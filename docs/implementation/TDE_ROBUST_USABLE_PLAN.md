@@ -108,11 +108,38 @@ schließen, kein `_append_turn` doppelt, `books_closed`/`_reply_persisted` konsi
 - decision_gate kann strukturell nicht ohne gemessene Daten durchstempeln (schon so gebaut).
 - e2e-wiring-proof: der Konsument braucht einen realen Trigger + E2E-Test durch ihn.
 
-## Schritt 3: Risikofreier Shadow (optional, für Datensammlung ohne TDE-Output an User)
+## Schritt 3: Risikofreier Shadow (Datensammlung ohne TDE-Output an User)
 
-- Separater Pfad: native an den User, TDE läuft detached mit, Output verworfen, nur
-  Tokens/Latenz/Judge → measurement.jsonl. Erlaubt Datensammlung, ohne je eine TDE-Antwort
-  auszuliefern. Größer; nur wenn Schritt 2 zeigt, dass wir mehr Daten brauchen.
+**KRITISCHE Semantik-Entscheidung (verifiziert 2026-08-07):** Die native Antwort ist NUR
+der Trigger, NICHT der `direct`-Mess-Arm. Grund: der native Turn läuft mit vollem
+Repo-/Tool-Kontext (`cwd=sess.workdir`, Tools erlaubt), `whole_task_direct_baseline` läuft
+bewusst tool-los + kontextfrei (`--disallowedTools *`). Die native Antwort als `direct` zu
+nehmen würde `direct` künstlich aufblähen (mehr Tokens durch Tools) → TDE sähe gegen einen
+fetten `direct` künstlich gut aus = genau der fabrizierte Vorteil, den ADR-0222 verhindert.
+Also: der Shadow fährt die ECHTE tool-lose `{direct, tier, tde}`-Messung des Task-Textes
+(dieselben Semantiken wie der bestehende Pfad), TDE wird SELBST gefahren statt als Input.
+
+**Was fehlt (Kern-Baustein):** eine Methode, die TDE selbst für einen Task fährt und
+`(tokens, output, complexity, workload_type)` liefert — heute kommt `tde_tokens`/`tde_output`
+IMMER aus dem echten TDE-Haupt-Turn (Input in `orchestrate`). Neu:
+`whole_task_tde_run(task_text, *, run_id, session_key, tenant_id)` (repliziert die
+TDE-Mechanik aus `_stream_tde_turn`: `run_initial_analysis_sync` → `SendIntegration.
+select_engine_and_execute`; Full-Instrumentation-Gate wie chat_runtime.py:4113).
+
+**Eingriff (kleinster):**
+1. `whole_task_tde_run(...)` in `tde_measurement.py` (TDE selbst fahren, Output verworfen).
+2. `orchestrate_shadow(...)`: wie `orchestrate`, aber holt tde-Arm aus `whole_task_tde_run`
+   statt aus Input; fährt direct + tier + tde, judged tde/tier gegen direct, schreibt Sample.
+3. `_spawn_shadow_measurement(ctx)` in chat_runtime.py (Kopie von `_spawn_tde_measurement`,
+   gleiches `_MEASUREMENT_TASKS`-Concurrency-1-Gate).
+4. Hook nach dem nativen Turn (Ende `stream_turn`), hinter Flag `tde_shadow_measurement`
+   (ships-dark, default False) UND `_measurement_should_sample()` (TDE_MEASUREMENT_ENABLED=1).
+5. Flag `tde_shadow_measurement` in `feature_flags.py` (Vorlage `acs_context_sync`).
+6. Tests (Flag-off = kein Shadow; Flag-on+sampling = Sample geschrieben, native unverändert).
+
+Der User sieht NIE eine TDE-Antwort — TDEs Output geht nur an den Judge und wird verworfen.
+Kosten: 3 Extra-Runs pro gemessenem Turn (direct+tier+tde), detached, nur bei Sampling,
+nicht gegen Quota gebucht. Damit füttert der Shadow genau das Gate aus Schritt 2.
 
 ## Schritt 4: Bridge-Parität — erst wenn Gate grün (ADR-0221 P3/P4).
 
@@ -173,4 +200,22 @@ im measurement-tail behält die TDE-Antwort).
   trivial/moderate wahrscheinlich verliert, feuert das globale Arm praktisch nie →
   ehrlich, aber TDE bleibt praktisch aus. **Echte Nutzbarkeit braucht per-Band-Arming**
   (armed-band-Store + `band`-Param durch `worker_engine_target`) — eigener ADR-Schritt.
-  OFFEN: per-Band-Entscheidung (Operator), Mess-Woche für echte Daten, commit.
+  OFFEN: per-Band-Entscheidung (Operator), Mess-Woche für echte Daten, commit. Commit `ca1263c`.
+- 2026-08-07 — **Schritt 3 GEBAUT + GETESTET.** Risikofreier Shadow-Mess-Modus.
+  Orchestrierung (`tde_measurement.py`): `_run_tde_arm` (fährt TDE SELBST für einen Task,
+  Full-Instrumentation-Gate, self-limiting via Quota — leerer Pool → None) + `orchestrate_shadow`
+  (dünner Wrapper: TDE-Arm holen, dann bestehenden `orchestrate` mit direct+tier-Baselines +
+  Judges füttern — maximale Wiederverwendung, kein Refactor am kritischen Code). Kern-Semantik:
+  native Antwort ist NUR Trigger, NICHT der direct-Arm (tool-behaftet vs. tool-lose Baseline →
+  würde fabrizierten TDE-Vorteil erzeugen). chat_runtime: `_run/_spawn_shadow_measurement`
+  (detached, concurrency-1, gleiche `_MEASUREMENT_TASKS`) + Hook am Ende des nativen Turns,
+  hinter Flag `tde_shadow_measurement` (ships-dark, default False) UND `_measurement_should_sample`
+  (TDE_MEASUREMENT_ENABLED=1). Flag in `feature_flags.py` (Vorlage `acs_context_sync`).
+  E2E `test_tde_shadow_measurement.py` (durch echten `stream_turn`): 3 grün — Flag+sampling→Hook
+  feuert mit korrektem ctx (beweist `_task_text`/`_os_model_used` im Scope), Flag-off→still,
+  sampling-off→still. Regression: 27 Tests grün (Schritt 1+2+3 + ACS + Routing).
+  **KOSTEN-HINWEIS (Operator):** der Shadow-TDE-Arm ist ein echter Fan-out und bucht den
+  geteilten Compute-Pool — self-limiting (leerer Pool → Sample fällt weg), nur bei Sampling +
+  Flag. Für eine Mess-Woche: Flag an + `TDE_MEASUREMENT_ENABLED=1` + Sample-Rate, dann füttert
+  der Shadow das Gate aus Schritt 2 ohne je eine TDE-Antwort zu zeigen. OFFEN: commit; danach
+  Mess-Woche fahren → `corvin tde gate` liest den Verdict.

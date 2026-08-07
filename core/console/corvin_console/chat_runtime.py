@@ -3767,6 +3767,73 @@ def _spawn_tde_measurement(ctx: dict[str, Any]) -> None:
     task.add_done_callback(_done)
 
 
+async def _run_shadow_measurement(ctx: dict[str, Any]) -> None:
+    """Body of one detached SHADOW measurement (TDE_ROBUST_USABLE_PLAN Step 3).
+
+    Unlike _run_tde_measurement (which measures a TDE turn that ALREADY ran as
+    the main turn), the shadow path fires when the user got a NATIVE answer: it
+    runs TDE ITSELF as one of the measured arms (output discarded, never shown)
+    via orchestrate_shadow, so the ADR-0222 gate gets real per-band evidence
+    without ever surfacing a TDE answer. Never raises into the caller.
+    """
+    try:
+        from tde.tde_measurement import (  # noqa: PLC0415
+            MeasurementRecorder,
+            RealTdeOrchestrator,
+        )
+    except ImportError:
+        _log.warning("shadow measurement skipped: tde.tde_measurement unavailable",
+                     exc_info=True)
+        return
+
+    sample = await RealTdeOrchestrator.orchestrate_shadow(
+        task_id=ctx["task_id"],
+        task_text=ctx["task_text"],
+        session_key=ctx["session_key"],
+        tenant_id=ctx["tenant_id"],
+        user_model=ctx["user_model"],
+    )
+    if sample is None:
+        # orchestrate_shadow already logged the specific reason it refused.
+        return
+    await MeasurementRecorder.get_instance().record_sample(sample)
+    _log.info("ADR-0222 shadow measurement recorded for %s (band=%s)",
+              sample.task_id, sample.task_band)
+
+
+def _spawn_shadow_measurement(ctx: dict[str, Any]) -> None:
+    """Fire a shadow measurement OFF the native turn's critical path.
+
+    Same detached, concurrency-1-gated, fail-closed mechanism as
+    _spawn_tde_measurement (shares _MEASUREMENT_TASKS): the native answer is
+    already streamed + persisted by the time this runs, and a process shutdown
+    mid-measurement just loses the sample (best-effort by design).
+    """
+    if len(_MEASUREMENT_TASKS) >= _MEASUREMENT_MAX_CONCURRENT:
+        _log.info("shadow measurement skipped for %s: %d already in flight",
+                  ctx.get("task_id"), len(_MEASUREMENT_TASKS))
+        return
+    coro = _run_shadow_measurement(ctx)
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:
+        coro.close()
+        _log.warning("shadow measurement not started: no running event loop")
+        return
+    _MEASUREMENT_TASKS.add(task)
+
+    def _done(t: "asyncio.Task[Any]") -> None:
+        _MEASUREMENT_TASKS.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            _log.warning("shadow measurement failed for %s: %r",
+                         ctx.get("task_id"), exc)
+
+    task.add_done_callback(_done)
+
+
 async def _stream_tde_turn(
     sess: "WebChatSession",
     task_text: str,
@@ -6138,5 +6205,25 @@ async def stream_turn(
 
     # Phase 2b: Emit execution context to L16 audit chain
     _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
+
+    # TDE_ROBUST_USABLE_PLAN Step 3: risk-free shadow measurement. The user now
+    # has the NATIVE answer above; if sampling is on (TDE_MEASUREMENT_ENABLED=1)
+    # AND the ships-dark flag is enabled, fire a detached shadow job that runs
+    # the tool-less {direct, tier, tde} arms (orchestrate_shadow) so the ADR-0222
+    # gate gets real per-band evidence WITHOUT ever showing the user a TDE
+    # answer. The native answer is ONLY the trigger — never a measured arm (it
+    # runs with tools/repo context; the direct arm is deliberately tool-less).
+    # Detached + concurrency-1-gated; a shutdown mid-measurement just loses the
+    # sample (best-effort). The TDE arm books the shared pool only when there is
+    # headroom (self-limiting), so this never starves the operator's own quota.
+    if (rc == 0 and _measurement_should_sample()
+            and _feature_flags.is_enabled("tde_shadow_measurement", sess.tenant_id)):
+        _spawn_shadow_measurement({
+            "task_id": f"shadow-{int(time.time())}-{secrets.token_hex(4)}",
+            "task_text": _task_text,
+            "session_key": f"{sess.tenant_id}:{sess.sid}",
+            "tenant_id": sess.tenant_id,
+            "user_model": _os_model_used,
+        })
 
     yield {"type": "done"}

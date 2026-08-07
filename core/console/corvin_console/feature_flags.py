@@ -169,6 +169,23 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("delegation",),
     ),
     FeatureFlag(
+        id="tde_shadow_measurement",
+        label="TDE shadow measurement",
+        description=(
+            "ADR-0222: after a NATIVE turn, run a detached shadow measurement — "
+            "the tool-less {direct, tier, tde} arms — so the decision gate gets "
+            "real per-band evidence WITHOUT ever showing the user a TDE answer. "
+            "The native answer is only the trigger, never a measured arm. Also "
+            "requires TDE_MEASUREMENT_ENABLED=1 and passing the sample rate. The "
+            "TDE arm is a real fan-out and books the shared compute pool (self-"
+            "limiting: an exhausted pool drops the sample). Costs extra compute "
+            "per sampled turn — enable only during a measurement week."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("delegation", "measurement"),
+    ),
+    FeatureFlag(
         id="bridge_big_data_delegation",
         label="Big-data delegation on messenger bridges",
         description=(
