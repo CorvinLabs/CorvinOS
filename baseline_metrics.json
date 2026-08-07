@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-08-07T12:24:13.887677",
+  "phase": "Phase 1 Lite Baseline",
+  "cel_enabled": false,
+  "test_passed": 289,
+  "test_total": 289,
+  "pass_rate": 1.0,
+  "duration_s": 25.713146538997535,
+  "exit_code": 0,
+  "success": true
+}
