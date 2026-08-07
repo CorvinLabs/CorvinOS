@@ -220,6 +220,7 @@ class TaskClassifier:
                 recommended.append("code_diff")
 
             # Fallback: if no graphs selected, pick the highest-scoring ones
+            # BUT ONLY if they have non-zero scores
             if not recommended:
                 scores = {
                     "call_graph": scored_routers.call_graph,
@@ -228,8 +229,11 @@ class TaskClassifier:
                     "layer_graph": scored_routers.layer_graph,
                     "code_diff": scored_routers.code_diff,
                 }
+                # Only recommend if top score is > 0.0 (avoid recommending 0.0-scored graphs)
                 top_two = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:2]
-                recommended = [name for name, _ in top_two]
+                if top_two and top_two[0][1] > 0.0:
+                    recommended = [name for name, _ in top_two]
+                # else: no recommendation (better than recommending 0.0 graphs)
         else:
             # Fallback mode: recommend all graphs (low confidence)
             recommended = [

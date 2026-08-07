@@ -143,14 +143,14 @@ class CostEstimator:
         if model_pricing is None:
             model_pricing = {"haiku": 0.80, "opus": 3.0}
 
-        # Task description tokens
+        # Task description tokens (rough estimate: ~4 chars per token)
         description = getattr(validated.filtered.classified.normalized, "description", "")
-        description_tokens = len(description) // 4 if description else 0
+        description_tokens = int(len(description) / 4.0) if description else 0
 
-        # Graph files tokens (rough)
+        # Graph files tokens (rough estimate: ~4 chars per token)
         files_tokens = 0
         for file_list in validated.filtered.deduplicated_files.values():
-            files_tokens += len(str(file_list)) // 4
+            files_tokens += int(len(str(file_list)) / 4.0)
 
         # Buffer for reasoning + output
         buffer_tokens = 2000
