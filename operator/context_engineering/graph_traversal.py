@@ -1,10 +1,12 @@
-"""Graph Traversal module (Phase 2).
+"""Graph Traversal module (Phase 2 + Phase 3 ADR Integration).
 
 Walks classifier graphs to discover related decisions.
-Extends Phase 1 Memory Lookup with structural context.
+Phase 2: Generic decision discovery
+Phase 3: ADR-based decision discovery via Corvin-ADR repo
 
 Features:
 - BFS traversal of classifier graphs
+- ADR-based decision discovery with dependency graph
 - Relevance scoring (similarity + distance)
 - Caching (same pattern as Phase 1)
 - Integration with RichTaskBrief
@@ -18,6 +20,14 @@ from typing import List, Optional, Dict, Tuple
 import time
 
 logger = logging.getLogger(__name__)
+
+# Try to import ADR support (Phase 3)
+try:
+    from .adr_loader import ADRLoader
+    from .adr_classifier import ADRClassifier
+    ADR_AVAILABLE = True
+except ImportError:
+    ADR_AVAILABLE = False
 
 
 @dataclass
@@ -71,18 +81,35 @@ class GraphTraversalResult:
 class GraphTraversal:
     """Traverse classifier graphs to find related decisions.
 
-    Implements Phase 2 extension to CEL.
+    Implements Phase 2 + Phase 3 (ADR integration).
     Uses same caching pattern as Phase 1 MemoryLookup.
+
+    Phase 2: Generic decision discovery (placeholder)
+    Phase 3: ADR-based decision discovery from Corvin-ADR repo
     """
 
-    def __init__(self, cache_ttl_minutes: int = 30):
+    def __init__(self, cache_ttl_minutes: int = 30, enable_adr: bool = True):
         """Initialize graph traversal.
 
         Args:
             cache_ttl_minutes: Cache TTL in minutes (default: 30).
+            enable_adr: Enable ADR-based discovery (Phase 3, default: True).
         """
         self.cache_ttl = timedelta(minutes=cache_ttl_minutes)
         self._traversal_cache: Dict[int, Tuple[List[RelatedDecision], datetime]] = {}
+
+        # Phase 3: ADR integration
+        self.adr_classifier: Optional[ADRClassifier] = None
+        if enable_adr and ADR_AVAILABLE:
+            try:
+                adr_loader = ADRLoader()
+                self.adr_classifier = ADRClassifier(adr_loader)
+                logger.info(f"GraphTraversal initialized with ADR support ({len(adr_loader.adrs)} ADRs loaded)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize ADR support: {e}")
+
+        if not self.adr_classifier:
+            logger.info(f"GraphTraversal initialized without ADR (Phase 2 placeholder mode)")
 
         logger.info(f"GraphTraversal initialized (TTL: {cache_ttl_minutes}min)")
 
@@ -137,17 +164,30 @@ class GraphTraversal:
 
         logger.debug(f"Graph traversal cache miss: searching (depth={depth})")
 
-        # Extract seed nodes from task
-        seed_nodes = self._extract_seed_nodes(task, top_n)
-        logger.debug(f"Extracted {len(seed_nodes)} seed nodes")
-
-        # BFS traversal
+        # Phase 3: Try ADR-based discovery first (if available)
         all_decisions = []
-        visited = set()
 
-        for seed in seed_nodes:
-            decisions = self._bfs_traverse(seed, depth, visited)
-            all_decisions.extend(decisions)
+        if self.adr_classifier:
+            try:
+                adr_results = self.adr_classifier.find_relevant_adrs(task, top_n=top_n, max_results=max_results)
+                logger.debug(f"ADR classifier found {len(adr_results)} relevant ADRs")
+
+                # Convert ADR metadata to decision dicts
+                for adr_metadata in adr_results:
+                    all_decisions.append(self._adr_metadata_to_decision(adr_metadata, distance=1))
+            except Exception as e:
+                logger.warning(f"ADR discovery failed: {e}, falling back to Phase 2")
+
+        # Phase 2: Fallback to generic decision discovery (placeholder)
+        if not all_decisions:
+            seed_nodes = self._extract_seed_nodes(task, top_n)
+            logger.debug(f"Extracted {len(seed_nodes)} seed nodes (Phase 2 fallback)")
+
+            # BFS traversal
+            visited = set()
+            for seed in seed_nodes:
+                decisions = self._bfs_traverse(seed, depth, visited)
+                all_decisions.extend(decisions)
 
         # Score by relevance + distance
         scored = self._score_decisions(all_decisions, task)
@@ -212,7 +252,7 @@ class GraphTraversal:
         - distance_factor: inverse of graph distance (1.0 at distance 0, 0.5 at distance 2)
 
         Args:
-            decisions: List of raw decision dicts from BFS.
+            decisions: List of raw decision dicts from BFS or ADR metadata.
             task: Current task for similarity scoring.
 
         Returns:
@@ -235,7 +275,7 @@ class GraphTraversal:
                         title=decision.get("title", "Unknown"),
                         relevance_score=score,
                         distance=distance,
-                        decision_type=decision.get("type", "unknown"),
+                        decision_type=decision.get("type", "adr"),  # Phase 3: type = "adr"
                         context=decision.get("context", ""),
                     )
                 )
@@ -245,6 +285,28 @@ class GraphTraversal:
                 continue
 
         return related
+
+    def _adr_metadata_to_decision(self, adr_metadata: object, distance: int = 1) -> Dict:
+        """Convert ADR metadata to decision dict for scoring.
+
+        Args:
+            adr_metadata: ADRMetadata object from ADRClassifier.
+            distance: Graph distance from seed ADR.
+
+        Returns:
+            Dictionary representation suitable for RelatedDecision.
+        """
+        if not adr_metadata:
+            return {}
+
+        return {
+            "id": getattr(adr_metadata, "id", "unknown"),
+            "title": getattr(adr_metadata, "title", "Unknown"),
+            "type": "adr",
+            "distance": distance,
+            "context": getattr(adr_metadata, "content_preview", "")[:200],
+            "status": getattr(adr_metadata, "status", "unknown"),
+        }
 
     def _get_task_id(self, task: object) -> str:
         """Extract task identifier."""

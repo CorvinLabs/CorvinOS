@@ -5,24 +5,33 @@ Phases: Memory Lookup, Graph Traversal, Skill Injection, Approach Synthesis, Blo
 
 Phase 1 Lite (MVP): Memory Lookup only (ADR-0269).
 Phase 2: Graph Traversal + Skill Injection (ADR-0269 Phase 2).
+Phase 3: ADR-based decision discovery (Corvin-ADR integration).
 """
 
 from .memory_lookup import MemoryLookup, MemoryMatch
 from .rich_task_brief import RichTaskBrief, MemoryContext
 from .graph_traversal import GraphTraversal, RelatedDecision, GraphTraversalResult
 from .skill_injection import SkillInjection, RecommendedSkill, SkillInjectionResult
+from .adr_loader import ADRLoader, ADRMetadata
+from .adr_classifier import ADRClassifier
 
 __all__ = [
+    # Phase 1
     "MemoryLookup",
     "MemoryMatch",
     "RichTaskBrief",
     "MemoryContext",
+    # Phase 2
     "GraphTraversal",
     "RelatedDecision",
     "GraphTraversalResult",
     "SkillInjection",
     "RecommendedSkill",
     "SkillInjectionResult",
+    # Phase 3 (ADR Integration)
+    "ADRLoader",
+    "ADRMetadata",
+    "ADRClassifier",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"  # Phase 3: ADR integration
