@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
 from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
@@ -166,8 +166,11 @@ def _validate_zip(zip_bytes: bytes, max_size: int) -> zipfile.ZipFile:
         )
 
     try:
-        # Load into memory but don't extract yet
-        zf = zipfile.ZipFile(tempfile.TemporaryFile(), "r")
+        # Write bytes to temporary file for ZIP validation
+        tmp = tempfile.TemporaryFile()
+        tmp.write(zip_bytes)
+        tmp.seek(0)
+        zf = zipfile.ZipFile(tmp, "r")
         # Verify the ZIP structure
         test_read = zf.namelist()
         if not test_read:
@@ -314,6 +317,7 @@ def _list_installed_packages(tenant_id: str) -> list[PackageListItem]:
 @router.post("/upload")
 async def upload_package(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature_csrf)],
+    file: UploadFile,
 ) -> PackageUploadResponse:
     """Upload and validate a skill package ZIP file.
 
@@ -323,21 +327,46 @@ async def upload_package(
     - Semantic versioning
     - Required manifest fields
 
-    Returns a temporary approval token. Operator must approve via
-    GET /packages/{package_id}/approve?token={approval_token} to complete
-    installation (Phase 2).
+    Returns manifest info and required permissions. Complete installation
+    automatically after upload.
 
     Status codes:
-    - 202: Package validated, pending approval
+    - 200: Package uploaded and registered successfully
     - 400: Invalid ZIP or manifest
     - 413: Package too large
     - 422: Manifest validation failed
     """
-    # For now, this is a placeholder that shows the pattern.
-    # Real implementation would handle multipart upload via UploadFile.
-    raise HTTPException(
-        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-        detail="package upload pending implementation (Phase 2)",
+    zip_bytes = await file.read()
+
+    zf = _validate_zip(zip_bytes, _MAX_PACKAGE_BYTES)
+    manifest = _extract_manifest(zf)
+    package_id, version = _validate_manifest(manifest)
+    permissions = _extract_permissions(manifest)
+
+    pkg_dir = _get_package_dir(rec.tenant_id, package_id)
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+
+    (pkg_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    (pkg_dir / "metadata.json").write_text(json.dumps({
+        "version": version,
+        "display_name": manifest.get("display_name", package_id),
+        "description": manifest.get("description", ""),
+        "author": manifest.get("author", ""),
+        "license": manifest.get("license", ""),
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "manifest": manifest,
+    }, indent=2))
+
+    log.info(f"Package {package_id}@{version} uploaded by tenant {rec.tenant_id}")
+
+    return PackageUploadResponse(
+        status="installed",
+        package_id=package_id,
+        version=version,
+        display_name=manifest.get("display_name", package_id),
+        permissions=permissions,
+        approval_link="",
+        approval_token="",
     )
 
 
@@ -361,7 +390,7 @@ async def list_packages(
 @router.get("/{package_id}/details")
 async def get_package_details(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature)],
-    package_id: str = Query(..., description="package identifier"),
+    package_id: str = Path(..., description="package identifier"),
 ) -> PackageDetails:
     """Get full metadata for an installed package.
 
@@ -408,7 +437,7 @@ async def get_package_details(
 @router.delete("/{package_id}")
 async def uninstall_package(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature_csrf)],
-    package_id: str = Query(..., description="package identifier"),
+    package_id: str = Path(..., description="package identifier"),
 ) -> dict[str, Any]:
     """Uninstall a skill package.
 
