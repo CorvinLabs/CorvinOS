@@ -1,11 +1,15 @@
-"""TaskEngine: Orchestrator for all 6 phases of ADR-0267.
+"""TaskEngine: Orchestrator for all 6 phases (+ Phase 5.5 CEL) of ADR-0267.
 
 Single entry point for the complete task routing pipeline.
 Handles error context and ensures phase contracts are maintained.
+Integrates Context Engineering Layer (Phase 5.5) for memory enrichment.
 """
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
+
 from .normalizer import TaskNormalizer, InsufficientTaskInfo
 from .classifier import TaskClassifier
 from .filtering import GraphFilteringPipeline, FilterConfig
@@ -14,6 +18,15 @@ from .enrichment import TaskEnricher
 from .delegation import DelegationRouter, DelegationTarget
 from .metrics import TaskMetrics, MetricsPhase, MetricsOutcome
 from .contracts import PhaseContracts, ContractViolation
+
+# Import CEL (Phase 5.5)
+try:
+    from operator.context_engineering import MemoryLookup
+    CEL_AVAILABLE = True
+except ImportError:
+    CEL_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 class EngineError(Exception):
@@ -30,6 +43,7 @@ class EnginePhase(Enum):
     FILTERING = "filtering"
     VALIDATION = "validation"
     ENRICHMENT = "enrichment"
+    CONTEXT_ENGINEERING = "context_engineering"  # Phase 5.5
     DELEGATION = "delegation"
 
 
@@ -61,16 +75,35 @@ class EngineResult:
     enriched_metadata: dict
     """All metadata from all phases for inspection."""
 
+    rich_task_brief: Optional[object] = None
+    """RichTaskBrief from Phase 5.5 (CEL), if enabled (can be None)."""
+
 
 class TaskEngine:
-    """Complete task routing pipeline (Phases 0–5)."""
+    """Complete task routing pipeline (Phases 0–5 + Phase 5.5 CEL).
 
-    def __init__(self, filter_config: FilterConfig = None, metrics: TaskMetrics = None):
+    Phases:
+    - 0: Normalize (extract metadata)
+    - 1: Classify (5 graph routers)
+    - 2: Filter (deduplicate)
+    - 3: Validate (completeness)
+    - 4: Enrich (complexity, model, cost)
+    - 5.5: CEL (Context Engineering Layer, memory enrichment, OPTIONAL)
+    - 5: Delegate (native/acs/tde)
+    """
+
+    def __init__(
+        self,
+        filter_config: FilterConfig = None,
+        metrics: TaskMetrics = None,
+        enable_cel: bool = True,
+    ):
         """Initialize engine components.
 
         Args:
             filter_config: Filtering configuration (uses defaults if None).
             metrics: Optional TaskMetrics collector for Prometheus export.
+            enable_cel: Enable Context Engineering Layer (Phase 5.5, default: True).
         """
         self.normalizer = TaskNormalizer()
         self.classifier = TaskClassifier()
@@ -80,6 +113,17 @@ class TaskEngine:
         self.router = DelegationRouter()
         self.filter_config = filter_config or FilterConfig()
         self.metrics = metrics or TaskMetrics()
+
+        # Phase 5.5: Context Engineering Layer (optional)
+        self.cel: Optional[MemoryLookup] = None
+        if enable_cel and CEL_AVAILABLE:
+            try:
+                self.cel = MemoryLookup()
+                logger.info("CEL (Phase 5.5) enabled for memory enrichment")
+            except Exception as e:
+                logger.warning(f"Failed to initialize CEL: {e}, continuing without it")
+        elif enable_cel and not CEL_AVAILABLE:
+            logger.warning("CEL requested but not available, continuing without it")
 
     def route_task(self, raw_task: str) -> EngineResult:
         """Route a task through all 6 phases (with Prometheus metrics).
@@ -166,6 +210,22 @@ class TaskEngine:
                 self.metrics.record_model_selection(enriched.model_recommendation)
                 self.metrics.record_cost(enriched.estimated_cost_usd)
 
+            # Phase 5.5: Context Engineering Layer (Memory Enrichment, OPTIONAL)
+            rich_brief = None
+            if self.cel:
+                try:
+                    with self.metrics.phase_timer(MetricsPhase.CEL) as ctx:
+                        logger.debug("Running Phase 5.5: Context Engineering Layer")
+                        rich_brief = self.cel.enrich_task(enriched)
+                        ctx["memory_matches"] = len(rich_brief.memory_context.matches)
+                        ctx["cel_confidence"] = rich_brief.memory_context.confidence
+                        logger.info(
+                            f"Phase 5.5 complete: {len(rich_brief.memory_context.matches)} matches, "
+                            f"confidence={rich_brief.memory_context.confidence:.2f}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Phase 5.5 (CEL) failed: {e}, continuing without it")
+
             # Phase 5: Delegate
             with self.metrics.phase_timer(MetricsPhase.DELEGATION) as ctx:
                 decision = self.router.route(enriched)
@@ -189,6 +249,7 @@ class TaskEngine:
                 estimated_cost_usd=enriched.estimated_cost_usd,
                 model_recommendation=enriched.model_recommendation,
                 task_complexity=enriched.task_complexity,
+                rich_task_brief=rich_brief,
                 enriched_metadata={
                     "normalized_type": str(normalized.type),
                     "normalized_severity": normalized.severity,
@@ -198,6 +259,7 @@ class TaskEngine:
                     "final_confidence": validated.final_confidence,
                     "estimated_tokens": enriched.estimated_tokens,
                     "metrics_summary": self.metrics.summary(),
+                    "cel_enabled": bool(self.cel),
                 },
             )
 

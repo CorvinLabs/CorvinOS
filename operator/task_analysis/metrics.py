@@ -41,6 +41,7 @@ class MetricsPhase(Enum):
     FILTERING = "filtering"
     VALIDATION = "validation"
     ENRICHMENT = "enrichment"
+    CEL = "context_engineering"  # Phase 5.5
     DELEGATION = "delegation"
 
 
