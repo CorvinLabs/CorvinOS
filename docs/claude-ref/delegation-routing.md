@@ -82,7 +82,19 @@ auto-delegation. Since 2026-07-28 that shape is spelled out affirmatively —
 see § 2a — and an ordinary request, prose, or a coding task no longer reaches it.
 Every degrade ends at the direct OS-turn, never at a different delegation
 engine: an unavailable TDE or an exhausted pool must not silently swap the
-operator's selection. (The ACS branch keeps its own hardened ADR-0201 ladder
+operator's selection. **Since 2026-08-07 (TDE_ROBUST_USABLE_PLAN Step 1) the
+degrade also covers IN-FLIGHT failures**, not just the pre-dispatch
+availability/pool check: once a turn has entered `_stream_tde_turn`, a missing
+orchestration module (TOCTOU), an analysis/worker-IPC exception, or a mid-run
+shared-pool exhaustion no longer surfaces an error to the user — it emits an
+internal `_tde_degraded` sentinel (swallowed by the caller, never streamed) and
+falls through to the native OS-turn, which owns the single os-span close +
+`web.turn.completed` with the real rc (so the ADR-0171 engine-span is never
+sealed with the wrong status and there is no duplicate turn-completion). The
+user sees a short `notice/tde_fallback` (or the shared-pool notice when the
+cause was quota) and then the native answer. A TDE run that completed but whose
+steps failed (`ok=False`) is NOT degraded — it already spent the run, so its
+honest error result stands rather than paying for a native re-run. (The ACS branch keeps its own hardened ADR-0201 ladder
 for the cases that do reach it.)
 (ADR-0214's RobustEngineDetector — TDE vs ACS vs claude_code — remains the
 embedder-facing selector in `SendIntegration`; the console's Tier-1 choice is
