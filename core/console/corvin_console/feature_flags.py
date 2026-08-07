@@ -240,6 +240,21 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("delegation", "measurement", "bridges"),
     ),
     FeatureFlag(
+        id="delegation_badge",
+        label="Delegation transparency badge",
+        description=(
+            "Show which delegation ran a task on BOTH surfaces: the console "
+            "engine chip and a compact text-suffix on messenger-bridge replies "
+            "(e.g. '⚙ TDE · tiered', '⚙ ACS · loop', '⚙ native'), so it is always "
+            "traceable how a task was delegated. Uses the shared "
+            "execution_context.format_delegation_badge() so both surfaces read "
+            "identically. Off = no badge (unchanged)."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("delegation", "ux"),
+    ),
+    FeatureFlag(
         id="plugin_health_monitoring",
         label="Plugin health monitoring",
         description=(

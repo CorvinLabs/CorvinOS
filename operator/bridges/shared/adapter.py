@@ -7784,6 +7784,7 @@ def _maybe_delegate_worker(
     chat_key: str,
     persona: str | None,
     tenant_id: str | None = None,
+    meta: dict | None = None,
 ) -> tuple[str | None, str]:
     """Bridge worker-engine parity (ADR-0255).
 
@@ -7867,6 +7868,11 @@ def _maybe_delegate_worker(
             prompt, channel=channel, chat_key=chat_key, persona=persona,
             tenant_id=tid,
         )
+        # Delegation-transparency: report the engine/mode ONLY when TDE actually
+        # produced the answer; a degrade (answer=None) is a native turn, tagged
+        # by the dispatcher.
+        if answer is not None and meta is not None:
+            meta["engine"], meta["mode"] = "tde", "tiered"
         return answer, prompt
     if target == "acs":
         if not parity_on:
@@ -7879,6 +7885,8 @@ def _maybe_delegate_worker(
             quota_channel_suffix="worker",
             workflow_name_suffix="worker-delegation",
         )
+        if answer is not None and meta is not None:
+            meta["engine"], meta["mode"] = "acs", "delegation_loop"
         return answer, prompt
     # "native" — run the direct turn.
     return None, prompt
@@ -10647,10 +10655,12 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         # everything else — including any failure — so the normal gated
         # dispatcher below stays the default path. May also return a
         # `/delegate`-stripped prompt even on the degrade path.
+        _deleg_meta: dict = {}
         answer, prompt = _maybe_delegate_worker(
             prompt, channel=channel, chat_key=chat_key,
             persona=str((profile or {}).get("persona")
                         or (profile or {}).get("name") or ""),
+            meta=_deleg_meta,
         )
         if answer is not None:
             pass
@@ -10683,6 +10693,26 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 sender=sender,
                 **media_kwargs,
             )
+        # Delegation-transparency badge (flag `delegation_badge`, ships-dark):
+        # append a compact "how was this task delegated" text-suffix so a bridge
+        # user can always see which engine + orchestration mode ran their task.
+        # Discord/WhatsApp are text-only, so it is a suffix mirroring the console
+        # engine chip via the SHARED format_delegation_badge(). engine/mode come
+        # from _deleg_meta when a delegation ran, else native.
+        _badge_engine = _deleg_meta.get("engine") or "native"
+        _badge_mode = _deleg_meta.get("mode")
+        if answer:
+            try:
+                from corvin_console import feature_flags as _ff_badge  # noqa: PLC0415
+                _badge_tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+                if _ff_badge.is_enabled("delegation_badge", _badge_tid):
+                    from corvin_console.execution_context import (  # noqa: PLC0415
+                        format_delegation_badge,
+                    )
+                    answer = (f"{answer}\n\n— ⚙ "
+                              f"{format_delegation_badge(_badge_engine, _badge_mode)}")
+            except Exception as e:  # noqa: BLE001 — a badge must never break a turn
+                log(f"delegation badge skipped ({e!r})")
     finally:
         hb_stop.set()
 

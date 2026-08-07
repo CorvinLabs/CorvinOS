@@ -178,7 +178,32 @@ aufheben — hinter einem opt-in Flag, reversibel.
 läuft real, misst still → nach ein paar Tagen `corvin tde gate` liest den Verdict.
 **OFFEN:** optionaler Circuit-Breaker (N Degrades in Folge → Flag auto-aus); commit; ADR-Amendment.
 
-## Schritt 5 (vormals 4): Bridge-ACS-Parität — Flags `bridge_worker_engine_parity` etc.
+## Schritt 5: Delegation-Transparenz-Badge (Operator-Wunsch: nachvollziehbar welche Engine/Modus)
+
+**Ziel:** in Console UND Bridge immer anzeigen, wie ein Task delegiert wurde — Engine
+(native/acs/tde) + Orchestrierungs-Modus.
+
+**WICHTIGE REALITÄT (Explore-verifiziert):** „goal" existiert NICHT als Laufzeit-Modus.
+Echte `orchestration.engine`-Werte: `delegation_loop`→**loop**, `dag`→**graph**, `chat`.
+TDE ist kein orchestration.engine (eigener Executor)→**tiered**. native→kein Modus. Für
+interaktive Tasks ist der Modus quasi an die Engine gekoppelt: acs=loop, tde=tiered. dag/graph
+nur bei deklarativen AWP-Workflows. → Anzeige zeigt die ECHTEN Werte, nicht drei fiktive.
+
+**GEBAUT (Bridge-Teil + gemeinsame Funktion):**
+- `execution_context.format_delegation_badge(engine, orch_mode)` (Console-Modul, von Bridge
+  erreichbar) — EINE Quelle, beide Surfaces rendern identisch: „TDE · tiered", „ACS · loop",
+  „native".
+- Bridge (`adapter.py`): `_maybe_delegate_worker` gibt engine/mode via optionalen `meta`-Param
+  zurück (minimal-invasiv, bestehende Tests unberührt); Dispatcher hängt Text-Suffix
+  „— ⚙ TDE · tiered" an die Antwort, hinter Flag `delegation_badge` (ships-dark). 23 Bridge-Tests
+  grün, meta-Befüllung + Format verifiziert.
+
+**OFFEN (Console-Teil = nächster Schritt, braucht Frontend-Rebuild):**
+- Console-Backend: `orch_mode` ins `{"type":"engine",...}`-Event (chat_runtime.py ACS-yield,
+  TDE-yield, native-yield). Console zeigt die Engine SCHON (chip), nur der Modus fehlt.
+- Console-Frontend (`web-next` chat-registry.ts + chat.tsx): Chip um Modus erweitern → `npm run build`.
+
+## Schritt 6 (vormals 4): Bridge-ACS-Parität — Flags `bridge_worker_engine_parity` etc.
 
 ---
 
