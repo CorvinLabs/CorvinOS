@@ -3878,16 +3878,21 @@ async def _stream_tde_turn(
             from tde.send_integration import SendIntegration  # noqa: PLC0415
             from tde.worker_ipc import ProcHolder  # noqa: PLC0415
         except ImportError as _imp_err:
-            final = (f"TDE ist auf dieser Installation nicht verfügbar "
-                     f"(Modul fehlt: {_imp_err}).")
-            _close_books(1, reason="tde_unavailable",
-                         error="tde modules unavailable")
-            books_closed = True
-            yield {"type": "delta", "text": final}
-            yield {"type": "result", "text": final, "usage": None}
-            touch(sess, increment_turn=False)
-            _append_turn(sess, "assistant", [{"kind": "text", "text": final}])
-            yield {"type": "done"}
+            # Robust degrade (TDE_ROBUST_USABLE_PLAN Step 1): the orchestration
+            # tree is missing (wheel install without it). Do NOT surface an
+            # error and do NOT close ANY books here — emit only the degrade
+            # sentinel and return. The native Claude Code OS-turn the caller
+            # falls through to owns os_turn.completed + web.turn.completed with
+            # the REAL rc; the ADR-0171 os-span START (3809, attributed to
+            # _os_engine, not TDE) is idempotently closed there. Calling
+            # _close_books/emit_completed here would seal that span with rc=1 and
+            # the native emit_completed (nonlocal-guarded) would no-op → wrong
+            # span status + a duplicate web.turn.completed. (Pre-dispatch
+            # _tde_available() already probes imports, so this is the rare
+            # TOCTOU case.)
+            _log.info("ADR-0222/TDE: modules unavailable (%s) — degrading to "
+                      "native OS-turn", _imp_err)
+            yield {"type": "_tde_degraded", "reason": "import"}
             return
 
         # Round-4 finding: unlike the ADR-0213 context-sync call below
@@ -4056,21 +4061,18 @@ async def _stream_tde_turn(
             # "compute_units_per_day exceeded" error, honouring the ADR-0201
             # "quota degrades, never hard-fails" invariant on the TDE path too.
             if result.get("reason") == "quota_exhausted":
-                final = (
-                    "Dein tägliches Agentic-Compute-Kontingent ist ausgeschöpft "
-                    "(geteilter Pool für TDE-, ACS- und Compute-Runs im "
-                    "Free-Tier). Bitte versuche es morgen erneut oder erhöhe "
-                    "dein Kontingent: "
-                    "[Member-Upgrade](https://corvin-labs.com/pricing)"
-                )
-                _close_books(1, reason="tde_quota_exhausted")
-                books_closed = True
-                yield {"type": "notice", "subtype": "quota_fallback", "message": final}
-                yield {"type": "delta", "text": final}
-                yield {"type": "result", "text": final, "usage": None}
-                touch(sess, increment_turn=False)
-                _append_turn(sess, "assistant", [{"kind": "text", "text": final}])
-                yield {"type": "done"}
+                # Robust degrade (TDE_ROBUST_USABLE_PLAN Step 1): shared compute
+                # pool exhausted mid-run (peek/charge TOCTOU). Instead of ending
+                # the turn with an upgrade notice, degrade to the native Claude
+                # Code OS-turn — which is NOT metered against the pool — so the
+                # user still gets an answer. The caller shows the correct
+                # shared-pool notice for reason="quota" before running native.
+                # Emit NOTHING to audit here (see the ImportError branch above):
+                # the native path owns the single os-span close + the single
+                # web.turn.completed with the real rc.
+                _log.info("ADR-0222/TDE: shared pool exhausted mid-run — "
+                          "degrading to native OS-turn")
+                yield {"type": "_tde_degraded", "reason": "quota"}
                 return
             parts: list[str] = []
             for r in result.get("results", []) or []:
@@ -4135,10 +4137,27 @@ async def _stream_tde_turn(
                     # whole_task_tier_baseline's documented limitation).
                     "confidence": None,
                 }
-        except Exception as e:  # noqa: BLE001 — surface, never crash the socket
-            final = f"TDE-Turn fehlgeschlagen: {e}"
-            rc = 1
-            # tde_progress_dict stays None (initialized above) on exception
+        except Exception as e:  # noqa: BLE001 — degrade, never crash the socket
+            # Robust degrade (TDE_ROBUST_USABLE_PLAN Step 1): an in-flight TDE
+            # failure (analysis timeout, worker IPC, malformed plan) BEFORE any
+            # real content was streamed — the first content yield is below
+            # (final delta), everything above it is progress chrome only. Fall
+            # through to the native Claude Code OS-turn instead of surfacing
+            # "TDE-Turn fehlgeschlagen". Emit NOTHING to audit (see ImportError
+            # branch): the native path owns the single os-span close + the
+            # single web.turn.completed with the real rc. Post-success guard: if
+            # TDE already produced a good answer (final set, rc 0) and the
+            # exception is in the measurement-setup tail, KEEP the answer rather
+            # than throwing away a completed TDE turn for a native re-run.
+            if final and rc == 0:
+                _log.warning("ADR-0222/TDE: post-success exception (%r) — "
+                             "keeping the completed TDE answer", e)
+                # fall through to the normal close/persist/yield below
+            else:
+                _log.warning("ADR-0222/TDE: in-flight failure (%r) — degrading "
+                             "to native OS-turn", e)
+                yield {"type": "_tde_degraded", "reason": "runtime"}
+                return
 
         # Bookkeeping BEFORE the result yields: a disconnect on any yield
         # below must not leave the task RUNNING / audit unpaired.
@@ -5033,6 +5052,16 @@ async def stream_turn(
              worker_engine=_worker_mode,
              force_delegate=_force_delegate,
              big_data=_is_big_data_task(prompt))
+        # TDE_ROBUST_USABLE_PLAN Step 1: a `_tde_degraded` sentinel from
+        # _stream_tde_turn means TDE declined in-flight (modules missing, shared
+        # pool exhausted, or a runtime failure) BEFORE any real content reached
+        # the client. The degrade ladder ends at native (never ACS, per
+        # CLAUDE.md § Worker Engine Selection), so we swallow the sentinel and
+        # fall through into the ACS block already in quota-fallback state — the
+        # ACS run is skipped and the inline native OS-turn below runs the task.
+        # _stream_tde_turn emits NOTHING to audit on degrade; the native path
+        # owns the single os-span close + web.turn.completed with the real rc.
+        _tde_degraded_reason: "str | None" = None
         if _tde_target == "tde":
             async for _ev in _stream_tde_turn(
                 sess, _task_text, tm, task_id,
@@ -5040,8 +5069,13 @@ async def stream_turn(
                 emit_completed=_os_emit_completed,
                 os_model=_os_model, resume=resume,
             ):
+                if isinstance(_ev, dict) and _ev.get("type") == "_tde_degraded":
+                    _tde_degraded_reason = _ev.get("reason") or "runtime"
+                    continue  # swallow — never leak the sentinel to the client
                 yield _ev
-            return
+            if _tde_degraded_reason is None:
+                return
+            # else: fall through to native (ACS block no-ops via _quota_fallback)
         task_text = _task_text
         _acs = None
         # Fallback flag: any "no ACS run possible" condition — runtime import
@@ -5050,7 +5084,10 @@ async def stream_turn(
         # Code OS-turn instead of failing it. The normal path does its own
         # Task-tool delegation, so the user still gets delegated work, just not
         # via the ACS fan-out. (User requirement: robust — no ACS → normal.)
-        _quota_fallback = False
+        # TDE_ROBUST_USABLE_PLAN Step 1: a TDE in-flight degrade enters here
+        # already in fallback state, so the ACS run is skipped and the inline
+        # native OS-turn below handles the task (ladder ends at native, not ACS).
+        _quota_fallback = (_tde_degraded_reason is not None)
         try:
             # Ensure operator/bridges/shared is in path for spawn_gates and other deps
             # Path: core/console/corvin_console/chat_runtime.py → CorvinOS/operator/bridges/shared
@@ -5150,6 +5187,22 @@ async def stream_turn(
             pass
 
         if _quota_fallback:
+            # TDE_ROBUST_USABLE_PLAN Step 1: when this fallback was triggered by
+            # a TDE in-flight degrade, surface the RIGHT reason before the native
+            # OS-turn. reason="quota" reuses the existing shared-pool notice
+            # below (_fb_quota_exceeded); import/runtime get a short, honest TDE
+            # notice. A genuine ACS quota fallback leaves _tde_degraded_reason
+            # None and is unaffected.
+            if _tde_degraded_reason == "quota":
+                _fb_quota_exceeded = True
+            elif _tde_degraded_reason is not None:
+                _tde_fb_notice = (
+                    "↩ Die Tiered Delegation Engine ist gerade nicht verfügbar "
+                    "— dein Task wird über Claude Code (Standard) ausgeführt.\n"
+                )
+                yield {"type": "notice", "subtype": "tde_fallback",
+                       "message": _tde_fb_notice}
+                yield {"type": "delta", "text": _tde_fb_notice}
             # L34/L35 fix: re-gate with the ACTUAL fallback engine on EVERY
             # fallback branch (adversarial review D2 — previously only the
             # quota-exhausted branch re-gated; the "ACS runtime unavailable",
