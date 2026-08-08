@@ -346,8 +346,24 @@ function Install-CorvinAutostart {
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $Supervisor = Join-Path $BinDir "corvin-supervisor.ps1"
 
-    $ServeCmd = (Get-Command corvinos-serve -ErrorAction SilentlyContinue).Source
-    if (-not $ServeCmd) { $ServeCmd = (Get-Command corvin-serve -ErrorAction SilentlyContinue).Source }
+    # INST-16 (2026-08-05 live Windows report): Get-Command returns the FIRST
+    # corvinos-serve on PATH. On a machine that ALSO carries a stale, SEPARATE
+    # pip-era install (e.g. ...\Python\pythoncoreXX\Scripts\corvinos-serve.exe),
+    # PATH order can surface that broken one -- its site-packages no longer has
+    # the `ops` package the current entry point imports, so the generated
+    # supervisor crash-loops with "ModuleNotFoundError: No module named 'ops'"
+    # (the auto-update only refreshes the uv-tool env, never that orphan). Prefer
+    # the uv-tool shim THIS install just wrote to %USERPROFILE%\.local\bin (uv
+    # installs tool shims there -- see step 2) over whatever PATH order happens to
+    # surface: that is always the freshly installed, correct binary. Falls back to
+    # PATH resolution only when the shim is somehow absent.
+    $UvShim = Join-Path $env:USERPROFILE ".local\bin\corvinos-serve.exe"
+    if (Test-Path $UvShim) {
+        $ServeCmd = $UvShim
+    } else {
+        $ServeCmd = (Get-Command corvinos-serve -ErrorAction SilentlyContinue).Source
+        if (-not $ServeCmd) { $ServeCmd = (Get-Command corvin-serve -ErrorAction SilentlyContinue).Source }
+    }
     if (-not $ServeCmd) { throw "corvinos-serve not found on PATH" }
 
     # INST-11: $ServeCmd/$Supervisor are filesystem paths interpolated as
