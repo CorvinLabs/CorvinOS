@@ -45,7 +45,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .app import mount_static, router
-from .routes.packages import router as packages_router
 
 _LOCAL_STATS_HTML = """<!DOCTYPE html>
 <html lang="de">
@@ -475,10 +474,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Mount package management routes at /v1/console/packages
-    app.include_router(packages_router, prefix="/v1/console")
-
     # Mount all console API routes at /v1/console
+    # (includes packages router already registered in app.py)
     app.include_router(router, prefix="/v1/console")
 
     # ── Layer 38 — A2A inbound receive + ping (ADR-0048 / ADR-0199) ─────────

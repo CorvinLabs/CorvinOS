@@ -153,11 +153,11 @@ class PackageUploadResponse(BaseModel):
 
 
 def _require_feature(tenant_id: str) -> None:
-    """Check if the package management feature is enabled."""
-    if not _feature_flags.is_enabled("skill_package_system", tenant_id):
+    """Check if the package marketplace feature is enabled."""
+    if not _feature_flags.is_enabled("package_marketplace_ui", tenant_id):
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
-            detail="skill package system is not enabled",
+            detail="package marketplace is not enabled",
         )
 
 
