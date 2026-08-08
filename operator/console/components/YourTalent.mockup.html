@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Talent | CorvinOS Console</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --primary: #0066CC;
+      --success: #00AA44;
+      --warning: #FF8800;
+      --critical: #CC0000;
+      --muted: #999999;
+      --surface: #F5F5F5;
+      --border: #E0E0E0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #f5f7fa, #c3cfe2);
+      padding: 2rem;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    .console-header {
+      background: white;
+      border-bottom: 2px solid var(--border);
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 2rem;
+      padding: 1rem 0;
+    }
+
+    .tab {
+      padding: 0.75rem 1rem;
+      background: none;
+      border: none;
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: all 0.3s ease;
+    }
+
+    .tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+
+    .tab:hover {
+      color: var(--primary);
+    }
+
+    /* Main Content */
+    .content {
+      background: white;
+      border-radius: 12px;
+      padding: 2rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    .section-title {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      color: #1a1a1a;
+    }
+
+    /* Talent Score Card */
+    .talent-score-section {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      margin-bottom: 3rem;
+      padding-bottom: 2rem;
+      border-bottom: 2px solid var(--surface);
+    }
+
+    .talent-score-main {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+    }
+
+    .talent-number {
+      font-size: 5rem;
+      font-weight: 700;
+      color: var(--primary);
+      line-height: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .talent-number small {
+      font-size: 1.5rem;
+      color: var(--muted);
+    }
+
+    .talent-info h2 {
+      font-size: 1.5rem;
+      margin-bottom: 1rem;
+      color: #1a1a1a;
+    }
+
+    .talent-stats {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .talent-stat {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--surface);
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .stat-value {
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+
+    .stat-value.trend {
+      color: var(--success);
+    }
+
+    .chart-placeholder {
+      background: var(--surface);
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      color: var(--muted);
+      height: 300px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 3rem;
+    }
+
+    /* Context Ranking */
+    .ranking-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .context-card {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 1.5rem;
+      border-left: 4px solid var(--primary);
+      transition: all 0.3s ease;
+    }
+
+    .context-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    .context-card.rank-1 {
+      border-left-color: #FFD700;
+      background: linear-gradient(135deg, rgba(255,215,0,0.05), transparent);
+    }
+
+    .context-card.rank-2 {
+      border-left-color: #C0C0C0;
+      background: linear-gradient(135deg, rgba(192,192,192,0.05), transparent);
+    }
+
+    .context-card.rank-3 {
+      border-left-color: #CD7F32;
+      background: linear-gradient(135deg, rgba(205,127,50,0.05), transparent);
+    }
+
+    .context-card.warning {
+      border-left-color: var(--warning);
+      background: linear-gradient(135deg, rgba(255,136,0,0.05), transparent);
+    }
+
+    .context-card.critical {
+      border-left-color: var(--critical);
+      background: linear-gradient(135deg, rgba(204,0,0,0.05), transparent);
+    }
+
+    .context-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .context-medal {
+      font-size: 1.5rem;
+    }
+
+    .context-status {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.25rem 0.75rem;
+      border-radius: 12px;
+      background: rgba(0,170,68,0.1);
+      color: var(--success);
+      margin-left: 0.5rem;
+    }
+
+    .context-status.warning {
+      background: rgba(255,136,0,0.1);
+      color: var(--warning);
+    }
+
+    .context-status.critical {
+      background: rgba(204,0,0,0.1);
+      color: var(--critical);
+    }
+
+    .context-bar {
+      width: 100%;
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 0.75rem;
+    }
+
+    .context-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), #6699FF);
+      border-radius: 4px;
+      transition: width 0.5s ease;
+    }
+
+    .context-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+
+    .meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .meta-label {
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 0.8rem;
+    }
+
+    .meta-value {
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+
+    .context-action {
+      width: 100%;
+      padding: 0.5rem;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      font-size: 0.9rem;
+    }
+
+    .context-action:hover {
+      background: #0052a3;
+      transform: translateY(-1px);
+    }
+
+    /* Timeline */
+    .timeline {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 2rem;
+      margin-bottom: 2rem;
+    }
+
+    .timeline-item {
+      display: flex;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .timeline-item:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .timeline-time {
+      font-weight: 600;
+      color: var(--primary);
+      min-width: 80px;
+    }
+
+    .timeline-event {
+      flex: 1;
+    }
+
+    .timeline-title {
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      color: #1a1a1a;
+    }
+
+    .timeline-desc {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .timeline-badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      padding: 0.25rem 0.75rem;
+      background: rgba(0,170,68,0.1);
+      color: var(--success);
+      border-radius: 12px;
+      margin-top: 0.5rem;
+      font-weight: 600;
+    }
+
+    .timeline-badge.attention {
+      background: rgba(255,136,0,0.1);
+      color: var(--warning);
+    }
+
+    /* Bottom Actions */
+    .action-section {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      padding-top: 2rem;
+      border-top: 2px solid var(--surface);
+    }
+
+    .action-btn {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 1.5rem;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .action-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,102,204,0.3);
+    }
+
+    .action-btn small {
+      font-size: 0.8rem;
+      opacity: 0.9;
+      font-weight: 400;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .talent-score-section {
+        grid-template-columns: 1fr;
+      }
+
+      .content {
+        padding: 1rem;
+      }
+
+      .ranking-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .section-title {
+        font-size: 1.25rem;
+      }
+
+      .talent-number {
+        font-size: 3rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Console Header -->
+    <div class="console-header">
+      <div class="tabs">
+        <button class="tab">💬 Chat</button>
+        <button class="tab active">🌟 Your Talent</button>
+        <button class="tab">⚙️ Settings</button>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+      <!-- Talent Score Section -->
+      <div class="talent-score-section">
+        <div class="talent-score-main">
+          <div class="talent-number">
+            8.2
+            <small>/10</small>
+          </div>
+          <div class="talent-info">
+            <h2>Dein Talent wächst</h2>
+            <div class="talent-stats">
+              <div class="talent-stat">
+                <span class="stat-label">Wachstum diese Woche</span>
+                <span class="stat-value trend">↗ +1.7 Punkte</span>
+              </div>
+              <div class="talent-stat">
+                <span class="stat-label">Tägliche Rate</span>
+                <span class="stat-value trend">+0.24/Tag</span>
+              </div>
+              <div class="talent-stat">
+                <span class="stat-label">Prognose (Tag 14)</span>
+                <span class="stat-value trend">8.6 (+0.4 erwartet)</span>
+              </div>
+              <div class="talent-stat">
+                <span class="stat-label">Status</span>
+                <span class="stat-value">🚀 Schnell lernend</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div style="color: var(--muted); margin-bottom: 1rem; font-weight: 500;">7-Tage Trend</div>
+          <div class="chart-placeholder">📈 Wachstums-Kurve</div>
+        </div>
+      </div>
+
+      <!-- Section: Context Ranking -->
+      <div class="section-title">🏆 Deine Top-Kontexte</div>
+      <div class="ranking-grid">
+        <!-- Rank 1 -->
+        <div class="context-card rank-1">
+          <div class="context-name">
+            <span class="context-medal">🏆</span>
+            ADR-0270
+            <span class="context-status">MENTOR</span>
+          </div>
+          <div class="context-bar">
+            <div class="context-bar-fill" style="width: 92%;"></div>
+          </div>
+          <div class="context-meta">
+            <div class="meta-item">
+              <span class="meta-label">Genauigkeit</span>
+              <span class="meta-value">92%</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Verwendet</span>
+              <span class="meta-value">8×</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Feedback</span>
+              <span class="meta-value">✅ 7/8</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Trend</span>
+              <span class="meta-value">✓ Stabil</span>
+            </div>
+          </div>
+          <button class="context-action">Deep Dive</button>
+        </div>
+
+        <!-- Rank 2 -->
+        <div class="context-card rank-2">
+          <div class="context-name">
+            <span class="context-medal">🥈</span>
+            skill-e2e
+            <span class="context-status">STRONG</span>
+          </div>
+          <div class="context-bar">
+            <div class="context-bar-fill" style="width: 88%;"></div>
+          </div>
+          <div class="context-meta">
+            <div class="meta-item">
+              <span class="meta-label">Genauigkeit</span>
+              <span class="meta-value">88%</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Verwendet</span>
+              <span class="meta-value">6×</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Feedback</span>
+              <span class="meta-value">✅ 5/6</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Trend</span>
+              <span class="meta-value">↗ +4%</span>
+            </div>
+          </div>
+          <button class="context-action">Deep Dive</button>
+        </div>
+
+        <!-- Rank 3 -->
+        <div class="context-card rank-3">
+          <div class="context-name">
+            <span class="context-medal">🥉</span>
+            ADR-0273
+            <span class="context-status">SOLID</span>
+          </div>
+          <div class="context-bar">
+            <div class="context-bar-fill" style="width: 85%;"></div>
+          </div>
+          <div class="context-meta">
+            <div class="meta-item">
+              <span class="meta-label">Genauigkeit</span>
+              <span class="meta-value">85%</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Verwendet</span>
+              <span class="meta-value">4×</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Feedback</span>
+              <span class="meta-value">⚠️ 2/4</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Trend</span>
+              <span class="meta-value">↔ Stabil</span>
+            </div>
+          </div>
+          <button class="context-action">Deep Dive</button>
+        </div>
+
+        <!-- Warning -->
+        <div class="context-card warning">
+          <div class="context-name">
+            <span>⚠️</span>
+            Memory-phase3
+            <span class="context-status warning">NEEDS TRAINING</span>
+          </div>
+          <div class="context-bar">
+            <div class="context-bar-fill" style="width: 78%; background: linear-gradient(90deg, var(--warning), #FFBB44);"></div>
+          </div>
+          <div class="context-meta">
+            <div class="meta-item">
+              <span class="meta-label">Genauigkeit</span>
+              <span class="meta-value">78%</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Verwendet</span>
+              <span class="meta-value">3×</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Feedback</span>
+              <span class="meta-value">❌ 1/3</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Trend</span>
+              <span class="meta-value">↓ -8%</span>
+            </div>
+          </div>
+          <button class="context-action" style="background: var(--warning);">Trainieren</button>
+        </div>
+
+        <!-- Critical -->
+        <div class="context-card critical">
+          <div class="context-name">
+            <span>🚨</span>
+            ADR-0271
+            <span class="context-status critical">STRUGGLING</span>
+          </div>
+          <div class="context-bar">
+            <div class="context-bar-fill" style="width: 72%; background: linear-gradient(90deg, var(--critical), #FF6666);"></div>
+          </div>
+          <div class="context-meta">
+            <div class="meta-item">
+              <span class="meta-label">Genauigkeit</span>
+              <span class="meta-value">72%</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Verwendet</span>
+              <span class="meta-value">2×</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Feedback</span>
+              <span class="meta-value">❌ 0/2</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Trend</span>
+              <span class="meta-value">↓ -3%</span>
+            </div>
+          </div>
+          <button class="context-action" style="background: var(--critical);">Feedback Geben</button>
+        </div>
+      </div>
+
+      <!-- Timeline Section -->
+      <div class="section-title">📰 Letzte Learning Events</div>
+      <div class="timeline">
+        <div class="timeline-item">
+          <div class="timeline-time">14:32</div>
+          <div class="timeline-event">
+            <div class="timeline-title">skill-e2e: Performance Sprung</div>
+            <div class="timeline-desc">+5% Verbesserung nach positivem Feedback</div>
+            <span class="timeline-badge">↗ Trend Reversal</span>
+          </div>
+        </div>
+
+        <div class="timeline-item">
+          <div class="timeline-time">13:15</div>
+          <div class="timeline-event">
+            <div class="timeline-title">🎉 ADR-0270 Milestone</div>
+            <div class="timeline-desc">Accuracy Grenze "90% erreicht und übertroffen</div>
+            <span class="timeline-badge">🏆 MVP Status</span>
+          </div>
+        </div>
+
+        <div class="timeline-item">
+          <div class="timeline-time">11:42</div>
+          <div class="timeline-event">
+            <div class="timeline-title">Memory-phase3: Warnung</div>
+            <div class="timeline-desc">2× negatives Feedback in Folge erkannt</div>
+            <span class="timeline-badge attention">⚠️ Attention Needed</span>
+          </div>
+        </div>
+
+        <div class="timeline-item">
+          <div class="timeline-time">08:20</div>
+          <div class="timeline-event">
+            <div class="timeline-title">Budget Match: Verbessert</div>
+            <div class="timeline-desc">Allokation jetzt 89% aligned zu Komplexität</div>
+            <span class="timeline-badge">✅ System Tuned</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="section-title">🎯 Was willst du machen?</div>
+      <div class="action-section">
+        <button class="action-btn">
+          💬 Feedback Geben
+          <small>Zeig mir: War das nützlich?</small>
+        </button>
+        <button class="action-btn">
+          🔗 Context Pairing
+          <small>Nutze 2 Kontexte zusammen</small>
+        </button>
+        <button class="action-btn">
+          🧪 Isolation Test
+          <small>Deaktiviere einen Kontext</small>
+        </button>
+        <button class="action-btn">
+          📚 Retraining
+          <small>Zeige Beispiele wo das gut läuft</small>
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
