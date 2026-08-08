@@ -302,6 +302,57 @@ def get_talent_events():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/v1/talent/history", methods=["GET"])
+def get_talent_history():
+    """Get daily talent score breakdown (for trend chart)."""
+    days = request.args.get("days", 7, type=int)
+    try:
+        calculator = get_talent_calculator()
+        daily = calculator.get_daily_breakdown(days=days)
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "daily": daily,
+            "days_returned": len(daily),
+        })
+    except Exception as e:
+        logger.error(f"History fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/talent/task-types", methods=["GET"])
+def get_task_type_performance():
+    """Get performance breakdown by task type."""
+    days = request.args.get("days", 7, type=int)
+    try:
+        calculator = get_talent_calculator()
+        task_perf = calculator.get_task_type_performance(days=days)
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "task_types": task_perf,
+            "count": len(task_perf),
+        })
+    except Exception as e:
+        logger.error(f"Task type performance failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/talent/correlation", methods=["GET"])
+def get_correlation_data():
+    """Get accuracy vs efficiency correlation (scatter plot)."""
+    days = request.args.get("days", 7, type=int)
+    try:
+        calculator = get_talent_calculator()
+        corr = calculator.get_component_correlation(days=days)
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "correlation": corr,
+            "points_count": len(corr.get("points", [])),
+        })
+    except Exception as e:
+        logger.error(f"Correlation fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint."""
