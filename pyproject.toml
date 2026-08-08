@@ -85,6 +85,8 @@ dependencies = [
     # gate, not optional. corvin-a2a pair emits a QR code for the friendship token.
     "jsonschema >= 4.0",
     "qrcode >= 7.0",
+    "flask>=3.1.3",
+    "flask-cors>=6.0.5",
 ]
 
 [project.optional-dependencies]
