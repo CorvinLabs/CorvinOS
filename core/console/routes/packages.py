@@ -1,19 +1,23 @@
 """Console API routes for package management (ADR-0268 Phase 1)."""
 from __future__ import annotations
 
-import json
+import tempfile
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from fastapi import APIRouter, Header, UploadFile, File
+from fastapi.responses import JSONResponse
 
 from core.package_manager import PackageManager
 from core.package_manager.validators import ValidationError
 
-packages_bp = Blueprint("packages", __name__, url_prefix="/api/v1/packages")
+router = APIRouter(prefix="/api/v1/packages", tags=["packages"])
 
 
-@packages_bp.route("/upload", methods=["POST"])
-def upload_package():
+@router.post("/upload", status_code=202)
+async def upload_package(
+    file: UploadFile = File(...),
+    x_tenant_id: str = Header(default="_default", alias="X-Tenant-ID"),
+):
     """
     Upload and install a skill package.
 
@@ -24,23 +28,19 @@ def upload_package():
         - 400: Invalid ZIP / manifest / dependencies
         - 409: Package already installed
     """
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-
-    file = request.files["file"]
-    if file.filename == "" or not file.filename.endswith(".zip"):
-        return jsonify({"error": "File must be a ZIP archive"}), 400
+    if not file.filename or not file.filename.endswith(".zip"):
+        return JSONResponse(
+            {"error": "File must be a ZIP archive"},
+            status_code=400,
+        )
 
     try:
-        # Get tenant from session or default
-        tenant_id = request.headers.get("X-Tenant-ID", "_default")
-        manager = PackageManager(tenant_id)
+        manager = PackageManager(x_tenant_id)
 
         # Save uploaded file to temp location
-        import tempfile
-
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-            file.save(tmp.name)
+            content = await file.read()
+            tmp.write(content)
             tmp_path = tmp.name
 
         # Load package (validates, extracts, checks deps)
@@ -52,71 +52,66 @@ def upload_package():
         # Extract permissions for approval modal
         permissions = pkg.manifest.get("permissions", [])
 
-        return (
-            jsonify(
-                {
-                    "status": "pending_approval",
-                    "package": {
-                        "id": pkg.id,
-                        "version": pkg.version,
-                        "name": pkg.manifest.get("name"),
-                        "path": pkg.path,
-                    },
-                    "permissions": permissions,
-                    "dependencies": pkg.manifest.get("dependencies", []),
-                }
-            ),
-            202,
-        )
+        return {
+            "status": "pending_approval",
+            "package": {
+                "id": pkg.id,
+                "version": pkg.version,
+                "name": pkg.manifest.get("name"),
+                "path": pkg.path,
+            },
+            "permissions": permissions,
+            "dependencies": pkg.manifest.get("dependencies", []),
+        }
 
     except ValidationError as e:
-        return (
-            jsonify(
-                {
-                    "error": e.message,
-                    "field": e.field,
-                    "details": e.details or {},
-                }
-            ),
-            400,
+        return JSONResponse(
+            {
+                "error": e.message,
+                "field": e.field,
+                "details": e.details or {},
+            },
+            status_code=400,
         )
     except Exception as e:
-        return (
-            jsonify({"error": f"Package installation failed: {str(e)}"}),
-            400,
+        return JSONResponse(
+            {"error": f"Package installation failed: {str(e)}"},
+            status_code=400,
         )
 
 
-@packages_bp.route("", methods=["GET"])
-def list_packages():
+@router.get("", status_code=200)
+async def list_packages(
+    x_tenant_id: str = Header(default="_default", alias="X-Tenant-ID"),
+):
     """
     List all installed packages.
 
     Returns:
         200: List of installed packages
     """
-    tenant_id = request.headers.get("X-Tenant-ID", "_default")
-    manager = PackageManager(tenant_id)
+    manager = PackageManager(x_tenant_id)
 
     packages = manager.list_packages()
-    return jsonify(
-        {
-            "packages": [
-                {
-                    "id": pkg.id,
-                    "version": pkg.version,
-                    "name": pkg.manifest.get("name"),
-                    "installed_at": pkg.installed_at,
-                    "enabled": pkg.enabled,
-                }
-                for pkg in packages.values()
-            ]
-        }
-    ), 200
+    return {
+        "packages": [
+            {
+                "id": pkg.id,
+                "version": pkg.version,
+                "name": pkg.manifest.get("name"),
+                "installed_at": pkg.installed_at,
+                "enabled": pkg.enabled,
+            }
+            for pkg in packages.values()
+        ]
+    }
 
 
-@packages_bp.route("/<package_id>", methods=["DELETE"])
-def delete_package(package_id: str):
+@router.delete("/{package_id}", status_code=204)
+async def delete_package(
+    package_id: str,
+    x_tenant_id: str = Header(default="_default", alias="X-Tenant-ID"),
+):
     """
     Uninstall (delete) a skill package.
 
@@ -125,20 +120,27 @@ def delete_package(package_id: str):
         404: Package not found
     """
     try:
-        tenant_id = request.headers.get("X-Tenant-ID", "_default")
-        manager = PackageManager(tenant_id)
-
+        manager = PackageManager(x_tenant_id)
         manager.unload_package(package_id)
-        return "", 204
+        return None
 
     except ValueError:
-        return jsonify({"error": f"Package not found: {package_id}"}), 404
+        return JSONResponse(
+            {"error": f"Package not found: {package_id}"},
+            status_code=404,
+        )
     except Exception as e:
-        return jsonify({"error": f"Uninstall failed: {str(e)}"}), 400
+        return JSONResponse(
+            {"error": f"Uninstall failed: {str(e)}"},
+            status_code=400,
+        )
 
 
-@packages_bp.route("/<package_id>/details", methods=["GET"])
-def get_package_details(package_id: str):
+@router.get("/{package_id}/details", status_code=200)
+async def get_package_details(
+    package_id: str,
+    x_tenant_id: str = Header(default="_default", alias="X-Tenant-ID"),
+):
     """
     Get full metadata for an installed package.
 
@@ -147,26 +149,26 @@ def get_package_details(package_id: str):
         404: Package not found
     """
     try:
-        tenant_id = request.headers.get("X-Tenant-ID", "_default")
-        manager = PackageManager(tenant_id)
+        manager = PackageManager(x_tenant_id)
 
         pkg = manager.get_package(package_id)
         if not pkg:
-            return jsonify({"error": f"Package not found: {package_id}"}), 404
+            return JSONResponse(
+                {"error": f"Package not found: {package_id}"},
+                status_code=404,
+            )
 
-        return (
-            jsonify(
-                {
-                    "id": pkg.id,
-                    "version": pkg.version,
-                    "path": pkg.path,
-                    "installed_at": pkg.installed_at,
-                    "enabled": pkg.enabled,
-                    "manifest": pkg.manifest,
-                }
-            ),
-            200,
-        )
+        return {
+            "id": pkg.id,
+            "version": pkg.version,
+            "path": pkg.path,
+            "installed_at": pkg.installed_at,
+            "enabled": pkg.enabled,
+            "manifest": pkg.manifest,
+        }
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=400,
+        )

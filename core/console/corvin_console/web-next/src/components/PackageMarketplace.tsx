@@ -303,16 +303,18 @@ export const PackageMarketplace: React.FC = () => {
         }
 
         .error-message {
-          background: #fee;
-          color: #c00;
+          background: #ffebee;
+          color: #d32f2f;
+          border-left: 4px solid #d32f2f;
           padding: 12px;
           border-radius: 4px;
           margin-bottom: 20px;
         }
 
         .status-message {
-          background: #efe;
-          color: #0a0;
+          background: #e8f5e9;
+          color: #2e7d32;
+          border-left: 4px solid #2e7d32;
           padding: 12px;
           border-radius: 4px;
           margin-bottom: 20px;
