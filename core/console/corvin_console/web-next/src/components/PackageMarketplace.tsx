@@ -116,15 +116,18 @@ export const PackageMarketplace: React.FC = () => {
 
       // Schedule package list refresh with proper cleanup
       const timeoutId = setTimeout(() => {
+        // Remove from pending list when it fires (callback executed)
+        const index = pendingTimeoutsRef.current.indexOf(timeoutId)
+        if (index >= 0) {
+          pendingTimeoutsRef.current.splice(index, 1)
+        }
         if (isMountedRef.current) {
           fetchPackages()
           setUploadStatus(null)
         }
-        // Remove from pending list when it fires
-        pendingTimeoutsRef.current = pendingTimeoutsRef.current.filter(t => t !== timeoutId)
       }, 1500)
 
-      // Add to pending timeouts so cleanup on unmount clears it
+      // Add to pending BEFORE scheduling (so cleanup can clear it if needed)
       pendingTimeoutsRef.current.push(timeoutId)
     } catch (err) {
       if (isMountedRef.current) {
@@ -159,11 +162,15 @@ export const PackageMarketplace: React.FC = () => {
       if (isMountedRef.current) setUploadStatus('Package uninstalled successfully!')
 
       const timeoutId = setTimeout(() => {
+        // Remove from pending list when it fires
+        const index = pendingTimeoutsRef.current.indexOf(timeoutId)
+        if (index >= 0) {
+          pendingTimeoutsRef.current.splice(index, 1)
+        }
         if (isMountedRef.current) {
           fetchPackages()
           setUploadStatus(null)
         }
-        pendingTimeoutsRef.current = pendingTimeoutsRef.current.filter(t => t !== timeoutId)
       }, 1500)
 
       pendingTimeoutsRef.current.push(timeoutId)
