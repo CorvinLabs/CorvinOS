@@ -28,7 +28,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
+# FastAPI's ``Path`` is a path-PARAMETER declarator, not ``pathlib.Path``.
+# Importing it unaliased shadows the ``pathlib.Path`` imported above, and the
+# module-level ``Path.home()`` on the next lines then dies with
+# AttributeError: 'function' object has no attribute 'home' — which the
+# gateway's plugin-mount try/except downgrades to a log warning, silently
+# dropping EVERY console route. Keep it aliased.
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Path as PathParam,
+    Query,
+    UploadFile,
+)
 from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
@@ -458,7 +472,7 @@ async def list_packages(
 @router.get("/{package_id}/details")
 async def get_package_details(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature)],
-    package_id: str = Path(..., description="package identifier"),
+    package_id: str = PathParam(..., description="package identifier"),
 ) -> PackageDetails:
     """Get full metadata for an installed package.
 
@@ -505,7 +519,7 @@ async def get_package_details(
 @router.delete("/{package_id}")
 async def uninstall_package(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature_csrf)],
-    package_id: str = Path(..., description="package identifier"),
+    package_id: str = PathParam(..., description="package identifier"),
 ) -> dict[str, Any]:
     """Uninstall a skill package.
 

@@ -69,11 +69,14 @@ class ContextSuggestionGate:
                 target_exists = baseline_link.exists()
 
             if target_exists:
-                # MEDIUM FIX M1 + ITERATION 5 FIX I5-2: Check cache (with LRU eviction)
+                # MEDIUM FIX M1 + CODE REVIEW I6-4: Fix TOCTOU race in cache check
+                # MUST read mtime INSIDE lock to prevent file modification race
                 cache_key = (self.tenant_id, str(baseline_link.resolve()))
-                current_mtime = baseline_link.stat().st_mtime
 
                 with _cache_lock:
+                    # Read mtime INSIDE lock to detect concurrent modifications
+                    current_mtime = baseline_link.stat().st_mtime
+
                     if cache_key in _profile_cache:
                         cached_data, cached_mtime = _profile_cache[cache_key]
                         if cached_mtime == current_mtime:
@@ -84,7 +87,7 @@ class ContextSuggestionGate:
                             logger.debug(f"CR-6: Guard loaded from cache (mtime unchanged)")
                             return
 
-                # Cache miss or stale (mtime changed); read content
+                # Cache miss or stale (mtime changed); read content OUTSIDE lock
                 import json
                 with open(baseline_link, "r") as f:
                     file_content = f.read()
@@ -92,6 +95,9 @@ class ContextSuggestionGate:
                 # Update cache with mtime (not hash; faster)
                 profile_data = json.loads(file_content)
                 with _cache_lock:
+                    # Check mtime again (file could have changed during read)
+                    final_mtime = baseline_link.stat().st_mtime
+
                     # ITERATION 5 FIX I5-2: Implement LRU eviction
                     if cache_key not in _profile_cache:
                         # Check if cache is full
@@ -101,7 +107,7 @@ class ContextSuggestionGate:
                             del _profile_cache[oldest_key]
                             logger.debug(f"CR-6: Evicted oldest cache entry to make room")
 
-                    _profile_cache[cache_key] = (profile_data, current_mtime)
+                    _profile_cache[cache_key] = (profile_data, final_mtime)
                     _profile_cache.move_to_end(cache_key)  # Mark as most recent
 
                 self.guard = ExtensibleDangerZoneGuard({"tenant-baseline": profile_data})

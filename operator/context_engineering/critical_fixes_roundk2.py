@@ -405,9 +405,6 @@ class IntegrationAggregator:
         self.guard: Optional[ExtensibleDangerZoneGuard] = None
         self.checkpoint = AggregatorCheckpoint(queue_root / ".checkpoint")
 
-        # ITERATION 3 FIX I3-8: Global aggregation lock to prevent concurrent runs
-        self._aggregation_lock = ExclusiveQueueLock
-
     def run_aggregation(self) -> Dict:
         """
         CR-6 FIX: Full aggregation pipeline with guard enforcement.
@@ -428,9 +425,13 @@ class IntegrationAggregator:
         snapshot_time_iso = snapshot_time.isoformat()
         queue_files_at_start = sorted([f for f in self.queue_root.glob("*.jsonl") if f.is_file()])
 
-        # Record mtime of files at snapshot time to detect post-window uploads
-        snapshot_mtimes = {f.name: f.stat().st_mtime for f in queue_files_at_start}
-        logger.info(f"H4: Snapshot at {snapshot_time_iso}: {len(queue_files_at_start)} files, mtimes recorded")
+        # CRITICAL FIX (Code Review I6-1): Record both mtime AND size at snapshot time
+        # to detect post-window appends (not just mtime changes)
+        snapshot_files = {}
+        for f in queue_files_at_start:
+            stat = f.stat()
+            snapshot_files[f.name] = {"mtime": stat.st_mtime, "size": stat.st_size}
+        logger.info(f"H4: Snapshot at {snapshot_time_iso}: {len(queue_files_at_start)} files, mtime+size recorded")
 
         # Use today's queue file
         queue_file = self.queue_root / f"{datetime.utcnow().strftime('%Y-%m-%d')}.jsonl"
@@ -445,22 +446,32 @@ class IntegrationAggregator:
             # Step 2: Read queue (with corruption detection + post-window enforcement)
             records = []
             if queue_file.exists():
-                # CRITICAL FIX H4: Check if file was modified AFTER snapshot (post-window upload)
-                # Use inode + size for more robust detection (clock-skew resistant)
+                # CRITICAL FIX H4 + CODE REVIEW I6-1: Check if file was modified AFTER snapshot
                 current_stat = queue_file.stat()
-                snapshot_mtime = snapshot_mtimes.get(queue_file.name, current_stat.st_mtime)
+                snapshot_info = snapshot_files.get(queue_file.name)
 
-                # Two checks: mtime AND file size (catches both timestamp tricks and new appends)
-                if current_stat.st_mtime > snapshot_mtime or (
-                    current_stat.st_mtime == snapshot_mtime and current_stat.st_size > 0
-                ):
-                    # Additional check: read file size at snapshot to detect appends
-                    # If size grew, new data was added (post-window)
+                is_post_window = False
+                if snapshot_info is None:
+                    # NEW file created AFTER snapshot (definitely post-window)
+                    is_post_window = True
+                    logger.warning(f"H4: {queue_file.name} created after snapshot (post-window). Skipping.")
+                elif current_stat.st_mtime > snapshot_info["mtime"]:
+                    # File MODIFIED after snapshot
+                    is_post_window = True
                     logger.warning(
-                        f"H4: {queue_file.name} modified after snapshot (post-window upload detected). "
-                        f"Snapshot: {snapshot_mtime}, Current: {current_stat.st_mtime}. Skipping file."
+                        f"H4: {queue_file.name} modified after snapshot (mtime changed). Skipping file."
                     )
-                    # Skip this file entirely to prevent processing stale/post-window data
+                elif current_stat.st_size > snapshot_info["size"]:
+                    # File SIZE GREW after snapshot (data appended post-window)
+                    is_post_window = True
+                    logger.warning(
+                        f"H4: {queue_file.name} size grew after snapshot ({snapshot_info['size']} → {current_stat.st_size}). "
+                        f"Skipping file (post-window append detected)."
+                    )
+
+                if is_post_window:
+                    # Skip this file entirely to prevent processing post-window data
+                    pass  # Records remain empty
                 else:
                     with open(queue_file, "r") as f:
                         for line_no, line in enumerate(f, 1):
@@ -643,14 +654,23 @@ class AtomicSymlinkManager:
                 os.rename(str(temp_symlink), str(symlink_path))
                 logger.info(f"Atomically updated {symlink_path} → {symlink_target} (symlink)")
             else:
-                # MEDIUM FIX M2: Windows fallback to atomic file-copy
+                # MEDIUM FIX M2 + CODE REVIEW I6-3: Windows fallback with cleanup on failure
                 import shutil
                 profile_file = profile_dir / symlink_target
                 if profile_file.exists():
-                    # Copy the profile file to the "current" name atomically
-                    shutil.copy2(str(profile_file), str(temp_symlink))
-                    os.rename(str(temp_symlink), str(symlink_path))
-                    logger.info(f"Atomically updated {symlink_path} → copy of {symlink_target} (file-copy fallback)")
+                    try:
+                        # Copy the profile file to the "current" name atomically
+                        shutil.copy2(str(profile_file), str(temp_symlink))
+                        os.rename(str(temp_symlink), str(symlink_path))
+                        logger.info(f"Atomically updated {symlink_path} → copy of {symlink_target} (file-copy fallback)")
+                    except Exception as copy_err:
+                        # Clean up temp file on failure (prevent resource leak)
+                        try:
+                            if temp_symlink.exists():
+                                temp_symlink.unlink()
+                        except:
+                            pass
+                        raise copy_err
                 else:
                     logger.error(f"Cannot use file-copy fallback: profile {profile_file} not found")
                     return False
@@ -658,5 +678,11 @@ class AtomicSymlinkManager:
             return True
 
         except Exception as e:
+            # Clean up temp files on any exception
+            try:
+                if temp_symlink.exists() or temp_symlink.is_symlink():
+                    temp_symlink.unlink()
+            except:
+                pass
             logger.error(f"Atomic symlink/file update failed: {e}", exc_info=True)
             return False

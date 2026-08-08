@@ -118,13 +118,17 @@ class MeasurementCollector:
         try:
             self.queue_dir.mkdir(parents=True, exist_ok=True)
 
-            # MEDIUM FIX M4 + ITERATION 4 FIX I4-5: Verify directory is actually writable
+            # MEDIUM FIX M4 + CODE REVIEW I6-5: Verify directory is actually writable
+            # Distinguish permission errors from other OS errors
             test_file = self.queue_dir / ".write_test"
             try:
                 test_file.write_text("")
                 test_file.unlink()
-            except Exception as e:
-                raise PermissionError(f"Measurement queue directory is not writable") from e
+            except PermissionError as perm_err:
+                raise PermissionError(f"Measurement queue directory is not writable") from perm_err
+            except (FileNotFoundError, OSError) as os_err:
+                # Directory was deleted between mkdir and write, or other OS error
+                raise ValueError(f"Measurement queue directory became inaccessible") from os_err
 
         except PermissionError as e:
             # MEDIUM FIX M4 + ITERATION 3 FIX I3-6: Don't leak full filesystem paths in exceptions (GDPR)
