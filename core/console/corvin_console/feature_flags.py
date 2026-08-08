@@ -545,6 +545,20 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         target_release="0.13.x",
         tags=("plugins",),
     ),
+    FeatureFlag(
+        id="package_marketplace_ui",
+        label="Package Marketplace UI redesign",
+        description=(
+            "Show the redesigned Package Marketplace interface with package "
+            "cards, search, and details modal. The new UI provides a modern, "
+            "user-friendly way to discover, view, and manage installed packages "
+            "with license, dependencies, and permissions information. Off means "
+            "the marketplace page is not accessible."
+        ),
+        owner="maintainer",
+        target_release="0.10.x",
+        tags=("console", "packages"),
+    ),
 )
 
 

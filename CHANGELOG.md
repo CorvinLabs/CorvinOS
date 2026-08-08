@@ -6,6 +6,33 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.124] — 2026-08-09 — Package Marketplace hardening
+
+### Fixed — Duplicate route registration in Package Marketplace
+
+The packages router was mounted both directly in `standalone.py` (line 479) 
+and indirectly through the main router registered in `app.py`. This duplicate 
+registration caused route conflicts and incorrect path stacking.
+
+Removed the direct mount in `standalone.py` since `app.py` already registers 
+the packages router.
+
+### Fixed — Async/sync race condition in Package Details modal
+
+When clicking "View Details" on a package, the modal component was 
+synchronously casting incomplete PackageInfo to PackageDetails before the 
+async `fetchPackageDetails()` call completed. This caused the modal to render 
+with undefined license, dependencies, and permissions fields.
+
+Fixed by removing the premature `setSelectedPackage()` call that fired before 
+the async fetch finished. The modal now only updates after the full details 
+are loaded.
+
+### Added — Feature flag for Package Marketplace UI
+
+Wrapped the Package Marketplace UI behind a new `package_marketplace_ui` 
+feature flag (dark-by-default per CLAUDE.md § Feature Flags). This allows the 
+operator to control whether the redesigned marketplace is visible in the console.
 
 ## [0.10.122] — 2026-08-08 — Package Marketplace UI redesign
 
