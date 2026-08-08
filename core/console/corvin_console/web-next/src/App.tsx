@@ -18,6 +18,7 @@ import {
   VoicePage,
   ForgePage,
   SkillsPage,
+  PackagesPage,
   CoworkPage,
   LddPage,
   CompliancePage,
@@ -153,6 +154,7 @@ export default function App() {
             <Route path="voice" element={<VoicePage />} />
             <Route path="forge" element={<ForgePage />} />
             <Route path="skills" element={<SkillsPage />} />
+            <Route path="packages" element={<PackagesPage />} />
             <Route path="cowork" element={<CoworkPage />} />
             <Route path="ldd" element={<LddPage />} />
             <Route path="compliance" element={<CompliancePage />} />

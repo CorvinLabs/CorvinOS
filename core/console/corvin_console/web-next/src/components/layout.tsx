@@ -149,6 +149,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/compute",    label: "Agentic Compute", icon: Gauge },
       { to: "/app/forge",      label: "Tools",           icon: Hammer },
       { to: "/app/skills",     label: "Skills",          icon: BookOpen },
+      { to: "/app/packages",   label: "Packages",        icon: Package },
       { to: "/app/agents",      label: "Agents",          icon: ShieldCheck },
       { to: "/app/extensions",  label: "Extensions",      icon: Puzzle },
       { to: "/app/mcp-plugins", label: "MCP Plugins",     icon: Package },
