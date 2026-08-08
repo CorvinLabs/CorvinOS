@@ -465,6 +465,297 @@ class TalentScoreCalculator:
 
         return {"points": points}
 
+    def extract_learning_narratives(self, days: int = 7) -> List[Dict]:
+        """
+        Extract what was learned in natural language.
+
+        Returns:
+            List of narrative insights about improvements, patterns, concepts.
+        """
+        narratives = []
+        records = self.get_recent_records(days=days)
+
+        # Narrative 1: Major context improvements
+        ranking = self.compute_context_ranking(records)
+        if ranking:
+            for ctx in ranking[:3]:
+                if ctx["accuracy"] >= 0.85:
+                    narratives.append({
+                        "type": "milestone",
+                        "icon": "🎓",
+                        "title": f"Meistery: {ctx['id']}",
+                        "description": f"Context '{ctx['id']}' reached {ctx['accuracy']*100:.0f}% accuracy — now a trusted mentor",
+                        "importance": "high",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    })
+                elif ctx["feedback_pct"] >= 75:
+                    narratives.append({
+                        "type": "feedback_win",
+                        "icon": "✅",
+                        "title": f"Learning Signal: {ctx['id']}",
+                        "description": f"Context '{ctx['id']}' has {ctx['feedback_pct']:.0f}% helpful feedback — strong learning signal",
+                        "importance": "medium",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    })
+
+        # Narrative 2: Task type diversity
+        task_types = set(c.get("task_type") for c in records["choices"])
+        if len(task_types) >= 3:
+            narratives.append({
+                "type": "diversity",
+                "icon": "🌈",
+                "title": f"Versatility Gained",
+                "description": f"You've worked with {len(task_types)} different task types: {', '.join(sorted(task_types))}",
+                "importance": "medium",
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+
+        # Narrative 3: Accuracy trend
+        if records["predictions"]:
+            recent_acc = self.compute_accuracy(records["predictions"][:20])
+            older_acc = self.compute_accuracy(records["predictions"][-20:]) if len(records["predictions"]) > 20 else 0.5
+            improvement = (recent_acc - older_acc) * 100
+            if improvement > 5:
+                narratives.append({
+                    "type": "trend_up",
+                    "icon": "📈",
+                    "title": "Accuracy Improving",
+                    "description": f"Your prediction accuracy improved by {improvement:.1f}% over the measurement period",
+                    "importance": "high",
+                    "timestamp": datetime.utcnow().isoformat(),
+                })
+
+        # Narrative 4: Efficiency pattern
+        if records["budget"]:
+            avg_match = sum(b.get("match_score", 0.5) for b in records["budget"]) / len(records["budget"])
+            if avg_match >= 0.80:
+                narratives.append({
+                    "type": "efficiency",
+                    "icon": "⚡",
+                    "title": "Budget Alignment",
+                    "description": f"Your complexity-budget match score is {avg_match*100:.0f}% — excellent resource allocation",
+                    "importance": "medium",
+                    "timestamp": datetime.utcnow().isoformat(),
+                })
+
+        # Narrative 5: Learning velocity
+        helpful_count = len([f for f in records["feedback"] if f.get("feedback_impact") == "helpful"])
+        if helpful_count > 5:
+            velocity = (helpful_count / max(1, len(records["feedback"]))) * 100
+            narratives.append({
+                "type": "learning_velocity",
+                "icon": "🚀",
+                "title": "Fast Learning",
+                "description": f"{velocity:.0f}% of feedback was helpful — you're learning quickly",
+                "importance": "high",
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+
+        return sorted(narratives, key=lambda x: x["importance"] == "high", reverse=True)
+
+    def get_dimension_insights(self, days: int = 7) -> List[Dict]:
+        """
+        Analyze each dimension (Accuracy, Learning, Variety, Efficiency).
+
+        Returns:
+            List of insights about what changed in each dimension.
+        """
+        records = self.get_recent_records(days=days)
+        score, components = self.compute_talent_score(records)
+
+        # Compare to previous period
+        yesterday = self.get_recent_records(days=1)
+        yesterday_score, yesterday_comp = self.compute_talent_score(yesterday)
+
+        insights = []
+
+        # Accuracy insight
+        acc_change = components["accuracy"] - yesterday_comp["accuracy"]
+        insights.append({
+            "dimension": "Accuracy",
+            "icon": "🎯",
+            "current": round(components["accuracy"] * 100, 1),
+            "change": round(acc_change * 100, 1),
+            "status": "up" if acc_change > 0 else "down" if acc_change < 0 else "stable",
+            "narrative": f"Prediction accuracy is {components['accuracy']*100:.0f}%",
+            "analysis": "How well your predictions match reality"
+        })
+
+        # Learning Rate insight
+        lr_change = components["learning_rate"] - yesterday_comp["learning_rate"]
+        insights.append({
+            "dimension": "Learning Rate",
+            "icon": "📚",
+            "current": round(components["learning_rate"] * 100, 1),
+            "change": round(lr_change * 100, 1),
+            "status": "up" if lr_change > 0 else "down" if lr_change < 0 else "stable",
+            "narrative": f"Learning velocity is {components['learning_rate']*100:.0f}% of feedback is helpful",
+            "analysis": "How fast you learn from feedback"
+        })
+
+        # Variety insight
+        var_change = components["variety"] - yesterday_comp["variety"]
+        insights.append({
+            "dimension": "Variety",
+            "icon": "🌈",
+            "current": round(components["variety"] * 100, 1),
+            "change": round(var_change * 100, 1),
+            "status": "up" if var_change > 0 else "down" if var_change < 0 else "stable",
+            "narrative": f"You're working with {int(components['variety']*10)} different task types",
+            "analysis": "Breadth of skills and task diversity"
+        })
+
+        # Efficiency insight
+        eff_change = components["efficiency"] - yesterday_comp["efficiency"]
+        insights.append({
+            "dimension": "Efficiency",
+            "icon": "⚡",
+            "current": round(components["efficiency"] * 100, 1),
+            "change": round(eff_change * 100, 1),
+            "status": "up" if eff_change > 0 else "down" if eff_change < 0 else "stable",
+            "narrative": f"Resource allocation match is {components['efficiency']*100:.0f}%",
+            "analysis": "How well you match budget to task complexity"
+        })
+
+        return insights
+
+    def get_milestone_badges(self, days: int = 7) -> List[Dict]:
+        """
+        Identify concepts/skills that have been mastered (milestones).
+
+        Returns:
+            List of badge achievements.
+        """
+        records = self.get_recent_records(days=days)
+        ranking = self.compute_context_ranking(records)
+        badges = []
+
+        # Milestone: High accuracy context (MVP status)
+        for ctx in ranking:
+            if ctx["accuracy"] >= 0.90:
+                badges.append({
+                    "badge": "🏆",
+                    "title": "Context Master",
+                    "description": f"'{ctx['id']}' achieved 90%+ accuracy",
+                    "context": ctx["id"],
+                    "level": "elite",
+                    "achievement_date": datetime.utcnow().isoformat(),
+                })
+                break
+
+        # Milestone: High accuracy context (Strong)
+        for ctx in ranking:
+            if 0.80 <= ctx["accuracy"] < 0.90:
+                badges.append({
+                    "badge": "🥈",
+                    "title": "Strong Performer",
+                    "description": f"'{ctx['id']}' has solid {ctx['accuracy']*100:.0f}% accuracy",
+                    "context": ctx["id"],
+                    "level": "advanced",
+                    "achievement_date": datetime.utcnow().isoformat(),
+                })
+                break
+
+        # Milestone: Task type mastery
+        task_types = {}
+        for choice in records["choices"]:
+            tt = choice.get("task_type", "unknown")
+            task_types[tt] = task_types.get(tt, 0) + 1
+
+        for task_type, count in sorted(task_types.items(), key=lambda x: x[1], reverse=True)[:3]:
+            if count >= 5:
+                badges.append({
+                    "badge": "🎓",
+                    "title": f"{task_type.title()} Expert",
+                    "description": f"Completed {count} {task_type} tasks",
+                    "context": task_type,
+                    "level": "expert",
+                    "achievement_date": datetime.utcnow().isoformat(),
+                })
+
+        # Milestone: Learning velocity
+        helpful = len([f for f in records["feedback"] if f.get("feedback_impact") == "helpful"])
+        if helpful >= 10:
+            badges.append({
+                "badge": "🚀",
+                "title": "Fast Learner",
+                "description": f"{helpful} helpful feedback interactions",
+                "context": "feedback",
+                "level": "advanced",
+                "achievement_date": datetime.utcnow().isoformat(),
+            })
+
+        return badges
+
+    def get_improvement_story(self, days: int = 7) -> Dict:
+        """
+        Generate a narrative story of how you've improved.
+
+        Returns:
+            Dict with title, chapters (timeline), and overall summary.
+        """
+        daily = self.get_daily_breakdown(days=days)
+        records = self.get_recent_records(days=days)
+        ranking = self.compute_context_ranking(records)
+
+        # Calculate changes
+        if len(daily) >= 2:
+            first_score = daily[0]["score"]
+            last_score = daily[-1]["score"]
+            score_change = last_score - first_score
+        else:
+            first_score = 5.0
+            last_score = 5.0
+            score_change = 0
+
+        # Build story chapters (one per day)
+        chapters = []
+        for i, day in enumerate(daily):
+            if i == 0:
+                phase = "Foundation"
+            elif score_change > 0 and i > len(daily) * 0.5:
+                phase = "Acceleration"
+            elif score_change < 0 and i > len(daily) * 0.5:
+                phase = "Recalibration"
+            else:
+                phase = "Growth"
+
+            chapters.append({
+                "date": day["date"],
+                "phase": phase,
+                "score": day["score"],
+                "accuracy": day["accuracy"],
+                "learning_rate": day["learning_rate"],
+                "variety": day["variety"],
+                "efficiency": day["efficiency"],
+            })
+
+        # Overall summary
+        summary = f"Over the past {days} days, your system "
+        if score_change > 1:
+            summary += f"improved significantly by {abs(score_change):.1f} points (from {first_score:.1f} to {last_score:.1f})"
+        elif score_change > 0:
+            summary += f"showed steady improvement of {score_change:.1f} points"
+        elif score_change < -1:
+            summary += f"shifted focus and recalibrated by {abs(score_change):.1f} points"
+        else:
+            summary += f"maintained consistent performance at {last_score:.1f}"
+
+        summary += ". "
+        if ranking and ranking[0]["accuracy"] >= 0.85:
+            summary += f"Your top context '{ranking[0]['id']}' is performing exceptionally well."
+
+        return {
+            "title": "Your Learning Journey",
+            "summary": summary,
+            "duration_days": days,
+            "score_start": round(first_score, 1),
+            "score_end": round(last_score, 1),
+            "score_change": round(score_change, 1),
+            "trend": "improving" if score_change > 0 else "recalibrating" if score_change < -0.5 else "stable",
+            "chapters": chapters,
+        }
+
     def generate_talent_report(self, days: int = 7) -> Dict:
         """
         Generate complete talent report for Console.
