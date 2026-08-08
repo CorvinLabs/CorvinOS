@@ -124,9 +124,12 @@ class MeasurementCollector:
                 test_file.write_text("")
                 test_file.unlink()
             except PermissionError as perm_err:
+                # K=8 Polish: Specific exception ordering (PermissionError before OSError)
                 raise PermissionError(f"Measurement queue directory is not writable") from perm_err
-            except (FileNotFoundError, OSError) as os_err:
-                raise ValueError(f"Measurement queue directory became inaccessible") from os_err
+            except FileNotFoundError as fnf_err:
+                raise ValueError(f"Measurement queue directory became inaccessible") from fnf_err
+            except OSError as os_err:
+                raise ValueError(f"Measurement queue directory I/O error") from os_err
 
         except PermissionError:
             raise PermissionError(f"Measurement queue directory not accessible (permission denied)")
