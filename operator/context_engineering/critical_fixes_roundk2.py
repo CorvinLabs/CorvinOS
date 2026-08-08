@@ -10,7 +10,7 @@ import hashlib
 import os
 import threading
 from pathlib import Path
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import logging
@@ -325,6 +325,49 @@ class ExtensibleDangerZoneGuard:
 # CR-6 FIX: Aggregator Integration (Wires Guard Into Actual Code)
 # ============================================================================
 
+class AggregatorCheckpoint:
+    """H1 FIX: Atomic checkpoint for aggregation state."""
+
+    def __init__(self, checkpoint_dir: Path):
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_file = checkpoint_dir / "aggregator.checkpoint.json"
+
+    def save(self, state: Dict) -> bool:
+        """H1 FIX: Atomically save checkpoint state."""
+        temp_file = self.checkpoint_file.with_suffix(".tmp")
+        try:
+            # Write to temp with fsync
+            with open(temp_file, "w") as f:
+                json.dump(state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Atomic rename
+            os.rename(str(temp_file), str(self.checkpoint_file))
+            logger.debug(f"Checkpoint saved: {state}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Checkpoint save failed: {e}", exc_info=True)
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
+            return False
+
+    def load(self) -> Optional[Dict]:
+        """Load last checkpoint state."""
+        try:
+            if self.checkpoint_file.exists():
+                with open(self.checkpoint_file, "r") as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.error(f"Checkpoint load failed: {e}")
+        return None
+
+
 class IntegrationAggregator:
     """
     CR-6 FIX: Aggregator that uses all C1–C4 components together.
@@ -337,20 +380,29 @@ class IntegrationAggregator:
         self.profile_dir = profile_dir
         self.tenant_id = tenant_id
         self.guard: Optional[ExtensibleDangerZoneGuard] = None
+        self.checkpoint = AggregatorCheckpoint(queue_root / ".checkpoint")
 
     def run_aggregation(self) -> Dict:
         """
         CR-6 FIX: Full aggregation pipeline with guard enforcement.
 
         Steps:
+        0. H2: Take file snapshot at window start
         1. Acquire exclusive lock on queue (C2 fixed)
         2. Read queue file with corruption detection (C1 fixed)
         3. Compute new profiles
         4. Load guard with danger zones (C4 fixed)
         5. Filter suggested contexts through guard
         6. Atomically update symlink (C3 fixed)
-        7. Release lock
+        7. Save checkpoint (H1 fixed)
+        8. Release lock
         """
+        # Step 0: H2 - File snapshot at aggregation start (guards against post-window uploads)
+        snapshot_time = datetime.utcnow().isoformat()
+        queue_files_at_start = sorted([f for f in self.queue_root.glob("*.jsonl") if f.is_file()])
+        logger.info(f"H2: Snapshot at {snapshot_time}: {len(queue_files_at_start)} files")
+
+        # Use today's queue file
         queue_file = self.queue_root / f"{datetime.utcnow().strftime('%Y-%m-%d')}.jsonl"
 
         # Step 1: Acquire exclusive lock
@@ -383,6 +435,8 @@ class IntegrationAggregator:
                 "version": datetime.utcnow().strftime("%Y%m%d%H%M"),
                 "record_count": len(records),
                 "danger_zones": self._extract_danger_zones_from_records(records),
+                "snapshot_time": snapshot_time,
+                "files_processed": [f.name for f in queue_files_at_start],
             }
 
             # Step 4: Load guard with new profile
@@ -409,15 +463,25 @@ class IntegrationAggregator:
                 logger.error("Failed to update symlink atomically")
                 return {"success": False, "reason": "symlink_update_failed"}
 
+            # Step 7: H1 - Save checkpoint (atomic)
+            checkpoint_state = {
+                "timestamp": snapshot_time,
+                "records_processed": len(records),
+                "profile_version": new_profile["version"],
+                "files_processed": new_profile["files_processed"],
+            }
+            self.checkpoint.save(checkpoint_state)
+
             return {
                 "success": True,
                 "records_processed": len(records),
                 "contexts_approved": len(approved),
                 "audit_blocks": len(self.guard.get_audit_log()),
+                "checkpoint_saved": True,
             }
 
         finally:
-            # Step 7: Release lock
+            # Step 8: Release lock
             ExclusiveQueueLock.release(queue_file)
 
     @staticmethod
