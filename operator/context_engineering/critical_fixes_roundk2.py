@@ -296,14 +296,14 @@ class ExtensibleDangerZoneGuard:
                     self.blocked_count += 1
                     reason = f"Danger zone: {pattern.description}"
 
-                    # CR-6 FIX: Audit trail
+                    # CR-6 FIX: Audit trail (anonymize user_id for GDPR)
                     audit_entry = {
                         "type": "context_blocked",
                         "timestamp": datetime.utcnow().isoformat(),
                         "context_id": context_id,
                         "danger_pattern": pattern.name,
                         "conditions": conditions,
-                        "user_id": user_id,
+                        # CRITICAL: Don't log raw user_id (GDPR Art. 30/32)
                     }
                     self.audit_log.append(audit_entry)
 
@@ -311,8 +311,19 @@ class ExtensibleDangerZoneGuard:
                     return False, reason
 
             except Exception as e:
-                logger.error(f"Error evaluating pattern {pattern.name}: {e}")
-                # Don't block on pattern evaluation error; log and continue
+                # CRITICAL: Pattern evaluation failed - this is a security issue
+                # Fail safely: assume dangerous and block the context
+                logger.critical(f"Guard pattern {pattern.name} evaluation FAILED: {e} — blocking {context_id} for safety")
+                reason = f"Guard evaluation error (fail-safe): {pattern.name}"
+                audit_entry = {
+                    "type": "context_blocked_guard_error",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "context_id": context_id,
+                    "danger_pattern": pattern.name,
+                    "error": str(e),
+                }
+                self.audit_log.append(audit_entry)
+                return False, reason
 
         return True, None
 
