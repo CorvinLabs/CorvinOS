@@ -51,7 +51,7 @@ export const PackageMarketplace: React.FC = () => {
   const fetchPackages = async () => {
     try {
       setLoading(true)
-      const response = await fetch('/api/v1/packages')
+      const response = await fetch('/v1/console/packages')
       if (!response.ok) throw new Error(`Failed to fetch packages: ${response.statusText}`)
       const data = await response.json()
       if (isMountedRef.current) {
@@ -92,7 +92,7 @@ export const PackageMarketplace: React.FC = () => {
       const formData = new FormData()
       formData.append('file', selectedFile)
 
-      const response = await fetch('/api/v1/packages/upload', {
+      const response = await fetch('/v1/console/packages/upload', {
         method: 'POST',
         body: formData,
       })
@@ -144,7 +144,7 @@ export const PackageMarketplace: React.FC = () => {
 
     try {
       if (isMountedRef.current) setUploadStatus(`Uninstalling ${packageId}...`)
-      const response = await fetch(`/api/v1/packages/${packageId}`, {
+      const response = await fetch(`/v1/console/packages/${packageId}`, {
         method: 'DELETE',
       })
 
