@@ -63,6 +63,10 @@ export const SkillsPage = React.lazy(() =>
   import("@/pages/skills").then((m) => ({ default: m.SkillsPage }))
 );
 
+export const PackagesPage = React.lazy(() =>
+  import("@/pages/packages").then((m) => ({ default: m.PackagesPage }))
+);
+
 export const CoworkPage = React.lazy(() =>
   import("@/pages/cowork").then((m) => ({ default: m.CoworkPage }))
 );
