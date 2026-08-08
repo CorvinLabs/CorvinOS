@@ -7,6 +7,23 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.122] — 2026-08-08 — Package Marketplace UI redesign
+
+### Added — Beautiful new Package Marketplace interface
+
+Complete redesign of the Package Marketplace with:
+
+- **Modern Grid Layout:** Responsive 3-column grid (2 cols on tablet, 1 on mobile)
+- **Package Cards:** Gradient headers, metadata, author attribution
+- **Details Modal:** Full package info including license, dependencies, permissions
+- **Smart Search:** Filter packages by name or description in real-time
+- **Upload UI:** Drag-and-drop modal for package upload
+- **Dark Mode:** Complete dark mode support throughout
+- **Accessibility:** Semantic HTML, proper labels, no color-alone information
+- **Smooth UX:** Hover effects, transitions, loading states
+
+Users can now understand each package's purpose, requirements, and dependencies at a glance.
+
 ## [0.10.121] — 2026-08-08 — Fix duplicate /packages prefix
 
 ### Fixed — Package Marketplace still returned 404 after 0.10.120 wiring fix
