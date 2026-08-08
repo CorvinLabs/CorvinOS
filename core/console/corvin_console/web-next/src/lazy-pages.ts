@@ -15,6 +15,10 @@ export const DashboardPage = React.lazy(() =>
   import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage }))
 );
 
+export const YourTalentPage = React.lazy(() =>
+  import("@/pages/talent").then((m) => ({ default: m.default }))
+);
+
 export const SettingsPage = React.lazy(() =>
   import("@/pages/settings").then((m) => ({ default: m.SettingsPage }))
 );

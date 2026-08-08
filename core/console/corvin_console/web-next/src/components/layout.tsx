@@ -115,6 +115,7 @@ const NAV_GROUPS: NavGroup[] = [
     id: "primary",
     items: [
       { to: "/app/chat",      label: "Chat",      icon: MessagesSquare },
+      { to: "/app/talent",    label: "Your Talent", icon: Sparkles },
       { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
     ],
   },

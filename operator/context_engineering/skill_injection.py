@@ -18,6 +18,13 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# Optional package skill loader (for ADR-0268 Phase 5 integration)
+try:
+    from operator.context_engineering.package_skill_loader import PackageSkillLoader
+    HAS_PACKAGE_SKILLS = True
+except (ImportError, ModuleNotFoundError):
+    HAS_PACKAGE_SKILLS = False
+
 
 @dataclass
 class RecommendedSkill:
@@ -73,16 +80,27 @@ class SkillInjection:
     Maps decisions → skills → task context.
     """
 
-    def __init__(self, cache_ttl_minutes: int = 30):
+    def __init__(self, cache_ttl_minutes: int = 30, tenant_id: str = "_default"):
         """Initialize skill injection.
 
         Args:
             cache_ttl_minutes: Cache TTL in minutes (default: 30).
+            tenant_id: Tenant ID for package skill discovery (ADR-0268 Phase 5).
         """
         self.cache_ttl = timedelta(minutes=cache_ttl_minutes)
         self._injection_cache: Dict[int, Tuple[List[RecommendedSkill], datetime]] = {}
+        self.tenant_id = tenant_id
 
-        logger.info(f"SkillInjection initialized (TTL: {cache_ttl_minutes}min)")
+        # Optional: Initialize package skill loader for ADR-0268 Phase 5
+        self.package_skill_loader: Optional[PackageSkillLoader] = None
+        if HAS_PACKAGE_SKILLS:
+            try:
+                self.package_skill_loader = PackageSkillLoader(tenant_id=tenant_id)
+                logger.info(f"Package skill loader initialized (tenant={tenant_id})")
+            except Exception as e:
+                logger.warning(f"Failed to initialize package skill loader: {e}")
+
+        logger.info(f"SkillInjection initialized (TTL: {cache_ttl_minutes}min, tenant={tenant_id})")
 
     def recommend_skills(
         self,
@@ -173,16 +191,32 @@ class SkillInjection:
     def _map_decisions_to_skills(self, decisions: Optional[List]) -> List[Dict]:
         """Map decisions to associated skills.
 
-        In real implementation, would lookup skill registry.
-        For now, returns empty list (tests will provide mocks).
+        Combines:
+        1. ADR-driven skills (from graph traversal decisions)
+        2. Package skills (from ADR-0268 installed packages)
 
         Args:
             decisions: Related decisions from GraphTraversal.
 
         Returns:
-            List of skill dicts.
+            List of skill dicts (combined from all sources).
         """
-        return []
+        all_skills: List[Dict] = []
+
+        # Get package skills (ADR-0268 Phase 5)
+        if self.package_skill_loader:
+            try:
+                package_skills = self.package_skill_loader.get_skills_for_task(None)
+                all_skills.extend(package_skills)
+                logger.debug(f"Added {len(package_skills)} package skills")
+            except Exception as e:
+                logger.warning(f"Error getting package skills: {e}")
+
+        # TODO: Add ADR-driven skills from decisions (Phase 2 extension)
+        # For now, placeholder for future integration with ADRLoader
+
+        logger.debug(f"_map_decisions_to_skills: {len(all_skills)} total skills")
+        return all_skills
 
     def _score_skills(self, skills: List[Dict], task: object) -> List[RecommendedSkill]:
         """Score skills by relevance and success rate.

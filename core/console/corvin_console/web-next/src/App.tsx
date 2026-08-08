@@ -8,6 +8,7 @@ import {
   LandingPage,
   LoginPage,
   DashboardPage,
+  YourTalentPage,
   SettingsPage,
   EnginesPage,
   BrowserPage,
@@ -160,6 +161,7 @@ export default function App() {
             <Route path="compliance" element={<CompliancePage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
+            <Route path="talent" element={<YourTalentPage />} />
             <Route path="agent-hub" element={<AgentHubPage />} />
             <Route path="connectors" element={<ConnectorsPage />} />
             <Route path="workflows" element={<WorkflowsListPage />} />

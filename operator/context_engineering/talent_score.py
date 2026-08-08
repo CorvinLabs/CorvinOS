@@ -319,6 +319,152 @@ class TalentScoreCalculator:
 
         return sorted(events, key=lambda e: e["timestamp"], reverse=True)
 
+    def get_daily_breakdown(self, days: int = 7) -> List[Dict]:
+        """
+        Get daily score breakdown for chart visualization.
+
+        Returns:
+            List of dicts with date, score, and components for each day.
+        """
+        daily_data = []
+
+        for d in range(days, 0, -1):  # Reverse order (oldest first)
+            date = (datetime.utcnow() - timedelta(days=d)).strftime("%Y-%m-%d")
+            date_dir = self.queue_root / date
+
+            if not date_dir.exists():
+                # Add placeholder for missing day
+                daily_data.append({
+                    "date": date,
+                    "score": 5.0,
+                    "accuracy": 0.5,
+                    "learning_rate": 0.5,
+                    "variety": 0.5,
+                    "efficiency": 0.5,
+                    "record_count": 0,
+                })
+                continue
+
+            # Read records for this day only
+            day_records = {
+                "predictions": self.read_jsonl_file(date_dir / "predictions.jsonl"),
+                "feedback": self.read_jsonl_file(date_dir / "feedback.jsonl"),
+                "choices": self.read_jsonl_file(date_dir / "user_choices.jsonl"),
+                "budget": self.read_jsonl_file(date_dir / "budget_allocations.jsonl"),
+            }
+
+            # Compute metrics for this day
+            score, components = self.compute_talent_score(day_records)
+            record_count = (
+                len(day_records["predictions"]) +
+                len(day_records["feedback"]) +
+                len(day_records["choices"]) +
+                len(day_records["budget"])
+            )
+
+            daily_data.append({
+                "date": date,
+                "score": round(score, 1),
+                "accuracy": round(components["accuracy"], 2),
+                "learning_rate": round(components["learning_rate"], 2),
+                "variety": round(components["variety"], 2),
+                "efficiency": round(components["efficiency"], 2),
+                "record_count": record_count,
+            })
+
+        return daily_data
+
+    def get_task_type_performance(self, days: int = 7) -> List[Dict]:
+        """
+        Get performance by task type.
+
+        Returns:
+            List of dicts with task_type and performance metrics.
+        """
+        task_performance = {}
+        records = self.get_recent_records(days=days)
+
+        for choice in records["choices"]:
+            task_type = choice.get("task_type", "unknown")
+            if task_type not in task_performance:
+                task_performance[task_type] = {
+                    "type": task_type,
+                    "count": 0,
+                    "accuracy_sum": 0.0,
+                    "feedback_good": 0,
+                    "feedback_total": 0,
+                    "efficiency_sum": 0.0,
+                }
+
+            task_performance[task_type]["count"] += 1
+
+        # Correlate with feedback and predictions
+        for fb in records["feedback"]:
+            task_type = fb.get("task_type", "unknown")
+            if task_type in task_performance:
+                is_good = fb.get("feedback_impact") == "helpful"
+                task_performance[task_type]["feedback_good"] += int(is_good)
+                task_performance[task_type]["feedback_total"] += 1
+
+        # Add efficiency data
+        for budget in records["budget"]:
+            task_type = budget.get("task_type", "unknown")
+            if task_type in task_performance:
+                task_performance[task_type]["efficiency_sum"] += budget.get("match_score", 0.5)
+
+        # Compute final metrics
+        result = []
+        for task_type, stats in task_performance.items():
+            avg_accuracy = (
+                stats["accuracy_sum"] / max(1, stats["count"])
+                if stats["count"] > 0 else 0.5
+            )
+            feedback_pct = (
+                100.0 * stats["feedback_good"] / max(1, stats["feedback_total"])
+                if stats["feedback_total"] > 0 else 50.0
+            )
+            avg_efficiency = (
+                stats["efficiency_sum"] / max(1, stats["count"])
+                if stats["count"] > 0 else 0.5
+            )
+
+            result.append({
+                "type": task_type,
+                "count": stats["count"],
+                "accuracy": round(avg_accuracy, 2),
+                "feedback_percentage": round(feedback_pct, 1),
+                "efficiency": round(avg_efficiency, 2),
+            })
+
+        return sorted(result, key=lambda x: x["count"], reverse=True)
+
+    def get_component_correlation(self, days: int = 7) -> Dict:
+        """
+        Analyze correlation between components.
+
+        Returns:
+            Dict with scatter plot data for accuracy vs efficiency.
+        """
+        records = self.get_recent_records(days=days)
+
+        # Correlation: each prediction/budget pair
+        points = []
+        for i, pred in enumerate(records["predictions"][:50]):  # Sample max 50
+            accuracy = 1.0 - abs(
+                pred.get("confidence_pred", 0.0) - pred.get("outcome_actual", 0.0)
+            )
+            efficiency = 0.75  # Default
+
+            if i < len(records["budget"]):
+                efficiency = records["budget"][i].get("match_score", 0.75)
+
+            points.append({
+                "accuracy": round(accuracy, 2),
+                "efficiency": round(efficiency, 2),
+            })
+
+        return {"points": points}
+
     def generate_talent_report(self, days: int = 7) -> Dict:
         """
         Generate complete talent report for Console.
