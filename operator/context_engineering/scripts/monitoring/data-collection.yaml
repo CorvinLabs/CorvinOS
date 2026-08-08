@@ -1,0 +1,70 @@
+# Week 6 Measurement Data Collection Config
+# Specifies which metrics to collect from measurement_hooks.py
+
+tracks:
+  uncertainty_quantification:
+    enabled: true
+    description: "ADR-0270: Confidence-score calibration"
+    metrics:
+      - prediction_accuracy
+      - rare_context_uncertainty
+      - negative_feedback_loops
+    sample_size: "≥1000"
+    target_accuracy: "±5%"
+
+  outcome_feedback_loop:
+    enabled: true
+    description: "ADR-0271: Bayesian learning validation"
+    metrics:
+      - score_delta_per_feedback
+      - decay_weighting_90d
+      - score_oscillation_events
+    sample_size: "≥500"
+    target_validation: "±0.03 delta"
+
+  user_preferences:
+    enabled: true
+    description: "ADR-0272: User profile accuracy"
+    metrics:
+      - profile_recall
+      - profile_precision
+      - user_clustering
+    sample_size: "≥100 users"
+    target_recall: "≥0.80"
+    target_precision: "≥0.75"
+
+  attention_budget:
+    enabled: true
+    description: "ADR-0273: Budget allocation vs. complexity"
+    metrics:
+      - budget_complexity_correlation
+      - budget_overrun_events
+      - nice_to_have_deferral_rate
+    sample_size: "≥500 tasks"
+    target_match: "≥0.80"
+
+data_collection:
+  schedule: "every 5 minutes"
+  retention: "7 days"
+  format: "JSONL"
+  location: "~/.corvin/measurement/"
+  backup_location: "~/.corvin/measurement/backups/"
+
+alerts:
+  on_metric_below_target: "immediate"
+  on_track_divergence: "1 hour"
+  on_data_corruption: "immediate"
+
+dashboards:
+  - name: "uncertainty-calibration"
+    interval: "5m"
+    panels: ["prediction accuracy", "rare contexts", "oscillation"]
+  - name: "feedback-learning"
+    interval: "5m"
+    panels: ["score deltas", "decay weighting", "convergence"]
+  - name: "user-profiles"
+    interval: "10m"
+    panels: ["recall/precision", "profile clusters", "drift"]
+  - name: "budget-allocation"
+    interval: "5m"
+    panels: ["complexity match", "overruns", "deferral rate"]

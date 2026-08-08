@@ -1,0 +1,82 @@
+groups:
+  - name: adr-0274-measurement
+    interval: 30s
+    rules:
+      # ADR-0270: Confidence Calibration
+      - alert: HighPredictionError
+        expr: |
+          abs(confidence_pred - outcome_actual) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+          track: uncertainty
+        annotations:
+          summary: "High prediction error detected"
+          description: "Confidence predictions off by >10%"
+
+      # ADR-0271: Learning Rate
+      - alert: UnusualLearningDelta
+        expr: |
+          abs(score_after - score_before) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          track: feedback
+        annotations:
+          summary: "Unusual score delta"
+          description: "Score update >±0.05 (expected ±0.03)"
+
+      # ADR-0272: User Profile
+      - alert: ProfileDivergence
+        expr: |
+          abs(profile_confidence_change) > 0.15 and profile_age_days > 14
+        for: 10m
+        labels:
+          severity: medium
+          track: preferences
+        annotations:
+          summary: "User profile divergence"
+          description: "Profile confidence changed >15% in established profile"
+
+      # ADR-0273: Budget Mismatch
+      - alert: BudgetComplexityMismatch
+        expr: |
+          budget_match_score < 0.60
+        for: 5m
+        labels:
+          severity: info
+          track: budget
+        annotations:
+          summary: "Budget allocation mismatch"
+          description: "Budget allocation doesn't match task complexity"
+
+      # Infrastructure
+      - alert: ChecksumValidationFailure
+        expr: |
+          rate(checksum_failures_total[1m]) > 0.001
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Queue checksum failures detected"
+          description: "Rate > 0.1% indicates data corruption"
+
+      - alert: LockContention
+        expr: |
+          aggregation_wait_seconds > 300
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "High lock contention"
+          description: "Aggregation blocked >5 minutes"
+
+      - alert: ProfileSymlinkFailed
+        expr: |
+          symlink_update_failures_total > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Profile symlink update failed"
+          description: "Could not atomically update profile symlink"

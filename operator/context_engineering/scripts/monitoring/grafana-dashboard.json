@@ -1,0 +1,113 @@
+{
+  "dashboard": {
+    "title": "ADR-0274 Week 6 Measurement",
+    "tags": ["adr-0274", "measurement", "cel-phase4"],
+    "timezone": "UTC",
+    "panels": [
+      {
+        "id": 1,
+        "title": "ADR-0270: Confidence Calibration",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, confidence_pred)",
+            "legendFormat": "95th percentile",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "percentunit", "min": 0, "max": 1}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "ADR-0271: Learning Rate Validation",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(score_deltas_total[1m])",
+            "legendFormat": "Score updates/min",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "ADR-0272: User Profile Accuracy",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "profile_recall_score",
+            "legendFormat": "Recall",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {"unit": "percentunit"}
+        }
+      },
+      {
+        "id": 4,
+        "title": "ADR-0273: Budget/Complexity Match",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "avg(budget_match_score)",
+            "legendFormat": "Average match",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.6},
+                {"color": "green", "value": 0.8}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Checksum Validation Health",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(checksum_failures_total[5m])",
+            "legendFormat": "Failure rate",
+            "refId": "A"
+          }
+        ],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {"color": "green", "value": 0},
+            {"color": "yellow", "value": 0.001},
+            {"color": "red", "value": 0.01}
+          ]
+        }
+      },
+      {
+        "id": 6,
+        "title": "Lock Contention (seconds)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, aggregation_wait_seconds)",
+            "legendFormat": "p99 wait",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "Wait time"}
+        ]
+      }
+    ]
+  }
+}

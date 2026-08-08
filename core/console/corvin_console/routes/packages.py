@@ -22,6 +22,7 @@ import json
 import logging
 import shutil
 import sys
+import uuid
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -347,8 +348,6 @@ async def upload_package(
     - 413: Package too large
     - 422: Manifest validation failed
     """
-    import uuid
-
     zip_bytes = await file.read()
 
     # Use unique temp directory to avoid concurrent upload conflicts
@@ -356,12 +355,16 @@ async def upload_package(
     temp_pkg_dir = _PACKAGES_REGISTRY_DIR / rec.tenant_id / "temp" / temp_id
 
     try:
+        # Create parent directory for temp extraction
+        temp_pkg_dir.parent.mkdir(parents=True, exist_ok=True)
+
         # Validate ZIP and extract all files to unique temp location
         extract_result = _validate_and_extract_zip(zip_bytes, temp_pkg_dir, _MAX_PACKAGE_BYTES)
         manifest = extract_result["manifest"]
         package_id, version = _validate_manifest(manifest)
+        permissions = _extract_permissions(manifest)
 
-        # Check for version conflict
+        # Check for version conflict before committing
         final_pkg_dir = _get_package_dir(rec.tenant_id, package_id)
         existing_metadata = final_pkg_dir / "metadata.json"
         if existing_metadata.exists():
@@ -377,19 +380,43 @@ async def upload_package(
             except json.JSONDecodeError:
                 log.warning(f"Corrupted metadata for {package_id}, will overwrite")
 
-        # Atomically move extracted files to final location
+        # **AUDIT BEFORE COMMIT:** Log to audit trail BEFORE writing files (GDPR Art. 30)
+        # If audit fails, exception prevents file write via the outer except handler
+        console_audit.action_performed(
+            rec,
+            action="package.install",
+            detail={
+                "package_id": package_id,
+                "version": version,
+                "display_name": manifest.get("display_name", package_id),
+                "permissions": [p.permission for p in permissions],
+            },
+        )
+
+        # Now commit the package by moving temp → final (atomic move)
         if final_pkg_dir.exists():
-            shutil.rmtree(final_pkg_dir)
-        temp_pkg_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.rmtree(final_pkg_dir, ignore_errors=True)
+        # Move atomically (rename is atomic on POSIX/Windows)
         temp_pkg_dir.rename(final_pkg_dir)
 
+        # Write metadata after atomic move
+        (final_pkg_dir / "metadata.json").write_text(json.dumps({
+            "version": version,
+            "display_name": manifest.get("display_name", package_id),
+            "description": manifest.get("description", ""),
+            "author": manifest.get("author", ""),
+            "license": manifest.get("license", ""),
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "manifest": manifest,
+        }, indent=2))
+
     except HTTPException:
-        # Clean up temp directory on any HTTP error
+        # Clean up temp directory on any HTTP error (includes audit failures)
         if temp_pkg_dir.exists():
             shutil.rmtree(temp_pkg_dir, ignore_errors=True)
         raise
     except Exception as exc:
-        # Clean up temp directory on any unexpected error
+        # Clean up temp directory on any unexpected error (includes audit failures)
         if temp_pkg_dir.exists():
             shutil.rmtree(temp_pkg_dir, ignore_errors=True)
         log.exception(f"Unexpected error during package upload: {exc}")
@@ -397,30 +424,6 @@ async def upload_package(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Package upload failed due to system error",
         ) from exc
-
-    # Write metadata
-    permissions = _extract_permissions(manifest)
-    (final_pkg_dir / "metadata.json").write_text(json.dumps({
-        "version": version,
-        "display_name": manifest.get("display_name", package_id),
-        "description": manifest.get("description", ""),
-        "author": manifest.get("author", ""),
-        "license": manifest.get("license", ""),
-        "installed_at": datetime.now(timezone.utc).isoformat(),
-        "manifest": manifest,
-    }, indent=2))
-
-    # Audit trail: package installation (GDPR Art. 30 accountability)
-    console_audit.action_performed(
-        rec,
-        action="package.install",
-        detail={
-            "package_id": package_id,
-            "version": version,
-            "display_name": manifest.get("display_name", package_id),
-            "permissions": [p.permission for p in permissions],
-        },
-    )
 
     log.info(f"Package {package_id}@{version} installed by tenant {rec.tenant_id}")
 
