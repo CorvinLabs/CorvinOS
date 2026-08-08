@@ -7,6 +7,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.120] — 2026-08-08 — Package Marketplace route wiring
+
+### Fixed — Package Marketplace returns 404 when listing packages
+
+The Skill Package System (ADR-0268) defined a complete `packages.py` route module with
+endpoints for listing, uploading, and managing packages. However, this route was never
+registered in `standalone.py`, causing the Package Marketplace UI to fail with "Failed
+to fetch packages: Not Found" errors.
+
+Fixed by importing and registering `packages_router` in `create_app()`. Endpoints are
+now reachable at `/v1/console/packages/*`.
+
 ## [0.10.119] — 2026-08-05 — Bridge daemons now start hidden on Windows
 
 ### Fixed — visible console window opened when starting Discord/WhatsApp/other bridges
