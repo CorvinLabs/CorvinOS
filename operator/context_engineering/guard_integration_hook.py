@@ -15,11 +15,19 @@ Usage Pattern:
 """
 
 import logging
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from critical_fixes_roundk2 import ExtensibleDangerZoneGuard
 
 logger = logging.getLogger(__name__)
+
+# MEDIUM FIX M1 + ITERATION 5 FIX I5-2: Module-level LRU cache to avoid unbounded growth
+# Max 10 profiles (typical deployment has 1-3 tenants, 10 is safe upper bound)
+_PROFILE_CACHE_MAX_SIZE = 10
+_profile_cache: OrderedDict[str, tuple] = OrderedDict()  # (tenant_id, profile_path) -> (data, mtime)
+_cache_lock = threading.Lock()
 
 
 class ContextSuggestionGate:
@@ -39,16 +47,65 @@ class ContextSuggestionGate:
         self._load_guard()
 
     def _load_guard(self) -> None:
-        """Load latest profiles and initialize guard."""
+        """Load latest profiles and initialize guard (with cache)."""
         try:
-            # Load tenant-baseline profile
             baseline_link = self.profile_dir / "tenant-baseline.json"
-            if baseline_link.exists() or baseline_link.is_symlink():
+
+            # CRITICAL FIX H5: Validate symlink target exists before opening
+            if baseline_link.is_symlink():
+                # Symlink exists; now check if target is valid
+                try:
+                    import os
+                    target_path = os.readlink(str(baseline_link))  # Use os.readlink for Python 3.8+ compat
+                    target = baseline_link.parent / target_path  # Resolve relative to symlink location
+                    target_exists = target.exists()
+                    if not target_exists:
+                        logger.warning(f"CR-6: Baseline symlink is dangling: {baseline_link} → {target_path}")
+                except (OSError, FileNotFoundError):
+                    # Symlink read failed or is broken
+                    logger.warning(f"CR-6: Failed to read symlink {baseline_link}")
+                    target_exists = False
+            else:
+                target_exists = baseline_link.exists()
+
+            if target_exists:
+                # MEDIUM FIX M1 + ITERATION 5 FIX I5-2: Check cache (with LRU eviction)
+                cache_key = (self.tenant_id, str(baseline_link.resolve()))
+                current_mtime = baseline_link.stat().st_mtime
+
+                with _cache_lock:
+                    if cache_key in _profile_cache:
+                        cached_data, cached_mtime = _profile_cache[cache_key]
+                        if cached_mtime == current_mtime:
+                            # Fast path: mtime unchanged, cache is valid
+                            # Move to end (LRU)
+                            _profile_cache.move_to_end(cache_key)
+                            self.guard = ExtensibleDangerZoneGuard({"tenant-baseline": cached_data})
+                            logger.debug(f"CR-6: Guard loaded from cache (mtime unchanged)")
+                            return
+
+                # Cache miss or stale (mtime changed); read content
                 import json
                 with open(baseline_link, "r") as f:
-                    profile_data = json.load(f)
+                    file_content = f.read()
+
+                # Update cache with mtime (not hash; faster)
+                profile_data = json.loads(file_content)
+                with _cache_lock:
+                    # ITERATION 5 FIX I5-2: Implement LRU eviction
+                    if cache_key not in _profile_cache:
+                        # Check if cache is full
+                        if len(_profile_cache) >= _PROFILE_CACHE_MAX_SIZE:
+                            # Evict oldest (first) entry
+                            oldest_key = next(iter(_profile_cache))
+                            del _profile_cache[oldest_key]
+                            logger.debug(f"CR-6: Evicted oldest cache entry to make room")
+
+                    _profile_cache[cache_key] = (profile_data, current_mtime)
+                    _profile_cache.move_to_end(cache_key)  # Mark as most recent
+
                 self.guard = ExtensibleDangerZoneGuard({"tenant-baseline": profile_data})
-                logger.info(f"CR-6: Guard loaded with {len(self.guard.patterns)} patterns")
+                logger.info(f"CR-6: Guard loaded from disk with {len(self.guard.patterns)} patterns")
             else:
                 logger.warning("CR-6: No baseline profile found; guard disabled")
         except Exception as e:

@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from critical_fixes_roundk2 import (
     IntegrationAggregator,
     compute_record_checksum,
-    atomic_append_to_queue_file,
     ExclusiveQueueLock,
 )
 from guard_integration_hook import ContextSuggestionGate

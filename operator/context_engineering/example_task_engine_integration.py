@@ -8,6 +8,7 @@ This is a REFERENCE IMPLEMENTATION - copy patterns into your actual task_engine.
 """
 
 import logging
+import threading
 from pathlib import Path
 from typing import Dict, Optional, List
 
@@ -54,6 +55,9 @@ class ExampleTaskEngine:
             "memory-phase3": 0.65,
         }
 
+        # MEDIUM FIX M3: Thread-safe access to confidence_cache
+        self._cache_lock = threading.Lock()
+
         logger.info("Task engine initialized with learning system")
 
     def execute_task(
@@ -99,8 +103,9 @@ class ExampleTaskEngine:
         # Step 3: Execute task (simulate)
         results = {}
         for context_id in approved_contexts:
-            # Get confidence from cache (Tier 1)
-            confidence_pred = self.confidence_cache.get(context_id, 0.60)
+            # Get confidence from cache (Tier 1) - MEDIUM FIX M3: thread-safe access
+            with self._cache_lock:
+                confidence_pred = self.confidence_cache.get(context_id, 0.60)
 
             # Execute with this context
             outcome_actual = self._execute_with_context(
@@ -153,14 +158,18 @@ class ExampleTaskEngine:
         # Record feedback for each context (ADR-0271 - Bayesian updates)
         for context_id, result in results.items():
             if feedback_impact != "neutral":
-                score_before = self.confidence_cache.get(context_id, 0.60)
-                score_after = self._apply_bayesian_update(
-                    score_before,
-                    feedback_impact,
-                    learning_rate=0.05,
-                )
-                self.confidence_cache[context_id] = score_after
+                # MEDIUM FIX M3 + ITERATION 3 FIX I3-5 + ITERATION 4 FIX I4-4:
+                # Lock only for cache access, not for disk I/O (avoid deadlocks)
+                with self._cache_lock:
+                    score_before = self.confidence_cache.get(context_id, 0.60)
+                    score_after = self._apply_bayesian_update(
+                        score_before,
+                        feedback_impact,
+                        learning_rate=0.05,
+                    )
+                    self.confidence_cache[context_id] = score_after
 
+                # Record feedback OUTSIDE lock (disk I/O should not hold the lock)
                 record_feedback(
                     context_id=context_id,
                     feedback_impact=feedback_impact,
