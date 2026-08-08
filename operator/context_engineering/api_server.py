@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from talent_score import get_talent_calculator
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,55 @@ def get_budget():
         "stats": reader.compute_adr_0273_stats(budget),
         "recent": budget[:20],
     })
+
+
+@app.route("/api/v1/talent/score", methods=["GET"])
+def get_talent_score():
+    """Get Your Talent Score (CONCEPT-0003)."""
+    days = request.args.get("days", 7, type=int)
+    try:
+        calculator = get_talent_calculator()
+        report = calculator.generate_talent_report(days=days)
+        return jsonify(report)
+    except Exception as e:
+        logger.error(f"Talent score computation failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/talent/ranking", methods=["GET"])
+def get_talent_ranking():
+    """Get context ranking from Your Talent."""
+    days = request.args.get("days", 7, type=int)
+    try:
+        calculator = get_talent_calculator()
+        records = calculator.get_recent_records(days=days)
+        ranking = calculator.compute_context_ranking(records)
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "ranking": ranking,
+            "count": len(ranking),
+        })
+    except Exception as e:
+        logger.error(f"Context ranking failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/talent/events", methods=["GET"])
+def get_talent_events():
+    """Get learning events timeline."""
+    days = request.args.get("days", 7, type=int)
+    try:
+        calculator = get_talent_calculator()
+        records = calculator.get_recent_records(days=days)
+        events = calculator.compute_learning_events(records)
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "events": events,
+            "count": len(events),
+        })
+    except Exception as e:
+        logger.error(f"Learning events failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/health", methods=["GET"])
