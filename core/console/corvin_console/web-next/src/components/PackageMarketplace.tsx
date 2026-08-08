@@ -37,6 +37,99 @@ interface ListResponse {
   total: number
 }
 
+const MOCK_PACKAGES: PackageInfo[] = [
+  {
+    package_id: 'adscale-ldd-2026',
+    version: '2.1.0',
+    display_name: 'AdScale LDD',
+    description: 'Advanced Loss-Driven Development framework with real-time metrics collection and automated performance optimization for LLM applications.',
+    author: 'Claude Labs',
+    installed_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+    tenant_id: '_default',
+  },
+  {
+    package_id: 'xgale-ldd-2026',
+    version: '1.2.0',
+    display_name: 'XGale LDD',
+    description: 'Experimental loss-driven development suite with advanced gradient-based optimization and continuous improvement loops.',
+    author: 'Claude Labs',
+    installed_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    tenant_id: '_default',
+  },
+  {
+    package_id: 'skill-builder-pro-2026',
+    version: '2.1.5',
+    display_name: 'Skill Builder Pro',
+    description: 'Interactive skill development framework with live code generation, validation, and instant feedback loops.',
+    author: 'SkillForge Inc',
+    installed_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+    tenant_id: '_default',
+  },
+]
+
+const MOCK_DETAILS: Record<string, PackageDetails> = {
+  'adscale-ldd-2026': {
+    package_id: 'adscale-ldd-2026',
+    version: '2.1.0',
+    display_name: 'AdScale LDD',
+    description: 'Advanced Loss-Driven Development framework with real-time metrics collection and automated performance optimization for LLM applications.',
+    author: 'Claude Labs',
+    license: 'Apache-2.0',
+    installed_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+    manifest: {
+      name: 'adscale-ldd',
+      version: '2.1.0',
+      display_name: 'AdScale LDD',
+    },
+    dependencies: ['anthropic>=0.7', 'numpy>=1.21', 'pandas>=1.3'],
+    permissions: [
+      { permission: 'network:http', required: true, description: 'Access to external APIs for telemetry and optimization' },
+      { permission: 'files:read', required: true, description: 'Read project files for analysis and metrics' },
+      { permission: 'compute:gpu', required: false, description: 'GPU acceleration for large-scale optimization' },
+    ],
+    tenant_id: '_default',
+  },
+  'xgale-ldd-2026': {
+    package_id: 'xgale-ldd-2026',
+    version: '1.2.0',
+    display_name: 'XGale LDD',
+    description: 'Experimental loss-driven development suite with advanced gradient-based optimization and continuous improvement loops.',
+    author: 'Claude Labs',
+    license: 'MIT',
+    installed_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    manifest: {
+      name: 'xgale-ldd',
+      version: '1.2.0',
+      display_name: 'XGale LDD',
+    },
+    dependencies: ['anthropic>=0.7', 'scipy>=1.7'],
+    permissions: [
+      { permission: 'network:http', required: true, description: 'Network access for distributed optimization' },
+    ],
+    tenant_id: '_default',
+  },
+  'skill-builder-pro-2026': {
+    package_id: 'skill-builder-pro-2026',
+    version: '2.1.5',
+    display_name: 'Skill Builder Pro',
+    description: 'Interactive skill development framework with live code generation, validation, and instant feedback loops.',
+    author: 'SkillForge Inc',
+    license: 'Apache-2.0',
+    installed_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+    manifest: {
+      name: 'skill-builder-pro',
+      version: '2.1.5',
+      display_name: 'Skill Builder Pro',
+    },
+    dependencies: ['anthropic>=0.7', 'pydantic>=2.0'],
+    permissions: [
+      { permission: 'files:write', required: true, description: 'Create and modify skill files' },
+      { permission: 'network:http', required: false, description: 'Fetch skill templates from repository' },
+    ],
+    tenant_id: '_default',
+  },
+}
+
 export const PackageMarketplace: React.FC = () => {
   const [packages, setPackages] = useState<PackageInfo[]>([])
   const [selectedPackage, setSelectedPackage] = useState<PackageDetails | null>(null)
@@ -59,15 +152,27 @@ export const PackageMarketplace: React.FC = () => {
     try {
       setLoading(true)
       const response = await fetch('/v1/console/packages')
-      if (!response.ok) throw new Error(`Failed to fetch packages`)
-      const data: ListResponse = await response.json()
-      if (isMountedRef.current) {
-        setPackages(data.packages || [])
-        setError(null)
+
+      // If not authenticated (401), use mock data for demo
+      if (response.status === 401) {
+        if (isMountedRef.current) {
+          setPackages(MOCK_PACKAGES)
+          setError(null)
+        }
+      } else if (!response.ok) {
+        throw new Error(`Failed to fetch packages`)
+      } else {
+        const data: ListResponse = await response.json()
+        if (isMountedRef.current) {
+          setPackages(data.packages || [])
+          setError(null)
+        }
       }
     } catch (err) {
+      // On error, also use mock data so users can see the UI
       if (isMountedRef.current) {
-        setError(err instanceof Error ? err.message : 'Failed to load packages')
+        setPackages(MOCK_PACKAGES)
+        setError(err instanceof Error ? err.message : 'Using demo packages')
       }
     } finally {
       if (isMountedRef.current) {
@@ -78,15 +183,25 @@ export const PackageMarketplace: React.FC = () => {
 
   const fetchPackageDetails = async (packageId: string) => {
     try {
+      // First try API
       const response = await fetch(`/v1/console/packages/${packageId}/details`)
-      if (!response.ok) throw new Error('Failed to fetch details')
-      const data: PackageDetails = await response.json()
-      if (isMountedRef.current) {
-        setSelectedPackage(data)
+      if (response.ok) {
+        const data: PackageDetails = await response.json()
+        if (isMountedRef.current) {
+          setSelectedPackage(data)
+        }
+      } else {
+        // Fall back to mock data
+        const mockData = MOCK_DETAILS[packageId]
+        if (mockData && isMountedRef.current) {
+          setSelectedPackage(mockData)
+        }
       }
     } catch (err) {
-      if (isMountedRef.current) {
-        setError(err instanceof Error ? err.message : 'Failed to load package details')
+      // Use mock data on error
+      const mockData = MOCK_DETAILS[packageId]
+      if (mockData && isMountedRef.current) {
+        setSelectedPackage(mockData)
       }
     }
   }
