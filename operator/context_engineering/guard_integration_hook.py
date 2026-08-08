@@ -60,10 +60,10 @@ class ContextSuggestionGate:
                     target = baseline_link.parent / target_path  # Resolve relative to symlink location
                     target_exists = target.exists()
                     if not target_exists:
-                        logger.warning(f"CR-6: Baseline symlink is dangling: {baseline_link} → {target_path}")
+                        logger.warning(f"CR-6: Baseline symlink is dangling (K=7: no path log)")
                 except (OSError, FileNotFoundError):
                     # Symlink read failed or is broken
-                    logger.warning(f"CR-6: Failed to read symlink {baseline_link}")
+                    logger.warning(f"CR-6: Failed to read baseline symlink (K=7: no path log)")
                     target_exists = False
             else:
                 target_exists = baseline_link.exists()
@@ -98,14 +98,13 @@ class ContextSuggestionGate:
                     # Check mtime again (file could have changed during read)
                     final_mtime = baseline_link.stat().st_mtime
 
-                    # ITERATION 5 FIX I5-2: Implement LRU eviction
-                    if cache_key not in _profile_cache:
-                        # Check if cache is full
-                        if len(_profile_cache) >= _PROFILE_CACHE_MAX_SIZE:
-                            # Evict oldest (first) entry
-                            oldest_key = next(iter(_profile_cache))
-                            del _profile_cache[oldest_key]
-                            logger.debug(f"CR-6: Evicted oldest cache entry to make room")
+                    # K=7 FIX: Implement LRU eviction on EVERY insert, not just on misses
+                    # Check if cache is full BEFORE adding new entry
+                    if cache_key not in _profile_cache and len(_profile_cache) >= _PROFILE_CACHE_MAX_SIZE:
+                        # Evict oldest (first) entry
+                        oldest_key = next(iter(_profile_cache))
+                        del _profile_cache[oldest_key]
+                        logger.debug(f"CR-6: Evicted oldest cache entry to make room")
 
                     _profile_cache[cache_key] = (profile_data, final_mtime)
                     _profile_cache.move_to_end(cache_key)  # Mark as most recent

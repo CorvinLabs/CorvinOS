@@ -652,7 +652,7 @@ class AtomicSymlinkManager:
             if use_symlink:
                 # Unix/Linux/macOS: Use atomic symlink rename
                 os.rename(str(temp_symlink), str(symlink_path))
-                logger.info(f"Atomically updated {symlink_path} → {symlink_target} (symlink)")
+                logger.info(f"Profile updated (symlink)")
             else:
                 # MEDIUM FIX M2 + CODE REVIEW I6-3: Windows fallback with cleanup on failure
                 import shutil
@@ -662,27 +662,27 @@ class AtomicSymlinkManager:
                         # Copy the profile file to the "current" name atomically
                         shutil.copy2(str(profile_file), str(temp_symlink))
                         os.rename(str(temp_symlink), str(symlink_path))
-                        logger.info(f"Atomically updated {symlink_path} → copy of {symlink_target} (file-copy fallback)")
+                        logger.info(f"Atomically updated profile (file-copy fallback)")
                     except Exception as copy_err:
                         # Clean up temp file on failure (prevent resource leak)
                         try:
                             if temp_symlink.exists():
                                 temp_symlink.unlink()
-                        except:
-                            pass
+                        except Exception:
+                            pass  # Cleanup failure is non-fatal
                         raise copy_err
                 else:
-                    logger.error(f"Cannot use file-copy fallback: profile {profile_file} not found")
+                    logger.error(f"Cannot use file-copy fallback: profile file not found")
                     return False
 
             return True
 
         except Exception as e:
-            # Clean up temp files on any exception
+            # Clean up temp files on any exception (use try-finally instead of bare except)
             try:
                 if temp_symlink.exists() or temp_symlink.is_symlink():
                     temp_symlink.unlink()
-            except:
-                pass
-            logger.error(f"Atomic symlink/file update failed: {e}", exc_info=True)
+            except Exception:
+                pass  # Cleanup failure is non-fatal
+            logger.error(f"Atomic symlink/file update failed", exc_info=False)
             return False

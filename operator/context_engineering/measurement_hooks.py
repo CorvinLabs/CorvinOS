@@ -118,8 +118,7 @@ class MeasurementCollector:
         try:
             self.queue_dir.mkdir(parents=True, exist_ok=True)
 
-            # MEDIUM FIX M4 + CODE REVIEW I6-5: Verify directory is actually writable
-            # Distinguish permission errors from other OS errors
+            # MEDIUM FIX M4 + K=7 FIX: Verify directory is actually writable (no path leaks)
             test_file = self.queue_dir / ".write_test"
             try:
                 test_file.write_text("")
@@ -127,14 +126,12 @@ class MeasurementCollector:
             except PermissionError as perm_err:
                 raise PermissionError(f"Measurement queue directory is not writable") from perm_err
             except (FileNotFoundError, OSError) as os_err:
-                # Directory was deleted between mkdir and write, or other OS error
                 raise ValueError(f"Measurement queue directory became inaccessible") from os_err
 
-        except PermissionError as e:
-            # MEDIUM FIX M4 + ITERATION 3 FIX I3-6: Don't leak full filesystem paths in exceptions (GDPR)
-            raise PermissionError(f"Cannot create measurement queue directory (permission denied)") from e
+        except PermissionError:
+            raise PermissionError(f"Measurement queue directory not accessible (permission denied)")
         except Exception as e:
-            raise ValueError(f"Failed to create measurement queue directory") from e
+            raise ValueError(f"Measurement queue directory setup failed") from e
 
         self.prediction_file = self.queue_dir / "predictions.jsonl"
         self.feedback_file = self.queue_dir / "feedback.jsonl"
@@ -277,7 +274,10 @@ class MeasurementCollector:
                 f.flush()
                 os.fsync(f.fileno())  # CRITICAL: ensure data written to disk
         except Exception as e:
-            logger.error(f"Failed to record measurement: {e}", exc_info=True)
+            # K=7 FIX: Log error but do NOT swallow silently
+            # Use exc_info=False to avoid leaking paths in traceback
+            logger.error(f"Measurement record failed to write", exc_info=False)
+            raise  # Re-raise so caller can detect data loss
 
 
 # Global collector instance (initialized on import, thread-safe)
@@ -293,7 +293,13 @@ def get_collector() -> MeasurementCollector:
             # Double-check after acquiring lock
             if _default_collector is None:
                 enabled = True  # Check env var or config
-                _default_collector = MeasurementCollector(enabled=enabled)
+                try:
+                    _default_collector = MeasurementCollector(enabled=enabled)
+                except (PermissionError, ValueError) as e:
+                    # If measurement collection fails, create disabled collector
+                    # to prevent crashes in record_* functions
+                    logger.warning(f"Measurement collection disabled: {e}")
+                    _default_collector = MeasurementCollector(enabled=False)
     return _default_collector
 
 
