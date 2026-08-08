@@ -17,10 +17,11 @@ never env vars (CLAUDE.md § Multi-tenant axis).
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
+import shutil
 import sys
-import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -157,8 +158,13 @@ async def require_feature_csrf(rec: Annotated[Any, Depends(require_csrf)]) -> An
     return rec
 
 
-def _validate_zip(zip_bytes: bytes, max_size: int) -> zipfile.ZipFile:
-    """Validate that bytes are a valid ZIP file and not too large."""
+def _validate_and_extract_zip(zip_bytes: bytes, extract_to: Path, max_size: int) -> dict[str, Any]:
+    """Validate ZIP, extract contents, return manifest.
+
+    Returns dict with:
+    - manifest: parsed manifest.json
+    - extracted_files: list of extracted file paths
+    """
     if len(zip_bytes) > max_size:
         raise HTTPException(
             status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -166,44 +172,49 @@ def _validate_zip(zip_bytes: bytes, max_size: int) -> zipfile.ZipFile:
         )
 
     try:
-        # Write bytes to temporary file for ZIP validation
-        tmp = tempfile.TemporaryFile()
-        tmp.write(zip_bytes)
-        tmp.seek(0)
-        zf = zipfile.ZipFile(tmp, "r")
-        # Verify the ZIP structure
-        test_read = zf.namelist()
-        if not test_read:
-            raise ValueError("ZIP file is empty")
-        return zf
+        # Use BytesIO (in-memory) to avoid file handle leaks
+        zip_buffer = io.BytesIO(zip_bytes)
+
+        with zipfile.ZipFile(zip_buffer, "r") as zf:
+            # Verify ZIP structure
+            members = zf.namelist()
+            if not members:
+                raise ValueError("ZIP file is empty")
+
+            # Extract manifest first to validate structure
+            manifest_data = zf.read("manifest.json")
+            manifest = json.loads(manifest_data)
+
+            # Now extract all files
+            extract_to.mkdir(parents=True, exist_ok=True)
+            zf.extractall(extract_to)
+
+            return {
+                "manifest": manifest,
+                "extracted_files": members,
+            }
     except zipfile.BadZipFile as exc:
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail="invalid ZIP file format",
         ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"ZIP validation failed: {str(exc)[:100]}",
-        ) from exc
-
-
-def _extract_manifest(zf: zipfile.ZipFile) -> dict[str, Any]:
-    """Extract and parse manifest.json from ZIP root."""
-    try:
-        manifest_data = zf.read("manifest.json")
-        manifest = json.loads(manifest_data)
-        return manifest
-    except KeyError:
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail="package missing manifest.json in root",
-        )
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail=f"manifest.json is not valid JSON: {str(exc)[:100]}",
         ) from exc
+    except KeyError:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="package missing manifest.json in root",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"ZIP validation or extraction failed: {type(exc).__name__}",
+        ) from exc
+
+
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> tuple[str, str]:
@@ -338,16 +349,42 @@ async def upload_package(
     """
     zip_bytes = await file.read()
 
-    zf = _validate_zip(zip_bytes, _MAX_PACKAGE_BYTES)
-    manifest = _extract_manifest(zf)
+    package_id = None  # Will be set after manifest validation
+    pkg_dir = _get_package_dir(rec.tenant_id, "temp")  # Temp dir for extraction
+
+    # Clean up any existing temp extraction
+    if pkg_dir.exists():
+        shutil.rmtree(pkg_dir, ignore_errors=True)
+
+    # Validate ZIP and extract all files
+    extract_result = _validate_and_extract_zip(zip_bytes, pkg_dir, _MAX_PACKAGE_BYTES)
+    manifest = extract_result["manifest"]
     package_id, version = _validate_manifest(manifest)
+
+    # Check for version conflict
+    final_pkg_dir = _get_package_dir(rec.tenant_id, package_id)
+    existing_metadata = final_pkg_dir / "metadata.json"
+    if existing_metadata.exists():
+        try:
+            existing = json.loads(existing_metadata.read_text())
+            existing_version = existing.get("version", "0.0.0")
+            if existing_version == version:
+                raise HTTPException(
+                    status_code=http_status.HTTP_409_CONFLICT,
+                    detail=f"Package {package_id}@{version} already installed",
+                )
+            log.warning(f"Replacing {package_id}@{existing_version} with @{version}")
+        except json.JSONDecodeError:
+            log.warning(f"Corrupted metadata for {package_id}, will overwrite")
+
+    # Move extracted files to final location
+    if final_pkg_dir.exists():
+        shutil.rmtree(final_pkg_dir)
+    pkg_dir.rename(final_pkg_dir)
+
+    # Write metadata
     permissions = _extract_permissions(manifest)
-
-    pkg_dir = _get_package_dir(rec.tenant_id, package_id)
-    pkg_dir.mkdir(parents=True, exist_ok=True)
-
-    (pkg_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    (pkg_dir / "metadata.json").write_text(json.dumps({
+    (final_pkg_dir / "metadata.json").write_text(json.dumps({
         "version": version,
         "display_name": manifest.get("display_name", package_id),
         "description": manifest.get("description", ""),
@@ -357,7 +394,7 @@ async def upload_package(
         "manifest": manifest,
     }, indent=2))
 
-    log.info(f"Package {package_id}@{version} uploaded by tenant {rec.tenant_id}")
+    log.info(f"Package {package_id}@{version} installed by tenant {rec.tenant_id}")
 
     return PackageUploadResponse(
         status="installed",
