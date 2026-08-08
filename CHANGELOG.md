@@ -7,6 +7,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.121] — 2026-08-08 — Fix duplicate /packages prefix
+
+### Fixed — Package Marketplace still returned 404 after 0.10.120 wiring fix
+
+After 0.10.120 registered the packages router in `standalone.py`, the gateway 
+continued to return 404 for `/v1/console/packages` endpoints.
+
+Root cause: `packages_route.router` already defined `prefix="/packages"` in its 
+APIRouter constructor (routes/packages.py:57). When `app.py` registered it with 
+an additional `prefix="/packages"` (line 233), FastAPI stacked the prefixes, 
+resulting in routes being mounted at `/packages/packages/*` instead of `/packages/*`.
+
+Fixed by removing the redundant `prefix="/packages"` parameter from the 
+`router.include_router()` call in app.py.
+
 ## [0.10.120] — 2026-08-08 — Package Marketplace route wiring
 
 ### Fixed — Package Marketplace returns 404 when listing packages
