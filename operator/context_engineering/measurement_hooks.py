@@ -18,6 +18,8 @@ Usage:
 
 import json
 import logging
+import os
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, Literal
@@ -125,6 +127,14 @@ class MeasurementCollector:
         if not self.enabled:
             return
 
+        # CRITICAL: Validate confidence scores are in valid range [0.0, 1.0]
+        if not (0.0 <= confidence_pred <= 1.0):
+            logger.warning(f"Invalid confidence_pred {confidence_pred} (must be 0.0-1.0), clamping")
+            confidence_pred = max(0.0, min(1.0, confidence_pred))
+        if not (0.0 <= outcome_actual <= 1.0):
+            logger.warning(f"Invalid outcome_actual {outcome_actual} (must be 0.0-1.0), clamping")
+            outcome_actual = max(0.0, min(1.0, outcome_actual))
+
         record = PredictionRecord(
             timestamp=datetime.utcnow().isoformat(),
             context_id=context_id,
@@ -136,6 +146,7 @@ class MeasurementCollector:
         )
 
         self._append_jsonl(self.prediction_file, asdict(record))
+        # GDPR: Don't log raw user_id
         logger.debug(f"Recorded prediction: {context_id} (pred={confidence_pred:.2f}, actual={outcome_actual:.2f})")
 
     def record_feedback(
@@ -229,26 +240,31 @@ class MeasurementCollector:
         logger.debug(f"Recorded budget: {task_id} ({budget_allocated}, match={match_score:.2f})")
 
     def _append_jsonl(self, filepath: Path, record_dict: Dict) -> None:
-        """Append record to JSONL file (atomic append)."""
+        """Append record to JSONL file (durable write with fsync)."""
         try:
             with open(filepath, "a") as f:
                 json.dump(record_dict, f)
                 f.write("\n")
                 f.flush()
+                os.fsync(f.fileno())  # CRITICAL: ensure data written to disk
         except Exception as e:
             logger.error(f"Failed to record measurement: {e}", exc_info=True)
 
 
-# Global collector instance (initialized on import)
+# Global collector instance (initialized on import, thread-safe)
 _default_collector: Optional[MeasurementCollector] = None
+_collector_lock = threading.Lock()
 
 
 def get_collector() -> MeasurementCollector:
-    """Get or create the default measurement collector."""
+    """Get or create the default measurement collector (thread-safe)."""
     global _default_collector
     if _default_collector is None:
-        enabled = True  # Check env var or config
-        _default_collector = MeasurementCollector(enabled=enabled)
+        with _collector_lock:
+            # Double-check after acquiring lock
+            if _default_collector is None:
+                enabled = True  # Check env var or config
+                _default_collector = MeasurementCollector(enabled=enabled)
     return _default_collector
 
 
