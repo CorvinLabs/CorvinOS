@@ -94,6 +94,10 @@ class MeasurementCollector:
         Args:
             queue_dir: Directory to write measurement records (default: ~/.corvin/.measurement)
             enabled: If False, all methods are no-ops
+
+        Raises:
+            ValueError: If queue_dir is invalid (exists but is not a directory)
+            PermissionError: If queue_dir cannot be created due to permissions
         """
         self.enabled = enabled
         if not enabled:
@@ -103,9 +107,30 @@ class MeasurementCollector:
         if queue_dir is None:
             home = Path.home()
             queue_dir = home / ".corvin" / "measurement" / datetime.utcnow().strftime("%Y-%m-%d")
+        else:
+            # MEDIUM FIX M4: Validate queue_dir parameter
+            queue_dir = Path(queue_dir) if not isinstance(queue_dir, Path) else queue_dir
+
+            if queue_dir.exists() and not queue_dir.is_dir():
+                raise ValueError(f"queue_dir exists but is not a directory: {queue_dir}")
 
         self.queue_dir = queue_dir
-        self.queue_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.queue_dir.mkdir(parents=True, exist_ok=True)
+
+            # MEDIUM FIX M4 + ITERATION 4 FIX I4-5: Verify directory is actually writable
+            test_file = self.queue_dir / ".write_test"
+            try:
+                test_file.write_text("")
+                test_file.unlink()
+            except Exception as e:
+                raise PermissionError(f"Measurement queue directory is not writable") from e
+
+        except PermissionError as e:
+            # MEDIUM FIX M4 + ITERATION 3 FIX I3-6: Don't leak full filesystem paths in exceptions (GDPR)
+            raise PermissionError(f"Cannot create measurement queue directory (permission denied)") from e
+        except Exception as e:
+            raise ValueError(f"Failed to create measurement queue directory") from e
 
         self.prediction_file = self.queue_dir / "predictions.jsonl"
         self.feedback_file = self.queue_dir / "feedback.jsonl"

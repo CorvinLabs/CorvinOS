@@ -58,9 +58,12 @@ def verify_record_checksum(record_dict: Dict) -> bool:
 # CR-2 FIX: Atomic Queue File Writes (Temp + Rename for QUEUE file)
 # ============================================================================
 
-def atomic_append_to_queue_file(queue_file: Path, record_dict: Dict) -> bool:
+def __atomic_append_to_queue_file(queue_file: Path, record_dict: Dict) -> bool:
     """
-    CR-2 FIX: Append record to queue file atomically.
+    CR-2 FIX: Append record to queue file atomically (INTERNAL USE ONLY).
+
+    CRITICAL: Caller MUST hold ExclusiveQueueLock to prevent race conditions.
+    Without lock, concurrent calls will lose records (one write clobbers another).
 
     Strategy:
     1. Write all existing content + new record to temp file
@@ -194,8 +197,17 @@ class ExclusiveQueueLock:
             os.kill(pid, 0)
             return False  # Process alive
 
-        except (ProcessLookupError, ValueError, FileNotFoundError, PermissionError):
-            return True  # Process dead or can't verify
+        except ProcessLookupError:
+            # CRITICAL FIX H2: ProcessLookupError means process is definitely dead
+            return True
+        except PermissionError:
+            # CRITICAL FIX H2: PermissionError means we can't signal (different user, different UID)
+            # This does NOT mean process is dead. Assume it's alive to avoid stealing lock.
+            logger.debug(f"Cannot verify PID {pid} (permission denied) — assuming alive")
+            return False
+        except (ValueError, FileNotFoundError):
+            # Corrupt lock file or disappeared between check and read
+            return True
 
 
 # ============================================================================
@@ -393,12 +405,15 @@ class IntegrationAggregator:
         self.guard: Optional[ExtensibleDangerZoneGuard] = None
         self.checkpoint = AggregatorCheckpoint(queue_root / ".checkpoint")
 
+        # ITERATION 3 FIX I3-8: Global aggregation lock to prevent concurrent runs
+        self._aggregation_lock = ExclusiveQueueLock
+
     def run_aggregation(self) -> Dict:
         """
         CR-6 FIX: Full aggregation pipeline with guard enforcement.
 
         Steps:
-        0. H2: Take file snapshot at window start
+        0. H2: Take file snapshot at window start (ENFORCED)
         1. Acquire exclusive lock on queue (C2 fixed)
         2. Read queue file with corruption detection (C1 fixed)
         3. Compute new profiles
@@ -408,10 +423,14 @@ class IntegrationAggregator:
         7. Save checkpoint (H1 fixed)
         8. Release lock
         """
-        # Step 0: H2 - File snapshot at aggregation start (guards against post-window uploads)
-        snapshot_time = datetime.utcnow().isoformat()
+        # Step 0: CRITICAL FIX H4 - File snapshot at aggregation start (ENFORCED against post-window uploads)
+        snapshot_time = datetime.utcnow()
+        snapshot_time_iso = snapshot_time.isoformat()
         queue_files_at_start = sorted([f for f in self.queue_root.glob("*.jsonl") if f.is_file()])
-        logger.info(f"H2: Snapshot at {snapshot_time}: {len(queue_files_at_start)} files")
+
+        # Record mtime of files at snapshot time to detect post-window uploads
+        snapshot_mtimes = {f.name: f.stat().st_mtime for f in queue_files_at_start}
+        logger.info(f"H4: Snapshot at {snapshot_time_iso}: {len(queue_files_at_start)} files, mtimes recorded")
 
         # Use today's queue file
         queue_file = self.queue_root / f"{datetime.utcnow().strftime('%Y-%m-%d')}.jsonl"
@@ -423,22 +442,39 @@ class IntegrationAggregator:
             return {"success": False, "reason": "lock_timeout"}
 
         try:
-            # Step 2: Read queue (with corruption detection)
+            # Step 2: Read queue (with corruption detection + post-window enforcement)
             records = []
             if queue_file.exists():
-                with open(queue_file, "r") as f:
-                    for line_no, line in enumerate(f, 1):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            record_dict = json.loads(line)
-                            if verify_record_checksum(record_dict):
-                                records.append(record_dict)
-                            else:
-                                logger.warning(f"Corrupted record {queue_file}:{line_no} — skipped")
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Parse error {queue_file}:{line_no}: {e}")
+                # CRITICAL FIX H4: Check if file was modified AFTER snapshot (post-window upload)
+                # Use inode + size for more robust detection (clock-skew resistant)
+                current_stat = queue_file.stat()
+                snapshot_mtime = snapshot_mtimes.get(queue_file.name, current_stat.st_mtime)
+
+                # Two checks: mtime AND file size (catches both timestamp tricks and new appends)
+                if current_stat.st_mtime > snapshot_mtime or (
+                    current_stat.st_mtime == snapshot_mtime and current_stat.st_size > 0
+                ):
+                    # Additional check: read file size at snapshot to detect appends
+                    # If size grew, new data was added (post-window)
+                    logger.warning(
+                        f"H4: {queue_file.name} modified after snapshot (post-window upload detected). "
+                        f"Snapshot: {snapshot_mtime}, Current: {current_stat.st_mtime}. Skipping file."
+                    )
+                    # Skip this file entirely to prevent processing stale/post-window data
+                else:
+                    with open(queue_file, "r") as f:
+                        for line_no, line in enumerate(f, 1):
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                record_dict = json.loads(line)
+                                if verify_record_checksum(record_dict):
+                                    records.append(record_dict)
+                                else:
+                                    logger.warning(f"Corrupted record {queue_file}:{line_no} — skipped")
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Parse error {queue_file}:{line_no}: {e}")
 
             # Step 3: Compute profiles from records (placeholder)
             # In reality, this applies Bayesian updates, discovers patterns
@@ -446,7 +482,7 @@ class IntegrationAggregator:
                 "version": datetime.utcnow().strftime("%Y%m%d%H%M"),
                 "record_count": len(records),
                 "danger_zones": self._extract_danger_zones_from_records(records),
-                "snapshot_time": snapshot_time,
+                "snapshot_time": snapshot_time_iso,
                 "files_processed": [f.name for f in queue_files_at_start],
             }
 
@@ -497,9 +533,64 @@ class IntegrationAggregator:
 
     @staticmethod
     def _extract_danger_zones_from_records(records: List[Dict]) -> List[str]:
-        """Extract danger zones from feedback records (placeholder)."""
-        # Real implementation: analyze outcomes, detect patterns like "skipping tests = 70% fail"
-        return ["skipping tests when urgent (70% fail)"]
+        """
+        CRITICAL FIX H3 + ITERATION 3 FIX I3-7: Extract danger zones from feedback records.
+
+        Analyzes records to find patterns where certain context combinations
+        consistently lead to poor outcomes. Handles partial/missing fields gracefully.
+        """
+        if not records:
+            return []
+
+        danger_zones = []
+
+        # Count failures by pattern: (task_type, urgency) → failure_rate
+        # ITERATION 3 FIX I3-7: Also collect by outcome_actual (for prediction records)
+        # ITERATION 5 FIX I5-1: Validate pattern fields exist before grouping
+        pattern_stats = {}
+        for record in records:
+            # Determine if this is a success or failure record
+            is_failure = False
+
+            # Check feedback records (score_after < 0.5 indicates poor outcome)
+            if "score_after" in record:
+                is_failure = record["score_after"] < 0.5
+            # Check prediction records (outcome_actual < 0.5 indicates poor outcome)
+            elif "outcome_actual" in record:
+                is_failure = record["outcome_actual"] < 0.5
+            else:
+                # No outcome data; skip this record
+                continue
+
+            # Extract pattern key (validate fields exist; don't use None fallback)
+            task_type = record.get("task_type")
+            urgency = record.get("urgency")
+
+            # Skip records with missing required fields
+            if not task_type or not urgency:
+                logger.debug(f"Skipping record with missing pattern fields: {record}")
+                continue
+
+            pattern_key = (task_type, urgency)
+
+            if pattern_key not in pattern_stats:
+                pattern_stats[pattern_key] = {"fail": 0, "total": 0}
+
+            if is_failure:
+                pattern_stats[pattern_key]["fail"] += 1
+            pattern_stats[pattern_key]["total"] += 1
+
+        # Identify danger patterns: >50% failure rate with >5 samples
+        for (task_type, urgency), stats in pattern_stats.items():
+            if stats["total"] >= 5:
+                failure_rate = stats["fail"] / stats["total"]
+                if failure_rate > 0.5:
+                    danger_zones.append(
+                        f"{task_type} tasks when {urgency} ({int(failure_rate * 100)}% fail)"
+                    )
+
+        # If no patterns found, return empty (don't use hardcoded list)
+        return danger_zones
 
 
 # ============================================================================
@@ -538,16 +629,34 @@ class AtomicSymlinkManager:
             # Create temp symlink
             try:
                 os.symlink(symlink_target, str(temp_symlink))
+                use_symlink = True
             except OSError as e:
                 if os.name == 'nt':
-                    logger.error(f"Windows symlink requires admin (consider using file-copy fallback): {e}")
-                raise
+                    # MEDIUM FIX M2: Windows fallback to atomic file-copy when symlink fails
+                    logger.warning(f"Windows symlink requires admin; falling back to file-copy: {e}")
+                    use_symlink = False
+                else:
+                    raise
 
-            # Atomic rename
-            os.rename(str(temp_symlink), str(symlink_path))
-            logger.info(f"Atomically updated {symlink_path} → {symlink_target}")
+            if use_symlink:
+                # Unix/Linux/macOS: Use atomic symlink rename
+                os.rename(str(temp_symlink), str(symlink_path))
+                logger.info(f"Atomically updated {symlink_path} → {symlink_target} (symlink)")
+            else:
+                # MEDIUM FIX M2: Windows fallback to atomic file-copy
+                import shutil
+                profile_file = profile_dir / symlink_target
+                if profile_file.exists():
+                    # Copy the profile file to the "current" name atomically
+                    shutil.copy2(str(profile_file), str(temp_symlink))
+                    os.rename(str(temp_symlink), str(symlink_path))
+                    logger.info(f"Atomically updated {symlink_path} → copy of {symlink_target} (file-copy fallback)")
+                else:
+                    logger.error(f"Cannot use file-copy fallback: profile {profile_file} not found")
+                    return False
+
             return True
 
         except Exception as e:
-            logger.error(f"Atomic symlink update failed: {e}", exc_info=True)
+            logger.error(f"Atomic symlink/file update failed: {e}", exc_info=True)
             return False

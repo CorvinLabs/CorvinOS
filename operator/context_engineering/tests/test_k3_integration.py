@@ -23,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from critical_fixes_roundk2 import (
     compute_record_checksum,
     verify_record_checksum,
-    atomic_append_to_queue_file,
     ExclusiveQueueLock,
     ExtensibleDangerZoneGuard,
     IntegrationAggregator,
@@ -56,8 +55,10 @@ class TestH2FileSnapshot:
             }
             record["checksum"] = compute_record_checksum(record)
 
-            # Append record
-            atomic_append_to_queue_file(queue_file, record)
+            # Append record (simulate direct write, since _atomic_append_to_queue_file is now private)
+            with open(queue_file, "a") as f:
+                json.dump(record, f)
+                f.write("\n")
 
             # Snapshot files
             snapshot_files = sorted(queue_root.glob("*.jsonl"))
@@ -110,12 +111,17 @@ class TestH4IntegrationE2E:
                             results["error"] = "session: write-lock timeout"
                             return
 
-                        success = atomic_append_to_queue_file(queue_file, record)
-                        ExclusiveQueueLock.release(queue_file)
-
-                        if not success:
-                            results["error"] = "session: append failed"
+                        # Append record directly (caller holds lock)
+                        try:
+                            with open(queue_file, "a") as f:
+                                json.dump(record, f)
+                                f.write("\n")
+                        except Exception as e:
+                            results["error"] = f"session: append failed: {e}"
+                            ExclusiveQueueLock.release(queue_file)
                             return
+
+                        ExclusiveQueueLock.release(queue_file)
 
                         results["session_appended"] += 1
                         time.sleep(0.05)

@@ -146,8 +146,9 @@ ls ~/.corvin/tenants/_default/learning-queue/.lock 2>&1
 
 **Immediate Response (15 min):**
 ```bash
-# Verify directories exist
+# Verify directories exist AND are writable (M4 FIX)
 ls -la ~/.corvin/measurement/$(date +%Y-%m-%d)/ || echo "Missing today's directory"
+touch ~/.corvin/measurement/test && rm ~/.corvin/measurement/test || echo "Not writable"
 
 # Check environment variables
 echo $CORVIN_MEASUREMENT_TRACK_UNCERTAINTY
@@ -160,7 +161,16 @@ grep "record_prediction\|record_feedback" ~/.corvin/logs/session.log | wc -l
 
 # Check if tasks are actually running
 grep "execute_task\|task-[0-9]" ~/.corvin/logs/session.log | wc -l
+
+# NEW (H4 FIX): Check if queue files are being skipped (post-window uploads prevented)
+grep "post-window upload detected" ~/.corvin/logs/session.log || echo "No post-window detection"
 ```
+
+**If PermissionError on queue_dir (M4 FIX):**
+1. Queue directory exists but is not writable
+2. Check directory: `ls -ld ~/.corvin/measurement/`
+3. Fix permissions: `chmod 755 ~/.corvin/measurement/`
+4. MeasurementCollector now tests writability at init (fails fast)
 
 **If environment variables not set:**
 ```bash
@@ -177,8 +187,12 @@ corvin-serve &
 
 **If environment variables set but no data:**
 1. Check if tasks are running: `grep "task-" ~/.corvin/logs/session.log`
-2. If no tasks: measurement is working, just no activity (normal)
-3. If tasks but no records: hooks not being called → escalate (integration issue)
+2. **NEW (H4 FIX):** If tasks exist but files are small: check post-window filtering
+   - Aggregation snapshots queue files at window start time
+   - Files modified AFTER snapshot are **skipped intentionally** (prevents inconsistent state)
+   - This is NOT a bug; it's the H4 snapshot-enforcement fix
+3. If no tasks: measurement is working, just no activity (normal)
+4. If tasks but no records: hooks not being called → escalate (integration issue)
 
 ---
 
@@ -299,6 +313,7 @@ ls ~/.corvin/tenants/_default/learning-queue/.lock*
 **Before Each Day (9am Stand-up):**
 - [ ] Service running: `pgrep corvin-serve`
 - [ ] No errors overnight: `grep -c ERROR ~/.corvin/logs/session.log`
+- [ ] No dangling symlinks: `grep -c "dangling symlink" ~/.corvin/logs/session.log` (H5 FIX: now logged as WARNING)
 - [ ] Aggregation ran: Check checkpoint freshness
 - [ ] Measurement collecting: 4 files present in today's directory
 - [ ] Locks healthy: No stale locks older than 2 hours

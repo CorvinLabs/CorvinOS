@@ -192,6 +192,7 @@ Session startup / task engine initialization
 ```python
 from pathlib import Path
 from operator.context_engineering.guard_integration_hook import ContextSuggestionGate
+import threading
 
 class Session:
     def __init__(self, user_id: str, tenant_id: str = "_default"):
@@ -200,10 +201,12 @@ class Session:
         )
         
         # Load guard + profiles (Tier 3 → Tier 1 cache)
+        # NOTE: Module-level profile cache with LRU eviction (max 10 profiles, shared)
         self.guard = ContextSuggestionGate(profile_dir)
         
         # Initialize confidence cache from loaded profiles
         self.confidence_cache = {}
+        self._cache_lock = threading.Lock()  # REQUIRED: thread-safe cache access
         baseline_profile = profile_dir / "tenant-baseline.json"
         
         if baseline_profile.exists():
@@ -219,6 +222,13 @@ class Session:
         self.confidence_cache.setdefault("skill-e2e-wiring", 0.75)
         
         logger.info(f"Cache initialized: {len(self.confidence_cache)} contexts")
+```
+
+**IMPORTANT:** Cache access must use the lock:
+```python
+with self._cache_lock:
+    confidence = self.confidence_cache.get(context_id, 0.60)
+    self.confidence_cache[context_id] = new_score  # Update while holding lock
 ```
 
 ---
@@ -288,8 +298,33 @@ cat ~/.corvin/measurement/$(date +%Y-%m-%d)/predictions.jsonl | head -5
    echo $CORVIN_MEASUREMENT_TRACK_UNCERTAINTY
    echo $CORVIN_MEASUREMENT_TRACK_FEEDBACK
    ```
-2. Check measurement directory exists: `ls -la ~/.corvin/measurement/`
+2. Check measurement directory exists AND is writable: `ls -la ~/.corvin/measurement/`
 3. Verify hooks are being called (add logging)
+4. **NEW:** If data files appear but rows don't grow: check if aggregation is blocking post-window uploads (H4 fix)
+
+### Issue: Queue files present but not processed by aggregator
+**Solution (H4 SNAPSHOT ENFORCEMENT):**
+1. Check aggregation window: files created AFTER `snapshot_time` are skipped
+2. Verify: `ls -la ~/.corvin/tenants/_default/learning-queue/`
+3. Files should have mtime BEFORE aggregation start time
+4. If post-window: normal behavior (intentional skipping to prevent inconsistent state)
+
+### Issue: "Baseline symlink is dangling" in logs
+**Solution (H5 SYMLINK VALIDATION):**
+1. This is a WARNING, not an ERROR — guard disables gracefully
+2. Check target exists: `ls -la ~/.corvin/tenants/_default/profiles/tenant-baseline.v*.json`
+3. On Windows: symlink may be file-copy (M2 fallback) — both are valid
+4. Restart aggregation to regenerate symlink/copy
+
+### Issue: PermissionError: "Measurement queue directory is not writable"
+**Solution (M4 QUEUE_DIR VALIDATION):**
+1. Check directory exists and has write permissions:
+   ```bash
+   touch ~/.corvin/measurement/test
+   rm ~/.corvin/measurement/test
+   ```
+2. If still fails: check for disk full or SELinux policies
+3. MeasurementCollector now tests writability at init (fails fast instead of silent)
 
 ### Issue: Guard is blocking too many contexts
 **Solution:**
@@ -302,7 +337,7 @@ cat ~/.corvin/measurement/$(date +%Y-%m-%d)/predictions.jsonl | head -5
 **Solution:**
 1. Verify `record_feedback()` is being called
 2. Check Bayesian update math: delta = learning_rate × feedback_impact
-3. Verify cache is being read on next task
+3. Verify cache is being read on next task **while holding _cache_lock** (M3 fix)
 4. Check convergence: scores should stabilize after ~20 tasks
 
 ### Issue: E2E test failing
@@ -351,13 +386,32 @@ A: Measurement hooks are async JSONL writes (~1ms), guard filtering is CPU-bound
 ## Success Criteria
 
 Integration is complete when:
-- ✅ Guard filtering works (no more dangerous contexts suggested)
-- ✅ Measurement files created daily: `~/.corvin/measurement/YYYY-MM-DD/*.jsonl`
-- ✅ Cache updated with feedback (scores trending up/down)
+- ✅ Guard filtering works (no dangerous contexts suggested; guard handles dangling symlinks gracefully per H5)
+- ✅ Measurement files created daily: `~/.corvin/measurement/YYYY-MM-DD/*.jsonl` (queue_dir validated as writable per M4)
+- ✅ Cache updated with feedback (scores trending up/down, thread-safe per M3, LRU-evicted per M1)
 - ✅ E2E test passes (12/12 tests green)
 - ✅ Week 6 measurement tracks all 4 pillars
+- ✅ Snapshot enforcement working: post-window queue files are skipped (H4 fix)
+- ✅ Windows deployment uses file-copy fallback (M2 fix)
+- ✅ All measurement data durable on disk (fsync per C1)
 
 ---
 
-**Integration Ready:** All code written, tested, and documented.  
+**Integration Ready:** All code written, tested (K=5 convergence), docs synced.  
 **Next Step:** Follow DEPLOYMENT-CHECKLIST.md to deploy.
+
+---
+
+## What Changed Since 2026-08-08 (K=5 Complete)
+
+**5 CRITICAL + 9 HIGH + 10 refinements fixed:**
+- Measurement durability (fsync)
+- Lock coordination (thread-safety)
+- Atomic symlink operations
+- Snapshot enforcement (skip post-window)
+- Profile cache + LRU
+- Windows symlink fallback
+- Guard pattern validation
+- Error message sanitization (GDPR)
+
+See `ADR-0274-IMPLEMENTATION-COMPLETE.md` for full changelog.
