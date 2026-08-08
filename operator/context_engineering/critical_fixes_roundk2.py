@@ -405,6 +405,26 @@ class IntegrationAggregator:
         self.guard: Optional[ExtensibleDangerZoneGuard] = None
         self.checkpoint = AggregatorCheckpoint(queue_root / ".checkpoint")
 
+    def _check_post_window_file(self, filename: str, current_stat, snapshot_info: Optional[Dict]) -> tuple:
+        """K=8 Polish: Consolidate post-window detection into single method.
+
+        Returns:
+            (is_post_window: bool, reason: str)
+        """
+        if snapshot_info is None:
+            # NEW file created AFTER snapshot (definitely post-window)
+            return True, f"{filename} created after snapshot (post-window). Skipping."
+        elif current_stat.st_mtime > snapshot_info["mtime"]:
+            # File MODIFIED after snapshot
+            return True, f"{filename} modified after snapshot (mtime changed). Skipping file."
+        elif current_stat.st_size > snapshot_info["size"]:
+            # File SIZE GREW after snapshot (data appended post-window)
+            return True, (
+                f"{filename} size grew after snapshot ({snapshot_info['size']} → {current_stat.st_size}). "
+                f"Skipping file (post-window append detected)."
+            )
+        return False, None
+
     def run_aggregation(self) -> Dict:
         """
         CR-6 FIX: Full aggregation pipeline with guard enforcement.
@@ -450,24 +470,12 @@ class IntegrationAggregator:
                 current_stat = queue_file.stat()
                 snapshot_info = snapshot_files.get(queue_file.name)
 
-                is_post_window = False
-                if snapshot_info is None:
-                    # NEW file created AFTER snapshot (definitely post-window)
-                    is_post_window = True
-                    logger.warning(f"H4: {queue_file.name} created after snapshot (post-window). Skipping.")
-                elif current_stat.st_mtime > snapshot_info["mtime"]:
-                    # File MODIFIED after snapshot
-                    is_post_window = True
-                    logger.warning(
-                        f"H4: {queue_file.name} modified after snapshot (mtime changed). Skipping file."
-                    )
-                elif current_stat.st_size > snapshot_info["size"]:
-                    # File SIZE GREW after snapshot (data appended post-window)
-                    is_post_window = True
-                    logger.warning(
-                        f"H4: {queue_file.name} size grew after snapshot ({snapshot_info['size']} → {current_stat.st_size}). "
-                        f"Skipping file (post-window append detected)."
-                    )
+                # K=8 Polish: Consolidate post-window detection logic
+                is_post_window, reason = self._check_post_window_file(
+                    queue_file.name, current_stat, snapshot_info
+                )
+                if is_post_window and reason:
+                    logger.warning(f"H4: {reason}")
 
                 if is_post_window:
                     # Skip this file entirely to prevent processing post-window data
@@ -612,6 +620,15 @@ class AtomicSymlinkManager:
     """CR-3 FIX: Atomic symlink switching with error handling."""
 
     @staticmethod
+    def _cleanup_temp_symlink(temp_path: Path) -> None:
+        """K=8 Polish: Extract cleanup logic to eliminate duplication."""
+        try:
+            if temp_path.exists() or temp_path.is_symlink():
+                temp_path.unlink()
+        except Exception:
+            pass  # Cleanup failure is non-fatal
+
+    @staticmethod
     def atomic_symlink_update(
         profile_dir: Path,
         profile_basename: str,
@@ -634,8 +651,7 @@ class AtomicSymlinkManager:
             symlink_path = profile_dir / f"{profile_basename}.json"
 
             # Clean stale temp
-            if temp_symlink.exists() or temp_symlink.is_symlink():
-                temp_symlink.unlink()
+            AtomicSymlinkManager._cleanup_temp_symlink(temp_symlink)
 
             # Create temp symlink
             try:
@@ -664,12 +680,8 @@ class AtomicSymlinkManager:
                         os.rename(str(temp_symlink), str(symlink_path))
                         logger.info(f"Atomically updated profile (file-copy fallback)")
                     except Exception as copy_err:
-                        # Clean up temp file on failure (prevent resource leak)
-                        try:
-                            if temp_symlink.exists():
-                                temp_symlink.unlink()
-                        except Exception:
-                            pass  # Cleanup failure is non-fatal
+                        # K=8 Polish: Use extracted cleanup method
+                        AtomicSymlinkManager._cleanup_temp_symlink(temp_symlink)
                         raise copy_err
                 else:
                     logger.error(f"Cannot use file-copy fallback: profile file not found")
@@ -678,11 +690,7 @@ class AtomicSymlinkManager:
             return True
 
         except Exception as e:
-            # Clean up temp files on any exception (use try-finally instead of bare except)
-            try:
-                if temp_symlink.exists() or temp_symlink.is_symlink():
-                    temp_symlink.unlink()
-            except Exception:
-                pass  # Cleanup failure is non-fatal
+            # K=8 Polish: Use extracted cleanup method
+            AtomicSymlinkManager._cleanup_temp_symlink(temp_symlink)
             logger.error(f"Atomic symlink/file update failed", exc_info=False)
             return False

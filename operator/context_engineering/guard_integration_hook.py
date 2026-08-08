@@ -95,8 +95,15 @@ class ContextSuggestionGate:
                 # Update cache with mtime (not hash; faster)
                 profile_data = json.loads(file_content)
                 with _cache_lock:
-                    # Check mtime again (file could have changed during read)
-                    final_mtime = baseline_link.stat().st_mtime
+                    # K=8 Polish: Check mtime again (file could have changed during read)
+                    # and handle FileNotFoundError if file was deleted during I/O
+                    try:
+                        final_mtime = baseline_link.stat().st_mtime
+                    except FileNotFoundError:
+                        # K=8 Polish: TOCTOU race — file deleted after read, don't cache
+                        logger.warning("CR-6: Profile file deleted during cache update (TOCTOU)")
+                        self.guard = ExtensibleDangerZoneGuard({"tenant-baseline": profile_data})
+                        return
 
                     # K=7 FIX: Implement LRU eviction on EVERY insert, not just on misses
                     # Check if cache is full BEFORE adding new entry
