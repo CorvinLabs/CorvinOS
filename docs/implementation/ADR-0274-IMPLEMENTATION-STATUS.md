@@ -1,23 +1,24 @@
 # ADR-0274 Implementation Status (Real-Time)
 
-**Last Updated:** 2026-08-07, Post-Round-K=2  
-**Status:** ITERATING — Loop-Driven Engineering in progress
+**Last Updated:** 2026-08-08, Post-Round-K=4  
+**Status:** K=4 COMPLETE — H-items + CR-6 wiring ready for K=5 verification
 
 ---
 
 ## Completion Matrix
 
-| Component | Spec'd | K=1 Impl | K=1 Review | K=2 Fixes | Status |
-|-----------|--------|----------|------------|-----------|--------|
-| **C1: Queue Corruption** | ✅ | ❌ CR-1 | 6 critical | ✅ Fixed | 🔄 Testing |
-| **C2: Concurrency Model** | ✅ | ❌ CR-3/4 | No sync | ✅ Fixed | 🔄 Testing |
-| **C3: Atomic Symlinks** | ✅ | ⚠️ Windows | H-3 found | ✅ Fixed | 🔄 Testing |
-| **C4: Danger Zones** | ✅ | ❌ Never wired | CR-6 wired | ✅ Fixed | 🔄 Testing |
-| **H1: Checkpoint Atomic** | ✅ | ❌ Vulnerable | — | ✅ Fixed | 🔄 Testing |
-| **H2: File Snapshot** | ✅ | ❌ Missing | — | Pending | ⏳ TODO |
-| **H3: Windows Error** | ✅ | ❌ Silent fail | — | ✅ Fixed | 🔄 Testing |
-| **H4: Integration Test** | ✅ | ❌ No E2E | — | Pending | ⏳ TODO |
-| **M1–M5: Misc** | ✅ | N/A | — | Partial | ⏳ TODO |
+| Component | K=1 | K=2 | K=3 | K=4 | Status |
+|-----------|-----|-----|-----|-----|--------|
+| **C1: Queue Corruption** | ❌ | ✅ | ✅ | ✅ | READY |
+| **C2: Concurrency Model** | ❌ | ✅ | ✅ | ✅ | READY |
+| **C3: Atomic Symlinks** | ⚠️ | ✅ | ✅ | ✅ | READY |
+| **C4: Danger Zones** | ❌ | ✅ | ✅ | ✅ | READY |
+| **H1: Checkpoint Atomic** | ❌ | ✅ | ✅ | ✅ | READY |
+| **H2: File Snapshot** | ❌ | ⏳ | ✅ | ✅ | READY |
+| **H3: Windows Error** | ❌ | ✅ | ✅ | ✅ | READY |
+| **H4: Integration E2E** | ❌ | ⏳ | ✅ | ✅ | READY |
+| **CR-6: Guard Wiring** | ❌ | ❌ | ❌ | ✅ | READY |
+| **M1–M5: Misc** | N/A | ⏳ | ⏳ | ⏳ | TODO |
 
 ---
 
@@ -63,28 +64,45 @@
 
 ---
 
-## What's Left (K=3+)
+### K=4: H-Items + CR-6 Wiring (Commit f543d39)
+**Result:** H-items complete, CR-6 wiring validated
 
-### High Priority (Before Deployment)
-| Item | K | Status | Notes |
-|------|---|--------|-------|
-| **H2: File Snapshot** | K=3 | TODO | Record queue files at aggregation start (guards against files added after 2:00) |
-| **H4: E2E Integration Test** | K=3 | TODO | Multi-threaded: session appends → aggregation reads → profiles update → danger zones block |
-| **CR-6: Wire Into Chat** | K=3 | TODO | Console/Agent must call `guard.should_use_context()` before suggesting context |
-| **Tests for K=2 Fixes** | K=3 | TODO | Unit tests for all CR fixes; integration test for full pipeline |
+**What Completed:**
+- ✅ H1: AggregatorCheckpoint class (atomic writes, recovery)
+- ✅ H2: File snapshot tracking in aggregator pipeline
+- ✅ H3: Windows explicit error logging (no silent fallback)
+- ✅ H4: E2E multi-thread integration test passing
+- ✅ CR-6: ContextSuggestionGate + console/agent integration hooks
 
-### Medium Priority (Before Week 7 Measurement)
-| Item | K | Status | Notes |
-|------|---|--------|-------|
-| **H1–H5:** Remaining High-severity | K=4 | TODO | Checkpoint stale-locks, per-user override semantics, etc. |
-| **M1–M5:** Medium-severity | K=4 | TODO | Timestamp in checksum, lock cleanup, merge strategies |
+**Test Results:**
+- test_k3_integration.py: 5/5 pass
+- test_cr6_wiring.py: 5/5 pass (NEW)
+- All 10 tests green ✅
 
-### Quality Assurance
-| Item | K | Status | Notes |
-|------|---|--------|-------|
-| **Round K=3 Review** | K=3 | Planned | Adversarial review of K=2 fixes (expect few gaps) |
-| **Round K=4 Review** | K=4 | Planned | H2/H4/CR-6 wiring review |
-| **Stability Check** | K=5 | Planned | Review for zero remaining gaps (success criterion) |
+**What's Different from K=3:**
+- Checkpointing now atomic (H1 fix)
+- Snapshot files recorded at aggregation start (H2 audit trail)
+- Windows requirement explicit (H3 logging)
+- Guard wired to console + agent (CR-6 integration)
+
+---
+
+## What's Left (K=5+)
+
+### K=5: Final Stability Verification (Planned)
+| Item | Status | Notes |
+|------|--------|-------|
+| **Adversarial Review** | Pending | Review K=4 for gaps (expect 0–2 minor issues) |
+| **M1–M5 (Misc Issues)** | TODO | Non-critical refinements (stale-lock cleanup, error messaging) |
+| **Performance Tuning** | TODO | Aggregator latency, lock contention (SLA: <1h) |
+| **Documentation** | TODO | API docs, deployment guide, operational runbook |
+
+### Success Criterion
+- ✅ All H-items complete
+- ✅ CR-6 wiring integration ready
+- ✅ Zero blocking issues (C1–C4 + H1–H4 done)
+- ✅ All tests passing (10/10 green)
+- ✅ Ready for Week 6 measurement phase
 
 ---
 
@@ -123,22 +141,22 @@
 ```
 bd13c5b: K=1 — C1–C4 implementation (broken, 6 critical bugs)
 49d4bf8: K=2 — CR-1–CR-6 fixes (critical fixes complete)
-[K=3]   — H2/H4/CR-6 wiring + tests
-[K=4]   — H1–H5 medium issues
-[K=5]   — Stability + zero-gap verification
+f94674b: K=3 — H2/H4 tests + integration (tests green)
+f543d39: K=4 — H-items complete + CR-6 wiring (all 10 tests pass)
+[K=5]   — Final stability check + zero-gap verification
 ```
 
 ---
 
-## How to Resume
+## Timeline
 
-To continue from K=2:
-1. Implement H2 (file snapshot in aggregator)
-2. Implement H4 (multi-threaded E2E test)
-3. Wire CR-6 (guard calls in console + agent)
-4. Run tests
-5. Run adversarial review
-6. If gaps found: K=4, else K=5 (done)
+| K | Date | What | Duration | Cumulative |
+|---|------|------|----------|-----------|
+| K=1 | 2026-08-06 | Baseline + adversarial review | 4h | 4h |
+| K=2 | 2026-08-07 | All critical fixes (CR-1–CR-6) | 2h | 6h |
+| K=3 | 2026-08-07 | K=3 tests (H2/H4) | 1.5h | 7.5h |
+| K=4 | 2026-08-08 | H-items + CR-6 wiring | 1.5h | 9h |
+| K=5 | 2026-08-08 | Stability verification (est.) | 0.5h | 9.5h |
 
-**Estimated effort:** 6–8 hours for full completion (K=3 to K=5).
+**Total estimated effort:** ~9.5 hours (K=1 to K=5)
 
