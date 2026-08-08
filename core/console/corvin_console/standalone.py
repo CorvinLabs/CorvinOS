@@ -45,6 +45,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .app import mount_static, router
+from .routes.packages import router as packages_router
 
 _LOCAL_STATS_HTML = """<!DOCTYPE html>
 <html lang="de">
@@ -167,6 +168,7 @@ def _configure_persistent_logging() -> None:
     single point of failure for the thing it exists to help debug."""
     try:
         import logging.handlers as _lh
+
         import forge.paths as _fp  # type: ignore[import]
 
         log_dir = _fp.corvin_home() / "logs"
@@ -276,8 +278,9 @@ def create_app() -> FastAPI:
 
         # Start presence heartbeat (best-effort — never blocks startup).
         try:
-            from .aco.heartbeat import start_heartbeat_thread as _start_hb
             import forge.paths as _fp  # type: ignore[import]
+
+            from .aco.heartbeat import start_heartbeat_thread as _start_hb
             _start_hb(_fp.corvin_home())
         except Exception:
             pass
@@ -358,17 +361,24 @@ def create_app() -> FastAPI:
         _relay_listener = None
         _relay_task = None
         try:
-            from corvin_console import feature_flags as _relay_ff
             import a2a_friendship as _relay_ft  # type: ignore[import-not-found]
+
+            from corvin_console import feature_flags as _relay_ff
             if _a2a_available and _a2a_receiver is not None and _relay_ff.is_enabled("a2a_relay_fallback"):
                 _relay_url = _relay_ft.get_my_relay_url()
                 if _relay_url:
                     import asyncio as _relay_asyncio
+
                     import a2a_relay as _relay_mod  # type: ignore[import-not-found]
+
+                    from .routes.a2a_pair import (
+                        _endpoints_dir as _relay_endpoints_dir,
+                    )
                     from .routes.a2a_pair import (
                         _origins_dir as _relay_origins_dir,
+                    )
+                    from .routes.a2a_pair import (
                         _pending_friendships_dir as _relay_pending_dir,
-                        _endpoints_dir as _relay_endpoints_dir,
                     )
                     # pending_dir/endpoints_dir (2026-08-02): without these,
                     # the listener can still relay real task traffic but
@@ -465,6 +475,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Mount package management routes at /v1/console/packages
+    app.include_router(packages_router, prefix="/v1/console")
+
     # Mount all console API routes at /v1/console
     app.include_router(router, prefix="/v1/console")
 
@@ -554,17 +567,6 @@ def create_app() -> FastAPI:
             body = await request.json()
         except Exception:
             raise HTTPException(status_code=400, detail={"reason": "invalid_json"})
-        from a2a_friendship import process_friendship_ack_request  # type: ignore[import-not-found]
-        # Reuse the SAME dir resolvers the pairing routes already use (env-var
-        # override else repo-relative default) rather than re-deriving the
-        # path here — a second, independently-computed default would silently
-        # diverge from where friendship_create/friendship_import actually
-        # read and write on a wheel install.
-        from .routes.a2a_pair import (
-            _endpoints_dir as _a2a_endpoints_dir,
-            _origins_dir as _a2a_origins_dir,
-            _pending_friendships_dir as _a2a_pending_friendships_dir,
-        )
         # A5 (2026-07-30 relay redesign): process_friendship_ack_request is
         # fully SYNC and blocks on fcntl.flock, socket.getaddrinfo (no timeout,
         # on a peer-supplied hostname) and a 5 s urllib ping. Called directly in
@@ -572,6 +574,23 @@ def create_app() -> FastAPI:
         # the relay-listener background task — for ≥5 s per ack. Run it off the
         # loop (the RelayListener already uses this exact idiom).
         import asyncio as _asyncio
+
+        from a2a_friendship import process_friendship_ack_request  # type: ignore[import-not-found]
+
+        # Reuse the SAME dir resolvers the pairing routes already use (env-var
+        # override else repo-relative default) rather than re-deriving the
+        # path here — a second, independently-computed default would silently
+        # diverge from where friendship_create/friendship_import actually
+        # read and write on a wheel install.
+        from .routes.a2a_pair import (
+            _endpoints_dir as _a2a_endpoints_dir,
+        )
+        from .routes.a2a_pair import (
+            _origins_dir as _a2a_origins_dir,
+        )
+        from .routes.a2a_pair import (
+            _pending_friendships_dir as _a2a_pending_friendships_dir,
+        )
         status_code, payload = await _asyncio.to_thread(
             process_friendship_ack_request,
             body,
