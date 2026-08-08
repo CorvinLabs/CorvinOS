@@ -187,8 +187,10 @@ class PackageSkillLoader:
     def get_skills_for_task(self, task: object) -> List[Dict]:
         """Get package skills relevant to a task.
 
-        This is a basic implementation that returns all package skills.
-        A more sophisticated version would score by relevance.
+        Scores skills by relevance to the task based on:
+        - Category matching (if task has a category field)
+        - Skill trigger type matching (preprocessing, error_handling, etc.)
+        - Package ID matching (if task mentions a specific package)
 
         Args:
             task: Task object to find relevant skills for.
@@ -198,22 +200,63 @@ class PackageSkillLoader:
         """
         package_skills = self.discover_package_skills()
 
-        # Convert to SkillInjection format
+        # Convert to SkillInjection format with relevance scoring
         skill_dicts = []
         for pkg_skill in package_skills:
+            # Score relevance based on task context
+            relevance = self._score_skill_relevance(pkg_skill, task)
+
             skill_dicts.append(
                 {
                     "skill_id": pkg_skill.skill_id,
                     "title": pkg_skill.title,
                     "description": pkg_skill.description,
                     "category": pkg_skill.category,
-                    "relevance_score": 0.5,  # Default relevance; could be improved
-                    "success_rate": 0.7,  # Default success rate
+                    "relevance_score": relevance,
+                    "success_rate": 0.7,  # Default success rate (could be tracked over time)
                     "source": f"package:{pkg_skill.package_id}",
+                    "trigger": pkg_skill.trigger,  # Include trigger for filtering
                 }
             )
 
         return skill_dicts
+
+    def _score_skill_relevance(self, skill: PackageSkillInfo, task: object) -> float:
+        """Score how relevant a package skill is to a task.
+
+        Scoring rules:
+        - If task category matches skill category: +0.3 base
+        - If task mentions the package: +0.2
+        - If skill has preprocessing hook: +0.1 (universally useful)
+        - Otherwise: base score 0.5
+
+        Args:
+            skill: Package skill to score.
+            task: Task object (may have category, package_id, etc.).
+
+        Returns:
+            Relevance score [0.0, 1.0].
+        """
+        score = 0.5  # Base relevance
+
+        # Check if task has a matching category
+        if task and hasattr(task, "category"):
+            task_category = str(getattr(task, "category", "")).lower()
+            if task_category and task_category in skill.category.lower():
+                score += 0.3
+
+        # Check if task mentions this package
+        if task and hasattr(task, "package_id"):
+            task_package = str(getattr(task, "package_id", "")).lower()
+            if task_package and task_package == skill.package_id.lower():
+                score += 0.2
+
+        # Universal usefulness for preprocessing hooks
+        if skill.trigger == "preprocessing":
+            score += 0.1
+
+        # Clamp to valid range
+        return min(1.0, max(0.0, score))
 
     def clear_cache(self):
         """Clear the skill discovery cache."""

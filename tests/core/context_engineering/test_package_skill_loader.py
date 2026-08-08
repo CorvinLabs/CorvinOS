@@ -184,6 +184,113 @@ class TestSkillInjectionWithPackages:
             pytest.skip("PackageSkillLoader not available")
 
 
+class TestRelevanceScoring:
+    """Tests for skill relevance scoring."""
+
+    def test_score_skill_relevance_base_score(self):
+        """Test base relevance score without task context."""
+        from context_engineering.package_skill_loader import PackageSkillLoader, PackageSkillInfo
+
+        loader = PackageSkillLoader()
+        skill = PackageSkillInfo(
+            skill_id="test:skill",
+            title="Test Skill",
+            description="A test skill",
+            category="general",
+            package_id="com.test",
+            file_path="skills/test.yaml",
+        )
+
+        # Without task context, should get base score
+        score = loader._score_skill_relevance(skill, task=None)
+        assert score == 0.5, f"Expected base score 0.5, got {score}"
+
+    def test_score_skill_relevance_category_match(self):
+        """Test relevance boost for category matching."""
+        from context_engineering.package_skill_loader import PackageSkillLoader, PackageSkillInfo
+
+        loader = PackageSkillLoader()
+        skill = PackageSkillInfo(
+            skill_id="test:debug",
+            title="Debug Skill",
+            description="Debugging patterns",
+            category="debugging",
+            package_id="com.test",
+            file_path="skills/debug.yaml",
+        )
+
+        # Create a mock task with matching category
+        class MockTask:
+            category = "debugging"
+
+        score = loader._score_skill_relevance(skill, task=MockTask())
+        assert score == 0.8, f"Expected score 0.8 (0.5 + 0.3), got {score}"
+
+    def test_score_skill_relevance_package_match(self):
+        """Test relevance boost for package matching."""
+        from context_engineering.package_skill_loader import PackageSkillLoader, PackageSkillInfo
+
+        loader = PackageSkillLoader()
+        skill = PackageSkillInfo(
+            skill_id="pkg:skill",
+            title="Package Skill",
+            description="A skill from a package",
+            category="general",
+            package_id="com.specific",
+            file_path="skills/pkg.yaml",
+        )
+
+        # Create a mock task mentioning the package
+        class MockTask:
+            package_id = "com.specific"
+
+        score = loader._score_skill_relevance(skill, task=MockTask())
+        assert score == 0.7, f"Expected score 0.7 (0.5 + 0.2), got {score}"
+
+    def test_score_skill_relevance_preprocessing_hook_bonus(self):
+        """Test universal bonus for preprocessing hooks."""
+        from context_engineering.package_skill_loader import PackageSkillLoader, PackageSkillInfo
+
+        loader = PackageSkillLoader()
+        skill = PackageSkillInfo(
+            skill_id="test:preprocess",
+            title="Preprocess Skill",
+            description="Preprocessing hook",
+            category="general",
+            package_id="com.test",
+            file_path="hooks/preprocess.py",
+            trigger="preprocessing",
+        )
+
+        # Preprocessing hooks should get universal bonus
+        score = loader._score_skill_relevance(skill, task=None)
+        assert score == 0.6, f"Expected score 0.6 (0.5 + 0.1), got {score}"
+
+    def test_score_skill_relevance_combined_bonuses(self):
+        """Test combined relevance bonuses."""
+        from context_engineering.package_skill_loader import PackageSkillLoader, PackageSkillInfo
+
+        loader = PackageSkillLoader()
+        skill = PackageSkillInfo(
+            skill_id="pkg:debug",
+            title="Debug Preprocessing",
+            description="Debug preprocessing skill",
+            category="debugging",
+            package_id="com.specific",
+            file_path="hooks/debug_preprocess.py",
+            trigger="preprocessing",
+        )
+
+        class MockTask:
+            category = "debugging"
+            package_id = "com.specific"
+
+        # Should get all bonuses: 0.5 (base) + 0.3 (category) + 0.2 (package) + 0.1 (preprocessing)
+        score = loader._score_skill_relevance(skill, task=MockTask())
+        expected = 1.0  # Clamped at 1.0
+        assert score == expected, f"Expected score {expected}, got {score}"
+
+
 class TestPackageSkillLoaderE2E:
     """E2E tests with real adscale-ldd package."""
 

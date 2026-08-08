@@ -353,6 +353,42 @@ def get_correlation_data():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/v1/talent/insights", methods=["GET"])
+def get_talent_insights():
+    """Get learning insights and narratives (what was learned)."""
+    days = request.args.get("days", 7, type=int)
+    try:
+        calculator = get_talent_calculator()
+        narratives = calculator.extract_learning_narratives(days=days)
+        dimensions = calculator.get_dimension_insights(days=days)
+        badges = calculator.get_milestone_badges(days=days)
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "narratives": narratives,
+            "dimensions": dimensions,
+            "badges": badges,
+        })
+    except Exception as e:
+        logger.error(f"Insights fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/talent/story", methods=["GET"])
+def get_improvement_story():
+    """Get narrative story of improvement (the journey)."""
+    days = request.args.get("days", 7, type=int)
+    try:
+        calculator = get_talent_calculator()
+        story = calculator.get_improvement_story(days=days)
+        return jsonify({
+            "timestamp": datetime.utcnow().isoformat(),
+            "story": story,
+        })
+    except Exception as e:
+        logger.error(f"Story fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint."""

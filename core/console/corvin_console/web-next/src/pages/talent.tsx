@@ -79,9 +79,11 @@ export default function YourTalentPage() {
   const [dailyData, setDailyData] = useState<DailyData[]>([]);
   const [taskTypes, setTaskTypes] = useState<TaskTypeData[]>([]);
   const [correlation, setCorrelation] = useState<any>(null);
+  const [insights, setInsights] = useState<any>(null);
+  const [story, setStory] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedTab, setSelectedTab] = useState<"overview" | "history" | "analysis">("overview");
+  const [selectedTab, setSelectedTab] = useState<"overview" | "insights" | "history" | "analysis">("overview");
 
   const API_BASE = "http://127.0.0.1:5000";
 
@@ -92,11 +94,13 @@ export default function YourTalentPage() {
         setError(null);
 
         // Fetch all data in parallel
-        const [scoreRes, historyRes, taskRes, corrRes] = await Promise.all([
+        const [scoreRes, historyRes, taskRes, corrRes, insightsRes, storyRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/talent/score`),
           fetch(`${API_BASE}/api/v1/talent/history?days=7`),
           fetch(`${API_BASE}/api/v1/talent/task-types?days=7`),
           fetch(`${API_BASE}/api/v1/talent/correlation?days=7`),
+          fetch(`${API_BASE}/api/v1/talent/insights?days=7`),
+          fetch(`${API_BASE}/api/v1/talent/story?days=7`),
         ]);
 
         if (!scoreRes.ok) throw new Error("Failed to fetch talent score");
@@ -117,6 +121,16 @@ export default function YourTalentPage() {
         if (corrRes.ok) {
           const corr = await corrRes.json();
           setCorrelation(corr.correlation || { points: [] });
+        }
+
+        if (insightsRes.ok) {
+          const insightsData = await insightsRes.json();
+          setInsights(insightsData);
+        }
+
+        if (storyRes.ok) {
+          const storyData = await storyRes.json();
+          setStory(storyData.story);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -221,10 +235,10 @@ export default function YourTalentPage() {
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
         <button
           onClick={() => setSelectedTab("overview")}
-          className={`px-4 py-2 font-medium border-b-2 transition-colors ${
+          className={`px-4 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
             selectedTab === "overview"
               ? "border-blue-500 text-blue-600 dark:text-blue-400"
               : "border-transparent text-muted-foreground hover:text-foreground"
@@ -233,8 +247,18 @@ export default function YourTalentPage() {
           Overview
         </button>
         <button
+          onClick={() => setSelectedTab("insights")}
+          className={`px-4 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+            selectedTab === "insights"
+              ? "border-blue-500 text-blue-600 dark:text-blue-400"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          What You Learned
+        </button>
+        <button
           onClick={() => setSelectedTab("history")}
-          className={`px-4 py-2 font-medium border-b-2 transition-colors ${
+          className={`px-4 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
             selectedTab === "history"
               ? "border-blue-500 text-blue-600 dark:text-blue-400"
               : "border-transparent text-muted-foreground hover:text-foreground"
@@ -244,7 +268,7 @@ export default function YourTalentPage() {
         </button>
         <button
           onClick={() => setSelectedTab("analysis")}
-          className={`px-4 py-2 font-medium border-b-2 transition-colors ${
+          className={`px-4 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
             selectedTab === "analysis"
               ? "border-blue-500 text-blue-600 dark:text-blue-400"
               : "border-transparent text-muted-foreground hover:text-foreground"
@@ -314,6 +338,116 @@ export default function YourTalentPage() {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Insights Tab — What You Learned */}
+      {selectedTab === "insights" && (
+        <div className="space-y-6">
+          {/* Story/Journey */}
+          {story && (
+            <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 rounded-lg p-6 border border-purple-200 dark:border-purple-800">
+              <h2 className="text-2xl font-bold mb-3">Your Learning Journey</h2>
+              <p className="text-lg text-foreground mb-4">{story.summary}</p>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-white dark:bg-slate-800 rounded p-3">
+                  <p className="text-xs text-muted-foreground">Starting Score</p>
+                  <p className="text-2xl font-bold">{story.score_start}</p>
+                </div>
+                <div className="bg-white dark:bg-slate-800 rounded p-3">
+                  <p className="text-xs text-muted-foreground">Current Score</p>
+                  <p className="text-2xl font-bold text-green-600">{story.score_end}</p>
+                </div>
+                <div className="bg-white dark:bg-slate-800 rounded p-3">
+                  <p className="text-xs text-muted-foreground">Improvement</p>
+                  <p className="text-2xl font-bold text-blue-600">
+                    {story.score_change > 0 ? "+" : ""}{story.score_change}
+                  </p>
+                </div>
+                <div className="bg-white dark:bg-slate-800 rounded p-3">
+                  <p className="text-xs text-muted-foreground">Trend</p>
+                  <p className="text-lg font-bold capitalize">{story.trend} 📈</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Dimension Insights */}
+          {insights?.dimensions && (
+            <div className="bg-white dark:bg-slate-800 rounded-lg p-6 shadow">
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                📊 What Changed in Each Dimension
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {insights.dimensions.map((dim: any, i: number) => (
+                  <div key={i} className="bg-slate-50 dark:bg-slate-700 rounded p-4 border-l-4"
+                    style={{
+                      borderColor: dim.status === "up" ? "#10b981" : dim.status === "down" ? "#ef4444" : "#94a3b8"
+                    }}>
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <p className="text-sm text-muted-foreground">{dim.dimension}</p>
+                        <p className="text-2xl font-bold">{dim.icon}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-bold">{dim.current.toFixed(1)}%</p>
+                        <p className={`text-sm font-medium ${
+                          dim.status === "up" ? "text-green-600" :
+                          dim.status === "down" ? "text-red-600" :
+                          "text-gray-600"
+                        }`}>
+                          {dim.status === "up" ? "↗" : dim.status === "down" ? "↘" : "→"} {Math.abs(dim.change).toFixed(1)}%
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-sm">{dim.narrative}</p>
+                    <p className="text-xs text-muted-foreground mt-2">{dim.analysis}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Learning Narratives */}
+          {insights?.narratives && insights.narratives.length > 0 && (
+            <div className="bg-white dark:bg-slate-800 rounded-lg p-6 shadow">
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                💡 Learning Insights
+              </h2>
+              <div className="space-y-3">
+                {insights.narratives.map((narrative: any, i: number) => (
+                  <div key={i} className="flex gap-3 p-4 bg-slate-50 dark:bg-slate-700 rounded border-l-4 border-blue-500">
+                    <div className="text-2xl flex-shrink-0">{narrative.icon}</div>
+                    <div className="flex-1">
+                      <p className="font-semibold">{narrative.title}</p>
+                      <p className="text-sm text-muted-foreground">{narrative.description}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Achievement Badges */}
+          {insights?.badges && insights.badges.length > 0 && (
+            <div className="bg-white dark:bg-slate-800 rounded-lg p-6 shadow">
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                🏆 Achievements Unlocked
+              </h2>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {insights.badges.map((badge: any, i: number) => (
+                  <div key={i} className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-lg p-4 text-center border border-amber-200 dark:border-amber-800">
+                    <div className="text-4xl mb-2">{badge.badge}</div>
+                    <p className="font-bold text-sm">{badge.title}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{badge.context}</p>
+                    <p className="text-xs font-medium capitalize mt-2 text-amber-700 dark:text-amber-400">
+                      {badge.level}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
