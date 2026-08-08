@@ -22,14 +22,10 @@ interface Package {
 
 interface UploadResponse {
   status: string
-  package: {
-    id: string
-    version: string
-    name: string
-    path: string
-  }
-  permissions: string[]
-  dependencies: Array<{ id: string; version: string }>
+  package_id: string
+  version: string
+  display_name: string
+  permissions: Array<{ permission: string; required: boolean; description: string }>
 }
 
 export const PackageMarketplace: React.FC = () => {
@@ -39,12 +35,16 @@ export const PackageMarketplace: React.FC = () => {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const isMountedRef = React.useRef(true)
+  const pendingTimeoutsRef = React.useRef<NodeJS.Timeout[]>([])
 
   useEffect(() => {
     isMountedRef.current = true
     fetchPackages()
     return () => {
       isMountedRef.current = false
+      // Clean up all pending timeouts on unmount
+      pendingTimeoutsRef.current.forEach(timeoutId => clearTimeout(timeoutId))
+      pendingTimeoutsRef.current = []
     }
   }, [])
 
@@ -114,20 +114,18 @@ export const PackageMarketplace: React.FC = () => {
         setSelectedFile(null)
       }
 
-      // Refresh package list with cleanup (prevents state update on unmount)
+      // Schedule package list refresh with proper cleanup
       const timeoutId = setTimeout(() => {
         if (isMountedRef.current) {
           fetchPackages()
           setUploadStatus(null)
         }
+        // Remove from pending list when it fires
+        pendingTimeoutsRef.current = pendingTimeoutsRef.current.filter(t => t !== timeoutId)
       }, 1500)
 
-      // Store timeout ID for cleanup if needed
-      return () => {
-        if (isMountedRef.current === false) {
-          clearTimeout(timeoutId)
-        }
-      }
+      // Add to pending timeouts so cleanup on unmount clears it
+      pendingTimeoutsRef.current.push(timeoutId)
     } catch (err) {
       if (isMountedRef.current) {
         setError(err instanceof Error ? err.message : 'Upload failed')
@@ -165,13 +163,10 @@ export const PackageMarketplace: React.FC = () => {
           fetchPackages()
           setUploadStatus(null)
         }
+        pendingTimeoutsRef.current = pendingTimeoutsRef.current.filter(t => t !== timeoutId)
       }, 1500)
 
-      return () => {
-        if (isMountedRef.current === false) {
-          clearTimeout(timeoutId)
-        }
-      }
+      pendingTimeoutsRef.current.push(timeoutId)
     } catch (err) {
       if (isMountedRef.current) {
         setError(err instanceof Error ? err.message : 'Uninstall failed')

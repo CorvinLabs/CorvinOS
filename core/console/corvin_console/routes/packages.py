@@ -347,40 +347,56 @@ async def upload_package(
     - 413: Package too large
     - 422: Manifest validation failed
     """
+    import uuid
+
     zip_bytes = await file.read()
 
-    package_id = None  # Will be set after manifest validation
-    pkg_dir = _get_package_dir(rec.tenant_id, "temp")  # Temp dir for extraction
+    # Use unique temp directory to avoid concurrent upload conflicts
+    temp_id = str(uuid.uuid4())[:8]
+    temp_pkg_dir = _PACKAGES_REGISTRY_DIR / rec.tenant_id / "temp" / temp_id
 
-    # Clean up any existing temp extraction
-    if pkg_dir.exists():
-        shutil.rmtree(pkg_dir, ignore_errors=True)
+    try:
+        # Validate ZIP and extract all files to unique temp location
+        extract_result = _validate_and_extract_zip(zip_bytes, temp_pkg_dir, _MAX_PACKAGE_BYTES)
+        manifest = extract_result["manifest"]
+        package_id, version = _validate_manifest(manifest)
 
-    # Validate ZIP and extract all files
-    extract_result = _validate_and_extract_zip(zip_bytes, pkg_dir, _MAX_PACKAGE_BYTES)
-    manifest = extract_result["manifest"]
-    package_id, version = _validate_manifest(manifest)
+        # Check for version conflict
+        final_pkg_dir = _get_package_dir(rec.tenant_id, package_id)
+        existing_metadata = final_pkg_dir / "metadata.json"
+        if existing_metadata.exists():
+            try:
+                existing = json.loads(existing_metadata.read_text())
+                existing_version = existing.get("version", "0.0.0")
+                if existing_version == version:
+                    raise HTTPException(
+                        status_code=http_status.HTTP_409_CONFLICT,
+                        detail=f"Package {package_id}@{version} already installed",
+                    )
+                log.warning(f"Replacing {package_id}@{existing_version} with @{version}")
+            except json.JSONDecodeError:
+                log.warning(f"Corrupted metadata for {package_id}, will overwrite")
 
-    # Check for version conflict
-    final_pkg_dir = _get_package_dir(rec.tenant_id, package_id)
-    existing_metadata = final_pkg_dir / "metadata.json"
-    if existing_metadata.exists():
-        try:
-            existing = json.loads(existing_metadata.read_text())
-            existing_version = existing.get("version", "0.0.0")
-            if existing_version == version:
-                raise HTTPException(
-                    status_code=http_status.HTTP_409_CONFLICT,
-                    detail=f"Package {package_id}@{version} already installed",
-                )
-            log.warning(f"Replacing {package_id}@{existing_version} with @{version}")
-        except json.JSONDecodeError:
-            log.warning(f"Corrupted metadata for {package_id}, will overwrite")
+        # Atomically move extracted files to final location
+        if final_pkg_dir.exists():
+            shutil.rmtree(final_pkg_dir)
+        temp_pkg_dir.parent.mkdir(parents=True, exist_ok=True)
+        temp_pkg_dir.rename(final_pkg_dir)
 
-    # Move extracted files to final location
-    if final_pkg_dir.exists():
-        shutil.rmtree(final_pkg_dir)
-    pkg_dir.rename(final_pkg_dir)
+    except HTTPException:
+        # Clean up temp directory on any HTTP error
+        if temp_pkg_dir.exists():
+            shutil.rmtree(temp_pkg_dir, ignore_errors=True)
+        raise
+    except Exception as exc:
+        # Clean up temp directory on any unexpected error
+        if temp_pkg_dir.exists():
+            shutil.rmtree(temp_pkg_dir, ignore_errors=True)
+        log.exception(f"Unexpected error during package upload: {exc}")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Package upload failed due to system error",
+        ) from exc
 
     # Write metadata
     permissions = _extract_permissions(manifest)
@@ -393,6 +409,18 @@ async def upload_package(
         "installed_at": datetime.now(timezone.utc).isoformat(),
         "manifest": manifest,
     }, indent=2))
+
+    # Audit trail: package installation (GDPR Art. 30 accountability)
+    console_audit.action_performed(
+        rec,
+        action="package.install",
+        detail={
+            "package_id": package_id,
+            "version": version,
+            "display_name": manifest.get("display_name", package_id),
+            "permissions": [p.permission for p in permissions],
+        },
+    )
 
     log.info(f"Package {package_id}@{version} installed by tenant {rec.tenant_id}")
 
