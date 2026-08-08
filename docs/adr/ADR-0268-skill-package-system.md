@@ -24,6 +24,8 @@ paths:
   - "core/preprocessing/**"
   - "core/console/routes/packages.py"
   - "core/console/corvin_console/web-next/src/components/PackageMarketplace.tsx"
+  - "operator/context_engineering/package_skill_loader.py"
+  - "operator/context_engineering/skill_injection.py"
 docs:
   - "docs/SKILL_PACKAGE_CONCEPT.md"
   - "docs/marketplace/**"
@@ -53,6 +55,15 @@ docs:
 
 ✅ **Phase 4 (COMPLETE):** Console UI + Marketplace Browse/Upload (9 tests)
 - Commit 66e31d0: React PackageMarketplace component, file upload/list/uninstall, styled UI
+
+✅ **Phase 5 (COMPLETE):** Intelligent Relevance Scoring for Package Skills (13 tests)
+- New modules: `operator/context_engineering/package_skill_loader.py`, `operator/context_engineering/skill_injection.py` (updated)
+- PackageSkillLoader: discovers skills from installed packages, caches (30min TTL), converts to SkillInjection format
+- Relevance Scoring: context-aware scoring based on task category (+0.3), package match (+0.2), preprocessing hooks (+0.1), base 0.5
+- SkillInjection integration: optional fail-soft integration with PackageSkillLoader, backward compatible
+- Tests: 8 unit tests (extraction, format, missing fields, caching) + 5 scoring tests (base, category, package, hooks, combined)
+- E2E validation: real adscale-ldd package discovery test
+- Commits: (new Phase 5 commits to be created)
 
 ---
 
