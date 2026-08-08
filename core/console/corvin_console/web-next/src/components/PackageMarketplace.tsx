@@ -38,15 +38,13 @@ export const PackageMarketplace: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const isMountedRef = React.useRef(true)
 
   useEffect(() => {
-    let isMounted = true
-    const load = async () => {
-      if (isMounted) await fetchPackages()
-    }
-    load()
+    isMountedRef.current = true
+    fetchPackages()
     return () => {
-      isMounted = false
+      isMountedRef.current = false
     }
   }, [])
 
@@ -56,12 +54,18 @@ export const PackageMarketplace: React.FC = () => {
       const response = await fetch('/api/v1/packages')
       if (!response.ok) throw new Error(`Failed to fetch packages: ${response.statusText}`)
       const data = await response.json()
-      setPackages(data.packages || [])
-      setError(null)
+      if (isMountedRef.current) {
+        setPackages(data.packages || [])
+        setError(null)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load packages')
+      if (isMountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to load packages')
+      }
     } finally {
-      setLoading(false)
+      if (isMountedRef.current) {
+        setLoading(false)
+      }
     }
   }
 
@@ -84,7 +88,7 @@ export const PackageMarketplace: React.FC = () => {
     }
 
     try {
-      setUploadStatus('Uploading...')
+      if (isMountedRef.current) setUploadStatus('Uploading...')
       const formData = new FormData()
       formData.append('file', selectedFile)
 
@@ -105,19 +109,30 @@ export const PackageMarketplace: React.FC = () => {
       }
 
       const data: UploadResponse = await response.json()
-      setUploadStatus(`Package ${data.display_name} uploaded successfully!`)
-      setSelectedFile(null)
+      if (isMountedRef.current) {
+        setUploadStatus(`Package ${data.display_name} uploaded successfully!`)
+        setSelectedFile(null)
+      }
 
-      // Refresh package list with cleanup
+      // Refresh package list with cleanup (prevents state update on unmount)
       const timeoutId = setTimeout(() => {
-        fetchPackages()
-        setUploadStatus(null)
+        if (isMountedRef.current) {
+          fetchPackages()
+          setUploadStatus(null)
+        }
       }, 1500)
 
-      return () => clearTimeout(timeoutId)
+      // Store timeout ID for cleanup if needed
+      return () => {
+        if (isMountedRef.current === false) {
+          clearTimeout(timeoutId)
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed')
-      setUploadStatus(null)
+      if (isMountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Upload failed')
+        setUploadStatus(null)
+      }
     }
   }
 
@@ -127,7 +142,7 @@ export const PackageMarketplace: React.FC = () => {
     }
 
     try {
-      setUploadStatus(`Uninstalling ${packageId}...`)
+      if (isMountedRef.current) setUploadStatus(`Uninstalling ${packageId}...`)
       const response = await fetch(`/api/v1/packages/${packageId}`, {
         method: 'DELETE',
       })
@@ -143,16 +158,25 @@ export const PackageMarketplace: React.FC = () => {
         throw new Error(errorDetail)
       }
 
-      setUploadStatus('Package uninstalled successfully!')
+      if (isMountedRef.current) setUploadStatus('Package uninstalled successfully!')
+
       const timeoutId = setTimeout(() => {
-        fetchPackages()
-        setUploadStatus(null)
+        if (isMountedRef.current) {
+          fetchPackages()
+          setUploadStatus(null)
+        }
       }, 1500)
 
-      return () => clearTimeout(timeoutId)
+      return () => {
+        if (isMountedRef.current === false) {
+          clearTimeout(timeoutId)
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Uninstall failed')
-      setUploadStatus(null)
+      if (isMountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Uninstall failed')
+        setUploadStatus(null)
+      }
     }
   }
 
