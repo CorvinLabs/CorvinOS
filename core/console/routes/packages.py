@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from core.package_manager import PackageManager
 from core.package_manager.validators import ValidationError
 
-router = APIRouter(prefix="/api/v1/packages", tags=["packages"])
+router = APIRouter(prefix="/packages", tags=["packages"])
 
 
 @router.post("/upload", status_code=202)
