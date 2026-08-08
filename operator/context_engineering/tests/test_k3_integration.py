@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from dataclasses import asdict
@@ -39,7 +40,7 @@ class TestH2FileSnapshot:
             queue_root = Path(tmpdir)
             queue_file = queue_root / "2026-08-07.jsonl"
 
-            # Create a record
+            # Create a record (compute checksum last)
             record = {
                 "context_id": "adr-0269",
                 "task_id": "task-001",
@@ -51,8 +52,9 @@ class TestH2FileSnapshot:
                 "timestamp": "2026-08-07T10:00:00Z",
                 "user_id": "user1",
                 "task_keywords": ["test"],
-                "checksum": compute_record_checksum(record),
+                "checksum": "",
             }
+            record["checksum"] = compute_record_checksum(record)
 
             # Append record
             atomic_append_to_queue_file(queue_file, record)
