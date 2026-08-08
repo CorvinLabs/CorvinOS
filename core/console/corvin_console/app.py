@@ -101,6 +101,7 @@ from .routes import (
     data_sources as data_sources_route,
     chain_dual_track as chain_dual_track_route,
     flows as flows_route,
+    packages as packages_route,
     # ADR-0124 — Open Platform Extensibility (M1–M7)
     custom_engines as custom_engines_route,
     connectors_custom as connectors_custom_route,
@@ -228,7 +229,8 @@ router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
 # lives in one place instead of in the mount condition.
 router.include_router(plugins_route.router, tags=["console-plugins"])
 # ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
-# Mounted directly in gateway at /api/v1/packages (ADR-gateway routing, not console-prefixed)
+# packages_route.router already has prefix="/packages", so mount without additional prefix
+router.include_router(packages_route.router, tags=["console-packages"])
 # ADR-0239/0243 — admin control plane. UI-independent /api/admin/* routes, always
 # mounted and each one 404s while the `admin_control_plane` flag is off (ships
 # dark), so the gate lives in the route rather than in the mount condition.
