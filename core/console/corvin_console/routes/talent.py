@@ -13,28 +13,21 @@ from __future__ import annotations
 
 import random
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from .. import auth as session_auth
+from ..deps import require_session
 
 router = APIRouter(prefix="/talent", tags=["console-talent"])
 
 
-def _get_session(request: Request) -> dict[str, Any] | None:
-    """Get the current session from cookie."""
-    # Reuse session check from auth_routes
-    sid = request.cookies.get("corvin_console_sid")
-    if not sid:
-        return None
-    # In real impl, check session store; for now accept any sid
-    return {"sid": sid}
-
-
 @router.get("/score")
-async def get_talent_score(request: Request) -> dict[str, Any]:
-    """Get current talent score (mock data)."""
-    if not _get_session(request):
-        raise HTTPException(status_code=401, detail="no session")
+async def get_talent_score(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Get current talent score (mock data) — requires valid session."""
 
     return {
         "talent_score": 7.8,
@@ -114,10 +107,14 @@ async def get_talent_score(request: Request) -> dict[str, Any]:
 
 
 @router.get("/history")
-async def get_talent_history(request: Request, days: int = 7) -> dict[str, Any]:
-    """Get talent score history (mock data)."""
-    if not _get_session(request):
-        raise HTTPException(status_code=401, detail="no session")
+async def get_talent_history(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    days: int = 7,
+) -> dict[str, Any]:
+    """Get talent score history (mock data) — requires valid session."""
+    # Validate days parameter to prevent DoS
+    if not 1 <= days <= 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
 
     daily_data = []
     for i in range(days):
@@ -137,10 +134,13 @@ async def get_talent_history(request: Request, days: int = 7) -> dict[str, Any]:
 
 
 @router.get("/task-types")
-async def get_talent_task_types(request: Request, days: int = 7) -> dict[str, Any]:
-    """Get task type performance (mock data)."""
-    if not _get_session(request):
-        raise HTTPException(status_code=401, detail="no session")
+async def get_talent_task_types(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    days: int = 7,
+) -> dict[str, Any]:
+    """Get task type performance (mock data) — requires valid session."""
+    if not 1 <= days <= 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
 
     return {
         "task_types": [
@@ -191,10 +191,13 @@ async def get_talent_task_types(request: Request, days: int = 7) -> dict[str, An
 
 
 @router.get("/correlation")
-async def get_talent_correlation(request: Request, days: int = 7) -> dict[str, Any]:
-    """Get accuracy vs efficiency correlation (mock data)."""
-    if not _get_session(request):
-        raise HTTPException(status_code=401, detail="no session")
+async def get_talent_correlation(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    days: int = 7,
+) -> dict[str, Any]:
+    """Get accuracy vs efficiency correlation (mock data) — requires valid session."""
+    if not 1 <= days <= 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
 
     points = []
     for _ in range(40):
@@ -207,10 +210,13 @@ async def get_talent_correlation(request: Request, days: int = 7) -> dict[str, A
 
 
 @router.get("/insights")
-async def get_talent_insights(request: Request, days: int = 7) -> dict[str, Any]:
-    """Get learning insights (mock data)."""
-    if not _get_session(request):
-        raise HTTPException(status_code=401, detail="no session")
+async def get_talent_insights(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    days: int = 7,
+) -> dict[str, Any]:
+    """Get learning insights (mock data) — requires valid session."""
+    if not 1 <= days <= 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
 
     return {
         "dimensions": [
@@ -292,10 +298,13 @@ async def get_talent_insights(request: Request, days: int = 7) -> dict[str, Any]
 
 
 @router.get("/story")
-async def get_talent_story(request: Request, days: int = 7) -> dict[str, Any]:
-    """Get learning journey narrative (mock data)."""
-    if not _get_session(request):
-        raise HTTPException(status_code=401, detail="no session")
+async def get_talent_story(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    days: int = 7,
+) -> dict[str, Any]:
+    """Get learning journey narrative (mock data) — requires valid session."""
+    if not 1 <= days <= 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
 
     return {
         "story": {
