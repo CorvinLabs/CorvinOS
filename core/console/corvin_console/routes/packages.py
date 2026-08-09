@@ -407,6 +407,8 @@ async def upload_package(
         # Now commit the package by moving temp → final (atomic move)
         if final_pkg_dir.exists():
             shutil.rmtree(final_pkg_dir, ignore_errors=True)
+        # Ensure parent directory exists before rename
+        final_pkg_dir.parent.mkdir(parents=True, exist_ok=True)
         # Move atomically (rename is atomic on POSIX/Windows)
         temp_pkg_dir.rename(final_pkg_dir)
 
