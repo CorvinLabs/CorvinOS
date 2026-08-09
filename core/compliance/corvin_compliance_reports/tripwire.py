@@ -349,12 +349,40 @@ def audit_chain_intact() -> TripwireResult:
             corruption_reaches_history = any(
                 int(pr.get("line", 0)) <= last_good_line for pr in problems
             )
-            if has_history_before_tail and last_good_line > 0 and not corruption_reaches_history:
+
+            # Guard against sparse corruption (GDPR Art. 30/32 violation):
+            # If the problems list has gaps (e.g., record N is broken but N+1
+            # is not listed), truncating at N-1 would delete N+1 even though
+            # it verified. This can happen when a corrupted record's hash
+            # matches what the next record references, allowing the next record
+            # to verify against the corrupted hash.
+            # Strategy: refuse healing if we cannot confirm ALL records from
+            # first_tail_break onward are genuinely corrupted (2026-08-09).
+            # Before truncating, verify ALL records from first_tail_break onward are broken.
+            # Do NOT delete any record unless confirmed: check every line in the target range.
+            problem_lines_in_tail = {
+                int(pr.get("line", 0)) for pr in recent
+                if int(pr.get("line", 0)) >= first_tail_break
+            }
+            lines_to_delete = list(range(first_tail_break, total + 1))
+            all_records_broken = all(ln in problem_lines_in_tail for ln in lines_to_delete)
+            has_gap_in_corruption = not all_records_broken
+            if has_gap_in_corruption:
+                good_lines = [ln for ln in lines_to_delete if ln not in problem_lines_in_tail]
+                _log.warning(
+                    f"audit_chain_intact: cannot heal — unbroken records exist in tail "
+                    f"(lines {good_lines}, first at {good_lines[0]}). "
+                    f"Refusing boot to prevent deletion of potentially-valid records."
+                )
+
+            if has_history_before_tail and last_good_line > 0 and not corruption_reaches_history and not has_gap_in_corruption:
                 records_deleted = total - last_good_line
+                deleted_lines = list(range(last_good_line + 1, total + 1))
                 _heal_chain_at_line(path, last_good_line)
                 _log.warning(
                     f"audit_chain_intact: healed {len(recent)} broken record(s) "
-                    f"by truncating at line {last_good_line}"
+                    f"(lines {first_tail_break}–{total}); "
+                    f"deleted {records_deleted} record(s) at lines {deleted_lines[0]}–{deleted_lines[-1]}"
                 )
                 # The docstring above ("An audit event is written to mark
                 # the healing") and this module's module-level comment made
