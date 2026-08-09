@@ -267,6 +267,10 @@ def audit_event(
     effective_severity = (severity.upper() if severity else None) or _VOICE_EVENT_SEVERITY.get(event_type) or "INFO"
     core_write_committed = False
     try:
+        if tenant_id:
+            from forge.tenants import current_tenant
+            if tenant_id != current_tenant():
+                raise PermissionError(f"tenant_id {tenant_id!r} does not match context tenant")
         _se.write_event(
             path, event_type,
             severity=effective_severity,
