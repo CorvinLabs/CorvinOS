@@ -405,10 +405,32 @@ const UploadModal: React.FC<UploadModalProps> = ({ onClose, onUpload, onStatus }
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [csrfToken, setCsrfToken] = useState<string>('')
+
+  // Get CSRF token on mount
+  React.useEffect(() => {
+    const getCsrfToken = async () => {
+      try {
+        const response = await fetch('/v1/console/auth/whoami')
+        if (response.ok) {
+          const data = await response.json()
+          setCsrfToken(data.csrf_token)
+        }
+      } catch (err) {
+        console.error('Failed to get CSRF token:', err)
+      }
+    }
+    getCsrfToken()
+  }, [])
 
   const handleUpload = async () => {
     if (!file) {
       setError('Please select a ZIP file')
+      return
+    }
+
+    if (!csrfToken) {
+      setError('CSRF token not available')
       return
     }
 
@@ -422,6 +444,9 @@ const UploadModal: React.FC<UploadModalProps> = ({ onClose, onUpload, onStatus }
 
       const response = await fetch('/v1/console/packages/upload', {
         method: 'POST',
+        headers: {
+          'X-CSRF-Token': csrfToken,
+        },
         body: formData,
       })
 
