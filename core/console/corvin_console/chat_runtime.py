@@ -125,6 +125,7 @@ _REPO = _THIS_DIR.parents[2]
 _CEL_AVAILABLE = False
 _cel_build_brief = None
 _cel_render = None
+_cel_persist_trace = None
 try:
     import importlib.util as _ilu  # noqa: PLC0415
     _cel_dir = _REPO / "operator" / "context_engineering"
@@ -137,6 +138,7 @@ try:
         _cel_spec.loader.exec_module(_cel_mod)
         _cel_build_brief = _cel_mod.build_brief
         _cel_render = _cel_mod.render_brief_to_text
+        _cel_persist_trace = _cel_mod.persist_trace
         _CEL_AVAILABLE = True
 except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
     _CEL_AVAILABLE = False
@@ -4518,6 +4520,11 @@ async def stream_turn(
         try:
             _cbrief, _cel_trace = _cel_build_brief(prompt, sess.tenant_id, sess)
             _cel_brief_text = _cel_render(_cbrief) or ""
+            try:  # persist the trace for the read-only pipeline view (P1)
+                _cel_persist_trace(_cel_trace, sess.workdir,
+                                   f"turn-{sess.turn_count}")
+            except Exception:  # noqa: BLE001 — trace persistence is best-effort
+                pass
         except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
             _cel_brief_text = ""
     args = _build_args(sess, resume=resume, model=_os_model,

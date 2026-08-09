@@ -114,6 +114,9 @@ class VibeEngineeringP1Test(unittest.TestCase):
         self.assertIn("postgres", spy.call_args[0][0])
         self.assertIn(_MARKER, self._system_prompt_text(),
                       "the rendered CEL brief must land in the system prompt")
+        # P1: the trace is persisted per session (dot-prefixed, not an artifact).
+        self.assertTrue((self.sess.workdir / ".corvin-cel-traces.jsonl").exists(),
+                        "the CEL trace must be persisted for the pipeline view")
 
     def test_flag_off_does_not_call_and_no_marker(self):
         spy = MagicMock(return_value=(MagicMock(), {"stages": []}))
