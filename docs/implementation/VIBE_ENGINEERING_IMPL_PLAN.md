@@ -57,6 +57,10 @@ zero CEL calls (e2e-wiring proof, both states).
   `acs_engine_adapter._enforce_acs_compute_quota`; the caller semantics are NEW and
   opposite: **True = enrich, False = degrade to plain context and STILL RUN** (never a
   block/deny dict). (fixes H2.)
+  **MUST call `load_license_from_env()` FIRST** (like the ACS gate does): the console/
+  bridge/scheduler process does not auto-load the license, so without it `_ACTIVE_LICENSE`
+  is None and `get_limit()` falls back to FREE_TIER — capping a PAID tenant at 10/day.
+  (fixes R2 M-B.)
 - **Separate pool (fixes H1):** `increment_and_check(...)` keys its count by DATE inside
   `counter_file` and uses `feature` to pick the limit; `channel`/`chat_key` are
   audit-only. So separation needs BOTH `feature="context_engineering_units_per_day"`
