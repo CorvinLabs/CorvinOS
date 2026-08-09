@@ -45,7 +45,24 @@ export const PackageMarketplace: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('')
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [showUploadModal, setShowUploadModal] = useState(false)
+  const [csrfToken, setCsrfToken] = useState<string>('')
   const isMountedRef = React.useRef(true)
+
+  // Get CSRF token on mount
+  React.useEffect(() => {
+    const getCsrfToken = async () => {
+      try {
+        const response = await fetch('/v1/console/auth/whoami')
+        if (response.ok) {
+          const data = await response.json()
+          setCsrfToken(data.csrf_token)
+        }
+      } catch (err) {
+        console.error('Failed to get CSRF token:', err)
+      }
+    }
+    getCsrfToken()
+  }, [])
 
   useEffect(() => {
     isMountedRef.current = true
@@ -94,9 +111,19 @@ export const PackageMarketplace: React.FC = () => {
   const handleUninstall = async (packageId: string) => {
     if (!confirm('Permanently uninstall this package?')) return
 
+    if (!csrfToken) {
+      if (isMountedRef.current) {
+        setError('CSRF token not available')
+      }
+      return
+    }
+
     try {
       const response = await fetch(`/v1/console/packages/${packageId}`, {
         method: 'DELETE',
+        headers: {
+          'X-CSRF-Token': csrfToken,
+        },
       })
       if (!response.ok) throw new Error('Uninstall failed')
       if (isMountedRef.current) {
