@@ -115,6 +115,31 @@ from typing import Any, AsyncIterator, Callable
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[2]
+
+# Vibe Engineering P-1 (ADR-0275): load the consolidated CEL pipeline by FILE PATH
+# under the top-level name "context_engineering" — NOT via a sys.path insert of
+# operator/ (that would re-arm the stdlib `operator` shadow, project memory
+# "operator/ stdlib-Shadow-Falle"). sys.modules registration is required so the
+# package's own relative imports (`from .memory_lookup import …`) resolve. Absent
+# (e.g. a wheel install without the operator tree) → the feature is simply off.
+_CEL_AVAILABLE = False
+_cel_build_brief = None
+_cel_render = None
+try:
+    import importlib.util as _ilu  # noqa: PLC0415
+    _cel_dir = _REPO / "operator" / "context_engineering"
+    _cel_spec = _ilu.spec_from_file_location(
+        "context_engineering", str(_cel_dir / "__init__.py"),
+        submodule_search_locations=[str(_cel_dir)])
+    if _cel_spec and _cel_spec.loader:
+        _cel_mod = _ilu.module_from_spec(_cel_spec)
+        sys.modules["context_engineering"] = _cel_mod
+        _cel_spec.loader.exec_module(_cel_mod)
+        _cel_build_brief = _cel_mod.build_brief
+        _cel_render = _cel_mod.render_brief_to_text
+        _CEL_AVAILABLE = True
+except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
+    _CEL_AVAILABLE = False
 _FORGE_PATH = _REPO / "operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
@@ -1841,7 +1866,17 @@ def _language_closing_block() -> str:
     )
 
 
-def _turn_system_prompt(sess: WebChatSession, task_text: str = "") -> str:
+def _cel_brief_block(cel_brief: str) -> str:
+    """Vibe Engineering (ADR-0275 P-1): the CEL context brief appended to the
+    turn's system prompt. Empty when the flag is off or the brief is empty — a
+    quiet, unchanged path (invariant I5)."""
+    if not cel_brief or not cel_brief.strip():
+        return ""
+    return "\n\n" + cel_brief.strip() + "\n"
+
+
+def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
+                        cel_brief: str = "") -> str:
     """Base web-chat system prompt + per-turn uploaded-file manifest, plus the
     bridge-parity context blocks (ADR-0114): the resolved persona role, the
     Layer-12 voice-profile audience shaping, the Tier-1 user profile and the
@@ -1857,6 +1892,7 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "") -> str:
         + _memory_index_block()
         + _voice_audience_block()
         + _acs_directive_block(task_text)
+        + _cel_brief_block(cel_brief)
         # LAST WORD on language. The rule near the top and the profile line in
         # the middle were both present and still lost: in a ~10 KB, overwhelmingly
         # ENGLISH system prompt a single early directive gets diluted, and an
@@ -1913,7 +1949,8 @@ def _web_workspace_roots(tenant_id: str) -> list[str]:
     return out
 
 
-def _write_turn_system_prompt(sess: WebChatSession, task_text: str = "") -> Path:
+def _write_turn_system_prompt(sess: WebChatSession, task_text: str = "",
+                              cel_brief: str = "") -> Path:
     """Write this turn's merged system prompt to a file in the session
     workdir and return its path.
 
@@ -1936,13 +1973,13 @@ def _write_turn_system_prompt(sess: WebChatSession, task_text: str = "") -> Path
     which already skip ``name.startswith(".")``).
     """
     path = sess.workdir / ".corvin-system-prompt.txt"
-    path.write_text(_turn_system_prompt(sess, task_text), encoding="utf-8")
+    path.write_text(_turn_system_prompt(sess, task_text, cel_brief), encoding="utf-8")
     return path
 
 
 def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
                  browser_token: str | None = None, task_text: str = "",
-                 purpose: str = "turn") -> list[str]:
+                 purpose: str = "turn", cel_brief: str = "") -> list[str]:
     """Build a ``claude -p`` invocation for this turn.
 
     Resume mode uses ``--continue`` so the per-workdir session state
@@ -2000,7 +2037,8 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
     args += ["-p",
              "--output-format", "stream-json",
              "--verbose",
-             "--append-system-prompt-file", str(_write_turn_system_prompt(sess, task_text))]
+             "--append-system-prompt-file",
+             str(_write_turn_system_prompt(sess, task_text, cel_brief))]
 
     # MCP servers — the persona's resolver-injected servers + mcp_manager
     # catalog tools, exactly like the bridge adapter's spawn path. Without
@@ -4470,8 +4508,21 @@ async def stream_turn(
     # tool's first HTTP call.
     from .browser import internal_auth as _browser_internal_auth  # noqa: PLC0415
     _browser_token = _browser_internal_auth.mint(sess.tenant_id, sid_fingerprint)
+    # Vibe Engineering P-1 (ADR-0275): build the consolidated CEL brief HERE —
+    # before the pre-spawn compliance gates below — and inject it into the turn's
+    # system prompt. Behind the ships-dark `vibe_engineering` flag; fail-safe (a
+    # CEL error runs the turn without a brief). Invariant I1: the brief only
+    # shapes the prompt; the gates still inspect the task text, not the brief.
+    _cel_brief_text = ""
+    if _CEL_AVAILABLE and _feature_flags.is_enabled("vibe_engineering", sess.tenant_id):
+        try:
+            _cbrief, _cel_trace = _cel_build_brief(prompt, sess.tenant_id, sess)
+            _cel_brief_text = _cel_render(_cbrief) or ""
+        except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
+            _cel_brief_text = ""
     args = _build_args(sess, resume=resume, model=_os_model,
-                       browser_token=_browser_token, task_text=prompt)
+                       browser_token=_browser_token, task_text=prompt,
+                       cel_brief=_cel_brief_text)
 
     # First-turn auto-title: derive a readable label from the prompt so the
     # sidebar shows "Wie groß ist die Wahrscheinlichkeit, dass …" instead of

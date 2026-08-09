@@ -14,6 +14,7 @@ from .graph_traversal import GraphTraversal, RelatedDecision, GraphTraversalResu
 from .skill_injection import SkillInjection, RecommendedSkill, SkillInjectionResult
 from .adr_loader import ADRLoader, ADRMetadata
 from .adr_classifier import ADRClassifier
+from .pipeline import build_brief, render_brief_to_text
 
 __all__ = [
     # Phase 1
