@@ -386,6 +386,11 @@ def bootstrap_global(
             )
             continue
 
+        # Serialize grant BEFORE on_load() is called; locks it in the current
+        # epoch before threads spawned in on_load() try to re-register (ADR-0233 D5)
+        if boot_layer is BootLayer.COMPLIANCE:
+            _record_granted_compliance(plugin_id)
+
         ok = _register_instance(
             instance,
             plugin_id=plugin_id,
@@ -401,14 +406,6 @@ def bootstrap_global(
         )
         if ok:
             loaded.append(plugin_id)
-            if boot_layer is BootLayer.COMPLIANCE:
-                # Tell the tripwire that THIS id was granted the compliance
-                # layer by the wheel's own boot code. The post-boot check
-                # compares the registry against this list, so anything that put
-                # itself on the layer some other way stops the boot. Recorded
-                # only on the success path: a plugin that failed to register was
-                # never granted anything.
-                _record_granted_compliance(plugin_id)
         elif boot_layer is BootLayer.COMPLIANCE:
             raise GlobalComplianceLoadFailed(
                 f"compliance plugin {plugin_id!r} failed to register"
@@ -1301,6 +1298,12 @@ def boot_platform() -> list[str]:
     Raises whatever step 1 or step 3 raises — the caller MUST let it propagate.
     """
     assert_compliance()  # raises TripwireError -> boot aborts
+
+    # ADR-0233 D5: Increment registration epoch before loading plugins.
+    # This prevents threads spawned during the PREVIOUS boot from re-registering
+    # and escalating privilege in the current boot.
+    from .registry import advance_registration_epoch
+    advance_registration_epoch()
 
     loaded: list[str] = []
     try:
