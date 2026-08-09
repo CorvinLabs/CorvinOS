@@ -138,7 +138,8 @@ def local_login(
     Creates a console session directly for the local tenant and
     redirects to /console/. Only available from 127.0.0.1 or ::1.
 
-    Disable by setting CORVIN_LOCAL_AUTOLOGIN=0.
+    Enabled by default for all new installations. Disable only if needed
+    by setting CORVIN_LOCAL_AUTOLOGIN=0.
     """
     if not _is_localhost(request):
         raise HTTPException(
