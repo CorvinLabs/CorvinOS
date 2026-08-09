@@ -85,22 +85,20 @@ export default function YourTalentPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedTab, setSelectedTab] = useState<"overview" | "insights" | "history" | "analysis">("overview");
 
-  const API_BASE = "http://127.0.0.1:5000";
-
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        // Fetch all data in parallel
+        // Fetch all data in parallel (from console gateway)
         const [scoreRes, historyRes, taskRes, corrRes, insightsRes, storyRes] = await Promise.all([
-          fetch(`${API_BASE}/api/v1/talent/score`),
-          fetch(`${API_BASE}/api/v1/talent/history?days=7`),
-          fetch(`${API_BASE}/api/v1/talent/task-types?days=7`),
-          fetch(`${API_BASE}/api/v1/talent/correlation?days=7`),
-          fetch(`${API_BASE}/api/v1/talent/insights?days=7`),
-          fetch(`${API_BASE}/api/v1/talent/story?days=7`),
+          fetch(`/v1/console/talent/score`),
+          fetch(`/v1/console/talent/history?days=7`),
+          fetch(`/v1/console/talent/task-types?days=7`),
+          fetch(`/v1/console/talent/correlation?days=7`),
+          fetch(`/v1/console/talent/insights?days=7`),
+          fetch(`/v1/console/talent/story?days=7`),
         ]);
 
         if (!scoreRes.ok) throw new Error("Failed to fetch talent score");
