@@ -222,9 +222,10 @@ def _validate_and_extract_zip(zip_bytes: bytes, extract_to: Path, max_size: int)
             detail="invalid ZIP file format",
         ) from exc
     except json.JSONDecodeError as exc:
+        log.error(f"JSON decode error in manifest: {exc}")
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"manifest.json is not valid JSON: {str(exc)[:100]}",
+            detail="manifest.json is not valid JSON",
         ) from exc
     except KeyError:
         raise HTTPException(
@@ -232,9 +233,11 @@ def _validate_and_extract_zip(zip_bytes: bytes, extract_to: Path, max_size: int)
             detail="package missing manifest.json in root",
         )
     except Exception as exc:
+        # Log full error server-side, return generic message to client
+        log.error(f"ZIP validation failed: {type(exc).__name__}: {exc}")
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"ZIP validation or extraction failed: {type(exc).__name__}",
+            detail="ZIP validation failed",
         ) from exc
 
 
@@ -580,10 +583,10 @@ async def uninstall_package(
         import shutil
         shutil.rmtree(pkg_dir, ignore_errors=False)
     except Exception as exc:
-        log.error(f"Failed to delete package directory {package_id}: {exc}")
+        log.error(f"Failed to delete package directory {package_id}: {type(exc).__name__}: {exc}")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"uninstall failed: {str(exc)[:100]}",
+            detail="uninstall failed",
         ) from exc
 
     return {"ok": True, "package_id": package_id, "uninstalled": True}
