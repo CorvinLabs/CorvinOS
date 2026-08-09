@@ -40,6 +40,13 @@ import logging
 import os
 from pathlib import Path
 
+# CRITICAL: Set CORVIN_HOME BEFORE any imports that call corvin_home().
+# When the console runs as a service from within a repo checkout, _forge_paths.corvin_home()
+# would detect repo context and return repo/.corvin, breaking session storage symmetry.
+# This must run BEFORE `from .app import` which uses corvin_home() in app.py.
+if not os.environ.get("CORVIN_HOME"):
+    os.environ["CORVIN_HOME"] = str(Path.home() / ".corvin")
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
