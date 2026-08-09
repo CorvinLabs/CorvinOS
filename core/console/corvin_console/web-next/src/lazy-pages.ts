@@ -182,3 +182,7 @@ export const PluginsPage = React.lazy(() =>
 export const LearningObjectivesPage = React.lazy(() =>
   import("@/pages/learning-objectives").then((m) => ({ default: m.LearningObjectivesPage }))
 );
+
+export const VibeEngineeringPage = React.lazy(() =>
+  import("@/pages/vibe-engineering").then((m) => ({ default: m.default }))
+);
