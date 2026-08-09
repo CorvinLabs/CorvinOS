@@ -1663,6 +1663,11 @@ def write_event(
                     # process may have written between our last read and now.
                     prev = _last_hash(path)
                     rec["prev_hash"] = prev
+                    # ADR-0232/0233: Store the initial tail hash to detect if the
+                    # file was modified by another writer while we held the lock.
+                    # This catches broken cross-process locks on Windows that allow
+                    # concurrent writes, preventing hash-chain forks.
+                    _prev_hash_at_lock_time = prev
 
                     # ADR-0132 LSAD: inject chain_dna BEFORE computing hash so
                     # the DNA is part of the hash-chain integrity guarantee.
@@ -1790,6 +1795,34 @@ def write_event(
                             pass
 
                 try:
+                    # ADR-0232/0233: Atomic fork-detection checkpoint — if the chain
+                    # tail changed since we read it, the cross-process lock is broken
+                    # and another writer appended while we held the lock. Re-read the
+                    # actual latest hash and use it to avoid writing a fork. This is
+                    # best-effort: a truly broken lock means both processes will fail,
+                    # but at least one will use the correct prev_hash and restore chain
+                    # continuity for subsequent writers.
+                    if hash_chain:
+                        current_tail = _last_hash(path)
+                        if current_tail != _prev_hash_at_lock_time:
+                            # File was modified while we held the lock — another
+                            # writer broke the lock or the lock is non-functional.
+                            # Update rec with the actual latest hash and continue
+                            # (do not retry externally, keep this write atomic).
+                            rec["prev_hash"] = current_tail
+                            _canon = _canonical(rec).encode("utf-8")
+                            h = hashlib.sha256()
+                            h.update(current_tail.encode("utf-8"))
+                            h.update(b"\n")
+                            h.update(_canon)
+                            rec["hash"] = h.hexdigest()[:16]
+                            # Re-compute MAC if active (uses current_tail as seed)
+                            _ak = _anchor_key()
+                            if _ak is not None:
+                                rec["mac"] = hmac.new(
+                                    _ak, current_tail.encode("utf-8") + b"\n" + _canon,
+                                    hashlib.sha256,
+                                ).hexdigest()[:16]
                     fh.write(json.dumps(rec, allow_nan=False) + "\n")
                     fh.flush()
                     os.fsync(fh.fileno())
