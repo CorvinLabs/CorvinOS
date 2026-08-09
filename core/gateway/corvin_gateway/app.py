@@ -43,8 +43,16 @@ keep the bridges' inbox-based interface and never expose any port.
 from __future__ import annotations
 
 import os
-from contextlib import asynccontextmanager
 from pathlib import Path
+
+# CRITICAL: Set CORVIN_HOME BEFORE any imports that call corvin_home().
+# When the gateway runs as a service from within a repo checkout, _forge_paths.corvin_home()
+# would detect repo context and return repo/.corvin, breaking session storage symmetry.
+# This must run BEFORE any module imports that use corvin_home() (e.g., _audit_metrics).
+if not os.environ.get("CORVIN_HOME"):
+    os.environ["CORVIN_HOME"] = str(Path.home() / ".corvin")
+
+from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
