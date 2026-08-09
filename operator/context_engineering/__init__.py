@@ -17,6 +17,7 @@ from .adr_classifier import ADRClassifier
 from .pipeline import build_brief, render_brief_to_text
 from .license_gate import enforce_ce_quota
 from .trace import persist_trace, read_recent_traces
+from .decision_record import emit as emit_decision_record, build_record as build_decision_record
 
 __all__ = [
     # Phase 1

@@ -28,12 +28,16 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
+interface Source {
+  id: string;
+  score: number;
+}
 interface Stage {
   stage: string;
   status: string;
   duration_ms?: number | null;
   confidence_tier?: string;
-  sources?: string[];
+  sources?: Source[];
   tokens_in?: number | null;
   tokens_out?: number | null;
   error?: string;
@@ -78,7 +82,8 @@ function StageNode({ stage }: { stage: Stage }) {
   const meta = STAGE_META[stage.stage] ?? { icon: Workflow, label: stage.stage };
   const Icon = meta.icon;
   const failed = stage.status !== "ok";
-  const sources = stage.sources?.length ?? 0;
+  const sources = stage.sources ?? [];
+  const srcCount = sources.length;
   return (
     <div
       className={
@@ -106,8 +111,20 @@ function StageNode({ stage }: { stage: Stage }) {
       </div>
       <div className="flex flex-col gap-1 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
-          <FileText className="h-3 w-3" /> {sources} source{sources === 1 ? "" : "s"}
+          <FileText className="h-3 w-3" /> {srcCount} source{srcCount === 1 ? "" : "s"}
         </span>
+        {srcCount > 0 && (
+          <ul className="ml-4 space-y-0.5">
+            {sources.slice(0, 3).map((s, i) => (
+              <li key={i} className="flex justify-between gap-2">
+                <span className="truncate" title={`${s.id} — relevance ${s.score}`}>
+                  {s.id}
+                </span>
+                <span className="tabular-nums opacity-70">{s.score.toFixed(2)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
         {(stage.tokens_in != null || stage.tokens_out != null) && (
           <span className="flex items-center gap-1">
             <Zap className="h-3 w-3" /> {stage.tokens_in ?? 0} in / {stage.tokens_out ?? 0} out
