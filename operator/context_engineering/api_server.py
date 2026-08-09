@@ -11,14 +11,40 @@ Serves K=8 aggregator measurement data as JSON endpoints:
 
 import json
 import logging
+import os
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from functools import wraps
 from talent_score import get_talent_calculator
 
 logger = logging.getLogger(__name__)
+
+# Simple API key from environment (operator-only service)
+API_KEY = os.environ.get("CORVIN_TELEMETRY_API_KEY", "local-dev-only")
+
+def validate_api_key(f):
+    """Decorator: require valid API key or localhost origin."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Allow localhost without key (development)
+        if request.remote_addr in ("127.0.0.1", "localhost"):
+            return f(*args, **kwargs)
+        # Otherwise, check API key header
+        key = request.headers.get("X-API-Key", "")
+        if key != API_KEY:
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+def validate_days_param():
+    """Extract and validate days parameter (1-90 range)."""
+    days = request.args.get("days", 7, type=int)
+    if not 1 <= days <= 90:
+        return None, jsonify({"error": "days must be 1-90"}), 400
+    return days, None, None
 
 app = Flask(__name__)
 # CORS restricted to localhost only (operator-only telemetry server)
@@ -34,20 +60,36 @@ CORS(app, resources={
 class MeasurementReader:
     """Read and aggregate K=8 measurement data from queue files."""
 
+    MAX_FILE_SIZE_MB = 50  # Defense against OOM attacks
+    MAX_RECORDS_PER_FILE = 10000  # Defense against memory exhaustion
+
     def __init__(self, queue_root: Path = None):
         if queue_root is None:
             queue_root = Path.home() / ".corvin" / "measurement"
         self.queue_root = queue_root
 
     def read_jsonl_file(self, filepath: Path, limit: Optional[int] = None) -> List[Dict]:
-        """Read JSONL file (latest records first)."""
+        """Read JSONL file (latest records first) with size limits."""
         records = []
         if not filepath.exists():
+            return records
+
+        # Defense: check file size before reading
+        try:
+            file_size_mb = filepath.stat().st_size / (1024 * 1024)
+            if file_size_mb > self.MAX_FILE_SIZE_MB:
+                logger.error(f"File {filepath} exceeds {self.MAX_FILE_SIZE_MB}MB limit ({file_size_mb:.1f}MB)")
+                return records
+        except Exception as e:
+            logger.error(f"Cannot stat {filepath}: {e}")
             return records
 
         try:
             with open(filepath, "r") as f:
                 for line in f:
+                    if len(records) >= self.MAX_RECORDS_PER_FILE:
+                        logger.warning(f"Truncated {filepath} at {self.MAX_RECORDS_PER_FILE} records")
+                        break
                     line = line.strip()
                     if line:
                         try:
@@ -174,9 +216,12 @@ reader = MeasurementReader()
 
 
 @app.route("/api/v1/measurements/latest", methods=["GET"])
+@validate_api_key
 def get_latest_measurements():
     """Get all 4 measurement tracks (latest)."""
-    days = request.args.get("days", 7, type=int)
+    days, err_response, err_status = validate_days_param()
+    if err_response:
+        return err_response, err_status
     records = reader.get_latest_records(days=days)
 
     # Compute stats for each track
@@ -201,6 +246,7 @@ def get_latest_measurements():
 
 
 @app.route("/api/v1/measurements/predictions", methods=["GET"])
+@validate_api_key
 def get_predictions():
     """ADR-0270: Confidence predictions vs actual outcomes."""
     records = reader.get_latest_records(days=7)
@@ -216,6 +262,7 @@ def get_predictions():
 
 
 @app.route("/api/v1/measurements/feedback", methods=["GET"])
+@validate_api_key
 def get_feedback():
     """ADR-0271: Bayesian learning feedback loop."""
     records = reader.get_latest_records(days=7)
@@ -231,6 +278,7 @@ def get_feedback():
 
 
 @app.route("/api/v1/measurements/preferences", methods=["GET"])
+@validate_api_key
 def get_preferences():
     """ADR-0272: User decision style preferences."""
     records = reader.get_latest_records(days=7)
@@ -246,6 +294,7 @@ def get_preferences():
 
 
 @app.route("/api/v1/measurements/budget", methods=["GET"])
+@validate_api_key
 def get_budget():
     """ADR-0273: Attention budget allocation patterns."""
     records = reader.get_latest_records(days=7)
@@ -261,6 +310,7 @@ def get_budget():
 
 
 @app.route("/api/v1/talent/score", methods=["GET"])
+@validate_api_key
 def get_talent_score():
     """Get Your Talent Score (CONCEPT-0003)."""
     days = request.args.get("days", 7, type=int)
@@ -274,6 +324,7 @@ def get_talent_score():
 
 
 @app.route("/api/v1/talent/ranking", methods=["GET"])
+@validate_api_key
 def get_talent_ranking():
     """Get context ranking from Your Talent."""
     days = request.args.get("days", 7, type=int)
@@ -292,6 +343,7 @@ def get_talent_ranking():
 
 
 @app.route("/api/v1/talent/events", methods=["GET"])
+@validate_api_key
 def get_talent_events():
     """Get learning events timeline."""
     days = request.args.get("days", 7, type=int)
@@ -310,6 +362,7 @@ def get_talent_events():
 
 
 @app.route("/api/v1/talent/history", methods=["GET"])
+@validate_api_key
 def get_talent_history():
     """Get daily talent score breakdown (for trend chart)."""
     days = request.args.get("days", 7, type=int)
@@ -327,6 +380,7 @@ def get_talent_history():
 
 
 @app.route("/api/v1/talent/task-types", methods=["GET"])
+@validate_api_key
 def get_task_type_performance():
     """Get performance breakdown by task type."""
     days = request.args.get("days", 7, type=int)
@@ -344,6 +398,7 @@ def get_task_type_performance():
 
 
 @app.route("/api/v1/talent/correlation", methods=["GET"])
+@validate_api_key
 def get_correlation_data():
     """Get accuracy vs efficiency correlation (scatter plot)."""
     days = request.args.get("days", 7, type=int)
@@ -361,6 +416,7 @@ def get_correlation_data():
 
 
 @app.route("/api/v1/talent/insights", methods=["GET"])
+@validate_api_key
 def get_talent_insights():
     """Get learning insights and narratives (what was learned)."""
     days = request.args.get("days", 7, type=int)
@@ -381,6 +437,7 @@ def get_talent_insights():
 
 
 @app.route("/api/v1/talent/story", methods=["GET"])
+@validate_api_key
 def get_improvement_story():
     """Get narrative story of improvement (the journey)."""
     days = request.args.get("days", 7, type=int)
@@ -397,6 +454,7 @@ def get_improvement_story():
 
 
 @app.route("/health", methods=["GET"])
+@validate_api_key
 def health():
     """Health check endpoint."""
     return jsonify({"status": "ok", "service": "ADR-0274 API"}), 200
