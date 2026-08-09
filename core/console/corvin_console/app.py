@@ -132,6 +132,7 @@ from .routes import (
     # ADR-0245 — Live Model Discovery
     models as models_route,
     talent as talent_route,
+    vibe_engineering as vibe_engineering_route,
 )
 
 
@@ -268,6 +269,7 @@ router.include_router(local_stats_route.router, tags=["console-local-stats"])
 router.include_router(models_route.router, tags=["console-models"])
 router.include_router(stats_features_route.router, tags=["console-stats"])
 router.include_router(talent_route.router, tags=["console-talent"])
+router.include_router(vibe_engineering_route.router, tags=["console-vibe-engineering"])
 
 
 @router.get("/version")

@@ -115,8 +115,17 @@ const NAV_GROUPS: NavGroup[] = [
     id: "primary",
     items: [
       { to: "/app/chat",      label: "Chat",      icon: MessagesSquare },
-      { to: "/app/talent",    label: "Your Talent", icon: Sparkles },
       { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    ],
+  },
+  {
+    id: "vibe",
+    label: "Vibe Engineering",
+    collapsible: true,
+    defaultOpen: true,
+    items: [
+      { to: "/app/talent",           label: "Your Talent", icon: Sparkles },
+      { to: "/app/vibe-engineering", label: "Context Pipeline", icon: Workflow },
     ],
   },
   {
