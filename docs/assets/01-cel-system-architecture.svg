@@ -1,0 +1,157 @@
+<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="600" y="30" font-size="24" font-weight="bold" text-anchor="middle">Context Engineering Layer (CEL) — System Architecture</text>
+
+  <!-- TaskEngine -->
+  <rect x="50" y="80" width="200" height="100" fill="#E8F4F8" stroke="#0066CC" stroke-width="2" rx="5"/>
+  <text x="150" y="105" font-size="14" font-weight="bold" text-anchor="middle">TaskEngine</text>
+  <text x="150" y="125" font-size="11" text-anchor="middle">Phase 1-4: Enrich</text>
+  <text x="150" y="140" font-size="11" text-anchor="middle">Phase 5.5: CEL</text>
+  <text x="150" y="155" font-size="11" text-anchor="middle">Phase 5-6: Delegate</text>
+
+  <!-- Phase 5.5 CEL Box -->
+  <rect x="300" y="80" width="250" height="100" fill="#FFF4E6" stroke="#FF8C00" stroke-width="2" rx="5"/>
+  <text x="425" y="105" font-size="14" font-weight="bold" text-anchor="middle">Phase 5.5: Context Engineering</text>
+  <text x="425" y="130" font-size="11" text-anchor="middle">• Memory Lookup</text>
+  <text x="425" y="145" font-size="11" text-anchor="middle">• Graph Traversal (ADRs)</text>
+  <text x="425" y="160" font-size="11" text-anchor="middle">• Skill Injection</text>
+
+  <!-- Arrow from TaskEngine to CEL -->
+  <path d="M 250 130 L 300 130" stroke="#0066CC" stroke-width="2" fill="none" marker-end="url(#arrowhead)"/>
+
+  <!-- MemoryLookup Component -->
+  <rect x="300" y="220" width="200" height="120" fill="#F0F8F0" stroke="#00AA00" stroke-width="2" rx="5"/>
+  <text x="400" y="245" font-size="12" font-weight="bold" text-anchor="middle">MemoryLookup</text>
+  <circle cx="330" cy="270" r="3" fill="#00AA00"/>
+  <text x="340" y="275" font-size="10">Search by keywords</text>
+  <circle cx="330" cy="290" r="3" fill="#00AA00"/>
+  <text x="340" y="295" font-size="10">TF-IDF ranking</text>
+  <circle cx="330" cy="310" r="3" fill="#00AA00"/>
+  <text x="340" y="315" font-size="10">Age decay (30d TTL)</text>
+  <circle cx="330" cy="330" r="3" fill="#00AA00"/>
+  <text x="340" y="335" font-size="10">LRU caching</text>
+
+  <!-- GraphTraversal Component -->
+  <rect x="540" y="220" width="200" height="120" fill="#F0F0F8" stroke="#0033FF" stroke-width="2" rx="5"/>
+  <text x="640" y="245" font-size="12" font-weight="bold" text-anchor="middle">GraphTraversal</text>
+  <circle cx="570" cy="270" r="3" fill="#0033FF"/>
+  <text x="580" y="275" font-size="10">Find ADRs by keywords</text>
+  <circle cx="570" cy="290" r="3" fill="#0033FF"/>
+  <text x="580" y="295" font-size="10">Follow depends_on edges</text>
+  <circle cx="570" cy="310" r="3" fill="#0033FF"/>
+  <text x="580" y="315" font-size="10">Detect conflicts</text>
+  <circle cx="570" cy="330" r="3" fill="#0033FF"/>
+  <text x="580" y="335" font-size="10">Score by depth/match</text>
+
+  <!-- SkillInjection Component -->
+  <rect x="780" y="220" width="200" height="120" fill="#F8F0F8" stroke="#AA00AA" stroke-width="2" rx="5"/>
+  <text x="880" y="245" font-size="12" font-weight="bold" text-anchor="middle">SkillInjection</text>
+  <circle cx="810" cy="270" r="3" fill="#AA00AA"/>
+  <text x="820" y="275" font-size="10">Map decisions → skills</text>
+  <circle cx="810" cy="290" r="3" fill="#AA00AA"/>
+  <text x="820" y="295" font-size="10">Package skills loader</text>
+  <circle cx="810" cy="310" r="3" fill="#AA00AA"/>
+  <text x="820" y="315" font-size="10">Relevance scoring</text>
+  <circle cx="810" cy="330" r="3" fill="#AA00AA"/>
+  <text x="820" y="335" font-size="10">Fail-soft graceful</text>
+
+  <!-- Arrows from CEL to Components -->
+  <path d="M 350 180 L 350 220" stroke="#FF8C00" stroke-width="2" fill="none" marker-end="url(#arrowhead-orange)"/>
+  <path d="M 425 180 L 550 220" stroke="#FF8C00" stroke-width="2" fill="none" marker-end="url(#arrowhead-orange)"/>
+  <path d="M 500 180 L 790 220" stroke="#FF8C00" stroke-width="2" fill="none" marker-end="url(#arrowhead-orange)"/>
+
+  <!-- RichTaskBrief Output -->
+  <rect x="300" y="400" width="680" height="140" fill="#FFFACD" stroke="#DAA520" stroke-width="2" rx="5"/>
+  <text x="640" y="425" font-size="12" font-weight="bold" text-anchor="middle">RichTaskBrief — Enriched Context Output</text>
+  <line x1="310" y1="435" x2="980" y2="435" stroke="#DAA520" stroke-width="1"/>
+
+  <text x="320" y="455" font-size="11" font-weight="bold">memory_context:</text>
+  <text x="330" y="470" font-size="10">• Matches with confidence scores (relevance/reliability/freshness)</text>
+  <text x="330" y="483" font-size="10">• Tiered by priority (CRITICAL/IMPORTANT/NICE-TO-HAVE)</text>
+
+  <text x="320" y="503" font-size="11" font-weight="bold">related_decisions:</text>
+  <text x="330" y="518" font-size="10">• ADRs with confidence + conflict warnings</text>
+
+  <text x="320" y="538" font-size="11" font-weight="bold">recommended_skills:</text>
+  <text x="330" y="553" font-size="10">• Skills with caveats + success rate</text>
+
+  <!-- Arrows to RichTaskBrief -->
+  <path d="M 400 340 L 450 400" stroke="#00AA00" stroke-width="2" fill="none" marker-end="url(#arrowhead-green)"/>
+  <path d="M 640 340 L 640 400" stroke="#0033FF" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)"/>
+  <path d="M 880 340 L 830 400" stroke="#AA00AA" stroke-width="2" fill="none" marker-end="url(#arrowhead-purple)"/>
+
+  <!-- Phase 4 Sub-Components (Bottom) -->
+  <text x="50" y="600" font-size="13" font-weight="bold">Phase 4 Learning Loop:</text>
+
+  <!-- 4a Uncertainty -->
+  <rect x="50" y="620" width="160" height="100" fill="#E8F4F8" stroke="#0066CC" stroke-width="1.5" rx="3"/>
+  <text x="130" y="640" font-size="11" font-weight="bold" text-anchor="middle">4a: Uncertainty</text>
+  <text x="130" y="657" font-size="9" text-anchor="middle">Confidence Scoring</text>
+  <text x="60" y="672" font-size="8">• Relevance (0.5x)</text>
+  <text x="60" y="683" font-size="8">• Reliability (0.3x)</text>
+  <text x="60" y="694" font-size="8">• Freshness (0.2x)</text>
+  <text x="60" y="705" font-size="8">→ Combined [0.0, 1.0]</text>
+
+  <!-- 4b Feedback -->
+  <rect x="240" y="620" width="160" height="100" fill="#F8E8E8" stroke="#CC0000" stroke-width="1.5" rx="3"/>
+  <text x="320" y="640" font-size="11" font-weight="bold" text-anchor="middle">4b: Feedback Loop</text>
+  <text x="320" y="657" font-size="9" text-anchor="middle">Closed-Loop Learning</text>
+  <text x="250" y="672" font-size="8">• Track usage</text>
+  <text x="250" y="683" font-size="8">• Measure outcomes</text>
+  <text x="250" y="694" font-size="8">• Bayesian updates</text>
+  <text x="250" y="705" font-size="8">• Pattern discovery</text>
+
+  <!-- 4c Preferences -->
+  <rect x="430" y="620" width="160" height="100" fill="#E8F8E8" stroke="#00AA00" stroke-width="1.5" rx="3"/>
+  <text x="510" y="640" font-size="11" font-weight="bold" text-anchor="middle">4c: Preferences</text>
+  <text x="510" y="657" font-size="9" text-anchor="middle">Personalization</text>
+  <text x="440" y="672" font-size="8">• Decision style</text>
+  <text x="440" y="683" font-size="8">• Communication fmt</text>
+  <text x="440" y="694" font-size="8">• Risk tolerance</text>
+  <text x="440" y="705" font-size="8">• Care about/avoid</text>
+
+  <!-- 4d Attention Budget -->
+  <rect x="620" y="620" width="160" height="100" fill="#F8F8E8" stroke="#DAA520" stroke-width="1.5" rx="3"/>
+  <text x="700" y="640" font-size="11" font-weight="bold" text-anchor="middle">4d: Attention Budget</text>
+  <text x="700" y="657" font-size="9" text-anchor="middle">Curated Context</text>
+  <text x="630" y="672" font-size="8">• Task complexity</text>
+  <text x="630" y="683" font-size="8">• Urgency detection</text>
+  <text x="630" y="694" font-size="8">• Priority filtering</text>
+  <text x="630" y="705" font-size="8">• Budget allocation</text>
+
+  <!-- Integration feedback -->
+  <path d="M 130 620 L 200 550" stroke="#0066CC" stroke-width="1.5" fill="none" stroke-dasharray="5,5"/>
+  <path d="M 320 620 L 450 550" stroke="#CC0000" stroke-width="1.5" fill="none" stroke-dasharray="5,5"/>
+  <path d="M 510 620 L 630 550" stroke="#00AA00" stroke-width="1.5" fill="none" stroke-dasharray="5,5"/>
+  <path d="M 700 620 L 900 550" stroke="#DAA520" stroke-width="1.5" fill="none" stroke-dasharray="5,5"/>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0066CC" />
+    </marker>
+    <marker id="arrowhead-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#FF8C00" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#00AA00" />
+    </marker>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0033FF" />
+    </marker>
+    <marker id="arrowhead-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#AA00AA" />
+    </marker>
+  </defs>
+
+  <!-- Legend -->
+  <text x="1050" y="600" font-size="11" font-weight="bold">Integration Points:</text>
+  <line x1="1050" y1="610" x2="1070" y2="610" stroke="#0066CC" stroke-width="2"/>
+  <text x="1080" y="614" font-size="10">Memory</text>
+
+  <line x1="1050" y1="630" x2="1070" y2="630" stroke="#0033FF" stroke-width="2"/>
+  <text x="1080" y="634" font-size="10">Decisions</text>
+
+  <line x1="1050" y1="650" x2="1070" y2="650" stroke="#AA00AA" stroke-width="2"/>
+  <text x="1080" y="654" font-size="10">Skills</text>
+</svg>

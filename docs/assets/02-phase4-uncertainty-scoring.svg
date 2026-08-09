@@ -1,0 +1,120 @@
+<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="500" y="30" font-size="22" font-weight="bold" text-anchor="middle">Phase 4a: Uncertainty Quantification — Confidence Scoring</text>
+
+  <!-- Three dimensions -->
+  <text x="150" y="80" font-size="13" font-weight="bold">Relevance (0.5x)</text>
+  <text x="420" y="80" font-size="13" font-weight="bold">Reliability (0.3x)</text>
+  <text x="750" y="80" font-size="13" font-weight="bold">Freshness (0.2x)</text>
+
+  <!-- Relevance scores -->
+  <rect x="50" y="100" width="250" height="200" fill="#E8F4F8" stroke="#0066CC" stroke-width="2" rx="5"/>
+  <text x="175" y="125" font-size="11" font-weight="bold" text-anchor="middle">Relevance Scoring</text>
+  <text x="175" y="145" font-size="10" text-anchor="middle">(Does it apply to THIS task?)</text>
+  <line x1="60" y1="150" x2="290" y2="150" stroke="#0066CC" stroke-width="1"/>
+
+  <rect x="60" y="160" width="230" height="20" fill="#00DD00"/>
+  <text x="65" y="175" font-size="9">0.95 — ADR match by keyword</text>
+
+  <rect x="60" y="185" width="200" height="20" fill="#77DD77"/>
+  <text x="65" y="200" font-size="9">0.80 — ADR related (depends_on)</text>
+
+  <rect x="60" y="210" width="160" height="20" fill="#AADD77"/>
+  <text x="65" y="225" font-size="9">0.60 — ADR mentions topic</text>
+
+  <rect x="60" y="235" width="120" height="20" fill="#DDDD77"/>
+  <text x="65" y="250" font-size="9">0.40 — Tangential</text>
+
+  <rect x="60" y="260" width="35" height="20" fill="#FF9999"/>
+  <text x="65" y="275" font-size="9">0.10 — Unrelated</text>
+
+  <!-- Reliability scores -->
+  <rect x="345" y="100" width="250" height="200" fill="#F8E8E8" stroke="#CC0000" stroke-width="2" rx="5"/>
+  <text x="470" y="125" font-size="11" font-weight="bold" text-anchor="middle">Reliability Scoring</text>
+  <text x="470" y="145" font-size="10" text-anchor="middle">(Can I trust this source?)</text>
+  <line x1="355" y1="150" x2="585" y2="150" stroke="#CC0000" stroke-width="1"/>
+
+  <rect x="355" y="160" width="230" height="20" fill="#00DD00"/>
+  <text x="360" y="175" font-size="9">0.95 — ADR status=accepted</text>
+
+  <rect x="355" y="185" width="200" height="20" fill="#77DD77"/>
+  <text x="360" y="200" font-size="9">0.90 — User-explicit memory</text>
+
+  <rect x="355" y="210" width="170" height="20" fill="#AADD77"/>
+  <text x="360" y="225" font-size="9">0.75 — Incident report</text>
+
+  <rect x="355" y="235" width="160" height="20" fill="#DDDD77"/>
+  <text x="360" y="250" font-size="9">0.70 — ADR proposed</text>
+
+  <rect x="355" y="260" width="100" height="20" fill="#FF9999"/>
+  <text x="360" y="275" font-size="9">0.30 — Low success</text>
+
+  <!-- Freshness scores -->
+  <rect x="640" y="100" width="250" height="200" fill="#F0F8F0" stroke="#00AA00" stroke-width="2" rx="5"/>
+  <text x="765" y="125" font-size="11" font-weight="bold" text-anchor="middle">Freshness Scoring</text>
+  <text x="765" y="145" font-size="10" text-anchor="middle">(Is this still current?)</text>
+  <line x1="650" y1="150" x2="880" y2="150" stroke="#00AA00" stroke-width="1"/>
+
+  <rect x="650" y="160" width="230" height="20" fill="#00DD00"/>
+  <text x="655" y="175" font-size="9">1.0 — 0-7 days old</text>
+
+  <rect x="650" y="185" width="210" height="20" fill="#77DD77"/>
+  <text x="655" y="200" font-size="9">0.9 — 7-30 days old</text>
+
+  <rect x="650" y="210" width="170" height="20" fill="#AADD77"/>
+  <text x="655" y="225" font-size="9">0.7 — 30-90 days</text>
+
+  <rect x="650" y="235" width="130" height="20" fill="#DDDD77"/>
+  <text x="655" y="250" font-size="9">0.5 — 6-12 months</text>
+
+  <rect x="650" y="260" width="40" height="20" fill="#FF9999"/>
+  <text x="655" y="275" font-size="9">0.1 — >1 year</text>
+
+  <!-- Combined Confidence Formula -->
+  <rect x="50" y="340" width="900" height="100" fill="#FFFACD" stroke="#DAA520" stroke-width="2" rx="5"/>
+  <text x="500" y="365" font-size="13" font-weight="bold" text-anchor="middle">Combined Confidence Formula</text>
+  <line x1="60" y1="370" x2="940" y2="370" stroke="#DAA520" stroke-width="1"/>
+
+  <text x="500" y="395" font-size="12" font-family="monospace" text-anchor="middle">
+    Combined Confidence = (Relevance × 0.5) + (Reliability × 0.3) + (Freshness × 0.2)
+  </text>
+  <text x="500" y="418" font-size="11" text-anchor="middle" fill="#666">
+    Result: [0.0, 1.0] floating point score
+  </text>
+
+  <!-- Tier classification -->
+  <rect x="50" y="470" width="900" height="200" fill="#F8F8F8" stroke="#333" stroke-width="2" rx="5"/>
+  <text x="500" y="495" font-size="13" font-weight="bold" text-anchor="middle">Confidence Tiers</text>
+  <line x1="60" y1="500" x2="940" y2="500" stroke="#333" stroke-width="1"/>
+
+  <!-- HIGH -->
+  <rect x="70" y="515" width="200" height="80" fill="#00DD00" rx="3"/>
+  <text x="170" y="535" font-size="12" font-weight="bold" text-anchor="middle">HIGH</text>
+  <text x="170" y="553" font-size="10" text-anchor="middle" fill="white">Confidence ≥ 0.85</text>
+  <text x="170" y="570" font-size="9" text-anchor="middle" fill="white">Use directly, minimal</text>
+  <text x="170" y="583" font-size="9" text-anchor="middle" fill="white">second-guessing</text>
+
+  <!-- MEDIUM -->
+  <rect x="300" y="515" width="200" height="80" fill="#DDDD77" rx="3"/>
+  <text x="400" y="535" font-size="12" font-weight="bold" text-anchor="middle">MEDIUM</text>
+  <text x="400" y="553" font-size="10" text-anchor="middle">Confidence 0.65–0.85</text>
+  <text x="400" y="570" font-size="9" text-anchor="middle">Use as primary but</text>
+  <text x="400" y="583" font-size="9" text-anchor="middle">note caveats</text>
+
+  <!-- LOW -->
+  <rect x="530" y="515" width="200" height="80" fill="#FF9999" rx="3"/>
+  <text x="630" y="535" font-size="12" font-weight="bold" text-anchor="middle">LOW</text>
+  <text x="630" y="553" font-size="10" text-anchor="middle">Confidence 0.40–0.65</text>
+  <text x="630" y="570" font-size="9" text-anchor="middle">Consider but seek</text>
+  <text x="630" y="583" font-size="9" text-anchor="middle">additional signal</text>
+
+  <!-- UNCERTAIN -->
+  <rect x="760" y="515" width="170" height="80" fill="#CCCCCC" rx="3"/>
+  <text x="845" y="535" font-size="12" font-weight="bold" text-anchor="middle">UNCERTAIN</text>
+  <text x="845" y="553" font-size="10" text-anchor="middle">Confidence < 0.40</text>
+  <text x="845" y="570" font-size="9" text-anchor="middle">Acknowledge but</text>
+  <text x="845" y="583" font-size="9" text-anchor="middle">don't rely on</text>
+
+  <!-- Example at bottom -->
+  <rect x="50" y="690" width="900" height="1" fill="#DDD"/>
+</svg>

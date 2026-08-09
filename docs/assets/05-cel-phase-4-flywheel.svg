@@ -1,0 +1,117 @@
+<svg viewBox="0 0 1000 900" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="500" y="30" font-size="22" font-weight="bold" text-anchor="middle">Phase 4: The Flywheel — How All Four Concepts Work Together</text>
+
+  <!-- Central agent circle -->
+  <circle cx="500" cy="450" r="80" fill="#E8E8F8" stroke="#0033FF" stroke-width="3"/>
+  <text x="500" y="455" font-size="12" font-weight="bold" text-anchor="middle">AGENT</text>
+
+  <!-- Phase 4a: Uncertainty (top) -->
+  <circle cx="500" cy="120" r="70" fill="#E8F4F8" stroke="#0066CC" stroke-width="2"/>
+  <text x="500" y="120" font-size="11" font-weight="bold" text-anchor="middle" fill="#0066CC">4a</text>
+  <text x="500" y="135" font-size="10" text-anchor="middle" fill="#0066CC">Uncertainty</text>
+  <text x="500" y="150" font-size="8" text-anchor="middle">Confidence</text>
+  <text x="500" y="160" font-size="8" text-anchor="middle">Scoring</text>
+
+  <!-- Phase 4b: Feedback (right) -->
+  <circle cx="800" cy="450" r="70" fill="#F8E8E8" stroke="#CC0000" stroke-width="2"/>
+  <text x="800" y="450" font-size="11" font-weight="bold" text-anchor="middle" fill="#CC0000">4b</text>
+  <text x="800" y="465" font-size="10" text-anchor="middle" fill="#CC0000">Feedback</text>
+  <text x="800" y="480" font-size="8" text-anchor="middle">Loop</text>
+  <text x="800" y="490" font-size="8" text-anchor="middle">Learning</text>
+
+  <!-- Phase 4c: Preferences (bottom) -->
+  <circle cx="500" cy="780" r="70" fill="#E8F8E8" stroke="#00AA00" stroke-width="2"/>
+  <text x="500" y="780" font-size="11" font-weight="bold" text-anchor="middle" fill="#00AA00">4c</text>
+  <text x="500" y="795" font-size="10" text-anchor="middle" fill="#00AA00">Preferences</text>
+  <text x="500" y="810" font-size="8" text-anchor="middle">Personalization</text>
+
+  <!-- Phase 4d: Attention Budget (left) -->
+  <circle cx="200" cy="450" r="70" fill="#F8F8E8" stroke="#DAA520" stroke-width="2"/>
+  <text x="200" y="450" font-size="11" font-weight="bold" text-anchor="middle" fill="#DAA520">4d</text>
+  <text x="200" y="465" font-size="10" text-anchor="middle" fill="#DAA520">Attention</text>
+  <text x="200" y="480" font-size="8" text-anchor="middle">Budget</text>
+  <text x="200" y="490" font-size="8" text-anchor="middle">Curation</text>
+
+  <!-- Connecting arrows (clockwise) -->
+  <!-- 4a -> Agent -->
+  <path d="M 500 190 Q 500 300 500 370" stroke="#0066CC" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-blue)"/>
+  <text x="510" y="270" font-size="9" fill="#0066CC">scores all</text>
+  <text x="510" y="283" font-size="9" fill="#0066CC">context</text>
+
+  <!-- Agent -> 4b -->
+  <path d="M 570 450 Q 680 450 730 450" stroke="#0033FF" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-navy)"/>
+  <text x="630" y="435" font-size="9" fill="#0033FF">execution &</text>
+  <text x="630" y="448" font-size="9" fill="#0033FF">outcomes</text>
+
+  <!-- 4b -> Agent -->
+  <path d="M 730 480 Q 650 520 570 480" stroke="#CC0000" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-red)"/>
+  <text x="650" y="520" font-size="9" fill="#CC0000">feedback</text>
+  <text x="650" y="533" font-size="9" fill="#CC0000">updates</text>
+
+  <!-- 4b -> 4a (learning updates scores) -->
+  <path d="M 765 385 Q 650 280 565 160" stroke="#CC0000" stroke-width="2" fill="none" marker-end="url(#arrowhead-red)" stroke-dasharray="5,5"/>
+  <text x="700" y="310" font-size="8" fill="#CC0000" font-style="italic">confidence</text>
+  <text x="700" y="322" font-size="8" fill="#CC0000" font-style="italic">recalibrated</text>
+
+  <!-- Agent -> 4c -->
+  <path d="M 500 530 Q 500 640 500 710" stroke="#0033FF" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-navy)"/>
+  <text x="510" y="620" font-size="9" fill="#0033FF">adapts</text>
+  <text x="510" y="633" font-size="9" fill="#0033FF">to style</text>
+
+  <!-- 4c -> Agent -->
+  <path d="M 430 710 Q 350 600 430 530" stroke="#00AA00" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-green)"/>
+  <text x="360" y="610" font-size="9" fill="#00AA00">preferences</text>
+  <text x="360" y="623" font-size="9" fill="#00AA00">shape output</text>
+
+  <!-- 4c -> 4d (preferences affect budget) -->
+  <path d="M 430 765 Q 330 650 270 520" stroke="#00AA00" stroke-width="2" fill="none" marker-end="url(#arrowhead-green)" stroke-dasharray="5,5"/>
+  <text x="380" y="700" font-size="8" fill="#00AA00" font-style="italic">detail level</text>
+  <text x="380" y="712" font-size="8" fill="#00AA00" font-style="italic">affects budget</text>
+
+  <!-- Agent -> 4d -->
+  <path d="M 420 450 L 270 450" stroke="#0033FF" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-navy)"/>
+  <text x="350" y="435" font-size="9" fill="#0033FF">cognition load</text>
+  <text x="350" y="448" font-size="9" fill="#0033FF">signals</text>
+
+  <!-- 4d -> Agent -->
+  <path d="M 270 420 Q 350 380 420 420" stroke="#DAA520" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-orange)"/>
+  <text x="330" y="370" font-size="9" fill="#DAA520">context</text>
+  <text x="330" y="383" font-size="9" fill="#DAA520">curated</text>
+
+  <!-- 4d -> 4a (curated context affects confidence) -->
+  <path d="M 235 385 Q 300 280 435 160" stroke="#DAA520" stroke-width="2" fill="none" marker-end="url(#arrowhead-orange)" stroke-dasharray="5,5"/>
+  <text x="300" y="290" font-size="8" fill="#DAA520" font-style="italic">relevant items</text>
+  <text x="300" y="302" font-size="8" fill="#DAA520" font-style="italic">have higher conf</text>
+
+  <!-- Cycle description -->
+  <rect x="50" y="50" width="350" height="60" fill="#FFFACD" stroke="#DAA520" stroke-width="2" rx="5"/>
+  <text x="225" y="70" font-size="10" font-weight="bold" text-anchor="middle">Flywheel Effect:</text>
+  <text x="225" y="85" font-size="9" text-anchor="middle">Better scores → Better outcomes → Better learning</text>
+  <text x="225" y="98" font-size="9" text-anchor="middle">→ More personalized → Curated context → Better decisions</text>
+
+  <!-- Real-world impact -->
+  <rect x="600" y="50" width="350" height="60" fill="#F0F8F0" stroke="#00AA00" stroke-width="2" rx="5"/>
+  <text x="775" y="70" font-size="10" font-weight="bold" text-anchor="middle">Real-World Impact:</text>
+  <text x="775" y="85" font-size="9" text-anchor="middle">Reduces noise, improves signal ↑ Task success ↑</text>
+  <text x="775" y="98" font-size="9" text-anchor="middle">Speeds up decisions (less cognitive load) ↑</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0066CC" />
+    </marker>
+    <marker id="arrowhead-navy" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0033FF" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#CC0000" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#00AA00" />
+    </marker>
+    <marker id="arrowhead-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#DAA520" />
+    </marker>
+  </defs>
+</svg>

@@ -1,0 +1,187 @@
+<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="600" y="30" font-size="22" font-weight="bold" text-anchor="middle">Phase 4d: Attention Budget — Context Curation by Task Complexity & Urgency</text>
+
+  <!-- Budget calculation matrix -->
+  <text x="60" y="80" font-size="13" font-weight="bold">Task Complexity vs. Context Budget</text>
+
+  <rect x="50" y="100" width="1100" height="180" fill="#F8F8F8" stroke="#333" stroke-width="1" rx="3"/>
+
+  <!-- Headers -->
+  <rect x="50" y="100" width="150" height="30" fill="#333" rx="0"/>
+  <text x="125" y="120" font-size="11" font-weight="bold" text-anchor="middle" fill="white">Complexity</text>
+
+  <rect x="200" y="100" width="120" height="30" fill="#0066CC" rx="0"/>
+  <text x="260" y="120" font-size="11" font-weight="bold" text-anchor="middle" fill="white">Memory</text>
+
+  <rect x="320" y="100" width="120" height="30" fill="#0033FF" rx="0"/>
+  <text x="380" y="120" font-size="11" font-weight="bold" text-anchor="middle" fill="white">ADRs</text>
+
+  <rect x="440" y="100" width="120" height="30" fill="#AA00AA" rx="0"/>
+  <text x="500" y="120" font-size="11" font-weight="bold" text-anchor="middle" fill="white">Skills</text>
+
+  <rect x="560" y="100" width="150" height="30" fill="#DAA520" rx="0"/>
+  <text x="635" y="120" font-size="11" font-weight="bold" text-anchor="middle" fill="white">Urgency: Normal</text>
+
+  <rect x="710" y="100" width="150" height="30" fill="#FF8C00" rx="0"/>
+  <text x="785" y="120" font-size="11" font-weight="bold" text-anchor="middle" fill="white">Urgency: ASAP</text>
+
+  <rect x="860" y="100" width="150" height="30" fill="#00AA00" rx="0"/>
+  <text x="935" y="120" font-size="11" font-weight="bold" text-anchor="middle" fill="white">Urgency: Can-Wait</text>
+
+  <!-- Simple -->
+  <rect x="50" y="130" width="150" height="25" fill="#E8F4F8" stroke="#0066CC" stroke-width="1"/>
+  <text x="125" y="147" font-size="10" font-weight="bold" text-anchor="middle">SIMPLE</text>
+
+  <rect x="200" y="130" width="120" height="25" fill="#E8F4F8"/>
+  <text x="260" y="147" font-size="10" text-anchor="middle">2 items</text>
+
+  <rect x="320" y="130" width="120" height="25" fill="#E8E8F8"/>
+  <text x="380" y="147" font-size="10" text-anchor="middle">2 ADRs</text>
+
+  <rect x="440" y="130" width="120" height="25" fill="#F8E8F8"/>
+  <text x="500" y="147" font-size="10" text-anchor="middle">2 skills</text>
+
+  <rect x="560" y="130" width="150" height="25" fill="#FAFAF8"/>
+  <text x="635" y="147" font-size="9" text-anchor="middle">2/2/2 (baseline)</text>
+
+  <rect x="710" y="130" width="150" height="25" fill="#FAFAF8"/>
+  <text x="785" y="147" font-size="9" text-anchor="middle">1/1/1 (½)</text>
+
+  <rect x="860" y="130" width="150" height="25" fill="#FAFAF8"/>
+  <text x="935" y="147" font-size="9" text-anchor="middle">3/3/3 (1.5×)</text>
+
+  <!-- Moderate -->
+  <rect x="50" y="155" width="150" height="25" fill="#E8F8E8" stroke="#00AA00" stroke-width="1"/>
+  <text x="125" y="172" font-size="10" font-weight="bold" text-anchor="middle">MODERATE</text>
+
+  <rect x="200" y="155" width="120" height="25" fill="#E8F8E8"/>
+  <text x="260" y="172" font-size="10" text-anchor="middle">4 items</text>
+
+  <rect x="320" y="155" width="120" height="25" fill="#E8F8E8"/>
+  <text x="380" y="172" font-size="10" text-anchor="middle">5 ADRs</text>
+
+  <rect x="440" y="155" width="120" height="25" fill="#E8F8E8"/>
+  <text x="500" y="172" font-size="10" text-anchor="middle">4 skills</text>
+
+  <rect x="560" y="155" width="150" height="25" fill="#FAFAF8"/>
+  <text x="635" y="172" font-size="9" text-anchor="middle">4/5/4 (baseline)</text>
+
+  <rect x="710" y="155" width="150" height="25" fill="#FAFAF8"/>
+  <text x="785" y="172" font-size="9" text-anchor="middle">2/2/2 (½)</text>
+
+  <rect x="860" y="155" width="150" height="25" fill="#FAFAF8"/>
+  <text x="935" y="172" font-size="9" text-anchor="middle">6/7/6 (1.5×)</text>
+
+  <!-- Complex -->
+  <rect x="50" y="180" width="150" height="25" fill="#F8E8E8" stroke="#CC0000" stroke-width="1"/>
+  <text x="125" y="197" font-size="10" font-weight="bold" text-anchor="middle">COMPLEX</text>
+
+  <rect x="200" y="180" width="120" height="25" fill="#F8E8E8"/>
+  <text x="260" y="197" font-size="10" text-anchor="middle">6 items</text>
+
+  <rect x="320" y="180" width="120" height="25" fill="#F8E8E8"/>
+  <text x="380" y="197" font-size="10" text-anchor="middle">8 ADRs</text>
+
+  <rect x="440" y="180" width="120" height="25" fill="#F8E8E8"/>
+  <text x="500" y="197" font-size="10" text-anchor="middle">6 skills</text>
+
+  <rect x="560" y="180" width="150" height="25" fill="#FAFAF8"/>
+  <text x="635" y="197" font-size="9" text-anchor="middle">6/8/6 (baseline)</text>
+
+  <rect x="710" y="180" width="150" height="25" fill="#FAFAF8"/>
+  <text x="785" y="197" font-size="9" text-anchor="middle">3/4/3 (½)</text>
+
+  <rect x="860" y="180" width="150" height="25" fill="#FAFAF8"/>
+  <text x="935" y="197" font-size="9" text-anchor="middle">9/12/9 (1.5×)</text>
+
+  <!-- Priority Tiers -->
+  <text x="60" y="320" font-size="13" font-weight="bold">Priority Tiering — What Gets Shown?</text>
+
+  <!-- CRITICAL -->
+  <rect x="50" y="340" width="240" height="110" fill="#00DD00" rx="3"/>
+  <text x="170" y="360" font-size="11" font-weight="bold" text-anchor="middle" fill="white">CRITICAL</text>
+  <text x="170" y="378" font-size="9" text-anchor="middle" fill="white">(Always show)</text>
+  <circle cx="70" cy="395" r="2" fill="white"/>
+  <text x="80" y="399" font-size="8" fill="white">Production risks</text>
+  <circle cx="70" cy="410" r="2" fill="white"/>
+  <text x="80" y="414" font-size="8" fill="white">Blockers</text>
+  <circle cx="70" cy="425" r="2" fill="white"/>
+  <text x="80" y="429" font-size="8" fill="white">Security issues</text>
+  <circle cx="70" cy="440" r="2" fill="white"/>
+  <text x="80" y="444" font-size="8" fill="white">Direct conflicts</text>
+
+  <!-- IMPORTANT -->
+  <rect x="330" y="340" width="240" height="110" fill="#DDDD77" rx="3"/>
+  <text x="450" y="360" font-size="11" font-weight="bold" text-anchor="middle">IMPORTANT</text>
+  <text x="450" y="378" font-size="9" text-anchor="middle">(Show if budget allows)</text>
+  <circle cx="350" cy="395" r="2" fill="#333"/>
+  <text x="360" y="399" font-size="8">Related ADRs</text>
+  <circle cx="350" cy="410" r="2" fill="#333"/>
+  <text x="360" y="414" font-size="8">Relevant skills</text>
+  <circle cx="350" cy="425" r="2" fill="#333"/>
+  <text x="360" y="429" font-size="8">Performance tips</text>
+  <circle cx="350" cy="440" r="2" fill="#333"/>
+  <text x="360" y="444" font-size="8">Pattern matches</text>
+
+  <!-- NICE-TO-HAVE -->
+  <rect x="610" y="340" width="240" height="110" fill="#CCCCCC" rx="3"/>
+  <text x="730" y="360" font-size="11" font-weight="bold" text-anchor="middle">NICE-TO-HAVE</text>
+  <text x="730" y="378" font-size="9" text-anchor="middle">(Show if deep budget)</text>
+  <circle cx="630" cy="395" r="2" fill="#333"/>
+  <text x="640" y="399" font-size="8">Historical context</text>
+  <circle cx="630" cy="410" r="2" fill="#333"/>
+  <text x="640" y="414" font-size="8">Edge cases</text>
+  <circle cx="630" cy="425" r="2" fill="#333"/>
+  <text x="640" y="429" font-size="8">Future v0.3 changes</text>
+  <circle cx="630" cy="440" r="2" fill="#333"/>
+  <text x="640" y="444" font-size="8">Learning examples</text>
+
+  <!-- NOISE -->
+  <rect x="890" y="340" width="240" height="110" fill="#FF9999" rx="3"/>
+  <text x="1010" y="360" font-size="11" font-weight="bold" text-anchor="middle" fill="white">NOISE</text>
+  <text x="1010" y="378" font-size="9" text-anchor="middle" fill="white">(Hide by default)</text>
+  <circle cx="910" cy="395" r="2" fill="white"/>
+  <text x="920" y="399" font-size="8" fill="white">Very old files</text>
+  <circle cx="910" cy="410" r="2" fill="white"/>
+  <text x="920" y="414" font-size="8" fill="white">Tangential ADRs</text>
+  <circle cx="910" cy="425" r="2" fill="white"/>
+  <text x="920" y="429" font-size="8" fill="white">Deprecated skills</text>
+  <circle cx="910" cy="440" r="2" fill="white"/>
+  <text x="920" y="444" font-size="8" fill="white">Superseded</text>
+
+  <!-- Example at bottom -->
+  <text x="60" y="500" font-size="13" font-weight="bold">Example: Task Routing</text>
+
+  <!-- Task 1: Urgent -->
+  <rect x="50" y="520" width="550" height="120" fill="#FFE6E6" stroke="#CC0000" stroke-width="2" rx="5"/>
+  <text x="75" y="540" font-size="11" font-weight="bold">Task 1: CRITICAL Production Bug (ASAP)</text>
+  <text x="75" y="560" font-size="10">Complexity: Moderate | Urgency: asap | Decision Style: Pragmatic</text>
+  <line x1="60" y1="565" x2="590" y2="565" stroke="#CC0000" stroke-width="1"/>
+
+  <text x="75" y="580" font-size="9" font-weight="bold">Budget Allocation:</text>
+  <text x="75" y="595" font-size="9">Memory: 2 (½ of 4) | ADRs: 2.5→2 (½ of 5) | Skills: 2 (½ of 4)</text>
+  <text x="75" y="610" font-size="9" font-weight="bold">Result:</text>
+  <text x="75" y="625" font-size="9">✓ Critical memory files | ✓ Core ADRs only | ✓ Essential skills</text>
+
+  <!-- Task 2: Thorough -->
+  <rect x="620" y="520" width="550" height="120" fill="#E6F8E6" stroke="#00AA00" stroke-width="2" rx="5"/>
+  <text x="645" y="540" font-size="11" font-weight="bold">Task 2: Design Future CEL (Can-Wait)</text>
+  <text x="645" y="560" font-size="10">Complexity: Complex | Urgency: can-wait | Decision Style: Rigorous</text>
+  <line x1="630" y1="565" x2="1160" y2="565" stroke="#00AA00" stroke-width="1"/>
+
+  <text x="645" y="580" font-size="9" font-weight="bold">Budget Allocation:</text>
+  <text x="645" y="595" font-size="9">Memory: 9 (1.5× of 6) | ADRs: 12 (1.5× of 8) | Skills: 9 (1.5× of 6)</text>
+  <text x="645" y="610" font-size="9" font-weight="bold">Result:</text>
+  <text x="645" y="625" font-size="9">✓ All relevant context | ✓ Historical patterns | ✓ Deep explanations</text>
+
+  <!-- Monitoring -->
+  <text x="60" y="680" font-size="13" font-weight="bold">Attention Health Monitoring</text>
+
+  <rect x="50" y="700" width="1100" height="80" fill="#FFFACD" stroke="#DAA520" stroke-width="2" rx="5"/>
+  <text x="600" y="723" font-size="11" font-weight="bold" text-anchor="middle">After Each Task, Measure:</text>
+
+  <text x="70" y="745" font-size="10">• Utilization: Did agent use the allocated budget? (target: 70%)</text>
+  <text x="70" y="760" font-size="10">• Signal-to-Noise: How much was helpful vs noise? (target: >80% helpful)</text>
+  <text x="70" y="775" font-size="10">• Outcome per item: Average value of each context piece (target: >0.5)</text>
+</svg>
