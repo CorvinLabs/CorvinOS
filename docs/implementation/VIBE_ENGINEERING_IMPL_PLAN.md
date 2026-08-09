@@ -94,7 +94,7 @@ gated; (d) CE spend does NOT decrement `compute_quota.json` (separate counter_fi
    flat NavGroup[] with no Dashboard parent, and Talent is already in nav) (fixes M1).
    `npm run build`.
 Tests: route unit tests (trace shape, empty state, tenant isolation); Playwright smoke
-(tab renders, stage expands, empty-state shows). Flag-off → nav entry hidden, routes
+(nav group renders, stage expands, empty-state shows). Flag-off → nav entry hidden, routes
 not mounted.
 
 ## Phase P2 — Configurability
