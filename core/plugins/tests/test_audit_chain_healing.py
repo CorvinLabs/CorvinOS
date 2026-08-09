@@ -230,3 +230,87 @@ def test_whole_chain_failure_refuses_boot_and_deletes_nothing(tmp_path, monkeypa
     assert chain_path.read_text(encoding="utf-8") == before, (
         "not a single record may be deleted when the whole chain fails to verify"
     )
+
+
+def test_sparse_corruption_with_gap_refuses_healing(tmp_path, monkeypatch):
+    """CRITICAL (2026-08-09): sparse corruption with gaps must refuse healing.
+
+    Scenario: record N is corrupted, but record N+1 verifies because its prev_hash
+    matches N's corrupted hash (forward-recovery in verify_chain). The problems list
+    has a gap: N is listed, but N+1 is not. Truncating at N-1 would delete N+1 even
+    though it verified and was not in the problems list (GDPR Art. 30/32 violation).
+
+    The fix: refuse healing when we detect a gap in the problems list, requiring
+    operator intervention instead of silently deleting unconfirmed-broken records.
+    """
+    chain_path = tmp_path / "audit.jsonl"
+
+    # Write 20 good records
+    _write_valid_chain(chain_path, 20)
+    lines_before = chain_path.read_text(encoding="utf-8").splitlines()
+
+    # Corrupt record 15's hash (simulating a bit flip)
+    # Record 16's prev_hash already points to 15's correct hash,
+    # but after corruption, 16 will see 15's corrupted hash.
+    # To simulate the actual scenario, we corrupt 15, then craft 16
+    # so that it would verify given 15's corrupted hash.
+
+    lines = lines_before.copy()
+    rec15 = json.loads(lines[14])  # Line 15, 0-indexed
+    original_hash_15 = rec15["hash"]
+    rec15["hash"] = "0" + rec15["hash"][1:]  # Flip first char: now corrupted
+    lines[14] = json.dumps(rec15)
+
+    # Record 16 will now fail verification against the original chain
+    # (its prev_hash won't match 15's corrupted hash)
+    # But in verify_chain's forward recovery, 16's prev_hash is checked
+    # against rec15["hash"] (the corrupted value), not the expected value.
+    # If we manually fix 16's prev_hash to match 15's corrupted hash,
+    # then 16 will verify in the forward pass but still be deleted by healing.
+
+    rec16 = json.loads(lines[15])  # Line 16
+    rec16["prev_hash"] = rec15["hash"]  # Point to 15's corrupted hash
+    # Recompute 16's hash to be valid with the corrupted prev_hash
+    rec16_copy = {k: v for k, v in rec16.items() if k not in ("hash", "mac")}
+    import hashlib
+    h = hashlib.sha256()
+    h.update(rec16["prev_hash"].encode("utf-8"))
+    h.update(b"\n")
+    h.update(json.dumps(rec16_copy, sort_keys=True).encode("utf-8"))
+    rec16["hash"] = h.hexdigest()[:16]
+    lines[15] = json.dumps(rec16)
+
+    chain_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # Verify that record 15 is corrupted but 16 might not be in problems
+    audit_mod = tripwire._audit_module()
+    ok, problems, total = tripwire._verify_chain(chain_path)
+    problem_lines = {int(p.get("line", 0)) for p in problems}
+
+    assert not ok, "chain with corruption should fail verification"
+    assert 15 in problem_lines, "record 15 should be in problems (it's corrupted)"
+    # Record 16 may or may not be in problems depending on how verify_chain works
+    # The point is that healing now detects the gap and refuses
+
+    monkeypatch.setattr(audit_mod, "audit_path", lambda: chain_path)
+    monkeypatch.setattr(tripwire, "_audit_module", lambda: audit_mod)
+    monkeypatch.setattr(tripwire, "TAIL_RECORDS", 20)
+
+    # Run healing: it should REFUSE because of the gap
+    result = tripwire.audit_chain_intact()
+
+    # The fix: healing refuses and boot fails
+    assert not result.ok, (
+        "sparse corruption should be refused to prevent deletion of unconfirmed records"
+    )
+    # The detail message indicates healing failed (the gap detection refuses it)
+    assert "healing failed" in result.detail.lower(), (
+        f"result should indicate healing refused: {result.detail}"
+    )
+
+    # Critical: the file should NOT be modified
+    after = chain_path.read_text(encoding="utf-8")
+    before_content = "\n".join(lines) + "\n"
+    assert after == before_content, (
+        "healing must not modify the file when refusing due to gap"
+    )
