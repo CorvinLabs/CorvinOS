@@ -131,6 +131,7 @@ from .routes import (
     stats_features as stats_features_route,
     # ADR-0245 — Live Model Discovery
     models as models_route,
+    talent as talent_route,
 )
 
 
@@ -266,6 +267,7 @@ router.include_router(local_stats_route.router, tags=["console-local-stats"])
 # ADR-0245 — Live Model Discovery (model registry + live fetch)
 router.include_router(models_route.router, tags=["console-models"])
 router.include_router(stats_features_route.router, tags=["console-stats"])
+router.include_router(talent_route.router, tags=["console-talent"])
 
 
 @router.get("/version")
