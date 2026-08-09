@@ -204,6 +204,16 @@ def create_app() -> FastAPI:
     Callable as a uvicorn ``--factory`` target:
     ``corvin_console.standalone:create_app``
     """
+    # Ensure CORVIN_HOME is set to ~/.corvin for service mode. This prevents
+    # path divergence when the console runs as a service from within a repo
+    # checkout — _forge_paths.corvin_home() would detect repo context and
+    # return repo/.corvin, breaking session storage reader/writer symmetry
+    # (ADR-0154/sessions written to ~/.corvin must be readable from repo-based
+    # processes). When CORVIN_HOME is explicitly set (e.g. in tests or dev
+    # mode), respect it; otherwise, default to user home.
+    if not os.environ.get("CORVIN_HOME"):
+        os.environ["CORVIN_HOME"] = str(Path.home() / ".corvin")
+
     _configure_persistent_logging()
 
     from contextlib import asynccontextmanager

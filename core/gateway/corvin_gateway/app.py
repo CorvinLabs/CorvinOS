@@ -42,7 +42,9 @@ keep the bridges' inbox-based interface and never expose any port.
 """
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -385,6 +387,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # restart was a SIGKILL. Whenever this number changes, check
             # TimeoutStopSec in core/gateway/systemd/corvin-webui.service.
             await dispatcher.drain(timeout=15.0)
+
+
+# Ensure CORVIN_HOME is set to ~/.corvin for service mode (same as standalone.py).
+# This prevents path divergence when the gateway runs as a service from within a
+# repo checkout — _forge_paths.corvin_home() would detect repo context and return
+# repo/.corvin, breaking session storage reader/writer symmetry. When CORVIN_HOME is
+# explicitly set (e.g. in tests or dev mode), respect it; otherwise, default to user home.
+if not os.environ.get("CORVIN_HOME"):
+    os.environ["CORVIN_HOME"] = str(Path.home() / ".corvin")
 
 
 app = FastAPI(
