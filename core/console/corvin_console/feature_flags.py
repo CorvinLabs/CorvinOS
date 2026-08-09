@@ -559,6 +559,22 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         target_release="0.10.x",
         tags=("console", "packages"),
     ),
+    FeatureFlag(
+        id="vibe_engineering",
+        label="Vibe Engineering — CEL brief on live turns",
+        description=(
+            "Run the consolidated Context Engineering pipeline (memory → graph → "
+            "skill) via a single build_brief() BEFORE the pre-spawn gates and "
+            "inject the resulting brief into the OS-turn system prompt "
+            "(ADR-0275 P-1). Off means turns are assembled exactly as before, "
+            "with no CEL brief — a quiet, unchanged path. The brief only shapes "
+            "the prompt; the L34/L44/L35 gates still inspect the task text "
+            "(invariant I1)."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("chat", "context-engineering"),
+    ),
 )
 
 
