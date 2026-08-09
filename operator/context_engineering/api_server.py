@@ -21,7 +21,14 @@ from talent_score import get_talent_calculator
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+# CORS restricted to localhost only (operator-only telemetry server)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8765"],
+        "methods": ["GET"],
+        "allow_headers": ["Content-Type"],
+    }
+})
 
 
 class MeasurementReader:
@@ -397,4 +404,6 @@ def health():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # SECURITY: Bind to localhost only, disable debug mode
+    # This is an operator-only telemetry service; no remote access needed
+    app.run(host="127.0.0.1", port=5000, debug=False)
