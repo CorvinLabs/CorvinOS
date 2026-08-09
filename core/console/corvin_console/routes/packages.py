@@ -200,7 +200,15 @@ def _validate_and_extract_zip(zip_bytes: bytes, extract_to: Path, max_size: int)
             manifest_data = zf.read("manifest.json")
             manifest = json.loads(manifest_data)
 
-            # Now extract all files
+            # Validate all member paths BEFORE extraction (path traversal defense)
+            extract_to_resolved = extract_to.resolve()
+            for member in members:
+                member_path = (extract_to_resolved / member).resolve()
+                # Ensure resolved path stays within extract_to (no ../ escapes)
+                if not str(member_path).startswith(str(extract_to_resolved)):
+                    raise ValueError(f"path traversal detected: {member}")
+
+            # Now extract all files (paths already validated)
             extract_to.mkdir(parents=True, exist_ok=True)
             zf.extractall(extract_to)
 
@@ -404,13 +412,30 @@ async def upload_package(
             target_id=package_id,
         )
 
-        # Now commit the package by moving temp → final (atomic move)
-        if final_pkg_dir.exists():
-            shutil.rmtree(final_pkg_dir, ignore_errors=True)
-        # Ensure parent directory exists before rename
+        # Commit the package atomically: create backup, move temp → final, clean old backup
+        # (TOCTOU-safe: minimal window between atomic move and cleanup)
         final_pkg_dir.parent.mkdir(parents=True, exist_ok=True)
-        # Move atomically (rename is atomic on POSIX/Windows)
-        temp_pkg_dir.rename(final_pkg_dir)
+
+        if final_pkg_dir.exists():
+            backup_dir = final_pkg_dir.parent / f"{final_pkg_dir.name}.backup"
+            # Remove any stale backup
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=False)
+            # Move current → backup (atomic)
+            final_pkg_dir.rename(backup_dir)
+            try:
+                # Move temp → final (atomic)
+                temp_pkg_dir.rename(final_pkg_dir)
+                # Cleanup backup
+                shutil.rmtree(backup_dir, ignore_errors=False)
+            except Exception:
+                # Restore from backup if final move fails
+                if backup_dir.exists():
+                    backup_dir.rename(final_pkg_dir)
+                raise
+        else:
+            # No existing package, just move temp → final
+            temp_pkg_dir.rename(final_pkg_dir)
 
         # Write metadata after atomic move
         (final_pkg_dir / "metadata.json").write_text(json.dumps({
@@ -538,25 +563,27 @@ async def uninstall_package(
             detail="package not installed",
         )
 
-    # TODO: Check for reverse dependencies before deletion
-    # For now, just remove the directory
+    # Check for reverse dependencies before deletion (prevent orphaned dependents)
+    # TODO: Implement dependency graph scanning. For now, proceed with deletion.
+
+    # AUDIT BEFORE COMMIT: Log to audit trail BEFORE deleting files (GDPR Art. 30)
+    # If audit fails, exception prevents deletion
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="package.uninstall",
+        target_kind="package",
+        target_id=package_id,
+    )
 
     try:
         import shutil
         shutil.rmtree(pkg_dir, ignore_errors=False)
     except Exception as exc:
-        log.error(f"Failed to uninstall {package_id}: {exc}")
+        log.error(f"Failed to delete package directory {package_id}: {exc}")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"uninstall failed: {str(exc)[:100]}",
         ) from exc
-
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="packages.uninstall",
-        target_kind="package",
-        target_id=package_id,
-    )
 
     return {"ok": True, "package_id": package_id, "uninstalled": True}
