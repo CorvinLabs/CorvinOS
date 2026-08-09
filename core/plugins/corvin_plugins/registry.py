@@ -306,6 +306,20 @@ class PluginRegistry:
         #: that window: the id stays bound to its tenant even when the object is
         #: gone.
         self._tenant_history: dict[str, str] = {}
+        #: plugin_id -> registration epoch when it was granted a privileged layer.
+        #: Prevents re-registration tricks where a plugin unregisters and re-registers
+        #: to claim a privilege it was not originally granted.  Written in
+        #: _register_locked() after successful on_load() with privileged layer (ADR-0233 D5).
+        self._privileged_registration_epoch: dict[str, int] = {}
+        #: plugin_id -> epoch when this id was unregistered in current epoch.
+        #: Prevents a thread spawned during on_load() from unregistering itself and
+        #: re-registering in the same epoch with elevated privilege (ADR-0233 D5).
+        #: Cleared on each epoch increment.
+        self._unregistered_this_epoch: dict[str, int] = {}
+        #: Global registration epoch counter. Increments on each major bootstrap
+        #: sequence (boot_platform call), so threads spawned late in a load cannot
+        #: re-register in a different epoch.
+        self._registration_epoch: int = 0
 
     #: Cap on the tenant-history map, same reasoning as the op locks: an
     #: unbounded stream of ids must not grow it without limit.
@@ -333,11 +347,25 @@ class PluginRegistry:
                 lock = self._op_locks[plugin_id] = threading.RLock()
             return lock
 
+    def _advance_epoch(self) -> None:
+        """Increment registration epoch and clear same-epoch tracking.
+
+        Called from bootstrap.boot_platform() before loading any plugins.
+        Prevents threads spawned in the PREVIOUS epoch from escalating in the
+        current epoch (ADR-0233 D5).  The _privileged_registration_epoch dict
+        is NOT cleared — it remembers which plugins were granted privilege,
+        across ALL epochs.  Only _unregistered_this_epoch is cleared, since
+        "unregistered in the previous epoch" is not a valid reason to block
+        re-registration in a new epoch.
+        """
+        with self._lock:
+            self._registration_epoch += 1
+            self._unregistered_this_epoch.clear()
+
     # ── Registration ──────────────────────────────────────────────────────────
 
-    @staticmethod
     def _resolve_boot_layer(
-        plugin: CorvinPlugin, boot_layer: BootLayer | str | None
+        self, plugin: CorvinPlugin, boot_layer: BootLayer | str | None, plugin_id: str | None = None
     ) -> BootLayer:
         """Decide which boot layer a runtime plugin object belongs to.
 
@@ -354,6 +382,12 @@ class PluginRegistry:
         re-registers it without an explicit boot layer — which is exactly what a
         healing soft-restart does. Trust travels with the caller, not with the
         object being registered.
+
+        ADR-0233 D5: Prevents privilege escalation via unregister + re-register by
+        checking the registration epoch. A plugin re-registering in a different
+        epoch after unload is downgraded (thread escape mitigation). Also blocks
+        re-registration in the same epoch after unload (prevents same-epoch thread
+        escapes where a spawned thread unregisters and re-registers with privilege).
         """
         if boot_layer is not None:
             requested = BootLayer(boot_layer)
@@ -378,6 +412,40 @@ class PluginRegistry:
                         requested.value,
                     )
                     return BootLayer.INSTALLED
+
+                # ADR-0233 D5: Check if this plugin_id was already granted a
+                # privilege (in ANY epoch). If so, prevent re-escalation attempts:
+                # (a) re-registration in a DIFFERENT epoch (thread spawned in old boot)
+                # (b) re-registration in the SAME epoch after unload (same-epoch thread escape)
+                pid = plugin_id or getattr(plugin, "plugin_id", "")
+                with self._lock:
+                    already_privileged_epoch = self._privileged_registration_epoch.get(pid)
+                    unregistered_epoch = self._unregistered_this_epoch.get(pid)
+
+                if already_privileged_epoch is not None:
+                    if already_privileged_epoch != self._registration_epoch:
+                        # Cross-epoch re-escalation: thread from old boot trying to escape
+                        log.error(
+                            "plugin %r attempted to re-register on privileged layer "
+                            "across epochs (original epoch %d, current epoch %d) — "
+                            "downgraded to installed",
+                            pid, already_privileged_epoch, self._registration_epoch,
+                        )
+                        return BootLayer.INSTALLED
+                    else:
+                        # Same-epoch re-escalation: thread from this boot trying to re-register
+                        # after being unregistered (unregister + re-register attack).
+                        # This happens when a thread spawned during on_load() outlives the
+                        # loading context, calls unregister(), and tries to re-register with
+                        # privilege while _loading.current() is None.
+                        if unregistered_epoch == self._registration_epoch:
+                            log.error(
+                                "plugin %r attempted to re-register on privileged layer %s "
+                                "within the same epoch (epoch %d) after unload — this indicates "
+                                "a thread-escape attack; downgraded to installed",
+                                pid, requested.value, self._registration_epoch,
+                            )
+                            return BootLayer.INSTALLED
             return requested
         declared = getattr(plugin, "boot_layer", None)
         if declared is None:
@@ -413,7 +481,7 @@ class PluginRegistry:
         ``boot_layer`` (ADR-0243) records which boot layer the plugin belongs to;
         it is keyword-only and defaults to the least privileged value.
         """
-        resolved = self._resolve_boot_layer(plugin, boot_layer)
+        resolved = self._resolve_boot_layer(plugin, boot_layer, plugin_id=plugin.plugin_id)
         with self._op_lock(plugin.plugin_id):
             self._register_locked(plugin, ctx, resolved)
 
@@ -458,6 +526,14 @@ class PluginRegistry:
                 self._contexts.pop(plugin.plugin_id, None)
                 self._boot_layers.pop(plugin.plugin_id, None)
             raise
+
+        # ADR-0233 D5: Record that this plugin_id was granted this privilege in this epoch.
+        # Prevents a thread spawned during on_load() from re-escalating after the
+        # loading context resets. If a plugin unregisters and tries to re-register
+        # in the same epoch, this epoch check will catch it.
+        if resolved in _PRIVILEGED_BOOT_LAYERS:
+            with self._lock:
+                self._privileged_registration_epoch[plugin.plugin_id] = self._registration_epoch
 
         # A hook this plugin claimed BEFORE it was loaded — from __init__, where
         # no check could resolve it — is revoked now that its real tenant is
@@ -515,6 +591,10 @@ class PluginRegistry:
             self._plugins.pop(plugin_id, None)
             self._contexts.pop(plugin_id, None)
             boot_layer = self._boot_layers.pop(plugin_id, BootLayer.INSTALLED)
+            # ADR-0233 D5: Track that this plugin_id was unregistered in the current epoch.
+            # If a thread tries to re-register it with higher privilege in the same epoch,
+            # the re-escalation check will catch it.
+            self._unregistered_this_epoch[plugin_id] = self._registration_epoch
 
         try:
             plugin.on_unload()
@@ -886,3 +966,12 @@ def discover() -> list[str]:
 def get_registry() -> PluginRegistry:
     """Return the module-level PluginRegistry instance."""
     return _registry
+
+
+def advance_registration_epoch() -> None:
+    """Increment the registration epoch and clear same-epoch tracking (ADR-0233 D5).
+
+    Called from bootstrap.boot_platform() before loading plugins. Prevents threads
+    from a previous boot epoch from escalating privilege in the current epoch.
+    """
+    _registry._advance_epoch()
