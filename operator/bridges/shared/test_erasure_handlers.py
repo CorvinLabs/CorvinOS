@@ -513,6 +513,26 @@ class TestWebChatHandler(unittest.TestCase):
             finally:
                 os.environ.pop("CORVIN_HOME", None)
 
+    def test_purge_removes_cel_briefs(self):
+        """ADR-0278 Layer B: <workdir>/cel-briefs/<hash>.txt is the FULL rendered
+        context brief text (user task + memory passages) — PII by construction. It
+        is a sibling of voice/ that no other handler owns, so without this it would
+        be the exact orphaning bug this handler was written for: an Art. 17 run
+        reporting APPLIED while the brief text survived on disk."""
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                workdir = Path(td) / "tenants" / "_default" / "sessions" / "web:abc123"
+                briefs = workdir / "cel-briefs"
+                briefs.mkdir(parents=True)
+                (briefs / "9f2bdeadbeef.txt").write_text(
+                    "## Context brief\nRelevant past memory: patient Befund vom 3.7.")
+                result = WebChatHandler().purge("web:abc123", "er-test")
+                self.assertEqual(result.status, LayerStatus.APPLIED)
+                self.assertFalse(briefs.exists(), "cel-briefs/ survived erasure")
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
     def test_absent_session_returns_skipped(self):
         with self._corvin_home() as td:
             os.environ["CORVIN_HOME"] = td

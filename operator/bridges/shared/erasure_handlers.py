@@ -548,11 +548,12 @@ class WebChatHandler:
             pass
         # voice/ (synthesised speech), attachments/ (raw user uploads),
         # compute_inbox/ (task-result notifications carrying the user's task
-        # text in `description`, incl. the processed/ mirror) — all workdir
-        # siblings of artifacts/ that no other handler owns.
+        # text in `description`, incl. the processed/ mirror), cel-briefs/
+        # (ADR-0278 Layer B — full rendered context brief text, PII) — all
+        # workdir siblings of artifacts/ that no other handler owns.
         purge_dirs: list[Path] = []
         for name in names:
-            for sub in ("voice", "attachments", "compute_inbox"):
+            for sub in ("voice", "attachments", "compute_inbox", "cel-briefs"):
                 d = sessions / name / sub
                 if d.is_dir():
                     purge_dirs.append(d)

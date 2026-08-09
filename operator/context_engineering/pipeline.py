@@ -87,7 +87,10 @@ def build_brief(task: str, tenant: str = "_default", session: Any = None,
             "stage": "memory", "status": "ok",
             "duration_ms": getattr(mc, "search_duration_ms", None),
             "confidence_tier": _confidence_tier(getattr(mc, "confidence", 0.0) or 0.0),
-            "sources": [getattr(m, "source_file", None) or getattr(m, "filename", "?")
+            # id = basename only (never source_file — an abs path leaks the home dir);
+            # score = the raw per-source relevance, the causal "why this source" (ADR-0278).
+            "sources": [{"id": getattr(m, "filename", None) or "?",
+                         "score": round(getattr(m, "relevance_score", 0.0) or 0.0, 3)}
                         for m in matches][:8],
             "tokens_in": len(task) // 4, "tokens_out": None,
         })
@@ -105,7 +108,9 @@ def build_brief(task: str, tenant: str = "_default", session: Any = None,
             "stage": "graph", "status": "ok",
             "duration_ms": getattr(gr, "search_duration_ms", None),
             "confidence_tier": _confidence_tier(_avg(scores)),
-            "sources": [getattr(d, "decision_id", "?") for d in gr.related_decisions][:8],
+            "sources": [{"id": getattr(d, "decision_id", "?"),
+                         "score": round(getattr(d, "relevance_score", 0.0) or 0.0, 3)}
+                        for d in gr.related_decisions][:8],
             "tokens_in": None, "tokens_out": None,
         })
     except Exception as e:  # noqa: BLE001
@@ -122,7 +127,9 @@ def build_brief(task: str, tenant: str = "_default", session: Any = None,
             "stage": "skill", "status": "ok",
             "duration_ms": getattr(sr, "search_duration_ms", None),
             "confidence_tier": _confidence_tier(_avg(scores)),
-            "sources": [getattr(s, "skill_id", "?") for s in sr.recommended_skills][:8],
+            "sources": [{"id": getattr(s, "skill_id", "?"),
+                         "score": round(getattr(s, "relevance_score", 0.0) or 0.0, 3)}
+                        for s in sr.recommended_skills][:8],
             "tokens_in": None, "tokens_out": None,
         })
     except Exception as e:  # noqa: BLE001

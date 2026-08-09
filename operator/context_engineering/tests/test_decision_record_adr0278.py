@@ -1,0 +1,127 @@
+"""ADR-0278 — CEL Decision Record: audit-complete + PII-safe.
+
+Verifies the two-layer trail:
+  * Layer A is CONTENT-FREE — no task/brief/text ever reaches the record, and
+    assert_content_free fails LOUD on a leak (forbidden key OR long string).
+  * ALL conceptual stages appear — inactive ones as `not_run` (completeness).
+  * per-source {id, score} causal reason is preserved (not collapsed to a tier).
+  * brief_sha256 in Layer A == sha256(brief) AND Layer B sidecar is that file.
+  * Layer A is written through the REAL hash-chained writer (carries `hash`,
+    `prev_hash`) and contains NO brief text.
+  * emit never raises into the turn.
+
+Run: python3 operator/context_engineering/tests/test_decision_record_adr0278.py
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO / "operator" / "forge"))
+
+
+def _load_dr():
+    ce = _REPO / "operator" / "context_engineering"
+    spec = importlib.util.spec_from_file_location(
+        "context_engineering", str(ce / "__init__.py"),
+        submodule_search_locations=[str(ce)])
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["context_engineering"] = mod
+    spec.loader.exec_module(mod)
+    # __init__ ran `from .decision_record import …`, registering the submodule.
+    return sys.modules["context_engineering.decision_record"]
+
+
+_TRACE = {
+    "task_preview": "erklär postgres partial indexes",  # NB: present in the TRACE…
+    "stages": [
+        {"stage": "memory", "status": "ok", "confidence_tier": "high",
+         "duration_ms": 118,
+         "sources": [{"id": "pg-indexes.md", "score": 0.82},
+                     {"id": "query-planner.md", "score": 0.55}]},
+        {"stage": "graph", "status": "ok", "confidence_tier": "medium",
+         "sources": [{"id": "ADR-0269", "score": 0.4}]},
+        {"stage": "skill", "status": "failed", "error": "skill store unreachable"},
+    ],
+}
+_BRIEF = "## Context brief\nRelevant past memory:\n  - Postgres indexes\n"
+
+
+class DecisionRecordTests(unittest.TestCase):
+    def setUp(self):
+        self.dr = _load_dr()
+        self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
+        os.environ["CORVIN_HOME"] = self.td.name
+        self.addCleanup(lambda: os.environ.pop("CORVIN_HOME", None))
+        self.workdir = Path(self.td.name) / "sess"
+        self.workdir.mkdir(parents=True)
+
+    def test_all_conceptual_stages_present(self):
+        rec = self.dr.build_record(_TRACE, _BRIEF, turn_id="turn-1")
+        names = [s["stage"] for s in rec["stages"]]
+        self.assertEqual(names,
+                         ["memory", "graph", "skill", "approach_synthesis", "blocker_id"])
+        inactive = {s["stage"]: s for s in rec["stages"]
+                    if s["status"] == "not_run"}
+        self.assertEqual(set(inactive), {"approach_synthesis", "blocker_id"})
+        self.assertEqual(inactive["approach_synthesis"]["reason"], "stage_inactive")
+
+    def test_per_source_score_preserved(self):
+        rec = self.dr.build_record(_TRACE, _BRIEF, turn_id="turn-1")
+        mem = next(s for s in rec["stages"] if s["stage"] == "memory")
+        self.assertEqual(mem["sources"][0], {"id": "pg-indexes.md", "score": 0.82})
+        self.assertEqual(rec["top_score"], 0.82)
+        self.assertEqual(rec["stages_ok"], 2)  # memory + graph ok; skill failed
+
+    def test_content_free_assertion_catches_leaks(self):
+        with self.assertRaises(ValueError):
+            self.dr.assert_content_free({"task": "some user text"})
+        with self.assertRaises(ValueError):
+            self.dr.assert_content_free({"note": "x" * 200})
+        # a clean record passes
+        self.dr.assert_content_free(self.dr.build_record(_TRACE, _BRIEF, turn_id="t"))
+
+    def test_brief_hash_binds_layers(self):
+        rec = self.dr.emit(_TRACE, _BRIEF, turn_id="turn-1", tenant_id="_default",
+                           workdir=self.workdir, session_id="sess")
+        self.assertIsNotNone(rec)
+        want = hashlib.sha256(_BRIEF.encode("utf-8")).hexdigest()
+        self.assertEqual(rec["brief_sha256"], want)
+        sidecar = self.workdir / "cel-briefs" / f"{want}.txt"
+        self.assertTrue(sidecar.exists(), "Layer B sidecar keyed by the hash")
+        self.assertEqual(sidecar.read_text(encoding="utf-8"), _BRIEF)
+
+    def test_layer_a_is_content_free_and_hash_chained(self):
+        self.dr.emit(_TRACE, _BRIEF, turn_id="turn-1", tenant_id="_default",
+                     workdir=self.workdir, session_id="sess")
+        from forge.paths import tenant_global_dir
+        chain = Path(tenant_global_dir("_default")) / "forge" / "audit.jsonl"
+        self.assertTrue(chain.exists(), "Layer A written to the hash-chained log")
+        events = [json.loads(ln) for ln in chain.read_text().splitlines() if ln.strip()]
+        cel = [e for e in events if e.get("event_type") == "cel.decision"
+               or e.get("type") == "cel.decision"]
+        self.assertEqual(len(cel), 1)
+        blob = json.dumps(cel[0])
+        # tamper-evidence: a chain hash is present…
+        self.assertTrue("hash" in cel[0] or "prev_hash" in blob or "hash" in blob)
+        # …and the brief text is NOT in the immutable record (content-free).
+        self.assertNotIn("partial indexes", blob)
+        self.assertNotIn("Relevant past memory", blob)
+
+    def test_emit_never_raises(self):
+        # a bogus tenant path / workdir must degrade to None, never raise
+        rec = self.dr.emit(_TRACE, _BRIEF, turn_id="t", tenant_id="_default",
+                           workdir="/nonexistent/\0bad", session_id="s")
+        self.assertTrue(rec is None or isinstance(rec, dict))
+
+
+if __name__ == "__main__":
+    unittest.main()
