@@ -6,6 +6,36 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.125] — 2026-08-09 — Security hardening: hash-chain, tenant-id, plugin identity, audit healing
+
+### Fixed — Critical: Hash-chain fork prevention (ADR-0232/0233)
+
+Concurrent writes to the audit hash-chain could create fork via stale prev_hash cache. 
+Implemented double-read validation: re-verify file hash before write to detect if another 
+writer already appended. Fails-closed on fork detection; triggers healing mode.
+
+### Fixed — High: Tenant-id access control in audit events (ADR-0233)
+
+Audit events could be written without validating the calling context's tenant_id matched 
+the event's tenant_id. Added capability check at write time: caller must have explicit 
+access to the tenant.
+
+### Fixed — High: Plugin identity escape via thread spawning (ADR-0233)
+
+Plugin could spawn threads during on_load() to re-register with different identity 
+and escape compliance boot-layer restrictions. Implemented atomic grant recording 
+before on_load() and ContextVar inheritance verification for threads.
+
+### Fixed — Medium: Audit healing verification (ADR-0232/0233)
+
+Healing logic marked records for deletion without re-verifying they were actually broken. 
+Enhanced verification: re-read marked records before truncation; only delete if still invalid.
+
+### Fixed — Medium: Exception type names leak in audit
+
+Exception type names (e.g., PermissionError, FileNotFoundError) leaked into audit events. 
+Generic exception classes now map to safe audit categories (audit_category_from_exception).
+
 ## [0.10.124] — 2026-08-09 — Package Marketplace hardening
 
 ### Fixed — Duplicate route registration in Package Marketplace
