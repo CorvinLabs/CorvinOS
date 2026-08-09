@@ -15,6 +15,7 @@ from .skill_injection import SkillInjection, RecommendedSkill, SkillInjectionRes
 from .adr_loader import ADRLoader, ADRMetadata
 from .adr_classifier import ADRClassifier
 from .pipeline import build_brief, render_brief_to_text
+from .license_gate import enforce_ce_quota
 
 __all__ = [
     # Phase 1

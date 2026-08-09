@@ -52,15 +52,31 @@ def _avg(scores: list) -> float:
     return sum(scores) / len(scores) if scores else 0.0
 
 
-def build_brief(task: str, tenant: str = "_default", session: Any = None
-                ) -> "tuple[Any, dict]":
+def build_brief(task: str, tenant: str = "_default", session: Any = None,
+                meter: bool = True) -> "tuple[Any, dict]":
     """Run the full CEL (memory → graph → skill) in ONE place; return
-    ``(brief, trace)``. ``brief`` is a RichTaskBrief (or None if memory itself —
-    the brief constructor — fails). ``trace`` carries per-stage
-    {stage, status, duration_ms, confidence_tier, sources, tokens_in/out}.
+    ``(brief, trace)``. ``brief`` is a RichTaskBrief (or None if the license gate
+    degrades this turn to plain context, or if memory itself fails). ``trace``
+    carries per-stage {stage, status, duration_ms, confidence_tier, sources,
+    tokens_in/out}, plus ``degraded`` when the turn ran on plain context.
+
+    License gate (ADR-0276): this is the SINGLE metering boundary — it charges
+    exactly one context-engineering unit per turn. Over budget / license
+    unavailable → degrade to plain context (no stages run), never a block (I2).
+    ``meter=False`` bypasses the meter (tests / internal reuse).
     """
-    task_obj = _task_adapter(task)
     trace: dict[str, Any] = {"task_preview": task[:120], "stages": []}
+
+    if meter:
+        try:
+            from .license_gate import enforce_ce_quota  # noqa: PLC0415
+            if not enforce_ce_quota(tenant):
+                trace["degraded"] = "ce_budget_or_license"
+                return None, trace   # plain context — zero stages run
+        except Exception:  # noqa: BLE001 — a broken gate must never break the turn
+            pass
+
+    task_obj = _task_adapter(task)
 
     # Stage 1 — Memory (constructs the RichTaskBrief).
     try:

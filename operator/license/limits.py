@@ -68,6 +68,14 @@ FREE_TIER: dict[str, Any] = {
     # decision 2026-07-24: 10 agentic turns/day on the free tier, was 1).
     "compute_units_per_day":  10,
 
+    # Context Engineering (Vibe Engineering, ADR-0276). Its OWN daily pool,
+    # SEPARATE from compute_units_per_day: a context-engineered turn runs extra
+    # memory/graph/skill work (build_brief). 10/day on free; over budget a turn
+    # runs on plain context (no CE) — a quiet degrade, never a block (I2). Own
+    # counter_file (context_engineering_quota.json) so CE and delegation never
+    # starve each other. Paid tiers → unlimited (member below).
+    "context_engineering_units_per_day": 10,
+
     # Chat / design-assistant interactive turns. UNLIMITED on every tier
     # (operator decision 2026-06-23): the conversational assistant must always be
     # fully usable, even on the free tier with the local Hermes fallback. What IS
@@ -144,6 +152,7 @@ TIER_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
     # "universal" alias collapse to member (aliases added below).
     "member": {
         "compute_units_per_day":        None,   # unlimited
+        "context_engineering_units_per_day": None,  # unlimited (Vibe Engineering)
         "chat_turns_per_day":           None,   # unlimited
         "voice_summaries_per_day":      None,   # unlimited
         "a2a_peers_max":                None,
