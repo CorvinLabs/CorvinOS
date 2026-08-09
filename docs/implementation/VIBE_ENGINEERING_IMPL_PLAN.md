@@ -3,14 +3,25 @@
 **Realizes:** IDEA-0001, CONCEPT-0004 (discipline), CONCEPT-0005 (license gate),
 ADR-0275 (surface), ADR-0276 (license gate), ADR-0277 (ContextStage contract).
 **Status:** Draft — revised after adversarial review R1 (2026-08-07).
-**Build status:** ✅ **P-1 IMPLEMENTED + tested (2026-08-07).** `build_brief` in
-`operator/context_engineering/pipeline.py` (single memory→graph→skill boundary, fail-safe,
-returns brief+trace); exported from `__init__.py`; wired into `chat_runtime.stream_turn`
-before the pre-spawn gates via the file-path importlib trick (sys.modules-registered — the
-old engine.py load lacked that, matching the C2 "CEL never live" finding) behind the new
-ships-dark flag `vibe_engineering`. E2E `test_vibe_engineering_p1.py` (3): flag-on reaches
-build_brief + injects the brief into the system prompt; flag-off unchanged; CEL error
-fail-safe. 26 turn-path/delegation regression tests green. **NEXT: P0 (license gate).**
+**Build status:** ✅ **P-1 + P0 + P1 IMPLEMENTED + tested (2026-08-10).**
+
+- **P-1** (`78f79ff`): `build_brief` in `operator/context_engineering/pipeline.py` (single
+  memory→graph→skill boundary, fail-safe, returns brief+trace); wired into
+  `chat_runtime.stream_turn` before the pre-spawn gates via the file-path importlib trick
+  (sys.modules-registered — the old engine.py load lacked that, matching the C2 "CEL never
+  live" finding) behind the ships-dark flag `vibe_engineering`. E2E
+  `test_vibe_engineering_p1.py`.
+- **P0** (`8ebbcd2`): `license_gate.enforce_ce_quota` — 10/day free-tier, degrade-not-block,
+  SEPARATE pool (`context_engineering_quota.json` + `context_engineering_units_per_day`),
+  `load_license_from_env()` first. `test_ce_license_gate.py` (5).
+- **P1** (`2a0f404` trace persistence + `0fb0346` route + UI): `trace.persist_trace`/
+  `read_recent_traces`; GET `/v1/console/vibe-engineering/traces` (tenant-isolated via
+  `tenant_sessions_dir` + traversal guard); new **Vibe Engineering** nav group + Context
+  Pipeline page (memory→graph→skill stage chain, confidence/status badges, degraded turns,
+  empty-state onboarding). `test_vibe_engineering_route.py` (4, incl. tenant isolation).
+  npm build green; both UI states screenshotted via Playwright (`web-next/scripts/vibe-shot.mjs`).
+
+**NEXT: P2 (config — per-tenant stage toggles / budgets).**
 
 ## HONEST PREMISE (corrected after review)
 The CEL is **built but NOT wired into any live turn**. Verified: `TaskEngine`
