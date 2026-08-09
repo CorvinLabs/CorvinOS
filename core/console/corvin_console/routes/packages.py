@@ -343,7 +343,7 @@ def _list_installed_packages(tenant_id: str) -> list[PackageListItem]:
 @router.post("/upload")
 async def upload_package(
     rec: Annotated[session_auth.SessionRecord, Depends(require_feature_csrf)],
-    file: UploadFile,
+    file: Annotated[UploadFile, File(...)],
 ) -> PackageUploadResponse:
     """Upload and validate a skill package ZIP file.
 
@@ -397,14 +397,11 @@ async def upload_package(
         # **AUDIT BEFORE COMMIT:** Log to audit trail BEFORE writing files (GDPR Art. 30)
         # If audit fails, exception prevents file write via the outer except handler
         console_audit.action_performed(
-            rec,
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
             action="package.install",
-            detail={
-                "package_id": package_id,
-                "version": version,
-                "display_name": manifest.get("display_name", package_id),
-                "permissions": [p.permission for p in permissions],
-            },
+            target_kind="package",
+            target_id=package_id,
         )
 
         # Now commit the package by moving temp → final (atomic move)
