@@ -15,6 +15,22 @@ from .rich_task_brief import MemoryMatch, MemoryContext, RichTaskBrief
 logger = logging.getLogger(__name__)
 
 
+def _default_memory_dir() -> Path:
+    """Locate this project's memory directory.
+
+    Claude Code stores per-project memory under
+    ``~/.claude/projects/<escaped-repo-path>/memory``, where <escaped-repo-path>
+    is the repo root's absolute path with every ``/`` and ``.`` replaced by ``-``.
+    The old hard-coded ``projects/CorvinOS/memory`` omitted that escaped prefix,
+    so it never resolved and every turn's memory stage found nothing — even
+    though the real directory holds ~180 memories. Derive the path from THIS
+    file's location so it is correct on any machine / checkout, not just one.
+    """
+    repo_root = Path(__file__).resolve().parents[2]  # …/operator/context_engineering → repo
+    escaped = str(repo_root).replace("/", "-").replace(".", "-")
+    return Path.home() / ".claude" / "projects" / escaped / "memory"
+
+
 class MemoryLookup:
     """Search and rank memory files by relevance.
 
@@ -34,7 +50,7 @@ class MemoryLookup:
             cache_ttl_minutes: Cache time-to-live in minutes (default: 30).
         """
         if memory_dir is None:
-            memory_dir = Path.home() / ".claude" / "projects" / "CorvinOS" / "memory"
+            memory_dir = _default_memory_dir()
 
         self.memory_dir = Path(memory_dir)
         self.cache_ttl = timedelta(minutes=cache_ttl_minutes)
