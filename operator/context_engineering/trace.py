@@ -21,7 +21,6 @@ from typing import Any
 _TRACE_FILE = ".corvin-cel-traces.jsonl"
 _MAX_TRACES = 200
 _SCHEMA_VERSION = 1
-_FORGE_STAGES = {"llm_synthesis", "toolforge", "skillforge"}
 
 
 def _scrub_trace(trace: dict) -> dict:
@@ -38,7 +37,11 @@ def _scrub_trace(trace: dict) -> dict:
     # scrubbed in place (raw unless PII-shaped, then hashed) — so a memory filename
     # carrying a PII shape never reaches this cache (which lives OUTSIDE the GDPR
     # erasure handler) raw. gate denials + stage reasons are scrubbed the same way.
-    from .decision_record import _scrub_str  # noqa: PLC0415 — content-free parity
+    # SINGLE-SOURCE partition (review R6): derive "is this a task-derived egress/
+    # forge stage → hash the id" from the SAME _CONCEPTUAL_STAGES set build_record
+    # uses (its complement), so a FUTURE egress/forge stage can never auto-hash in
+    # the Layer-A record but silently fall to raw here.
+    from .decision_record import _scrub_str, _CONCEPTUAL_STAGES  # noqa: PLC0415
     # Drop the top-level keys that carry RAW task-derived forged/dropped names
     # (review R4 #1). Keep forged_rolled_back as counts.
     _DROP = {"task_preview", "tools_dropped"}
@@ -56,7 +59,7 @@ def _scrub_trace(trace: dict) -> dict:
             continue
         s2 = {k: v for k, v in s.items() if k != "error"}  # raw exception dropped
         if s.get("sources"):
-            hash_all = s.get("stage") in _FORGE_STAGES
+            hash_all = s.get("stage") not in _CONCEPTUAL_STAGES
             s2["sources"] = [
                 {"id": (_h(x.get("id", "")) if hash_all else _scrub_str(x.get("id", ""))),
                  "score": x.get("score")}
