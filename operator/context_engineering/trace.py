@@ -11,7 +11,9 @@ persistence error never breaks the turn.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -19,19 +21,47 @@ from typing import Any
 _TRACE_FILE = ".corvin-cel-traces.jsonl"
 _MAX_TRACES = 200
 _SCHEMA_VERSION = 1
+_FORGE_STAGES = {"llm_synthesis", "toolforge", "skillforge"}
+
+
+def _scrub_trace(trace: dict) -> dict:
+    """Content-free copy of the trace for on-disk persistence (review R3 finding
+    C1): the cache lived at the workdir root, OUTSIDE the GDPR Art. 17 erasure
+    handler's target list, so a raw ``task_preview`` (task[:120]) survived subject
+    erasure. Persist NOTHING that carries user/task content — drop task_preview +
+    raw exception strings, and hash the task-derived forge/egress source ids
+    (mirrors decision_record's content-free discipline)."""
+    def _h(v: str) -> str:
+        return hashlib.sha256(str(v).encode("utf-8")).hexdigest()[:16]
+    out = {k: v for k, v in trace.items() if k != "task_preview"}
+    stages = []
+    for s in trace.get("stages", []):
+        if not isinstance(s, dict):
+            continue
+        s2 = {k: v for k, v in s.items() if k != "error"}  # raw exception dropped
+        if s.get("stage") in _FORGE_STAGES:
+            s2["sources"] = [{"id": _h(x.get("id", "")), "score": x.get("score")}
+                             for x in s.get("sources", []) if isinstance(x, dict)]
+        stages.append(s2)
+    out["stages"] = stages
+    return out
 
 
 def persist_trace(trace: dict, workdir: Any, turn_id: str) -> None:
-    """Append one per-turn CEL trace to the session workdir. Never raises."""
+    """Append one CONTENT-FREE per-turn CEL trace to the session workdir. Never
+    raises. Atomic write (temp + os.replace) so a crash / concurrent turn cannot
+    truncate the file (review R3 finding C3)."""
     try:
         p = Path(workdir) / _TRACE_FILE
         rec = {"v": _SCHEMA_VERSION, "turn_id": turn_id,
-               "ts": time.time(), "trace": trace}
+               "ts": time.time(), "trace": _scrub_trace(trace)}
         lines: list[str] = []
         if p.exists():
             lines = p.read_text(encoding="utf-8").splitlines()
         lines.append(json.dumps(rec, default=str))
-        p.write_text("\n".join(lines[-_MAX_TRACES:]) + "\n", encoding="utf-8")
+        tmp = p.with_suffix(f".tmp.{os.getpid()}")
+        tmp.write_text("\n".join(lines[-_MAX_TRACES:]) + "\n", encoding="utf-8")
+        os.replace(tmp, p)
     except Exception:  # noqa: BLE001 — best-effort; a bad write never breaks a turn
         pass
 

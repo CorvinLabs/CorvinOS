@@ -165,6 +165,29 @@ class DecisionRecordTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.dr.assert_content_free(rec)
 
+    def test_numeric_session_id_does_not_drop_record(self):
+        # review R3 C1 (regression the R2 PII scan introduced): a 19-digit Discord
+        # snowflake session_id matches the \d{9,} PII shape — it must NOT trip
+        # assert_content_free and void the whole audit record.
+        rec = self.dr.build_record(
+            {"stages": [{"stage": "memory", "status": "ok", "sources": []}]},
+            "brief", turn_id="turn-msn0", session_id="1501540900529246251",
+            tenant_id="_default")
+        self.dr.assert_content_free(rec)  # must NOT raise
+        self.assertEqual(rec["session_id"], "1501540900529246251")
+
+    def test_raw_exception_not_in_record(self):
+        # review R3 C3: a stage's raw `error` string is never persisted (only the
+        # slug-shaped reason), so a prompt/task fragment in an exception can't leak.
+        trace = {"stages": [{"stage": "llm_synthesis", "status": "failed",
+                             "reason": "parse_error",
+                             "error": "boom on user secret pw=hunter2 line 4",
+                             "sources": []}]}
+        rec = self.dr.build_record(trace, "b", turn_id="t")
+        self.dr.assert_content_free(rec)
+        self.assertNotIn("hunter2", json.dumps(rec))
+        self.assertIn("parse_error", json.dumps(rec))
+
     def test_forged_rollback_is_counts_not_names(self):
         # review R2 C1: forged_rolled_back carries COUNTS, never the names.
         trace = {"stages": [{"stage": "memory", "status": "ok", "sources": []}],

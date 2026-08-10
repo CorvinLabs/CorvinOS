@@ -133,9 +133,12 @@ class ToolForgeStage:
             name = t.get("name") if isinstance(t, dict) else str(t)
             if not name:
                 continue
-            safe = "".join(c for c in str(name) if c.isalnum() or c in "_")[:48]
+            safe = "".join(c for c in str(name) if c.isalnum() or c in "_")[:44]
             if not safe:
                 continue
+            # Namespace CEL-forged tools so a task-derived name can never clobber a
+            # manually-forged session tool via overwrite=True (review R3 finding A4).
+            safe = "cel_" + safe
             # SAME-TURN forging ALWAYS uses the deterministic template (review R2
             # finding #1): an LLM-authored impl is never executed same-turn, because
             # the AST pre-filter is provably incomplete against Python introspection

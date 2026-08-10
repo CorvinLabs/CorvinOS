@@ -87,7 +87,7 @@ class ForgeStagesTests(unittest.TestCase):
         with patch.object(self.tf, "_forge_create") as fc:
             b, tel = self.stages.get_stage("toolforge").run(b, ctx)
         self.assertTrue(fc.called)
-        self.assertEqual([t.name for t in b.tools_to_bind], ["mcp__forge__csv_count"])
+        self.assertEqual([t.name for t in b.tools_to_bind], ["mcp__forge__cel_csv_count"])
         # default: template impl, not any LLM impl
         self.assertEqual(fc.call_args[0][4], self.tf._TEMPLATE_IMPL)
 

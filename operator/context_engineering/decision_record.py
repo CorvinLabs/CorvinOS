@@ -50,6 +50,12 @@ _INACTIVE_STAGES: set = set()
 # Keys whose presence would mean raw text leaked into the content-free Layer A.
 _FORBIDDEN_TEXT_KEYS = {"task", "brief", "content", "text", "summary", "prompt",
                         "passage", "body", "preview", "task_preview"}
+# System-generated identity keys — exempt from the PII/long-string scan. A numeric
+# session_id (a 19-digit Discord/Telegram snowflake) legitimately matches the
+# \d{9,} PII shape; without this exemption assert_content_free would raise and
+# emit() would drop the ENTIRE audit record for every messenger-bridge turn — the
+# exact P-0 silent void this module exists to prevent (review R3 finding #1).
+_RESERVED_ID_KEYS = {"turn_id", "session_id", "tenant_id"}
 _MAX_STR = 80  # any string value longer than this is treated as potential content
 _MAX_ID = 76   # source ids / error slugs are truncated to this (< _MAX_STR) so a
                # benign long title never trips the content-free tripwire (finding #1)
@@ -91,10 +97,11 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
             "duration_ms": s.get("duration_ms"),
             "sources": safe_sources,   # {id, score} — the causal "why this source"
         }
+        # Only the slug-shaped `reason` (parse_error, egress_denied_l35, …) enters
+        # Layer A. The raw exception string (`error`=str(e)) is NEVER persisted —
+        # it can echo prompt/task fragments into the immutable chain (review R3 #3).
         if s.get("reason"):
             e["reason"] = str(s["reason"])[:_MAX_ID]
-        if s.get("error"):
-            e["error_slug"] = str(s["error"])[:_MAX_ID]
         return e
 
     def _accumulate(s: dict) -> None:
@@ -165,6 +172,8 @@ def assert_content_free(record: dict) -> None:
             for k, v in obj.items():
                 if k in _FORBIDDEN_TEXT_KEYS:
                     raise ValueError(f"content-free violation: key '{path}{k}'")
+                if k in _RESERVED_ID_KEYS:
+                    continue  # system id — exempt from the content/PII scan (R3 #1)
                 _walk(v, f"{path}{k}.")
         elif isinstance(obj, list):
             for i, v in enumerate(obj):

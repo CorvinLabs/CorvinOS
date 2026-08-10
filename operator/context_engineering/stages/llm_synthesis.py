@@ -50,12 +50,14 @@ def _l35_egress_permitted(tenant_id: str) -> bool:
     a missing EgressGate module, or ANY error → DENY (return False), closing the
     fail-OPEN hole where a broken deny-policy leaked task text to the cloud."""
     try:
-        import os as _os  # noqa: PLC0415
         from pathlib import Path as _Path  # noqa: PLC0415
         from egress_gate import EgressGate  # type: ignore  # noqa: PLC0415
-        env = _os.environ.get("CORVIN_HOME")
-        home = _Path(_os.path.expanduser(env)) if env else (_Path.home() / ".corvin")
-        cfg = home / "tenants" / (tenant_id or "_default") / "global" / "tenant.corvin.yaml"
+        # Resolve the tenant config through the CANONICAL path helper (review R3
+        # finding B3) — hand-rolling CORVIN_HOME/tenants/<tid>/global could diverge
+        # from the real layout (the runtime-vs-maintenance split) and read a
+        # non-existent file → permissive default → egress allowed despite a deny.
+        from forge.paths import tenant_global_dir  # noqa: PLC0415
+        cfg = _Path(tenant_global_dir(tenant_id or "_default")) / "tenant.corvin.yaml"
         doc = {}
         if cfg.is_file():
             import yaml  # type: ignore  # noqa: PLC0415

@@ -10,6 +10,15 @@ excluded. The loop attributes a turn's outcome to the stages that ran.
 
 Community stages themselves remain P-G (no in-process isolation yet, ADR-0285 R2)
 — this store governs default-pipeline ENTRY, not process isolation.
+
+DORMANT UNTIL P-G (review R3 finding B1): ``is_default_eligible`` /
+``record_turn_outcome`` have NO production caller today — ``resolve_pipeline``
+does not consult eligibility, and every registered stage is ``trust="builtin"``
+(always eligible), so there is no live subject. This module is intentionally
+built-ahead; wire ``is_default_eligible`` into ``resolve_pipeline`` (drop+audit an
+ineligible non-builtin) when the first community stage ships. The hardening below
+(operator-only promotion, trusted-grader filter, atomic write) is here so that
+wiring is safe on day one, NOT because it governs anything reachable now.
 """
 from __future__ import annotations
 
