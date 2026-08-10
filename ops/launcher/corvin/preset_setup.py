@@ -1,6 +1,7 @@
 """Preset setup CLI — configure installation preset at install-time (Phase 6.5)."""
 
 import argparse
+import os
 from pathlib import Path
 import yaml
 
@@ -40,9 +41,10 @@ def save_tenant_spec(spec: dict) -> None:
     # Update spec
     data["spec"] = spec
 
-    # Write back
+    # Write back with restricted permissions (GDPR Art. 32)
     with open(path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    os.chmod(path, 0o600)
 
 
 def main():

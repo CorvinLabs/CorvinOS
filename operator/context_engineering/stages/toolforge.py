@@ -22,11 +22,14 @@ from .binding import ToolRef, MAX_BINDINGS
 from .registry import register_stage
 
 # `sys`/`json` are needed for stdin/stdout — allowed; the bwrap sandbox is the real
-# guard. The forbidden set is the obviously-dangerous: process/network/fs-escape.
+# guard. The forbidden set is the obviously-dangerous: process/network/fs-escape +
+# `builtins`/`__builtins__` (else `import builtins; builtins.eval(...)` bypasses the
+# call check — review finding #2).
 _FORBIDDEN_IMPORTS = {"os", "subprocess", "socket", "ctypes", "importlib",
-                      "multiprocessing", "shutil", "pathlib", "requests", "urllib"}
+                      "multiprocessing", "shutil", "pathlib", "requests", "urllib",
+                      "builtins", "__builtins__", "code", "pty", "posix", "runpy"}
 _FORBIDDEN_CALLS = {"eval", "exec", "compile", "__import__", "open", "getattr",
-                    "setattr", "globals", "locals", "vars"}
+                    "setattr", "globals", "locals", "vars", "breakpoint", "input"}
 
 # A safe deterministic template: reads a JSON payload on stdin, echoes it. The LLM
 # `needs` only names a tool; the real impl is a reviewed template unless the
@@ -56,8 +59,13 @@ def ast_allowlist_ok(impl: str) -> "tuple[bool, str]":
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in _FORBIDDEN_CALLS:
                 return False, f"call:{node.func.id}"
-        elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
-            return False, f"dunder:{node.attr}"
+        elif isinstance(node, ast.Attribute):
+            # x.eval(...) / x.system(...) / x.__import__ — the attribute form the
+            # bare-name check misses (review finding #2).
+            if node.attr.startswith("__"):
+                return False, f"dunder:{node.attr}"
+            if node.attr in _FORBIDDEN_CALLS or node.attr in _FORBIDDEN_ATTRS:
+                return False, f"attr:{node.attr}"
     return True, ""
 
 
