@@ -74,7 +74,18 @@ class LLMSynthesisStage:
             return bundle, StageTelemetry(stage=self.id, status="skipped",
                                           reason="gate_unavailable")
 
-        model = (ctx.config or {}).get("model") or _DEFAULT_MODEL
+        cfg = ctx.config or {}
+        # Fail-closed egress guard (review finding #7): this is an egress call
+        # (task + memories → LLM). It runs ONLY if the operator explicitly allowed
+        # egress for this stage; a turn under a zero-egress residency policy leaves
+        # this unset → skip → deterministic brief stands. Full L34/L35 residency
+        # classification of the sent payload is the turn-path caller's job when
+        # post_gate is wired (P-D); until then this guard is the fail-closed floor.
+        if not cfg.get("egress_ok"):
+            return bundle, StageTelemetry(stage=self.id, status="skipped",
+                                          reason="egress_not_allowed")
+
+        model = cfg.get("model") or _DEFAULT_MODEL
         prompt = (f"TASK:\n{bundle.task}\n\nRETRIEVED CONTEXT:\n"
                   f"{_context_digest(bundle)}")
         try:
@@ -95,7 +106,8 @@ class LLMSynthesisStage:
             inner = json.loads(text) if isinstance(text, str) else (
                 payload if isinstance(payload, dict) else {})
             brief_text = inner.get("brief")
-            needs = inner.get("needs") or {}
+            needs = inner.get("needs")
+            needs = needs if isinstance(needs, dict) else {}  # finding #8
         except Exception as e:  # noqa: BLE001 — unparseable → degrade
             return bundle, StageTelemetry(stage=self.id, status="failed",
                                           reason="parse_error", error=str(e)[:120])

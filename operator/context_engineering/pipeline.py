@@ -112,6 +112,8 @@ async def build_context_post_gate(bundle: Any, trace: dict) -> Any:
     import asyncio  # noqa: PLC0415
     from .stages import get_stage  # noqa: PLC0415
 
+    if bundle is None:  # degraded pre-gate (meter deny / cycle / memory fail)
+        return None
     ctx = bundle.scratch.get("_ctx")
     for spec in bundle.scratch.get("_deferred", []):
         stage = get_stage(spec.id)
