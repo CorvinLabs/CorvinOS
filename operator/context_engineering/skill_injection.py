@@ -13,6 +13,8 @@ Features:
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import lru_cache
+from pathlib import Path
 from typing import List, Optional, Dict, Tuple
 import time
 
@@ -71,6 +73,53 @@ class SkillInjectionResult:
 
     adoption_tracked: bool
     """Whether adoption is being tracked for this injection."""
+
+
+def _parse_skill_frontmatter(text: str, fallback_id: str) -> tuple:
+    """Pull (name, description) from a SKILL.md YAML frontmatter, cheaply. No YAML
+    dependency — the two fields are single-line. Falls back to the dir name."""
+    name, desc = fallback_id, ""
+    for line in text.splitlines()[:20]:
+        low = line.strip()
+        if low.startswith("name:") and name == fallback_id:
+            name = low[5:].strip().strip("'\"") or fallback_id
+        elif low.startswith("description:"):
+            desc = low[12:].strip().strip("'\"")
+        if low == "---" and desc:  # end of frontmatter once we have a description
+            break
+    return name, desc
+
+
+@lru_cache(maxsize=1)
+def _load_repo_skills() -> tuple:
+    """Real skills the OS actually ships, as scorable dicts: the bundle skills
+    (operator/bundle/skills) + SkillForge dynamic skills (operator/skill-forge/
+    skills/dyn). Reads each SKILL.md's name/description — the same source the
+    skill system injects from. Cached once per process; a missing dir yields
+    nothing, never an error. Fixes the empty skill stage: `_map_decisions_to_
+    skills` previously returned ONLY package skills (usually none) and the
+    ADR-driven path was a TODO, so the stage always found zero."""
+    repo = Path(__file__).resolve().parents[2]  # …/operator/context_engineering → repo
+    roots = [repo / "operator" / "bundle" / "skills",
+             repo / "operator" / "skill-forge" / "skills" / "dyn"]
+    out: List[Dict] = []
+    seen = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for sk in root.rglob("SKILL.md"):
+            try:
+                name, desc = _parse_skill_frontmatter(
+                    sk.read_text(encoding="utf-8")[:2000], sk.parent.name)
+                if name in seen:
+                    continue
+                seen.add(name)
+                out.append({"id": name, "title": name, "description": desc,
+                            "category": "skill", "success_rate": 0.7,
+                            "text": f"{name} {desc}".lower()})
+            except Exception:  # noqa: BLE001 — one unreadable skill never breaks the stage
+                continue
+    return tuple(out)
 
 
 class SkillInjection:
@@ -212,8 +261,9 @@ class SkillInjection:
             except Exception as e:
                 logger.warning(f"Error getting package skills: {e}")
 
-        # TODO: Add ADR-driven skills from decisions (Phase 2 extension)
-        # For now, placeholder for future integration with ADRLoader
+        # Real shipped skills (bundle + SkillForge dyn) — the source that makes
+        # this stage non-empty. Scored against the task in _score_skills.
+        all_skills.extend(_load_repo_skills())
 
         logger.debug(f"_map_decisions_to_skills: {len(all_skills)} total skills")
         return all_skills
@@ -235,12 +285,27 @@ class SkillInjection:
         if not skills:
             return []
 
+        # Relevance = share of the task's key terms found in the skill's
+        # name+description. Replaces the old constant 0.7 placeholder, which gave
+        # every skill the same score (no ranking, and — combined with an empty
+        # catalog — an always-empty stage).
+        terms = [str(t).lower() for t in (getattr(task, "key_terms", None) or [])]
+
         recommended = []
         for skill in skills:
-            # Placeholder scoring
-            relevance = 0.7
-            success = 0.8
-
+            text = skill.get("text") or (
+                f"{skill.get('title', '')} {skill.get('description', '')}".lower())
+            if terms:
+                hits = sum(1 for t in terms if t and t in text)
+                relevance = min(1.0, hits / len(terms))
+            else:
+                relevance = 0.0
+            # Drop zero-match repo skills so the stage injects signal, not noise.
+            # Package/decision skills (no "text" key) keep a floor so an explicit
+            # install still surfaces.
+            if relevance <= 0.0 and skill.get("text") is not None:
+                continue
+            success = float(skill.get("success_rate", 0.7))
             try:
                 recommended.append(
                     RecommendedSkill(
