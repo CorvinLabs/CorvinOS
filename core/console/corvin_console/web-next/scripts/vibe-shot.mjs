@@ -62,6 +62,24 @@ async function routes(page, tracesBody) {
   await page.route("**/v1/console/setup/status", (r) =>
     r.fulfill({ status: 200, contentType: "application/json",
       body: JSON.stringify({ setup_complete: true }) }));
+  await page.route("**/v1/console/vibe-engineering/pipeline", (r) =>
+    r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      available: true,
+      current: [{ stage: "memory" }, { stage: "graph" }, { stage: "skill" },
+                { stage: "llm_synthesis", config: { egress_ok: false, model: "claude-haiku-4-5" } },
+                { stage: "blocker_id" }],
+      palette: [
+        { id: "memory", requires: [], effect: "pure", trust: "builtin" },
+        { id: "graph", requires: ["memory"], effect: "pure", trust: "builtin" },
+        { id: "skill", requires: ["graph"], effect: "pure", trust: "builtin" },
+        { id: "approach_synthesis", requires: ["memory","graph","skill"], effect: "pure", trust: "builtin" },
+        { id: "blocker_id", requires: ["memory","graph"], effect: "pure", trust: "builtin" },
+        { id: "llm_synthesis", requires: ["memory","graph","skill"], effect: "egress", trust: "builtin" },
+        { id: "toolforge", requires: ["llm_synthesis"], effect: "forge", trust: "builtin" },
+        { id: "skillforge", requires: ["llm_synthesis"], effect: "forge", trust: "builtin" },
+      ],
+      default: ["memory","graph","skill","approach_synthesis","blocker_id"],
+    }) }));
   await page.route("**/v1/console/vibe-engineering/explain/**", (r) =>
     r.fulfill({ status: 200, contentType: "application/json",
       body: JSON.stringify({ found: true, brief_sha256: BRIEF_SHA, text: BRIEF_TEXT }) }));
@@ -87,6 +105,14 @@ async function run() {
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${OUT}/vibe-detail.png`, fullPage: false });
   console.log("wrote vibe-detail.png (graph window)");
+  // close the stage modal, open the pipeline editor
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.mouse.click(30, 30).catch(() => {});
+  await page.waitForTimeout(300);
+  await page.getByText("Configure", { exact: false }).first().click();
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: `${OUT}/vibe-editor.png`, fullPage: false });
+  console.log("wrote vibe-editor.png (pipeline editor)");
   await page.close();
 
   // 3) empty state
