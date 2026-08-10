@@ -70,6 +70,9 @@ class ForgeStagesTests(unittest.TestCase):
             "list(map(exec, ['code']))",                # passed as an argument
             "g = getattr\ng(object, 'x')",              # getattr alias
             "sorted([1], key=eval)",                    # forbidden as a kwarg value
+            "import sys\nsys.modules['os'].execv('x',['x'])",   # R2: module registry
+            "import sys\nsys.modules['subprocess'].Popen(['id'])",
+            "import sys\nprint(sys.modules['os'].environ)",     # env/secret leak
         ):
             ok, reason = self.tf.ast_allowlist_ok(bad)
             self.assertFalse(ok, f"bypass not blocked: {bad!r} -> {reason}")
@@ -88,22 +91,20 @@ class ForgeStagesTests(unittest.TestCase):
         # default: template impl, not any LLM impl
         self.assertEqual(fc.call_args[0][4], self.tf._TEMPLATE_IMPL)
 
-    def test_llm_impl_needs_flag(self):
-        b = self.Bundle(task="x")
+    def test_llm_impl_never_executed_same_turn(self):
+        # review R2 #1: same-turn forging ALWAYS uses the deterministic template —
+        # an LLM-authored impl is NEVER executed same-turn, even with the (now
+        # retired) allow_llm_impl config, because the AST pre-filter is provably
+        # incomplete against Python introspection (sys.modules[...] etc.).
         clean_impl = "import json,sys\nprint(json.dumps({'ok':True}))\n"
-        b.scratch["needs"] = {"tools": [{"name": "t1", "impl": clean_impl}]}
-        # without allow_llm_impl → template
-        ctx = self.Ctx(tenant_id="_default", config={})
-        with patch.object(self.tf, "_forge_create") as fc:
-            self.stages.get_stage("toolforge").run(b, ctx)
-        self.assertEqual(fc.call_args[0][4], self.tf._TEMPLATE_IMPL)
-        # with allow_llm_impl + clean AST → uses the LLM impl
-        b2 = self.Bundle(task="x")
-        b2.scratch["needs"] = {"tools": [{"name": "t1", "impl": clean_impl}]}
-        ctx2 = self.Ctx(tenant_id="_default", config={"allow_llm_impl": True})
-        with patch.object(self.tf, "_forge_create") as fc2:
-            self.stages.get_stage("toolforge").run(b2, ctx2)
-        self.assertEqual(fc2.call_args[0][4], clean_impl)
+        for cfg in ({}, {"allow_llm_impl": True}):
+            b = self.Bundle(task="x")
+            b.scratch["needs"] = {"tools": [{"name": "t1", "impl": clean_impl}]}
+            ctx = self.Ctx(tenant_id="_default", config=cfg)
+            with patch.object(self.tf, "_forge_create") as fc:
+                self.stages.get_stage("toolforge").run(b, ctx)
+            self.assertEqual(fc.call_args[0][4], self.tf._TEMPLATE_IMPL,
+                             f"template used even with config={cfg}")
 
     def test_skillforge_binds_skill_channel(self):
         b = self.Bundle(task="x")

@@ -24,10 +24,21 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger(__name__)
+
+# Length-independent PII shapes (review R2 finding C2: the _MAX_ID<_MAX_STR gap
+# let a ≤76-char name/email/IBAN slip past the long-string tripwire). A 64-hex
+# sha256 digest is exempt (it is the allowed brief/id hash).
+_PII_SHAPES = [
+    re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),          # email
+    re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b"),  # IBAN
+    re.compile(r"\b\d{9,}\b"),                         # long digit run (phone/id/card)
+]
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 # The full conceptual CEL pipeline. Stages the live build_brief does not run are
 # recorded as `not_run` so an auditor sees completeness, not a gap (ADR-0278 gap 1).
@@ -60,13 +71,19 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
     ok = 0
     top_score = 0.0
 
-    def _content_free_entry(name: str, s: dict) -> dict:
+    def _content_free_entry(name: str, s: dict, *, hash_ids: bool = False) -> dict:
         # Truncate source ids + error slugs to a content-free-safe length BEFORE
         # the record is assembled — a benign long memory title / error path must
         # NOT trip assert_content_free and cause the whole audit record to be
         # dropped (finding #1: this was silently voiding Layer A / P-0).
+        # For egress/forge stages the source ids are TASK-DERIVED (an LLM proposes
+        # a tool/skill name from the task — "summarize_klaus_mueller_notes"), so
+        # they must be HASHED, never stored raw in the immutable chain (review R2
+        # finding C1 — this was the PII leak the R1 completeness fix introduced).
+        def _src_id(v: str) -> str:
+            return _sha256_text(v) if hash_ids else v[:_MAX_ID]
         safe_sources = [
-            {"id": str(x.get("id", ""))[:_MAX_ID], "score": x.get("score")}
+            {"id": _src_id(str(x.get("id", ""))), "score": x.get("score")}
             for x in s.get("sources", []) if isinstance(x, dict)]
         e: dict[str, Any] = {
             "stage": name, "status": s.get("status", "ok"),
@@ -106,8 +123,8 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
             continue
         if s.get("status") == "ok":
             ok += 1
-        stages.append(_content_free_entry(name, s))
-        _accumulate(s)
+        # egress/forge stage sources are task-derived → hash their ids (R2 C1).
+        stages.append(_content_free_entry(name, s, hash_ids=True))
 
     # Reflect the ACTUAL feature that ran + any gate denial (review R2 finding C3:
     # the record hardcoded flag=vibe_engineering and only read `degraded`, so an
@@ -132,9 +149,10 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
             rec[k] = str(trace[k])[:_MAX_ID]
     if trace.get("forged_rolled_back"):
         rb = trace["forged_rolled_back"]
+        # COUNTS, never names — a forged name is LLM/task-derived (review R2 C1).
         rec["forged_rolled_back"] = {
-            "tools": [str(t)[:_MAX_ID] for t in (rb.get("tools") or [])],
-            "skills": [str(s)[:_MAX_ID] for s in (rb.get("skills") or [])]}
+            "tools": len(rb.get("tools") or []),
+            "skills": len(rb.get("skills") or [])}
     return rec
 
 
@@ -152,9 +170,16 @@ def assert_content_free(record: dict) -> None:
             for i, v in enumerate(obj):
                 _walk(v, f"{path}{i}.")
         elif isinstance(obj, str):
-            # brief_sha256 is a 64-hex digest — allowed; anything else long = suspect
+            # brief_sha256 / hashed source ids are 64-hex digests — allowed.
+            if _HEX64.match(obj):
+                return
+            # anything else long = suspect (raw content)
             if len(obj) > _MAX_STR:
                 raise ValueError(f"content-free violation: long string at '{path}'")
+            # length-INDEPENDENT PII shapes (R2 C2 — short PII must also fail loud)
+            for pat in _PII_SHAPES:
+                if pat.search(obj):
+                    raise ValueError(f"content-free violation: PII shape at '{path}'")
     _walk(record)
 
 

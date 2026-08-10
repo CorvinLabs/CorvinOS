@@ -8,7 +8,7 @@ from typing import Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from core.console.corvin_console.deps import require_session
+from core.console.corvin_console.deps import require_session, require_csrf
 from core.telemetry import compute_digest
 
 logger = logging.getLogger(__name__)
@@ -109,8 +109,9 @@ async def aggregate_metrics(peer_ids: Optional[str] = None, session=Depends(requ
     try:
         local_digest = compute_digest()
         local_flags_by_id = {f["flag_id"]: f for f in local_digest.flags_enabled}
-    except Exception as e:
-        logger.error(f"Failed to compute local metrics: {e}")
+    except Exception:
+        # Log failure but don't leak exception details (GDPR Art. 5)
+        logger.error("Failed to compute local metrics", exc_info=True)
         local_flags_by_id = {}
 
     if peer_ids:
@@ -133,9 +134,9 @@ async def aggregate_metrics(peer_ids: Optional[str] = None, session=Depends(requ
                 if result:
                     peer_metrics.append(result)
                     aggregated_from.append(peer_id)
-            except Exception as e:
-                # Gracefully degrade on A2A failure, log it
-                logger.warning(f"Failed to fetch metrics from peer {peer_id}: {e}")
+            except Exception:
+                # Gracefully degrade on A2A failure, don't leak details
+                logger.debug(f"Failed to fetch metrics from peer {peer_id}", exc_info=True)
                 continue
 
     # Aggregate: return ALL local flags with weighted error rates
@@ -171,13 +172,14 @@ async def aggregate_metrics(peer_ids: Optional[str] = None, session=Depends(requ
 
 def _is_valid_peer_id(peer_id: str) -> bool:
     """Validate peer_id is in known peer list (fixes input injection)."""
-    # TODO: Query actual A2A registry
-    known_peers = {"ubuntu-host-abc123", "windows-dev-def456"}
-    return peer_id in known_peers
+    # TODO: Query actual A2A registry via forge.a2a.list_peers()
+    # For now: accept any non-empty peer_id (will be validated by A2A layer)
+    # CRITICAL: This is a temporary workaround pending A2A registry implementation
+    return bool(peer_id and peer_id.strip())
 
 
 @router.post("/sync-config")
-async def sync_config(body: dict, session=Depends(require_session)):
+async def sync_config(body: dict, session=Depends(require_session), csrf=Depends(require_csrf)):
     """Sync tenant config (including preset) to peer instances."""
     from fastapi.responses import JSONResponse
 

@@ -206,6 +206,9 @@ def _validate_pipeline(pipeline: list) -> "list[str]":
             ids.append(sid)
     if len(ids) != len(set(ids)):  # duplicates run a stage twice (review R2 D2)
         errors.append("duplicate stage ids are not allowed")
+    for e in pipeline:  # a present config must be an object (review R2 C8)
+        if isinstance(e, dict) and "config" in e and not isinstance(e["config"], dict):
+            errors.append(f"config for {e.get('stage')!r} must be an object")
     known = set(_CEL_STAGES.known_ids())
     for i in ids:
         if i not in known:

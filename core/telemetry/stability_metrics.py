@@ -204,8 +204,10 @@ def compute_digest(
     """
     if release_tiers is None:
         release_tiers = {}
+    # enabled_by MUST be passed from caller (read from actual config)
+    # Do NOT default to "preset:standard" (violates telemetry accuracy)
     if enabled_by is None:
-        enabled_by = "preset:standard"
+        enabled_by = "unknown"
 
     flags_data = []
     # Make atomic snapshot of _METRICS to avoid iterator race

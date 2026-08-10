@@ -77,18 +77,21 @@ class GradeGateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.g.grade_stage("_default", "x", 0.9, grader="x")  # self-grade
 
-    def test_untrusted_grader_does_not_promote(self):
-        # review R2 B2: a stage graded 3×@1.0 by a NON-trusted grader (e.g. its own
-        # spoofed name) is NOT default-eligible — only __loop__/operator/bootstrap
-        # count toward promotion.
+    def test_only_operator_grades_promote(self):
+        # review R2 B2/C3/C4: neither a spoofed grader name NOR mere loop usage
+        # promotes — only EXPLICIT operator grades count toward default-eligibility.
         builtins = ["memory"]
         for _ in range(3):
             self.g.grade_stage("_default", "sneaky", 1.0, grader="sneaky_ally")
         self.assertFalse(self.g.is_default_eligible("_default", "sneaky", builtins))
-        # but the same 3 grades from a trusted grader DO promote
+        # 3 loop-outcome grades are ADVISORY — they do NOT auto-promote (no human intent)
         for _ in range(3):
-            self.g.grade_stage("_default", "honest", 1.0, grader="__loop__")
-        self.assertTrue(self.g.is_default_eligible("_default", "honest", builtins))
+            self.g.grade_stage("_default", "used_a_lot", 1.0, grader="__loop__")
+        self.assertFalse(self.g.is_default_eligible("_default", "used_a_lot", builtins))
+        # only explicit operator grades promote
+        for _ in range(3):
+            self.g.grade_stage("_default", "approved", 1.0, grader="operator")
+        self.assertTrue(self.g.is_default_eligible("_default", "approved", builtins))
 
     def test_bootstrap_capped(self):
         self.g.bootstrap_seed("_default", "new_x", score=0.9)  # asks 0.9
