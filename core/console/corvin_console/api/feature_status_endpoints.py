@@ -1,22 +1,64 @@
 """API endpoints for feature status (preset + dashboard). Phase 5, ADR-0287/0288."""
 
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
+import yaml
 from fastapi import APIRouter, HTTPException
 
 from core.console.corvin_console.feature_flags import REGISTRY, tier_of
 from core.telemetry import get_flag_metrics
 
-router = APIRouter(prefix="/v1/console/api/feature-status", tags=["feature-status"])
+router = APIRouter(prefix="/api/feature-status", tags=["feature-status"])
+
+
+def _get_tenant_yaml_path() -> Path:
+    """Get the path to tenant.corvin.yaml (in ~/.corvin/tenants/_default/)."""
+    home = Path.home()
+    return home / ".corvin" / "tenants" / "_default" / "tenant.corvin.yaml"
+
+
+def _load_tenant_spec() -> dict:
+    """Load tenant.corvin.yaml and return the spec dict."""
+    path = _get_tenant_yaml_path()
+    if not path.exists():
+        return {"preset": "standard"}
+
+    try:
+        with open(path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("spec", {})
+    except Exception:
+        return {"preset": "standard"}
+
+
+def _save_tenant_spec(spec: dict) -> None:
+    """Save updated spec back to tenant.corvin.yaml."""
+    path = _get_tenant_yaml_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load existing YAML or create new
+    if path.exists():
+        with open(path, "r") as f:
+            data = yaml.safe_load(f) or {}
+    else:
+        data = {}
+
+    # Update spec
+    data["spec"] = spec
+
+    # Write back
+    with open(path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 
 @router.get("/preset")
 async def get_preset():
     """Get current installation preset (minimal|standard|advanced)."""
-    # TODO: Load from tenant.corvin.yaml spec.preset
-    # For now, return default
-    return {"preset": "standard"}
+    spec = _load_tenant_spec()
+    preset = spec.get("preset", "standard")
+    return {"preset": preset}
 
 
 @router.post("/preset")
@@ -26,8 +68,10 @@ async def set_preset(body: dict):
     if preset not in ("minimal", "standard", "advanced"):
         raise HTTPException(status_code=400, detail="Invalid preset")
 
-    # TODO: Update tenant.corvin.yaml spec.preset
-    # TODO: Log audit event
+    spec = _load_tenant_spec()
+    spec["preset"] = preset
+    _save_tenant_spec(spec)
+
     return {"preset": preset, "requires_restart": True}
 
 
