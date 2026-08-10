@@ -43,15 +43,40 @@ export function MultiInstanceDashboard() {
   const [showRepoEditor, setShowRepoEditor] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
-  // Detect dark mode from document class
+  // Detect dark mode from multiple sources
   useEffect(() => {
     const checkDarkMode = () => {
-      setIsDarkMode(document.documentElement.classList.contains('dark'));
+      // Check 1: HTML element dark class
+      const hasDarkClass = document.documentElement.classList.contains('dark');
+
+      // Check 2: Computed background color (dark mode = dark bg)
+      const bodyBg = window.getComputedStyle(document.body).backgroundColor;
+      // Dark mode typically has dark backgrounds like rgb(15, 23, 42) or similar
+      const isDarkBg = bodyBg.includes('rgb') &&
+        (() => {
+          const match = bodyBg.match(/\d+/g);
+          if (!match || match.length < 3) return false;
+          const [r, g, b] = match.map(Number);
+          return (r + g + b) / 3 < 128; // Average of RGB < 128 = dark
+        })();
+
+      setIsDarkMode(hasDarkClass || isDarkBg);
     };
+
     checkDarkMode();
+
+    // Watch for class changes and listen to system preference changes
     const observer = new MutationObserver(checkDarkMode);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
+
+    // Also watch body for background color changes
+    const styleObserver = new MutationObserver(checkDarkMode);
+    styleObserver.observe(document.body, { attributes: true, attributeFilter: ['style'] });
+
+    return () => {
+      observer.disconnect();
+      styleObserver.disconnect();
+    };
   }, []);
 
   const getGithubRepo = () => customRepo || (status?.github_repo || 'https://github.com/veegee82/tenent-shumway');
