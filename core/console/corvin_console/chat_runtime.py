@@ -4476,14 +4476,36 @@ async def stream_turn(
             payload = _model_selector.estimate_os_turn_chars(
                 prompt, _WEB_CHAT_SYSTEM_PROMPT, session_dir=sess.workdir,
             )
-            # The SAME 6-Tier resolver the bridge adapter calls (ADR-0024 /
-            # ADR-0119 / ADR-0123) — single source of truth for OS-model
-            # resolution across both surfaces. profile=None: the console has
-            # no per-persona pin concept, so Tiers 2/1.5 simply no-op and
-            # fall through to Tier 2.5 (spec.engine_models.<engine>.os_model),
-            # which is exactly the tenant setting under Settings → AI Engines.
+            # Build a minimal profile dict from tenant spec (ADR-0024 / ADR-0119 / ADR-0123).
+            # The SAME 6-Tier resolver the bridge adapter calls — single source of truth for
+            # OS-model resolution across both surfaces. Unlike the bridge (which has per-persona
+            # profiles), the console builds a runtime profile from spec.engine_models.<engine>
+            # so Tier 2.5 (tenant config) can be consulted correctly. Pass the os_model field
+            # so if it's set in tenant.yaml it respects that choice instead of defaulting to
+            # adaptive autoselect (Tier 3).
+            profile_for_model_resolve: dict[str, Any] = {}
+            try:
+                # Tier 2.5: tenant-level spec.engine_models.<engine>.os_model setting
+                from engine_models import get_tenant_engine_model  # type: ignore  # noqa: PLC0415,I001
+            except ImportError:
+                try:
+                    from .engine_models import get_tenant_engine_model  # type: ignore  # noqa: PLC0415
+                except Exception:  # noqa: BLE001
+                    get_tenant_engine_model = None  # type: ignore
+
+            if get_tenant_engine_model is not None:
+                try:
+                    tenant_os_model = get_tenant_engine_model(sess.tenant_id, _os_engine, "os_model")
+                    if tenant_os_model:
+                        # Feed the tenant setting as an explicit profile.model so resolve_os_model
+                        # Tier 2 catches it (explicit pin wins over everything else). This makes the
+                        # Console's Settings → AI Engines choice actually work end-to-end.
+                        profile_for_model_resolve["model"] = tenant_os_model
+                except Exception:  # noqa: BLE001
+                    pass  # Failed to read tenant setting; fall through to Tier 3 (autoselect)
+
             _os_model = _model_selector.resolve_os_model(
-                None,
+                profile_for_model_resolve if profile_for_model_resolve else None,
                 payload_chars=payload,
                 engine_id=_os_engine,
                 tenant_id=sess.tenant_id,
