@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import {
   Loader2, AlertCircle, Brain, Network, Sparkles, Workflow, X, ShieldCheck,
-  Hash, FileText, ChevronRight,
+  Hash, FileText, ChevronRight, Cpu, Wrench, BookOpen, Code, Layers,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -38,14 +38,24 @@ interface TracesResponse { tenant_id: string; sessions: SessionGroup[]; availabl
 
 const STAGE_META: Record<string, {
   icon: React.ComponentType<{ className?: string }>; label: string; short: string;
+  effect?: "pure" | "egress" | "forge";
 }> = {
-  memory: { icon: Brain, label: "Memory Lookup", short: "Memory" },
-  graph: { icon: Network, label: "Graph Traversal", short: "Graph" },
-  skill: { icon: Sparkles, label: "Skill Injection", short: "Skill" },
-  approach_synthesis: { icon: Workflow, label: "Approach Synthesis", short: "Approach" },
-  blocker_id: { icon: AlertCircle, label: "Blocker ID", short: "Blocker" },
+  memory: { icon: Brain, label: "Memory Lookup", short: "Memory", effect: "pure" },
+  graph: { icon: Network, label: "Graph Traversal", short: "Graph", effect: "pure" },
+  skill: { icon: Sparkles, label: "Skill Injection", short: "Skill", effect: "pure" },
+  approach_synthesis: { icon: Workflow, label: "Approach Synthesis", short: "Approach", effect: "pure" },
+  blocker_id: { icon: AlertCircle, label: "Blocker ID", short: "Blocker", effect: "pure" },
+  llm_synthesis: { icon: Cpu, label: "LLM Synthesis", short: "LLM", effect: "egress" },
+  toolforge: { icon: Wrench, label: "ToolForge", short: "ToolForge", effect: "forge" },
+  skillforge: { icon: BookOpen, label: "SkillForge", short: "SkillForge", effect: "forge" },
 };
-const ORDER = ["memory", "graph", "skill", "approach_synthesis", "blocker_id"];
+const ORDER = ["memory", "graph", "skill", "llm_synthesis", "toolforge",
+  "skillforge", "approach_synthesis", "blocker_id"];
+function effectBadge(effect?: string): { txt: string; cls: string } | null {
+  if (effect === "egress") return { txt: "egress", cls: "bg-orange-500/15 text-orange-300 border-orange-500/30" };
+  if (effect === "forge") return { txt: "forge", cls: "bg-violet-500/15 text-violet-300 border-violet-500/30" };
+  return null;
+}
 
 function dotColor(status: string): string {
   if (status === "ok") return "bg-emerald-500";
@@ -61,10 +71,11 @@ function tierColor(tier?: string): string {
 
 /* ── compact pipeline bar: one row of small clickable pills ─────────────── */
 function StagePill({ stage, onClick }: { stage: Stage; onClick: () => void }) {
-  const meta = STAGE_META[stage.stage] ?? { icon: Workflow, label: stage.stage, short: stage.stage };
+  const meta = STAGE_META[stage.stage] ?? { icon: Workflow, label: stage.stage, short: stage.stage, effect: "pure" as const };
   const Icon = meta.icon;
   const n = stage.sources?.length ?? 0;
   const notRun = stage.status === "not_run";
+  const eff = effectBadge(meta.effect);
   return (
     <button
       onClick={onClick}
@@ -79,6 +90,7 @@ function StagePill({ stage, onClick }: { stage: Stage; onClick: () => void }) {
       <span className={"h-2 w-2 shrink-0 rounded-full " + dotColor(stage.status)} />
       <Icon className="h-4 w-4 shrink-0 text-accent-foreground" />
       <span className="text-sm font-medium">{meta.short}</span>
+      {eff && <span className={"rounded border px-1 text-[10px] font-semibold " + eff.cls}>{eff.txt}</span>}
       {!notRun && (
         <span className="text-xs text-muted-foreground tabular-nums">{n}</span>
       )}
@@ -258,6 +270,88 @@ function BriefModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
 }
 
 /* ── turn card: header + one compact pipeline row ──────────────────────── */
+/* ── prompt inspector: bausteine → final prompt + forged tool/skill code ── */
+interface Section { kind: string; label: string; items?: string[]; text?: string }
+interface ForgedTool { name: string; description?: string; code: string; deterministic?: boolean }
+interface ForgedSkill { skill_id: string; body: string }
+
+function PromptInspectorModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
+  const [asm, setAsm] = useState<{ sections?: Section[]; final_prompt?: string } | null>(null);
+  const [forged, setForged] = useState<{ tools: ForgedTool[]; skills: ForgedSkill[] } | null>(null);
+  const [state, setState] = useState<"loading" | "ok" | "none">("loading");
+  const [openCode, setOpenCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      fetch(`/v1/console/vibe-engineering/prompt/${turn.turn_id}`).then((r) => r.json()).catch(() => null),
+      fetch(`/v1/console/vibe-engineering/forged/${turn.turn_id}`).then((r) => r.json()).catch(() => null),
+    ]).then(([a, f]) => {
+      if (!alive) return;
+      if (a && a.found) { setAsm(a); setState("ok"); } else { setState("none"); }
+      if (f && f.found) setForged({ tools: f.tools || [], skills: f.skills || [] });
+    });
+    return () => { alive = false; };
+  }, [turn.turn_id]);
+
+  return (
+    <Modal title="Prompt Inspector" subtitle={turn.turn_id} onClose={onClose}>
+      {state === "loading" && <div className="flex items-center gap-2 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> lädt…</div>}
+      {state === "none" && <div className="text-sm text-slate-400">Kein Assembly-Record für diesen Turn (passiver Turn ohne aktives Brain, oder GDPR-gelöscht).</div>}
+      {state === "ok" && asm && (
+        <div className="space-y-5">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400"><Layers className="h-3.5 w-3.5" /> Bausteine</div>
+            <div className="space-y-2">
+              {(asm.sections || []).map((s, i) => (
+                <div key={i} className="rounded-lg border border-slate-700/60 bg-slate-800/40 p-3">
+                  <div className="mb-1 text-xs font-semibold text-slate-300">{s.label}</div>
+                  {s.text
+                    ? <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-slate-200">{s.text}</pre>
+                    : <ul className="list-disc pl-4 text-xs text-slate-300">{(s.items || []).map((it, j) => <li key={j}>{it}</li>)}</ul>}
+                </div>
+              ))}
+              {(asm.sections || []).length === 0 && <div className="text-xs text-slate-500">(keine Bausteine — leerer Brief)</div>}
+            </div>
+          </div>
+          {forged && (forged.tools.length > 0 || forged.skills.length > 0) && (
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400"><Code className="h-3.5 w-3.5" /> Erzeugte Tools & Skills — Code</div>
+              <div className="space-y-2">
+                {forged.tools.map((t) => (
+                  <div key={t.name} className="rounded-lg border border-violet-700/40 bg-violet-900/10">
+                    <button onClick={() => setOpenCode(openCode === t.name ? null : t.name)} className="flex w-full items-center gap-2 p-2 text-left text-xs">
+                      <Wrench className="h-3.5 w-3.5 shrink-0 text-violet-300" />
+                      <span className="font-mono text-violet-200">{t.name}</span>
+                      <span className="truncate opacity-60">{t.description}</span>
+                      <ChevronRight className={`ml-auto h-3.5 w-3.5 shrink-0 transition ${openCode === t.name ? "rotate-90" : ""}`} />
+                    </button>
+                    {openCode === t.name && <pre className="max-h-[30vh] overflow-auto border-t border-violet-700/30 p-3 font-mono text-xs leading-relaxed text-slate-200">{t.code || "(kein Code auf Platte)"}</pre>}
+                  </div>
+                ))}
+                {forged.skills.map((s) => (
+                  <div key={s.skill_id} className="rounded-lg border border-violet-700/40 bg-violet-900/10">
+                    <button onClick={() => setOpenCode(openCode === s.skill_id ? null : s.skill_id)} className="flex w-full items-center gap-2 p-2 text-left text-xs">
+                      <BookOpen className="h-3.5 w-3.5 shrink-0 text-violet-300" />
+                      <span className="font-mono text-violet-200">{s.skill_id}</span>
+                      <ChevronRight className={`ml-auto h-3.5 w-3.5 shrink-0 transition ${openCode === s.skill_id ? "rotate-90" : ""}`} />
+                    </button>
+                    {openCode === s.skill_id && <pre className="max-h-[30vh] overflow-auto whitespace-pre-wrap border-t border-violet-700/30 p-3 font-mono text-xs leading-relaxed text-slate-200">{s.body}</pre>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400"><FileText className="h-3.5 w-3.5" /> Finaler Prompt → Worker-Engine</div>
+            <pre className="max-h-[45vh] overflow-auto whitespace-pre-wrap rounded-lg border border-emerald-700/40 bg-emerald-900/10 p-3 font-mono text-xs leading-relaxed text-slate-100">{asm.final_prompt || "(leer)"}</pre>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 interface PaletteStage { id: string; requires: string[]; effect: string; trust: string }
 interface PipeEntry { stage: string; config?: Record<string, any> }
 
@@ -421,8 +515,8 @@ function PipelineEditorModal({ onClose, onSaved }: { onClose: () => void; onSave
   );
 }
 
-function TurnCard({ turn, onStage, onBrief }: {
-  turn: Turn; onStage: (s: Stage) => void; onBrief: () => void;
+function TurnCard({ turn, onStage, onBrief, onInspect }: {
+  turn: Turn; onStage: (s: Stage) => void; onBrief: () => void; onInspect: () => void;
 }) {
   const when = turn.ts ? new Date(turn.ts * 1000).toLocaleString() : "";
   return (
@@ -437,6 +531,10 @@ function TurnCard({ turn, onStage, onBrief }: {
           </div>
           <div className="flex items-center gap-2">
             {turn.degraded && <Badge variant="warn">degraded</Badge>}
+            <button onClick={onInspect}
+                    className="flex items-center gap-1 rounded-md border border-emerald-600/50 px-2 py-1 text-xs text-emerald-300 hover:border-emerald-400">
+              <Layers className="h-3 w-3" /> Inspect
+            </button>
             <button onClick={onBrief}
                     className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:border-accent-foreground/50">
               <FileText className="h-3 w-3" /> Brief
@@ -459,6 +557,7 @@ export default function VibeEngineeringPage() {
   const [error, setError] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
   const [briefTurn, setBriefTurn] = useState<Turn | null>(null);
+  const [inspectTurn, setInspectTurn] = useState<Turn | null>(null);
   const [showEditor, setShowEditor] = useState(false);
 
   useEffect(() => {
@@ -534,7 +633,8 @@ export default function VibeEngineeringPage() {
               <h2 className="text-sm font-semibold text-muted-foreground mb-3 font-mono">{sg.session}</h2>
               {sg.turns.map((t) => (
                 <TurnCard key={t.turn_id + (t.ts ?? "")} turn={t}
-                          onStage={setStage} onBrief={() => setBriefTurn(t)} />
+                          onStage={setStage} onBrief={() => setBriefTurn(t)}
+                          onInspect={() => setInspectTurn(t)} />
               ))}
             </div>
           ))}
@@ -543,6 +643,7 @@ export default function VibeEngineeringPage() {
 
       {stage && <StageModal stage={stage} onClose={() => setStage(null)} />}
       {briefTurn && <BriefModal turn={briefTurn} onClose={() => setBriefTurn(null)} />}
+      {inspectTurn && <PromptInspectorModal turn={inspectTurn} onClose={() => setInspectTurn(null)} />}
       {showEditor && <PipelineEditorModal onClose={() => setShowEditor(false)}
                                           onSaved={() => window.location.reload()} />}
     </div>
