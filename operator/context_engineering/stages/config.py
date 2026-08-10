@@ -48,7 +48,13 @@ def resolve_pipeline(tenant_id: str = "_default") -> "tuple[list, list]":
         if not sid or get_stage(sid) is None:
             dropped.append(str(sid))
             continue
-        cfg = {k: v for k, v in e.items() if k != "stage"} if isinstance(e, dict) else {}
+        # Accept BOTH shapes (review finding #3): a nested {"stage": id, "config":
+        # {...}} (what the editor writes) and flat {"stage": id, model: …} keys.
+        if isinstance(e, dict):
+            cfg = e["config"] if isinstance(e.get("config"), dict) else {
+                k: v for k, v in e.items() if k != "stage"}
+        else:
+            cfg = {}
         specs.append(StageSpec(id=sid, config=cfg))
     return specs, dropped
 

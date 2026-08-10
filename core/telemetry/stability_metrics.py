@@ -13,12 +13,16 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import defaultdict, deque
-from dataclasses import dataclass, field, asdict
+import threading
+from collections import deque
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Thread-safe lock for _METRICS dict operations (fixes CRITICAL data-race)
+_METRICS_LOCK = threading.Lock()
 
 
 @dataclass
@@ -33,28 +37,52 @@ class FlagMetrics:
     # Timestamp of last error (for "days_since_last_error")
     last_error_time: datetime | None = None
 
-    def mark_invocation(self) -> None:
-        """Record one invocation of this flag."""
-        if not self.hourly_invocations:
-            self.hourly_invocations.append(0)
-        self.hourly_invocations[-1] += 1
+    def mark_invocation(self, lock: threading.Lock | None = None) -> None:
+        """Record one invocation of this flag (atomic)."""
+        # If called with lock, caller holds it; if not, acquire here
+        if lock:
+            if not self.hourly_invocations:
+                self.hourly_invocations.append(0)
+            self.hourly_invocations[-1] += 1
+        else:
+            with _METRICS_LOCK:
+                if not self.hourly_invocations:
+                    self.hourly_invocations.append(0)
+                self.hourly_invocations[-1] += 1
 
-    def mark_error(self, exc: Exception) -> None:
-        """Record one error for this flag."""
-        if not self.hourly_errors:
-            self.hourly_errors.append(0)
-        self.hourly_errors[-1] += 1
-        self.last_error_time = datetime.utcnow()
+    def mark_error(self, exc: Exception, lock: threading.Lock | None = None) -> None:
+        """Record one error for this flag (atomic)."""
+        if lock:
+            if not self.hourly_errors:
+                self.hourly_errors.append(0)
+            self.hourly_errors[-1] += 1
+            self.last_error_time = datetime.utcnow()
+        else:
+            with _METRICS_LOCK:
+                if not self.hourly_errors:
+                    self.hourly_errors.append(0)
+                self.hourly_errors[-1] += 1
+                self.last_error_time = datetime.utcnow()
 
-    def get_24h_stats(self) -> dict[str, Any]:
-        """Compute rolling 24h metrics."""
-        invocation_sum = sum(self.hourly_invocations) if self.hourly_invocations else 0
-        error_sum = sum(self.hourly_errors) if self.hourly_errors else 0
+    def get_24h_stats(self, lock: threading.Lock | None = None) -> dict[str, Any]:
+        """Compute rolling 24h metrics (atomic snapshot)."""
+        if lock:
+            # Caller holds lock, make atomic snapshot
+            invocation_sum = sum(list(self.hourly_invocations)) if self.hourly_invocations else 0
+            error_sum = sum(list(self.hourly_errors)) if self.hourly_errors else 0
+            last_error_time = self.last_error_time
+        else:
+            # Acquire lock for atomic snapshot
+            with _METRICS_LOCK:
+                invocation_sum = sum(list(self.hourly_invocations)) if self.hourly_invocations else 0
+                error_sum = sum(list(self.hourly_errors)) if self.hourly_errors else 0
+                last_error_time = self.last_error_time
+
         error_rate = (error_sum / invocation_sum) if invocation_sum > 0 else 0.0
 
         days_since_error = None
-        if self.last_error_time:
-            delta = datetime.utcnow() - self.last_error_time
+        if last_error_time:
+            delta = datetime.utcnow() - last_error_time
             days_since_error = delta.days
 
         return {
@@ -66,29 +94,34 @@ class FlagMetrics:
 
 
 # Global registry: flag_id → FlagMetrics
-_METRICS: dict[str, FlagMetrics] = defaultdict(lambda: FlagMetrics(flag_id=""))
+_METRICS: dict[str, FlagMetrics] = {}
 
 
 def get_flag_metrics(flag_id: str) -> FlagMetrics:
-    """Get or create metrics for a flag."""
-    if flag_id not in _METRICS:
-        _METRICS[flag_id] = FlagMetrics(flag_id=flag_id)
-    return _METRICS[flag_id]
+    """Get or create metrics for a flag (thread-safe)."""
+    with _METRICS_LOCK:
+        if flag_id not in _METRICS:
+            _METRICS[flag_id] = FlagMetrics(flag_id=flag_id)
+        return _METRICS[flag_id]
 
 
 def mark_invocation(flag_id: str) -> None:
-    """Record a feature flag invocation."""
-    metrics = get_flag_metrics(flag_id)
-    metrics.mark_invocation()
+    """Record a feature flag invocation (thread-safe)."""
+    with _METRICS_LOCK:
+        if flag_id not in _METRICS:
+            _METRICS[flag_id] = FlagMetrics(flag_id=flag_id)
+        _METRICS[flag_id].mark_invocation(lock=_METRICS_LOCK)
 
 
 def mark_error(flag_id: str, exc: Exception) -> None:
-    """Record a feature flag error. Validates error message is PII-safe first."""
+    """Record a feature flag error. Validates error message is PII-safe first (thread-safe)."""
     if not _is_pii_safe_error(exc):
         logger.warning(f"Dropping error for flag {flag_id}: PII detected in message")
         return
-    metrics = get_flag_metrics(flag_id)
-    metrics.mark_error(exc)
+    with _METRICS_LOCK:
+        if flag_id not in _METRICS:
+            _METRICS[flag_id] = FlagMetrics(flag_id=flag_id)
+        _METRICS[flag_id].mark_error(exc, lock=_METRICS_LOCK)
 
 
 def _is_pii_safe_error(exc: Exception) -> bool:
@@ -139,32 +172,40 @@ def compute_digest(
     instance_id: str = "unknown",
     enabled_flag_ids: list[str] | None = None,
     release_tiers: dict[str, str] | None = None,
+    enabled_by: str | None = None,
 ) -> FeatureStabilityEvent:
-    """Compute an hourly stability digest for telemetry.
+    """Compute an hourly stability digest for telemetry (thread-safe).
 
     Args:
         tenant_id: Tenant identifier
         instance_id: Instance identifier (e.g., "home-laptop-ubuntu")
         enabled_flag_ids: Flags that are currently enabled (if None, all are included)
         release_tiers: Map of flag_id → release_tier (fetched from registry)
+        enabled_by: How these flags are enabled (e.g., "preset:standard")
 
     Returns:
         FeatureStabilityEvent ready to send
     """
     if release_tiers is None:
         release_tiers = {}
+    if enabled_by is None:
+        enabled_by = "preset:standard"
 
     flags_data = []
-    for flag_id, metrics in _METRICS.items():
+    # Make atomic snapshot of _METRICS to avoid iterator race
+    with _METRICS_LOCK:
+        metrics_snapshot = dict(_METRICS)
+
+    for flag_id, metrics in metrics_snapshot.items():
         # Skip if this flag is not enabled (optional; include all by default for telemetry)
         if enabled_flag_ids is not None and flag_id not in enabled_flag_ids:
             continue
 
-        stats = metrics.get_24h_stats()
+        stats = metrics.get_24h_stats(lock=_METRICS_LOCK)
         flags_data.append({
             "flag_id": flag_id,
             "release_tier": release_tiers.get(flag_id, "alpha"),
-            "enabled_by": "preset:standard",  # TODO: determine from is_enabled() source
+            "enabled_by": enabled_by,
             "invocation_count_24h": stats["invocation_count_24h"],
             "error_count_24h": stats["error_count_24h"],
             "error_rate_24h": stats["error_rate_24h"],
@@ -180,6 +221,7 @@ def compute_digest(
 
 
 def reset_metrics() -> None:
-    """Clear all metrics (for testing). Do NOT call in production."""
+    """Clear all metrics (for testing). Do NOT call in production (thread-safe)."""
     global _METRICS
-    _METRICS.clear()
+    with _METRICS_LOCK:
+        _METRICS.clear()
