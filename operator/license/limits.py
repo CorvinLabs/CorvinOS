@@ -75,6 +75,7 @@ FREE_TIER: dict[str, Any] = {
     # counter_file (context_engineering_quota.json) so CE and delegation never
     # starve each other. Paid tiers → unlimited (member below).
     "context_engineering_units_per_day": 10,
+    "ce_llm_units_per_day": 5,  # LLM synthesis calls (ADR-0282), separate pool
 
     # Chat / design-assistant interactive turns. UNLIMITED on every tier
     # (operator decision 2026-06-23): the conversational assistant must always be
@@ -153,6 +154,7 @@ TIER_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
     "member": {
         "compute_units_per_day":        None,   # unlimited
         "context_engineering_units_per_day": None,  # unlimited (Vibe Engineering)
+        "ce_llm_units_per_day": None,  # unlimited LLM synthesis (ADR-0282)
         "chat_turns_per_day":           None,   # unlimited
         "voice_summaries_per_day":      None,   # unlimited
         "a2a_peers_max":                None,

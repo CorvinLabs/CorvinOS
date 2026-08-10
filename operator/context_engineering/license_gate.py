@@ -39,13 +39,9 @@ def _corvin_home() -> Path:
         return Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
 
 
-def enforce_ce_quota(tenant_id: str = "_default") -> bool:
-    """Charge one context-engineering unit for this turn.
-
-    Returns ``True`` to run the CEL (enrich), ``False`` to DEGRADE to plain
-    context (the turn still runs — never a block). Fail-closed on import (deny
-    enrichment); fail-open on operational I/O (enrich, don't punish a hiccup).
-    """
+def _enforce(tenant_id: str, *, channel: str, feature: str, counter_file: str) -> bool:
+    """Charge one unit on a named daily pool. True = proceed, False = DEGRADE
+    (never block). Fail-closed on import (deny); fail-open on operational I/O."""
     try:
         if _OPERATOR not in sys.path:
             sys.path.insert(0, _OPERATOR)
@@ -54,18 +50,29 @@ def enforce_ce_quota(tenant_id: str = "_default") -> bool:
         from license.validator import load_license_from_env as _load_lic  # type: ignore  # noqa: PLC0415
         _load_lic()  # reflect the real tier, not FREE defaults (M-B)
     except ImportError:
-        # Fail-CLOSED: deny enrichment (turn still served on plain context);
-        # never fail-open into unmetered CE.
-        return False
+        return False  # fail-closed: deny (turn still served on plain context)
 
     try:
-        _cq_inc(_corvin_home(), channel="context_engineering",
-                chat_key=f"ce:{tenant_id}",
-                feature="context_engineering_units_per_day",
-                counter_file="context_engineering_quota.json")
+        _cq_inc(_corvin_home(), channel=channel, chat_key=f"{channel}:{tenant_id}",
+                feature=feature, counter_file=counter_file)
     except _CQErr:
-        # Over the daily CE budget → degrade to plain context (turn still runs).
-        return False
-    except Exception:  # noqa: BLE001 — operational I/O hiccup → fail-open (enrich)
+        return False  # over the daily budget → degrade
+    except Exception:  # noqa: BLE001 — operational I/O hiccup → fail-open
         return True
     return True
+
+
+def enforce_ce_quota(tenant_id: str = "_default") -> bool:
+    """Charge one context-engineering unit for this turn (ADR-0276). Own pool."""
+    return _enforce(tenant_id, channel="context_engineering",
+                    feature="context_engineering_units_per_day",
+                    counter_file="context_engineering_quota.json")
+
+
+def enforce_ce_llm_quota(tenant_id: str = "_default") -> bool:
+    """Meter one LLM-synthesis call (ADR-0282) on a SEPARATE pool from the CE unit
+    — the synthesis call is an extra cost. Same degrade-not-block semantics: over
+    budget → skip synthesis, keep the deterministic brief (never a block)."""
+    return _enforce(tenant_id, channel="context_engineering_llm",
+                    feature="ce_llm_units_per_day",
+                    counter_file="ce_llm_quota.json")
