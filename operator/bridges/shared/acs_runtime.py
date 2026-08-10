@@ -45,6 +45,29 @@ _SHARED = Path(__file__).resolve().parent
 if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 
+# Vibe Engineering (ADR-0275) — Context Engineering Layer, loaded by file path
+# (operator/ is not on the ACS PYTHONPATH; a sys.path insert would re-open the
+# stdlib `operator` shadow trap). Injected into the MANAGER prompt only — never
+# per worker: the manager holds the whole-task view, the workers keep their
+# deliberate context isolation (ADR-0217). Flag-gated + fail-safe.
+_CEL_AVAILABLE = False
+_cel_build_brief = _cel_render = None
+try:
+    import importlib.util as _ilu  # noqa: PLC0415
+    _cel_dir = Path(__file__).resolve().parents[2] / "context_engineering"
+    _cel_spec = _ilu.spec_from_file_location(
+        "context_engineering", str(_cel_dir / "__init__.py"),
+        submodule_search_locations=[str(_cel_dir)])
+    if _cel_spec and _cel_spec.loader:
+        _cel_mod = _ilu.module_from_spec(_cel_spec)
+        sys.modules["context_engineering"] = _cel_mod
+        _cel_spec.loader.exec_module(_cel_mod)
+        _cel_build_brief = _cel_mod.build_brief
+        _cel_render = _cel_mod.render_brief_to_text
+        _CEL_AVAILABLE = True
+except Exception:  # noqa: BLE001 — CEL absent → feature off, manager unchanged
+    _CEL_AVAILABLE = False
+
 # ADR-0171 — universal engine-span audit. Best-effort import (same dir); a missing
 # module must never break a worker spawn — spans are additive observability.
 try:
@@ -867,6 +890,22 @@ def _build_manager_prompt(ctx: RunContext) -> str:
         f"  wall_time_s: {b.max_wall_time - int(time.monotonic() - b.start_time):.0f}",
         "",
     ]
+
+    # Vibe Engineering (ADR-0275) — CEL brief for the MANAGER on iteration 0:
+    # gives the decomposition step the memory/graph/skill context + the
+    # constraint blockers, WITHOUT touching the workers' deliberate isolation
+    # (ADR-0217). Injected once; later iterations already carry ctx.state.
+    if _CEL_AVAILABLE and ctx.iteration == 0:
+        try:
+            from corvin_console import feature_flags as _cel_ff  # noqa: PLC0415
+            if _cel_ff.is_enabled("vibe_engineering", ctx.tenant_id):
+                _cbrief, _ = _cel_build_brief(
+                    f"{wf_name}. {description}".strip(), ctx.tenant_id, None)
+                _ctext = (_cel_render(_cbrief) or "").strip()
+                if _ctext:
+                    lines += [_ctext, ""]
+        except Exception:  # noqa: BLE001 — CEL failure never breaks the manager
+            pass
 
     # ADR-0105 M2/M4: inject loss trajectory + worker attribution
     if ctx.loss_history:
