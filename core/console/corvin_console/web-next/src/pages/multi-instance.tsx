@@ -43,13 +43,44 @@ export function MultiInstanceDashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // Determine API base URL with fallback
+        let apiBase = window.location.origin;
+
+        // If running on dev server (localhost:3000/5173), try Console ports
+        if (window.location.hostname === 'localhost' &&
+            (window.location.port === '3000' || window.location.port === '5173')) {
+          // Try common Console ports
+          const ports = ['8765', '8000', '8080'];
+          let foundPort = null;
+
+          for (const port of ports) {
+            try {
+              const testRes = await fetch(`http://localhost:${port}/api/multi-instance/status`, {
+                method: 'HEAD'
+              });
+              if (testRes.ok || testRes.status === 404) {
+                // Server responded (even if not found) - this is our port
+                foundPort = port;
+                break;
+              }
+            } catch (e) {
+              // Port not responding, try next
+              continue;
+            }
+          }
+
+          if (foundPort) {
+            apiBase = `http://localhost:${foundPort}`;
+          }
+        }
+
         const [statusRes, patternsRes] = await Promise.all([
-          fetch('/api/multi-instance/status'),
-          fetch('/api/multi-instance/patterns'),
+          fetch(`${apiBase}/api/multi-instance/status`),
+          fetch(`${apiBase}/api/multi-instance/patterns`),
         ]);
 
         if (!statusRes.ok || !patternsRes.ok) {
-          throw new Error('Failed to fetch multi-instance data');
+          throw new Error(`Failed to fetch from ${apiBase} (status: ${statusRes.status}, ${patternsRes.status})`);
         }
 
         const statusData = await statusRes.json();
