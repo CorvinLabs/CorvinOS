@@ -33,7 +33,16 @@ def _scrub_trace(trace: dict) -> dict:
     (mirrors decision_record's content-free discipline)."""
     def _h(v: str) -> str:
         return hashlib.sha256(str(v).encode("utf-8")).hexdigest()[:16]
-    out = {k: v for k, v in trace.items() if k != "task_preview"}
+    # Drop the top-level keys that carry RAW task-derived forged/dropped names
+    # (review R4 finding #1: _scrub_trace copied every key except task_preview, so
+    # tools_dropped + forged_rolled_back leaked names into the cache — the exact
+    # PII class R3 hashed everywhere ELSE). Keep forged_rolled_back as counts.
+    _DROP = {"task_preview", "tools_dropped"}
+    out = {k: v for k, v in trace.items() if k not in _DROP}
+    if isinstance(trace.get("forged_rolled_back"), dict):
+        rb = trace["forged_rolled_back"]
+        out["forged_rolled_back"] = {"tools": len(rb.get("tools") or []),
+                                     "skills": len(rb.get("skills") or [])}
     stages = []
     for s in trace.get("stages", []):
         if not isinstance(s, dict):

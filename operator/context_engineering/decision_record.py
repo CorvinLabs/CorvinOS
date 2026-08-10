@@ -65,6 +65,21 @@ def _sha256_text(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
+def _scrub_str(v: Any) -> str:
+    """A system string (a source id, a reason, a gate slug) that happens to match a
+    PII shape is HASHED, not stored raw — so assert_content_free never has to DROP
+    the whole audit record over a PII-shaped system id (review R4 finding #2: a
+    memory filename with a 9+-digit run would otherwise void Layer A / P-0).
+    Non-PII strings are length-truncated for the content-free bound."""
+    s = str(v)
+    if _HEX64.match(s):
+        return s
+    for pat in _PII_SHAPES:
+        if pat.search(s):
+            return _sha256_text(s)
+    return s[:_MAX_ID]
+
+
 def build_record(trace: dict, brief_text: str, *, turn_id: str,
                  session_id: str = "", tenant_id: str = "_default") -> dict:
     """Build the CONTENT-FREE Layer-A record from the (already content-free) trace.
@@ -87,7 +102,9 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
         # they must be HASHED, never stored raw in the immutable chain (review R2
         # finding C1 — this was the PII leak the R1 completeness fix introduced).
         def _src_id(v: str) -> str:
-            return _sha256_text(v) if hash_ids else v[:_MAX_ID]
+            # forge/egress ids always hashed; conceptual ids scrubbed (raw unless
+            # PII-shaped, then hashed — R4 #2, so a system id never voids the record)
+            return _sha256_text(v) if hash_ids else _scrub_str(v)
         safe_sources = [
             {"id": _src_id(str(x.get("id", ""))), "score": x.get("score")}
             for x in s.get("sources", []) if isinstance(x, dict)]
@@ -101,7 +118,7 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
         # Layer A. The raw exception string (`error`=str(e)) is NEVER persisted —
         # it can echo prompt/task fragments into the immutable chain (review R3 #3).
         if s.get("reason"):
-            e["reason"] = str(s["reason"])[:_MAX_ID]
+            e["reason"] = _scrub_str(s["reason"])
         return e
 
     def _accumulate(s: dict) -> None:
@@ -153,7 +170,7 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
     }
     for k in ("gate1_denied", "gate2_denied"):
         if trace.get(k):
-            rec[k] = str(trace[k])[:_MAX_ID]
+            rec[k] = _scrub_str(trace[k])  # PII-safe (R4): a gate_error echo can't void it
     if trace.get("forged_rolled_back"):
         rb = trace["forged_rolled_back"]
         # COUNTS, never names — a forged name is LLM/task-derived (review R2 C1).

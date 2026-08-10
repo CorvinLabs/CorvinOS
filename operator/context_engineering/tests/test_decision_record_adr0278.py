@@ -155,15 +155,24 @@ class DecisionRecordTests(unittest.TestCase):
         self.assertNotIn("klaus_mueller", blob, "forged (task-derived) name not raw in chain")
         self.assertIn("adr-0222.md", blob, "conceptual (system) id kept for causality")
 
-    def test_content_free_rejects_short_pii(self):
-        # review R2 C2: length-independent PII shapes must fail loud even ≤80 chars.
+    def test_content_free_backstop_rejects_short_pii(self):
+        # review R2 C2: assert_content_free is the fail-loud BACKSTOP — a raw PII
+        # shape injected DIRECTLY into a record (bypassing build_record's scrub)
+        # must still raise, even ≤80 chars.
+        for bad in ("john.doe@example.com", "DE89370400440532013000"):
+            with self.assertRaises(ValueError):
+                self.dr.assert_content_free({"stages": [{"note": bad}]})
+
+    def test_build_record_sanitizes_short_pii_in_place(self):
+        # review R4 #2: build_record HASHES a PII-shaped source id in place, so it
+        # never appears raw AND never voids the whole record (no P-0 drop).
         for bad_id in ("john.doe@example.com", "DE89370400440532013000"):
             rec = self.dr.build_record(
                 {"stages": [{"stage": "memory", "status": "ok",
                              "sources": [{"id": bad_id, "score": 1.0}]}]},
                 "b", turn_id="t")
-            with self.assertRaises(ValueError):
-                self.dr.assert_content_free(rec)
+            self.dr.assert_content_free(rec)  # must NOT raise
+            self.assertNotIn(bad_id, json.dumps(rec), "PII hashed, not raw")
 
     def test_numeric_session_id_does_not_drop_record(self):
         # review R3 C1 (regression the R2 PII scan introduced): a 19-digit Discord
@@ -187,6 +196,15 @@ class DecisionRecordTests(unittest.TestCase):
         self.dr.assert_content_free(rec)
         self.assertNotIn("hunter2", json.dumps(rec))
         self.assertIn("parse_error", json.dumps(rec))
+
+    def test_pii_shaped_conceptual_id_hashed_not_dropped(self):
+        # review R4 #2: a PII-shaped conceptual source id must be HASHED in place,
+        # so it never voids the whole record (P-0), and never appears raw.
+        trace = {"stages": [{"stage": "memory", "status": "ok",
+                             "sources": [{"id": "notes-491234567890.md", "score": 1.0}]}]}
+        rec = self.dr.build_record(trace, "b", turn_id="t")
+        self.dr.assert_content_free(rec)  # must NOT raise (no record drop)
+        self.assertNotIn("491234567890", json.dumps(rec), "PII-shaped id hashed")
 
     def test_forged_rollback_is_counts_not_names(self):
         # review R2 C1: forged_rolled_back carries COUNTS, never the names.
