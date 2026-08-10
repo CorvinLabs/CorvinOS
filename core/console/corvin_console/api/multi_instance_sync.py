@@ -156,6 +156,8 @@ def _is_valid_peer_id(peer_id: str) -> bool:
 @router.post("/sync-config")
 async def sync_config(body: dict, session=Depends(require_session)):
     """Sync tenant config (including preset) to peer instances."""
+    from fastapi.responses import JSONResponse
+
     peer_id = body.get("peer_id")
     config_fields = body.get("fields", ["preset"])
 
@@ -174,12 +176,15 @@ async def sync_config(body: dict, session=Depends(require_session)):
 
     # TODO: Send config via A2A to peer_id
     # For now, return success stub
-    return {
-        "status": "scheduled",
-        "peer_id": peer_id,
-        "fields_to_sync": config_fields,
-        "message": "Config sync queued (not yet implemented)",
-    }
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "scheduled",
+            "peer_id": peer_id,
+            "fields_to_sync": config_fields,
+            "message": "Config sync queued (not yet implemented)",
+        }
+    )
 
 
 @router.get("/sync-status/{peer_id}")

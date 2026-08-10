@@ -66,6 +66,8 @@ async def get_preset():
 @router.post("/preset")
 async def set_preset(body: dict, session=Depends(require_session)):
     """Set installation preset. Requires restart to take effect."""
+    from fastapi.responses import JSONResponse
+
     preset = body.get("preset")
     if preset not in ("minimal", "standard", "advanced"):
         raise HTTPException(status_code=400, detail="Invalid preset")
@@ -74,7 +76,10 @@ async def set_preset(body: dict, session=Depends(require_session)):
     spec["preset"] = preset
     _save_tenant_spec(spec)
 
-    return {"preset": preset, "requires_restart": True, "status_code": 201}
+    return JSONResponse(
+        status_code=201,
+        content={"preset": preset, "requires_restart": True}
+    )
 
 
 @router.get("")
