@@ -23,8 +23,11 @@ never breaks the turn.
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 # The full conceptual CEL pipeline. Stages the live build_brief does not run are
 # recorded as `not_run` so an auditor sees completeness, not a gap (ADR-0278 gap 1).
@@ -129,21 +132,32 @@ def emit(trace: dict, brief_text: str, *, turn_id: str, tenant_id: str = "_defau
         record = build_record(trace, brief_text, turn_id=turn_id,
                               session_id=session_id, tenant_id=tenant_id)
         assert_content_free(record)  # fail-loud before the immutable write
+    except Exception as e:  # noqa: BLE001 — a broken record is a code bug: surface it
+        _log.error("CEL Decision Record build failed (turn %s): %s", turn_id, e)
+        return None
 
-        # Layer B — full brief text, erasable sidecar keyed by the hash.
-        if brief_text and workdir and record.get("brief_sha256"):
-            try:
-                d = Path(workdir) / "cel-briefs"
-                d.mkdir(parents=True, exist_ok=True)
-                (d / f"{record['brief_sha256']}.txt").write_text(
-                    brief_text, encoding="utf-8")
-            except Exception:  # noqa: BLE001 — missing sidecar only loses the CONTENT,
-                pass           # the content-free Layer-A record still stands
+    # Layer B — full brief text, erasable sidecar keyed by the hash. A miss here
+    # only loses the CONTENT (the content-free Layer-A record still stands), but
+    # it is logged, not silently dropped.
+    if brief_text and workdir and record.get("brief_sha256"):
+        try:
+            d = Path(workdir) / "cel-briefs"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{record['brief_sha256']}.txt").write_text(
+                brief_text, encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            _log.warning("CEL Layer-B brief sidecar write failed (turn %s): %s",
+                         turn_id, e)
 
-        # Layer A — the canonical hash-chained writer (never hand-rolled JSONL).
+    # Layer A — the canonical hash-chained audit record. ADR-0278 durability (P-0):
+    # a write failure is SURFACED to the ops/L16 stream, NEVER a silent drop. The
+    # turn still runs (ADR-0276 degrade-not-block), but the failure is visible.
+    try:
         from forge.security_events import write_event  # noqa: PLC0415
         write_event(_layer_a_path(tenant_id), "cel.decision",
                     tool="context_engineering", details=record)
         return record
-    except Exception:  # noqa: BLE001 — auditability must never break the live turn
+    except Exception as e:  # noqa: BLE001
+        _log.error("CEL Decision Record AUDIT-WRITE FAILED (turn %s, tenant %s): %s "
+                   "— record NOT persisted to the hash chain", turn_id, tenant_id, e)
         return None
