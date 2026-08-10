@@ -15,6 +15,23 @@ from .registry import get_stage
 
 DEFAULT_PIPELINE = ["memory", "graph", "skill", "approach_synthesis", "blocker_id"]
 
+# The full "Context Brain" pipeline (ADR-0282/0283) used when the operator turns
+# on the active pipeline (vibe_engineering_active flag) and has NOT hand-authored
+# their own pipeline in tenant.corvin.yaml. It adds the LLM synthesis stage (egress
+# ON — this is the deliberate opt-in) and the ToolForge + SkillForge stages so the
+# worker is provisioned with forged tools/skills, not just a text brief. Every
+# egress/forge stage still runs POST-gate, and the final payload is re-gated
+# (Gate-2) before the spawn — see pipeline.run_full_pipeline.
+ACTIVE_PIPELINE = [
+    {"stage": "memory"},
+    {"stage": "graph"},
+    {"stage": "skill"},
+    {"stage": "llm_synthesis", "config": {"egress_ok": True}},
+    {"stage": "toolforge"},
+    {"stage": "skillforge"},
+    {"stage": "blocker_id"},
+]
+
 
 @dataclass
 class StageSpec:
@@ -36,11 +53,21 @@ def _read_pipeline_config(tenant_id: str) -> "list | None":
         return None
 
 
-def resolve_pipeline(tenant_id: str = "_default") -> "tuple[list, list]":
+def resolve_pipeline(tenant_id: str = "_default",
+                     active: bool = False) -> "tuple[list, list]":
     """Return (specs, dropped_ids). Each spec is a StageSpec (id + config). Unknown
-    or non-registered ids are dropped and returned separately for auditing."""
+    or non-registered ids are dropped and returned separately for auditing.
+
+    An operator-authored ``spec.context_engineering.pipeline`` always wins. Absent,
+    the fallback is ACTIVE_PIPELINE when ``active`` (the full Context Brain — LLM
+    synthesis + ToolForge + SkillForge) else the five-stage DEFAULT_PIPELINE."""
     raw = _read_pipeline_config(tenant_id)
-    entries = raw if raw is not None else [{"stage": s} for s in DEFAULT_PIPELINE]
+    if raw is not None:
+        entries = raw
+    elif active:
+        entries = ACTIVE_PIPELINE
+    else:
+        entries = [{"stage": s} for s in DEFAULT_PIPELINE]
     specs: list[StageSpec] = []
     dropped: list[str] = []
     for e in entries:

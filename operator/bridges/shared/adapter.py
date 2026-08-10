@@ -94,6 +94,7 @@ try:
         _cel_render = _cel_mod.render_brief_to_text
         _cel_persist_trace = _cel_mod.persist_trace
         _cel_emit_record = _cel_mod.emit_decision_record
+        _cel_run_full = _cel_mod.run_full_pipeline   # ADR-0282/0283 active brain
         _CEL_AVAILABLE = True
 except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
     _CEL_AVAILABLE = False
@@ -3255,6 +3256,7 @@ def _resolve_spawn_inputs(
     # covers BOTH bridge spawn paths (legacy `claude -p` + engine-driven), since
     # both compose their system prompt through _resolve_spawn_inputs. Mirrors the
     # web-chat wiring: build_brief → render → persist_trace → Decision Record.
+    _cel_forged_tools: list = []   # ADR-0283 — tools the active brain forged+bound
     if _CEL_AVAILABLE:
         _cel_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
         _cel_on = False
@@ -3267,8 +3269,47 @@ def _resolve_spawn_inputs(
             try:
                 _cel_wd = _session_dir(channel, chat_key or "anon", _cel_tid)
                 _cel_turn = f"turn-{msg_id or _safe_id(str(chat_key or 'anon'))}"
-                _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid, None)
-                _cel_text = (_cel_render(_cbrief) or "").strip()
+                # ACTIVE brain (ADR-0282/0283) — opt-in flag ON TOP of
+                # vibe_engineering. It runs the egress/forge stages behind the FULL
+                # two-gate enforcer (run_full_pipeline): Gate-1 on the task, Gate-2
+                # on the synthesised payload + forged tool names, class-based bind
+                # re-validation against the persona's own allowed_tools. It needs
+                # cloud egress (LLM synthesis), so it respects L35: egress denied →
+                # degrade to the deterministic brief (never send under a zero-egress
+                # residency policy). Fail-safe: any error → deterministic brief.
+                _cel_active = False
+                try:
+                    _cel_active = _cel_ff.is_enabled("vibe_engineering_active", _cel_tid)
+                except Exception:  # noqa: BLE001
+                    _cel_active = False
+                if _cel_active and not _house_rules_cloud_egress_allowed(_cel_tid):
+                    _cel_active = False  # L35: no cloud egress → deterministic only
+                if _cel_active:
+                    def _cel_gate(_text: str):
+                        # Gate-1 (task) + Gate-2 (final payload) both go through the
+                        # SAME mandatory L44 acceptable-use classifier — deny → drop.
+                        _ref = _check_house_rules_or_fail(
+                            prompt=_text, persona=mode, channel=channel,
+                            chat_key=str(chat_key or "anon"),
+                            engine_id=(profile or {}).get("default_engine") or "claude_code",
+                            tenant_id=_cel_tid)
+                        return (_ref is None, _ref or "")
+                    _persona_globs = (list(profile.get("allowed_tools"))
+                                      if isinstance(profile.get("allowed_tools"), list)
+                                      else None)
+                    _bundle, _ctrace = _cel_run_full(
+                        prompt, _cel_tid, None, gate_fn=_cel_gate,
+                        persona_patterns=_persona_globs)
+                    if _bundle is not None and getattr(_bundle, "synthesised_prompt", None):
+                        _cel_text = _bundle.synthesised_prompt.strip()
+                    else:
+                        _cel_text = (_cel_render(getattr(_bundle, "brief", None)
+                                                 if _bundle else None) or "").strip()
+                    if _bundle is not None and getattr(_bundle, "tools_to_bind", None):
+                        _cel_forged_tools = [t.name for t in _bundle.tools_to_bind]
+                else:
+                    _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid, None)
+                    _cel_text = (_cel_render(_cbrief) or "").strip()
                 if _cel_text:
                     sys_prompt = sys_prompt + "\n\n" + _cel_text + "\n"
                 try:
@@ -3289,7 +3330,12 @@ def _resolve_spawn_inputs(
         "mode": mode,
         "permission_mode": profile.get("permission_mode"),
         "allowed_tools": (
-            list(profile.get("allowed_tools") or [])
+            # Merge the class-re-validated forged tools into the persona's
+            # allow-list (ADR-0283). A None allow-list means "all tools allowed",
+            # so a forged tool is already permitted — leave it None (never narrow
+            # an all-allowed persona down to just the forged names).
+            (list(profile.get("allowed_tools"))
+             + [t for t in _cel_forged_tools if t not in profile.get("allowed_tools")])
             if isinstance(profile.get("allowed_tools"), list) else None
         ),
         "disallowed_tools": (

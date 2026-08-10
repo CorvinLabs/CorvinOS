@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
-from core.console.corvin_console.auth import require_session
+from core.console.corvin_console.deps import require_session
 from core.console.corvin_console.feature_flags import REGISTRY
 from core.telemetry import get_flag_metrics
 
@@ -56,8 +56,8 @@ def _save_tenant_spec(spec: dict) -> None:
 
 
 @router.get("/preset")
-async def get_preset():
-    """Get current installation preset (minimal|standard|advanced)."""
+async def get_preset(session=Depends(require_session)):
+    """Get current installation preset (minimal|standard|advanced). Requires auth."""
     spec = _load_tenant_spec()
     preset = spec.get("preset", "standard")
     return {"preset": preset}

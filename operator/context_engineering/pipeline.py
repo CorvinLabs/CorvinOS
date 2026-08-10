@@ -36,13 +36,14 @@ def build_brief(task: str, tenant: str = "_default", session: Any = None,
 
 
 def build_context(task: str, tenant: str = "_default", session: Any = None,
-                  meter: bool = True) -> "tuple[Any, dict]":
+                  meter: bool = True, active: bool = False) -> "tuple[Any, dict]":
     """Run the config-resolved stage pipeline; return ``(bundle, trace)``.
 
     ``bundle`` is a ContextBundle (or None if the license gate degrades this turn,
     the pipeline has a cycle, or memory fails). ``trace`` carries per-stage
     telemetry + ``degraded`` when the turn ran on plain context. ``meter=False``
-    bypasses the license gate (tests / internal reuse).
+    bypasses the license gate (tests / internal reuse). ``active=True`` falls back
+    to ACTIVE_PIPELINE (egress/forge) when the operator authored no pipeline.
     """
     trace: dict[str, Any] = {"task_preview": task[:120], "stages": []}
 
@@ -64,7 +65,7 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
     ctx = StageCtx(tenant_id=tenant, task_obj=task_adapter(task),
                    session_id=getattr(session, "sid", "") or "")
 
-    specs, dropped = resolve_pipeline(tenant)
+    specs, dropped = resolve_pipeline(tenant, active=active)
     for d in dropped:  # unknown/unregistered stage ids — audited, never a crash
         trace["stages"].append({"stage": d, "status": "not_run",
                                 "reason": "unknown_stage"})
@@ -103,41 +104,20 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
     return bundle, trace
 
 
-async def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
-                            meter: bool = True, *, gate_fn=None,
-                            persona_patterns=None) -> "tuple[Any, dict]":
-    """The FULL two-gate pipeline (ADR-0280 R2 / CONCEPT-0006 §9), with EVERY
-    enforcer in ONE place (the review's key demand — not delegated to a caller):
+def _gate1(bundle: Any, trace: dict, gate, task: str) -> bool:
+    """Gate-1 on the raw task. Returns True to proceed to the egress/forge stages,
+    False when the gate denied (nothing side-effecting then runs)."""
+    ok, reason = gate(task)
+    if not ok:
+        trace["gate1_denied"] = str(reason)[:120]
+        bundle.scratch["_deferred"] = []
+    return ok
 
-      build_context (pure, pre-gate)
-        → Gate-1 on the raw task
-        → build_context_post_gate (egress/forge stages)
-        → Gate-2 on the FINAL payload (synthesised prompt + bound tool names)
-        → class-based tool re-validation (bind ≠ authorise)
 
-    ``gate_fn(text) -> (ok: bool, reason: str)`` is the caller's compliance gate
-    (L44/L34/L35); default allow-all for tests. ``persona_patterns`` are the
-    persona's allowed tool globs (a forged tool of an allowed class survives).
-    Returns ``(bundle, trace)``; fail-safe throughout — a denial degrades (drops
-    the un-approved egress/forge output), never blocks the turn.
-    """
-    bundle, trace = build_context(task, tenant, session, meter)
-    if bundle is None:
-        return None, trace
-
-    gate = gate_fn or (lambda _text: (True, ""))
-
-    # Gate-1 — raw task. A refused task never reaches an egress/forge stage.
-    ok1, reason1 = gate(task)
-    if not ok1:
-        trace["gate1_denied"] = str(reason1)[:120]
-        bundle.scratch["_deferred"] = []   # nothing side-effecting runs
-        return bundle, trace
-
-    bundle = await build_context_post_gate(bundle, trace)
-
-    # Gate-2 — the FINAL assembled payload (the synthesised prompt + the bound
-    # tool names) is what actually spawns the worker; it MUST be re-inspected.
+def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns) -> Any:
+    """Gate-2 on the FINAL assembled payload (synthesised prompt + bound tool
+    names) + class-based tool re-validation (bind ≠ authorise). Shared by the sync
+    and async entry points so the enforcer logic lives in exactly one place."""
     tool_names = " ".join(getattr(t, "name", "") for t in (bundle.tools_to_bind or []))
     final_payload = (f"{bundle.synthesised_prompt or ''} {tool_names}").strip()
     if final_payload:
@@ -147,16 +127,81 @@ async def run_full_pipeline(task: str, tenant: str = "_default", session: Any = 
             bundle.synthesised_prompt = None      # drop the un-approved synthesis
             bundle.tools_to_bind = []
             bundle.skills_to_bind = []
-            return bundle, trace
-
-    # bind ≠ authorise — a bound tool must be of a class the persona already allows.
+            return bundle
     if bundle.tools_to_bind and persona_patterns is not None:
         from .stages.binding import revalidate_tools  # noqa: PLC0415
         kept, dropped = revalidate_tools(bundle.tools_to_bind, persona_patterns)
         bundle.tools_to_bind = kept
         if dropped:
             trace["tools_dropped"] = [getattr(t, "name", "?") for t in dropped]
-    return bundle, trace
+    return bundle
+
+
+def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
+                      meter: bool = True, *, gate_fn=None,
+                      persona_patterns=None) -> "tuple[Any, dict]":
+    """The FULL two-gate pipeline (ADR-0280 R2 / CONCEPT-0006 §9), SYNC, with EVERY
+    enforcer in ONE place (the review's key demand — not delegated to a caller):
+
+      build_context (pure, pre-gate)
+        → Gate-1 on the raw task
+        → deferred egress/forge stages (blocking; the caller runs in a worker
+          context, not the event loop — the bridge spawn hook is sync)
+        → Gate-2 on the FINAL payload (synthesised prompt + bound tool names)
+        → class-based tool re-validation (bind ≠ authorise)
+
+    ``gate_fn(text) -> (ok: bool, reason: str)`` is the caller's compliance gate
+    (L44/L34/L35); default allow-all for tests. ``persona_patterns`` are the
+    persona's allowed tool globs. Returns ``(bundle, trace)``; fail-safe throughout
+    — a denial degrades (drops the un-approved egress/forge output), never blocks
+    the turn. Async callers (console chat_runtime) use ``run_full_pipeline_async``.
+    """
+    bundle, trace = build_context(task, tenant, session, meter, active=True)
+    if bundle is None:
+        return None, trace
+    gate = gate_fn or (lambda _text: (True, ""))
+    if not _gate1(bundle, trace, gate, task):
+        return bundle, trace
+    bundle = _run_deferred_sync(bundle, trace)
+    return _gate2_and_bind(bundle, trace, gate, persona_patterns), trace
+
+
+async def run_full_pipeline_async(task: str, tenant: str = "_default",
+                                  session: Any = None, meter: bool = True, *,
+                                  gate_fn=None, persona_patterns=None) -> "tuple[Any, dict]":
+    """Async twin of :func:`run_full_pipeline` for the event-loop callers (console
+    chat_runtime): the deferred stages run via ``asyncio.to_thread`` so a
+    ``claude -p`` subprocess never blocks the loop. Same two-gate enforcer path."""
+    bundle, trace = build_context(task, tenant, session, meter, active=True)
+    if bundle is None:
+        return None, trace
+    gate = gate_fn or (lambda _text: (True, ""))
+    if not _gate1(bundle, trace, gate, task):
+        return bundle, trace
+    bundle = await build_context_post_gate(bundle, trace)
+    return _gate2_and_bind(bundle, trace, gate, persona_patterns), trace
+
+
+def _run_deferred_sync(bundle: Any, trace: dict) -> Any:
+    """Run the deferred egress/forge stages BLOCKING (no event loop). Fail-safe:
+    a stage that raises is recorded failed and the pipeline continues."""
+    from .stages import get_stage  # noqa: PLC0415
+    if bundle is None:
+        return None
+    ctx = bundle.scratch.get("_ctx")
+    for spec in bundle.scratch.get("_deferred", []):
+        stage = get_stage(spec.id)
+        if stage is None:
+            continue
+        if ctx is not None:
+            ctx.config = spec.config
+        try:
+            bundle, tel = stage.run(bundle, ctx)
+            trace["stages"].append(tel.to_trace() if hasattr(tel, "to_trace") else tel)
+        except Exception as e:  # noqa: BLE001
+            trace["stages"].append({"stage": spec.id, "status": "failed",
+                                    "error": str(e)[:120]})
+    return bundle
 
 
 async def build_context_post_gate(bundle: Any, trace: dict) -> Any:

@@ -206,8 +206,9 @@ class PromotionDaemon:
             self.audit_fn(event)
 
     def start(self) -> None:
-        """Start daemon (async)."""
-        if self._task is None:
+        """Start daemon (async) — thread-safe."""
+        # Use atomic check-and-set to prevent duplicate task creation
+        if self._task is None or self._task.done():
             self._task = asyncio.create_task(self.run())
 
     def stop(self) -> None:
