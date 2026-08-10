@@ -29,7 +29,9 @@ from typing import Any
 # The full conceptual CEL pipeline. Stages the live build_brief does not run are
 # recorded as `not_run` so an auditor sees completeness, not a gap (ADR-0278 gap 1).
 _CONCEPTUAL_STAGES = ["memory", "graph", "skill", "approach_synthesis", "blocker_id"]
-_INACTIVE_STAGES = {"approach_synthesis", "blocker_id"}
+# All five stages run now (approach_synthesis + blocker_id are deterministic,
+# ADR-0275). A stage absent from the trace is a genuine miss, not "inactive".
+_INACTIVE_STAGES: set = set()
 
 # Keys whose presence would mean raw text leaked into the content-free Layer A.
 _FORBIDDEN_TEXT_KEYS = {"task", "brief", "content", "text", "summary", "prompt",

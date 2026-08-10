@@ -84,6 +84,38 @@ class CelSubstanceTests(unittest.TestCase):
         self.assertEqual(len(res.recommended_skills), 0,
                          "no term match → inject nothing, not constant-score noise")
 
+    # ── the two later stages now RUN (deterministic) ───────────────────
+    def test_all_five_stages_run(self):
+        from context_engineering.pipeline import build_brief
+        _, trace = build_brief("fail-closed audit constraint must not bypass",
+                               "_default", None, meter=False)
+        names = [s["stage"] for s in trace["stages"]]
+        for st in ("memory", "graph", "skill", "approach_synthesis", "blocker_id"):
+            self.assertIn(st, names, f"stage {st} must run")
+        self.assertTrue(all(s["status"] != "not_run" for s in trace["stages"]),
+                        "no stage is not_run — all five actually execute")
+
+    def test_blocker_scan_finds_constraints(self):
+        from context_engineering.pipeline import _scan_blockers
+        brief = SimpleNamespace(
+            memory_context=SimpleNamespace(matches=[
+                SimpleNamespace(title="fail-closed gate",
+                                content_preview="must not bypass", filename="x.md")]),
+            related_decisions=[SimpleNamespace(decision_id="ADR-0260",
+                                               title="Bounded Fail Closed chain")])
+        blockers = _scan_blockers(brief)
+        self.assertIn("fail-closed gate", blockers)
+        self.assertIn("ADR-0260", blockers)
+
+    def test_blocker_scan_clean_context_empty(self):
+        from context_engineering.pipeline import _scan_blockers
+        brief = SimpleNamespace(
+            memory_context=SimpleNamespace(matches=[
+                SimpleNamespace(title="ordinary note", content_preview="nothing here",
+                                filename="n.md")]),
+            related_decisions=[])
+        self.assertEqual(_scan_blockers(brief), [])
+
     # ── integration: the brief carries real content ─────────────────────
     def test_build_brief_produces_nonempty_brief(self):
         from context_engineering.pipeline import build_brief, render_brief_to_text

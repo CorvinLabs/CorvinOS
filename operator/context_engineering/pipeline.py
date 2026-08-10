@@ -52,6 +52,33 @@ def _avg(scores: list) -> float:
     return sum(scores) / len(scores) if scores else 0.0
 
 
+# Blocker ID is DETERMINISTIC (no LLM call per turn): it surfaces the documented
+# constraint / "must not" / fail-closed signals the gathered context already
+# carries, so the agent sees the tripwires before it acts. The agent itself does
+# the real synthesis; approach_synthesis only points at the densest signal.
+_BLOCKER_SIGNALS = (
+    "must not", "must-not", "fail-closed", "fail closed", "load-bearing",
+    "load bearing", "blocker", "constraint", "deprecated", "do not", "don't",
+    "never ", "irreversible", "locked", "blocked", "breaking change",
+)
+
+
+def _scan_blockers(brief: Any) -> list:
+    """Sources whose title/preview carries a constraint signal. Deterministic."""
+    out: list[str] = []
+    mc = getattr(brief, "memory_context", None)
+    for m in (getattr(mc, "matches", []) if mc else []):
+        hay = f"{getattr(m, 'title', '')} {getattr(m, 'content_preview', '')}".lower()
+        if any(sig in hay for sig in _BLOCKER_SIGNALS):
+            out.append(getattr(m, "title", None) or getattr(m, "filename", "?"))
+    for d in (getattr(brief, "related_decisions", None) or []):
+        if any(sig in (getattr(d, "title", "") or "").lower() for sig in _BLOCKER_SIGNALS):
+            out.append(getattr(d, "decision_id", "?"))
+    # de-dup preserving order
+    seen: set = set()
+    return [x for x in out if not (x in seen or seen.add(x))][:5]
+
+
 def build_brief(task: str, tenant: str = "_default", session: Any = None,
                 meter: bool = True) -> "tuple[Any, dict]":
     """Run the full CEL (memory → graph → skill) in ONE place; return
@@ -136,6 +163,43 @@ def build_brief(task: str, tenant: str = "_default", session: Any = None,
         trace["stages"].append({"stage": "skill", "status": "failed",
                                 "error": str(e)[:120]})
 
+    # Stage 4 — Approach Synthesis (deterministic: point at the densest signal
+    # across the three stages; the agent does the real synthesis from there).
+    try:
+        mc = getattr(brief, "memory_context", None)
+        top_mem = next(iter(getattr(mc, "matches", []) if mc else []), None)
+        top_adr = next(iter(getattr(brief, "related_decisions", None) or []), None)
+        top_skill = next(iter(getattr(brief, "recommended_skills", None) or []), None)
+        anchors: list[str] = []
+        if top_mem:
+            anchors.append(getattr(top_mem, "title", None) or getattr(top_mem, "filename", "?"))
+        if top_adr:
+            anchors.append(getattr(top_adr, "decision_id", "?"))
+        if top_skill:
+            anchors.append(getattr(top_skill, "title", None) or getattr(top_skill, "skill_id", "?"))
+        brief.approach = anchors
+        trace["stages"].append({
+            "stage": "approach_synthesis", "status": "ok",
+            "confidence_tier": "high" if len(anchors) >= 2 else "low",
+            "sources": [{"id": a, "score": 1.0} for a in anchors],
+        })
+    except Exception as e:  # noqa: BLE001
+        trace["stages"].append({"stage": "approach_synthesis", "status": "failed",
+                                "error": str(e)[:120]})
+
+    # Stage 5 — Blocker ID (deterministic constraint scan over the gathered context).
+    try:
+        blockers = _scan_blockers(brief)
+        brief.blockers = blockers
+        trace["stages"].append({
+            "stage": "blocker_id", "status": "ok",  # ran; empty is a valid result
+            "confidence_tier": "high" if blockers else "low",
+            "sources": [{"id": b, "score": 1.0} for b in blockers],
+        })
+    except Exception as e:  # noqa: BLE001
+        trace["stages"].append({"stage": "blocker_id", "status": "failed",
+                                "error": str(e)[:120]})
+
     return brief, trace
 
 
@@ -162,6 +226,15 @@ def render_brief_to_text(brief: Any) -> str:
         lines.append("Recommended skills:")
         for s in sk[:5]:
             lines.append(f"  - {getattr(s, 'title', None) or getattr(s, 'skill_id', '?')}")
+    ap = getattr(brief, "approach", None) or []
+    if ap:
+        lines.append("Suggested focus (densest signal — synthesise from here):")
+        lines.append("  - " + " · ".join(str(a) for a in ap))
+    bl = getattr(brief, "blockers", None) or []
+    if bl:
+        lines.append("Constraints / blockers the context flags — respect these:")
+        for b in bl[:5]:
+            lines.append(f"  - {b}")
     if not lines:
         return ""
     return "## Context brief (Vibe Engineering)\n" + "\n".join(lines)
