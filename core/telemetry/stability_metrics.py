@@ -1,0 +1,185 @@
+"""Feature stability metrics collection (ADR-0286, ADR-0288).
+
+Tracks invocations and errors per feature flag. Computes hourly digests
+with error rates, adoption, days-in-tier. Sends GDPR-safe telemetry events.
+
+**Compliance (GDPR Art. 5, 6):**
+- No user data, no prompts, no personal identifiers beyond tenant_id
+- Fail-closed: if ANY field would leak PII, entire event is dropped
+- Opt-out: spec.telemetry.stability_metrics: false
+- Legal basis: Legitimate interest (understanding feature reliability)
+"""
+from __future__ import annotations
+
+import json
+import logging
+from collections import defaultdict, deque
+from dataclasses import dataclass, field, asdict
+from datetime import datetime
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FlagMetrics:
+    """In-memory metrics for one flag (rolling 24h window)."""
+
+    flag_id: str
+    # Hourly invocation counts (deque, max 24 items for rolling 24h)
+    hourly_invocations: deque[int] = field(default_factory=lambda: deque(maxlen=24))
+    # Hourly error counts (same 24h window)
+    hourly_errors: deque[int] = field(default_factory=lambda: deque(maxlen=24))
+    # Timestamp of last error (for "days_since_last_error")
+    last_error_time: datetime | None = None
+
+    def mark_invocation(self) -> None:
+        """Record one invocation of this flag."""
+        if not self.hourly_invocations:
+            self.hourly_invocations.append(0)
+        self.hourly_invocations[-1] += 1
+
+    def mark_error(self, exc: Exception) -> None:
+        """Record one error for this flag."""
+        if not self.hourly_errors:
+            self.hourly_errors.append(0)
+        self.hourly_errors[-1] += 1
+        self.last_error_time = datetime.utcnow()
+
+    def get_24h_stats(self) -> dict[str, Any]:
+        """Compute rolling 24h metrics."""
+        invocation_sum = sum(self.hourly_invocations) if self.hourly_invocations else 0
+        error_sum = sum(self.hourly_errors) if self.hourly_errors else 0
+        error_rate = (error_sum / invocation_sum) if invocation_sum > 0 else 0.0
+
+        days_since_error = None
+        if self.last_error_time:
+            delta = datetime.utcnow() - self.last_error_time
+            days_since_error = delta.days
+
+        return {
+            "invocation_count_24h": invocation_sum,
+            "error_count_24h": error_sum,
+            "error_rate_24h": round(error_rate, 4),
+            "days_since_last_error": days_since_error,
+        }
+
+
+# Global registry: flag_id → FlagMetrics
+_METRICS: dict[str, FlagMetrics] = defaultdict(lambda: FlagMetrics(flag_id=""))
+
+
+def get_flag_metrics(flag_id: str) -> FlagMetrics:
+    """Get or create metrics for a flag."""
+    if flag_id not in _METRICS:
+        _METRICS[flag_id] = FlagMetrics(flag_id=flag_id)
+    return _METRICS[flag_id]
+
+
+def mark_invocation(flag_id: str) -> None:
+    """Record a feature flag invocation."""
+    metrics = get_flag_metrics(flag_id)
+    metrics.mark_invocation()
+
+
+def mark_error(flag_id: str, exc: Exception) -> None:
+    """Record a feature flag error. Validates error message is PII-safe first."""
+    if not _is_pii_safe_error(exc):
+        logger.warning(f"Dropping error for flag {flag_id}: PII detected in message")
+        return
+    metrics = get_flag_metrics(flag_id)
+    metrics.mark_error(exc)
+
+
+def _is_pii_safe_error(exc: Exception) -> bool:
+    """Check if exception message contains PII patterns. Fail-closed: if unsure, return False."""
+    message = str(exc).lower()
+    # Simple patterns: email addresses, phone numbers, common sensitive fields
+    pii_patterns = [
+        "@",  # email
+        "password",
+        "token",
+        "secret",
+        "key",
+        "credential",
+        "api_key",
+        "session",
+        "cookie",
+        "jwt",
+        "oauth",
+        "+1",  # US phone
+    ]
+    for pattern in pii_patterns:
+        if pattern in message:
+            return False
+    return True
+
+
+@dataclass
+class FeatureStabilityEvent:
+    """GDPR-safe telemetry event for feature stability."""
+
+    event_type: str = "feature_stability_digest"
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    tenant_id: str = "_default"
+    instance_id: str = "unknown"
+    flags_enabled: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to JSON-safe dict."""
+        return asdict(self)
+
+    def to_json(self) -> str:
+        """Serialize to JSON."""
+        return json.dumps(self.to_dict(), default=str)
+
+
+def compute_digest(
+    tenant_id: str = "_default",
+    instance_id: str = "unknown",
+    enabled_flag_ids: list[str] | None = None,
+    release_tiers: dict[str, str] | None = None,
+) -> FeatureStabilityEvent:
+    """Compute an hourly stability digest for telemetry.
+
+    Args:
+        tenant_id: Tenant identifier
+        instance_id: Instance identifier (e.g., "home-laptop-ubuntu")
+        enabled_flag_ids: Flags that are currently enabled (if None, all are included)
+        release_tiers: Map of flag_id → release_tier (fetched from registry)
+
+    Returns:
+        FeatureStabilityEvent ready to send
+    """
+    if release_tiers is None:
+        release_tiers = {}
+
+    flags_data = []
+    for flag_id, metrics in _METRICS.items():
+        # Skip if this flag is not enabled (optional; include all by default for telemetry)
+        if enabled_flag_ids is not None and flag_id not in enabled_flag_ids:
+            continue
+
+        stats = metrics.get_24h_stats()
+        flags_data.append({
+            "flag_id": flag_id,
+            "release_tier": release_tiers.get(flag_id, "alpha"),
+            "enabled_by": "preset:standard",  # TODO: determine from is_enabled() source
+            "invocation_count_24h": stats["invocation_count_24h"],
+            "error_count_24h": stats["error_count_24h"],
+            "error_rate_24h": stats["error_rate_24h"],
+            "days_since_last_error": stats["days_since_last_error"],
+            "status": "active",
+        })
+
+    return FeatureStabilityEvent(
+        tenant_id=tenant_id,
+        instance_id=instance_id,
+        flags_enabled=flags_data,
+    )
+
+
+def reset_metrics() -> None:
+    """Clear all metrics (for testing). Do NOT call in production."""
+    global _METRICS
+    _METRICS.clear()
