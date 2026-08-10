@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
-from core.console.corvin_console.deps import require_session
+from core.console.corvin_console.deps import require_session, require_csrf
 from core.console.corvin_console.feature_flags import REGISTRY
 from core.telemetry import get_flag_metrics
 
@@ -64,7 +64,7 @@ async def get_preset(session=Depends(require_session)):
 
 
 @router.post("/preset")
-async def set_preset(body: dict, session=Depends(require_session)):
+async def set_preset(body: dict, session=Depends(require_session), csrf=Depends(require_csrf)):
     """Set installation preset. Requires restart to take effect."""
     from fastapi.responses import JSONResponse
 
