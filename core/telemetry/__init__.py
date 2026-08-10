@@ -5,6 +5,7 @@ from core.telemetry.stability_metrics import (
     mark_error,
     compute_digest,
     FeatureStabilityEvent,
+    get_flag_metrics,
 )
 from core.telemetry.telemetry_daemon import (
     TelemetryDaemon,
@@ -17,6 +18,7 @@ __all__ = [
     "mark_invocation",
     "mark_error",
     "compute_digest",
+    "get_flag_metrics",
     "FeatureStabilityEvent",
     "TelemetryDaemon",
     "initialize_daemon",
