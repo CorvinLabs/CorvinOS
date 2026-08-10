@@ -20,6 +20,7 @@ from .binding import (
 # The five default stages + the opt-in egress/forge stages (not in DEFAULT_PIPELINE).
 from . import memory, graph, skill, approach, blocker  # noqa: F401,E402
 from . import llm_synthesis  # noqa: F401,E402  (opt-in, ADR-0282)
+from . import toolforge, skillforge  # noqa: F401,E402  (opt-in, ADR-0283)
 
 __all__ = [
     "ContextBundle", "StageCtx", "StageTelemetry", "ContextStage", "SCRATCH_KEYS",
