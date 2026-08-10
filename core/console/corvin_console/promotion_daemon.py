@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
@@ -58,6 +59,7 @@ class PromotionDaemon:
         self.enabled = enabled
         self._running = False
         self._task: asyncio.Task | None = None
+        self._start_lock = threading.Lock()
 
     async def run(self) -> None:
         """Main daemon loop."""
@@ -207,9 +209,9 @@ class PromotionDaemon:
 
     def start(self) -> None:
         """Start daemon (async) — thread-safe."""
-        # Use atomic check-and-set to prevent duplicate task creation
-        if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self.run())
+        with self._start_lock:
+            if self._task is None or self._task.done():
+                self._task = asyncio.create_task(self.run())
 
     def stop(self) -> None:
         """Stop daemon."""
