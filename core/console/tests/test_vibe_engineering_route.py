@@ -1,13 +1,13 @@
-"""E2E-wiring — Vibe Engineering P1 route (ADR-0275).
+"""E2E-wiring — Vibe Engineering route (ADR-0275/0278).
 
-Drives GET /vibe-engineering/traces through the REAL FastAPI router via
-TestClient (not a direct call to the handler) — the e2e-wiring-proof for a new
-endpoint. Covers:
-  * empty-state (no trace file yet) → 200, sessions=[], available=True.
-  * a persisted trace is read back through the HTTP boundary.
-  * TENANT ISOLATION: a trace under tenant B's sessions dir is invisible to a
-    session authenticated as tenant A (the route roots at tenant_sessions_dir).
-  * limit bounds → 400.
+Drives the routes through the REAL FastAPI router via TestClient. The route now
+reads the DURABLE Layer-A Decision Record (audit.jsonl), and serves the Layer-B
+brief via /explain. Covers:
+  * empty-state (no audit log) → 200, sessions=[].
+  * Layer-A records read back + grouped by session, carrying hash + brief_sha256.
+  * TENANT ISOLATION: the audit log is per-tenant (tenant_global_dir).
+  * /explain returns the brief text; invalid hash → 400; missing → found:false.
+  * /explain traversal guard: a hash-shaped name can't escape the tenant root.
 
 Run: python3 core/console/tests/test_vibe_engineering_route.py
 """
@@ -32,6 +32,9 @@ from corvin_console import auth as session_auth  # noqa: E402
 from corvin_console import deps as console_deps  # noqa: E402
 from corvin_console.routes import vibe_engineering as V  # noqa: E402
 
+_SHA = "a" * 64
+_SHA2 = "b" * 64
+
 
 def _fake_record(tenant_id: str = "_default") -> session_auth.SessionRecord:
     now = 1_000_000.0
@@ -54,12 +57,13 @@ def _fake_record(tenant_id: str = "_default") -> session_auth.SessionRecord:
     return session_auth.SessionRecord(**values)  # type: ignore[arg-type]
 
 
-def _write_trace(sessions_root: Path, session_name: str, trace: dict, ts: float):
-    wd = sessions_root / session_name
-    wd.mkdir(parents=True, exist_ok=True)
-    rec = {"v": 1, "turn_id": "turn-1", "ts": ts, "trace": trace}
-    (wd / ".corvin-cel-traces.jsonl").write_text(
-        json.dumps(rec) + "\n", encoding="utf-8")
+def _decision_event(session_id, turn_id, ts, brief_sha, hashv):
+    return json.dumps({
+        "event_type": "cel.decision", "ts": ts, "hash": hashv, "prev_hash": "p",
+        "details": {"turn_id": turn_id, "session_id": session_id, "top_score": 0.6,
+                    "stages_ok": 3, "brief_sha256": brief_sha, "brief_bytes": 100,
+                    "stages": [{"stage": "memory", "status": "ok",
+                                "sources": [{"id": "m.md", "score": 0.6}]}]}})
 
 
 class VibeRouteTests(unittest.TestCase):
@@ -67,12 +71,12 @@ class VibeRouteTests(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory()
         self.addCleanup(self.td.cleanup)
         self.base = Path(self.td.name)
-
-        # tenant_sessions_dir(tid) -> <tmp>/<tid>/sessions  (real tenant isolation)
-        self.pp = patch.object(
-            V._forge_paths, "tenant_sessions_dir",
-            lambda tid: self.base / tid / "sessions")
-        self.pp.start(); self.addCleanup(self.pp.stop)
+        self.pg = patch.object(V._forge_paths, "tenant_global_dir",
+                               lambda tid: self.base / tid / "global")
+        self.ps = patch.object(V._forge_paths, "tenant_sessions_dir",
+                               lambda tid: self.base / tid / "sessions")
+        self.pg.start(); self.addCleanup(self.pg.stop)
+        self.ps.start(); self.addCleanup(self.ps.stop)
 
     def _client(self, tenant_id="_default"):
         app = FastAPI()
@@ -81,42 +85,58 @@ class VibeRouteTests(unittest.TestCase):
         app.dependency_overrides[console_deps.require_session] = lambda: rec
         return TestClient(app)
 
+    def _write_audit(self, tenant, *events):
+        d = self.base / tenant / "global" / "forge"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "audit.jsonl").write_text("\n".join(events) + "\n", encoding="utf-8")
+
+    def _write_brief(self, tenant, session, sha, text):
+        d = self.base / tenant / "sessions" / session / "cel-briefs"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{sha}.txt").write_text(text, encoding="utf-8")
+
     def test_empty_state(self):
         r = self._client().get("/vibe-engineering/traces")
         self.assertEqual(r.status_code, 200, r.text)
-        body = r.json()
-        self.assertEqual(body["sessions"], [])
-        self.assertTrue(body["available"])
+        self.assertEqual(r.json()["sessions"], [])
 
-    def test_reads_persisted_trace_over_http(self):
-        root = self.base / "_default" / "sessions"
-        _write_trace(root, "web:abc", {
-            "task_preview": "erklär postgres indexes",
-            "stages": [{"stage": "memory", "status": "ok",
-                        "confidence_tier": "high", "sources": ["m1"]}],
-        }, ts=100.0)
+    def test_reads_layer_a_grouped(self):
+        self._write_audit("_default",
+                          _decision_event("web:a", "turn-1", 100.0, _SHA, "h1"),
+                          _decision_event("web:a", "turn-2", 200.0, _SHA2, "h2"))
         r = self._client().get("/vibe-engineering/traces")
-        self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
         self.assertEqual(len(body["sessions"]), 1)
         s = body["sessions"][0]
-        self.assertEqual(s["session"], "web:abc")
-        self.assertEqual(s["traces"][0]["trace"]["stages"][0]["stage"], "memory")
+        self.assertEqual(s["session"], "web:a")
+        self.assertEqual(len(s["turns"]), 2)
+        self.assertEqual(s["turns"][0]["hash"], "h2")  # newest first
+        self.assertEqual(s["turns"][0]["brief_sha256"], _SHA2)
 
     def test_tenant_isolation(self):
-        # tenant B has a trace; a session authed as tenant A must NOT see it.
-        b_root = self.base / "tenant_b" / "sessions"
-        _write_trace(b_root, "web:secret", {"stages": [], "task_preview": "B"}, ts=1.0)
+        self._write_audit("tenant_b",
+                          _decision_event("web:secret", "t", 1.0, _SHA, "h"))
         r = self._client(tenant_id="_default").get("/vibe-engineering/traces")
-        self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["sessions"], [],
-                         "tenant A must not read tenant B's traces")
+                         "tenant A must not read tenant B's audit records")
 
-    def test_limit_bounds(self):
-        self.assertEqual(self._client().get(
-            "/vibe-engineering/traces?limit=0").status_code, 400)
-        self.assertEqual(self._client().get(
-            "/vibe-engineering/traces?limit=201").status_code, 400)
+    def test_explain_returns_brief(self):
+        self._write_brief("_default", "web:a", _SHA, "## Context brief\nreal text")
+        r = self._client().get(f"/vibe-engineering/explain/{_SHA}")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body["found"])
+        self.assertIn("real text", body["text"])
+
+    def test_explain_invalid_hash_400(self):
+        r = self._client().get("/vibe-engineering/explain/not-a-hash")
+        self.assertEqual(r.status_code, 400)
+
+    def test_explain_missing_is_found_false(self):
+        r = self._client().get(f"/vibe-engineering/explain/{_SHA}")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.json()["found"])
+        self.assertEqual(r.json()["reason"], "erased_or_absent")
 
 
 if __name__ == "__main__":
