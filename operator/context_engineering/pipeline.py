@@ -103,6 +103,62 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
     return bundle, trace
 
 
+async def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
+                            meter: bool = True, *, gate_fn=None,
+                            persona_patterns=None) -> "tuple[Any, dict]":
+    """The FULL two-gate pipeline (ADR-0280 R2 / CONCEPT-0006 §9), with EVERY
+    enforcer in ONE place (the review's key demand — not delegated to a caller):
+
+      build_context (pure, pre-gate)
+        → Gate-1 on the raw task
+        → build_context_post_gate (egress/forge stages)
+        → Gate-2 on the FINAL payload (synthesised prompt + bound tool names)
+        → class-based tool re-validation (bind ≠ authorise)
+
+    ``gate_fn(text) -> (ok: bool, reason: str)`` is the caller's compliance gate
+    (L44/L34/L35); default allow-all for tests. ``persona_patterns`` are the
+    persona's allowed tool globs (a forged tool of an allowed class survives).
+    Returns ``(bundle, trace)``; fail-safe throughout — a denial degrades (drops
+    the un-approved egress/forge output), never blocks the turn.
+    """
+    bundle, trace = build_context(task, tenant, session, meter)
+    if bundle is None:
+        return None, trace
+
+    gate = gate_fn or (lambda _text: (True, ""))
+
+    # Gate-1 — raw task. A refused task never reaches an egress/forge stage.
+    ok1, reason1 = gate(task)
+    if not ok1:
+        trace["gate1_denied"] = str(reason1)[:120]
+        bundle.scratch["_deferred"] = []   # nothing side-effecting runs
+        return bundle, trace
+
+    bundle = await build_context_post_gate(bundle, trace)
+
+    # Gate-2 — the FINAL assembled payload (the synthesised prompt + the bound
+    # tool names) is what actually spawns the worker; it MUST be re-inspected.
+    tool_names = " ".join(getattr(t, "name", "") for t in (bundle.tools_to_bind or []))
+    final_payload = (f"{bundle.synthesised_prompt or ''} {tool_names}").strip()
+    if final_payload:
+        ok2, reason2 = gate(final_payload)
+        if not ok2:
+            trace["gate2_denied"] = str(reason2)[:120]
+            bundle.synthesised_prompt = None      # drop the un-approved synthesis
+            bundle.tools_to_bind = []
+            bundle.skills_to_bind = []
+            return bundle, trace
+
+    # bind ≠ authorise — a bound tool must be of a class the persona already allows.
+    if bundle.tools_to_bind and persona_patterns is not None:
+        from .stages.binding import revalidate_tools  # noqa: PLC0415
+        kept, dropped = revalidate_tools(bundle.tools_to_bind, persona_patterns)
+        bundle.tools_to_bind = kept
+        if dropped:
+            trace["tools_dropped"] = [getattr(t, "name", "?") for t in dropped]
+    return bundle, trace
+
+
 async def build_context_post_gate(bundle: Any, trace: dict) -> Any:
     """Run the deferred egress/forge stages AFTER the caller's Gate-1 approved the
     task (ADR-0282). Blocking stages run via ``asyncio.to_thread`` so a `claude -p`

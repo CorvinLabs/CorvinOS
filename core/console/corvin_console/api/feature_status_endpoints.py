@@ -5,10 +5,10 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
+from core.console.corvin_console.auth import require_session
 from core.console.corvin_console.feature_flags import REGISTRY
-from core.console.corvin_console.deps import require_session
 from core.telemetry import get_flag_metrics
 
 router = APIRouter(prefix="/api/feature-status", tags=["feature-status"])
@@ -119,7 +119,7 @@ async def get_all_features(session=Depends(require_session)):
 
 @router.get("/{flag_id}")
 async def get_feature(flag_id: str, session=Depends(require_session)):
-    """Get status for a single feature."""
+    """Get status for a single feature (requires auth to prevent info disclosure)."""
     # Find flag in registry
     flag = None
     for f in REGISTRY:
@@ -128,7 +128,7 @@ async def get_feature(flag_id: str, session=Depends(require_session)):
             break
 
     if not flag:
-        raise HTTPException(status_code=404, detail="Flag not found")
+        raise HTTPException(status_code=404, detail="Not found")
 
     metrics = get_flag_metrics(flag_id).get_24h_stats()
     error_rate = metrics.get("error_rate_24h", 0.0)

@@ -7,18 +7,16 @@ Fully automatic; no maintainer approval needed.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
 from core.console.corvin_console.promotion_gates import (
-    PromotionGates,
     DemotionGates,
-    PromotionEvent,
+    PromotionGates,
 )
-from core.telemetry import compute_digest, get_flag_metrics
+from core.telemetry import get_flag_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +58,6 @@ class PromotionDaemon:
         self.enabled = enabled
         self._running = False
         self._task: asyncio.Task | None = None
-        self._last_error_hours: dict[str, int] = {}  # flag_id → consecutive error hours
 
     async def run(self) -> None:
         """Main daemon loop."""
@@ -116,21 +113,11 @@ class PromotionDaemon:
 
         if tier == "beta":
             should_demote, reason = DemotionGates.check_beta_demotion(error_rate)
-            if should_demote:
-                self._last_error_hours["beta"] = self._last_error_hours.get("beta", 0) + 1
-                return should_demote, reason
-            else:
-                self._last_error_hours["beta"] = 0
-                return False, ""
+            return should_demote, reason
 
         elif tier == "stable":
             should_demote, reason = DemotionGates.check_stable_demotion(error_rate)
-            if should_demote:
-                self._last_error_hours["stable"] = self._last_error_hours.get("stable", 0) + 1
-                return should_demote, reason
-            else:
-                self._last_error_hours["stable"] = 0
-                return False, ""
+            return should_demote, reason
 
         elif tier == "production":
             should_demote, reason = DemotionGates.check_production_demotion(error_rate)
