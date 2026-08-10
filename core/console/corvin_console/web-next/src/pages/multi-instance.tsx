@@ -74,9 +74,10 @@ export function MultiInstanceDashboard() {
           }
         }
 
+        // Routes are mounted at /v1/console/api/multi-instance/* in the gateway
         const [statusRes, patternsRes] = await Promise.all([
-          fetch(`${apiBase}/api/multi-instance/status`),
-          fetch(`${apiBase}/api/multi-instance/patterns`),
+          fetch(`${apiBase}/v1/console/api/multi-instance/status`),
+          fetch(`${apiBase}/v1/console/api/multi-instance/patterns`),
         ]);
 
         if (!statusRes.ok || !patternsRes.ok) {
