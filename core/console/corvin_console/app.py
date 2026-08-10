@@ -133,6 +133,8 @@ from .routes import (
     models as models_route,
     talent as talent_route,
     vibe_engineering as vibe_engineering_route,
+    # ADR-0275/0277 — Multi-Instance Cross-Device Learning
+    multi_instance as multi_instance_route,
 )
 
 
@@ -270,6 +272,8 @@ router.include_router(models_route.router, tags=["console-models"])
 router.include_router(stats_features_route.router, tags=["console-stats"])
 router.include_router(talent_route.router, tags=["console-talent"])
 router.include_router(vibe_engineering_route.router, tags=["console-vibe-engineering"])
+# ADR-0275/0277 — Multi-Instance Cross-Device Learning Dashboard
+router.include_router(multi_instance_route.router, tags=["console-multi-instance"])
 
 
 @router.get("/version")

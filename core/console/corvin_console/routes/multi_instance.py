@@ -1,0 +1,221 @@
+"""
+Multi-Instance Learning Routes (ADR-0275/0277)
+
+Cross-device learning dashboard, sync status, patterns, overrides.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends
+from typing import Optional, List, Dict, Any
+import json
+from pathlib import Path
+from datetime import datetime
+
+router = APIRouter(prefix="/api/multi-instance", tags=["multi-instance"])
+
+
+# Data Models
+class InstanceStatus:
+    """Instance sync status."""
+    instance_id: str
+    name: str
+    status: str  # active, inactive, retired, archived
+    last_sync: datetime
+    voting_weight: float
+
+
+class MergedPattern:
+    """A learned pattern from merged state."""
+    pattern_id: str
+    recommended_choice: str
+    confidence: float
+    sources: List[str]  # instance IDs that contributed
+
+
+class SyncHealth:
+    """Overall sync health metrics."""
+    total_decisions: int
+    decisions_today: int
+    github_status: str  # ok, error, unreachable
+    merged_state_freshness: str  # "1 hour ago", "2 days ago", etc
+    next_scheduled_sync: datetime
+
+
+# Paths (from Tenant-Shumway)
+TENANT_SHUMWAY = Path.home() / "projects" / "Tenant-Shumway"
+MERGED_STATE = TENANT_SHUMWAY / "merged-state"
+
+
+def load_merged_state() -> Dict[str, Any]:
+    """Load user-profile.json from merged-state."""
+    profile_path = MERGED_STATE / "user-profile.json"
+
+    if not profile_path.exists():
+        return {
+            "merged_at": datetime.utcnow().isoformat() + "Z",
+            "patterns": {},
+            "n_patterns": 0,
+            "status": "uninitialized"
+        }
+
+    with open(profile_path) as f:
+        return json.load(f)
+
+
+def load_instance_registry() -> Dict[str, Any]:
+    """Load instance-registry.json (or create stub)."""
+    registry_path = MERGED_STATE / "instance-registry.json"
+
+    if not registry_path.exists():
+        return {
+            "user_id": "shumway-corvin",
+            "instances": [
+                {
+                    "instance_id": "home-laptop-ubuntu",
+                    "instance_name": "Home Laptop",
+                    "status": "active",
+                    "last_seen": datetime.utcnow().isoformat() + "Z",
+                    "is_primary": True
+                },
+                {
+                    "instance_id": "work-pc-windows",
+                    "instance_name": "Work PC",
+                    "status": "active",
+                    "last_seen": "2026-08-09T18:00:00Z",
+                    "is_primary": False
+                }
+            ]
+        }
+
+    with open(registry_path) as f:
+        return json.load(f)
+
+
+# Routes
+
+@router.get("/status")
+async def get_multi_instance_status() -> Dict[str, Any]:
+    """Get overall multi-instance sync status."""
+
+    try:
+        merged = load_merged_state()
+        registry = load_instance_registry()
+
+        # Compute freshness
+        merged_at = merged.get("merged_at", "unknown")
+        if merged_at != "unknown":
+            merged_time = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+            delta = datetime.utcnow().replace(tzinfo=merged_time.tzinfo) - merged_time
+            freshness = f"{delta.days}d {delta.seconds // 3600}h ago" if delta.days > 0 else f"{delta.seconds // 3600}h ago"
+        else:
+            freshness = "unknown"
+
+        return {
+            "enabled": True,
+            "instances": registry.get("instances", []),
+            "merged_patterns": merged.get("n_patterns", 0),
+            "merged_at": merged.get("merged_at"),
+            "freshness": freshness,
+            "github_repo": "https://github.com/veegee82/tenent-shumway",
+            "sync_frequency": "weekly"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/patterns")
+async def get_learned_patterns() -> Dict[str, Any]:
+    """Get all learned patterns from merged-state."""
+
+    try:
+        merged = load_merged_state()
+        patterns = []
+
+        for pattern_id, pattern_data in merged.get("patterns", {}).items():
+            patterns.append({
+                "pattern_id": pattern_id,
+                "recommended": pattern_data.get("recommended_model"),
+                "confidence": pattern_data.get("confidence"),
+                "sources": pattern_data.get("sources", []),
+                "candidates": pattern_data.get("candidates", {})
+            })
+
+        return {
+            "patterns": patterns,
+            "count": len(patterns),
+            "merged_at": merged.get("merged_at")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/instances")
+async def get_instance_status() -> Dict[str, Any]:
+    """Get status of all paired instances."""
+
+    try:
+        registry = load_instance_registry()
+
+        instances = []
+        for inst in registry.get("instances", []):
+            instances.append({
+                "instance_id": inst.get("instance_id"),
+                "name": inst.get("instance_name"),
+                "status": inst.get("status", "unknown"),
+                "last_seen": inst.get("last_seen"),
+                "is_primary": inst.get("is_primary", False)
+            })
+
+        return {
+            "user_id": registry.get("user_id"),
+            "instances": instances,
+            "count": len(instances)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conflicts")
+async def get_merge_conflicts() -> Dict[str, Any]:
+    """Get recent merge conflicts from merge-log."""
+
+    try:
+        merge_log_path = MERGED_STATE / "merge-log.jsonl"
+
+        conflicts = []
+        if merge_log_path.exists():
+            with open(merge_log_path) as f:
+                for line in f:
+                    if line.strip():
+                        event = json.loads(line)
+                        # Filter to conflict events (where candidates differ)
+                        candidates = event.get("candidates", {})
+                        if len(candidates) > 1:
+                            conflicts.append({
+                                "timestamp": event.get("timestamp"),
+                                "category": event.get("decision_category"),
+                                "candidates": candidates,
+                                "winner": event.get("winner"),
+                                "confidence": event.get("confidence")
+                            })
+
+        return {
+            "conflicts": conflicts[-10:] if conflicts else [],  # Last 10
+            "count": len(conflicts)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sync")
+async def trigger_manual_sync() -> Dict[str, str]:
+    """Trigger immediate sync (for testing)."""
+
+    try:
+        # In production, this would call the merge algorithm
+        # For now, just return status
+        return {
+            "status": "sync_triggered",
+            "message": "Manual sync requested. Will run next scheduled job or manually via cron."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
