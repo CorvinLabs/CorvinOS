@@ -61,6 +61,22 @@ class ForgeStagesTests(unittest.TestCase):
         self.assertFalse(self.tf.ast_allowlist_ok("import x\nx.system('rm')")[0])
         self.assertFalse(self.tf.ast_allowlist_ok("import x\nx.eval('y')")[0])
 
+    def test_ast_indirect_name_bypasses_blocked(self):
+        # review R2 finding B1: a forbidden builtin in ANY load-context position
+        # (not just Call.func) must be rejected. These all returned True before.
+        for bad in (
+            "_e = eval\n_e('__import__(1)')",          # alias then call
+            "__builtins__['eval']('x')",                # builtins subscript
+            "list(map(exec, ['code']))",                # passed as an argument
+            "g = getattr\ng(object, 'x')",              # getattr alias
+            "sorted([1], key=eval)",                    # forbidden as a kwarg value
+        ):
+            ok, reason = self.tf.ast_allowlist_ok(bad)
+            self.assertFalse(ok, f"bypass not blocked: {bad!r} -> {reason}")
+        # a clean impl using only json/sys still passes
+        self.assertTrue(self.tf.ast_allowlist_ok(
+            "import json, sys\nprint(json.dumps(json.load(sys.stdin)))")[0])
+
     def test_toolforge_binds_forged_tool(self):
         b = self.Bundle(task="x")
         b.scratch["needs"] = {"tools": [{"name": "csv_count", "description": "count"}]}

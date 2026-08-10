@@ -59,41 +59,66 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
     stages: list[dict[str, Any]] = []
     ok = 0
     top_score = 0.0
+
+    def _content_free_entry(name: str, s: dict) -> dict:
+        # Truncate source ids + error slugs to a content-free-safe length BEFORE
+        # the record is assembled — a benign long memory title / error path must
+        # NOT trip assert_content_free and cause the whole audit record to be
+        # dropped (finding #1: this was silently voiding Layer A / P-0).
+        safe_sources = [
+            {"id": str(x.get("id", ""))[:_MAX_ID], "score": x.get("score")}
+            for x in s.get("sources", []) if isinstance(x, dict)]
+        e: dict[str, Any] = {
+            "stage": name, "status": s.get("status", "ok"),
+            "confidence_tier": s.get("confidence_tier"),
+            "duration_ms": s.get("duration_ms"),
+            "sources": safe_sources,   # {id, score} — the causal "why this source"
+        }
+        if s.get("reason"):
+            e["reason"] = str(s["reason"])[:_MAX_ID]
+        if s.get("error"):
+            e["error_slug"] = str(s["error"])[:_MAX_ID]
+        return e
+
+    def _accumulate(s: dict) -> None:
+        nonlocal top_score
+        for src in s.get("sources", []):
+            if isinstance(src, dict):
+                top_score = max(top_score, float(src.get("score", 0.0) or 0.0))
+
     for name in _CONCEPTUAL_STAGES:
         s = seen.get(name)
         if s is None:
             reason = "stage_inactive" if name in _INACTIVE_STAGES else "not_reached"
             stages.append({"stage": name, "status": "not_run", "reason": reason})
             continue
-        status = s.get("status", "ok")
-        if status == "ok":
+        if s.get("status") == "ok":
             ok += 1
-        # Truncate source ids + error slugs to a content-free-safe length BEFORE
-        # the record is assembled — a benign long memory title / error path must
-        # NOT trip assert_content_free and cause the whole audit record to be
-        # dropped (review finding #1: this was silently voiding Layer A / P-0).
-        safe_sources = [
-            {"id": str(x.get("id", ""))[:_MAX_ID], "score": x.get("score")}
-            for x in s.get("sources", []) if isinstance(x, dict)]
-        entry: dict[str, Any] = {
-            "stage": name, "status": status,
-            "confidence_tier": s.get("confidence_tier"),
-            "duration_ms": s.get("duration_ms"),
-            # sources are {id, score} — the causal "why this source" (ADR-0278).
-            "sources": safe_sources,
-        }
-        if s.get("error"):
-            entry["reason"] = str(s["error"])[:_MAX_ID]
-        for src in s.get("sources", []):
-            if isinstance(src, dict):
-                top_score = max(top_score, float(src.get("score", 0.0) or 0.0))
-        stages.append(entry)
+        stages.append(_content_free_entry(name, s))
+        _accumulate(s)
 
-    return {
+    # The ACTIVE pipeline runs egress/forge stages (llm_synthesis, toolforge,
+    # skillforge) NOT in _CONCEPTUAL_STAGES. They MUST appear in the hash-chained
+    # record — the cloud-egress + tool-forge decisions are exactly what an EU AI
+    # Act auditor needs to see (review R2 finding C1: they were silently dropped).
+    for name, s in seen.items():
+        if not name or name in _CONCEPTUAL_STAGES:
+            continue
+        if s.get("status") == "ok":
+            ok += 1
+        stages.append(_content_free_entry(name, s))
+        _accumulate(s)
+
+    # Reflect the ACTUAL feature that ran + any gate denial (review R2 finding C3:
+    # the record hardcoded flag=vibe_engineering and only read `degraded`, so an
+    # active-brain turn a house-rules gate denied left no trace of the active brain
+    # or the denial).
+    active = any(sid in seen for sid in ("llm_synthesis", "toolforge", "skillforge"))
+    rec: dict[str, Any] = {
         "turn_id": turn_id,
         "session_id": session_id,
         "tenant_id": tenant_id,           # reserved audit key, always kept
-        "flag": "vibe_engineering",
+        "flag": "vibe_engineering_active" if active else "vibe_engineering",
         "metered": True,
         "degraded": trace.get("degraded"),
         "stages": stages,
@@ -102,6 +127,15 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
         "brief_sha256": _sha256_text(brief_text) if brief_text else None,
         "brief_bytes": len(brief_text.encode("utf-8")) if brief_text else 0,
     }
+    for k in ("gate1_denied", "gate2_denied"):
+        if trace.get(k):
+            rec[k] = str(trace[k])[:_MAX_ID]
+    if trace.get("forged_rolled_back"):
+        rb = trace["forged_rolled_back"]
+        rec["forged_rolled_back"] = {
+            "tools": [str(t)[:_MAX_ID] for t in (rb.get("tools") or [])],
+            "skills": [str(s)[:_MAX_ID] for s in (rb.get("skills") or [])]}
+    return rec
 
 
 def assert_content_free(record: dict) -> None:
@@ -148,13 +182,15 @@ def emit(trace: dict, brief_text: str, *, turn_id: str, tenant_id: str = "_defau
     # Layer B — full brief text, erasable sidecar keyed by the hash. A miss here
     # only loses the CONTENT (the content-free Layer-A record still stands), but
     # it is logged, not silently dropped.
+    sidecar: "Path | None" = None
     if brief_text and workdir and record.get("brief_sha256"):
         try:
             d = Path(workdir) / "cel-briefs"
             d.mkdir(parents=True, exist_ok=True)
-            (d / f"{record['brief_sha256']}.txt").write_text(
-                brief_text, encoding="utf-8")
+            sidecar = d / f"{record['brief_sha256']}.txt"
+            sidecar.write_text(brief_text, encoding="utf-8")
         except Exception as e:  # noqa: BLE001
+            sidecar = None
             _log.warning("CEL Layer-B brief sidecar write failed (turn %s): %s",
                          turn_id, e)
 
@@ -169,4 +205,12 @@ def emit(trace: dict, brief_text: str, *, turn_id: str, tenant_id: str = "_defau
     except Exception as e:  # noqa: BLE001
         _log.error("CEL Decision Record AUDIT-WRITE FAILED (turn %s, tenant %s): %s "
                    "— record NOT persisted to the hash chain", turn_id, tenant_id, e)
+        # Roll back the orphaned Layer-B sidecar (review R2 finding D5): with no
+        # Layer-A hash referencing it, the brief text would linger un-audited until
+        # the erasure handler runs. Best-effort unlink.
+        if sidecar is not None:
+            try:
+                sidecar.unlink()
+            except Exception:  # noqa: BLE001
+                pass
         return None

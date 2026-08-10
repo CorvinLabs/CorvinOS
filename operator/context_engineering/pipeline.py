@@ -104,36 +104,91 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
     return bundle, trace
 
 
+def _safe_gate(gate, text: str) -> "tuple[bool, str]":
+    """Invoke the compliance gate; a gate that RAISES must DENY, never fail-open
+    (review R2 finding A3 — an un-wrapped gate exception propagated out of the
+    enforcer, and a caller catching it could then spawn ungated)."""
+    try:
+        ok, reason = gate(text)
+        return bool(ok), str(reason or "")
+    except Exception as e:  # noqa: BLE001 — gate error → deny (fail-closed)
+        return False, f"gate_error:{str(e)[:80]}"
+
+
+def _tenant_of(bundle: Any) -> str:
+    ctx = bundle.scratch.get("_ctx")
+    return getattr(ctx, "tenant_id", "_default") if ctx is not None else "_default"
+
+
+def _rollback_forged(bundle: Any, trace: dict, *, tool_names=None,
+                     skill_names=None) -> None:
+    """Un-create forged tools/skills a gate/re-validation rejected (review R2 A4:
+    the artifact is written to disk PRE-Gate-2, so a denial must roll it back or a
+    forge_enabled persona could invoke the denied tool by name). Best-effort."""
+    tenant = _tenant_of(bundle)
+    if tool_names:
+        from .stages.toolforge import uncreate_tools  # noqa: PLC0415
+        uncreate_tools(tenant, tool_names)
+    if skill_names:
+        from .stages.skillforge import uncreate_skills  # noqa: PLC0415
+        uncreate_skills(tenant, skill_names)
+    if tool_names or skill_names:
+        rb = trace.setdefault("forged_rolled_back", {"tools": [], "skills": []})
+        rb["tools"].extend(tool_names or [])
+        rb["skills"].extend(skill_names or [])
+
+
 def _gate1(bundle: Any, trace: dict, gate, task: str) -> bool:
     """Gate-1 on the raw task. Returns True to proceed to the egress/forge stages,
     False when the gate denied (nothing side-effecting then runs)."""
-    ok, reason = gate(task)
+    ok, reason = _safe_gate(gate, task)
     if not ok:
-        trace["gate1_denied"] = str(reason)[:120]
+        trace["gate1_denied"] = reason[:120]
         bundle.scratch["_deferred"] = []
     return ok
 
 
 def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns) -> Any:
-    """Gate-2 on the FINAL assembled payload (synthesised prompt + bound tool
-    names) + class-based tool re-validation (bind ≠ authorise). Shared by the sync
-    and async entry points so the enforcer logic lives in exactly one place."""
+    """Gate-2 on the FINAL assembled payload + class-based tool re-validation
+    (bind ≠ authorise). Shared by the sync and async entry points so the enforcer
+    logic lives in exactly one place.
+
+    The payload Gate-2 inspects is EVERYTHING that reaches the worker: the
+    synthesised prompt, the bound tool names, AND the forged-skill ids + bodies
+    (review R2 finding A1 — skills reach the worker via the injection channel, so
+    a skill body was previously un-gated). If Gate-2 denies, every forged artifact
+    is rolled back (A4). Re-validation ALWAYS runs (A2): None/empty patterns drop
+    all forged tools (fail-closed); the bridge passes ["*"] for an all-allowed
+    persona so an all-allowed persona is not wrongly narrowed."""
     tool_names = " ".join(getattr(t, "name", "") for t in (bundle.tools_to_bind or []))
-    final_payload = (f"{bundle.synthesised_prompt or ''} {tool_names}").strip()
+    skill_ids = " ".join(getattr(s, "skill_id", "") for s in (bundle.skills_to_bind or []))
+    skill_bodies = " ".join(getattr(s, "body", "") for s in (bundle.skills_to_bind or []))
+    final_payload = " ".join(
+        x for x in (bundle.synthesised_prompt or "", tool_names, skill_ids,
+                    skill_bodies) if x).strip()
     if final_payload:
-        ok2, reason2 = gate(final_payload)
+        ok2, reason2 = _safe_gate(gate, final_payload)
         if not ok2:
-            trace["gate2_denied"] = str(reason2)[:120]
+            trace["gate2_denied"] = reason2[:120]
+            _rollback_forged(
+                bundle, trace,
+                tool_names=[f["name"] for f in bundle.scratch.get("_forged_tools", [])],
+                skill_names=list(bundle.scratch.get("_forged_skills", [])))
             bundle.synthesised_prompt = None      # drop the un-approved synthesis
             bundle.tools_to_bind = []
             bundle.skills_to_bind = []
             return bundle
-    if bundle.tools_to_bind and persona_patterns is not None:
+    if bundle.tools_to_bind:
         from .stages.binding import revalidate_tools  # noqa: PLC0415
         kept, dropped = revalidate_tools(bundle.tools_to_bind, persona_patterns)
         bundle.tools_to_bind = kept
         if dropped:
             trace["tools_dropped"] = [getattr(t, "name", "?") for t in dropped]
+            dropped_refs = {getattr(t, "name", "") for t in dropped}
+            forged = bundle.scratch.get("_forged_tools", [])
+            _rollback_forged(
+                bundle, trace,
+                tool_names=[f["name"] for f in forged if f["ref"] in dropped_refs])
     return bundle
 
 

@@ -197,10 +197,15 @@ def _validate_pipeline(pipeline: list) -> "list[str]":
     ids = []
     for e in pipeline:
         sid = e.get("stage") if isinstance(e, dict) else e
-        if not sid:
-            errors.append("each entry needs a 'stage' id")
+        # A non-string sid (list/dict) is unhashable — it must produce a clean 400
+        # validation error, not a 500 when tested against the `known` set below
+        # (review R2 finding D1).
+        if not isinstance(sid, str) or not sid:
+            errors.append("each entry needs a string 'stage' id")
         else:
             ids.append(sid)
+    if len(ids) != len(set(ids)):  # duplicates run a stage twice (review R2 D2)
+        errors.append("duplicate stage ids are not allowed")
     known = set(_CEL_STAGES.known_ids())
     for i in ids:
         if i not in known:
