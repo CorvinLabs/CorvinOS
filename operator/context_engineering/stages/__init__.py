@@ -11,6 +11,10 @@ from .base import (
 )
 from .registry import register_stage, get_stage, known_ids, all_specs
 from .config import StageSpec, resolve_pipeline, DEFAULT_PIPELINE, topo_order
+from .binding import (
+    ToolRef, SkillRef, revalidate_tools, strip_for_remote, apply_tool_bindings,
+    MAX_BINDINGS,
+)
 
 # Import the first-party stages so they self-register at package import.
 from . import memory, graph, skill, approach, blocker  # noqa: F401,E402

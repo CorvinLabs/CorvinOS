@@ -27,9 +27,19 @@ from .stages._util import (  # noqa: F401
 
 def build_brief(task: str, tenant: str = "_default", session: Any = None,
                 meter: bool = True) -> "tuple[Any, dict]":
-    """Run the config-resolved stage pipeline; return ``(brief, trace)``.
+    """Backward-compatible façade: run the pipeline, return ``(brief, trace)``.
+    The bridge/console call this. ``build_context`` (below) exposes the full
+    ContextBundle (incl. the P-B binding channels) for callers that provision the
+    worker with tools/skills, not just text."""
+    bundle, trace = build_context(task, tenant, session, meter)
+    return (bundle.brief if bundle is not None else None), trace
 
-    ``brief`` is a RichTaskBrief (or None if the license gate degrades this turn,
+
+def build_context(task: str, tenant: str = "_default", session: Any = None,
+                  meter: bool = True) -> "tuple[Any, dict]":
+    """Run the config-resolved stage pipeline; return ``(bundle, trace)``.
+
+    ``bundle`` is a ContextBundle (or None if the license gate degrades this turn,
     the pipeline has a cycle, or memory fails). ``trace`` carries per-stage
     telemetry + ``degraded`` when the turn ran on plain context. ``meter=False``
     bypasses the license gate (tests / internal reuse).
@@ -78,7 +88,7 @@ def build_brief(task: str, tenant: str = "_default", session: Any = None,
             if spec.id == "memory" or bundle.brief is None:
                 return None, trace   # no brief → nothing downstream can attach
 
-    return bundle.brief, trace
+    return bundle, trace
 
 
 def render_brief_to_text(brief: Any) -> str:

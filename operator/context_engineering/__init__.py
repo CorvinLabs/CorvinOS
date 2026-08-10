@@ -14,7 +14,7 @@ from .graph_traversal import GraphTraversal, RelatedDecision, GraphTraversalResu
 from .skill_injection import SkillInjection, RecommendedSkill, SkillInjectionResult
 from .adr_loader import ADRLoader, ADRMetadata
 from .adr_classifier import ADRClassifier
-from .pipeline import build_brief, render_brief_to_text
+from .pipeline import build_brief, render_brief_to_text, build_context
 from .license_gate import enforce_ce_quota
 from .trace import persist_trace, read_recent_traces
 from .decision_record import emit as emit_decision_record, build_record as build_decision_record
