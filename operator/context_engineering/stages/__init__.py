@@ -21,6 +21,9 @@ from .binding import (
 from . import memory, graph, skill, approach, blocker  # noqa: F401,E402
 from . import llm_synthesis  # noqa: F401,E402  (opt-in, ADR-0282)
 from . import toolforge, skillforge  # noqa: F401,E402  (opt-in, ADR-0283)
+from .grades import (  # noqa: E402  (ADR-0285)
+    grade_stage, get_grade, bootstrap_seed, is_default_eligible, record_turn_outcome,
+)
 
 __all__ = [
     "ContextBundle", "StageCtx", "StageTelemetry", "ContextStage", "SCRATCH_KEYS",
