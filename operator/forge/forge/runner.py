@@ -38,6 +38,7 @@ from .sandbox import (
     build_bwrap_cmd,
     ensure_requirements,
     have_bwrap,
+    interpreter_ro_binds,
     stripped_env,
 )
 
@@ -552,46 +553,13 @@ def run_tool(
         rw_extras = list(extra_rw_paths or [])
         # Always rw-bind this run's artifacts dir so the tool can write into it.
         rw_extras.append(ctx.artifacts_dir)
-        # If python lives outside /usr (e.g. a venv), expose it read-only.
-        # IMPORTANT: do NOT resolve symlinks before the prefix check —
-        # a venv's `bin/python` is typically a symlink to /usr/bin/python3,
-        # but the venv ROOT (containing site-packages + bin/) is what
-        # the inner cmd needs in the sandbox. Resolving first would bind
-        # /usr and miss the venv tree, breaking spawns that use
-        # sys.executable from the venv.
+        # The interpreter must be resolvable INSIDE the jail — venv root plus,
+        # on a uv install, the multi-hop interpreter store. ONE implementation,
+        # shared with the P-G ContextStage sandbox (ADR-0289):
+        # sandbox.interpreter_ro_binds() carries the full rationale, including
+        # why the symlinks must NOT be resolved before the prefix check.
         if spec.runtime == "python":
-            py_exec = Path(sys.executable)
-            venv_root = py_exec.parent.parent
-            if (py_exec.parent.name == "bin"
-                    and not str(venv_root).startswith("/usr")):
-                ro_extras.append(venv_root)
-            # A uv-managed venv symlinks bin/python3 to an interpreter that
-            # lives OUTSIDE the venv tree, THROUGH SEVERAL HOPS — e.g.
-            #   .venv/bin/python3 → python
-            #   .venv/bin/python  → ~/.local/share/uv/python/cpython-3.11-…/bin/python3.11
-            #   …/cpython-3.11-…  → …/cpython-3.11.15-…            (dir symlink)
-            # Binding only venv_root (or even only the fully-resolved prefix)
-            # leaves an intermediate hop dangling inside the jail ("bwrap:
-            # execvp .../python3: No such file"), which silently breaks EVERY
-            # forged tool on a uv install — the DEFAULT installer path. Bind the
-            # interpreter version STORE (the parent that holds both the
-            # short-name symlink dir and the real cpython-X.Y.Z dir) read-only,
-            # so every hop resolves. Guarded so we never bind a system-wide or
-            # home-root directory. A classic `python -m venv` whose bin/python
-            # points at /usr is unaffected (real_exec is under /usr → skipped).
-            real_exec = py_exec.resolve()
-            if (not str(real_exec).startswith("/usr")
-                    and not real_exec.is_relative_to(venv_root)):
-                store = real_exec.parent.parent.parent  # …/uv/python
-                # Only bind a sufficiently-specific store dir — never '/',
-                # '/home', the user's home root, or a two-level path.
-                if (len(store.parts) >= 4
-                        and store != Path.home()
-                        and str(store) not in ("/", "/usr", "/home", "/opt")):
-                    ro_extras.append(store)
-                else:
-                    # Fallback: the resolved interpreter's own prefix only.
-                    ro_extras.append(real_exec.parent.parent)
+            ro_extras.extend(interpreter_ro_binds())
         # Bind the per-tool requirements target dir (if any) read-only.
         if req_site_dir is not None:
             ro_extras.append(req_site_dir)

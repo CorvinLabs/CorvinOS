@@ -39,18 +39,70 @@ class StageSpec:
     config: dict = field(default_factory=dict)   # per-stage config (when/model/budget)
 
 
-def _read_pipeline_config(tenant_id: str) -> "list | None":
-    """Best-effort read of spec.context_engineering.pipeline. None ⇒ use default."""
+def _read_ce_config(tenant_id: str) -> dict:
+    """Best-effort read of ``spec.context_engineering``. {} on any failure."""
     try:
         # Reuse the console's tenant-spec reader (already importable from the CEL
         # call sites); a shared public reader is the P-A follow-up, not a 3rd copy.
         from corvin_console import feature_flags as _ff  # noqa: PLC0415
         spec = _ff._tenant_spec(tenant_id) or {}  # type: ignore[attr-defined]
         ce = spec.get("context_engineering") or {}
-        pipe = ce.get("pipeline")
-        return pipe if isinstance(pipe, list) else None
-    except Exception:  # noqa: BLE001 — any read failure → default-safe pipeline
-        return None
+        return ce if isinstance(ce, dict) else {}
+    except Exception:  # noqa: BLE001 — any read failure → default-safe behaviour
+        return {}
+
+
+def _read_pipeline_config(tenant_id: str) -> "list | None":
+    """Best-effort read of spec.context_engineering.pipeline. None ⇒ use default."""
+    pipe = _read_ce_config(tenant_id).get("pipeline")
+    return pipe if isinstance(pipe, list) else None
+
+
+def _load_community_stages(tenant_id: str) -> None:
+    """Register the community stages the operator DECLARED, so they exist by the
+    time the pipeline is resolved (ADR-0289).
+
+    Surface: ``spec.context_engineering.community_stages`` in tenant.corvin.yaml,
+    a list of ``{id, path, requires?}``. The same file the pipeline itself lives
+    in — no new configuration surface, and no marketplace: the operator points at
+    a file they already decided to trust enough to place on the box.
+
+    Without this the sandbox would have had no production caller at all: a
+    mechanism reachable only from a Python REPL is the dead-mechanism class this
+    phase's own review round exists to prevent (CONCEPT-0008). Fail-safe — a
+    malformed entry is skipped, and a host without isolation registers nothing.
+    """
+    try:
+        from .registry import get_stage, register_community_stage  # noqa: PLC0415
+        spec = _read_ce_config(tenant_id)
+        for e in (spec.get("community_stages") or []):
+            if not isinstance(e, dict):
+                continue
+            sid, path = e.get("id"), e.get("path")
+            if not isinstance(sid, str) or not sid or not path:
+                continue
+            if get_stage(sid) is not None:
+                continue          # already registered (or a builtin id — never shadow)
+            req = e.get("requires")
+            register_community_stage(
+                sid, path,
+                requires=tuple(req) if isinstance(req, (list, tuple)) else ())
+    except Exception:  # noqa: BLE001 — a bad declaration never breaks a turn
+        return
+
+
+def _default_eligible(tenant_id: str, stage_id: str) -> bool:
+    """May this stage sit in a pipeline the operator did NOT author?
+
+    Builtin → always (vetted). Otherwise it needs operator grades over the
+    ADR-0285 threshold. Fail-CLOSED on any error: an unreadable grade store must
+    not silently promote an unproven community stage into the default path."""
+    try:
+        from .grades import is_default_eligible  # noqa: PLC0415
+        from .registry import builtin_ids  # noqa: PLC0415
+        return is_default_eligible(tenant_id, stage_id, builtin_ids())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def resolve_pipeline(tenant_id: str = "_default",
@@ -61,8 +113,18 @@ def resolve_pipeline(tenant_id: str = "_default",
     An operator-authored ``spec.context_engineering.pipeline`` always wins. Absent,
     the fallback is ACTIVE_PIPELINE when ``active`` (the full Context Brain — LLM
     synthesis + ToolForge + SkillForge) else the five-stage DEFAULT_PIPELINE."""
+    # Declared community stages must be registered BEFORE the ids below are
+    # resolved, or an operator's own pipeline entry would be dropped as unknown.
+    _load_community_stages(tenant_id)
     raw = _read_pipeline_config(tenant_id)
-    if raw is not None:
+    # An operator-AUTHORED pipeline is opt-in use: an ungraded community stage is
+    # allowed there, because that is the only way it can ever earn its first
+    # grade (ADR-0284 R1c, the henne-ei trap). A DEFAULT pipeline is different —
+    # nobody chose those stages, so the grade gate applies (ADR-0285). Before
+    # P-G this distinction had no subject: every registered stage was builtin and
+    # therefore always eligible, which is why `is_default_eligible` sat dormant.
+    authored = raw is not None
+    if authored:
         entries = raw
     elif active:
         entries = ACTIVE_PIPELINE
@@ -76,6 +138,12 @@ def resolve_pipeline(tenant_id: str = "_default",
         # must be dropped+audited, not crash get_stage's dict lookup (review R2 A5).
         if not isinstance(sid, str) or not sid or get_stage(sid) is None:
             dropped.append(str(sid))
+            continue
+        # Grade gate on the DEFAULT path only (ADR-0285, live since ADR-0289):
+        # a non-builtin stage the operator did not explicitly author needs a
+        # passing mean over a minimum sample before it may run by default.
+        if not authored and not _default_eligible(tenant_id, sid):
+            dropped.append(sid)
             continue
         # Accept BOTH shapes (review finding #3): a nested {"stage": id, "config":
         # {...}} (what the editor writes) and flat {"stage": id, model: …} keys. A

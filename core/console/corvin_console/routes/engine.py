@@ -30,6 +30,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -610,6 +611,19 @@ def get_engine_model_registry(
         "worker_models": [{"id": "...", "label": "...", "default": bool}, ...]
       }
     """
+    # Auto-refresh the live model catalogue so a newly released model appears in
+    # the pickers on its own. SHIPS DARK: this is real network egress on a
+    # page-load path, so a default install must not start reaching out because it
+    # upgraded (CLAUDE.md feature-flag rule). The gating logic itself lives in
+    # `_maybe_refresh_model_catalog` and is unconditional there — the flag is
+    # checked HERE, at the call site, so "off" is a quiet path.
+    try:
+        from .. import feature_flags as _ff  # noqa: PLC0415
+        if _ff.is_enabled("model_catalog_auto_refresh",
+                          getattr(_rec, "tenant_id", "_default")):
+            _maybe_refresh_model_catalog(getattr(_rec, "tenant_id", "_default"))
+    except Exception:  # noqa: BLE001 — a refresh must never take this page down
+        pass
     try:
         from engine_models import registry_as_dict  # type: ignore[import]
         # force_reload → always serve the current model catalog so a registry
@@ -619,6 +633,74 @@ def get_engine_model_registry(
         return registry_as_dict(force_reload=True)
     except Exception:  # noqa: BLE001
         return {}
+
+
+# ── live model-catalogue refresh (gating, ADR-0181) ──────────────────────────
+# The fetch itself is the easy part; the GATING is what matters, because this
+# runs on a page load. Specified by test_model_catalog_refresh_gating.py, which
+# shipped in 4f76526 WITHOUT the implementation — the module raised
+# AttributeError on import and so never ran (found in the R6/R7 review sweep).
+#
+#   * a FRESH cache must not egress at all;
+#   * a FAILED attempt must not re-fire on every page load — a failed fetch
+#     writes nothing, so the entry stays stale and would otherwise refetch
+#     forever; a retry FLOOR is the only thing that stops that;
+#   * an in-flight refresh is never duplicated;
+#   * an L35-denied host is never contacted;
+#   * nothing may raise into the route.
+_REFRESH_RETRY_FLOOR_SECONDS = 3600.0
+_refresh_inflight: set[str] = set()
+_refresh_last_attempt: dict[str, float] = {}
+_refresh_lock = threading.Lock()
+#: providers worth auto-refreshing (cloud, model list changes over time).
+_AUTO_REFRESH_PROVIDERS = ("anthropic",)
+
+
+def _maybe_refresh_model_catalog(tenant_id: str) -> None:
+    """Start a background refresh for every stale auto-refresh provider."""
+    import model_catalog  # type: ignore[import]  # noqa: PLC0415
+    now = time.time()
+    for provider in _AUTO_REFRESH_PROVIDERS:
+        if not model_catalog.is_stale(provider):
+            continue
+        with _refresh_lock:
+            if provider in _refresh_inflight:
+                continue
+            last = _refresh_last_attempt.get(provider)
+            if last is not None and (now - last) < _REFRESH_RETRY_FLOOR_SECONDS:
+                continue
+            _refresh_inflight.add(provider)
+            _refresh_last_attempt[provider] = now
+        threading.Thread(target=_refresh_model_catalog_now,
+                         args=(provider, tenant_id), daemon=True).start()
+
+
+def _refresh_model_catalog_now(provider: str, tenant_id: str) -> None:
+    """Fetch one provider's model list and store it. NEVER raises; always
+    releases the in-flight guard (a leaked guard would wedge the provider for
+    the process lifetime)."""
+    try:
+        from engine_models import load_providers  # type: ignore[import]  # noqa: PLC0415
+        from engine_providers import fetch_models  # type: ignore[import]  # noqa: PLC0415
+        import model_catalog  # type: ignore[import]  # noqa: PLC0415
+
+        spec = load_providers(force_reload=True).get(provider)
+        if spec is None:
+            return
+        if spec.kind == "cloud" and spec.base_url:
+            if _egress_denied(spec.base_url, tenant_id):
+                return          # L35 applies to the background refresh too
+        result = fetch_models(provider, base_url=spec.base_url,
+                              model_source=spec.model_source,
+                              credential_env=spec.credential_env) or {}
+        models = result.get("models") or []
+        if models:
+            model_catalog.store_models(provider, models)
+    except Exception:  # noqa: BLE001 — a broken refresh never reaches the route
+        pass
+    finally:
+        with _refresh_lock:
+            _refresh_inflight.discard(provider)
 
 
 def _egress_denied(base_url: str, tenant_id: str) -> str | None:

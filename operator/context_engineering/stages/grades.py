@@ -11,14 +11,16 @@ excluded. The loop attributes a turn's outcome to the stages that ran.
 Community stages themselves remain P-G (no in-process isolation yet, ADR-0285 R2)
 — this store governs default-pipeline ENTRY, not process isolation.
 
-DORMANT UNTIL P-G (review R3 finding B1): ``is_default_eligible`` /
-``record_turn_outcome`` have NO production caller today — ``resolve_pipeline``
-does not consult eligibility, and every registered stage is ``trust="builtin"``
-(always eligible), so there is no live subject. This module is intentionally
-built-ahead; wire ``is_default_eligible`` into ``resolve_pipeline`` (drop+audit an
-ineligible non-builtin) when the first community stage ships. The hardening below
-(operator-only promotion, trusted-grader filter, atomic write) is here so that
-wiring is safe on day one, NOT because it governs anything reachable now.
+LIVE SINCE P-G (ADR-0289). ``is_default_eligible`` is called by
+``config.resolve_pipeline`` for any pipeline the operator did NOT author, and
+community stages — the non-builtin subject this gate was written for — now exist
+because they run in the subprocess sandbox. Was "dormant until P-G" (review R3
+finding B1) up to 2026-08-11.
+
+``record_turn_outcome`` is STILL without a production caller: the
+outcome-feedback loop (ADR-0269 Phase-4b) that would attribute a turn's success
+to the stages that ran is not wired. Grades therefore accrue only from explicit
+operator grading today — which is also the only kind that promotes.
 """
 from __future__ import annotations
 

@@ -203,6 +203,49 @@ def build_bwrap_cmd(
     return cmd
 
 
+def interpreter_ro_binds() -> list[Path]:
+    """Read-only binds that make ``sys.executable`` resolvable INSIDE the jail.
+
+    Extracted from ``runner.py`` (ADR-0289) so the forged-tool runner and the
+    P-G ContextStage sandbox share ONE implementation — a second copy of this
+    would silently rot, and the failure mode is invisible ("bwrap: execvp
+    .../python3: No such file", every sandboxed run dead on a uv install, which
+    is the DEFAULT installer path).
+
+    Two cases, both needed:
+
+    * a venv interpreter (``<venv>/bin/python``) → bind the venv ROOT, not the
+      resolved target: resolving first typically lands on /usr/bin/python3 and
+      misses the site-packages tree the inner command needs;
+    * a **uv**-managed venv, whose ``bin/python3`` symlinks THROUGH SEVERAL HOPS
+      to an interpreter outside the venv (``bin/python3 → python →
+      ~/.local/share/uv/python/cpython-3.11-…/bin/python3.11``, with a dir
+      symlink in between) → bind the interpreter version STORE, the parent
+      holding both the short-name symlink dir and the real ``cpython-X.Y.Z``
+      dir, so every hop resolves.
+
+    Guarded so a too-generic directory ('/', '/usr', '/home', '/opt', the user's
+    home root, or any path shallower than four parts) is never bound; that case
+    falls back to the resolved interpreter's own prefix.
+    """
+    out: list[Path] = []
+    py_exec = Path(sys.executable)
+    venv_root = py_exec.parent.parent
+    if py_exec.parent.name == "bin" and not str(venv_root).startswith("/usr"):
+        out.append(venv_root)
+    real_exec = py_exec.resolve()
+    if (not str(real_exec).startswith("/usr")
+            and not real_exec.is_relative_to(venv_root)):
+        store = real_exec.parent.parent.parent          # …/uv/python
+        if (len(store.parts) >= 4
+                and store != Path.home()
+                and str(store) not in ("/", "/usr", "/home", "/opt")):
+            out.append(store)
+        else:
+            out.append(real_exec.parent.parent)
+    return out
+
+
 def apply_rlimits(limits: Limits) -> None:
     """``preexec_fn`` for subprocess.run — runs in the child after fork."""
     cpu = limits.cpu_seconds

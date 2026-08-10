@@ -607,6 +607,37 @@ def _resolve_tts_voice(lang: str) -> str | None:
 _MAX_VOICE_SEGMENTS = 24
 _TTS_PROVIDER_CHAR_LIMIT = 4000  # OpenAI TTS-1 hard cap is 4096; stay under it
 _TTS_SUMMARIZE_MAX_CHARS = 400   # same default build_voice_summary() uses for bridges
+# Shortest prefix worth keeping when a sentence boundary is found — a period at
+# character 5 would collapse a summary to "Hi." and is worse than a mid-word cut.
+_TTS_MIN_SENTENCE_CUT = 80
+
+
+def _cut_at_sentence_boundary(text: str, limit: int,
+                              min_cut: int = _TTS_MIN_SENTENCE_CUT) -> str:
+    """Bound ``text`` to ``limit`` chars, ending at a sentence boundary when one
+    exists late enough in the window; otherwise a hard cut.
+
+    Live report 2026-08-04 — "the voice summary in the Console chat sometimes
+    gets cut off / doesn't come out complete". `_voice_tts_sync` clamped the
+    SUMMARY with a bare ``text[:limit]`` slice, unlike its own two neighbouring
+    fallback branches which already cut at a boundary. That mattered because
+    ``summarize.py::adaptive_target()`` scales the target to ~85% of the ORIGINAL
+    answer with no hard cap ("completeness wins"), so a long answer legitimately
+    produces a summary longer than the provider limit — and the raw slice then
+    cut it mid-word, which TTS reads aloud as a broken-off sentence.
+
+    The fix was specified by `test_voice_summary_truncation_boundary.py` in
+    4f76526 but the helper was never written, so that whole module raised
+    AttributeError and the duplicated inline logic stayed in two places. Now all
+    THREE truncation sites go through here (found in the R6/R7 review sweep).
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    dot = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if dot > min_cut:
+        return cut[:dot + 1].strip()
+    return cut
 # summarize.py's OWN internal budget is CLI (90s) + Hermes (45s) = up to 135s
 # worst case (see summarize.py's _SUMMARY_CLI_TIMEOUT_S/_SUMMARY_HERMES_TIMEOUT_S).
 # A shorter wrapper timeout here would routinely cut off a legitimate
@@ -1152,9 +1183,8 @@ def _voice_tts_sync(
     # constructs a sid-less TtsRequest for an ordinary long answer).
     if body.system_generated:
         _raw = " ".join((body.text or "").split())
-        _cut = _raw[: _TTS_SUMMARIZE_MAX_CHARS * 2]
-        _dot = max(_cut.rfind(". "), _cut.rfind("! "), _cut.rfind("? "))
-        tts_text = (_cut[: _dot + 1] if _dot > 80 else _cut).strip()
+        tts_text = _cut_at_sentence_boundary(
+            _raw, _TTS_SUMMARIZE_MAX_CHARS * 2).strip()
     else:
         # summarize.py now BOUNDS even its degraded (no-LLM) fallback to the spoken
         # budget (2026-07-24) — it can no longer return the whole answer, so the
@@ -1164,14 +1194,17 @@ def _voice_tts_sync(
         # to a spoken size here rather than clamped only at the 4096 provider limit.
         _summary = _summarize_for_speech(body.text, body.lang)
         if _summary:
-            tts_text = _summary[:_TTS_PROVIDER_CHAR_LIMIT]
+            # The bug the live report described: this was a bare
+            # `_summary[:_TTS_PROVIDER_CHAR_LIMIT]`, so an oversized LLM summary
+            # (legitimate — adaptive_target scales to ~85% of the answer with no
+            # cap) was spoken with its last sentence sliced mid-word.
+            tts_text = _cut_at_sentence_boundary(_summary, _TTS_PROVIDER_CHAR_LIMIT)
         else:
             # No summary at all — bound the raw answer to roughly the spoken budget
             # at a sentence boundary instead of speaking up to 4096 raw chars.
             _raw = " ".join((body.text or "").split())
-            _cut = _raw[: _TTS_SUMMARIZE_MAX_CHARS * 2]
-            _dot = max(_cut.rfind(". "), _cut.rfind("! "), _cut.rfind("? "))
-            tts_text = (_cut[: _dot + 1] if _dot > 80 else _cut).strip()
+            tts_text = _cut_at_sentence_boundary(
+                _raw, _TTS_SUMMARIZE_MAX_CHARS * 2).strip()
 
     # Resolve the user's pins ONCE, before choosing a synthesis path. Before
     # this restructure the OpenAI branch ran FIRST — on raw un-summarized text,

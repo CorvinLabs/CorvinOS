@@ -108,14 +108,12 @@ to the package-relative form, which then exposed two real defects in the modules
 they cover (a writer/reader checksum asymmetry that made every record read back
 corrupt, and a read/write lock pair on disjoint files that never interlocked).
 
-**Still open after R6** (unchanged, honestly dormant, not regressions):
-- **P-G** (community-stage subprocess sandbox) is unbuilt. `registry.register_stage`
-  refuses any non-`builtin` stage, so the palette is builtin-only and the refusal is
-  fail-closed — but the marketplace/share story does not exist.
-- **`stages/grades.py` has no production caller.** `resolve_pipeline` does not
-  consult `is_default_eligible`, and every registered stage is `trust="builtin"`
-  (always eligible), so there is no live subject until P-G ships a community stage.
-  ADR-0285's self-improving loop is therefore built, tested, and dormant.
+**Closed after R6** — see the P-G section below:
+- ~~**P-G** (community-stage subprocess sandbox) is unbuilt.~~ **Shipped** as
+  ADR-0289 (2026-08-11).
+- ~~**`stages/grades.py` has no production caller.**~~ `is_default_eligible` is
+  now called by `resolve_pipeline`; `record_turn_outcome` remains unwired (the
+  outcome-feedback loop is still open).
 - A `ToolRef` carrying its own `mcp_config` is **refused** at the bridge boundary
   (logged + recorded), because an extra MCP server cannot be plumbed into the
   already-written config file. No producer sets it today.
@@ -252,6 +250,46 @@ compliance invariants hold for a high-scoring stage (still gated).
 
 **Risk:** weak outcome signal → slow learning (not wrong). Gate: the loop is
 advisory (proposes), operator disposes (ADR-0284) — never auto-applied silently.
+
+---
+
+## P-G — Community-stage subprocess sandbox (ADR-0289) ✅ SHIPPED 2026-08-11
+
+The phase ADR-0285 R2 deferred by name. A community stage runs in the SAME jail
+the forged-tool runner uses (`forge.sandbox`: bwrap namespaces, no network,
+stripped env, POSIX rlimits), talking JSON over stdin/stdout.
+
+**New** `stages/sandbox.py` (parent: projection → fork → patch) +
+`stages/_sandbox_child.py` (child; imports NOTHING from CorvinOS — only this file,
+the stage module and the stdlib are inside the jail).
+**Changed** `registry.py` — `register_community_stage(id, path)` stores a
+`SandboxedStage` PROXY; `register_stage()` still refuses a live foreign object,
+because registration by object means in-process execution. `config.py` — the
+grade gate is live (below). `forge/sandbox.py` — `interpreter_ro_binds()`
+extracted from `runner.py` so the uv multi-hop interpreter resolution has ONE
+implementation.
+
+Four load-bearing decisions (full rationale + alternatives in ADR-0289):
+
+| | |
+|---|---|
+| **D1 additive-only** | A projection (`task`, `text_sections`, `scratch`) goes in; a patch of what the stage ADDED comes back. The `RichTaskBrief` never crosses. The parent refuses any scratch key that already exists or starts with `_`. |
+| **D2 no provisioning** | `tools_to_bind`/`skills_to_bind` stay first-party; the proxy's `effect` is forced to `pure`, so a community stage can never be egress/forge. |
+| **D3 fail-closed** | No bwrap and no Docker → the stage never runs and the palette stays builtin-only, i.e. exactly the pre-P-G state. Timeout, crash, non-JSON reply, oversized reply → recorded failure, pipeline continues. |
+| **D4 grade gate live** | `resolve_pipeline` consults `is_default_eligible` for pipelines the operator did NOT author. An authored pipeline may contain an ungraded stage — that is how it earns its first grade (ADR-0284 R1c). |
+| **D5 operator surface** | `spec.context_engineering.community_stages: [{id, path, requires?}]` in tenant.corvin.yaml — the same file the pipeline lives in. Registered before ids resolve; a declared id can never shadow a builtin. This is the PRODUCTION call site: without it the sandbox would be reachable only from a Python REPL, the dead-mechanism class this phase's own review round exists to prevent. |
+
+**Tests:** `tests/test_community_sandbox_adr0289.py` — 16 REAL jail forks (network
+denied, `.env`/`~/.corvin`/`~/.ssh` unreachable, no host write, brief unchanged,
+first-party context unwritable, no provisioning, every failure mode fail-safe,
+registry stores a proxy, grade gate drops an ungraded stage from a default
+pipeline). Skips wholesale on a host without isolation.
+
+**Still open (deliberately):** distribution and provenance. Nothing here says
+where a community stage comes from or who signed it —
+`register_community_stage()` takes a path the operator already trusted enough to
+place. Marketplace install, signing and revocation are unbuilt, and ADR-0289 does
+not invent them.
 
 ---
 

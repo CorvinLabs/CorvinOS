@@ -130,6 +130,20 @@ def _runtime_compliance_plugin(plugin_id: str = "audit-writer"):
     from corvin_plugins.protocol import HealthStatus
     from corvin_plugins.registry import get_registry
 
+    # A privileged registration is remembered ACROSS ALL EPOCHS by design
+    # (ADR-0233 D5, registry.py:424 branch (a)): once `audit-writer` has held
+    # the compliance layer in this PROCESS, any later re-registration is a
+    # re-escalation attempt and is downgraded to `installed` — correctly. A
+    # real boot is a fresh PROCESS, so the honest simulation is to forget this
+    # id's privilege history, not to advance the epoch (that only guarantees a
+    # DIFFERENT epoch and thus trips branch (a) even harder). Without this the
+    # SECOND test in the process registers a non-compliance plugin and then
+    # asserts the compliance refusal, which reads as "the compliance layer has
+    # no off switch — broken" when the product is fine.
+    _reg = get_registry()
+    _reg._privileged_registration_epoch.pop(plugin_id, None)
+    _reg._unregistered_this_epoch.pop(plugin_id, None)
+
     class _Writer:
         plugin_id = "audit-writer"
         plugin_type = "audit_backend"
