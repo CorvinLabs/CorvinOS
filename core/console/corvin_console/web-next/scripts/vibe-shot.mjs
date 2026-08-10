@@ -82,11 +82,11 @@ async function run() {
   await page.screenshot({ path: `${OUT}/vibe-pipeline.png`, fullPage: true });
   console.log("wrote vibe-pipeline.png");
 
-  // 2) detail drawer — click the first turn card
-  await page.getByText("turn-msn2hwwn_e902aa").first().click();
-  await page.waitForTimeout(900);
+  // 2) stage graph window — click the Graph pill of the first turn
+  await page.getByText("Graph", { exact: true }).first().click();
+  await page.waitForTimeout(800);
   await page.screenshot({ path: `${OUT}/vibe-detail.png`, fullPage: false });
-  console.log("wrote vibe-detail.png");
+  console.log("wrote vibe-detail.png (graph window)");
   await page.close();
 
   // 3) empty state
