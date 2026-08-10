@@ -44,7 +44,10 @@ def _scrub_trace(trace: dict) -> dict:
     from .decision_record import _scrub_str, _CONCEPTUAL_STAGES  # noqa: PLC0415
     # Drop the top-level keys that carry RAW task-derived forged/dropped names
     # (review R4 #1). Keep forged_rolled_back as counts.
-    _DROP = {"task_preview", "tools_dropped"}
+    # `tools_bound` joins them (review R6): a CEL-forged tool name is LLM/task-
+    # derived ("cel_summarize_klaus_mueller_notes"), and this cache sits OUTSIDE
+    # the GDPR Art. 17 erasure handler — the same reason `tools_dropped` is dropped.
+    _DROP = {"task_preview", "tools_dropped", "tools_bound"}
     out = {k: v for k, v in trace.items() if k not in _DROP}
     if isinstance(trace.get("forged_rolled_back"), dict):
         rb = trace["forged_rolled_back"]
@@ -98,8 +101,14 @@ def read_recent_traces(workdir: Any, n: int = 20) -> list[dict]:
         if not p.exists():
             return []
         lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        # n <= 0 means "none" — NOT "all" (review R6): `lines[-max(0, n):]` is
+        # `lines[0:]` for n=0, so a caller asking for zero traces got the whole
+        # file back (the route clamps 1..500, but read_recent_traces is public
+        # and the bridge/tests call it directly).
+        if n <= 0:
+            return []
         out: list[dict] = []
-        for ln in reversed(lines[-max(0, n):]):
+        for ln in reversed(lines[-n:]):
             try:
                 out.append(json.loads(ln))
             except (json.JSONDecodeError, ValueError):

@@ -141,6 +141,16 @@ try:
         _cel_render = _cel_mod.render_brief_to_text
         _cel_persist_trace = _cel_mod.persist_trace
         _cel_emit_record = _cel_mod.emit_decision_record
+        # ACTIVE brain (ADR-0282/0283), wired in review R6. The console owns the
+        # Vibe Engineering surface AND the pipeline editor, yet only ever called
+        # the deterministic `build_brief`: an operator who dragged `llm_synthesis`
+        # or `toolforge` into their pipeline got stages recorded `deferred` on
+        # every console turn and never run. `run_full_pipeline_async` is the
+        # event-loop twin of the bridge's entry point — same two-gate enforcer,
+        # with the blocking `claude -p` synthesis on `asyncio.to_thread`.
+        _cel_run_full_async = _cel_mod.run_full_pipeline_async
+        _cel_render_skills = _cel_mod.render_skill_bindings
+        _cel_apply_tools = _cel_mod.apply_tool_bindings
         _CEL_AVAILABLE = True
 except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
     _CEL_AVAILABLE = False
@@ -4542,8 +4552,82 @@ async def stream_turn(
     _cel_brief_text = ""
     if _CEL_AVAILABLE and _feature_flags.is_enabled("vibe_engineering", sess.tenant_id):
         try:
-            _cbrief, _cel_trace = _cel_build_brief(prompt, sess.tenant_id, sess)
-            _cel_brief_text = _cel_render(_cbrief) or ""
+            # ACTIVE brain (ADR-0282/0283) — a SECOND ships-dark flag on top of
+            # `vibe_engineering`, exactly as on the bridge. Off → the deterministic
+            # brief, byte-identical to before. On → the full two-gate pipeline:
+            # Gate-1 on the raw task, the deferred egress/forge stages, Gate-2 on
+            # the assembled payload, capability-class bind re-validation. Every
+            # enforcer lives in `run_full_pipeline_async`, never here.
+            _cel_active = False
+            try:
+                _cel_active = _feature_flags.is_enabled(
+                    "vibe_engineering_active", sess.tenant_id)
+            except Exception:  # noqa: BLE001 — no flag subsystem → active off
+                _cel_active = False
+            if _cel_active:
+                def _cel_gate(_text: str) -> "tuple[bool, str]":
+                    # The SAME four fail-closed console pre-spawn gates the turn
+                    # itself runs below (L44 + ADR-0141 + L34 + L35). None = allow.
+                    _ref = _spawn_gates.check_console_spawn_or_refusal(
+                        _text, tenant_id=sess.tenant_id,
+                        persona=_WEB_CHAT_PERSONA, channel=CHANNEL,
+                        chat_key=sess.chat_key, engine_id=_os_engine)
+                    return (_ref is None, _ref or "")
+
+                _persona = {}
+                try:
+                    _persona = (_cowork.resolve(_WEB_CHAT_PERSONA, overrides={})
+                                if _cowork else {}) or {}
+                except Exception:  # noqa: BLE001 — unresolvable persona → fail-closed
+                    _persona = {}
+                _cel_globs = (list(_persona.get("allowed_tools"))
+                              if isinstance(_persona.get("allowed_tools"), list)
+                              else ["*"])
+                _cel_caps = {
+                    "forge_enabled": bool(_persona.get("forge_enabled")),
+                    "skill_forge_enabled": bool(_persona.get("skill_forge_enabled")),
+                }
+                _bundle, _cel_trace = await _cel_run_full_async(
+                    prompt, sess.tenant_id, sess, gate_fn=_cel_gate,
+                    persona_patterns=_cel_globs, persona_caps=_cel_caps)
+                if _bundle is not None and getattr(_bundle, "synthesised_prompt", None):
+                    _cel_brief_text = _bundle.synthesised_prompt.strip()
+                elif _cel_trace.get("gate2_denied") or _cel_trace.get("gate1_denied"):
+                    # A denied turn injects NOTHING — not even the deterministic
+                    # fallback, which Gate-2 never inspected (mirrors the bridge).
+                    _cel_brief_text = ""
+                else:
+                    _cel_brief_text = (_cel_render(
+                        getattr(_bundle, "brief", None) if _bundle else None) or "")
+                # Skills take the injection channel, never `--allowedTools`
+                # (ADR-0281 R1b). Bodies were inspected by Gate-2 already.
+                if _bundle is not None:
+                    try:
+                        _sk_block = _cel_render_skills(_bundle) or ""
+                    except Exception:  # noqa: BLE001
+                        _sk_block = ""
+                    if _sk_block:
+                        _cel_brief_text = ((_cel_brief_text + "\n\n" + _sk_block)
+                                           if _cel_brief_text else _sk_block)
+                    # Forged tools need no argv change here: the console spawns with
+                    # `--dangerously-skip-permissions` (no `--allowedTools` at all),
+                    # and under a prompting permission mode `_build_args` already
+                    # passes the persona's globs, which include `mcp__forge__*` for
+                    # a forge-enabled persona. The re-validated names are recorded
+                    # so the Decision Record and the trace show what was bound.
+                    try:
+                        _at, _mc, _dropped = _cel_apply_tools(
+                            _bundle, _cel_globs, [], {}, _cel_caps)
+                        if _at:
+                            _cel_trace["tools_bound"] = list(_at)
+                        if _dropped:
+                            _cel_trace.setdefault("tools_dropped", []).extend(
+                                [getattr(t, "name", "?") for t in _dropped])
+                    except Exception:  # noqa: BLE001 — bookkeeping never breaks a turn
+                        pass
+            else:
+                _cbrief, _cel_trace = _cel_build_brief(prompt, sess.tenant_id, sess)
+                _cel_brief_text = _cel_render(_cbrief) or ""
             try:  # persist the trace for the read-only pipeline view (P1, cache)
                 _cel_persist_trace(_cel_trace, sess.workdir,
                                    f"turn-{sess.turn_count}")

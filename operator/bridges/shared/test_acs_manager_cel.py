@@ -59,7 +59,7 @@ class AcsManagerCelTests(unittest.TestCase):
             return flag_on if fid == "vibe_engineering" else False
         with (
             patch.object(self.ar, "_CEL_AVAILABLE", True),
-            patch.object(self.ar, "_cel_build_brief", spy),
+            patch.object(self.ar, "_cel_build_context", spy),
             patch.object(self.ar, "_cel_render", return_value=f"## brief\n{_MARKER}"),
             patch("corvin_console.feature_flags.is_enabled", side_effect=_flag),
         ):
@@ -71,6 +71,21 @@ class AcsManagerCelTests(unittest.TestCase):
         self.assertIn(_MARKER, prompt, "manager prompt must carry the CEL brief")
         self.assertTrue(spy.called)
         self.assertIn("big data task", spy.call_args[0][0])
+
+    def test_bindings_are_stripped_before_the_isolation_boundary(self):
+        """ADR-0279, ENFORCED (review R6): the ACS fan-out is an isolation
+        boundary, so the manager brief carries TEXT only. This used to be vacuous
+        — `build_brief` returns no bundle, so nothing could leak — which meant a
+        later switch to the active pipeline here would have started shipping local
+        capabilities across it silently. Now `strip_for_remote` actually runs."""
+        bundle = SimpleNamespace(brief=MagicMock(),
+                                 tools_to_bind=[SimpleNamespace(name="mcp__forge__cel_x")],
+                                 skills_to_bind=[SimpleNamespace(skill_id="cel_s")])
+        spy = MagicMock(return_value=(bundle, {"stages": []}))
+        prompt = self._run(iteration=0, flag_on=True, spy=spy)
+        self.assertIn(_MARKER, prompt, "the TEXT brief still reaches the manager")
+        self.assertEqual(bundle.tools_to_bind, [], "no local tool crosses the boundary")
+        self.assertEqual(bundle.skills_to_bind, [], "no local skill crosses the boundary")
 
     def test_iter1_no_brief(self):
         spy = MagicMock(return_value=(MagicMock(), {"stages": []}))

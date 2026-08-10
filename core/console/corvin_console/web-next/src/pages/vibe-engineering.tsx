@@ -275,13 +275,19 @@ function PipelineEditorModal({ onClose, onSaved }: { onClose: () => void; onSave
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [csrf, setCsrf] = useState("");
+  // Whether the egress/forge stages below can actually RUN. They are deferred to
+  // the post-gate phase, which only the ACTIVE brain executes — with the
+  // `vibe_engineering_active` flag off they sit permanently "deferred". Without
+  // this the editor showed a pipeline that looked armed and silently was not.
+  const [activeOn, setActiveOn] = useState(true);
 
   useEffect(() => {
     let alive = true;
     fetch("/v1/console/vibe-engineering/pipeline").then((r) => r.json()).then((d) => {
       if (!alive) return;
       setCurrent(d.current || []); setPalette(d.palette || []);
-      setDef(d.default || []); setLoading(false);
+      setDef(d.default || []); setActiveOn(d.active_enabled !== false);
+      setLoading(false);
     }).catch(() => { if (alive) { setErr("failed to load pipeline"); setLoading(false); } });
     fetch("/v1/console/auth/whoami").then((r) => r.json())
       .then((d) => alive && setCsrf(d.csrf_token || "")).catch(() => {});
@@ -331,6 +337,17 @@ function PipelineEditorModal({ onClose, onSaved }: { onClose: () => void; onSave
         <div className="py-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>
       ) : (
         <>
+          {!activeOn && current.some((e) => {
+            const m = palette.find((p) => p.id === e.stage);
+            return m && m.effect !== "pure";
+          }) && (
+            <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+              This pipeline contains egress/forge stages, but the <b>ACTIVE brain</b>{" "}
+              feature flag (<code>vibe_engineering_active</code>) is off — those stages
+              are recorded <code>deferred</code> and never run. Enable it under
+              Settings → Features to arm them.
+            </div>
+          )}
           <div className="space-y-2 mb-4">
             {current.map((e, i) => {
               const m = meta(e.stage);

@@ -95,6 +95,12 @@ try:
         _cel_persist_trace = _cel_mod.persist_trace
         _cel_emit_record = _cel_mod.emit_decision_record
         _cel_run_full = _cel_mod.run_full_pipeline   # ADR-0282/0283 active brain
+        # P-B dual channel (ADR-0281): the ONE tool merge (names + mcp_config) and
+        # the skill-injection renderer. Hand-rolling either at the boundary is what
+        # left `skills_to_bind` consumed by nobody and a ToolRef's mcp_config
+        # unreachable (review R6).
+        _cel_apply_tools = _cel_mod.apply_tool_bindings
+        _cel_render_skills = _cel_mod.render_skill_bindings
         _CEL_AVAILABLE = True
 except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
     _CEL_AVAILABLE = False
@@ -3302,9 +3308,21 @@ def _resolve_spawn_inputs(
                     _persona_globs = (list(profile.get("allowed_tools"))
                                       if isinstance(profile.get("allowed_tools"), list)
                                       else ["*"])
+                    # Capability CLASS (ADR-0281 R2, wired in review R6): the glob
+                    # list alone is not the class. An all-allowed persona arrives
+                    # here as ["*"], which matches `mcp__forge__*` even when the
+                    # operator left `forge_enabled: false` — and that same flag is
+                    # what decides whether the Forge MCP SERVER is injected, so the
+                    # bind produced an un-callable name plus an orphaned on-disk
+                    # artifact. Pass the resolved capabilities; fail-closed.
+                    _persona_caps = {
+                        "forge_enabled": bool(profile.get("forge_enabled")),
+                        "skill_forge_enabled": bool(profile.get("skill_forge_enabled")),
+                    }
                     _bundle, _ctrace = _cel_run_full(
                         prompt, _cel_tid, None, gate_fn=_cel_gate,
-                        persona_patterns=_persona_globs)
+                        persona_patterns=_persona_globs,
+                        persona_caps=_persona_caps)
                     if _bundle is not None and getattr(_bundle, "synthesised_prompt", None):
                         _cel_text = _bundle.synthesised_prompt.strip()
                     elif _ctrace.get("gate2_denied") or _ctrace.get("gate1_denied"):
@@ -3316,8 +3334,33 @@ def _resolve_spawn_inputs(
                     else:
                         _cel_text = (_cel_render(getattr(_bundle, "brief", None)
                                                  if _bundle else None) or "").strip()
-                    if _bundle is not None and getattr(_bundle, "tools_to_bind", None):
-                        _cel_forged_tools = [t.name for t in _bundle.tools_to_bind]
+                    if _bundle is not None:
+                        # ONE merge (ADR-0281 / review R6) instead of the previous
+                        # hand-rolled name append: it re-validates the capability
+                        # class and carries a ToolRef's own mcp_config instead of
+                        # silently swallowing it. A ref that CARRIES an mcp_config is
+                        # refused (and rolled back) inside run_full_pipeline's
+                        # enforcer, not here — one place, both boundaries (R7).
+                        if _ctrace.get("mcp_config_unsupported"):
+                            log("CEL: %d tool binding(s) refused — they carry an "
+                                "mcp_config no boundary can plumb yet"
+                                % _ctrace["mcp_config_unsupported"])
+                        _at, _mc, _dropped_refs = _cel_apply_tools(
+                            _bundle, _persona_globs, [], {}, _persona_caps)
+                        if _dropped_refs:
+                            _ctrace.setdefault("tools_dropped", []).extend(
+                                [getattr(t, "name", "?") for t in _dropped_refs])
+                        _cel_forged_tools = list(_at)
+                        # Skills take the INJECTION channel, never allowed_tools
+                        # (ADR-0281 R1b). Gate-2 already inspected these bodies.
+                        try:
+                            _skill_block = _cel_render_skills(_bundle) or ""
+                        except Exception:  # noqa: BLE001 — never break the turn
+                            _skill_block = ""
+                        if _skill_block and _cel_text:
+                            _cel_text = _cel_text + "\n\n" + _skill_block
+                        elif _skill_block:
+                            _cel_text = _skill_block
                 else:
                     _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid, None)
                     _cel_text = (_cel_render(_cbrief) or "").strip()

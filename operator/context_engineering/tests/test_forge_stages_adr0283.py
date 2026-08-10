@@ -43,6 +43,43 @@ class ForgeStagesTests(unittest.TestCase):
         base = sys.modules["context_engineering.stages.base"]
         self.Bundle, self.Ctx = base.ContextBundle, base.StageCtx
 
+    def test_the_real_registries_are_actually_callable(self):
+        """Review R7: every other test in this file patches `_forge_create` /
+        `_skill_create`, so NOTHING ever exercised the real registry call — and
+        `skillforge` imported `MultiRegistry`, a class that does not exist (the real
+        name is `MultiSkillRegistry`, with a keyword-only constructor). Every call
+        raised ImportError into the stage's `except: pass`: no skill was ever written
+        to disk, and `_forged_skills` stayed empty, making the Gate-2 skill rollback
+        a permanent no-op. This test writes for real against a temp CORVIN_HOME and
+        rolls back, so an API drift on either registry fails loudly."""
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            prev = os.environ.get("CORVIN_HOME")
+            os.environ["CORVIN_HOME"] = tmp
+            try:
+                import importlib
+                import forge.paths as fp
+                importlib.reload(fp)
+                # skills
+                self.sf._skill_create("_default", "cel_r7_probe", "# probe body\n")
+                reg = self.sf._skill_registry("_default")
+                self.assertIsNotNone(reg.get("cel_r7_probe")
+                                     if hasattr(reg, "get") else True)
+                self.sf.uncreate_skills("_default", ["cel_r7_probe"])
+                # tools
+                self.tf._forge_create("_default", "cel_r7_tool", "probe",
+                                      {"type": "object"}, self.tf._TEMPLATE_IMPL)
+                self.tf.uncreate_tools("_default", ["cel_r7_tool"])
+            finally:
+                if prev is None:
+                    os.environ.pop("CORVIN_HOME", None)
+                else:
+                    os.environ["CORVIN_HOME"] = prev
+                import importlib
+                import forge.paths as fp
+                importlib.reload(fp)
+
     def test_opt_in(self):
         for sid in ("toolforge", "skillforge"):
             self.assertNotIn(sid, self.stages.DEFAULT_PIPELINE)
@@ -112,8 +149,21 @@ class ForgeStagesTests(unittest.TestCase):
         ctx = self.Ctx(tenant_id="_default")
         with patch.object(self.sf, "_skill_create"):
             b, tel = self.stages.get_stage("skillforge").run(b, ctx)
-        self.assertEqual([s.skill_id for s in b.skills_to_bind], ["sql-explain"])
+        # Namespaced `cel_` like forged TOOLS are (review R6 / R3 finding A4):
+        # `_skill_create` writes with overwrite=True, so an LLM-proposed name taken
+        # from the task would otherwise clobber an operator's own session skill.
+        self.assertEqual([s.skill_id for s in b.skills_to_bind], ["cel_sql-explain"])
         self.assertEqual(b.tools_to_bind, [], "skills are NOT on the tool channel")
+
+    def test_forged_skill_cannot_clobber_an_operator_skill(self):
+        b = self.Bundle(task="x")
+        b.scratch["needs"] = {"skills": [{"name": "notes", "body": "# hijacked\n"}]}
+        created: list = []
+        with patch.object(self.sf, "_skill_create",
+                          side_effect=lambda t, n, body: created.append(n)):
+            b, _ = self.stages.get_stage("skillforge").run(b, self.Ctx(tenant_id="_default"))
+        self.assertEqual(created, ["cel_notes"],
+                         "an operator's own 'notes' session skill is untouched")
 
     def test_forge_failure_is_fail_safe(self):
         b = self.Bundle(task="x")
