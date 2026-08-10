@@ -43,6 +43,13 @@ export function MultiInstanceDashboard() {
   const [showRepoEditor, setShowRepoEditor] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
+  // Initialize repo from status once loaded
+  useEffect(() => {
+    if (status?.github_repo && !customRepo) {
+      setCustomRepo(status.github_repo);
+    }
+  }, [status?.github_repo]);
+
   // Detect dark mode from multiple sources
   useEffect(() => {
     const checkDarkMode = () => {
@@ -248,9 +255,6 @@ export function MultiInstanceDashboard() {
               Open
             </a>
           </div>
-          <p style={{ fontSize: '12px', marginTop: '8px', color: colors.label, margin: '8px 0 0 0' }}>
-            Default: {status?.github_repo || 'https://github.com/veegee82/tenent-shumway'}
-          </p>
         </div>
       )}
 
