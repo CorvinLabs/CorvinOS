@@ -30,6 +30,9 @@ _FORBIDDEN_IMPORTS = {"os", "subprocess", "socket", "ctypes", "importlib",
                       "builtins", "__builtins__", "code", "pty", "posix", "runpy"}
 _FORBIDDEN_CALLS = {"eval", "exec", "compile", "__import__", "open", "getattr",
                     "setattr", "globals", "locals", "vars", "breakpoint", "input"}
+# dangerous attribute names in the `x.attr(...)` form (finding #2)
+_FORBIDDEN_ATTRS = {"system", "popen", "spawn", "spawnl", "spawnv", "fork",
+                    "remove", "unlink", "rmtree", "rename", "chmod", "startfile"}
 
 # A safe deterministic template: reads a JSON payload on stdin, echoes it. The LLM
 # `needs` only names a tool; the real impl is a reviewed template unless the

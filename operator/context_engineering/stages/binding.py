@@ -49,11 +49,11 @@ def revalidate_tools(tools: list, persona_allowed_patterns: list) -> "tuple[list
     dropped: list = []
     pats = list(persona_allowed_patterns or [])
     for t in tools[:MAX_BINDINGS]:
-        name = getattr(t, "name", t)
-        if any(fnmatch.fnmatch(name, p) for p in pats):
+        name = getattr(t, "name", None) or (t if isinstance(t, str) else "")
+        if name and any(fnmatch.fnmatch(name, p) for p in pats):
             kept.append(t)
         else:
-            dropped.append(t)
+            dropped.append(t)  # unnamed / non-matching → dropped, never a TypeError
     # anything past the cap is dropped too (bounded provisioning)
     dropped.extend(tools[MAX_BINDINGS:])
     return kept, dropped
@@ -81,8 +81,9 @@ def apply_tool_bindings(bundle: Any, persona_allowed_patterns: list,
     at = list(allowed_tools or [])
     mc = dict(mcp_config or {})
     for t in kept:
-        if t.name not in at:
-            at.append(t.name)
-        if t.mcp_config:
+        nm = getattr(t, "name", None)
+        if nm and nm not in at:
+            at.append(nm)
+        if getattr(t, "mcp_config", None):
             mc.update(t.mcp_config)
     return at, mc, dropped

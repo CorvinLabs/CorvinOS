@@ -48,9 +48,13 @@ def _enforce(tenant_id: str, *, channel: str, feature: str, counter_file: str) -
         from license.compute_quota import increment_and_check as _cq_inc  # type: ignore  # noqa: PLC0415
         from license.limits import LicenseLimitError as _CQErr  # type: ignore  # noqa: PLC0415
         from license.validator import load_license_from_env as _load_lic  # type: ignore  # noqa: PLC0415
-        _load_lic()  # reflect the real tier, not FREE defaults (M-B)
     except ImportError:
         return False  # fail-closed: deny (turn still served on plain context)
+
+    try:
+        _load_lic()  # reflect the real tier, not FREE defaults (M-B)
+    except Exception:  # noqa: BLE001 — corrupt/expired license → fail-closed (finding #4)
+        return False
 
     try:
         _cq_inc(_corvin_home(), channel=channel, chat_key=f"{channel}:{tenant_id}",
