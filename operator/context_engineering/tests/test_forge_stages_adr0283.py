@@ -56,6 +56,10 @@ class ForgeStagesTests(unittest.TestCase):
         self.assertIn("os", reason)
         bad2, _ = self.tf.ast_allowlist_ok("eval('1+1')")
         self.assertFalse(bad2)
+        # finding #2: the builtins + attribute-form bypasses must be caught
+        self.assertFalse(self.tf.ast_allowlist_ok("import builtins\nbuiltins.eval('x')")[0])
+        self.assertFalse(self.tf.ast_allowlist_ok("import x\nx.system('rm')")[0])
+        self.assertFalse(self.tf.ast_allowlist_ok("import x\nx.eval('y')")[0])
 
     def test_toolforge_binds_forged_tool(self):
         b = self.Bundle(task="x")

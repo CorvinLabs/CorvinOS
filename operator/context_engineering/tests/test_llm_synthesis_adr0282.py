@@ -54,9 +54,22 @@ class LLMSynthesisTests(unittest.TestCase):
         self.assertNotIn("llm_synthesis", self.stages.DEFAULT_PIPELINE)
         self.assertIsNotNone(self.stages.get_stage("llm_synthesis"), "but registered")
 
-    def _pipeline_with_synth(self):
-        return [{"stage": "memory"}, {"stage": "graph"}, {"stage": "skill"},
-                {"stage": "llm_synthesis"}]
+    def _pipeline_with_synth(self, egress=True):
+        synth = {"stage": "llm_synthesis"}
+        if egress:
+            synth["config"] = {"egress_ok": True}
+        return [{"stage": "memory"}, {"stage": "graph"}, {"stage": "skill"}, synth]
+
+    def test_egress_guard_fail_closed(self):
+        # without egress_ok the synthesis call never fires (residency floor)
+        with patch.object(self.stages.config, "_read_pipeline_config",
+                          return_value=self._pipeline_with_synth(egress=False)):
+            bundle, trace = self.pipe.build_context("x", "_default", None, meter=False)
+        with patch("context_engineering.license_gate.enforce_ce_llm_quota", return_value=True), \
+             patch.object(subprocess, "run", return_value=_fake_completed()) as sr:
+            bundle = asyncio.run(self.pipe.build_context_post_gate(bundle, trace))
+        self.assertFalse(sr.called, "no egress_ok → no subprocess egress")
+        self.assertIsNone(bundle.synthesised_prompt)
 
     def test_egress_stage_is_deferred_pre_gate(self):
         with patch.object(self.stages.config, "_read_pipeline_config",

@@ -45,8 +45,13 @@ _TEMPLATE_IMPL = (
 
 
 def ast_allowlist_ok(impl: str) -> "tuple[bool, str]":
-    """AST allowlist (ADR-0283 R1): reject forbidden imports, dangerous builtins,
-    and dunder attribute access. Fail-closed on a parse error."""
+    """Hardened AST guard (ADR-0283 R1 + review finding #2): reject forbidden
+    imports (incl. builtins/importlib), dangerous calls in BOTH the bare-name
+    (`eval(...)`) and attribute (`x.eval(...)` / `x.system(...)`) forms, and dunder
+    attribute access. This is a hardened DENYLIST, not a pure allowlist — the bwrap
+    sandbox (no net/subprocess) is the real isolation; this is defense-in-depth,
+    and same-turn LLM impls need the default-off allow_llm_impl flag on top.
+    Fail-closed on a parse error."""
     try:
         tree = ast.parse(impl)
     except SyntaxError as e:
