@@ -111,33 +111,67 @@ export function MultiInstanceDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  const bgClass = isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-white text-gray-900';
-  const cardClass = isDarkMode
-    ? 'bg-slate-900 border-slate-700'
-    : 'bg-gray-50 border-gray-200';
-  const labelClass = isDarkMode ? 'text-slate-400' : 'text-gray-600';
-  const accentClass = isDarkMode ? 'text-emerald-400' : 'text-emerald-600';
+  // Theme colors
+  const colors = {
+    bg: isDarkMode ? '#020617' : '#ffffff',
+    text: isDarkMode ? '#f1f5f9' : '#111827',
+    cardBg: isDarkMode ? '#0f172a' : '#f9fafb',
+    cardBorder: isDarkMode ? '#334155' : '#e5e7eb',
+    label: isDarkMode ? '#94a3b8' : '#4b5563',
+    accent: isDarkMode ? '#4ade80' : '#059669',
+    error: isDarkMode ? '#fca5a5' : '#dc2626',
+    errorBg: isDarkMode ? '#7f1d1d' : '#fee2e2',
+    hover: isDarkMode ? '#1e293b' : '#f3f4f6'
+  };
 
   if (loading) {
-    return <div className={`p-6 text-center ${bgClass}`}>Loading multi-instance status...</div>;
+    return (
+      <div style={{ backgroundColor: colors.bg, color: colors.text, padding: '24px', textAlign: 'center' }}>
+        Loading multi-instance status...
+      </div>
+    );
   }
 
   if (error || !status) {
     return (
-      <div className={`p-6 rounded ${bgClass} ${isDarkMode ? 'bg-red-950' : 'bg-red-50'} border ${isDarkMode ? 'border-red-800' : 'border-red-200'}`}>
-        <AlertCircle className={`${isDarkMode ? 'text-red-400' : 'text-red-600'} mb-2`} />
-        <p className={isDarkMode ? 'text-red-400' : 'text-red-600'}>{error || 'Failed to load data'}</p>
+      <div
+        style={{
+          padding: '24px',
+          borderRadius: '8px',
+          border: `1px solid ${colors.cardBorder}`,
+          backgroundColor: colors.errorBg,
+          color: colors.error
+        }}
+      >
+        <AlertCircle style={{ marginBottom: '8px' }} size={20} />
+        <p>{error || 'Failed to load data'}</p>
       </div>
     );
   }
 
   return (
-    <div className={`p-6 space-y-6 ${bgClass}`}>
-      <div className="flex justify-between items-center">
-        <h1 className={`text-2xl font-bold ${accentClass}`}>🧠 Cross-Device Learning</h1>
+    <div style={{ backgroundColor: colors.bg, color: colors.text, padding: '24px' }}>
+      <style>{`
+        body { background-color: ${colors.bg}; color: ${colors.text}; }
+      `}</style>
+
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <h1 style={{ fontSize: '24px', fontWeight: 'bold', color: colors.accent, margin: 0 }}>
+          🧠 Cross-Device Learning
+        </h1>
         <button
           onClick={() => setShowRepoEditor(!showRepoEditor)}
-          className={`p-2 rounded transition ${isDarkMode ? 'hover:bg-slate-800' : 'hover:bg-gray-100'}`}
+          style={{
+            padding: '8px',
+            backgroundColor: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: colors.accent,
+            borderRadius: '6px'
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.hover}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
         >
           <Settings size={20} />
         </button>
@@ -145,123 +179,204 @@ export function MultiInstanceDashboard() {
 
       {/* GitHub Repo Editor */}
       {showRepoEditor && (
-        <div className={`p-4 rounded border ${cardClass}`}>
-          <label className={`block text-sm font-medium mb-2 ${labelClass}`}>GitHub Repository</label>
-          <div className="flex gap-2">
+        <div
+          style={{
+            padding: '16px',
+            borderRadius: '8px',
+            border: `1px solid ${colors.cardBorder}`,
+            backgroundColor: colors.cardBg,
+            marginBottom: '24px'
+          }}
+        >
+          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: colors.label }}>
+            GitHub Repository
+          </label>
+          <div style={{ display: 'flex', gap: '8px' }}>
             <input
               type="text"
               value={customRepo}
               onChange={(e) => setCustomRepo(e.target.value)}
               placeholder="https://github.com/user/repo"
-              className={`flex-1 px-3 py-2 rounded border ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-gray-300'}`}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: '6px',
+                border: `1px solid ${colors.cardBorder}`,
+                backgroundColor: colors.cardBg,
+                color: colors.text
+              }}
             />
             <a
               href={getGithubRepo()}
               target="_blank"
               rel="noopener noreferrer"
-              className={`px-4 py-2 rounded font-medium transition ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-200 hover:bg-gray-300'}`}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '6px',
+                backgroundColor: colors.cardBorder,
+                color: colors.text,
+                textDecoration: 'none',
+                fontWeight: '500',
+                cursor: 'pointer'
+              }}
             >
               Open
             </a>
           </div>
-          <p className={`text-xs mt-2 ${labelClass}`}>
+          <p style={{ fontSize: '12px', marginTop: '8px', color: colors.label, margin: '8px 0 0 0' }}>
             Default: {status?.github_repo || 'https://github.com/veegee82/tenent-shumway'}
           </p>
         </div>
       )}
 
       {/* Instance Status Section */}
-      <section className={`border rounded-lg p-4 ${cardClass}`}>
-        <h2 className={`text-lg font-semibold mb-4 flex items-center gap-2 ${accentClass}`}>
+      <div
+        style={{
+          border: `1px solid ${colors.cardBorder}`,
+          borderRadius: '8px',
+          padding: '16px',
+          backgroundColor: colors.cardBg,
+          marginBottom: '24px'
+        }}
+      >
+        <h2 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px', color: colors.accent, display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 16px 0' }}>
           <Check size={20} />
           Instance Status
         </h2>
 
-        <div className="space-y-2">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {status.instances.map((instance) => (
-            <div key={instance.instance_id} className={`border rounded p-3 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'}`}>
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="font-medium">{instance.name}</p>
-                  <p className={`text-sm ${labelClass}`}>{instance.instance_id}</p>
-                </div>
-                <div className="text-right">
-                  <p className={`text-sm font-medium ${
-                    instance.status === 'active' ? accentClass : 'text-yellow-500'
-                  }`}>
-                    {instance.status.toUpperCase()}
-                  </p>
-                  <p className={`text-xs ${labelClass}`}>Last: {new Date(instance.last_seen).toLocaleTimeString()}</p>
-                </div>
+            <div
+              key={instance.instance_id}
+              style={{
+                border: `1px solid ${colors.cardBorder}`,
+                borderRadius: '6px',
+                padding: '12px',
+                backgroundColor: colors.bg,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <div>
+                <p style={{ fontWeight: '500', margin: '0 0 4px 0' }}>{instance.name}</p>
+                <p style={{ fontSize: '14px', color: colors.label, margin: '0' }}>{instance.instance_id}</p>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <p
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: instance.status === 'active' ? colors.accent : '#fbbf24',
+                    margin: '0 0 4px 0'
+                  }}
+                >
+                  {instance.status.toUpperCase()}
+                </p>
+                <p style={{ fontSize: '12px', color: colors.label, margin: '0' }}>
+                  Last: {new Date(instance.last_seen).toLocaleTimeString()}
+                </p>
               </div>
             </div>
           ))}
         </div>
-      </section>
+      </div>
 
       {/* Patterns Section */}
-      <section className={`border rounded-lg p-4 ${cardClass}`}>
-        <h2 className={`text-lg font-semibold mb-4 flex items-center gap-2 ${accentClass}`}>
+      <div
+        style={{
+          border: `1px solid ${colors.cardBorder}`,
+          borderRadius: '8px',
+          padding: '16px',
+          backgroundColor: colors.cardBg,
+          marginBottom: '24px'
+        }}
+      >
+        <h2 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px', color: colors.accent, display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 16px 0' }}>
           <Clock size={20} />
           Learned Patterns ({patterns.length})
         </h2>
 
         {patterns.length === 0 ? (
-          <p className={labelClass}>No patterns learned yet</p>
+          <p style={{ color: colors.label, margin: '0' }}>No patterns learned yet</p>
         ) : (
-          <div className="space-y-3">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {patterns.map((pattern) => (
-              <div key={pattern.pattern_id} className={`border rounded p-3 ${isDarkMode ? 'border-slate-700' : 'border-gray-200'}`}>
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <p className={`font-mono text-sm ${labelClass}`}>{pattern.pattern_id}</p>
-                    <p className="text-sm mt-1">
-                      <span className="font-medium">Recommendation:</span> {pattern.recommended}
-                    </p>
-                    <p className="text-sm">
-                      <span className="font-medium">Confidence:</span>{' '}
-                      <span className={accentClass}>{(pattern.confidence * 100).toFixed(0)}%</span>
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className={`text-xs ${labelClass}`}>Sources:</p>
-                    <ul className={`text-xs font-mono ${labelClass}`}>
-                      {pattern.sources.map((src) => (
-                        <li key={src}>{src}</li>
-                      ))}
-                    </ul>
-                  </div>
+              <div
+                key={pattern.pattern_id}
+                style={{
+                  border: `1px solid ${colors.cardBorder}`,
+                  borderRadius: '6px',
+                  padding: '12px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start'
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontFamily: 'monospace', fontSize: '12px', color: colors.label, margin: '0 0 8px 0' }}>
+                    {pattern.pattern_id}
+                  </p>
+                  <p style={{ fontSize: '14px', margin: '0 0 4px 0' }}>
+                    <span style={{ fontWeight: '500' }}>Recommendation:</span> {pattern.recommended}
+                  </p>
+                  <p style={{ fontSize: '14px', margin: '0' }}>
+                    <span style={{ fontWeight: '500' }}>Confidence:</span>{' '}
+                    <span style={{ color: colors.accent }}>{(pattern.confidence * 100).toFixed(0)}%</span>
+                  </p>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <p style={{ fontSize: '12px', color: colors.label, margin: '0 0 4px 0' }}>Sources:</p>
+                  <ul style={{ margin: '0', padding: '0', listStyle: 'none' }}>
+                    {pattern.sources.map((src) => (
+                      <li key={src} style={{ fontSize: '12px', fontFamily: 'monospace', color: colors.label }}>
+                        {src}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
             ))}
           </div>
         )}
-      </section>
+      </div>
 
       {/* Sync Health Section */}
-      <section className={`border rounded-lg p-4 ${cardClass}`}>
-        <h2 className={`text-lg font-semibold mb-4 flex items-center gap-2 ${accentClass}`}>
+      <div
+        style={{
+          border: `1px solid ${colors.cardBorder}`,
+          borderRadius: '8px',
+          padding: '16px',
+          backgroundColor: colors.cardBg
+        }}
+      >
+        <h2 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px', color: colors.accent, display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 16px 0' }}>
           <Github size={20} />
           Sync Health
         </h2>
 
-        <div className="space-y-2">
-          <div className="flex justify-between">
-            <span className={labelClass}>Merged State:</span>
-            <span className="font-mono text-sm">{status.freshness}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: colors.label }}>Merged State:</span>
+            <span style={{ fontFamily: 'monospace', fontSize: '14px' }}>{status.freshness}</span>
           </div>
-          <div className="flex justify-between">
-            <span className={labelClass}>Sync Frequency:</span>
-            <span className="font-mono text-sm">{status.sync_frequency}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: colors.label }}>Sync Frequency:</span>
+            <span style={{ fontFamily: 'monospace', fontSize: '14px' }}>{status.sync_frequency}</span>
           </div>
-          <div className="flex justify-between">
-            <span className={labelClass}>Repository:</span>
-            <a href={getGithubRepo()} target="_blank" rel="noopener noreferrer" className={`${accentClass} hover:underline`}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: colors.label }}>Repository:</span>
+            <a
+              href={getGithubRepo()}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: colors.accent, textDecoration: 'none', cursor: 'pointer' }}
+            >
               GitHub ↗
             </a>
           </div>
         </div>
-      </section>
+      </div>
     </div>
   );
 }
