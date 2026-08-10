@@ -10815,7 +10815,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                         format_delegation_badge,
                     )
                     answer = (f"{answer}\n\n— ⚙ "
-                              f"{format_delegation_badge(_badge_engine, _badge_mode)}")
+                              f"{format_delegation_badge(_badge_engine, _badge_mode, model=_os_model)}")
             except Exception as e:  # noqa: BLE001 — a badge must never break a turn
                 log(f"delegation badge skipped ({e!r})")
     finally:
