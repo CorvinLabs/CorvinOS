@@ -126,6 +126,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/talent",           label: "Your Talent", icon: Sparkles },
       { to: "/app/vibe-engineering", label: "Context Pipeline", icon: Workflow },
+      { to: "/app/multi-instance",   label: "Cross-Device Learning", icon: Network },
     ],
   },
   {

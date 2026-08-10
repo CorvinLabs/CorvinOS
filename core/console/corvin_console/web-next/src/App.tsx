@@ -50,6 +50,7 @@ import {
   PluginsPage,
   ActivityFeedPage,
   LearningObjectivesPage,
+  MultiInstancePage,
 } from "@/lazy-pages";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -194,6 +195,8 @@ export default function App() {
             <Route path="plugins" element={<PluginsPage />} />
             <Route path="activity" element={<ActivityFeedPage />} />
             <Route path="learning-objectives" element={<LearningObjectivesPage />} />
+            {/* ADR-0275/0277 — Multi-Instance Cross-Device Learning */}
+            <Route path="multi-instance" element={<MultiInstancePage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
           </Routes>
