@@ -45,6 +45,11 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
     bypasses the license gate (tests / internal reuse). ``active=True`` falls back
     to ACTIVE_PIPELINE (egress/forge) when the operator authored no pipeline.
     """
+    # Coerce a non-str task before task_adapter().split() (review R3 finding C4):
+    # this runs BEFORE the per-stage try, so a bad input would otherwise raise out
+    # of the whole pipeline rather than degrade to a recorded trace.
+    if not isinstance(task, str):
+        task = str(task or "")
     trace: dict[str, Any] = {"task_preview": task[:120], "stages": []}
 
     if meter:

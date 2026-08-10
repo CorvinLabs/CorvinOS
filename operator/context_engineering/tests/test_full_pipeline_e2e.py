@@ -86,7 +86,7 @@ class FullPipelineE2E(unittest.TestCase):
                 persona_patterns=["mcp__forge__*", "Read", "Bash"])
         self.assertIsNotNone(bundle)
         self.assertTrue(bundle.synthesised_prompt, "synthesis prompt set")
-        self.assertEqual([t.name for t in bundle.tools_to_bind], ["mcp__forge__csv_region_count"])
+        self.assertEqual([t.name for t in bundle.tools_to_bind], ["mcp__forge__cel_csv_region_count"])
         self.assertEqual([s.skill_id for s in bundle.skills_to_bind], ["csv-aggregation"])
         self.assertTrue(fc.called and sc.called, "forge + skill create invoked")
         stage_ids = [s.get("stage") for s in trace["stages"]]
@@ -212,7 +212,7 @@ class FullPipelineE2E(unittest.TestCase):
              patch.object(self.tf, "_forge_create"):
             bundle2, _ = self.ce.run_full_pipeline(
                 TASK_CSV, meter=False, gate_fn=allow, persona_patterns=["*"])
-        self.assertEqual([t.name for t in bundle2.tools_to_bind], ["mcp__forge__csv_x"])
+        self.assertEqual([t.name for t in bundle2.tools_to_bind], ["mcp__forge__cel_csv_x"])
 
     # ---- R2 A3: a gate that RAISES denies (fail-closed), never propagates ----
     def test_gate_exception_denies(self):
