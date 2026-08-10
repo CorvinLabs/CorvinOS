@@ -69,10 +69,13 @@ class DecisionRecordTests(unittest.TestCase):
         names = [s["stage"] for s in rec["stages"]]
         self.assertEqual(names,
                          ["memory", "graph", "skill", "approach_synthesis", "blocker_id"])
+        # In this trace only memory/graph/skill are present, so the two later
+        # stages are recorded as not_run — but with reason "not_reached" now that
+        # they actually run in the live pipeline (ADR-0275), not "stage_inactive".
         inactive = {s["stage"]: s for s in rec["stages"]
                     if s["status"] == "not_run"}
         self.assertEqual(set(inactive), {"approach_synthesis", "blocker_id"})
-        self.assertEqual(inactive["approach_synthesis"]["reason"], "stage_inactive")
+        self.assertEqual(inactive["approach_synthesis"]["reason"], "not_reached")
 
     def test_per_source_score_preserved(self):
         rec = self.dr.build_record(_TRACE, _BRIEF, turn_id="turn-1")
