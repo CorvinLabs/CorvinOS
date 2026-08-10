@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from core.console.corvin_console.deps import require_session, require_csrf
 from core.telemetry import compute_digest
@@ -17,6 +18,16 @@ router = APIRouter(prefix="/api/multi-instance", tags=["multi-instance"])
 
 # Peer ID whitelist (must be explicitly registered)
 _KNOWN_PEERS: Set[str] = set()
+
+
+# Request/response models
+class SyncConfigRequest(BaseModel):
+    """Validated sync_config request."""
+    peer_id: str = Field(..., min_length=1, description="Target peer ID")
+    fields: list[str] = Field(default=["preset"], description="Fields to sync")
+
+    class Config:
+        schema_extra = {"example": {"peer_id": "ubuntu-host-abc123", "fields": ["preset"]}}
 
 
 # ── A2A Integration (Phase 9a) ─────────────────────────────────────────────
@@ -179,15 +190,12 @@ def _is_valid_peer_id(peer_id: str) -> bool:
 
 
 @router.post("/sync-config")
-async def sync_config(body: dict, session=Depends(require_session), csrf=Depends(require_csrf)):
+async def sync_config(req: SyncConfigRequest, session=Depends(require_session), csrf=Depends(require_csrf)):
     """Sync tenant config (including preset) to peer instances."""
     from fastapi.responses import JSONResponse
 
-    peer_id = body.get("peer_id")
-    config_fields = body.get("fields", ["preset"])
-
-    if not peer_id:
-        raise HTTPException(status_code=400, detail="peer_id required")
+    peer_id = req.peer_id
+    config_fields = req.fields
 
     # Validate peer_id (fixes input validation bug)
     if not _is_valid_peer_id(peer_id):

@@ -140,6 +140,41 @@ class DecisionRecordTests(unittest.TestCase):
                            workdir="/nonexistent/\0bad", session_id="s")
         self.assertTrue(rec is None or isinstance(rec, dict))
 
+    def test_forge_stage_source_ids_are_hashed(self):
+        # review R2 C1: an egress/forge stage's source ids are task-derived (an LLM
+        # names a tool/skill from the task) → they must be HASHED in Layer A, never
+        # stored raw. The conceptual stages keep their (system) ids.
+        trace = {"task_preview": "x", "stages": [
+            {"stage": "memory", "status": "ok", "sources": [{"id": "adr-0222.md", "score": 1.0}]},
+            {"stage": "toolforge", "status": "ok",
+             "sources": [{"id": "mcp__forge__summarize_klaus_mueller", "score": 1.0}]},
+        ]}
+        rec = self.dr.build_record(trace, "b", turn_id="t1")
+        self.dr.assert_content_free(rec)  # must not raise
+        blob = json.dumps(rec)
+        self.assertNotIn("klaus_mueller", blob, "forged (task-derived) name not raw in chain")
+        self.assertIn("adr-0222.md", blob, "conceptual (system) id kept for causality")
+
+    def test_content_free_rejects_short_pii(self):
+        # review R2 C2: length-independent PII shapes must fail loud even ≤80 chars.
+        for bad_id in ("john.doe@example.com", "DE89370400440532013000"):
+            rec = self.dr.build_record(
+                {"stages": [{"stage": "memory", "status": "ok",
+                             "sources": [{"id": bad_id, "score": 1.0}]}]},
+                "b", turn_id="t")
+            with self.assertRaises(ValueError):
+                self.dr.assert_content_free(rec)
+
+    def test_forged_rollback_is_counts_not_names(self):
+        # review R2 C1: forged_rolled_back carries COUNTS, never the names.
+        trace = {"stages": [{"stage": "memory", "status": "ok", "sources": []}],
+                 "gate2_denied": "[house-rules] not permitted (rule 'x')",
+                 "forged_rolled_back": {"tools": ["evil_tool"], "skills": ["evil_skill"]}}
+        rec = self.dr.build_record(trace, "b", turn_id="t")
+        self.dr.assert_content_free(rec)
+        self.assertEqual(rec["forged_rolled_back"], {"tools": 1, "skills": 1})
+        self.assertNotIn("evil_tool", json.dumps(rec))
+
 
 if __name__ == "__main__":
     unittest.main()
