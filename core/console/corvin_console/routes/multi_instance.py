@@ -4,11 +4,12 @@ Multi-Instance Learning Routes (ADR-0275/0277)
 Cross-device learning dashboard, sync status, patterns, overrides.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import Optional, List, Dict, Any
 import json
 from pathlib import Path
 from datetime import datetime
+from corvin_console.feature_flags import is_enabled
 
 router = APIRouter(prefix="/api/multi-instance", tags=["multi-instance"])
 
@@ -116,7 +117,8 @@ async def get_multi_instance_status() -> Dict[str, Any]:
             "merged_at": merged.get("merged_at"),
             "freshness": freshness,
             "github_repo": "https://github.com/veegee82/tenent-shumway",
-            "sync_frequency": "weekly"
+            "sync_frequency": "weekly",
+            "auto_load_repo_enabled": is_enabled("auto_load_github_repo")
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
