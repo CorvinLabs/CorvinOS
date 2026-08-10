@@ -506,13 +506,33 @@ _BADGE_ORCH_LABELS = {
 }
 
 
-def format_delegation_badge(engine: str, orch_mode: "str | None" = None) -> str:
+def format_delegation_badge(engine: str, orch_mode: "str | None" = None, model: "str | None" = None) -> str:
     """Human-readable 'how was this task delegated' label, e.g. 'ACS · loop',
-    'TDE · tiered', 'native'. Shared by the console engine chip and the bridge
-    text-suffix so both surfaces read identically."""
+    'TDE · tiered · Opus 5', 'native · Haiku'. Shared by the console engine chip
+    and the bridge text-suffix so both surfaces read identically. Includes model
+    label when provided."""
     eng = _BADGE_ENGINE_LABELS.get((engine or "").lower(), engine or "native")
     mode = _BADGE_ORCH_LABELS.get((orch_mode or "").lower()) if orch_mode else None
-    return f"{eng} · {mode}" if mode else eng
+
+    # Extract short model name (e.g. "Opus 5" from "claude-opus-5")
+    model_label = None
+    if model:
+        model_lower = (model or "").lower()
+        if "opus" in model_lower:
+            model_label = "Opus 5" if "5" in model_lower else "Opus 4"
+        elif "sonnet" in model_lower:
+            model_label = "Sonnet"
+        elif "haiku" in model_lower:
+            model_label = "Haiku"
+
+    # Build badge: engine, optionally mode, optionally model
+    parts = [eng]
+    if mode:
+        parts.append(mode)
+    if model_label:
+        parts.append(model_label)
+
+    return " · ".join(parts)
 
 
 # ── Timestamp Utilities ────────────────────────────────────────────────────
