@@ -1,19 +1,18 @@
 /**
  * Vibe Engineering — Context Pipeline (read-only observability, ADR-0275/0278).
  *
- * Reads the durable Layer-A Decision Record (per-turn: stage chain, per-source
- * scores, chain hash, brief_sha256). Click a turn to open a detail drawer with
- * the exact injected brief text (Layer B via /explain), the causal per-source
- * scores, and the audit hash + tamper-evidence.
+ * Compact, overview-first: each turn is a single row of small clickable stage
+ * pills (no more wide cards running off-screen). Click a stage → a window with a
+ * star-graph of that stage (the stage at the centre, its sources radial with
+ * relevance-scored edges) so the user can VISUALLY follow how the context is
+ * built. A separate button opens the full injected brief + audit integrity.
  */
 import { useEffect, useState } from "react";
 import {
-  Loader2, AlertCircle, Brain, Network, Sparkles, ArrowRight, Workflow,
-  Clock, FileText, X, ShieldCheck, Hash,
+  Loader2, AlertCircle, Brain, Network, Sparkles, Workflow, X, ShieldCheck,
+  Hash, FileText, ChevronRight,
 } from "lucide-react";
-import {
-  Card, CardHeader, CardTitle, CardDescription, CardContent,
-} from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 interface Source { id: string; score: number }
@@ -27,104 +26,76 @@ interface Stage {
 }
 interface Turn {
   turn_id: string;
-  session_id?: string;
   ts?: number;
   hash?: string;
-  prev_hash?: string;
   degraded?: string | null;
   top_score?: number;
-  stages_ok?: number;
   brief_sha256?: string | null;
-  brief_bytes?: number;
   stages: Stage[];
 }
 interface SessionGroup { session: string; turns: Turn[] }
-interface TracesResponse {
-  tenant_id: string;
-  sessions: SessionGroup[];
-  available: boolean;
-}
+interface TracesResponse { tenant_id: string; sessions: SessionGroup[]; available: boolean }
 
-const STAGE_META: Record<
-  string, { icon: React.ComponentType<{ className?: string }>; label: string }
-> = {
-  memory: { icon: Brain, label: "Memory Lookup" },
-  graph: { icon: Network, label: "Graph Traversal" },
-  skill: { icon: Sparkles, label: "Skill Injection" },
-  approach_synthesis: { icon: Workflow, label: "Approach Synthesis" },
-  blocker_id: { icon: AlertCircle, label: "Blocker ID" },
+const STAGE_META: Record<string, {
+  icon: React.ComponentType<{ className?: string }>; label: string; short: string;
+}> = {
+  memory: { icon: Brain, label: "Memory Lookup", short: "Memory" },
+  graph: { icon: Network, label: "Graph Traversal", short: "Graph" },
+  skill: { icon: Sparkles, label: "Skill Injection", short: "Skill" },
+  approach_synthesis: { icon: Workflow, label: "Approach Synthesis", short: "Approach" },
+  blocker_id: { icon: AlertCircle, label: "Blocker ID", short: "Blocker" },
 };
+const ORDER = ["memory", "graph", "skill", "approach_synthesis", "blocker_id"];
 
-function confidenceVariant(t?: string): "ok" | "warn" | "secondary" {
-  if (t === "high") return "ok";
-  if (t === "medium") return "warn";
-  return "secondary";
+function dotColor(status: string): string {
+  if (status === "ok") return "bg-emerald-500";
+  if (status === "not_run") return "bg-slate-500/50";
+  if (status === "failed") return "bg-red-500";
+  return "bg-amber-500";
 }
-function statusVariant(s: string): "ok" | "warn" | "danger" | "secondary" {
-  if (s === "ok") return "ok";
-  if (s === "not_run") return "secondary";
-  return "danger";
+function tierColor(tier?: string): string {
+  if (tier === "high") return "#10b981";
+  if (tier === "medium") return "#f59e0b";
+  return "#64748b";
 }
 
-function StageNode({ stage }: { stage: Stage }) {
-  const meta = STAGE_META[stage.stage] ?? { icon: Workflow, label: stage.stage };
+/* ── compact pipeline bar: one row of small clickable pills ─────────────── */
+function StagePill({ stage, onClick }: { stage: Stage; onClick: () => void }) {
+  const meta = STAGE_META[stage.stage] ?? { icon: Workflow, label: stage.stage, short: stage.stage };
   const Icon = meta.icon;
+  const n = stage.sources?.length ?? 0;
   const notRun = stage.status === "not_run";
-  const failed = stage.status !== "ok" && !notRun;
-  const sources = stage.sources ?? [];
   return (
-    <div
+    <button
+      onClick={onClick}
+      title={`${meta.label} — ${stage.status}${n ? `, ${n} sources` : ""}`}
       className={
-        "flex-1 min-w-[150px] rounded-lg border p-3 " +
-        (failed ? "border-destructive/40 bg-destructive/5"
-          : notRun ? "border-border bg-muted/30 opacity-70"
-          : "border-border bg-card")
+        "group flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors " +
+        (notRun
+          ? "border-border bg-muted/20 opacity-60 hover:opacity-100"
+          : "border-border bg-card hover:border-accent-foreground/50")
       }
     >
-      <div className="flex items-center gap-2 mb-2">
-        <Icon className={"h-4 w-4 " + (failed ? "text-destructive" : "text-accent-foreground")} />
-        <span className="text-sm font-medium">{meta.label}</span>
-      </div>
-      <div className="flex flex-wrap gap-1.5 mb-2">
-        <Badge variant={statusVariant(stage.status)}>{stage.status}</Badge>
-        {stage.confidence_tier && (
-          <Badge variant={confidenceVariant(stage.confidence_tier)}>{stage.confidence_tier}</Badge>
-        )}
-      </div>
+      <span className={"h-2 w-2 shrink-0 rounded-full " + dotColor(stage.status)} />
+      <Icon className="h-4 w-4 shrink-0 text-accent-foreground" />
+      <span className="text-sm font-medium">{meta.short}</span>
       {!notRun && (
-        <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <FileText className="h-3 w-3" /> {sources.length} source{sources.length === 1 ? "" : "s"}
-          </span>
-          {sources.slice(0, 3).map((s, i) => (
-            <div key={i} className="flex justify-between gap-2 ml-4">
-              <span className="truncate" title={s.id}>{s.id}</span>
-              <span className="tabular-nums opacity-70">{s.score.toFixed(2)}</span>
-            </div>
-          ))}
-          {stage.duration_ms != null && (
-            <span className="flex items-center gap-1">
-              <Clock className="h-3 w-3" /> {Math.round(stage.duration_ms)} ms
-            </span>
-          )}
-        </div>
+        <span className="text-xs text-muted-foreground tabular-nums">{n}</span>
       )}
-      {stage.reason && notRun && (
-        <p className="text-xs text-muted-foreground italic">{stage.reason}</p>
-      )}
-    </div>
+    </button>
   );
 }
 
-function StageChain({ stages }: { stages: Stage[] }) {
-  const shown = stages.filter((s) => s.stage in STAGE_META);
+function PipelineBar({ turn, onStage }: { turn: Turn; onStage: (s: Stage) => void }) {
+  const map = new Map(turn.stages.map((s) => [s.stage, s]));
+  const ordered = ORDER.map((k) => map.get(k)).filter(Boolean) as Stage[];
   return (
-    <div className="flex flex-col md:flex-row items-stretch gap-2 md:gap-1">
-      {shown.map((s, i) => (
-        <div key={i} className="flex items-center gap-2 md:gap-1 md:flex-1">
-          <StageNode stage={s} />
-          {i < shown.length - 1 && (
-            <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground rotate-90 md:rotate-0" />
+    <div className="flex flex-wrap items-center gap-1.5">
+      {ordered.map((s, i) => (
+        <div key={s.stage} className="flex items-center gap-1.5">
+          <StagePill stage={s} onClick={() => onStage(s)} />
+          {i < ordered.length - 1 && (
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60" />
           )}
         </div>
       ))}
@@ -132,112 +103,190 @@ function StageChain({ stages }: { stages: Stage[] }) {
   );
 }
 
-function TurnCard({ turn, onOpen }: { turn: Turn; onOpen: () => void }) {
-  const when = turn.ts ? new Date(turn.ts * 1000).toLocaleString() : "";
+/* ── star graph of one stage (SVG): stage at centre, sources radial ─────── */
+function StageGraph({ stage }: { stage: Stage }) {
+  const meta = STAGE_META[stage.stage] ?? { label: stage.stage, short: stage.stage };
+  const srcs = (stage.sources ?? []).slice(0, 8);
+  const W = 520, H = 360, cx = W / 2, cy = H / 2, R = 128;
+  const col = tierColor(stage.confidence_tier);
+
+  if (stage.status === "not_run") {
+    return <p className="text-sm text-muted-foreground italic py-8 text-center">
+      This stage did not run this turn ({stage.reason || "not reached"}).</p>;
+  }
+  if (srcs.length === 0) {
+    return <p className="text-sm text-muted-foreground italic py-8 text-center">
+      Stage ran with no matching sources.</p>;
+  }
+
+  const pts = srcs.map((s, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / srcs.length;
+    return { s, x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) };
+  });
+
   return (
-    <Card className="mb-4 cursor-pointer transition-colors hover:border-accent-foreground/40"
-          onClick={onOpen} role="button" tabIndex={0}
-          onKeyDown={(e) => (e.key === "Enter" ? onOpen() : null)}>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="min-w-0">
-            <CardTitle className="text-base truncate">{turn.turn_id}</CardTitle>
-            <CardDescription className="text-xs">
-              {when} · top score {turn.top_score ?? 0} · click for detail
-            </CardDescription>
-          </div>
-          {turn.degraded && <Badge variant="warn">degraded: {turn.degraded}</Badge>}
-        </div>
-      </CardHeader>
-      <CardContent>
-        {turn.stages.length === 0
-          ? <p className="text-sm text-muted-foreground">No enrichment stages ran (plain context).</p>
-          : <StageChain stages={turn.stages} />}
-      </CardContent>
-    </Card>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto">
+      {/* edges */}
+      {pts.map((p, i) => {
+        const mx = (cx + p.x) / 2, my = (cy + p.y) / 2;
+        return (
+          <g key={"e" + i}>
+            <line x1={cx} y1={cy} x2={p.x} y2={p.y} stroke={col}
+                  strokeWidth={0.8 + p.s.score * 2.6} strokeOpacity={0.45} />
+            <rect x={mx - 15} y={my - 9} width={30} height={16} rx={4}
+                  className="fill-background" stroke={col} strokeOpacity={0.5} />
+            <text x={mx} y={my + 3} textAnchor="middle"
+                  className="fill-muted-foreground" fontSize={10}>
+              {p.s.score.toFixed(2)}
+            </text>
+          </g>
+        );
+      })}
+      {/* source nodes */}
+      {pts.map((p, i) => {
+        const label = p.s.id.length > 22 ? p.s.id.slice(0, 21) + "…" : p.s.id;
+        const w = Math.max(70, label.length * 6.2);
+        return (
+          <g key={"n" + i}>
+            <rect x={p.x - w / 2} y={p.y - 13} width={w} height={26} rx={7}
+                  className="fill-card" stroke={col} strokeOpacity={0.7} />
+            <text x={p.x} y={p.y + 4} textAnchor="middle"
+                  className="fill-foreground" fontSize={11}>{label}</text>
+          </g>
+        );
+      })}
+      {/* centre */}
+      <circle cx={cx} cy={cy} r={44} className="fill-accent/15" stroke={col} strokeWidth={2} />
+      <text x={cx} y={cy - 2} textAnchor="middle" className="fill-foreground" fontSize={12} fontWeight={600}>
+        {meta.short}
+      </text>
+      <text x={cx} y={cy + 14} textAnchor="middle" className="fill-muted-foreground" fontSize={10}>
+        {srcs.length} src
+      </text>
+    </svg>
   );
 }
 
-function DetailDrawer({ turn, onClose }: { turn: Turn; onClose: () => void }) {
-  const [brief, setBrief] = useState<string | null>(null);
-  const [briefState, setBriefState] = useState<"loading" | "ok" | "erased" | "none">("loading");
-
-  useEffect(() => {
-    if (!turn.brief_sha256) { setBriefState("none"); return; }
-    let alive = true;
-    fetch(`/v1/console/vibe-engineering/explain/${turn.brief_sha256}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (!alive) return;
-        if (d.found) { setBrief(d.text); setBriefState("ok"); }
-        else setBriefState("erased");
-      })
-      .catch(() => alive && setBriefState("erased"));
-    return () => { alive = false; };
-  }, [turn.brief_sha256]);
-
+/* ── modal shells ──────────────────────────────────────────────────────── */
+function Modal({ title, subtitle, onClose, children }: {
+  title: string; subtitle?: string; onClose: () => void; children: React.ReactNode;
+}) {
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="fixed inset-0 bg-background/70 backdrop-blur-sm" />
-      <div className="relative z-10 h-full w-full max-w-xl overflow-y-auto border-l border-border bg-card p-6 shadow-xl"
+      <div className="relative z-10 w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-xl"
            onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h2 className="text-lg font-bold">{turn.turn_id}</h2>
-            <p className="text-xs text-muted-foreground">
-              {turn.ts ? new Date(turn.ts * 1000).toLocaleString() : ""}
-            </p>
+            <h2 className="text-lg font-bold">{title}</h2>
+            {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
           </div>
           <button onClick={onClose} className="rounded-md p-1 hover:bg-muted" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
-
-        {/* Integrity — hash-chained audit record (ADR-0278) */}
-        <div className="mb-5 rounded-lg border border-border bg-muted/30 p-3">
-          <div className="flex items-center gap-2 mb-1 text-sm font-medium">
-            <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-            Audit record — hash-chained
-          </div>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground font-mono break-all">
-            <Hash className="h-3 w-3 shrink-0" /> {turn.hash ?? "—"}
-          </div>
-          {turn.brief_sha256 && (
-            <div className="text-xs text-muted-foreground font-mono break-all mt-1">
-              brief sha256: {turn.brief_sha256}
-            </div>
-          )}
-        </div>
-
-        {/* Injected brief — Layer B */}
-        <h3 className="text-sm font-semibold mb-2">Injected context brief</h3>
-        <div className="mb-5 rounded-lg border border-border bg-background p-3 text-sm">
-          {briefState === "loading" && (
-            <span className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> loading…
-            </span>
-          )}
-          {briefState === "ok" && (
-            <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">{brief}</pre>
-          )}
-          {briefState === "erased" && (
-            <span className="text-muted-foreground italic">
-              Brief text was lawfully erased (GDPR Art. 17) — the hash in the audit
-              record now resolves to nothing, which is itself honest evidence.
-            </span>
-          )}
-          {briefState === "none" && (
-            <span className="text-muted-foreground italic">
-              No brief was produced this turn (plain context / degraded).
-            </span>
-          )}
-        </div>
-
-        {/* Full stage chain with per-source scores */}
-        <h3 className="text-sm font-semibold mb-2">Pipeline stages</h3>
-        <StageChain stages={turn.stages} />
+        {children}
       </div>
     </div>
+  );
+}
+
+function StageModal({ stage, onClose }: { stage: Stage; onClose: () => void }) {
+  const meta = STAGE_META[stage.stage] ?? { label: stage.stage };
+  return (
+    <Modal title={meta.label}
+           subtitle={`status ${stage.status}` +
+             (stage.confidence_tier ? ` · confidence ${stage.confidence_tier}` : "") +
+             (stage.duration_ms != null ? ` · ${Math.round(stage.duration_ms)} ms` : "")}
+           onClose={onClose}>
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        <Badge variant={stage.status === "ok" ? "ok" : stage.status === "not_run" ? "secondary" : "danger"}>
+          {stage.status}
+        </Badge>
+        {stage.confidence_tier && <Badge variant="secondary">{stage.confidence_tier}</Badge>}
+      </div>
+      <div className="rounded-lg border border-border bg-background/50 p-2">
+        <StageGraph stage={stage} />
+      </div>
+      {(stage.sources?.length ?? 0) > 0 && (
+        <div className="mt-4">
+          <h3 className="text-sm font-semibold mb-2">Sources (relevance)</h3>
+          <ul className="space-y-1">
+            {stage.sources!.map((s, i) => (
+              <li key={i} className="flex justify-between gap-2 text-sm">
+                <span className="truncate font-mono text-xs" title={s.id}>{s.id}</span>
+                <span className="tabular-nums text-muted-foreground">{s.score.toFixed(2)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function BriefModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
+  const [brief, setBrief] = useState<string | null>(null);
+  const [state, setState] = useState<"loading" | "ok" | "erased" | "none">("loading");
+  useEffect(() => {
+    if (!turn.brief_sha256) { setState("none"); return; }
+    let alive = true;
+    fetch(`/v1/console/vibe-engineering/explain/${turn.brief_sha256}`)
+      .then((r) => r.json())
+      .then((d) => { if (!alive) return; d.found ? (setBrief(d.text), setState("ok")) : setState("erased"); })
+      .catch(() => alive && setState("erased"));
+    return () => { alive = false; };
+  }, [turn.brief_sha256]);
+  return (
+    <Modal title="Injected context brief" subtitle={turn.turn_id} onClose={onClose}>
+      <div className="mb-4 rounded-lg border border-border bg-muted/30 p-3">
+        <div className="flex items-center gap-2 mb-1 text-sm font-medium">
+          <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /> Audit record — hash-chained
+        </div>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground font-mono break-all">
+          <Hash className="h-3 w-3 shrink-0" /> {turn.hash ?? "—"}
+        </div>
+      </div>
+      <div className="rounded-lg border border-border bg-background p-3 text-sm">
+        {state === "loading" && <span className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> loading…</span>}
+        {state === "ok" && <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">{brief}</pre>}
+        {state === "erased" && <span className="text-muted-foreground italic">Brief text was lawfully erased (GDPR Art. 17).</span>}
+        {state === "none" && <span className="text-muted-foreground italic">No brief produced this turn (plain context).</span>}
+      </div>
+    </Modal>
+  );
+}
+
+/* ── turn card: header + one compact pipeline row ──────────────────────── */
+function TurnCard({ turn, onStage, onBrief }: {
+  turn: Turn; onStage: (s: Stage) => void; onBrief: () => void;
+}) {
+  const when = turn.ts ? new Date(turn.ts * 1000).toLocaleString() : "";
+  return (
+    <Card className="mb-3">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <CardTitle className="text-sm truncate">{turn.turn_id}</CardTitle>
+            <CardDescription className="text-xs">
+              {when} · top score {turn.top_score ?? 0}
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            {turn.degraded && <Badge variant="warn">degraded</Badge>}
+            <button onClick={onBrief}
+                    className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:border-accent-foreground/50">
+              <FileText className="h-3 w-3" /> Brief
+            </button>
+          </div>
+        </div>
+      </CardHeader>
+      <div className="px-6 pb-4">
+        {turn.stages.length === 0
+          ? <p className="text-sm text-muted-foreground">No enrichment stages ran (plain context).</p>
+          : <PipelineBar turn={turn} onStage={onStage} />}
+      </div>
+    </Card>
   );
 }
 
@@ -245,11 +294,12 @@ export default function VibeEngineeringPage() {
   const [data, setData] = useState<TracesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Turn | null>(null);
+  const [stage, setStage] = useState<Stage | null>(null);
+  const [briefTurn, setBriefTurn] = useState<Turn | null>(null);
 
   useEffect(() => {
     let alive = true;
-    const fetchData = async () => {
+    const run = async () => {
       try {
         const res = await fetch("/v1/console/vibe-engineering/traces?limit=50");
         if (!res.ok) throw new Error(`Failed to load (${res.status})`);
@@ -257,65 +307,52 @@ export default function VibeEngineeringPage() {
         if (alive) { setData(body); setError(null); }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (alive) setLoading(false);
-      }
+      } finally { if (alive) setLoading(false); }
     };
-    fetchData();
-    const id = setInterval(fetchData, 15000);
+    run();
+    const id = setInterval(run, 15000);
     return () => { alive = false; clearInterval(id); };
   }, []);
 
   if (loading && !data) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-8 w-8 animate-spin text-accent-foreground" />
-          <p className="text-muted-foreground">Loading Context Pipeline…</p>
-        </div>
-      </div>
-    );
+    return <div className="flex items-center justify-center min-h-screen">
+      <div className="flex flex-col items-center gap-4">
+        <Loader2 className="h-8 w-8 animate-spin text-accent-foreground" />
+        <p className="text-muted-foreground">Loading Context Pipeline…</p>
+      </div></div>;
   }
   if (error) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="flex flex-col items-center gap-4 text-destructive">
-          <AlertCircle className="h-8 w-8" />
-          <p className="text-muted-foreground">Error: {error}</p>
-        </div>
-      </div>
-    );
+    return <div className="flex items-center justify-center min-h-screen">
+      <div className="flex flex-col items-center gap-4 text-destructive">
+        <AlertCircle className="h-8 w-8" /><p className="text-muted-foreground">Error: {error}</p>
+      </div></div>;
   }
 
   const sessions = data?.sessions ?? [];
   const totalTurns = sessions.reduce((n, s) => n + s.turns.length, 0);
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center gap-3 mb-1">
         <Workflow className="h-6 w-6 text-accent-foreground" />
         <h1 className="text-2xl font-bold">Context Pipeline</h1>
       </div>
       <p className="text-muted-foreground mb-6">
-        How the Context Engineering Layer enriches each turn — memory → graph →
-        skill — before your agent sees it. From the durable, hash-chained audit
-        record. Click a turn for the injected brief + integrity detail.
+        Each turn as a compact pipeline: memory → graph → skill → approach →
+        blocker. Click a stage to see its source graph; click Brief for the exact
+        injected context + audit integrity.
       </p>
 
       {sessions.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-accent-foreground" />
-              No context-engineered turns yet
-            </CardTitle>
-            <CardDescription>
-              Turn on <span className="font-mono">vibe_engineering</span> under
-              Settings → Features. Every enriched turn then appears here with its
-              pipeline, per-source scores and audit record.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+        <Card><CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-accent-foreground" /> No context-engineered turns yet
+          </CardTitle>
+          <CardDescription>
+            Turn on <span className="font-mono">vibe_engineering</span> under
+            Settings → Features. Every enriched turn then appears here.
+          </CardDescription>
+        </CardHeader></Card>
       ) : (
         <>
           <p className="text-sm text-muted-foreground mb-4">
@@ -324,18 +361,18 @@ export default function VibeEngineeringPage() {
           </p>
           {sessions.map((sg) => (
             <div key={sg.session} className="mb-8">
-              <h2 className="text-sm font-semibold text-muted-foreground mb-3 font-mono">
-                {sg.session}
-              </h2>
+              <h2 className="text-sm font-semibold text-muted-foreground mb-3 font-mono">{sg.session}</h2>
               {sg.turns.map((t) => (
-                <TurnCard key={t.turn_id + (t.ts ?? "")} turn={t} onOpen={() => setSelected(t)} />
+                <TurnCard key={t.turn_id + (t.ts ?? "")} turn={t}
+                          onStage={setStage} onBrief={() => setBriefTurn(t)} />
               ))}
             </div>
           ))}
         </>
       )}
 
-      {selected && <DetailDrawer turn={selected} onClose={() => setSelected(null)} />}
+      {stage && <StageModal stage={stage} onClose={() => setStage(null)} />}
+      {briefTurn && <BriefModal turn={briefTurn} onClose={() => setBriefTurn(null)} />}
     </div>
   );
 }
