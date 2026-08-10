@@ -22,6 +22,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "operator" / "forge"))
@@ -118,6 +119,20 @@ class DecisionRecordTests(unittest.TestCase):
         # …and the brief text is NOT in the immutable record (content-free).
         self.assertNotIn("partial indexes", blob)
         self.assertNotIn("Relevant past memory", blob)
+
+    def test_layer_a_write_failure_is_surfaced_not_silent(self):
+        # P-0 (ADR-0278 durability): a hash-chain write failure is LOGGED, not
+        # silently dropped, and the turn still runs (emit degrades to None).
+        import forge.security_events as se
+        with patch.object(se, "write_event", side_effect=OSError("chain locked")):
+            with self.assertLogs("context_engineering.decision_record",
+                                 level="ERROR") as cm:
+                rec = self.dr.emit(_TRACE, _BRIEF, turn_id="turn-x",
+                                   tenant_id="_default", workdir=self.workdir,
+                                   session_id="sess")
+        self.assertIsNone(rec, "emit degrades (turn runs), does not raise")
+        self.assertTrue(any("AUDIT-WRITE FAILED" in m for m in cm.output),
+                        "the audit-write failure must be surfaced to the log")
 
     def test_emit_never_raises(self):
         # a bogus tenant path / workdir must degrade to None, never raise
