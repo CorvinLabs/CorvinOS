@@ -47,6 +47,9 @@ __all__ = [
     "set_enabled",
     "worker_engine_mode",
     "set_worker_engine_mode",
+    "tier_of",
+    "can_promote_to",
+    "migrate_flags_to_alpha",
 ]
 
 _FLAG_ID_RE = re.compile(r"^[a-z][a-z0-9_]{2,47}$")
@@ -87,6 +90,10 @@ class FeatureFlag:
     migration device, not permanent architecture. ``target_release`` names the
     release in which the flag either flips to default-on or the feature is
     removed.
+
+    ``release_tier`` (ADR-0286): semantic maturity classification for automatic
+    graduation. alpha → beta → stable → production. Starts as alpha; promotes
+    automatically based on metrics. Demotes automatically on error spike.
     """
 
     id: str
@@ -106,6 +113,12 @@ class FeatureFlag:
     # so the UI never hard-codes a flag id — see `recovery_command()` and
     # `corvin config set features.<id> false`.
     self_locking: bool = False
+    # Release tier for automatic promotion (ADR-0286, ADR-0288)
+    release_tier: str = "alpha"  # alpha | beta | stable | production
+    # Timestamp when tier was set/promoted (for metrics tracking)
+    released_date: str | None = None
+    # Maintainer who promoted to current tier (for audit trail)
+    promoted_by: str | None = None
 
 
 # ── The registry ──────────────────────────────────────────────────────────
@@ -475,6 +488,7 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         owner="maintainer",
         target_release="0.12.x",
         tags=("plugins",),
+        release_tier="beta",
     ),
     FeatureFlag(
         id="plugin_builder_idea_first_interview",
@@ -574,6 +588,7 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         owner="maintainer",
         target_release="0.12.x",
         tags=("chat", "context-engineering"),
+        release_tier="beta",
     ),
     FeatureFlag(
         id="auto_load_github_repo",
@@ -588,12 +603,14 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         owner="maintainer",
         target_release="0.11.x",
         tags=("multi-instance", "console"),
+        release_tier="beta",
     ),
 )
 
 
 def _validate_registry(entries: tuple[FeatureFlag, ...]) -> None:
     seen: set[str] = set()
+    allowed_tiers = ("alpha", "beta", "stable", "production")
     for entry in entries:
         if not _FLAG_ID_RE.match(entry.id):
             raise ValueError(f"invalid feature-flag id: {entry.id!r}")
@@ -615,6 +632,12 @@ def _validate_registry(entries: tuple[FeatureFlag, ...]) -> None:
         if not entry.owner or not entry.target_release:
             raise ValueError(
                 f"feature flag {entry.id!r} needs an owner and a target_release"
+            )
+        # Validate release_tier (ADR-0286)
+        if entry.release_tier not in allowed_tiers:
+            raise ValueError(
+                f"feature flag {entry.id!r} has invalid release_tier {entry.release_tier!r}; "
+                f"must be one of {allowed_tiers}"
             )
 
 
@@ -825,3 +848,40 @@ def set_worker_engine_mode(mode: str, tenant_id: str = "_default") -> str:
         data["worker_engine"] = mode
         _write_overlay(tenant_id, data)
     return mode
+
+
+# ── Tier management (ADR-0286, ADR-0288) ──────────────────────────────────
+
+_TIER_PROGRESSION = ("alpha", "beta", "stable", "production")
+
+
+def tier_of(flag_id: str) -> str:
+    """Return the current release_tier of a flag."""
+    return flag(flag_id).release_tier
+
+
+def can_promote_to(flag_id: str, target_tier: str) -> bool:
+    """Check if a flag can progress to the next tier (not used for auto-promotion gate).
+
+    This is an informational check for the CLI/dashboard. Real gating happens in
+    the promotion daemon (ADR-0288) with metrics-based thresholds.
+    """
+    if target_tier not in _TIER_PROGRESSION:
+        return False
+    current = tier_of(flag_id)
+    current_idx = _TIER_PROGRESSION.index(current)
+    target_idx = _TIER_PROGRESSION.index(target_tier)
+    return target_idx > current_idx  # Can only progress forward
+
+
+def migrate_flags_to_alpha() -> dict[str, str]:
+    """One-time migration: ensure all flags in registry have a release_tier.
+
+    Returns dict of flag_id → tier (for audit trail).
+
+    Safe to re-run; idempotent.
+    """
+    result = {}
+    for entry in REGISTRY:
+        result[entry.id] = entry.release_tier
+    return result
