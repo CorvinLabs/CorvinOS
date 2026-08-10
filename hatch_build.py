@@ -211,6 +211,16 @@ _VENDOR_MAP: tuple[tuple[str, str], ...] = (
     # ~/.claude/skills/) had nothing to copy on a pip-only install. Found
     # 2026-07-29 while adding the e2e-wiring-proof skill and applying that
     # skill's own reachability-proof rule to itself.
+    # The Context Engineering Layer — the whole Vibe Engineering / Context Brain
+    # surface (ADR-0275..0285, ADR-0289). Same class of bug as the bundle/skills
+    # entry below and found the same way: the console, the bridge and acs_runtime
+    # all load it by FILE PATH inside a try/except, so on a wheel the import
+    # simply failed and `_CEL_AVAILABLE` stayed False — the feature was silently
+    # ABSENT for every `pip install corvinos` user since P-1 shipped, while the
+    # source checkout it was developed in worked perfectly. Found 2026-08-11 by
+    # inspecting the built wheel's contents before an upload (project memory:
+    # "Source-Tree vs. Runtime-Dir — im Checkout korrekt, auf Wheel kaputt").
+    ("operator/context_engineering", "corvin_console/_vendor/operator/context_engineering"),
     ("operator/bundle/skills", "corvin_console/_vendor/operator/bundle/skills"),
     ("operator/bundle/install.sh", "corvin_console/_vendor/operator/bundle/install.sh"),
     ("operator/bundle/manifest.yaml", "corvin_console/_vendor/operator/bundle/manifest.yaml"),

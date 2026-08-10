@@ -129,7 +129,16 @@ _cel_persist_trace = None
 _cel_emit_record = None
 try:
     import importlib.util as _ilu  # noqa: PLC0415
+    # Source tree → <repo>/operator/context_engineering. Wheel → the vendored
+    # copy under _vendor/operator/. Resolving only the first left the CEL
+    # unimportable on every pip install, and because the load sits in a
+    # try/except the feature just reported itself unavailable (fixed 2026-08-11).
     _cel_dir = _REPO / "operator" / "context_engineering"
+    if not _cel_dir.is_dir():
+        from ._operator_bootstrap import vendor_operator_root as _vor  # noqa: PLC0415
+        _vroot = _vor()
+        if _vroot is not None:
+            _cel_dir = _vroot / "context_engineering"
     _cel_spec = _ilu.spec_from_file_location(
         "context_engineering", str(_cel_dir / "__init__.py"),
         submodule_search_locations=[str(_cel_dir)])

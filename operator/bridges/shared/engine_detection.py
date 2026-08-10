@@ -31,13 +31,24 @@ CREDENTIAL_SOURCES = ("subscription", "env_var", "config_file", "vault", "none",
 _PROBE_TIMEOUT = 5.0
 _OLLAMA_TIMEOUT = 2.0
 
-# Claude credential search paths (same as installer/core.py — MUST stay in sync)
-_CLAUDE_CREDENTIAL_PATHS = [
-    Path.home() / ".claude" / ".credentials.json",
-    Path.home() / ".claude" / "credentials.json",
-    Path.home() / ".config" / "claude" / ".credentials.json",
-    Path.home() / ".config" / "claude" / "credentials.json",
-]
+# Claude credential search paths (same as installer/core.py — MUST stay in sync).
+#
+# A FUNCTION, not a module-level list: as constants these were computed ONCE from
+# the real `Path.home()` at import time, so any later change of HOME — a probe run
+# after the host pins its home, a test isolating into tmp — was ignored and the
+# REAL `~/.claude/.credentials.json` was read regardless. That is the documented
+# "path-audit-class bug" vault.py fixed in 2026-07-14 and warns about verbatim
+# ("Do NOT reintroduce these as module-level path constants"); it silently reported
+# `credential_source="subscription"` on a machine that has a subscription, no
+# matter which home the caller meant. Re-resolve per call.
+def _claude_credential_paths() -> "list[Path]":
+    home = Path.home()
+    return [
+        home / ".claude" / ".credentials.json",
+        home / ".claude" / "credentials.json",
+        home / ".config" / "claude" / ".credentials.json",
+        home / ".config" / "claude" / "credentials.json",
+    ]
 
 # Auto-discovery candidates — any binary found in PATH gets surfaced as "discovered".
 # (binary_name, display_label) pairs; order = display order after registered engines.
@@ -113,7 +124,7 @@ def _find_claude_credentials() -> Path | None:
 
     Fail-closed: returns None if no credentials found, not if a file is corrupted.
     """
-    for path in _CLAUDE_CREDENTIAL_PATHS:
+    for path in _claude_credential_paths():
         if path.exists() and path.is_file():
             try:
                 creds = json.loads(path.read_text(encoding="utf-8"))

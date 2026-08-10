@@ -145,6 +145,14 @@ components:
 
   - name: decision_gate
     module: tde.decision_gate
+    # The symbol the live consumer actually imports (`ops/launcher/corvin/
+    # tde_cmd.py:74` — `from tde.decision_gate import evaluate_tde_verdict`).
+    # This was MISSING while `status: live`, which is exactly what the
+    # WiringIntegrityFiber flags: the manifest claimed reachability in prose but
+    # gave the runtime check nothing to verify, so `aco.wiring_integrity` — the
+    # repo's own reachability gate — has been reporting HIGH ever since the
+    # status flipped to live (found in the R6/R7 reachability review).
+    entry_point: "tde.decision_gate:evaluate_tde_verdict"
     status: live
     reason: >
       ADR-0222 Phase 2 decision logic. Its BandEvidence dataclass IS reached in

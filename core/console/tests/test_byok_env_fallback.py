@@ -24,9 +24,17 @@ class _FakeRec:
 
 
 def _empty_vault(monkeypatch, tmp_path):
-    """Point both the vault module and byok's own file-fallback lookup at an
-    empty, isolated XDG config dir so neither sees any real local state."""
+    """Point the vault, byok's file-fallback lookup AND the encrypted secrets
+    store at empty, isolated roots so none of them sees any real local state."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    # `provider_keys.resolve_key` checks THREE stores — process env, secrets.enc,
+    # service.env — and only the last two follow XDG. `SecretsStore` reads
+    # `<CORVIN_HOME>/tenants/<t>/global/secrets.enc`, so isolating XDG alone left
+    # these tests resolving the DEVELOPER'S real encrypted OpenAI key: the STT
+    # slot then reported present no matter what the test had deleted from the env,
+    # and the "a TTS key must not satisfy the STT slot" assertions failed on a
+    # machine with keys configured while CI stayed green.
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
     monkeypatch.delenv("CORVIN_HOSTED_MODE", raising=False)
 
 

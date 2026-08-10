@@ -9,7 +9,10 @@ synthesis stage (P-C), ToolForge/SkillForge stages (P-D), and grading (P-F).
 from .base import (
     ContextBundle, StageCtx, StageTelemetry, ContextStage, SCRATCH_KEYS,
 )
-from .registry import register_stage, get_stage, known_ids, all_specs
+from .registry import (register_stage, register_community_stage,
+                       unregister_stage, builtin_ids, get_stage, known_ids,
+                       all_specs)
+from .sandbox import SandboxedStage, sandbox_available, run_stage_sandboxed
 from .config import StageSpec, resolve_pipeline, DEFAULT_PIPELINE, topo_order
 from .binding import (
     ToolRef, SkillRef, revalidate_tools, strip_for_remote, apply_tool_bindings,

@@ -21,9 +21,17 @@ from corvin_console.aco import repair_actions as RA  # type: ignore
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch, tmp_path):
     monkeypatch.delenv("CORVIN_ACO_L5_OFF", raising=False)
     monkeypatch.delenv("CORVIN_ACO_L5_RISKY", raising=False)
+    # `_risky_enabled()` / `_kill_switch()` fall back to the TENANT CONFIG when the
+    # env var is unset, and `_tenant_config()` resolves it through
+    # forge_paths.tenant_global_dir() — i.e. the real CORVIN_HOME. Clearing only the
+    # env vars therefore left these tests reading the DEVELOPER'S live
+    # `tenant.corvin.yaml`; on a machine with `spec.aco.l5_risky: true` (the
+    # maintainer's own install) the risky-gating tests failed while CI stayed green.
+    # Project memory: "Tests lesen Live-Zustand — CORVIN_HOME in conftest umbiegen".
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "_aco_home"))
 
 
 def _ctx(tmp_path: Path, now: float = 0.0) -> RA.RepairContext:

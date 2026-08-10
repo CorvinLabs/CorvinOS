@@ -36,7 +36,15 @@ _CEL_STAGES = None
 _CEL = None  # the context_engineering module itself (prompt_assembly readers)
 try:
     import importlib.util as _ilu  # noqa: PLC0415
+    # Source tree → <repo>/operator/context_engineering; wheel → the vendored
+    # copy. Without the fallback the editor + inspector degraded to "unavailable"
+    # on every pip install (fixed 2026-08-11 alongside the missing vendor entry).
     _ce_dir = Path(__file__).resolve().parents[4] / "operator" / "context_engineering"
+    if not _ce_dir.is_dir():
+        from .._operator_bootstrap import vendor_operator_root as _vor  # noqa: PLC0415
+        _vroot = _vor()
+        if _vroot is not None:
+            _ce_dir = _vroot / "context_engineering"
     _sp = _ilu.spec_from_file_location(
         "context_engineering", str(_ce_dir / "__init__.py"),
         submodule_search_locations=[str(_ce_dir)])

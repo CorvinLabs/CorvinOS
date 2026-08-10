@@ -96,7 +96,17 @@ def _protected_state(
             ),
             "~/.claude/plugins/cache/corvin-voice-local": p["plugin_cache"].is_dir(),
         }
-    except (OSError, RuntimeError):
+    except Exception:  # noqa: BLE001
+        # Deliberately broad, matching this function's stated contract: "returns
+        # None when the snapshot itself cannot be taken … the tripwire then skips
+        # its comparison for that test instead of erroring an innocent test with a
+        # raw traceback." (OSError, RuntimeError) was too narrow for the commonest
+        # real cause — a test that monkeypatches `Path.stat`/`is_dir` GLOBALLY for
+        # its own subject (e.g. test_voice_session_summary stubs
+        # `Path.stat -> Mock(st_size=100)` to fake an audio file). The teardown
+        # snapshot then hit `S_ISDIR(Mock)` → TypeError, which escaped and turned
+        # two PASSING tests into teardown ERRORs. A guard that cannot take its
+        # snapshot must stand down, never fail the test it is protecting.
         return None
 
 

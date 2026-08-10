@@ -574,6 +574,26 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("console", "packages"),
     ),
     FeatureFlag(
+        id="model_catalog_auto_refresh",
+        label="Auto-refresh the live model catalogue",
+        description=(
+            "When the Settings → AI Engines page loads, refresh the cached model "
+            "list for cloud providers in the background, so a newly released "
+            "model appears in the pickers on its own instead of waiting for a "
+            "package upgrade (ADR-0181). Gated: a fresh cache never egresses, a "
+            "failed attempt is not retried for an hour (a failed fetch writes "
+            "nothing, so without the floor it would refetch on every page load), "
+            "an in-flight refresh is never duplicated, an L35-denied host is "
+            "never contacted, and a broken refresh can never take the Engines "
+            "page down. Off (default) means the catalogue only changes on an "
+            "explicit per-provider fetch or a package upgrade — no page load "
+            "ever reaches the network."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("console", "engine", "egress"),
+    ),
+    FeatureFlag(
         id="vibe_engineering",
         label="Vibe Engineering — CEL brief on live turns",
         description=(
