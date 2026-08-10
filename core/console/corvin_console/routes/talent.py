@@ -1,108 +1,159 @@
-"""Talent Score API — User Learning Analytics Dashboard
+"""Your Talent — real Context-Engineering analytics (ADR-0275).
 
-Mock endpoints for "Your Talent" dashboard displaying:
-- Real-time talent score
-- Component breakdown (accuracy, learning rate, variety, efficiency)
-- Historical trend data
-- Task type performance analysis
-- Correlation analysis
-- Learning insights and achievements
+The prior version returned mock/random data. This computes every figure from the
+durable `cel.decision` audit records (ADR-0278): how much you context-engineer,
+how good the context is, which sources shape your turns, and the trend. Zero
+records → an honest empty-state (all zero / empty), never invented numbers.
+
+The four component figures are HONEST proxies of context-engineering quality,
+not coding skill:
+  * accuracy      → stage success rate (share of stages that ran ok)
+  * learning_rate → context-quality trend (is top_score improving?)
+  * variety       → source diversity (distinct sources / total source refs)
+  * efficiency    → non-degraded rate (turns that ran enriched, not plain)
 """
-
 from __future__ import annotations
 
-import random
-from datetime import datetime, timedelta, timezone
+import json
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 
 from .. import auth as session_auth
 from ..deps import require_session
 
+try:
+    from forge import paths as _forge_paths
+except Exception:  # noqa: BLE001
+    _forge_paths = None  # type: ignore[assignment]
+
 router = APIRouter(prefix="/talent", tags=["console-talent"])
+
+_MEDALS = ["🥇", "🥈", "🥉", "⭐", "✨"]
+
+
+def _read_decisions(tenant_id: str, limit: int = 2000) -> list[dict]:
+    """All cel.decision detail dicts for the tenant (with ts), newest last."""
+    if _forge_paths is None:
+        return []
+    try:
+        p = Path(_forge_paths.tenant_global_dir(tenant_id)) / "forge" / "audit.jsonl"
+    except Exception:  # noqa: BLE001
+        return []
+    if not p.exists():
+        return []
+    out: list[dict] = []
+    try:
+        for ln in p.read_text(encoding="utf-8").splitlines():
+            if '"cel.decision"' not in ln:
+                continue
+            try:
+                e = json.loads(ln)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if e.get("event_type") != "cel.decision":
+                continue
+            d = dict(e.get("details", {}) or {})
+            d["ts"] = e.get("ts")
+            out.append(d)
+    except Exception:  # noqa: BLE001
+        return []
+    return out[-limit:]
+
+
+def _stats(tenant_id: str) -> dict[str, Any]:
+    """Aggregate the cel.decision records into talent figures. All real."""
+    recs = _read_decisions(tenant_id)
+    n = len(recs)
+    if n == 0:
+        return {"total_turns": 0}
+
+    top_scores = [float(r.get("top_score") or 0.0) for r in recs]
+    stage_total = stage_ok = 0
+    src_counter: Counter = Counter()
+    by_stage: Counter = Counter()
+    non_degraded = 0
+    for r in recs:
+        if not r.get("degraded"):
+            non_degraded += 1
+        for s in r.get("stages", []):
+            stage_total += 1
+            if s.get("status") == "ok":
+                stage_ok += 1
+            srcs = s.get("sources", []) or []
+            if srcs:
+                by_stage[s.get("stage")] += len(srcs)
+            for src in srcs:
+                if isinstance(src, dict) and src.get("id"):
+                    src_counter[src["id"]] += 1
+
+    total_src_refs = sum(src_counter.values())
+    variety = (len(src_counter) / total_src_refs) if total_src_refs else 0.0
+    accuracy = (stage_ok / stage_total) if stage_total else 0.0
+    efficiency = non_degraded / n
+    avg_top = sum(top_scores) / n
+    # learning_rate: recent-half avg vs older-half avg of top_score
+    half = max(1, n // 2)
+    older = top_scores[:half]
+    recent = top_scores[half:] or older
+    learning = min(1.0, max(0.0, 0.5 + (sum(recent) / len(recent) - sum(older) / len(older))))
+
+    # per-day buckets
+    daily: dict[str, list] = {}
+    for r in recs:
+        ts = r.get("ts")
+        if not ts:
+            continue
+        day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+        daily.setdefault(day, []).append(float(r.get("top_score") or 0.0))
+
+    return {
+        "total_turns": n, "avg_top": avg_top, "accuracy": accuracy,
+        "learning": learning, "variety": variety, "efficiency": efficiency,
+        "src_counter": src_counter, "by_stage": by_stage, "daily": daily,
+    }
 
 
 @router.get("/score")
 async def get_talent_score(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    """Get current talent score (mock data) — requires valid session."""
-
+    st = _stats(rec.tenant_id)
+    if st["total_turns"] == 0:
+        return {"talent_score": 0.0, "trend": 0.0, "empty": True,
+                "components": {"accuracy": 0, "learning_rate": 0, "variety": 0,
+                               "efficiency": 0},
+                "ranking": [], "events": []}
+    ranking = []
+    for i, (sid, cnt) in enumerate(st["src_counter"].most_common(5)):
+        ranking.append({
+            "id": sid, "rank": i + 1, "medal": _MEDALS[i],
+            "status": "Top source" if i == 0 else "Frequent",
+            "accuracy": round(st["accuracy"], 2),
+            "feedback_pct": round(100 * cnt / max(1, st["total_turns"]), 1),
+        })
+    events = [
+        {"timestamp": datetime.now(timezone.utc).isoformat(), "type": "milestone",
+         "title": f"{st['total_turns']} context-engineered turns", "badge": "🧠",
+         "description": f"Average context score {round(st['avg_top'], 2)}"},
+    ]
+    top = st["src_counter"].most_common(1)
+    if top:
+        events.append({"timestamp": datetime.now(timezone.utc).isoformat(),
+                       "type": "achievement", "title": "Most-used source",
+                       "description": top[0][0], "badge": "📌"})
     return {
-        "talent_score": 7.8,
-        "trend": 0.5,
-        "components": {
-            "accuracy": 0.82,
-            "learning_rate": 0.75,
-            "variety": 0.88,
-            "efficiency": 0.79,
-        },
-        "ranking": [
-            {
-                "id": "context_engineering",
-                "rank": 1,
-                "medal": "🥇",
-                "status": "Excellent",
-                "accuracy": 0.95,
-                "feedback_pct": 94.5,
-            },
-            {
-                "id": "plugin_development",
-                "rank": 2,
-                "medal": "🥈",
-                "status": "Very Good",
-                "accuracy": 0.88,
-                "feedback_pct": 87.2,
-            },
-            {
-                "id": "bug_fixing",
-                "rank": 3,
-                "medal": "🥉",
-                "status": "Good",
-                "accuracy": 0.82,
-                "feedback_pct": 81.0,
-            },
-            {
-                "id": "documentation",
-                "rank": 4,
-                "medal": "⭐",
-                "status": "Developing",
-                "accuracy": 0.76,
-                "feedback_pct": 72.3,
-            },
-            {
-                "id": "testing",
-                "rank": 5,
-                "medal": "✨",
-                "status": "Developing",
-                "accuracy": 0.71,
-                "feedback_pct": 68.9,
-            },
-        ],
-        "events": [
-            {
-                "timestamp": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
-                "type": "achievement",
-                "title": "Master Debugger",
-                "description": "Fixed 10+ bugs with 95%+ accuracy",
-                "badge": "🐛",
-            },
-            {
-                "timestamp": (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat(),
-                "type": "milestone",
-                "title": "100 Tasks Completed",
-                "description": "Completed 100 tasks this month",
-                "badge": "🎯",
-            },
-            {
-                "timestamp": (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat(),
-                "type": "improvement",
-                "title": "Score Improvement",
-                "description": "Talent score improved 0.5 points this week",
-                "badge": "📈",
-            },
-        ],
+        "talent_score": round(st["avg_top"] * 10, 1),
+        "trend": round((st["learning"] - 0.5) * 10, 2),
+        "empty": False,
+        "components": {"accuracy": round(st["accuracy"], 2),
+                       "learning_rate": round(st["learning"], 2),
+                       "variety": round(st["variety"], 2),
+                       "efficiency": round(st["efficiency"], 2)},
+        "ranking": ranking, "events": events,
     }
 
 
@@ -111,26 +162,24 @@ async def get_talent_history(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
-    """Get talent score history (mock data) — requires valid session."""
-    # Validate days parameter to prevent DoS
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-
-    daily_data = []
-    for i in range(days):
-        date = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
-        base_score = 7.0 + (i * 0.1)
-        daily_data.append({
-            "date": date,
-            "score": round(base_score + (i * 0.05), 2),
-            "accuracy": round(0.75 + (i * 0.02), 2),
-            "learning_rate": round(0.70 + (i * 0.015), 2),
-            "variety": round(0.85 + (i * 0.01), 2),
-            "efficiency": round(0.72 + (i * 0.025), 2),
-            "record_count": 15 + (i * 2),
+    st = _stats(rec.tenant_id)
+    if st["total_turns"] == 0:
+        return {"daily": [], "empty": True}
+    daily = []
+    for day in sorted(st["daily"])[-days:]:
+        scores = st["daily"][day]
+        avg = sum(scores) / len(scores) if scores else 0.0
+        daily.append({
+            "date": day, "score": round(avg * 10, 2),
+            "accuracy": round(st["accuracy"], 2),
+            "learning_rate": round(st["learning"], 2),
+            "variety": round(st["variety"], 2),
+            "efficiency": round(st["efficiency"], 2),
+            "record_count": len(scores),
         })
-
-    return {"daily": list(reversed(daily_data))}
+    return {"daily": daily, "empty": False}
 
 
 @router.get("/task-types")
@@ -138,56 +187,23 @@ async def get_talent_task_types(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
-    """Get task type performance (mock data) — requires valid session."""
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-
-    return {
-        "task_types": [
-            {
-                "type": "Bug Fixes",
-                "count": 24,
-                "accuracy": 0.92,
-                "feedback_percentage": 89.5,
-                "efficiency": 0.85,
-            },
-            {
-                "type": "Feature Development",
-                "count": 18,
-                "accuracy": 0.87,
-                "feedback_percentage": 84.2,
-                "efficiency": 0.78,
-            },
-            {
-                "type": "Code Review",
-                "count": 32,
-                "accuracy": 0.91,
-                "feedback_percentage": 88.7,
-                "efficiency": 0.82,
-            },
-            {
-                "type": "Documentation",
-                "count": 12,
-                "accuracy": 0.75,
-                "feedback_percentage": 71.3,
-                "efficiency": 0.68,
-            },
-            {
-                "type": "Architecture Design",
-                "count": 8,
-                "accuracy": 0.89,
-                "feedback_percentage": 86.4,
-                "efficiency": 0.80,
-            },
-            {
-                "type": "Testing",
-                "count": 22,
-                "accuracy": 0.80,
-                "feedback_percentage": 77.8,
-                "efficiency": 0.75,
-            },
-        ]
-    }
+    st = _stats(rec.tenant_id)
+    if st["total_turns"] == 0:
+        return {"task_types": [], "empty": True}
+    labels = {"memory": "Memory Lookup", "graph": "Graph Traversal",
+              "skill": "Skill Injection", "approach_synthesis": "Approach Synthesis",
+              "blocker_id": "Blocker ID"}
+    task_types = []
+    for stage, cnt in st["by_stage"].most_common():
+        task_types.append({
+            "type": labels.get(stage, stage), "count": cnt,
+            "accuracy": round(st["accuracy"], 2),
+            "feedback_percentage": round(st["efficiency"] * 100, 1),
+            "efficiency": round(st["variety"], 2),
+        })
+    return {"task_types": task_types, "empty": False}
 
 
 @router.get("/correlation")
@@ -195,18 +211,15 @@ async def get_talent_correlation(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
-    """Get accuracy vs efficiency correlation (mock data) — requires valid session."""
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-
+    recs = _read_decisions(rec.tenant_id)
     points = []
-    for _ in range(40):
-        points.append({
-            "accuracy": round(random.uniform(0.5, 1.0), 2),
-            "efficiency": round(random.uniform(0.5, 1.0), 2),
-        })
-
-    return {"correlation": {"points": points}}
+    for r in recs:
+        n_src = sum(len(s.get("sources", []) or []) for s in r.get("stages", []))
+        points.append({"accuracy": round(float(r.get("top_score") or 0.0), 2),
+                       "efficiency": round(min(1.0, n_src / 10.0), 2)})
+    return {"correlation": {"points": points}, "empty": not points}
 
 
 @router.get("/insights")
@@ -214,87 +227,28 @@ async def get_talent_insights(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
-    """Get learning insights (mock data) — requires valid session."""
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-
-    return {
-        "dimensions": [
-            {
-                "dimension": "Accuracy",
-                "icon": "🎯",
-                "current": 82.0,
-                "change": 5.2,
-                "status": "up",
-                "narrative": "Accuracy improved significantly this week",
-                "analysis": "More careful problem analysis and testing",
-            },
-            {
-                "dimension": "Learning Rate",
-                "icon": "📚",
-                "current": 75.0,
-                "change": 3.1,
-                "status": "up",
-                "narrative": "Learning speed is increasing",
-                "analysis": "Applying patterns from recent tasks faster",
-            },
-            {
-                "dimension": "Variety",
-                "icon": "🎨",
-                "current": 88.0,
-                "change": 1.5,
-                "status": "up",
-                "narrative": "Diverse task completion",
-                "analysis": "Tackling different problem types effectively",
-            },
-            {
-                "dimension": "Efficiency",
-                "icon": "⚡",
-                "current": 79.0,
-                "change": 2.8,
-                "status": "up",
-                "narrative": "Better time management",
-                "analysis": "Solving tasks faster while maintaining quality",
-            },
-        ],
-        "narratives": [
-            {
-                "icon": "💡",
-                "title": "Pattern Recognition Boost",
-                "description": "You're identifying common code patterns 40% faster",
-            },
-            {
-                "icon": "🔧",
-                "title": "Tool Mastery",
-                "description": "Your debugging toolkit is more effective",
-            },
-            {
-                "icon": "🚀",
-                "title": "Performance Optimization",
-                "description": "Solutions are more optimized for runtime efficiency",
-            },
-        ],
-        "badges": [
-            {
-                "badge": "🏆",
-                "title": "Bug Buster",
-                "context": "Fixed 20+ bugs",
-                "level": "gold",
-            },
-            {
-                "badge": "📖",
-                "title": "Documentation Master",
-                "context": "Wrote 50+ doc updates",
-                "level": "silver",
-            },
-            {
-                "badge": "⚙️",
-                "title": "Architecture Expert",
-                "context": "Designed 5+ systems",
-                "level": "bronze",
-            },
-        ],
-    }
+    st = _stats(rec.tenant_id)
+    if st["total_turns"] == 0:
+        return {"dimensions": [], "narratives": [], "badges": [], "empty": True}
+    dims = [
+        ("Context quality", "🎯", st["avg_top"], "Average top-source relevance per turn"),
+        ("Learning rate", "📚", st["learning"], "Is context quality trending up?"),
+        ("Source variety", "🎨", st["variety"], "Diversity of memories / ADRs / skills used"),
+        ("Enriched rate", "⚡", st["efficiency"], "Turns that ran enriched, not plain"),
+    ]
+    dimensions = [{"dimension": name, "icon": icon, "current": round(val * 100, 1),
+                   "change": 0.0, "status": "flat",
+                   "narrative": desc, "analysis": desc} for name, icon, val, desc in dims]
+    narratives = [{"icon": "🧠", "title": "Context-engineered turns",
+                   "description": f"{st['total_turns']} turns enriched so far"}]
+    top = st["src_counter"].most_common(3)
+    badges = [{"badge": "📌", "title": sid[:32], "context": f"used {cnt}×",
+               "level": ["gold", "silver", "bronze"][min(i, 2)]}
+              for i, (sid, cnt) in enumerate(top)]
+    return {"dimensions": dimensions, "narratives": narratives, "badges": badges,
+            "empty": False}
 
 
 @router.get("/story")
@@ -302,18 +256,19 @@ async def get_talent_story(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     days: int = 7,
 ) -> dict[str, Any]:
-    """Get learning journey narrative (mock data) — requires valid session."""
     if not 1 <= days <= 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-
-    return {
-        "story": {
-            "summary": "Your learning journey shows consistent improvement across all dimensions. "
-                      "You've mastered bug fixing and code review, with emerging strengths in architecture design.",
-            "score_start": 6.8,
-            "score_end": 7.8,
-            "score_change": 1.0,
-            "trend": "accelerating",
-            "milestone": "Reached Expert level in Bug Fixing",
-        }
-    }
+    st = _stats(rec.tenant_id)
+    if st["total_turns"] == 0:
+        return {"story": None, "empty": True}
+    end = round(st["avg_top"] * 10, 1)
+    return {"story": {
+        "summary": (f"You have context-engineered {st['total_turns']} turns. "
+                    f"Average context score {round(st['avg_top'], 2)}, "
+                    f"{round(st['efficiency'] * 100)}% enriched, "
+                    f"{len(st['src_counter'])} distinct sources drawn on."),
+        "score_start": end, "score_end": end,
+        "score_change": round((st["learning"] - 0.5) * 10, 1),
+        "trend": "improving" if st["learning"] > 0.5 else "steady",
+        "milestone": f"{st['total_turns']} enriched turns",
+    }, "empty": False}
