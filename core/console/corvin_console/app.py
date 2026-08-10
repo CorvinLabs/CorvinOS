@@ -61,7 +61,7 @@ class _SPAStaticFiles(StaticFiles):
         return response
 
 from . import __version__
-from .api import feature_status_endpoints
+from .api import feature_status_endpoints, multi_instance_sync
 from .routes import (
     auth_routes, dashboard, sessions, audit_tail, runs, personas,
     tasks as tasks_route,
@@ -182,6 +182,7 @@ router.include_router(engine_pref_route.router, tags=["console-engine-pref"])
 # would otherwise swallow `PUT /settings/worker-engine` as a file label.
 router.include_router(features_route.router, tags=["console-settings"])
 router.include_router(feature_status_endpoints.router, tags=["console-settings"])
+router.include_router(multi_instance_sync.router, tags=["console-settings"])
 router.include_router(settings_route.router, tags=["console-settings"])
 # Phase G — user-profile + chat-settings tab
 router.include_router(profile_route.router,      tags=["console-profile"])

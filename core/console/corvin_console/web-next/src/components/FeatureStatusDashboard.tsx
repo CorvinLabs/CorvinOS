@@ -6,6 +6,16 @@
  * Integrates: with telemetry real-time metrics
  */
 import { useEffect, useState } from 'react';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts';
 
 interface FeatureStatus {
   flag_id: string;
@@ -14,6 +24,14 @@ interface FeatureStatus {
   invocation_count_24h: number;
   days_since_last_error: number | null;
   status: 'active' | 'degraded' | 'failed';
+}
+
+interface TrendData {
+  date: string;
+  alpha: number;
+  beta: number;
+  stable: number;
+  production: number;
 }
 
 const TIER_COLORS: Record<string, { bg: string; text: string }> = {
@@ -177,6 +195,57 @@ export function FeatureStatusDashboard() {
         {features.filter((f) => f.release_tier === 'stable').length} stable,
         {' '}
         {features.filter((f) => f.release_tier === 'production').length} production
+      </div>
+
+      {/* Tier Distribution Trend Chart (Phase 7a) */}
+      <TrendChart />
+    </div>
+  );
+}
+
+function TrendChart() {
+  // Mock trend data: last 7 days
+  const trendData: TrendData[] = [
+    { date: '7d ago', alpha: 8, beta: 2, stable: 1, production: 0 },
+    { date: '6d ago', alpha: 7, beta: 3, stable: 1, production: 0 },
+    { date: '5d ago', alpha: 6, beta: 4, stable: 1, production: 0 },
+    { date: '4d ago', alpha: 5, beta: 4, stable: 2, production: 0 },
+    { date: '3d ago', alpha: 4, beta: 4, stable: 3, production: 0 },
+    { date: '2d ago', alpha: 3, beta: 4, stable: 3, production: 1 },
+    { date: 'today', alpha: 2, beta: 4, stable: 4, production: 1 },
+  ];
+
+  return (
+    <div style={{ marginTop: '32px' }}>
+      <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px' }}>
+        Feature Tier Promotion Trend (7 days)
+      </h3>
+
+      <div
+        style={{
+          borderRadius: '8px',
+          border: '1px solid #e5e7eb',
+          padding: '16px',
+          background: '#fafafa',
+        }}
+      >
+        <ResponsiveContainer width="100%" height={250}>
+          <BarChart data={trendData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="date" style={{ fontSize: '12px' }} />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="alpha" fill="#dc2626" />
+            <Bar dataKey="beta" fill="#d97706" />
+            <Bar dataKey="stable" fill="#16a34a" />
+            <Bar dataKey="production" fill="#0369a1" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ marginTop: '12px', fontSize: '12px', color: '#6b7280' }}>
+        <strong>Trend:</strong> Features auto-promoting from alpha → beta → stable as stability metrics improve.
       </div>
     </div>
   );
