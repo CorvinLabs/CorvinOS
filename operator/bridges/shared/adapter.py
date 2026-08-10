@@ -3366,6 +3366,20 @@ def _resolve_spawn_inputs(
                     _cel_text = (_cel_render(_cbrief) or "").strip()
                 if _cel_text:
                     sys_prompt = sys_prompt + "\n\n" + _cel_text + "\n"
+                try:  # inspector (Layer B): persist bausteine → the FINAL prompt
+                    _pa_b = locals().get("_bundle")
+                    _pa_src = (_pa_b if (_cel_active and _pa_b is not None)
+                               else locals().get("_cbrief"))
+                    _cel_mod.persist_assembly(
+                        _cel_wd, _cel_turn,
+                        sections=(_cel_mod.build_sections(_pa_src)
+                                  if _pa_src is not None else []),
+                        cel_text=_cel_text, final_prompt=sys_prompt,
+                        forged_tools=list(_cel_forged_tools),
+                        forged_skills=[getattr(s, "skill_id", "?") for s in
+                                       (getattr(_pa_b, "skills_to_bind", None) or [])])
+                except Exception:  # noqa: BLE001 — inspector detail is best-effort
+                    pass
                 try:
                     _cel_persist_trace(_ctrace, _cel_wd, _cel_turn)
                 except Exception:  # noqa: BLE001 — trace cache is best-effort

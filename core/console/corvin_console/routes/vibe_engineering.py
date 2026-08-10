@@ -33,6 +33,7 @@ router = APIRouter(prefix="/vibe-engineering", tags=["console-vibe-engineering"]
 # PYTHONPATH). Used by the pipeline editor (P-E, ADR-0284) for the palette +
 # requires-DAG validation. None → editor degrades to unavailable.
 _CEL_STAGES = None
+_CEL = None  # the context_engineering module itself (prompt_assembly readers)
 try:
     import importlib.util as _ilu  # noqa: PLC0415
     _ce_dir = Path(__file__).resolve().parents[4] / "operator" / "context_engineering"
@@ -45,8 +46,22 @@ try:
         _sys.modules["context_engineering"] = _m
         _sp.loader.exec_module(_m)
         _CEL_STAGES = _sys.modules["context_engineering.stages"]
+        _CEL = _m
 except Exception:  # noqa: BLE001
     _CEL_STAGES = None
+    _CEL = None
+
+_TURN_RE = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
+
+
+def _find_assembly_dir(tenant_id: str) -> "Path | None":
+    """The authenticated tenant's sessions root, for a contained cel-briefs rglob."""
+    if _forge_paths is None:
+        return None
+    try:
+        return Path(_forge_paths.tenant_sessions_dir(tenant_id))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _write_pipeline_config(tenant_id: str, pipeline: list) -> None:
@@ -179,6 +194,70 @@ async def explain_brief(
                 break
     return {"found": False, "brief_sha256": brief_sha256,
             "reason": "erased_or_absent"}
+
+
+@router.get("/prompt/{turn_id}")
+async def get_prompt_assembly(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    turn_id: str,
+) -> dict[str, Any]:
+    """The full assembly for one turn (Layer B): the structured bausteine, the CEL
+    block, and the FINAL prompt that entered the worker engine. `found: false` when
+    the sidecar was lawfully erased (GDPR Art. 17) or the turn ran passive."""
+    if not _TURN_RE.match(turn_id or ""):
+        raise HTTPException(status_code=400, detail="invalid turn id")
+    root = _find_assembly_dir(rec.tenant_id)
+    if root is None or _CEL is None or not root.is_dir():
+        return {"found": False, "turn_id": turn_id, "reason": "unavailable"}
+    root_resolved = root.resolve()
+    for f in root.rglob(f"cel-briefs/{turn_id}.assembly.json"):
+        try:  # traversal guard: stay inside the tenant's sessions root
+            f.resolve().relative_to(root_resolved)
+        except ValueError:
+            continue
+        rec_asm = _CEL.read_assembly(f.parent.parent, turn_id)
+        if rec_asm is not None:
+            return {"found": True, **rec_asm}
+        break
+    return {"found": False, "turn_id": turn_id, "reason": "erased_or_absent"}
+
+
+@router.get("/forged/{turn_id}")
+async def get_forged_artifacts(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    turn_id: str,
+) -> dict[str, Any]:
+    """The CODE of the tools + the BODY of the skills a turn forged, resolved from
+    the tenant's Forge / SkillForge registries. Read-only; tenant-scoped."""
+    if not _TURN_RE.match(turn_id or ""):
+        raise HTTPException(status_code=400, detail="invalid turn id")
+    root = _find_assembly_dir(rec.tenant_id)
+    if root is None or _CEL is None or not root.is_dir():
+        return {"found": False, "turn_id": turn_id, "tools": [], "skills": []}
+    root_resolved = root.resolve()
+    asm = None
+    for f in root.rglob(f"cel-briefs/{turn_id}.assembly.json"):
+        try:
+            f.resolve().relative_to(root_resolved)
+        except ValueError:
+            continue
+        asm = _CEL.read_assembly(f.parent.parent, turn_id)
+        break
+    if asm is None:
+        return {"found": False, "turn_id": turn_id, "tools": [], "skills": []}
+    # a bound forge tool name is "mcp__forge__<name>"; the registry key is <name>
+    tools = []
+    for full in asm.get("forged_tools", []):
+        name = str(full).split("mcp__forge__", 1)[-1]
+        code = _CEL.read_tool_code(rec.tenant_id, name)
+        if code is not None:
+            tools.append(code)
+    skills = []
+    for sid in asm.get("forged_skills", []):
+        body = _CEL.read_skill_body(rec.tenant_id, str(sid))
+        if body is not None:
+            skills.append(body)
+    return {"found": True, "turn_id": turn_id, "tools": tools, "skills": skills}
 
 
 # ── Pipeline editor (P-E, ADR-0284) ──────────────────────────────────────

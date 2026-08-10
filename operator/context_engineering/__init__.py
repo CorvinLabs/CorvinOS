@@ -17,6 +17,8 @@ from .adr_classifier import ADRClassifier
 from .pipeline import (build_brief, render_brief_to_text, build_context,
                        run_full_pipeline, run_full_pipeline_async,
                        build_context_post_gate)
+from .prompt_assembly import (build_sections, persist_assembly, read_assembly,
+                              read_tool_code, read_skill_body)
 from .pipeline import (apply_tool_bindings, render_skill_bindings,
                        strip_for_remote)
 from .license_gate import enforce_ce_quota
