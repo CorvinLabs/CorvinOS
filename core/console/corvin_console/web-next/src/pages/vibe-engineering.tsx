@@ -258,6 +258,152 @@ function BriefModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
 }
 
 /* ── turn card: header + one compact pipeline row ──────────────────────── */
+interface PaletteStage { id: string; requires: string[]; effect: string; trust: string }
+interface PipeEntry { stage: string; config?: Record<string, any> }
+
+const EFFECT_HINT: Record<string, string> = {
+  pure: "local reads → text; runs pre-gate, free",
+  egress: "sends context to an LLM — needs 'allow egress', gated + billed",
+  forge: "forges tools/skills for the worker — runs post-gate",
+};
+
+function PipelineEditorModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [current, setCurrent] = useState<PipeEntry[]>([]);
+  const [palette, setPalette] = useState<PaletteStage[]>([]);
+  const [def, setDef] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [csrf, setCsrf] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/v1/console/vibe-engineering/pipeline").then((r) => r.json()).then((d) => {
+      if (!alive) return;
+      setCurrent(d.current || []); setPalette(d.palette || []);
+      setDef(d.default || []); setLoading(false);
+    }).catch(() => { if (alive) { setErr("failed to load pipeline"); setLoading(false); } });
+    fetch("/v1/console/auth/whoami").then((r) => r.json())
+      .then((d) => alive && setCsrf(d.csrf_token || "")).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const meta = (id: string) => palette.find((p) => p.id === id);
+  const move = (i: number, d: number) => {
+    const a = [...current]; const j = i + d;
+    if (j < 0 || j >= a.length) return;
+    [a[i], a[j]] = [a[j], a[i]]; setCurrent(a);
+  };
+  const remove = (i: number) => setCurrent(current.filter((_, x) => x !== i));
+  const add = (id: string) => setCurrent([...current, { stage: id }]);
+  const setCfg = (i: number, k: string, v: any) => {
+    const a = [...current]; a[i] = { ...a[i], config: { ...(a[i].config || {}), [k]: v } };
+    setCurrent(a);
+  };
+
+  const save = async () => {
+    setSaving(true); setErr(null);
+    try {
+      const r = await fetch("/v1/console/vibe-engineering/pipeline", {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ pipeline: current }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        const errs = d.detail?.errors || d.detail || d;
+        throw new Error(Array.isArray(errs) ? errs.join("; ") : JSON.stringify(errs));
+      }
+      onSaved(); onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally { setSaving(false); }
+  };
+
+  const inPipe = new Set(current.map((c) => c.stage));
+  const addable = palette.filter((p) => !inPipe.has(p.id));
+
+  return (
+    <Modal title="Configure Context Pipeline"
+           subtitle="reorder, toggle, tune per-stage — saved to your tenant, validated (DAG + memory root)"
+           onClose={onClose}>
+      {loading ? (
+        <div className="py-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>
+      ) : (
+        <>
+          <div className="space-y-2 mb-4">
+            {current.map((e, i) => {
+              const m = meta(e.stage);
+              const eff = m?.effect || "pure";
+              return (
+                <div key={i} className="rounded-lg border border-border bg-card p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs text-muted-foreground tabular-nums">{i + 1}</span>
+                      <span className="font-medium text-sm truncate">{e.stage}</span>
+                      <Badge variant={eff === "pure" ? "secondary" : eff === "egress" ? "warn" : "danger"}>{eff}</Badge>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => move(i, -1)} className="rounded px-1.5 hover:bg-muted" title="up">↑</button>
+                      <button onClick={() => move(i, 1)} className="rounded px-1.5 hover:bg-muted" title="down">↓</button>
+                      <button onClick={() => remove(i)} className="rounded p-1 hover:bg-muted" title="remove"><X className="h-4 w-4" /></button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">{EFFECT_HINT[eff]}</p>
+                  {e.stage === "llm_synthesis" && (
+                    <div className="mt-2 space-y-1 text-xs">
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={!!e.config?.egress_ok}
+                               onChange={(ev) => setCfg(i, "egress_ok", ev.target.checked)} />
+                        allow egress (send context to an LLM)
+                      </label>
+                      <input className="w-full rounded border border-border bg-background px-2 py-1"
+                             placeholder="model (default claude-haiku-4-5)"
+                             value={e.config?.model || ""}
+                             onChange={(ev) => setCfg(i, "model", ev.target.value)} />
+                    </div>
+                  )}
+                  {e.stage === "toolforge" && (
+                    <label className="mt-2 flex items-center gap-2 text-xs">
+                      <input type="checkbox" checked={!!e.config?.allow_llm_impl}
+                             onChange={(ev) => setCfg(i, "allow_llm_impl", ev.target.checked)} />
+                      allow LLM-authored tool code (AST-checked; default: safe template only)
+                    </label>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {addable.length > 0 && (
+            <div className="mb-4">
+              <p className="text-xs text-muted-foreground mb-1">Add a stage:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {addable.map((p) => (
+                  <button key={p.id} onClick={() => add(p.id)}
+                          className="rounded-md border border-border px-2 py-1 text-xs hover:border-accent-foreground/50">
+                    + {p.id} <span className="opacity-60">({p.effect})</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {err && <p className="text-destructive text-xs mb-2">⚠ {err}</p>}
+          <div className="flex gap-2">
+            <button onClick={save} disabled={saving}
+                    className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-50">
+              {saving ? "Saving…" : "Save pipeline"}
+            </button>
+            <button onClick={() => setCurrent(def.map((s) => ({ stage: s })))}
+                    className="rounded-md border border-border px-4 py-2 text-sm">
+              Reset to default
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function TurnCard({ turn, onStage, onBrief }: {
   turn: Turn; onStage: (s: Stage) => void; onBrief: () => void;
 }) {
@@ -296,6 +442,7 @@ export default function VibeEngineeringPage() {
   const [error, setError] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
   const [briefTurn, setBriefTurn] = useState<Turn | null>(null);
+  const [showEditor, setShowEditor] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -333,9 +480,15 @@ export default function VibeEngineeringPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
-      <div className="flex items-center gap-3 mb-1">
-        <Workflow className="h-6 w-6 text-accent-foreground" />
-        <h1 className="text-2xl font-bold">Context Pipeline</h1>
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <div className="flex items-center gap-3">
+          <Workflow className="h-6 w-6 text-accent-foreground" />
+          <h1 className="text-2xl font-bold">Context Pipeline</h1>
+        </div>
+        <button onClick={() => setShowEditor(true)}
+                className="rounded-md border border-border px-3 py-1.5 text-sm hover:border-accent-foreground/50">
+          ⚙ Configure
+        </button>
       </div>
       <p className="text-muted-foreground mb-6">
         Each turn as a compact pipeline: memory → graph → skill → approach →
@@ -373,6 +526,8 @@ export default function VibeEngineeringPage() {
 
       {stage && <StageModal stage={stage} onClose={() => setStage(null)} />}
       {briefTurn && <BriefModal turn={briefTurn} onClose={() => setBriefTurn(null)} />}
+      {showEditor && <PipelineEditorModal onClose={() => setShowEditor(false)}
+                                          onSaved={() => window.location.reload()} />}
     </div>
   );
 }
