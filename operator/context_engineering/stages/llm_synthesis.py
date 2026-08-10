@@ -36,6 +36,36 @@ _SYS = (
 )
 
 
+_CLOUD_HOST = "api.anthropic.com"
+
+
+def _l35_egress_permitted(tenant_id: str) -> bool:
+    """FAIL-CLOSED L35 residency check for the synthesis cloud call (review R2 C2).
+
+    Unlike the bridge's ordering probe (which fails OPEN by design — it only picks
+    which classifier to try first), this is an ENFORCEMENT gate on a real egress:
+    the tenant's EgressGate decides. An absent policy uses the EgressGate's own
+    permissive default (L34 opt-in residency, ADR-0173 — permissive for PUBLIC), so
+    the active brain is not disabled everywhere; but a malformed/unreadable policy,
+    a missing EgressGate module, or ANY error → DENY (return False), closing the
+    fail-OPEN hole where a broken deny-policy leaked task text to the cloud."""
+    try:
+        import os as _os  # noqa: PLC0415
+        from pathlib import Path as _Path  # noqa: PLC0415
+        from egress_gate import EgressGate  # type: ignore  # noqa: PLC0415
+        env = _os.environ.get("CORVIN_HOME")
+        home = _Path(_os.path.expanduser(env)) if env else (_Path.home() / ".corvin")
+        cfg = home / "tenants" / (tenant_id or "_default") / "global" / "tenant.corvin.yaml"
+        doc = {}
+        if cfg.is_file():
+            import yaml  # type: ignore  # noqa: PLC0415
+            doc = yaml.safe_load(cfg.read_text("utf-8")) or {}
+        gate = EgressGate.from_tenant_config(doc, audit_writer=None)
+        return bool(gate.validate(_CLOUD_HOST).allowed)
+    except Exception:  # noqa: BLE001 — enforcement gate fails CLOSED
+        return False
+
+
 def _resolve_bin() -> str:
     try:
         from helper_model import resolve_claude_bin  # noqa: PLC0415
@@ -64,7 +94,22 @@ class LLMSynthesisStage:
     trust = "builtin"
 
     def run(self, bundle, ctx):
-        # gate: own pool, degrade-not-block
+        cfg = ctx.config or {}
+        # Egress guards run BEFORE the quota charge (review R2 finding B4: a turn
+        # under a zero-egress policy must not burn a ce_llm unit for a call it will
+        # never make). Two floors, both checked before any egress:
+        #  1. operator toggle — the stage only synthesises if egress_ok is set;
+        #  2. L35 residency (review R2 finding C2) — the REAL fail-closed check:
+        #     the tenant's EgressGate must permit the cloud host, else skip. Absent
+        #     gate / deny / any error → skip (never leak task text to the cloud).
+        if not cfg.get("egress_ok"):
+            return bundle, StageTelemetry(stage=self.id, status="skipped",
+                                          reason="egress_not_allowed")
+        if not _l35_egress_permitted(ctx.tenant_id):
+            return bundle, StageTelemetry(stage=self.id, status="skipped",
+                                          reason="egress_denied_l35")
+
+        # gate: own pool, degrade-not-block — charged only once both egress floors pass
         try:
             from ..license_gate import enforce_ce_llm_quota  # noqa: PLC0415
             if not enforce_ce_llm_quota(ctx.tenant_id):
@@ -73,17 +118,6 @@ class LLMSynthesisStage:
         except Exception:  # noqa: BLE001 — broken gate → skip (deterministic stands)
             return bundle, StageTelemetry(stage=self.id, status="skipped",
                                           reason="gate_unavailable")
-
-        cfg = ctx.config or {}
-        # Fail-closed egress guard (review finding #7): this is an egress call
-        # (task + memories → LLM). It runs ONLY if the operator explicitly allowed
-        # egress for this stage; a turn under a zero-egress residency policy leaves
-        # this unset → skip → deterministic brief stands. Full L34/L35 residency
-        # classification of the sent payload is the turn-path caller's job when
-        # post_gate is wired (P-D); until then this guard is the fail-closed floor.
-        if not cfg.get("egress_ok"):
-            return bundle, StageTelemetry(stage=self.id, status="skipped",
-                                          reason="egress_not_allowed")
 
         model = cfg.get("model") or _DEFAULT_MODEL
         prompt = (f"TASK:\n{bundle.task}\n\nRETRIEVED CONTEXT:\n"

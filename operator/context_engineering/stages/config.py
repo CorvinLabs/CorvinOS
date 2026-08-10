@@ -72,7 +72,9 @@ def resolve_pipeline(tenant_id: str = "_default",
     dropped: list[str] = []
     for e in entries:
         sid = e.get("stage") if isinstance(e, dict) else e
-        if not sid or get_stage(sid) is None:
+        # A hostile/malformed config can make sid a list/dict (unhashable) — that
+        # must be dropped+audited, not crash get_stage's dict lookup (review R2 A5).
+        if not isinstance(sid, str) or not sid or get_stage(sid) is None:
             dropped.append(str(sid))
             continue
         # Accept BOTH shapes (review finding #3): a nested {"stage": id, "config":

@@ -45,7 +45,7 @@ class GradeGateTests(unittest.TestCase):
 
     def test_accumulate(self):
         for s in (0.4, 0.6, 0.8):
-            self.g.grade_stage("_default", "custom_x", s, grader="op")
+            self.g.grade_stage("_default", "custom_x", s, grader="operator")
         gr = self.g.get_grade("_default", "custom_x")
         self.assertEqual(gr["n_grades"], 3)
         self.assertAlmostEqual(gr["mean_score"], 0.6, places=2)
@@ -62,12 +62,33 @@ class GradeGateTests(unittest.TestCase):
         self.assertFalse(self.g.is_default_eligible("_default", "custom_x", builtins))
         # opt-in with 3 grades @ 0.6 → eligible
         for _ in range(3):
-            self.g.grade_stage("_default", "custom_x", 0.6, grader="op")
+            self.g.grade_stage("_default", "custom_x", 0.6, grader="operator")
         self.assertTrue(self.g.is_default_eligible("_default", "custom_x", builtins))
         # opt-in with grades below threshold → not eligible
         for _ in range(3):
-            self.g.grade_stage("_default", "weak_x", 0.2, grader="op")
+            self.g.grade_stage("_default", "weak_x", 0.2, grader="operator")
         self.assertFalse(self.g.is_default_eligible("_default", "weak_x", builtins))
+
+    def test_empty_grader_rejected(self):
+        # review R2 B2: an anonymous grade (empty grader) is rejected — the old
+        # guard let a stage self-grade via the default empty grader.
+        with self.assertRaises(ValueError):
+            self.g.grade_stage("_default", "x", 0.9)
+        with self.assertRaises(ValueError):
+            self.g.grade_stage("_default", "x", 0.9, grader="x")  # self-grade
+
+    def test_untrusted_grader_does_not_promote(self):
+        # review R2 B2: a stage graded 3×@1.0 by a NON-trusted grader (e.g. its own
+        # spoofed name) is NOT default-eligible — only __loop__/operator/bootstrap
+        # count toward promotion.
+        builtins = ["memory"]
+        for _ in range(3):
+            self.g.grade_stage("_default", "sneaky", 1.0, grader="sneaky_ally")
+        self.assertFalse(self.g.is_default_eligible("_default", "sneaky", builtins))
+        # but the same 3 grades from a trusted grader DO promote
+        for _ in range(3):
+            self.g.grade_stage("_default", "honest", 1.0, grader="__loop__")
+        self.assertTrue(self.g.is_default_eligible("_default", "honest", builtins))
 
     def test_bootstrap_capped(self):
         self.g.bootstrap_seed("_default", "new_x", score=0.9)  # asks 0.9

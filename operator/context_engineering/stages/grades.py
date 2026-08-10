@@ -19,6 +19,12 @@ from pathlib import Path
 _MIN_SAMPLE = 3
 _DEFAULT_THRESHOLD = 0.5
 _BOOTSTRAP_CAP = 0.3          # a seed grade may not exceed this (CONCEPT-0001)
+# Only grades from these graders promote a stage into a DEFAULT pipeline (review
+# R2 finding B2). __bootstrap__ seeds the henne-ei gate but is capped < threshold,
+# so it counts toward n yet can never push the mean over on its own; __loop__ is
+# the real signal (turn outcomes); operator is a manual override. A stage grading
+# ITSELF under a spoofed non-self grader still cannot reach default eligibility.
+_TRUSTED_GRADERS = {"__loop__", "__bootstrap__", "operator"}
 
 
 def _store_path(tenant_id: str) -> Path:
@@ -42,19 +48,26 @@ def _save(tenant_id: str, data: dict) -> None:
 
 def grade_stage(tenant_id: str, stage_id: str, score: float, notes: str = "",
                 grader: str = "") -> None:
-    """Record a grade for a stage. Self-grading is structurally excluded
-    (a stage cannot grade itself over threshold, ADR-0285 R2)."""
-    if grader and grader == stage_id:
-        raise ValueError("self-grading is excluded")
+    """Record a grade for a stage. Self-grading is structurally excluded, and an
+    ANONYMOUS grade (empty grader) is rejected (review R2 finding B2 — the old
+    guard `if grader and grader == stage_id` let a stage self-grade via the default
+    empty grader). The grader is persisted so eligibility can trust-filter it."""
+    if not grader or grader == stage_id:
+        raise ValueError("a grade needs a non-self, non-empty grader")
     score = max(0.0, min(1.0, float(score)))
     data = _load(tenant_id)
     rec = data.setdefault(stage_id, {"grades": []})
-    rec["grades"].append({"score": score, "notes": str(notes)[:200]})
+    rec["grades"].append({"score": score, "notes": str(notes)[:200], "grader": grader})
     _save(tenant_id, data)
 
 
-def get_grade(tenant_id: str, stage_id: str) -> dict:
+def get_grade(tenant_id: str, stage_id: str, *, trusted_only: bool = False) -> dict:
+    """Aggregate a stage's grades. ``trusted_only`` counts only grades from a
+    trusted grader (used by the default-eligibility gate) so a stage cannot promote
+    itself with grades it authored under a spoofed grader name (review R2 B2)."""
     grades = _load(tenant_id).get(stage_id, {}).get("grades", [])
+    if trusted_only:
+        grades = [g for g in grades if g.get("grader") in _TRUSTED_GRADERS]
     n = len(grades)
     mean = (sum(g["score"] for g in grades) / n) if n else 0.0
     return {"n_grades": n, "mean_score": round(mean, 3)}
@@ -73,7 +86,7 @@ def is_default_eligible(tenant_id: str, stage_id: str, builtin_ids) -> bool:
     that is how a stage earns its grades; only default promotion is gated.)"""
     if stage_id in set(builtin_ids):
         return True
-    g = get_grade(tenant_id, stage_id)
+    g = get_grade(tenant_id, stage_id, trusted_only=True)  # only trusted grades promote
     return g["n_grades"] >= _MIN_SAMPLE and g["mean_score"] >= _DEFAULT_THRESHOLD
 
 

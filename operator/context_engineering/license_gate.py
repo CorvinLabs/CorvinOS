@@ -39,9 +39,15 @@ def _corvin_home() -> Path:
         return Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
 
 
-def _enforce(tenant_id: str, *, channel: str, feature: str, counter_file: str) -> bool:
+def _enforce(tenant_id: str, *, channel: str, feature: str, counter_file: str,
+             fail_open_on_io: bool = True) -> bool:
     """Charge one unit on a named daily pool. True = proceed, False = DEGRADE
-    (never block). Fail-closed on import (deny); fail-open on operational I/O."""
+    (never block). Fail-closed on import/license error (deny).
+
+    ``fail_open_on_io`` controls the operational-I/O branch (review R2 finding B3):
+    the CE brief pool fails OPEN (a disk hiccup should not silently disable a
+    HARMLESS local-only enrichment), but the ce_llm EGRESS pool fails CLOSED — an
+    I/O error there must not become unmetered, unbounded PAID cloud egress."""
     try:
         if _OPERATOR not in sys.path:
             sys.path.insert(0, _OPERATOR)
@@ -61,22 +67,26 @@ def _enforce(tenant_id: str, *, channel: str, feature: str, counter_file: str) -
                 feature=feature, counter_file=counter_file)
     except _CQErr:
         return False  # over the daily budget → degrade
-    except Exception:  # noqa: BLE001 — operational I/O hiccup → fail-open
-        return True
+    except Exception:  # noqa: BLE001 — operational I/O hiccup
+        return fail_open_on_io
     return True
 
 
 def enforce_ce_quota(tenant_id: str = "_default") -> bool:
-    """Charge one context-engineering unit for this turn (ADR-0276). Own pool."""
+    """Charge one context-engineering unit for this turn (ADR-0276). Own pool.
+    Brief enrichment is local-only + harmless → fail-open on an I/O hiccup."""
     return _enforce(tenant_id, channel="context_engineering",
                     feature="context_engineering_units_per_day",
-                    counter_file="context_engineering_quota.json")
+                    counter_file="context_engineering_quota.json",
+                    fail_open_on_io=True)
 
 
 def enforce_ce_llm_quota(tenant_id: str = "_default") -> bool:
     """Meter one LLM-synthesis call (ADR-0282) on a SEPARATE pool from the CE unit
     — the synthesis call is an extra cost. Same degrade-not-block semantics: over
-    budget → skip synthesis, keep the deterministic brief (never a block)."""
+    budget → skip synthesis, keep the deterministic brief (never a block). This is
+    a PAID EGRESS pool, so it fails CLOSED on an I/O error (review R2 B3)."""
     return _enforce(tenant_id, channel="context_engineering_llm",
                     feature="ce_llm_units_per_day",
-                    counter_file="ce_llm_quota.json")
+                    counter_file="ce_llm_quota.json",
+                    fail_open_on_io=False)

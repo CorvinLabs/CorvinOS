@@ -64,6 +64,13 @@ def ast_allowlist_ok(impl: str) -> "tuple[bool, str]":
         elif isinstance(node, ast.ImportFrom):
             if (node.module or "").split(".")[0] in _FORBIDDEN_IMPORTS:
                 return False, f"from:{node.module}"
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            # A forbidden builtin referenced ANYWHERE in load context — not just as
+            # a call target (review R2 finding: `_e = eval; _e(x)`, `map(exec, …)`,
+            # `sorted(x, key=eval)`, `__builtins__['eval']`, `g = getattr` all put
+            # the dangerous name in a non-Call.func position the old check missed).
+            if node.id in _FORBIDDEN_CALLS or node.id == "__builtins__":
+                return False, f"name:{node.id}"
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in _FORBIDDEN_CALLS:
                 return False, f"call:{node.func.id}"
@@ -87,6 +94,23 @@ def _forge_create(tenant_id: str, name: str, description: str,
                           input_schema or {"type": "object"}, impl,
                           scope="session", overwrite=True,
                           meta={"deterministic": True})
+
+
+def uncreate_tools(tenant_id: str, names) -> None:
+    """Roll back forged tools that Gate-2 or bind re-validation rejected (ADR-0283
+    R3 / review R2 finding A4). Best-effort — a failed delete never breaks the turn;
+    the un-bound tool is at worst an orphaned session artifact, not a live grant."""
+    try:
+        from forge.paths import tenant_home  # noqa: PLC0415
+        from forge.registry import Registry  # noqa: PLC0415
+        reg = Registry(Path(tenant_home(tenant_id)) / "forge")
+    except Exception:  # noqa: BLE001
+        return
+    for n in names or []:
+        try:
+            reg.delete(n)
+        except Exception:  # noqa: BLE001
+            continue
 
 
 class ToolForgeStage:
@@ -118,6 +142,12 @@ class ToolForgeStage:
                               (t.get("input_schema") if isinstance(t, dict) else None) or {},
                               impl)
                 bound.append(ToolRef(name=f"mcp__forge__{safe}", origin="forge"))
+                # Track the on-disk artifact so the pipeline can ROLL IT BACK if
+                # Gate-2 or bind re-validation rejects it (review R2 finding A4: a
+                # forged tool is written pre-Gate-2; a denial must un-create it, or
+                # a forge_enabled persona could invoke the denied tool by name).
+                bundle.scratch.setdefault("_forged_tools", []).append(
+                    {"name": safe, "ref": f"mcp__forge__{safe}"})
             except Exception:  # noqa: BLE001 — a forge failure is fail-safe
                 continue
         bundle.tools_to_bind.extend(bound)

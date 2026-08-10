@@ -23,6 +23,23 @@ def _skill_create(tenant_id: str, name: str, body: str) -> None:
                                overwrite=True)
 
 
+def uncreate_skills(tenant_id: str, names) -> None:
+    """Roll back forged skills that Gate-2 rejected (ADR-0283 R3 / review R2 A4).
+    Best-effort; a failed delete never breaks the turn."""
+    try:
+        from skill_forge.multi_registry import MultiRegistry  # noqa: PLC0415
+        from forge.paths import tenant_home  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+        reg = MultiRegistry(Path(tenant_home(tenant_id)) / "skill-forge")
+    except Exception:  # noqa: BLE001
+        return
+    for n in names or []:
+        try:
+            reg.delete(scope="session", name=n)
+        except Exception:  # noqa: BLE001
+            continue
+
+
 class SkillForgeStage:
     id = "skillforge"
     requires: tuple = ("llm_synthesis",)
@@ -42,6 +59,8 @@ class SkillForgeStage:
             body = (s.get("body") if isinstance(s, dict) else "") or f"# {safe}\n"
             try:
                 _skill_create(ctx.tenant_id, safe, body)
+                # Track for rollback if Gate-2 rejects the payload (review R2 A4).
+                bundle.scratch.setdefault("_forged_skills", []).append(safe)
             except Exception:  # noqa: BLE001 — fail-safe; still bind the ref
                 pass
             bound.append(SkillRef(skill_id=safe, body=body))

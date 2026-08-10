@@ -3294,9 +3294,14 @@ def _resolve_spawn_inputs(
                             engine_id=(profile or {}).get("default_engine") or "claude_code",
                             tenant_id=_cel_tid)
                         return (_ref is None, _ref or "")
+                    # An all-allowed persona (allowed_tools None) passes ["*"], NOT
+                    # None: run_full_pipeline now ALWAYS re-validates and treats
+                    # None/empty patterns as fail-closed (drop all forged). ["*"]
+                    # keeps forged tools for a genuinely all-allowed persona without
+                    # re-opening the None=fail-open hole (review R2 finding A2).
                     _persona_globs = (list(profile.get("allowed_tools"))
                                       if isinstance(profile.get("allowed_tools"), list)
-                                      else None)
+                                      else ["*"])
                     _bundle, _ctrace = _cel_run_full(
                         prompt, _cel_tid, None, gate_fn=_cel_gate,
                         persona_patterns=_persona_globs)
