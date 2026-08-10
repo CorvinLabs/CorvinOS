@@ -78,10 +78,16 @@ def resolve_pipeline(tenant_id: str = "_default",
             dropped.append(str(sid))
             continue
         # Accept BOTH shapes (review finding #3): a nested {"stage": id, "config":
-        # {...}} (what the editor writes) and flat {"stage": id, model: …} keys.
+        # {...}} (what the editor writes) and flat {"stage": id, model: …} keys. A
+        # present-but-non-dict config is IGNORED, not reshaped into {"config": […]}
+        # (review R2 finding C8).
         if isinstance(e, dict):
-            cfg = e["config"] if isinstance(e.get("config"), dict) else {
-                k: v for k, v in e.items() if k != "stage"}
+            if isinstance(e.get("config"), dict):
+                cfg = e["config"]
+            elif "config" in e:
+                cfg = {}   # malformed config → ignore
+            else:
+                cfg = {k: v for k, v in e.items() if k != "stage"}
         else:
             cfg = {}
         specs.append(StageSpec(id=sid, config=cfg))

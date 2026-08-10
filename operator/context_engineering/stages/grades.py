@@ -19,12 +19,12 @@ from pathlib import Path
 _MIN_SAMPLE = 3
 _DEFAULT_THRESHOLD = 0.5
 _BOOTSTRAP_CAP = 0.3          # a seed grade may not exceed this (CONCEPT-0001)
-# Only grades from these graders promote a stage into a DEFAULT pipeline (review
-# R2 finding B2). __bootstrap__ seeds the henne-ei gate but is capped < threshold,
-# so it counts toward n yet can never push the mean over on its own; __loop__ is
-# the real signal (turn outcomes); operator is a manual override. A stage grading
-# ITSELF under a spoofed non-self grader still cannot reach default eligibility.
-_TRUSTED_GRADERS = {"__loop__", "__bootstrap__", "operator"}
+# DEFAULT-pipeline promotion requires EXPLICIT operator grades (review R2 C3/C4:
+# "operator disposes", ADR-0284). __loop__ (turn outcomes) and __bootstrap__ (the
+# henne-ei seed) are ADVISORY only — counting them would auto-promote an opt-in
+# stage by mere usage (2×bootstrap@0.3 + 1×loop@1.0 = 0.53 ≥ threshold), with no
+# human intent. So only `operator` grades count toward default-eligibility.
+_PROMOTING_GRADERS = {"operator"}
 
 
 def _store_path(tenant_id: str) -> Path:
@@ -41,9 +41,15 @@ def _load(tenant_id: str) -> dict:
 
 
 def _save(tenant_id: str, data: dict) -> None:
+    # Atomic write (review R2 finding C5): a naked write_text can be torn by a
+    # crash / concurrent writer, and _load's bare except then SILENTLY discards
+    # every grade. Write a temp file + os.replace (atomic on POSIX + Windows).
+    import os  # noqa: PLC0415
     p = _store_path(tenant_id)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data), encoding="utf-8")
+    tmp = p.with_suffix(f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(tmp, p)
 
 
 def grade_stage(tenant_id: str, stage_id: str, score: float, notes: str = "",
@@ -61,13 +67,13 @@ def grade_stage(tenant_id: str, stage_id: str, score: float, notes: str = "",
     _save(tenant_id, data)
 
 
-def get_grade(tenant_id: str, stage_id: str, *, trusted_only: bool = False) -> dict:
-    """Aggregate a stage's grades. ``trusted_only`` counts only grades from a
-    trusted grader (used by the default-eligibility gate) so a stage cannot promote
-    itself with grades it authored under a spoofed grader name (review R2 B2)."""
+def get_grade(tenant_id: str, stage_id: str, *, promoting_only: bool = False) -> dict:
+    """Aggregate a stage's grades. ``promoting_only`` counts ONLY explicit operator
+    grades (used by the default-eligibility gate) so neither a spoofed grader name
+    nor mere loop/bootstrap usage can promote a stage (review R2 B2/C3/C4)."""
     grades = _load(tenant_id).get(stage_id, {}).get("grades", [])
-    if trusted_only:
-        grades = [g for g in grades if g.get("grader") in _TRUSTED_GRADERS]
+    if promoting_only:
+        grades = [g for g in grades if g.get("grader") in _PROMOTING_GRADERS]
     n = len(grades)
     mean = (sum(g["score"] for g in grades) / n) if n else 0.0
     return {"n_grades": n, "mean_score": round(mean, 3)}
@@ -86,7 +92,7 @@ def is_default_eligible(tenant_id: str, stage_id: str, builtin_ids) -> bool:
     that is how a stage earns its grades; only default promotion is gated.)"""
     if stage_id in set(builtin_ids):
         return True
-    g = get_grade(tenant_id, stage_id, trusted_only=True)  # only trusted grades promote
+    g = get_grade(tenant_id, stage_id, promoting_only=True)  # only operator grades promote
     return g["n_grades"] >= _MIN_SAMPLE and g["mean_score"] >= _DEFAULT_THRESHOLD
 
 

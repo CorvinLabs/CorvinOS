@@ -3307,6 +3307,12 @@ def _resolve_spawn_inputs(
                         persona_patterns=_persona_globs)
                     if _bundle is not None and getattr(_bundle, "synthesised_prompt", None):
                         _cel_text = _bundle.synthesised_prompt.strip()
+                    elif _ctrace.get("gate2_denied") or _ctrace.get("gate1_denied"):
+                        # A denied turn injects NOTHING — not even the deterministic
+                        # brief fallback, which Gate-2 never inspected (review R2 A2):
+                        # a Gate-2 denial must not silently downgrade to an un-gated
+                        # channel assembled from the same retrieval.
+                        _cel_text = ""
                     else:
                         _cel_text = (_cel_render(getattr(_bundle, "brief", None)
                                                  if _bundle else None) or "").strip()

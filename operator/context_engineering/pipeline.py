@@ -110,7 +110,10 @@ def _safe_gate(gate, text: str) -> "tuple[bool, str]":
     enforcer, and a caller catching it could then spawn ungated)."""
     try:
         ok, reason = gate(text)
-        return bool(ok), str(reason or "")
+        # Only an EXACT True allows (review R2 finding B3): a gate that returns a
+        # truthy non-bool first element — e.g. ("allow", …) or (reason_string, …)
+        # from a shape-confused refactor — must DENY, not be coerced to allow.
+        return (ok is True), str(reason or "")
     except Exception as e:  # noqa: BLE001 — gate error → deny (fail-closed)
         return False, f"gate_error:{str(e)[:80]}"
 
@@ -161,10 +164,15 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns) -> Any:
     all forged tools (fail-closed); the bridge passes ["*"] for an all-allowed
     persona so an all-allowed persona is not wrongly narrowed."""
     tool_names = " ".join(getattr(t, "name", "") for t in (bundle.tools_to_bind or []))
+    # An mcp_config (server URL/command) reaches the worker via apply_tool_bindings
+    # → Gate-2 must see it too (review R2 finding A3, defense-in-depth: forge tools
+    # carry None today, but a future producer could set it).
+    mcp_cfgs = " ".join(str(getattr(t, "mcp_config", "") or "")
+                        for t in (bundle.tools_to_bind or []))
     skill_ids = " ".join(getattr(s, "skill_id", "") for s in (bundle.skills_to_bind or []))
     skill_bodies = " ".join(getattr(s, "body", "") for s in (bundle.skills_to_bind or []))
     final_payload = " ".join(
-        x for x in (bundle.synthesised_prompt or "", tool_names, skill_ids,
+        x for x in (bundle.synthesised_prompt or "", tool_names, mcp_cfgs, skill_ids,
                     skill_bodies) if x).strip()
     if final_payload:
         ok2, reason2 = _safe_gate(gate, final_payload)
@@ -209,7 +217,9 @@ def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
     (L44/L34/L35); default allow-all for tests. ``persona_patterns`` are the
     persona's allowed tool globs. Returns ``(bundle, trace)``; fail-safe throughout
     — a denial degrades (drops the un-approved egress/forge output), never blocks
-    the turn. Async callers (console chat_runtime) use ``run_full_pipeline_async``.
+    the turn. An event-loop caller would use ``run_full_pipeline_async`` (the
+    console chat_runtime is NOT yet wired to the active brain — it still calls the
+    deterministic ``build_brief``; the active brain is bridge-adapter-only today).
     """
     bundle, trace = build_context(task, tenant, session, meter, active=True)
     if bundle is None:

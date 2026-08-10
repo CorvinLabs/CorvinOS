@@ -30,9 +30,14 @@ _FORBIDDEN_IMPORTS = {"os", "subprocess", "socket", "ctypes", "importlib",
                       "builtins", "__builtins__", "code", "pty", "posix", "runpy"}
 _FORBIDDEN_CALLS = {"eval", "exec", "compile", "__import__", "open", "getattr",
                     "setattr", "globals", "locals", "vars", "breakpoint", "input"}
-# dangerous attribute names in the `x.attr(...)` form (finding #2)
+# dangerous attribute names in the `x.attr(...)` form (finding #2). `modules` +
+# `import_module` close the R2 bypass `sys.modules["os"].execv(...)` — `sys` is
+# allowed for stdin/stdout, but `.modules` hands back EVERY loaded module (os,
+# subprocess, importlib) with no import statement (review R2 finding #1).
 _FORBIDDEN_ATTRS = {"system", "popen", "spawn", "spawnl", "spawnv", "fork",
-                    "remove", "unlink", "rmtree", "rename", "chmod", "startfile"}
+                    "remove", "unlink", "rmtree", "rename", "chmod", "startfile",
+                    "modules", "import_module", "environ", "execv", "execve",
+                    "execl", "dup2", "write", "load_module"}
 
 # A safe deterministic template: reads a JSON payload on stdin, echoes it. The LLM
 # `needs` only names a tool; the real impl is a reviewed template unless the
@@ -45,13 +50,15 @@ _TEMPLATE_IMPL = (
 
 
 def ast_allowlist_ok(impl: str) -> "tuple[bool, str]":
-    """Hardened AST guard (ADR-0283 R1 + review finding #2): reject forbidden
-    imports (incl. builtins/importlib), dangerous calls in BOTH the bare-name
-    (`eval(...)`) and attribute (`x.eval(...)` / `x.system(...)`) forms, and dunder
-    attribute access. This is a hardened DENYLIST, not a pure allowlist — the bwrap
-    sandbox (no net/subprocess) is the real isolation; this is defense-in-depth,
-    and same-turn LLM impls need the default-off allow_llm_impl flag on top.
-    Fail-closed on a parse error."""
+    """AST PRE-FILTER (ADR-0283 R1/R2). NOT a sufficient guard for executing
+    untrusted code: a denylist over Python's introspection surface is provably
+    incomplete (R2 showed `sys.modules["os"].execv(...)` bypassing it). As of R2
+    it is NO LONGER on the same-turn execution path — ToolForge always forges the
+    deterministic TEMPLATE impl (see ToolForgeStage.run); this function survives
+    only as a cheap first-pass screen for a FUTURE out-of-band human/second-model
+    review of LLM-authored impls, never as the sole gate before execution. The
+    bwrap sandbox (no net/subprocess) remains the real isolation. Fail-closed on a
+    parse error."""
     try:
         tree = ast.parse(impl)
     except SyntaxError as e:
@@ -121,7 +128,6 @@ class ToolForgeStage:
 
     def run(self, bundle, ctx):
         needs = (bundle.scratch.get("needs") or {}).get("tools") or []
-        allow_llm = bool((ctx.config or {}).get("allow_llm_impl"))
         bound: list = []
         for t in needs[:MAX_BINDINGS]:
             name = t.get("name") if isinstance(t, dict) else str(t)
@@ -130,12 +136,13 @@ class ToolForgeStage:
             safe = "".join(c for c in str(name) if c.isalnum() or c in "_")[:48]
             if not safe:
                 continue
+            # SAME-TURN forging ALWAYS uses the deterministic template (review R2
+            # finding #1): an LLM-authored impl is never executed same-turn, because
+            # the AST pre-filter is provably incomplete against Python introspection
+            # (`sys.modules[...]`, subclass walks). The `allow_llm_impl` config is
+            # retired to a no-op here; LLM impls belong to a future out-of-band
+            # human-reviewed promotion path, not the hot turn path.
             impl = _TEMPLATE_IMPL
-            if isinstance(t, dict) and t.get("impl") and allow_llm:
-                ok, _reason = ast_allowlist_ok(t["impl"])
-                if ok:
-                    impl = t["impl"]      # reviewed via AST allowlist
-                # else: fall back to the safe template (never run unreviewed code)
             try:
                 _forge_create(ctx.tenant_id, safe,
                               (t.get("description") if isinstance(t, dict) else "") or "",
