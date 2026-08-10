@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import auth as session_auth
-from ..deps import require_session
+from ..deps import require_session, require_csrf
 
 try:
     from forge import paths as _forge_paths
@@ -28,6 +28,39 @@ except Exception:  # noqa: BLE001 — degrade to an empty view, never 500 the pa
     _forge_paths = None  # type: ignore[assignment]
 
 router = APIRouter(prefix="/vibe-engineering", tags=["console-vibe-engineering"])
+
+# CEL stage registry — loaded by file path (operator/ is not on the gateway
+# PYTHONPATH). Used by the pipeline editor (P-E, ADR-0284) for the palette +
+# requires-DAG validation. None → editor degrades to unavailable.
+_CEL_STAGES = None
+try:
+    import importlib.util as _ilu  # noqa: PLC0415
+    _ce_dir = Path(__file__).resolve().parents[4] / "operator" / "context_engineering"
+    _sp = _ilu.spec_from_file_location(
+        "context_engineering", str(_ce_dir / "__init__.py"),
+        submodule_search_locations=[str(_ce_dir)])
+    if _sp and _sp.loader:
+        import sys as _sys  # noqa: PLC0415
+        _m = _ilu.module_from_spec(_sp)
+        _sys.modules["context_engineering"] = _m
+        _sp.loader.exec_module(_m)
+        _CEL_STAGES = _sys.modules["context_engineering.stages"]
+except Exception:  # noqa: BLE001
+    _CEL_STAGES = None
+
+
+def _write_pipeline_config(tenant_id: str, pipeline: list) -> None:
+    """Persist spec.context_engineering.pipeline into tenant.corvin.yaml."""
+    import yaml  # noqa: PLC0415
+    p = Path(_forge_paths.tenant_global_dir(tenant_id)) / "tenant.corvin.yaml"
+    data = {}
+    if p.exists():
+        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    spec = data.setdefault("spec", {})
+    ce = spec.setdefault("context_engineering", {})
+    ce["pipeline"] = pipeline
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")  # brief_sha256 shape; blocks path traversal
 
@@ -136,3 +169,76 @@ async def explain_brief(
                 break
     return {"found": False, "brief_sha256": brief_sha256,
             "reason": "erased_or_absent"}
+
+
+# ── Pipeline editor (P-E, ADR-0284) ──────────────────────────────────────
+@router.get("/pipeline")
+async def get_pipeline(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Current pipeline config + the stage palette (builtin-only until P-G)."""
+    if _CEL_STAGES is None:
+        return {"available": False, "current": [], "palette": [], "default": []}
+    specs, _dropped = _CEL_STAGES.resolve_pipeline(rec.tenant_id)
+    return {
+        "available": True,
+        "current": [{"stage": s.id, "config": s.config} for s in specs],
+        "palette": _CEL_STAGES.all_specs(),   # [{id, requires, effect, trust}]
+        "default": list(_CEL_STAGES.DEFAULT_PIPELINE),
+    }
+
+
+def _validate_pipeline(pipeline: list) -> "list[str]":
+    """Return a list of validation errors ([] = valid). Enforces: known ids,
+    memory root (default-safe minimum), requires-DAG satisfied + acyclic."""
+    errors: list[str] = []
+    if not isinstance(pipeline, list) or not pipeline:
+        return ["pipeline must be a non-empty list"]
+    ids = []
+    for e in pipeline:
+        sid = e.get("stage") if isinstance(e, dict) else e
+        if not sid:
+            errors.append("each entry needs a 'stage' id")
+        else:
+            ids.append(sid)
+    known = set(_CEL_STAGES.known_ids())
+    for i in ids:
+        if i not in known:
+            errors.append(f"unknown stage: {i}")
+    if "memory" not in ids:
+        errors.append("memory (the pipeline root) is required")
+    idset = set(ids)
+    for i in ids:
+        st = _CEL_STAGES.get_stage(i)
+        if st is None:
+            continue
+        missing = [r for r in getattr(st, "requires", ()) if r not in idset]
+        if missing:
+            errors.append(f"{i} requires {missing} which are not in the pipeline")
+    if not errors:
+        try:
+            _CEL_STAGES.topo_order(
+                [_CEL_STAGES.StageSpec(id=i, config={}) for i in ids])
+        except ValueError as e:
+            errors.append(f"cycle in requires: {e}")
+    return errors
+
+
+@router.put("/pipeline")
+async def put_pipeline(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    body: dict,
+) -> dict[str, Any]:
+    """Replace the tenant's pipeline config. Validates the requires-DAG + the
+    default-safe minimum before persisting (ADR-0284 R2)."""
+    if _CEL_STAGES is None or _forge_paths is None:
+        raise HTTPException(status_code=503, detail="pipeline editor unavailable")
+    pipeline = body.get("pipeline")
+    errors = _validate_pipeline(pipeline)
+    if errors:
+        raise HTTPException(status_code=400, detail={"errors": errors})
+    normalised = [{"stage": (e.get("stage") if isinstance(e, dict) else e),
+                   **({"config": e["config"]} if isinstance(e, dict) and e.get("config") else {})}
+                  for e in pipeline]
+    _write_pipeline_config(rec.tenant_id, normalised)
+    return {"ok": True, "pipeline": normalised}
