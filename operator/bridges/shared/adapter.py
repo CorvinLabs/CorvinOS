@@ -73,6 +73,31 @@ try:
 except Exception:  # noqa: BLE001 — path prep must never break adapter boot
     pass
 
+# Vibe Engineering (ADR-0275/0278) — Context Engineering Layer, loaded by file
+# path (NOT via sys.path: operator/ is not on the bridge PYTHONPATH, and inserting
+# it would re-open the stdlib `operator` shadow trap). sys.modules-registered so
+# the package's relative imports resolve. Bridge parity with the web-chat wiring
+# in chat_runtime.py — same CEL, same trace, same audit-complete Decision Record.
+_CEL_AVAILABLE = False
+_cel_build_brief = _cel_render = _cel_persist_trace = _cel_emit_record = None
+try:
+    import importlib.util as _ilu  # noqa: PLC0415
+    _cel_dir = Path(__file__).resolve().parents[2] / "context_engineering"
+    _cel_spec = _ilu.spec_from_file_location(
+        "context_engineering", str(_cel_dir / "__init__.py"),
+        submodule_search_locations=[str(_cel_dir)])
+    if _cel_spec and _cel_spec.loader:
+        _cel_mod = _ilu.module_from_spec(_cel_spec)
+        sys.modules["context_engineering"] = _cel_mod
+        _cel_spec.loader.exec_module(_cel_mod)
+        _cel_build_brief = _cel_mod.build_brief
+        _cel_render = _cel_mod.render_brief_to_text
+        _cel_persist_trace = _cel_mod.persist_trace
+        _cel_emit_record = _cel_mod.emit_decision_record
+        _CEL_AVAILABLE = True
+except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
+    _CEL_AVAILABLE = False
+
 # ADR-0080 M1 — Task lifecycle manager. Optional; fails gracefully when absent.
 # Enables persistent task tracking across bridges (WhatsApp, Discord, web-chat).
 try:
@@ -3224,6 +3249,40 @@ def _resolve_spawn_inputs(
         workload_hint=workload_hint,
         chat_key=chat_key,
     )
+
+    # Vibe Engineering (ADR-0275/0278) — inject the CEL brief into THIS turn's
+    # system prompt, flag-gated (vibe_engineering) + fail-safe. ONE hook here
+    # covers BOTH bridge spawn paths (legacy `claude -p` + engine-driven), since
+    # both compose their system prompt through _resolve_spawn_inputs. Mirrors the
+    # web-chat wiring: build_brief → render → persist_trace → Decision Record.
+    if _CEL_AVAILABLE:
+        _cel_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
+        _cel_on = False
+        try:
+            from corvin_console import feature_flags as _cel_ff  # noqa: PLC0415
+            _cel_on = _cel_ff.is_enabled("vibe_engineering", _cel_tid)
+        except Exception:  # noqa: BLE001 — no flag subsystem → feature off
+            _cel_on = False
+        if _cel_on:
+            try:
+                _cel_wd = _session_dir(channel, chat_key or "anon", _cel_tid)
+                _cel_turn = f"turn-{msg_id or _safe_id(str(chat_key or 'anon'))}"
+                _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid, None)
+                _cel_text = (_cel_render(_cbrief) or "").strip()
+                if _cel_text:
+                    sys_prompt = sys_prompt + "\n\n" + _cel_text + "\n"
+                try:
+                    _cel_persist_trace(_ctrace, _cel_wd, _cel_turn)
+                except Exception:  # noqa: BLE001 — trace cache is best-effort
+                    pass
+                try:
+                    _cel_emit_record(_ctrace, _cel_text, turn_id=_cel_turn,
+                                     tenant_id=_cel_tid, workdir=_cel_wd,
+                                     session_id=Path(_cel_wd).name)
+                except Exception:  # noqa: BLE001 — audit never breaks the turn
+                    pass
+            except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
+                pass
 
     return {
         "system": sys_prompt,
