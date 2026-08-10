@@ -1,13 +1,14 @@
 """API endpoints for feature status (preset + dashboard). Phase 5, ADR-0287/0288."""
 
+import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
-from core.console.corvin_console.feature_flags import REGISTRY, tier_of
+from core.console.corvin_console.feature_flags import REGISTRY
+from core.console.corvin_console.auth import require_session
 from core.telemetry import get_flag_metrics
 
 router = APIRouter(prefix="/api/feature-status", tags=["feature-status"])
@@ -48,9 +49,10 @@ def _save_tenant_spec(spec: dict) -> None:
     # Update spec
     data["spec"] = spec
 
-    # Write back
+    # Write back with restricted permissions (GDPR Art. 32)
     with open(path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    os.chmod(path, 0o600)
 
 
 @router.get("/preset")
@@ -62,7 +64,7 @@ async def get_preset():
 
 
 @router.post("/preset")
-async def set_preset(body: dict):
+async def set_preset(body: dict, session=Depends(require_session)):
     """Set installation preset. Requires restart to take effect."""
     preset = body.get("preset")
     if preset not in ("minimal", "standard", "advanced"):
@@ -72,11 +74,11 @@ async def set_preset(body: dict):
     spec["preset"] = preset
     _save_tenant_spec(spec)
 
-    return {"preset": preset, "requires_restart": True}
+    return {"preset": preset, "requires_restart": True, "status_code": 201}
 
 
 @router.get("")
-async def get_all_features():
+async def get_all_features(session=Depends(require_session)):
     """Get all features with tier, error rate, status."""
     flags_enabled = []
 
@@ -111,7 +113,7 @@ async def get_all_features():
 
 
 @router.get("/{flag_id}")
-async def get_feature(flag_id: str):
+async def get_feature(flag_id: str, session=Depends(require_session)):
     """Get status for a single feature."""
     # Find flag in registry
     flag = None

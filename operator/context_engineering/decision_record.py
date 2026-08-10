@@ -40,6 +40,8 @@ _INACTIVE_STAGES: set = set()
 _FORBIDDEN_TEXT_KEYS = {"task", "brief", "content", "text", "summary", "prompt",
                         "passage", "body", "preview", "task_preview"}
 _MAX_STR = 80  # any string value longer than this is treated as potential content
+_MAX_ID = 76   # source ids / error slugs are truncated to this (< _MAX_STR) so a
+               # benign long title never trips the content-free tripwire (finding #1)
 
 
 def _sha256_text(text: str) -> str:
@@ -66,15 +68,22 @@ def build_record(trace: dict, brief_text: str, *, turn_id: str,
         status = s.get("status", "ok")
         if status == "ok":
             ok += 1
+        # Truncate source ids + error slugs to a content-free-safe length BEFORE
+        # the record is assembled — a benign long memory title / error path must
+        # NOT trip assert_content_free and cause the whole audit record to be
+        # dropped (review finding #1: this was silently voiding Layer A / P-0).
+        safe_sources = [
+            {"id": str(x.get("id", ""))[:_MAX_ID], "score": x.get("score")}
+            for x in s.get("sources", []) if isinstance(x, dict)]
         entry: dict[str, Any] = {
             "stage": name, "status": status,
             "confidence_tier": s.get("confidence_tier"),
             "duration_ms": s.get("duration_ms"),
             # sources are {id, score} — the causal "why this source" (ADR-0278).
-            "sources": s.get("sources", []),
+            "sources": safe_sources,
         }
         if s.get("error"):
-            entry["reason"] = s["error"]
+            entry["reason"] = str(s["error"])[:_MAX_ID]
         for src in s.get("sources", []):
             if isinstance(src, dict):
                 top_score = max(top_score, float(src.get("score", 0.0) or 0.0))
