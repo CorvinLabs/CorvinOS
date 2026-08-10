@@ -20,6 +20,7 @@ SKIP_HERMES="${CORVIN_SKIP_HERMES:-0}"
 # --autostart and never the default.
 FORCE_AUTOSTART=0
 ALWAYS_ON=0
+PRESET=""  # Phase 6.5: Installation preset (minimal|standard|advanced)
 
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }
 _green() { printf '\033[32m%s\033[0m' "$*"; }
@@ -55,14 +56,25 @@ while [ $# -gt 0 ]; do
             FORCE_AUTOSTART=1; shift ;;
         --always-on)
             FORCE_AUTOSTART=1; ALWAYS_ON=1; shift ;;
+        --preset)
+            [ $# -lt 2 ] && die "--preset requires an argument (minimal|standard|advanced)"
+            PRESET="$2"; shift 2 ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>] [--no-hermes] [--autostart] [--always-on]" ;;
+Usage: $0 [--editable|-e <path>] [--no-hermes] [--autostart] [--always-on] [--preset {minimal|standard|advanced}]" ;;
     esac
 done
 if [ -n "$EDITABLE" ]; then
     [ -d "$EDITABLE" ] || die "Editable path does not exist: $EDITABLE"
     EDITABLE="$(cd "$EDITABLE" && pwd)"
+fi
+
+# Validate preset if provided
+if [ -n "$PRESET" ]; then
+    case "$PRESET" in
+        minimal|standard|advanced) ;;
+        *) die "Invalid preset: $PRESET. Must be one of: minimal, standard, advanced" ;;
+    esac
 fi
 
 printf '\n%s — self-hosted, local-first AI voice agent\n\n' "$(_bold 'CorvinOS installer')"
@@ -236,6 +248,17 @@ if command -v corvin-install >/dev/null 2>&1; then
         echo "  Provisioning voice (STT + TTS) and services non-interactively ..."; echo ""
         corvin-install --yes || printf '  %s Voice/setup provisioning did not fully complete — re-run later with: %s\n' \
             "$(_yellow '⚠')" "$(_bold 'corvin-install')"
+    fi
+fi
+
+# ── 3a. preset setup (Phase 6.5): configure installation preset ──────────────
+if [ -n "$PRESET" ]; then
+    echo ""
+    echo "  Configuring preset: $PRESET ..."
+    if command -v corvin-preset-setup >/dev/null 2>&1; then
+        corvin-preset-setup "$PRESET" --quiet || printf '  %s Could not set preset (will use default "standard")\n' "$(_yellow '⚠')"
+    else
+        printf '  %s corvin-preset-setup not found (preset not configured, will use default)\n' "$(_yellow '⚠')"
     fi
 fi
 

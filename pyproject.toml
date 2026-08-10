@@ -211,6 +211,8 @@ corvin-service = "ops.launcher.service_entry:main"
 # ADR-0185 M5: real, non-mocked STT+TTS round-trip self-test ("corvin-voice doctor").
 # Shim needed because operator/ shadows the Python stdlib 'operator' module.
 corvin-voice = "ops.launcher.voice_entry:main"
+# Phase 6.5: Installation preset setup — configure tenant after install
+corvin-preset-setup = "ops.launcher.corvin.preset_setup:main"
 
 [tool.hatch.build.targets.sdist.force-include]
 # Ship the PRE-BUILT SPA in the sdist so a wheel built FROM the sdist (the
