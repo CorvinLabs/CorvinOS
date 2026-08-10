@@ -591,6 +591,28 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         release_tier="beta",
     ),
     FeatureFlag(
+        id="vibe_engineering_active",
+        label="Vibe Engineering — ACTIVE brain (LLM synthesis + ToolForge/SkillForge)",
+        description=(
+            "On top of vibe_engineering: run the FULL Context Brain on live turns — "
+            "an LLM synthesis stage that assembles the single best worker prompt, "
+            "plus ToolForge and SkillForge stages that provision the worker with "
+            "forged tools/skills, not just a text brief (ADR-0282/0283). Every "
+            "egress/forge stage runs POST-gate behind the two-gate enforcer: Gate-1 "
+            "on the task, then egress cloud LLM synthesis, then Gate-2 re-inspects "
+            "the synthesised prompt + forged tool names through the SAME L44 "
+            "classifier before the spawn, and bound tools are class-re-validated "
+            "against the persona's own allow-list (bind ≠ authorise). Needs cloud "
+            "egress: under a zero-egress residency policy (L35) it degrades to the "
+            "deterministic brief. Off (default) means only the deterministic "
+            "memory→graph→skill brief runs — no cloud LLM call, nothing forged."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("chat", "context-engineering", "forge"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
         id="auto_load_github_repo",
         label="Auto-load GitHub repo in Cross-Device Learning",
         description=(

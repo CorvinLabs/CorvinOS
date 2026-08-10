@@ -217,7 +217,8 @@ def compute_digest(
         if enabled_flag_ids is not None and flag_id not in enabled_flag_ids:
             continue
 
-        stats = metrics.get_24h_stats(lock=_METRICS_LOCK)
+        # Get stats without passing lock (the snapshot is already atomic)
+        stats = metrics.get_24h_stats(lock=None)
         flags_data.append({
             "flag_id": flag_id,
             "release_tier": release_tiers.get(flag_id, "alpha"),
