@@ -100,6 +100,20 @@ class ActiveBrainWiring(unittest.TestCase):
         self.assertFalse(rf.called, "active brain NOT run with flag off")
         self.assertEqual(out["allowed_tools"], ["Read"], "no forged tools merged")
 
+    def test_gate_denied_injects_nothing_not_brief_fallback(self):
+        # review R2 A2: a Gate-2/Gate-1 denial must inject NOTHING — not even the
+        # deterministic brief fallback, which Gate-2 never inspected.
+        bundle = _Bundle(synth=None, tools=[])  # denial nulled the synthesis
+        with patch.object(self.ad, "_cel_run_full",
+                          return_value=(bundle, {"stages": [], "gate2_denied": "nope"})), \
+             patch.object(self.ad, "_cel_render", return_value="BRIEF SHOULD NOT APPEAR"), \
+             patch.object(self.ad, "_check_house_rules_or_fail", return_value=None), \
+             patch.object(self.ad, "_house_rules_cloud_egress_allowed", return_value=True), \
+             patch.object(self.ff, "is_enabled", self._flags(active=True)):
+            out = self._resolve(profile={"allowed_tools": ["Read"]})
+        self.assertNotIn("BRIEF SHOULD NOT APPEAR", out["system"],
+                         "a denied turn must not fall back to the un-gated brief")
+
     def test_egress_denied_degrades_even_with_flag_on(self):
         with patch.object(self.ad, "_cel_run_full") as rf, \
              patch.object(self.ad, "_cel_build_brief", return_value=(None, {"stages": []})), \
