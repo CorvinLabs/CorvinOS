@@ -64,6 +64,14 @@ try:
         _cel_spec.loader.exec_module(_cel_mod)
         _cel_build_brief = _cel_mod.build_brief
         _cel_render = _cel_mod.render_brief_to_text
+        # ADR-0279 reach boundary, ENFORCED (review R6): the ACS fan-out is an
+        # isolation boundary, so the manager brief must carry TEXT only — never a
+        # local tool/skill binding. `build_brief` happens to return no bundle
+        # today, which made the invariant vacuous; going through `build_context` +
+        # `strip_for_remote` makes it structural, so a later switch to the active
+        # pipeline here cannot silently start shipping local capabilities across it.
+        _cel_build_context = _cel_mod.build_context
+        _cel_strip_for_remote = _cel_mod.strip_for_remote
         _CEL_AVAILABLE = True
 except Exception:  # noqa: BLE001 — CEL absent → feature off, manager unchanged
     _CEL_AVAILABLE = False
@@ -899,9 +907,15 @@ def _build_manager_prompt(ctx: RunContext) -> str:
         try:
             from corvin_console import feature_flags as _cel_ff  # noqa: PLC0415
             if _cel_ff.is_enabled("vibe_engineering", ctx.tenant_id):
-                _cbrief, _ = _cel_build_brief(
+                _cbundle, _ = _cel_build_context(
                     f"{wf_name}. {description}".strip(), ctx.tenant_id, None)
-                _ctext = (_cel_render(_cbrief) or "").strip()
+                # ADR-0279: strip + audit BEFORE anything is rendered into a prompt
+                # that crosses the isolation boundary.
+                if _cbundle is not None and _cel_strip_for_remote(_cbundle):
+                    log.warning("CEL: stripped local tool/skill bindings before the "
+                                "ACS manager prompt (ADR-0279 reach boundary)")
+                _ctext = (_cel_render(getattr(_cbundle, "brief", None)
+                                      if _cbundle else None) or "").strip()
                 if _ctext:
                     lines += [_ctext, ""]
         except Exception:  # noqa: BLE001 — CEL failure never breaks the manager

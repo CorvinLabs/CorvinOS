@@ -16,12 +16,16 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from operator.context_engineering.learning_queue import (
+# `operator` is the STDLIB module — `operator.context_engineering` can never
+# import (project memory: never add operator/__init__.py, it shadows stdlib and
+# killed the webui service). These four tests were UNCOLLECTABLE since bd13c5b;
+# use the package-relative form conftest.py already uses (review R6).
+from ..learning_queue import (
     LearningQueue,
     LearningQueueRecord,
     QueueCorruptionError,
 )
-from operator.context_engineering.concurrency_model import (
+from ..concurrency_model import (
     ConcurrencyContract,
     AggregatorCheckpoint,
     AtomicSymlinkManager,

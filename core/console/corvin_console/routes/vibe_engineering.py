@@ -50,7 +50,15 @@ except Exception:  # noqa: BLE001
 
 
 def _write_pipeline_config(tenant_id: str, pipeline: list) -> None:
-    """Persist spec.context_engineering.pipeline into tenant.corvin.yaml."""
+    """Persist spec.context_engineering.pipeline into tenant.corvin.yaml.
+
+    ATOMIC (review R6): a naked ``write_text`` over the tenant spec can be torn by
+    a crash or a concurrent writer, and this one file also carries every feature
+    flag (incl. the compliance-adjacent ones) — a truncated read then reads as
+    "flag absent = off". Mirrors ``routes/engine.py::_save_tenant_yaml``
+    (temp + replace), the established writer for this exact file.
+    """
+    import os  # noqa: PLC0415
     import yaml  # noqa: PLC0415
     p = Path(_forge_paths.tenant_global_dir(tenant_id)) / "tenant.corvin.yaml"
     data = {}
@@ -60,7 +68,9 @@ def _write_pipeline_config(tenant_id: str, pipeline: list) -> None:
     ce = spec.setdefault("context_engineering", {})
     ce["pipeline"] = pipeline
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    tmp = p.with_suffix(f".yaml.tmp.{os.getpid()}")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    os.replace(tmp, p)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")  # brief_sha256 shape; blocks path traversal
 
@@ -178,13 +188,25 @@ async def get_pipeline(
 ) -> dict[str, Any]:
     """Current pipeline config + the stage palette (builtin-only until P-G)."""
     if _CEL_STAGES is None:
-        return {"available": False, "current": [], "palette": [], "default": []}
+        return {"available": False, "current": [], "palette": [], "default": [],
+                "active_enabled": False}
     specs, _dropped = _CEL_STAGES.resolve_pipeline(rec.tenant_id)
+    # Whether the egress/forge stages in this pipeline can actually RUN (review R6).
+    # They are deferred to the post-gate phase, which only the ACTIVE brain executes;
+    # with `vibe_engineering_active` off an authored `llm_synthesis`/`toolforge` sits
+    # permanently `deferred`. The editor must be able to say so instead of showing a
+    # pipeline that looks armed and silently is not.
+    try:
+        from .. import feature_flags as _ff  # noqa: PLC0415
+        _active = bool(_ff.is_enabled("vibe_engineering_active", rec.tenant_id))
+    except Exception:  # noqa: BLE001 — unknown → report not-active (honest default)
+        _active = False
     return {
         "available": True,
         "current": [{"stage": s.id, "config": s.config} for s in specs],
         "palette": _CEL_STAGES.all_specs(),   # [{id, requires, effect, trust}]
         "default": list(_CEL_STAGES.DEFAULT_PIPELINE),
+        "active_enabled": _active,
     }
 
 

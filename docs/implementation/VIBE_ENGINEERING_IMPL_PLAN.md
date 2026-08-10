@@ -23,6 +23,24 @@ ADR-0275 (surface), ADR-0276 (license gate), ADR-0277 (ContextStage contract).
 
 **NEXT: P2 (config — per-tenant stage toggles / budgets).**
 
+**Reachability status after review R6 (2026-08-10).** The Programmable Context
+Brain phases (P-A…P-F, see `CONTEXT_BRAIN_IMPL_PLAN.md`) shipped on top of this
+plan; R6 audited whether they are actually REACHED rather than merely enforced.
+Both live turn surfaces now run the same pipeline:
+
+| Surface | deterministic brief (`vibe_engineering`) | ACTIVE brain (`vibe_engineering_active`) |
+|---|---|---|
+| Console web-chat (`chat_runtime.stream_turn`) | ✅ | ✅ `run_full_pipeline_async` (R6 — had zero callers before) |
+| Messenger bridges (`adapter._resolve_spawn_inputs`) | ✅ | ✅ `run_full_pipeline` |
+| ACS manager fan-out (`acs_runtime`) | ✅ text-only, bindings stripped (ADR-0279, enforced in R6) | ✗ by design (isolation boundary) |
+| A2A / remote triggers | ✗ | ✗ by design (ADR-0279) |
+
+Both binding channels reach a worker: tools via `apply_tool_bindings`
+(capability-class re-validated — `forge_enabled`, not just the glob), skills via
+`render_skill_bindings` (system-prompt injection, never `allowed_tools`). Still
+dormant on purpose: P-G (community-stage sandbox) and `stages/grades.py`'s
+promotion gate, which has no live subject while every stage is `trust=builtin`.
+
 ## HONEST PREMISE (corrected after review)
 The CEL is **built but NOT wired into any live turn**. Verified: `TaskEngine`
 (Phase 5.5, `operator/task_analysis/engine.py`) is imported only by `scripts/*`,

@@ -605,7 +605,14 @@ REGISTRY: tuple[FeatureFlag, ...] = (
             "against the persona's own allow-list (bind ≠ authorise). Needs cloud "
             "egress: under a zero-egress residency policy (L35) it degrades to the "
             "deterministic brief. Off (default) means only the deterministic "
-            "memory→graph→skill brief runs — no cloud LLM call, nothing forged."
+            "memory→graph→skill brief runs — no cloud LLM call, nothing forged. "
+            "Reaches BOTH live turn surfaces: the messenger bridges "
+            "(adapter._resolve_spawn_inputs, sync) and the Console web-chat "
+            "(chat_runtime.stream_turn, async — the blocking synthesis subprocess "
+            "runs on asyncio.to_thread so it never stalls the event loop). Until "
+            "review R6 only the bridge did, so an operator who authored an "
+            "egress/forge pipeline in the Console's own Context Pipeline editor got "
+            "those stages recorded 'deferred' on every Console turn and never run."
         ),
         owner="maintainer",
         target_release="0.13.x",

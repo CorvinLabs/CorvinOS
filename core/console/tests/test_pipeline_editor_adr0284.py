@@ -74,6 +74,26 @@ class PipelineEditorTests(unittest.TestCase):
         self.assertIn("memory", pal)
         self.assertIn("llm_synthesis", pal)
 
+    def test_get_reports_whether_egress_forge_stages_can_actually_run(self):
+        """Review R6: egress/forge stages are deferred to the post-gate phase, which
+        only the ACTIVE brain executes. With `vibe_engineering_active` off an
+        authored `llm_synthesis` sits permanently `deferred`, so the editor showed a
+        pipeline that looked armed and silently was not."""
+        from unittest.mock import patch
+        with patch("corvin_console.feature_flags.is_enabled", return_value=False):
+            body = self._client().get("/vibe-engineering/pipeline").json()
+        self.assertFalse(body["active_enabled"])
+        with patch("corvin_console.feature_flags.is_enabled", return_value=True):
+            body = self._client().get("/vibe-engineering/pipeline").json()
+        self.assertTrue(body["active_enabled"])
+
+    def test_pipeline_write_is_atomic(self):
+        """The tenant spec also carries every feature flag — a torn write reads as
+        'flag absent = off'. Mirrors routes/engine.py::_save_tenant_yaml (R6)."""
+        import inspect
+        src = inspect.getsource(V._write_pipeline_config)
+        self.assertIn("os.replace", src, "temp + atomic replace, never a raw write")
+
     def test_put_rejects_unknown(self):
         r = self._client().put("/vibe-engineering/pipeline",
                                json={"pipeline": [{"stage": "memory"}, {"stage": "nope"}]})

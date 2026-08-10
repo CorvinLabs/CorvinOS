@@ -85,7 +85,13 @@ class ActiveBrainWiring(unittest.TestCase):
              patch.object(self.ad, "_check_house_rules_or_fail", return_value=None), \
              patch.object(self.ad, "_house_rules_cloud_egress_allowed", return_value=True), \
              patch.object(self.ff, "is_enabled", self._flags(active=True)):
-            out = self._resolve(profile={"allowed_tools": ["Read", "Bash"]})
+            # A REAL forge-capable persona: the cowork resolver injects the
+            # `mcp__forge__*` glob for `forge_enabled` personas, and review R6 made
+            # the boundary re-check the capability CLASS (ADR-0281 R2), not just the
+            # glob — so the fixture must carry the flag a real profile carries.
+            out = self._resolve(profile={
+                "allowed_tools": ["Read", "Bash", "mcp__forge__*"],
+                "forge_enabled": True, "skill_forge_enabled": True})
         self.assertTrue(rf.called, "active brain ran run_full_pipeline")
         self.assertIn("SYNTH: count orders per region", out["system"])
         self.assertIn("mcp__forge__csv_region_count", out["allowed_tools"])

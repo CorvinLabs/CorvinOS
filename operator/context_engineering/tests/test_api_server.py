@@ -200,7 +200,7 @@ class TestAPIEndpoints:
 
     def test_feedback_endpoint(self, client, temp_measurement_dir):
         """Test /api/v1/measurements/feedback endpoint."""
-        from operator.context_engineering import api_server
+        from .. import api_server
         api_server.reader = MeasurementReader(temp_measurement_dir)
 
         response = client.get("/api/v1/measurements/feedback")
@@ -212,7 +212,7 @@ class TestAPIEndpoints:
 
     def test_preferences_endpoint(self, client, temp_measurement_dir):
         """Test /api/v1/measurements/preferences endpoint."""
-        from operator.context_engineering import api_server
+        from .. import api_server
         api_server.reader = MeasurementReader(temp_measurement_dir)
 
         response = client.get("/api/v1/measurements/preferences")
@@ -224,7 +224,7 @@ class TestAPIEndpoints:
 
     def test_budget_endpoint(self, client, temp_measurement_dir):
         """Test /api/v1/measurements/budget endpoint."""
-        from operator.context_engineering import api_server
+        from .. import api_server
         api_server.reader = MeasurementReader(temp_measurement_dir)
 
         response = client.get("/api/v1/measurements/budget")

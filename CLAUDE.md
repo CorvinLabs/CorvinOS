@@ -409,6 +409,8 @@ skip implicit.
 → Concept: `Corvin-ADR: concepts/0001-self-learning-project-concept-archive.md`
 → Concept: `Corvin-ADR: concepts/0002-live-report-driven-root-cause-method.md`
 → Skill: `assistant.corvinOS_live_report_root_cause` (project scope, `learned-experience`)
+→ Concept: `Corvin-ADR: concepts/CONCEPT-0008-reachability-review-axis.md`
+→ Skill: `assistant.corvinOS_reachability_review` (project scope, `learned-experience`)
 
 ---
 

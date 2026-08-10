@@ -69,6 +69,57 @@ requires-DAG + scratch table) → P-B → P-C → P-D → P-E → P-F (first-par
 (community sandbox). Nothing ships that runs an LLM/forge stage before the two-gate
 model exists.
 
+### Revised again after review R6 (2026-08-10) — REACHABILITY, not enforcement
+
+R1–R5 hardened the enforcers until zero findings survived. R6 asked a different
+question — *does this code run at all?* — and found the P-B/P-D channels built,
+gated, rolled back on denial, and **wired to nobody**. Six confirmed findings, each
+reproduced against live code with an invented operator task before any fix:
+
+| # | Sev | Finding |
+|---|---|---|
+| 1 | HIGH | **The Console cannot run the pipeline its own editor authors.** `chat_runtime` only ever called the deterministic `build_brief`; `run_full_pipeline_async` had ZERO callers. An operator who dragged `llm_synthesis`/`toolforge` into the Context Pipeline editor got those stages recorded `deferred` on every Console turn, forever. Fixed: `stream_turn` now calls `run_full_pipeline_async` behind `vibe_engineering_active`, with the console's own four-gate chokepoint (`_spawn_gates.check_console_spawn_or_refusal`) as `gate_fn`. |
+| 2 | HIGH | **`skills_to_bind` reached no consumer.** SkillForge forged skills, Gate-2 inspected their bodies, rollback deleted them on a deny — and no spawn path ever read the channel. Fixed: `binding.render_skill_bindings()` renders them into the system prompt (never `allowed_tools`, ADR-0281 R1b), consumed by bridge + console. |
+| 3 | MED | **The bind class was the glob, not the capability.** `revalidate_tools` matched `allowed_tools` globs only; an all-allowed persona arrives as `["*"]`, which matches `mcp__forge__*` even with `forge_enabled: false` — the same flag that decides whether the Forge MCP *server* is injected, so the bind produced an un-callable name plus an orphaned on-disk artifact. Fixed: `persona_caps` is a fail-closed second axis (ADR-0281 R2's actual rule). |
+| 4 | MED | **ADR-0279's "by construction" strip was unenforced.** `strip_for_remote` had no caller; the ACS manager path was safe only by the accident that `build_brief` returns no bundle. Fixed: the ACS path goes through `build_context` + `strip_for_remote` + audit, so a later switch to the active pipeline there cannot silently ship local capabilities across the isolation boundary. |
+| 5 | MED | **A CEL-forged skill could clobber an operator's own.** `_skill_create` writes with `overwrite=True` and the LLM proposes task-derived names ("notes"). ToolForge got a `cel_` namespace in R3 for exactly this; SkillForge did not. Fixed (parity). |
+| 6 | MED | **Gate-2 missed the fallback channel.** When synthesis degrades, both boundaries inject `render_brief_to_text(brief)` — retrieved memory passages Gate-1 never saw (Gate-1 inspects the RAW TASK). Fixed: the deterministic brief is part of the inspected payload. |
+
+**R7 (refutation of the R6 diff)** found two weaknesses in the R6 fixes themselves —
+the new skill-injection channel injected LLM-authored bodies with no size bound, and
+the new `cel_` namespace collapsed onto the bare prefix for a name of only
+separators — plus, while minting this review's own companion skill, a **third layer
+of finding 2**: `stages/skillforge.py` imported `MultiRegistry`, *a class that does
+not exist* (the real name is `MultiSkillRegistry`, with a keyword-only constructor),
+and `skill_forge` was not on either host's import path to begin with. Every call
+raised into the stage's `except: pass`, so no skill was ever written to disk and
+`_forged_skills` stayed empty — which silently made the Gate-2 skill rollback a
+permanent no-op. Every test in the file patched `_skill_create`, so nothing caught
+it; there is now one test that writes against the REAL registries under a temp
+`CORVIN_HOME` and rolls back, so an API drift on either fails loudly.
+
+Plus: `read_recent_traces(n=0)` returned the whole file; `_write_pipeline_config`
+overwrote `tenant.corvin.yaml` non-atomically (that file also carries every feature
+flag); `tools_bound` is scrubbed from the trace cache like `tools_dropped`; the
+editor now warns when a pipeline holds egress/forge stages while the ACTIVE flag is
+off. Four CE test modules had been **uncollectable since bd13c5b** (`from
+operator.context_engineering import …` — `operator` is the stdlib module); repaired
+to the package-relative form, which then exposed two real defects in the modules
+they cover (a writer/reader checksum asymmetry that made every record read back
+corrupt, and a read/write lock pair on disjoint files that never interlocked).
+
+**Still open after R6** (unchanged, honestly dormant, not regressions):
+- **P-G** (community-stage subprocess sandbox) is unbuilt. `registry.register_stage`
+  refuses any non-`builtin` stage, so the palette is builtin-only and the refusal is
+  fail-closed — but the marketplace/share story does not exist.
+- **`stages/grades.py` has no production caller.** `resolve_pipeline` does not
+  consult `is_default_eligible`, and every registered stage is `trust="builtin"`
+  (always eligible), so there is no live subject until P-G ships a community stage.
+  ADR-0285's self-improving loop is therefore built, tested, and dormant.
+- A `ToolRef` carrying its own `mcp_config` is **refused** at the bridge boundary
+  (logged + recorded), because an extra MCP server cannot be plumbed into the
+  already-written config file. No producer sets it today.
+
 ---
 
 ## P-A — ContextStage contract + config-driven pipeline (ADR-0280)

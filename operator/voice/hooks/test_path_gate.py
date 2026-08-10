@@ -789,7 +789,19 @@ def main() -> int:
     # These assert on the backslash form specifically. The rest of the
     # suite exercises the same commands with `HOME` (native separators on
     # Windows, `/` on POSIX), so both shapes stay covered on both hosts.
+    #
+    # WINDOWS-ONLY by construction (review R7): `path_gate._split_tokens`
+    # short-circuits to plain POSIX shlex off-Windows *by design* — there a
+    # backslash really is an escape and real paths use `/`, so a Windows-shaped
+    # string is not a path into the protected tree and ALLOW is the correct
+    # answer. The original block asserted DENY unconditionally and would have
+    # failed on every POSIX host; nobody noticed because the module carried a
+    # SyntaxError (`f-string expression part cannot include a backslash`, a
+    # SyntaxError before Python 3.12) since the same commit, so the whole L10
+    # suite was uncollectable and never ran anywhere. Gate the expectation on the
+    # platform instead of dropping it, and pin the POSIX contract explicitly.
     # ---------------------------------------------------------------------
+    _on_windows = sys.platform.startswith("win")
     _win_home = str(Path(HOME)).replace("/", "\\")
     _win_audit = f"{_win_home}\\global\\forge\\audit.jsonl"
     _win_policy = f"{_win_home}\\global\\forge\\policy.json"
@@ -805,33 +817,52 @@ def main() -> int:
         ("cp --target-directory", f"cp /tmp/evil.py --target-directory={_win_tools}"),
         ("cp -t",               f"cp -t {_win_tools} /tmp/evil.py"),
     ):
+        if _on_windows:
+            expect(
+                f"Bash backslash path: {_label} → DENY",
+                {"tool_name": "Bash", "tool_input": {"command": _cmd}},
+                blocked=True,
+            )
+
+    if _on_windows:
+        # A quoted backslash path must survive tokenisation too — quoting is the
+        # natural way to write a Windows path containing spaces.
         expect(
-            f"Bash backslash path: {_label} → DENY",
-            {"tool_name": "Bash", "tool_input": {"command": _cmd}},
+            "Bash backslash path: quoted rm → DENY",
+            {"tool_name": "Bash", "tool_input": {"command": f"rm -f '{_win_audit}'"}},
             blocked=True,
         )
 
-    # A quoted backslash path must survive tokenisation too — quoting is the
-    # natural way to write a Windows path containing spaces.
-    expect(
-        "Bash backslash path: quoted rm → DENY",
-        {"tool_name": "Bash", "tool_input": {"command": f"rm -f '{_win_audit}'"}},
-        blocked=True,
-    )
-
-    # Token POSITIONS must be unchanged by the separator substitution —
-    # call sites read toks[0] as the command name and sed -i's target as the
-    # last positional, so a split that merges or adds tokens breaks them.
-    t("_split_tokens keeps token positions on a backslash path",
-      path_gate._split_tokens(f"rm -f {_win_audit}") == ["rm", "-f", _win_audit],
-      detail=f"got {path_gate._split_tokens(f'rm -f {_win_audit}')!r}")
+        # Token POSITIONS must be unchanged by the separator substitution —
+        # call sites read toks[0] as the command name and sed -i's target as the
+        # last positional, so a split that merges or adds tokens breaks them.
+        t("_split_tokens keeps token positions on a backslash path",
+          path_gate._split_tokens(f"rm -f {_win_audit}") == ["rm", "-f", _win_audit],
+          detail=f"got {path_gate._split_tokens(f'rm -f {_win_audit}')!r}")
+    else:
+        # POSIX contract, pinned so the platform split stays deliberate: a
+        # backslash is an ESCAPE here, so the Windows-shaped string collapses and
+        # is not a path into the protected tree. Token COUNT and positions must
+        # still hold — call sites read toks[0] as the command name.
+        _posix_toks = path_gate._split_tokens(f"rm -f {_win_audit}")
+        t("POSIX: backslashes are escapes, token positions still hold",
+          len(_posix_toks) == 3 and _posix_toks[:2] == ["rm", "-f"]
+          and "\\" not in _posix_toks[2],
+          detail=f"got {_posix_toks!r}")
 
     # POSIX escapes must still be honoured: `\ ` is an escaped space, not a
     # path separator, so this stays ONE token on every platform.
+    # NB: the backslash lives in a NAMED variable, not inline in the f-string —
+    # "f-string expression part cannot include a backslash" is a SyntaxError before
+    # Python 3.12, and this repo runs 3.11. Since d1ea90d the whole module was
+    # therefore uncollectable: the L10 path-gate suite — a load-bearing compliance
+    # layer — silently did not run at all (review R7, same class as the four dead
+    # CEL test modules).
+    _escaped_space_cmd = r"rm -f /tmp/two\ words.txt"
     t("_split_tokens still honours a POSIX escaped space",
-      path_gate._split_tokens(r"rm -f /tmp/two\ words.txt")
+      path_gate._split_tokens(_escaped_space_cmd)
       == ["rm", "-f", "/tmp/two words.txt"],
-      detail=f"got {path_gate._split_tokens(r'rm -f /tmp/two\ words.txt')!r}")
+      detail=f"got {path_gate._split_tokens(_escaped_space_cmd)!r}")
 
     # Non-protected backslash paths must NOT be over-blocked — the fix adds
     # visibility, not blanket denial of every command containing a `\`.

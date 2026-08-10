@@ -59,13 +59,28 @@ class ConcurrencyContract:
             True if lock acquired, False if timeout
         """
         lock_file = filepath.with_suffix(".lock.read")
+        # A read-lock must also EXCLUDE a held write-lock. The two used disjoint
+        # lock files, so `acquire_read_lock` happily succeeded while a writer held
+        # the file — a reader/writer pair that never interlocked (review R6; the
+        # test asserting this could not be collected, so it never ran).
+        write_lock = filepath.with_suffix(".lock.write")
         start = time.time()
 
         while time.time() - start < timeout_seconds:
             try:
+                if write_lock.exists():
+                    raise FileExistsError(str(write_lock))
                 # Create lock file (fails if already exists)
                 fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.close(fd)
+                # Re-check: a writer that took the lock between the check and the
+                # create wins — drop ours and keep waiting (TOCTOU).
+                if write_lock.exists():
+                    try:
+                        lock_file.unlink()
+                    except OSError:
+                        pass
+                    raise FileExistsError(str(write_lock))
                 return True
             except FileExistsError:
                 time.sleep(0.1)

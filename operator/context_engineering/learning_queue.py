@@ -95,8 +95,13 @@ class LearningQueue:
         """
         with self.lock:
             try:
-                # Compute checksum
+                # Compute checksum over the record WITHOUT its own `checksum` field
+                # — read_all_records/repair pop the key before hashing, so hashing
+                # it here (as `""`) made writer and reader disagree and EVERY record
+                # read back as corrupt. Invisible until review R6, because this
+                # module's whole test file was uncollectable since bd13c5b.
                 record_dict = asdict(record)
+                record_dict.pop("checksum", None)
                 record_json = json.dumps(record_dict, sort_keys=True)
                 checksum = hashlib.sha256(record_json.encode()).hexdigest()
                 record.checksum = checksum

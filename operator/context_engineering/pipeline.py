@@ -109,6 +109,34 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
     return bundle, trace
 
 
+# ── Boundary façades (review R6) ────────────────────────────────────────────
+# The live spawn boundaries (bridge adapter, console chat_runtime, ACS runtime)
+# load this package by FILE PATH and reach it through the top-level module object,
+# so the P-B binding helpers need a stable entry point here. They stay LAZY — the
+# `.stages` package registers every first-party stage at import, and pulling that
+# into `__init__` would make a plain `import context_engineering` do the stage
+# import work even for a caller that only wants `build_brief`.
+
+def apply_tool_bindings(bundle: Any, persona_patterns, allowed_tools, mcp_config,
+                        persona_caps=None) -> "tuple[list, dict, list]":
+    """See stages.binding.apply_tool_bindings — merge a bundle's tool bindings into
+    a turn's (allowed_tools, mcp_config) after capability-class re-validation."""
+    from .stages.binding import apply_tool_bindings as _impl  # noqa: PLC0415
+    return _impl(bundle, persona_patterns, allowed_tools, mcp_config, persona_caps)
+
+
+def render_skill_bindings(bundle: Any) -> str:
+    """See stages.binding.render_skill_bindings — the skill-injection channel."""
+    from .stages.binding import render_skill_bindings as _impl  # noqa: PLC0415
+    return _impl(bundle)
+
+
+def strip_for_remote(bundle: Any) -> bool:
+    """See stages.binding.strip_for_remote — ADR-0279 reach boundary."""
+    from .stages.binding import strip_for_remote as _impl  # noqa: PLC0415
+    return _impl(bundle)
+
+
 def _safe_gate(gate, text: str) -> "tuple[bool, str]":
     """Invoke the compliance gate; a gate that RAISES must DENY, never fail-open
     (review R2 finding A3 — an un-wrapped gate exception propagated out of the
@@ -156,7 +184,8 @@ def _gate1(bundle: Any, trace: dict, gate, task: str) -> bool:
     return ok
 
 
-def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns) -> Any:
+def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns,
+                    persona_caps=None) -> Any:
     """Gate-2 on the FINAL assembled payload + class-based tool re-validation
     (bind ≠ authorise). Shared by the sync and async entry points so the enforcer
     logic lives in exactly one place.
@@ -176,9 +205,18 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns) -> Any:
                         for t in (bundle.tools_to_bind or []))
     skill_ids = " ".join(getattr(s, "skill_id", "") for s in (bundle.skills_to_bind or []))
     skill_bodies = " ".join(getattr(s, "body", "") for s in (bundle.skills_to_bind or []))
+    # The DETERMINISTIC brief is part of the final payload too (review R6): when the
+    # synthesis stage degrades (over budget, egress denied, timeout) both boundaries
+    # inject `render_brief_to_text(bundle.brief)` instead — retrieved memory
+    # passages and ADR/skill titles that Gate-1 never saw, because Gate-1 inspects
+    # the RAW TASK. Gate-2's contract is "the spawn the worker gets is always what
+    # Gate-2 inspected", so it must cover the fallback channel, not only the
+    # synthesised one.
+    rendered = "" if bundle.synthesised_prompt else (
+        render_brief_to_text(getattr(bundle, "brief", None)) or "")
     final_payload = " ".join(
-        x for x in (bundle.synthesised_prompt or "", tool_names, mcp_cfgs, skill_ids,
-                    skill_bodies) if x).strip()
+        x for x in (bundle.synthesised_prompt or "", rendered, tool_names, mcp_cfgs,
+                    skill_ids, skill_bodies) if x).strip()
     if final_payload:
         ok2, reason2 = _safe_gate(gate, final_payload)
         if not ok2:
@@ -192,8 +230,29 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns) -> Any:
             bundle.skills_to_bind = []
             return bundle
     if bundle.tools_to_bind:
+        # A ToolRef carrying its OWN mcp_config is refused HERE, in the enforcer,
+        # not at each boundary (review R7 — the first cut put it in the bridge, so
+        # the console would silently have ignored it: the exact boundary-divergence
+        # class this review exists to close; project memory "fix the primitive, not
+        # the call site"). No producer sets it today, and neither boundary can plumb
+        # an extra MCP server into an already-written config file, so binding the
+        # NAME would hand the worker a tool it cannot call. Refusing here means the
+        # forged artifact is rolled back with everything else below.
+        _needs_srv = [t for t in bundle.tools_to_bind
+                      if getattr(t, "mcp_config", None)]
+        if _needs_srv:
+            trace["mcp_config_unsupported"] = len(_needs_srv)
+            bundle.tools_to_bind = [t for t in bundle.tools_to_bind
+                                    if not getattr(t, "mcp_config", None)]
+            dropped_names = {getattr(t, "name", "") for t in _needs_srv}
+            _rollback_forged(
+                bundle, trace,
+                tool_names=[f["name"] for f in bundle.scratch.get("_forged_tools", [])
+                            if f["ref"] in dropped_names])
+    if bundle.tools_to_bind:
         from .stages.binding import revalidate_tools  # noqa: PLC0415
-        kept, dropped = revalidate_tools(bundle.tools_to_bind, persona_patterns)
+        kept, dropped = revalidate_tools(bundle.tools_to_bind, persona_patterns,
+                                         persona_caps)
         bundle.tools_to_bind = kept
         if dropped:
             trace["tools_dropped"] = [getattr(t, "name", "?") for t in dropped]
@@ -207,7 +266,7 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns) -> Any:
 
 def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
                       meter: bool = True, *, gate_fn=None,
-                      persona_patterns=None) -> "tuple[Any, dict]":
+                      persona_patterns=None, persona_caps=None) -> "tuple[Any, dict]":
     """The FULL two-gate pipeline (ADR-0280 R2 / CONCEPT-0006 §9), SYNC, with EVERY
     enforcer in ONE place (the review's key demand — not delegated to a caller):
 
@@ -233,12 +292,13 @@ def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
     if not _gate1(bundle, trace, gate, task):
         return bundle, trace
     bundle = _run_deferred_sync(bundle, trace)
-    return _gate2_and_bind(bundle, trace, gate, persona_patterns), trace
+    return _gate2_and_bind(bundle, trace, gate, persona_patterns, persona_caps), trace
 
 
 async def run_full_pipeline_async(task: str, tenant: str = "_default",
                                   session: Any = None, meter: bool = True, *,
-                                  gate_fn=None, persona_patterns=None) -> "tuple[Any, dict]":
+                                  gate_fn=None, persona_patterns=None,
+                                  persona_caps=None) -> "tuple[Any, dict]":
     """Async twin of :func:`run_full_pipeline` for the event-loop callers (console
     chat_runtime): the deferred stages run via ``asyncio.to_thread`` so a
     ``claude -p`` subprocess never blocks the loop. Same two-gate enforcer path."""
@@ -249,7 +309,7 @@ async def run_full_pipeline_async(task: str, tenant: str = "_default",
     if not _gate1(bundle, trace, gate, task):
         return bundle, trace
     bundle = await build_context_post_gate(bundle, trace)
-    return _gate2_and_bind(bundle, trace, gate, persona_patterns), trace
+    return _gate2_and_bind(bundle, trace, gate, persona_patterns, persona_caps), trace
 
 
 def _run_deferred_sync(bundle: Any, trace: dict) -> Any:
