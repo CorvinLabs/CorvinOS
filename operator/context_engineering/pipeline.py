@@ -74,9 +74,19 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
         trace["degraded"] = "pipeline_cycle"
         return None, trace
 
+    # Gate-split (ADR-0280 R2 / ADR-0282): PURE stages run here, pre-gate. Stages
+    # with side effects (effect=egress/forge — LLM synthesis, ToolForge) are
+    # DEFERRED; the caller runs them via build_context_post_gate AFTER Gate-1
+    # approved the task, then re-gates the final payload (Gate-2) before the spawn.
+    deferred: list = []
     for spec in ordered:
         stage = get_stage(spec.id)
         if stage is None:
+            continue
+        if getattr(stage, "effect", "pure") != "pure":
+            deferred.append(spec)
+            trace["stages"].append({"stage": spec.id, "status": "deferred",
+                                    "reason": "post_gate"})
             continue
         ctx.config = spec.config
         try:
@@ -88,7 +98,34 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
             if spec.id == "memory" or bundle.brief is None:
                 return None, trace   # no brief → nothing downstream can attach
 
+    bundle.scratch["_deferred"] = deferred
+    bundle.scratch["_ctx"] = ctx
     return bundle, trace
+
+
+async def build_context_post_gate(bundle: Any, trace: dict) -> Any:
+    """Run the deferred egress/forge stages AFTER the caller's Gate-1 approved the
+    task (ADR-0282). Blocking stages run via ``asyncio.to_thread`` so a `claude -p`
+    subprocess never blocks the event loop. The caller MUST re-gate the final
+    assembled payload (Gate-2) before spawning the worker. Fail-safe: a stage that
+    raises is recorded failed and the pipeline continues (degrade, never block)."""
+    import asyncio  # noqa: PLC0415
+    from .stages import get_stage  # noqa: PLC0415
+
+    ctx = bundle.scratch.get("_ctx")
+    for spec in bundle.scratch.get("_deferred", []):
+        stage = get_stage(spec.id)
+        if stage is None:
+            continue
+        if ctx is not None:
+            ctx.config = spec.config
+        try:
+            bundle, tel = await asyncio.to_thread(stage.run, bundle, ctx)
+            trace["stages"].append(tel.to_trace() if hasattr(tel, "to_trace") else tel)
+        except Exception as e:  # noqa: BLE001
+            trace["stages"].append({"stage": spec.id, "status": "failed",
+                                    "error": str(e)[:120]})
+    return bundle
 
 
 def render_brief_to_text(brief: Any) -> str:
