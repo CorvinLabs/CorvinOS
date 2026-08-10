@@ -125,26 +125,42 @@ def mark_error(flag_id: str, exc: Exception) -> None:
 
 
 def _is_pii_safe_error(exc: Exception) -> bool:
-    """Check if exception message contains PII patterns. Fail-closed: if unsure, return False."""
+    """Check if exception message contains PII patterns. Fail-closed: if unsure, return False.
+
+    Checks: emails, passwords, tokens, phone numbers, credit cards, SSN patterns.
+    """
+    import re
+
     message = str(exc).lower()
-    # Simple patterns: email addresses, phone numbers, common sensitive fields
-    pii_patterns = [
-        "@",  # email
-        "password",
-        "token",
-        "secret",
-        "key",
-        "credential",
-        "api_key",
-        "session",
-        "cookie",
-        "jwt",
-        "oauth",
-        "+1",  # US phone
+
+    # Regex patterns (more robust than simple substring blacklist)
+    pii_regex_patterns = [
+        r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b",  # Email
+        r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b",  # US phone
+        r"\b\d{3}[-]?\d{2}[-]?\d{4}\b",  # SSN
+        r"\b\d{4}[\s]?\d{4}[\s]?\d{4}[\s]?\d{4}\b",  # Credit card
+        r"bearer\s+[a-z0-9_-]{20,}",  # Bearer token
     ]
-    for pattern in pii_patterns:
-        if pattern in message:
+
+    # Substring patterns (catch obvious keywords)
+    pii_keywords = [
+        "password", "passwd", "pwd",
+        "token", "secret", "api_key", "apikey",
+        "credential", "auth", "oauth", "jwt",
+        "session", "cookie", "bearer",
+        "key", "private_key", "keypair",
+    ]
+
+    # Check regex patterns
+    for pattern in pii_regex_patterns:
+        if re.search(pattern, message):
             return False
+
+    # Check keywords
+    for keyword in pii_keywords:
+        if keyword in message:
+            return False
+
     return True
 
 
