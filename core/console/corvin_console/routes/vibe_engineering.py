@@ -1,18 +1,19 @@
-"""Vibe Engineering — read-only Context-Engineering pipeline view (ADR-0275).
+"""Vibe Engineering — read-only Context-Engineering pipeline view (ADR-0275/0278).
 
-Exposes the per-turn CEL traces that ``operator/context_engineering/trace.py``
-persists under each session workdir (``.corvin-cel-traces.jsonl``). Read-only:
-GET only, no CSRF (Cookie same-origin). Tenant isolation is structural — every
-lookup is rooted at ``tenant_sessions_dir(rec.tenant_id)``, so one tenant can
-never read another's traces even though the on-disk file is per session.
+Reads the DURABLE, hash-chained Decision Record (Layer A, ADR-0278) from the
+tenant's audit log — not the rotating `.corvin-cel-traces.jsonl` cache — so the
+console shows every context-engineered turn (nothing ages out at 200), each with
+its per-source scores, its chain hash, and the `brief_sha256` that keys the full
+brief text. `/explain/{hash}` serves that full brief (Layer B) for drill-down,
+or reports it lawfully erased (GDPR Art. 17) when the sidecar is gone.
 
-The reader is replicated inline (not imported from the CEL package) so this
-route has no dependency on the importlib-loaded ``context_engineering`` module
-being present in ``sys.modules`` at request time — the trace file is plain JSONL.
+Read-only: GET only, no CSRF. Tenant isolation is structural — every lookup is
+rooted at the authenticated `rec.tenant_id`.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -21,72 +22,117 @@ from fastapi import APIRouter, Depends, HTTPException
 from .. import auth as session_auth
 from ..deps import require_session
 
-try:  # canonical path helpers (same import other routes use)
+try:
     from forge import paths as _forge_paths
 except Exception:  # noqa: BLE001 — degrade to an empty view, never 500 the page
     _forge_paths = None  # type: ignore[assignment]
 
 router = APIRouter(prefix="/vibe-engineering", tags=["console-vibe-engineering"])
 
-_TRACE_FILE = ".corvin-cel-traces.jsonl"
+_SHA_RE = re.compile(r"^[0-9a-f]{64}$")  # brief_sha256 shape; blocks path traversal
 
 
-def _read_recent(workdir: Path, n: int) -> list[dict]:
-    """Last ``n`` traces from one session workdir, most recent first. Inline copy
-    of trace.read_recent_traces — see module docstring for why it is not imported."""
+def _audit_path(tenant_id: str) -> "Path | None":
+    if _forge_paths is None:
+        return None
     try:
-        p = workdir / _TRACE_FILE
-        if not p.exists():
-            return []
-        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        out: list[dict] = []
-        for ln in reversed(lines[-max(0, n):]):
+        return Path(_forge_paths.tenant_global_dir(tenant_id)) / "forge" / "audit.jsonl"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _read_decisions(tenant_id: str, limit: int) -> list[dict]:
+    """Last `limit` cel.decision records from the hash-chained audit log, most
+    recent first. Each carries the chain hash + the content-free details. Empty
+    on any error or when the feature never ran (the legitimate empty-state)."""
+    p = _audit_path(tenant_id)
+    if p is None or not p.exists():
+        return []
+    out: list[dict] = []
+    try:
+        # Whole-file scan is fine at single-operator scale; bounded by `limit`
+        # at the end. (A tail-read is the optimisation if the log grows large.)
+        for ln in p.read_text(encoding="utf-8").splitlines():
+            if '"cel.decision"' not in ln:
+                continue
             try:
-                out.append(json.loads(ln))
+                e = json.loads(ln)
             except (json.JSONDecodeError, ValueError):
                 continue
-        return out
+            if e.get("event_type") != "cel.decision":
+                continue
+            d = e.get("details", {}) or {}
+            out.append({
+                "turn_id": d.get("turn_id"),
+                "session_id": d.get("session_id") or "?",
+                "ts": e.get("ts"),
+                "hash": e.get("hash"),
+                "prev_hash": e.get("prev_hash"),
+                "degraded": d.get("degraded"),
+                "top_score": d.get("top_score"),
+                "stages_ok": d.get("stages_ok"),
+                "brief_sha256": d.get("brief_sha256"),
+                "brief_bytes": d.get("brief_bytes"),
+                "stages": d.get("stages", []),
+            })
     except Exception:  # noqa: BLE001
         return []
+    return list(reversed(out))[:max(0, limit)]
 
 
 @router.get("/traces")
 async def get_vibe_traces(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-    limit: int = 20,
+    limit: int = 50,
 ) -> dict[str, Any]:
-    """CEL pipeline traces for the authenticated tenant, grouped by session.
+    """Context-engineering Decision Records for the tenant, grouped by session.
 
-    Empty ``sessions`` is the legitimate P1 empty-state (flag never on, or no
-    turn context-engineered yet) — the UI renders an onboarding card, not an error.
-    """
-    if not 1 <= limit <= 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    Layer A — durable + tamper-evident. Empty `sessions` is the legitimate
+    empty-state (flag never on, or no turn context-engineered yet)."""
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+
+    decisions = _read_decisions(rec.tenant_id, limit)
+    by_session: dict[str, dict[str, Any]] = {}
+    for d in decisions:
+        sid = d["session_id"]
+        grp = by_session.setdefault(sid, {"session": sid, "turns": []})
+        grp["turns"].append(d)
+    sessions = sorted(
+        by_session.values(),
+        key=lambda s: s["turns"][0].get("ts") or 0, reverse=True)
+    return {"tenant_id": rec.tenant_id, "sessions": sessions,
+            "available": _forge_paths is not None}
+
+
+@router.get("/explain/{brief_sha256}")
+async def explain_brief(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    brief_sha256: str,
+) -> dict[str, Any]:
+    """Full rendered brief text (Layer B) for one turn, resolved by its hash.
+
+    Returns `found: false` — NOT an error — when the sidecar was lawfully erased
+    (GDPR Art. 17); the hash in Layer A then honestly resolves to nothing."""
+    if not _SHA_RE.match(brief_sha256 or ""):
+        raise HTTPException(status_code=400, detail="invalid brief hash")
     if _forge_paths is None:
-        return {"tenant_id": rec.tenant_id, "sessions": [], "available": False}
-
+        return {"found": False, "brief_sha256": brief_sha256, "reason": "unavailable"}
     try:
-        sessions_root = _forge_paths.tenant_sessions_dir(rec.tenant_id)
+        root = Path(_forge_paths.tenant_sessions_dir(rec.tenant_id))
     except Exception:  # noqa: BLE001
-        return {"tenant_id": rec.tenant_id, "sessions": [], "available": False}
-
-    root = Path(sessions_root)
-    sessions: list[dict[str, Any]] = []
+        return {"found": False, "brief_sha256": brief_sha256, "reason": "unavailable"}
     if root.is_dir():
         root_resolved = root.resolve()
-        for tf in sorted(root.rglob(_TRACE_FILE)):
-            workdir = tf.parent
-            try:  # traversal guard: never escape the tenant's sessions root
-                rel = workdir.resolve().relative_to(root_resolved)
+        for f in root.rglob(f"cel-briefs/{brief_sha256}.txt"):
+            try:  # traversal guard: stay inside the tenant's sessions root
+                f.resolve().relative_to(root_resolved)
             except ValueError:
                 continue
-            traces = _read_recent(workdir, limit)
-            if traces:
-                sessions.append({
-                    "session": workdir.name,
-                    "path": str(rel),
-                    "traces": traces,
-                })
-    # newest-active session first (by the most recent trace ts it holds)
-    sessions.sort(key=lambda s: s["traces"][0].get("ts", 0), reverse=True)
-    return {"tenant_id": rec.tenant_id, "sessions": sessions, "available": True}
+            try:
+                return {"found": True, "brief_sha256": brief_sha256,
+                        "text": f.read_text(encoding="utf-8")}
+            except Exception:  # noqa: BLE001
+                break
+    return {"found": False, "brief_sha256": brief_sha256,
+            "reason": "erased_or_absent"}
