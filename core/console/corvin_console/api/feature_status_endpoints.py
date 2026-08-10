@@ -8,7 +8,7 @@ import yaml
 from fastapi import APIRouter, HTTPException, Depends
 
 from core.console.corvin_console.feature_flags import REGISTRY
-from core.console.corvin_console.auth import require_session
+from core.console.corvin_console.deps import require_session
 from core.telemetry import get_flag_metrics
 
 router = APIRouter(prefix="/api/feature-status", tags=["feature-status"])

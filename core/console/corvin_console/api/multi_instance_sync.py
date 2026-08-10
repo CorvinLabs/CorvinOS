@@ -7,7 +7,7 @@ from typing import Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from core.console.corvin_console.auth import require_session
+from core.console.corvin_console.deps import require_session
 
 router = APIRouter(prefix="/api/multi-instance", tags=["multi-instance"])
 
