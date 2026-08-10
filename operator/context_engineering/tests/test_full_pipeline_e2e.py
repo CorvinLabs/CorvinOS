@@ -241,6 +241,29 @@ class FullPipelineE2E(unittest.TestCase):
         self.assertEqual(record["flag"], "vibe_engineering_active")
         dr.assert_content_free(record)  # still content-free
 
+    # ---- R4/R5: the persisted trace cache is content-free ----
+    def test_scrub_trace_is_content_free(self):
+        tr = sys.modules["context_engineering.trace"]
+        scrubbed = tr._scrub_trace({
+            "task_preview": "summarize patient klaus mueller notes",
+            "tools_dropped": ["mcp__forge__cel_klaus_tool"],
+            "forged_rolled_back": {"tools": ["cel_klaus"], "skills": ["klaus_skill"]},
+            "gate2_denied": "refused for user 4915223456789",
+            "stages": [
+                {"stage": "memory", "status": "ok", "error": "boom klaus",
+                 "sources": [{"id": "discord-1501540900529246251.md", "score": 1.0},
+                             {"id": "adr-0222.md", "score": 0.8}]},
+                {"stage": "toolforge", "status": "ok",
+                 "sources": [{"id": "mcp__forge__cel_klaus_tool", "score": 1.0}]},
+            ]})
+        blob = json.dumps(scrubbed)
+        self.assertNotIn("task_preview", scrubbed)
+        self.assertNotIn("tools_dropped", scrubbed)
+        self.assertEqual(scrubbed["forged_rolled_back"], {"tools": 1, "skills": 1})
+        for leak in ("klaus", "boom", "1501540900529246251", "4915223456789"):
+            self.assertNotIn(leak, blob, f"content leaked into trace cache: {leak}")
+        self.assertIn("adr-0222.md", blob, "normal conceptual id kept for readability")
+
     # ---- the active pipeline actually contains toolforge + skillforge --
     def test_active_pipeline_has_forge_stages(self):
         cfg = sys.modules["context_engineering.stages.config"]
