@@ -32,6 +32,7 @@ interface MultiInstanceStatus {
   freshness: string;
   github_repo: string;
   sync_frequency: string;
+  auto_load_repo_enabled?: boolean;
 }
 
 export function MultiInstanceDashboard() {
@@ -42,13 +43,15 @@ export function MultiInstanceDashboard() {
   const [customRepo, setCustomRepo] = useState('');
   const [showRepoEditor, setShowRepoEditor] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
-  // Initialize repo from status once loaded
+  // Initialize repo from status once loaded (one-time only, gated by feature flag)
   useEffect(() => {
-    if (status?.github_repo && !customRepo) {
+    if (status?.github_repo && !isInitialized && !customRepo && status.auto_load_repo_enabled) {
       setCustomRepo(status.github_repo);
+      setIsInitialized(true);
     }
-  }, [status?.github_repo]);
+  }, [status?.github_repo, isInitialized, customRepo, status?.auto_load_repo_enabled]);
 
   // Detect dark mode from multiple sources
   useEffect(() => {

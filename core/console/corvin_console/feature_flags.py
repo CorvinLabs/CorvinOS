@@ -575,6 +575,20 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         target_release="0.12.x",
         tags=("chat", "context-engineering"),
     ),
+    FeatureFlag(
+        id="auto_load_github_repo",
+        label="Auto-load GitHub repo in Cross-Device Learning",
+        description=(
+            "Automatically populate the GitHub repository URL from the merged-state "
+            "config when opening the Cross-Device Learning dashboard. On means the "
+            "repo URL is pre-filled when the Settings panel loads; off means the "
+            "field starts empty and the user must manually enter it each time "
+            "(ADR-0275)."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("multi-instance", "console"),
+    ),
 )
 
 
