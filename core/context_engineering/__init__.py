@@ -15,6 +15,17 @@ from core.context_engineering.persona_model import (
     set_current_role,
     set_current_tenant_id,
 )
+from core.context_engineering.transport_resolvers import (
+    AuthError,
+    InvalidPersona,
+    TransportResolver,
+    UnresolvablePersona,
+)
+from core.context_engineering.auth_decorators import (
+    auth_required_cli,
+    auth_required_flask,
+    requires_auth_capability,
+)
 
 __all__ = [
     "Persona",
