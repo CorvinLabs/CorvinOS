@@ -448,8 +448,9 @@ pass" as equivalent to "reachable and works end-to-end" · write an E2E test tha
 real transport/interface boundary and call it satisfying · mock the exact component under test
 inside its own "E2E" test · leave an infeasibility skip implicit.
 
-→ Full reference: [quality-discipline.md](docs/claude-ref/quality-discipline.md) ·
-Skill: `operator/bundle/skills/ldd/e2e-wiring-proof/SKILL.md`
+→ Full reference: [e2e-wiring-proof-standard.md](docs/claude-ref/e2e-wiring-proof-standard.md) (standard definition) ·
+[quality-discipline.md](docs/claude-ref/quality-discipline.md) (LDD context) ·
+Skill: `assistant.e2e_wiring_proof` (auto-injected, learned-experience)
 
 ---
 
