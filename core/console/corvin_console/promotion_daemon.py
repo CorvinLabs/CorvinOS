@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from core.console.corvin_console.promotion_gates import (
+from .promotion_gates import (
     DemotionGates,
     PromotionGates,
 )

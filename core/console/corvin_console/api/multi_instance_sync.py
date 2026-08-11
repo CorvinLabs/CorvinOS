@@ -9,7 +9,7 @@ from typing import Optional, Set
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from core.console.corvin_console.deps import require_session, require_csrf
+from ..deps import require_session, require_csrf
 from core.telemetry import compute_digest
 
 logger = logging.getLogger(__name__)
