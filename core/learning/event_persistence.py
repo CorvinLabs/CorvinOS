@@ -248,3 +248,51 @@ class EventStore:
                         break
 
         return decisions
+
+    async def read_outcomes(
+        self,
+        tenant_id: str,
+        session_id: Optional[str] = None,
+        decision_id: Optional[str] = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Read outcome feedback records (ADR-0317).
+
+        Args:
+            tenant_id: Tenant ID
+            session_id: Filter by session
+            decision_id: Filter by decision
+            limit: Max results
+
+        Returns:
+            Outcome record payloads
+        """
+        outcomes = []
+
+        for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
+            if len(outcomes) >= limit:
+                break
+
+            with open(events_file) as f:
+                for line in reversed(f.readlines()):
+                    if not line.strip():
+                        continue
+
+                    event_dict = json.loads(line)
+
+                    # Filter
+                    if event_dict.get("tenant_id") != tenant_id:
+                        continue
+                    if not event_dict["event_type"].endswith("outcome.observed"):
+                        continue
+                    if session_id and event_dict.get("session_id") != session_id:
+                        continue
+                    if decision_id and event_dict.get("payload", {}).get("decision_id") != decision_id:
+                        continue
+
+                    outcomes.append(event_dict.get("payload", {}))
+
+                    if len(outcomes) >= limit:
+                        break
+
+        return outcomes

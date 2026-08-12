@@ -167,6 +167,44 @@ class EventEmitter:
         )
         await self.emit(event)
 
+    async def emit_outcome(
+        self,
+        outcome_id: str,
+        decision_id: str,
+        session_id: str,
+        outcome: str,
+        feedback_text: Optional[str] = None,
+        rating: Optional[int] = None,
+        instance_id: str = "unknown",
+    ) -> None:
+        """Emit an outcome feedback learning event (ADR-0317).
+
+        Args:
+            outcome_id: Unique outcome identifier
+            decision_id: ID of decision being evaluated
+            session_id: Session ID
+            outcome: "success", "partial", or "failure"
+            feedback_text: User's feedback
+            rating: Optional numeric rating (1-5)
+            instance_id: Instance identifier
+        """
+        event = LearningEvent(
+            event_type=LearningEventType.OUTCOME_OBSERVED,
+            tenant_id=self.tenant_id,
+            instance_id=instance_id,
+            skill_name=None,
+            session_id=session_id,
+            timestamp_utc=datetime.utcnow(),
+            payload={
+                "outcome_id": outcome_id,
+                "decision_id": decision_id,
+                "outcome": outcome,
+                "feedback_text": feedback_text,
+                "rating": rating,
+            },
+        )
+        await self.emit(event)
+
     async def read_events(
         self,
         event_type: Optional[LearningEventType] = None,
