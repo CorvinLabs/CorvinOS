@@ -27,30 +27,50 @@ class SkillComposition:
 
         Args:
             name: Step name
-            skill_fn: Async or sync callable
+            skill_fn: Async or sync callable (should be @skill_learnable decorated)
             tags: Optional tags
+
+        Raises:
+            ValueError: If skill doesn't have _skill_metadata attribute (contract violation)
         """
+        # K3-001 Fix: Validate skill contract
+        if not hasattr(skill_fn, "_skill_metadata"):
+            raise ValueError(
+                f"Skill '{name}' must be decorated with @skill_learnable. "
+                f"Missing _skill_metadata attribute. "
+                f"Use: @skill_learnable decorator on the skill function."
+            )
+
         self.steps.append(CompositionStep(name=name, skill_fn=skill_fn, tags=tags or []))
 
-    async def execute(self, input_data: Any) -> Any:
-        """Execute the pipeline sequentially.
+    async def execute(self, input_data: Any, step_timeout_s: float = 30.0) -> Any:
+        """Execute the pipeline sequentially with timeout protection.
 
         Args:
             input_data: Initial input
+            step_timeout_s: Max time per step (prevents sync blocking)
 
         Returns:
             Output of the last step
         """
+        import asyncio
+        from functools import partial
+
         result = input_data
 
         for step in self.steps:
             try:
-                # Try async first
-                import asyncio
                 if asyncio.iscoroutinefunction(step.skill_fn):
-                    result = await step.skill_fn(result)
+                    result = await asyncio.wait_for(step.skill_fn(result), timeout=step_timeout_s)
                 else:
-                    result = step.skill_fn(result)
+                    # K2-004 Fix: Wrap sync in executor to prevent blocking event loop
+                    loop = asyncio.get_event_loop()
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(None, partial(step.skill_fn, result)),
+                        timeout=step_timeout_s,
+                    )
+            except asyncio.TimeoutError:
+                raise RuntimeError(f"Step '{step.name}' exceeded timeout {step_timeout_s}s") from None
             except Exception as e:
                 raise RuntimeError(f"Step '{step.name}' failed: {e}") from e
 
