@@ -202,7 +202,7 @@ class EventStore:
 
         return count
 
-    async def _read_by_type(
+    def _read_by_type(
         self,
         tenant_id: str,
         event_type_suffix: str,
@@ -215,6 +215,7 @@ class EventStore:
             tenant_id: Tenant ID
             event_type_suffix: Event type to match (e.g. "decision.record")
             filters: Dict of {field_name: value} to match on payload/top-level
+                     (keys starting with "payload." match fields in payload dict)
             limit: Max results
 
         Returns:
@@ -243,8 +244,8 @@ class EventStore:
                     skip = False
                     for key, value in filters.items():
                         if key.startswith("payload."):
-                            # Payload field
-                            payload_key = key.replace("payload.", "")
+                            # Payload field: extract field name after "payload." prefix
+                            payload_key = key[8:]  # len("payload.") == 8
                             if event_dict.get("payload", {}).get(payload_key) != value:
                                 skip = True
                                 break
@@ -271,14 +272,24 @@ class EventStore:
         choice_type: Optional[str] = None,
         limit: int = 1000,
     ) -> list[dict]:
-        """Read decision records (ADR-0316)."""
+        """Read decision records (ADR-0316).
+
+        Args:
+            tenant_id: Tenant ID for filtering
+            session_id: Optional session ID to filter by
+            choice_type: Optional choice type to filter by
+            limit: Maximum results to return (default 1000)
+
+        Returns:
+            Decision record payloads matching the filters
+        """
         filters = {}
         if session_id:
             filters["session_id"] = session_id
         if choice_type:
             filters["payload.choice_type"] = choice_type
 
-        return await self._read_by_type(
+        return self._read_by_type(
             tenant_id, "decision.record", filters, limit
         )
 
@@ -290,14 +301,24 @@ class EventStore:
         decision_id: Optional[str] = None,
         limit: int = 1000,
     ) -> list[dict]:
-        """Read outcome feedback records (ADR-0317)."""
+        """Read outcome feedback records (ADR-0317).
+
+        Args:
+            tenant_id: Tenant ID for filtering
+            session_id: Optional session ID to filter by
+            decision_id: Optional decision ID to filter by
+            limit: Maximum results to return (default 1000)
+
+        Returns:
+            Outcome record payloads matching the filters
+        """
         filters = {}
         if session_id:
             filters["session_id"] = session_id
         if decision_id:
             filters["payload.decision_id"] = decision_id
 
-        return await self._read_by_type(
+        return self._read_by_type(
             tenant_id, "outcome.observed", filters, limit
         )
 
@@ -309,14 +330,24 @@ class EventStore:
         preference_type: Optional[str] = None,
         limit: int = 1000,
     ) -> list[dict]:
-        """Read preference change records (ADR-0318)."""
+        """Read preference change records (ADR-0318).
+
+        Args:
+            tenant_id: Tenant ID for filtering
+            user_id: Optional user ID to filter by
+            preference_type: Optional preference type to filter by
+            limit: Maximum results to return (default 1000)
+
+        Returns:
+            Preference record payloads matching the filters
+        """
         filters = {}
         if user_id:
             filters["payload.user_id"] = user_id
         if preference_type:
             filters["payload.preference_type"] = preference_type
 
-        return await self._read_by_type(
+        return self._read_by_type(
             tenant_id, "preference.set", filters, limit
         )
 
@@ -329,7 +360,18 @@ class EventStore:
         session_id: Optional[str] = None,
         limit: int = 1000,
     ) -> list[dict]:
-        """Read metric records (ADR-0320)."""
+        """Read metric records (ADR-0320).
+
+        Args:
+            tenant_id: Tenant ID for filtering
+            metric_type: Optional metric type to filter by
+            skill_name: Optional skill name to filter by
+            session_id: Optional session ID to filter by
+            limit: Maximum results to return (default 1000)
+
+        Returns:
+            Metric record payloads matching the filters
+        """
         filters = {}
         if metric_type:
             filters["payload.metric_type"] = metric_type
@@ -338,6 +380,6 @@ class EventStore:
         if session_id:
             filters["session_id"] = session_id
 
-        return await self._read_by_type(
+        return self._read_by_type(
             tenant_id, "metric.aggregated", filters, limit
         )
