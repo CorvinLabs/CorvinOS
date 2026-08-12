@@ -66,6 +66,7 @@ class EventStore:
 
     async def read_events(
         self,
+        *,
         tenant_id: str,
         event_type: Optional[LearningEventType] = None,
         skill_name: Optional[str] = None,
@@ -138,7 +139,7 @@ class EventStore:
 
         return events
 
-    async def cleanup_old_events(self, tenant_id: str, retention_days: int = 90) -> int:
+    async def cleanup_old_events(self, *, tenant_id: str, retention_days: int = 90) -> int:
         """Remove events older than retention period.
 
         Args:
@@ -179,7 +180,7 @@ class EventStore:
 
         return deleted_count
 
-    async def get_event_count(self, tenant_id: str) -> int:
+    async def get_event_count(self, *, tenant_id: str) -> int:
         """Get total event count for a tenant.
 
         Args:
@@ -203,6 +204,7 @@ class EventStore:
 
     async def read_decisions(
         self,
+        *,
         tenant_id: str,
         session_id: Optional[str] = None,
         choice_type: Optional[str] = None,
@@ -251,6 +253,7 @@ class EventStore:
 
     async def read_outcomes(
         self,
+        *,
         tenant_id: str,
         session_id: Optional[str] = None,
         decision_id: Optional[str] = None,
@@ -299,6 +302,7 @@ class EventStore:
 
     async def read_preferences(
         self,
+        *,
         tenant_id: str,
         user_id: Optional[str] = None,
         preference_type: Optional[str] = None,
@@ -347,6 +351,7 @@ class EventStore:
 
     async def read_metrics(
         self,
+        *,
         tenant_id: str,
         metric_type: Optional[str] = None,
         skill_name: Optional[str] = None,

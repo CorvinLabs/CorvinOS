@@ -59,8 +59,12 @@ class EventEmitter:
         try:
             self.event_queue.put_nowait(event)
         except asyncio.QueueFull:
-            # Fire-and-forget: drop event if queue is full
-            pass
+            # Fire-and-forget: drop event if queue is full, but log it
+            import logging
+            logging.warning(
+                f"EventEmitter queue full, dropping event: type={event.event_type.value}, "
+                f"skill={event.skill_name}, session={event.session_id}"
+            )
 
     async def _process_events(self) -> None:
         """Background worker: persist queued events."""
@@ -81,7 +85,7 @@ class EventEmitter:
 
     async def get_event_count(self) -> int:
         """Get total persisted event count."""
-        return await self.store.get_event_count(self.tenant_id)
+        return await self.store.get_event_count(tenant_id=self.tenant_id)
 
     async def emit_decision(
         self,
@@ -207,7 +211,6 @@ class EventEmitter:
 
     async def emit_preference(
         self,
-        user_id: str,
         preference_type: str,
         preference_value: str,
         session_id: Optional[str] = None,
@@ -216,7 +219,6 @@ class EventEmitter:
         """Emit a preference change learning event (ADR-0318).
 
         Args:
-            user_id: User ID
             preference_type: Type of preference (decision_style, verbosity, etc.)
             preference_value: New value
             session_id: Optional session ID
@@ -230,7 +232,6 @@ class EventEmitter:
             session_id=session_id or "global",
             timestamp_utc=datetime.utcnow(),
             payload={
-                "user_id": user_id,
                 "preference_type": preference_type,
                 "preference_value": preference_value,
             },
@@ -284,7 +285,7 @@ class EventEmitter:
     ) -> list[LearningEvent]:
         """Read persisted events with filtering."""
         return await self.store.read_events(
-            self.tenant_id,
+            tenant_id=self.tenant_id,
             event_type=event_type,
             skill_name=skill_name,
             session_id=session_id,

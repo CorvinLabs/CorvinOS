@@ -33,7 +33,6 @@ class TestPreferenceE2E:
 
         # Emit preference change
         await emitter.emit_preference(
-            user_id="user-1",
             preference_type="decision_style",
             preference_value="pragmatic",
         )
@@ -43,7 +42,7 @@ class TestPreferenceE2E:
 
         # Read back
         preferences = await emitter.store.read_preferences(
-            "_default", user_id="user-1"
+            tenant_id="_default"
         )
         assert len(preferences) == 1
         assert preferences[0]["preference_type"] == "decision_style"
@@ -66,13 +65,11 @@ class TestPreferenceE2E:
 
         # Emit preference changes
         await emitter.emit_preference(
-            user_id=profile.user_id,
             preference_type="decision_style",
             preference_value=profile.decision_style.value,
         )
 
         await emitter.emit_preference(
-            user_id=profile.user_id,
             preference_type="verbosity",
             preference_value=profile.verbosity.value,
         )
@@ -80,9 +77,9 @@ class TestPreferenceE2E:
         await emitter.flush()
         await emitter.stop()
 
-        # Read all preferences for user
+        # Read all preferences
         preferences = await emitter.store.read_preferences(
-            "_default", user_id="user-1"
+            tenant_id="_default"
         )
         assert len(preferences) == 2
 
@@ -98,36 +95,29 @@ class TestPreferenceE2E:
 
         await emitter.start()
 
-        # User 1 preferences
+        # Preferences
         await emitter.emit_preference(
-            user_id="user-1",
             preference_type="verbosity",
             preference_value="terse",
+            session_id="s1",
         )
 
-        # User 2 preferences
         await emitter.emit_preference(
-            user_id="user-2",
             preference_type="verbosity",
             preference_value="detailed",
+            session_id="s2",
         )
 
         await emitter.flush()
         await emitter.stop()
 
-        # Filter by user 1
-        u1_prefs = await emitter.store.read_preferences(
-            "_default", user_id="user-1"
+        # Read all
+        all_prefs = await emitter.store.read_preferences(
+            tenant_id="_default"
         )
-        assert len(u1_prefs) == 1
-        assert u1_prefs[0]["preference_value"] == "terse"
-
-        # Filter by user 2
-        u2_prefs = await emitter.store.read_preferences(
-            "_default", user_id="user-2"
-        )
-        assert len(u2_prefs) == 1
-        assert u2_prefs[0]["preference_value"] == "detailed"
+        assert len(all_prefs) == 2
+        assert any(p["preference_value"] == "terse" for p in all_prefs)
+        assert any(p["preference_value"] == "detailed" for p in all_prefs)
 
     @pytest.mark.asyncio
     async def test_filter_by_preference_type(self, temp_tenant_home):
@@ -138,19 +128,16 @@ class TestPreferenceE2E:
 
         # Multiple preference types
         await emitter.emit_preference(
-            user_id="user-1",
             preference_type="decision_style",
             preference_value="pragmatic",
         )
 
         await emitter.emit_preference(
-            user_id="user-1",
             preference_type="verbosity",
             preference_value="detailed",
         )
 
         await emitter.emit_preference(
-            user_id="user-1",
             preference_type="explanation_depth",
             preference_value="high",
         )
@@ -160,8 +147,7 @@ class TestPreferenceE2E:
 
         # Filter by preference type
         style_prefs = await emitter.store.read_preferences(
-            "_default",
-            user_id="user-1",
+            tenant_id="_default",
             preference_type="decision_style"
         )
         assert len(style_prefs) == 1
