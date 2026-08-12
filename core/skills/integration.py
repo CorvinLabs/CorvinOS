@@ -127,6 +127,16 @@ class SkillSystemIntegration:
         skill = Skill(name=name, version=version, body=body, tags=tags or [])
         self.learning.register_skill(skill)
 
+    async def start_event_emitter(self) -> None:
+        """Start the event emitter worker loop."""
+        if self.event_emitter:
+            await self.event_emitter.start()
+
+    async def flush_events(self) -> None:
+        """Wait for all pending events to be persisted."""
+        if self.event_emitter:
+            await self.event_emitter.flush()
+
     async def emit_learning_event(self, event: Any) -> None:
         """Emit a learning event asynchronously (non-blocking).
 
@@ -138,6 +148,30 @@ class SkillSystemIntegration:
         """
         if self.event_emitter:
             await self.event_emitter.emit(event)
+
+    async def read_learning_events(
+        self,
+        event_type: Optional[Any] = None,
+        skill_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> list[Any]:
+        """Read persisted learning events with optional filtering.
+
+        Args:
+            event_type: Filter by event type
+            skill_name: Filter by skill name
+            session_id: Filter by session ID
+
+        Returns:
+            List of LearningEvent objects, or empty list if emitter not initialized
+        """
+        if self.event_emitter:
+            return await self.event_emitter.read_events(
+                event_type=event_type,
+                skill_name=skill_name,
+                session_id=session_id,
+            )
+        return []
 
     def get_system_status(self) -> dict[str, Any]:
         """Get overall system status."""
