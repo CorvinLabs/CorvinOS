@@ -134,8 +134,12 @@ def instantiate_pipeline(
         # Step 2: Initialize AuditChain (ADR-0299)
         try:
             from core.audit import AuditChain
-            audit_chain = AuditChain(tenant_id=tenant_id)
-            logger.info(f"AuditChain initialized for tenant {tenant_id}")
+            from forge.paths import tenant_home as get_tenant_home  # type: ignore
+
+            tenant_dir = Path(get_tenant_home(tenant_id))
+            audit_file = tenant_dir / "audit.jsonl"
+            audit_chain = AuditChain(audit_file)
+            logger.info(f"AuditChain initialized for tenant {tenant_id} at {audit_file}")
         except Exception as e:
             logger.error(f"AuditChain initialization failed: {e}")
             raise

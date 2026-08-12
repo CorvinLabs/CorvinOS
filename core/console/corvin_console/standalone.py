@@ -516,7 +516,7 @@ def create_app() -> FastAPI:
     # Create middleware once (not on every request)
     dual_gate_middleware_fn = create_dual_gate_middleware(
         skip_paths=[
-            '/healthz', '/static/', '/ws-live/', '/.well-known/',
+            '/healthz', '/v1/console/healthz', '/static/', '/ws-live/', '/.well-known/',
             '/v1/console/login', '/v1/console/login/local'
         ]
     )

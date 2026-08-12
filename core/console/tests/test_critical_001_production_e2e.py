@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pathlib import Path
 import sys
+from unittest.mock import patch, MagicMock
 
 # Add core to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -30,7 +31,16 @@ def app():
 
 @pytest.fixture
 def client(app):
-    """FastAPI test client."""
+    """FastAPI test client (without lifespan context for now).
+
+    Note: For a proper production E2E test, this should use TestClient as a
+    context manager to trigger lifespan startup and initialize the
+    DualGatePipeline. However, the test environment doesn't have a valid
+    audit.jsonl, so the boot tripwire would fail. For now, we're testing
+    with the middleware but without full pipeline initialization.
+
+    TODO(K=2): Fix the audit chain test setup or provide a test bootstrap mode.
+    """
     return TestClient(app)
 
 
