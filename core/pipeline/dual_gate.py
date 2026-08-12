@@ -147,12 +147,13 @@ class DualGatePipeline:
         self.feature_flags = feature_flags or {}
 
         # Feature flag: enable dual-gate validation
+        # Validation gate: optional (feature flag)
         self._validation_enabled = self.feature_flags.get(
             "dual_gate_pipeline_enabled", False
         )
-        self._pii_detection_enabled = self.feature_flags.get(
-            "dual_gate_pii_detection_enabled", False
-        )
+        # PII Detection: ALWAYS ON (compliance-critical, GDPR Art. 32)
+        self._pii_detection_enabled = True
+        # Queue Integrity: optional (feature flag)
         self._queue_integrity_enabled = self.feature_flags.get(
             "dual_gate_queue_integrity_enabled", False
         )
