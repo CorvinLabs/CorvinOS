@@ -70,55 +70,73 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
 
             pipeline = get_global_pipeline()
 
-            actor = request.headers.get("X-User-ID")
+            actor = request.headers.get("X-User-ID", "")
             if not actor:
                 actor = request.cookies.get("sid", "unknown")[:8]
-            if not actor:
-                actor = "unknown"
+            actor = actor or "unknown"
 
             tenant_id = request.headers.get("X-Tenant-ID", "_default")
             capability = _infer_capability_from_request(request)
             action = _infer_action_from_request(request)
             resource = _infer_resource_from_request(request)
 
-            from core.pipeline.dual_gate import PipelineContext
-
-            ctx = PipelineContext(
-                actor=actor,
-                capability=capability,
-                action=action,
-                resource=resource,
-                tenant_id=tenant_id,
-                details={
-                    "method": request.method,
-                    "path": request.url.path,
-                },
-            )
-
+            # Gate 1: Capability Check (fail-closed)
             try:
-                pipeline.capability_gate.check(
-                    actor=ctx.actor,
-                    capability=ctx.capability,
-                    tenant_id=ctx.tenant_id,
+                has_cap = pipeline.check_capability(
+                    actor=actor,
+                    capability=capability,
+                    tenant_id=tenant_id,
                 )
-            except Exception as e:
-                logger.warning(f"Capability gate failed: {e}")
+                if not has_cap:
+                    logger.warning(
+                        f"Capability denied: {actor} lacks {capability} for {action}"
+                    )
+                    # Record denial in audit
+                    try:
+                        pipeline.record_audit(
+                            event_type="capability_denied",
+                            actor=actor,
+                            action=action,
+                            resource=resource,
+                            result="failure",
+                            tenant_id=tenant_id,
+                            details={
+                                "reason": "capability_denied",
+                                "method": request.method,
+                                "path": request.url.path,
+                            },
+                        )
+                    except Exception as audit_err:
+                        logger.exception(f"Failed to audit denial: {audit_err}")
+
+                    from starlette.responses import JSONResponse
+                    return JSONResponse({"error": "Unauthorized"}, status_code=403)
+            except Exception as gate_err:
+                logger.exception(f"Capability gate error: {gate_err}")
                 from starlette.responses import JSONResponse
                 return JSONResponse({"error": "Unauthorized"}, status_code=403)
 
+            # Proceed to route handler
             response = await call_next(request)
 
+            # Post-Audit: Record successful access
             try:
-                pipeline.audit_writer.write_event(
-                    actor=ctx.actor,
-                    action=ctx.action,
-                    resource=ctx.resource,
-                    tenant_id=ctx.tenant_id,
-                    success=200 <= response.status_code < 300,
-                    details=ctx.details,
+                pipeline.record_audit(
+                    event_type="route_access",
+                    actor=actor,
+                    action=action,
+                    resource=resource,
+                    result="success" if 200 <= response.status_code < 300 else "failure",
+                    tenant_id=tenant_id,
+                    details={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status_code": response.status_code,
+                    },
                 )
-            except Exception as e:
-                logger.exception(f"Audit failed: {e}")
+            except Exception as audit_err:
+                logger.exception(f"Audit recording failed: {audit_err}")
+                # Don't fail response on audit error (fail-safe audit)
 
             return response
 
