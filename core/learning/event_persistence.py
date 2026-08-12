@@ -296,3 +296,51 @@ class EventStore:
                         break
 
         return outcomes
+
+    async def read_preferences(
+        self,
+        tenant_id: str,
+        user_id: Optional[str] = None,
+        preference_type: Optional[str] = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Read preference change records (ADR-0318).
+
+        Args:
+            tenant_id: Tenant ID
+            user_id: Filter by user
+            preference_type: Filter by preference type
+            limit: Max results
+
+        Returns:
+            Preference record payloads
+        """
+        preferences = []
+
+        for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
+            if len(preferences) >= limit:
+                break
+
+            with open(events_file) as f:
+                for line in reversed(f.readlines()):
+                    if not line.strip():
+                        continue
+
+                    event_dict = json.loads(line)
+
+                    # Filter
+                    if event_dict.get("tenant_id") != tenant_id:
+                        continue
+                    if not event_dict["event_type"].endswith("preference.set"):
+                        continue
+                    if user_id and event_dict.get("payload", {}).get("user_id") != user_id:
+                        continue
+                    if preference_type and event_dict.get("payload", {}).get("preference_type") != preference_type:
+                        continue
+
+                    preferences.append(event_dict.get("payload", {}))
+
+                    if len(preferences) >= limit:
+                        break
+
+        return preferences
