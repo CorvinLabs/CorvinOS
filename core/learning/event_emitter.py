@@ -237,6 +237,43 @@ class EventEmitter:
         )
         await self.emit(event)
 
+    async def emit_metric(
+        self,
+        metric_id: str,
+        metric_type: str,
+        value: float,
+        session_id: str,
+        skill_name: Optional[str] = None,
+        tags: Optional[dict] = None,
+        instance_id: str = "unknown",
+    ) -> None:
+        """Emit a metric learning event (ADR-0320).
+
+        Args:
+            metric_id: Unique metric identifier
+            metric_type: Type of metric (accuracy, latency, confidence, etc.)
+            value: Metric value
+            session_id: Session ID
+            skill_name: Optional skill name
+            tags: Optional metadata tags
+            instance_id: Instance identifier
+        """
+        event = LearningEvent(
+            event_type=LearningEventType.METRIC_AGGREGATED,
+            tenant_id=self.tenant_id,
+            instance_id=instance_id,
+            skill_name=skill_name,
+            session_id=session_id,
+            timestamp_utc=datetime.utcnow(),
+            payload={
+                "metric_id": metric_id,
+                "metric_type": metric_type,
+                "value": value,
+                "tags": tags or {},
+            },
+        )
+        await self.emit(event)
+
     async def read_events(
         self,
         event_type: Optional[LearningEventType] = None,
