@@ -1,9 +1,10 @@
-"""Skill System Integration — wires all modules together (K4-001 fix)."""
+"""Skill System Integration — wires all modules together (K4-001 fix + ADR-0314)."""
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 
 from .backoff import BackoffConfig, SelfHealingBackoff
 from .grader import GradingManager
@@ -14,17 +15,21 @@ from .telemetry_manager import TelemetryManager
 
 
 class SkillSystemIntegration:
-    """Orchestrates all skill modules: Learning → Grading → Telemetry → Health → Backoff."""
+    """Orchestrates all skill modules: Learning → Grading → Telemetry → Health → Backoff → Events (ADR-0314)."""
 
     def __init__(
         self,
         learning_manager: SkillLearningManager,
         grading_manager: GradingManager,
         telemetry_manager: TelemetryManager,
+        tenant_home: Optional[Path] = None,
+        tenant_id: str = "_default",
     ):
         self.learning = learning_manager
         self.grading = grading_manager
         self.telemetry = telemetry_manager
+        self.tenant_home = tenant_home
+        self.tenant_id = tenant_id
 
         # Health checks
         self.grading_health = GradingHealth(stall_threshold_s=10.0)
@@ -33,6 +38,13 @@ class SkillSystemIntegration:
 
         # Backoff for recovery
         self.backoff = SelfHealingBackoff(BackoffConfig(base_delay_s=1.0, max_delay_s=60.0))
+
+        # Learning event emitter (ADR-0314)
+        self.event_emitter = None
+        if tenant_home:
+            from core.learning.event_emitter import EventEmitter
+
+            self.event_emitter = EventEmitter(tenant_home, tenant_id)
 
     async def run_all_loops(self) -> None:
         """Run all async loops concurrently.
@@ -43,13 +55,24 @@ class SkillSystemIntegration:
         3. Telemetry loop publishes metrics
         4. Health loop monitors system
         5. Backoff recovers on failure
+        6. Event emitter processes learning events (ADR-0314)
         """
-        await asyncio.gather(
-            self.learning.run_grading_loop(self.grading),  # Learning → Grading
-            self.telemetry.collect_and_publish_loop(self.grading),  # Grading → Telemetry
-            self._run_health_loop(),  # Telemetry + Grading → Health
-            return_exceptions=True,
-        )
+        # Start event emitter if available
+        if self.event_emitter:
+            await self.event_emitter.start()
+
+        try:
+            await asyncio.gather(
+                self.learning.run_grading_loop(self.grading),  # Learning → Grading
+                self.telemetry.collect_and_publish_loop(self.grading),  # Grading → Telemetry
+                self._run_health_loop(),  # Telemetry + Grading → Health
+                return_exceptions=True,
+            )
+        finally:
+            # Stop event emitter cleanly
+            if self.event_emitter:
+                await self.event_emitter.stop()
+                await self.event_emitter.flush()
 
     async def _run_health_loop(self) -> None:
         """Health monitoring and recovery loop."""
@@ -104,6 +127,18 @@ class SkillSystemIntegration:
         skill = Skill(name=name, version=version, body=body, tags=tags or [])
         self.learning.register_skill(skill)
 
+    async def emit_learning_event(self, event: Any) -> None:
+        """Emit a learning event asynchronously (non-blocking).
+
+        Args:
+            event: LearningEvent to emit
+
+        Note:
+            If event_emitter not initialized, silently skips (backward-compatible).
+        """
+        if self.event_emitter:
+            await self.event_emitter.emit(event)
+
     def get_system_status(self) -> dict[str, Any]:
         """Get overall system status."""
         return {
@@ -111,4 +146,5 @@ class SkillSystemIntegration:
             "telemetry": self.telemetry.get_stats(),
             "health": self.health_monitor.get_health_summary(),
             "backoff": self.backoff.get_status(),
+            "event_emitter": {"enabled": self.event_emitter is not None},
         }
