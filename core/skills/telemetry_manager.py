@@ -43,7 +43,9 @@ class TelemetryManager:
         self.poll_interval = poll_interval_s
         self.published_count = 0
         self.failed_count = 0
-        self.last_flush_time = time.time()  # Use time.time() instead of asyncio
+        self.last_flush_time = time.time()
+        # K2-002 Fix: Track last grading count for delta calculation
+        self.last_graded_count = 0  # Use time.time() instead of asyncio
 
     async def collect_and_publish_loop(
         self,
@@ -62,7 +64,18 @@ class TelemetryManager:
             try:
                 # Collect latest metrics
                 stats = grading_manager.get_stats()
-                await self.collector.add_sample(stats)
+                # K2-002 Fix: Publish delta, not cumulative
+                current_graded = stats.get("graded_count", 0)
+                delta_graded = current_graded - self.last_graded_count
+                self.last_graded_count = current_graded
+
+                # Publish delta sample
+                delta_stats = {
+                    "graded_count_delta": delta_graded,
+                    "failed_count": stats.get("failed_count", 0),
+                    "avg_latency": stats.get("avg_latency", 0.0),
+                }
+                await self.collector.add_sample(delta_stats)
 
                 # Check flush conditions
                 should_flush = await self.collector.should_flush()

@@ -90,6 +90,20 @@ class SkillSystemIntegration:
 
         await self.backoff.execute_with_backoff(recovery_fn, health_check)
 
+    def create_and_register_skill(self, name: str, version: str, body: str, tags: list[str] | None = None) -> None:
+        """K2-001 Fix: Create skill and register with learning system.
+
+        This establishes the skill lifecycle contract:
+        1. Skill created here via create_and_register_skill()
+        2. @skill_learnable decorator wraps the actual function
+        3. Decorator queues grades to GradingManager
+        4. GradingManager persists via Learning loop integration
+        """
+        from .skill import Skill
+
+        skill = Skill(name=name, version=version, body=body, tags=tags or [])
+        self.learning.register_skill(skill)
+
     def get_system_status(self) -> dict[str, Any]:
         """Get overall system status."""
         return {
