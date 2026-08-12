@@ -83,6 +83,50 @@ class EventEmitter:
         """Get total persisted event count."""
         return await self.store.get_event_count(self.tenant_id)
 
+    async def emit_decision(
+        self,
+        decision_id: str,
+        choice_type: str,
+        candidates: list[str],
+        chosen: str,
+        session_id: str,
+        confidence_score: Optional[float] = None,
+        user_input: Optional[str] = None,
+        reasoning: Optional[str] = None,
+        instance_id: str = "unknown",
+    ) -> None:
+        """Emit a decision record learning event (ADR-0316).
+
+        Args:
+            decision_id: Unique decision identifier
+            choice_type: Type of choice
+            candidates: Available options
+            chosen: Selected option
+            session_id: Session ID
+            confidence_score: Optional confidence score (ADR-0315)
+            user_input: User's original query
+            reasoning: Why this choice was made
+            instance_id: Instance identifier
+        """
+        event = LearningEvent(
+            event_type=LearningEventType.DECISION_RECORD,
+            tenant_id=self.tenant_id,
+            instance_id=instance_id,
+            skill_name=None,
+            session_id=session_id,
+            timestamp_utc=datetime.utcnow(),
+            payload={
+                "decision_id": decision_id,
+                "choice_type": choice_type,
+                "candidates": candidates,
+                "chosen": chosen,
+                "confidence_score": confidence_score,
+                "user_input": user_input,
+                "reasoning": reasoning,
+            },
+        )
+        await self.emit(event)
+
     async def emit_confidence_score(
         self,
         skill_name: str,
