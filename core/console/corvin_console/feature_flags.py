@@ -672,6 +672,96 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("validation", "security", "compliance"),
         release_tier="alpha",
     ),
+    FeatureFlag(
+        id="file_permissions_enabled",
+        label="File Permission Hardener (ADR-0295)",
+        description=(
+            "Enable fine-grained file-write protection with fail-closed semantics. "
+            "When on, the FilePermissionManager enforces per-path permission rules, "
+            "tenant-scoped file access (GDPR Art. 32), and audit trail integration. "
+            "Protected paths (audit logs, vaults, instance keys, license) are "
+            "always protected. Custom rules support whitelists, deny patterns, and "
+            "permission inheritance (directory → children). Deny rules take priority "
+            "over allow rules for safety. All checks are audit-logged. Off means "
+            "file operations follow the current path-gate rules only (L10)."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("security", "compliance", "file-access"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="dual_gate_pipeline_enabled",
+        label="Dual-Gate Pipeline: Input Validation (ADR-0300)",
+        description=(
+            "Enable Gate 2a of the dual-gate context pipeline: input validation. "
+            "When on, all operations with input_data must pass the ValidatorFactory "
+            "checks before execution (ADR-0296). Off means validation is skipped "
+            "and the operation proceeds after capability check. Fail-closed: "
+            "invalid input → ValidationGateError, audited, denied. Validator "
+            "configuration lives in PipelineContext.validator_rules. Tenant-scoped "
+            "validation with tenant_id required. GDPR Art. 32: input integrity is "
+            "load-bearing for data protection."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("security", "validation", "pipeline"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="dual_gate_pii_detection_enabled",
+        label="Dual-Gate Pipeline: PII Detection (ADR-0300)",
+        description=(
+            "Enable Gate 2b of the dual-gate context pipeline: PII detection. "
+            "When on, all operations with input_data are scanned for PII patterns "
+            "(email, phone, SSN, credit card, etc.) using the PIIDetector (ADR-0297). "
+            "Off means PII scanning is skipped. Fail-closed: PII detected → "
+            "PIIDetectionError, audited, denied. Unknown patterns default to SAFE "
+            "(not rejected). Tenant-scoped detection with tenant_id required. "
+            "GDPR Art. 5, 32: PII protection is load-bearing."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("security", "pii", "pipeline", "compliance"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="dual_gate_queue_integrity_enabled",
+        label="Dual-Gate Pipeline: Queue Integrity Check (ADR-0300)",
+        description=(
+            "Enable Gate 2c of the dual-gate context pipeline: queue integrity check. "
+            "When on, operations must pass the QueueIntegrityMonitor health check "
+            "before execution (ADR-0298). Off means queue integrity checks are "
+            "skipped. Fail-closed: queue unhealthy → QueueIntegrityError, audited, "
+            "denied. Monitors for hash-chain breaks, timestamp disorders, duplicate "
+            "event IDs, and disk I/O errors. Tenant-scoped monitoring with audit "
+            "trail integration. GDPR Art. 30, 32: audit trail integrity is load-bearing."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("security", "compliance", "audit", "pipeline"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="queue_corruption_detection_enabled",
+        label="Queue Corruption Detection & Recovery (ADR-0298)",
+        description=(
+            "Enable automatic detection and recovery from audit queue corruption "
+            "(ADR-0298). When on, the QueueIntegrityMonitor detects hash-chain "
+            "breaks, timestamp disorders, duplicate event IDs, and disk I/O errors, "
+            "then attempts automatic repair (marking corrupted records, extracting "
+            "tail for recovery). Tenant-scoped monitoring with audit trail "
+            "integration. Fail-closed: corruption detection never silently drops "
+            "records, only marks them as CORRUPTED. Repairs are atomic and "
+            "non-destructive. Off means queue loads but bypasses corruption "
+            "detection (existing chain verification still runs). GDPR Art. 30, 32: "
+            "audit trail integrity is load-bearing."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("security", "compliance", "audit"),
+        release_tier="alpha",
+    ),
 )
 
 
