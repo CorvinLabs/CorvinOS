@@ -37,6 +37,16 @@ from core.pipeline.call_site_registry import (
     get_registry,
     register_entry_point,
 )
+from core.pipeline.wiring import (
+    flask_route_guarded,
+    cli_command_guarded,
+    async_task_guarded,
+    websocket_handler_guarded,
+    bridge_handler_guarded,
+    plugin_entry_guarded,
+    get_global_pipeline,
+    set_global_pipeline,
+)
 
 __all__ = [
     # ADR-0300: Dual-Gate Pipeline
@@ -61,4 +71,13 @@ __all__ = [
     "WiringStatus",
     "get_registry",
     "register_entry_point",
+    # ADR-0301: Wiring Decorators
+    "flask_route_guarded",
+    "cli_command_guarded",
+    "async_task_guarded",
+    "websocket_handler_guarded",
+    "bridge_handler_guarded",
+    "plugin_entry_guarded",
+    "get_global_pipeline",
+    "set_global_pipeline",
 ]

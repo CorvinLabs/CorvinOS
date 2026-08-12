@@ -292,6 +292,21 @@ def create_app() -> FastAPI:
         except Exception as e:
             log.debug(f"Voice config initialization (non-blocking): {e}")
 
+        # ── ADR-0300/0301 — Dual-Gate Pipeline Bootstrap (FAIL-CLOSED) ───────
+        # CRITICAL-2 + CRITICAL-3: Instantiate DualGatePipeline + Boot Tripwire.
+        # This runs BEFORE accepting any requests. Any failure aborts the app boot.
+        # Audit chain integrity is verified (GDPR Art. 30, 32) before pipeline
+        # instantiation (CRITICAL-3), ensuring fail-closed semantics.
+        try:
+            from core.pipeline.bootstrap import bootstrap_pipeline
+            bootstrap_pipeline(application.state, tenant_id="_default")
+        except Exception as e:
+            log.critical(
+                f"DualGatePipeline bootstrap failed: {e}. "
+                "This is a GDPR Art. 30, 32 compliance failure. Aborting boot."
+            )
+            raise
+
         # Start presence heartbeat (best-effort — never blocks startup).
         try:
             import forge.paths as _fp  # type: ignore[import]
