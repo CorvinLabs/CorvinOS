@@ -56,7 +56,7 @@ class TestDecisionE2E:
         await emitter.stop()
 
         # Read back
-        decisions = await emitter.store.read_decisions("_default", session_id="session-123")
+        decisions = await emitter.store.read_decisions(tenant_id="_default", session_id="session-123")
         assert len(decisions) == 1
         assert decisions[0]["chosen"] == "ranking"
         assert decisions[0]["confidence_score"] == 0.85
@@ -106,10 +106,10 @@ class TestDecisionE2E:
 
         # Filter by skill_selection
         skill_decisions = await emitter.store.read_decisions(
-            "_default", choice_type="skill_selection"
+            tenant_id="_default", choice_type="skill_selection"
         )
         assert len(skill_decisions) == 2
 
         # Filter by session
-        s1_decisions = await emitter.store.read_decisions("_default", session_id="s1")
+        s1_decisions = await emitter.store.read_decisions(tenant_id="_default", session_id="s1")
         assert len(s1_decisions) == 2

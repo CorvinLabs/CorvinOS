@@ -52,7 +52,7 @@ class TestOutcomeE2E:
         await emitter.stop()
 
         # Read back
-        outcomes = await emitter.store.read_outcomes("_default", session_id="session-123")
+        outcomes = await emitter.store.read_outcomes(tenant_id="_default", session_id="session-123")
         assert len(outcomes) == 1
         assert outcomes[0]["outcome"] == "success"
         assert outcomes[0]["rating"] == 5
@@ -152,7 +152,7 @@ class TestOutcomeE2E:
         await emitter.stop()
 
         # Filter by session
-        s1_outcomes = await emitter.store.read_outcomes("_default", session_id="s1")
+        s1_outcomes = await emitter.store.read_outcomes(tenant_id="_default", session_id="s1")
         assert len(s1_outcomes) == 2
         assert any(o["outcome"] == "success" for o in s1_outcomes)
         assert any(o["outcome"] == "failure" for o in s1_outcomes)

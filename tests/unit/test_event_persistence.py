@@ -68,7 +68,7 @@ class TestEventStore:
         """Read events from empty store returns empty list."""
         store = EventStore(temp_tenant_home)
 
-        events = await store.read_events("_default")
+        events = await store.read_events(tenant_id="_default")
 
         assert events == []
 
@@ -89,7 +89,7 @@ class TestEventStore:
 
         await store.write_event(event, "_default")
 
-        read_events = await store.read_events("_default")
+        read_events = await store.read_events(tenant_id="_default")
 
         assert len(read_events) == 1
         assert read_events[0].event_type == LearningEventType.CONFIDENCE_SCORE
@@ -124,7 +124,7 @@ class TestEventStore:
         await store.write_event(event2, "_default")
 
         confidence_events = await store.read_events(
-            "_default", event_type=LearningEventType.CONFIDENCE_SCORE
+            tenant_id="_default", event_type=LearningEventType.CONFIDENCE_SCORE
         )
 
         assert len(confidence_events) == 1
@@ -158,7 +158,7 @@ class TestEventStore:
         await store.write_event(event1, "_default")
         await store.write_event(event2, "_default")
 
-        ranking_events = await store.read_events("_default", skill_name="ranking")
+        ranking_events = await store.read_events(tenant_id="_default", skill_name="ranking")
 
         assert len(ranking_events) == 1
         assert ranking_events[0].skill_name == "ranking"
@@ -191,7 +191,7 @@ class TestEventStore:
         await store.write_event(event1, "_default")
         await store.write_event(event2, "_default")
 
-        session_123_events = await store.read_events("_default", session_id="session-123")
+        session_123_events = await store.read_events(tenant_id="_default", session_id="session-123")
 
         assert len(session_123_events) == 1
         assert session_123_events[0].session_id == "session-123"
@@ -227,7 +227,7 @@ class TestEventStore:
         await store.write_event(event1, "_default")
         await store.write_event(event2, "_default")
 
-        recent_events = await store.read_events("_default", since=now - timedelta(hours=1))
+        recent_events = await store.read_events(tenant_id="_default", since=now - timedelta(hours=1))
 
         assert len(recent_events) == 1
         assert recent_events[0].timestamp_utc == now
@@ -261,7 +261,7 @@ class TestEventStore:
         # Note: can't write event2 due to tenant check, so manually create it for this test
         # This is actually OK - the isolation is enforced at write time
 
-        events = await store.read_events("_default")
+        events = await store.read_events(tenant_id="_default")
 
         assert len(events) == 1
         assert events[0].tenant_id == "_default"
@@ -297,11 +297,11 @@ class TestEventStore:
         await store.write_event(event_old, "_default")
         await store.write_event(event_new, "_default")
 
-        deleted_count = await store.cleanup_old_events("_default", retention_days=90)
+        deleted_count = await store.cleanup_old_events(tenant_id="_default", retention_days=90)
 
         assert deleted_count == 1
 
-        remaining_events = await store.read_events("_default")
+        remaining_events = await store.read_events(tenant_id="_default")
         assert len(remaining_events) == 1
         assert remaining_events[0].session_id == "session-456"
 
@@ -322,6 +322,6 @@ class TestEventStore:
             )
             await store.write_event(event, "_default")
 
-        count = await store.get_event_count("_default")
+        count = await store.get_event_count(tenant_id="_default")
 
         assert count == 5

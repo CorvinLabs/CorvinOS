@@ -93,9 +93,11 @@ class UserProfileBuilder:
         return self
 
     def with_language(self, language: str) -> UserProfileBuilder:
-        """Set language code."""
-        if not (1 <= len(language) <= 5):
-            raise ValueError(f"Invalid language code: {language}")
+        """Set language code (BCP 47 format: en, de, en-US, etc.)."""
+        import re
+
+        if not re.match(r'^[a-z]{2,3}(-[A-Z]{2})?$', language):
+            raise ValueError(f"Invalid language code: {language} (expected ISO 639-1/3 or BCP 47)")
         self._language = language
         return self
 

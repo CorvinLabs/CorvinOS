@@ -49,7 +49,7 @@ class TestMetricsE2E:
         await emitter.stop()
 
         # Read back
-        metrics = await emitter.store.read_metrics("_default", session_id="session-123")
+        metrics = await emitter.store.read_metrics(tenant_id="_default", session_id="session-123")
         assert len(metrics) == 1
         assert metrics[0]["metric_type"] == "accuracy"
         assert metrics[0]["value"] == 0.92
@@ -81,7 +81,7 @@ class TestMetricsE2E:
         await emitter.stop()
 
         # Read all metrics
-        all_metrics = await emitter.store.read_metrics("_default")
+        all_metrics = await emitter.store.read_metrics(tenant_id="_default")
         assert len(all_metrics) == 3
 
         # Filter by type
@@ -164,6 +164,6 @@ class TestMetricsE2E:
         await emitter.stop()
 
         # Read back with tags
-        metrics = await emitter.store.read_metrics("_default")
+        metrics = await emitter.store.read_metrics(tenant_id="_default")
         assert len(metrics) == 1
         assert metrics[0]["tags"]["model"] == "opus"

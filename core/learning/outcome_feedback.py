@@ -91,15 +91,16 @@ class OutcomeRecorder:
         )
 
     def _contains_potential_secret(self, text: str) -> bool:
-        """Check if text might contain secrets."""
-        secret_patterns = [
-            "api_key",
-            "password",
-            "token",
-            "secret",
-            "credential",
-            "key=",
+        """Check if text might contain secrets using regex patterns."""
+        import re
+
+        patterns = [
+            r'\b(api_key|api_secret|password|token|credential|secret|auth)\b\s*[=:]',
+            r'Bearer\s+[a-zA-Z0-9\-._~+/]+=*',
+            r'[a-f0-9]{32,}',  # Hex blobs (MD5+ length)
         ]
 
-        text_lower = text.lower()
-        return any(pattern in text_lower for pattern in secret_patterns)
+        for pattern in patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+        return False

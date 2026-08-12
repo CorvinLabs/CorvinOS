@@ -118,7 +118,7 @@ class TestUserProfileBuilder:
         with pytest.raises(ValueError, match="Invalid language code"):
             (
                 UserProfileBuilder("user-1", "_default")
-                .with_language("too_long_code")
+                .with_language("12345")  # Numeric, not valid BCP 47
                 .build()
             )
 
