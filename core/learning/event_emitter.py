@@ -205,6 +205,38 @@ class EventEmitter:
         )
         await self.emit(event)
 
+    async def emit_preference(
+        self,
+        user_id: str,
+        preference_type: str,
+        preference_value: str,
+        session_id: Optional[str] = None,
+        instance_id: str = "unknown",
+    ) -> None:
+        """Emit a preference change learning event (ADR-0318).
+
+        Args:
+            user_id: User ID
+            preference_type: Type of preference (decision_style, verbosity, etc.)
+            preference_value: New value
+            session_id: Optional session ID
+            instance_id: Instance identifier
+        """
+        event = LearningEvent(
+            event_type=LearningEventType.PREFERENCE_SET,
+            tenant_id=self.tenant_id,
+            instance_id=instance_id,
+            skill_name=None,
+            session_id=session_id or "global",
+            timestamp_utc=datetime.utcnow(),
+            payload={
+                "user_id": user_id,
+                "preference_type": preference_type,
+                "preference_value": preference_value,
+            },
+        )
+        await self.emit(event)
+
     async def read_events(
         self,
         event_type: Optional[LearningEventType] = None,
