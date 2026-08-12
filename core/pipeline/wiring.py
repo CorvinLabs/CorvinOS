@@ -119,7 +119,7 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
             # Proceed to route handler
             response = await call_next(request)
 
-            # Post-Audit: Record successful access
+            # Post-Audit: Record successful access (fail-closed on audit error)
             try:
                 pipeline.record_audit(
                     event_type="route_access",
@@ -135,8 +135,10 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
                     },
                 )
             except Exception as audit_err:
-                logger.exception(f"Audit recording failed: {audit_err}")
-                # Don't fail response on audit error (fail-safe audit)
+                logger.exception(f"Audit recording FAILED: {audit_err}")
+                # Fail-closed: deny access if audit fails (GDPR Art. 30, 32)
+                from starlette.responses import JSONResponse
+                return JSONResponse({"error": "Audit system error"}, status_code=500)
 
             return response
 

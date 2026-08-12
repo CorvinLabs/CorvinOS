@@ -122,9 +122,8 @@ class TestMiddlewareProtectsRoutes:
             headers={"X-User-ID": ""}  # Empty user = unauthorized
         )
         # Should be 403 (denied by middleware), not 200 (allowed)
-        # Or may be 401 (auth required), but NOT 200 (unauthorized allowed)
-        if response.status_code == 200:
-            pytest.fail("Middleware did not protect route: 200 response without auth")
+        assert response.status_code in (401, 403), \
+            f"Unauthorized request should be denied (401/403), got {response.status_code}"
 
     def test_authorized_request_allowed(self, client):
         """Request with auth headers should be allowed through middleware."""

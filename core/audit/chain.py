@@ -23,6 +23,7 @@ class AuditEntry:
     resource: str
     result: str  # success | failure
     timestamp: str
+    tenant_id: str  # Multi-tenant isolation (GDPR Art. 5, 32)
     details: Optional[dict[str, Any]] = None
     prior_hash: str = "genesis"  # Hash of prior entry
     self_hash: str = ""  # Hash of this entry (computed)
