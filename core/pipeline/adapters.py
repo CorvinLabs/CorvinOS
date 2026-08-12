@@ -6,6 +6,7 @@ Auto-wiring for common transports: Flask, CLI, async.
 
 import functools
 from typing import Any, Callable, Optional
+from flask import request, g
 
 from core.pipeline import DualGatePipeline, PipelineContext
 
@@ -43,8 +44,6 @@ class FlaskAdapter:
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 try:
-                    from flask import request, g
-
                     # Extract context from Flask g (set by auth middleware)
                     actor = getattr(g, "user_id", "unknown")
                     tenant_id = getattr(g, "tenant_id", "default")
