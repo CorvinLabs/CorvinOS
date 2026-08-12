@@ -89,6 +89,104 @@ without operator review · add in-process MCP server without operator review.
 
 ---
 
+## Code/Docs Sync — ADR-Code Enforcement (load-bearing)
+
+**Problem:** Phase 5 shipped code without corresponding ADRs, causing doc divergence.
+**Solution:** 5-layer enforcement makes Code-ADR sync non-negotiable.
+
+| Layer | Enforcement | Trigger |
+|---|---|---|
+| 1. Git Pre-Commit Hook | Rejects commits without ADR | Local commit attempt |
+| 2. CI/CD Gate | Blocks PR merge | GitHub push/PR |
+| 3. Code Review Checklist | Human validation | PR review |
+| 4. CLAUDE.md Rules | Canonical rules | Every session |
+| 5. Auto-Sync | Memory updated nightly | Cron job |
+
+**When ADR is Required:**
+
+| Code Change | ADR Required? | Reason |
+|---|---|---|
+| New module in `core/` | ✅ YES | Structural decision |
+| New public API / endpoint / CLI command | ✅ YES | Interface contract |
+| Change to compliance mechanism | ✅ YES | Regulatory binding |
+| Change to audit trail / hash-chain | ✅ YES | Data integrity |
+| New layer-level contract | ✅ YES | Cross-module coupling |
+| Security/performance optimization | ✅ YES | Trade-off binding |
+| Feature flag addition (if affects behavior) | ⚠️ MAYBE | Often not; if it gates major behavior, yes |
+| Refactor with ZERO behavior change | ❌ NO | Commit message sufficient |
+| Bug fix (no behavior change outside the bug) | ❌ NO | Commit message sufficient |
+| Test-only or fixture change | ❌ NO | Commit message + `test-only` flag |
+| Docs-only change | ❌ NO | Commit message + `docs-only` flag |
+| Config tuning (parameters, thresholds) | ❌ NO | Commit message sufficient |
+
+**Execution:**
+
+1. **Draft ADR FIRST** (or sync with code):
+   - File: `Corvin-ADR/decisions/ADR-XXXX-<slug>.md`
+   - Minimum template (ADR-0264 frontmatter):
+     ```yaml
+     id: ADR-0XXX
+     status: PROPOSED
+     depends_on: [ADR-YYYY]
+     relates_to: []
+     paths:
+       - core/module/file.py
+       - core/module/subdir/
+     docs:
+       - docs/claude-ref/layer-NN-*.md
+     ```
+
+2. **Commit code + ADR together:**
+   ```bash
+   git add core/...
+   git add Corvin-ADR/decisions/ADR-XXXX-*.md
+   git commit -m "feat(module): description
+
+   ADR-XXXX documents the design.
+
+   Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+   ```
+
+3. **Pre-commit hook validates** (layer 1):
+   - Detects `core/` changes
+   - Checks for `Corvin-ADR/decisions/ADR-*` in same commit
+   - Rejects if missing (unless exception flag set)
+
+4. **CI/CD gate validates** (layer 2):
+   - Runs on PR; checks base..HEAD for code vs ADR
+   - Auto-comments on PR if sync is broken
+   - Blocks merge until resolved
+
+5. **Code review checklist** (layer 3):
+   - Reviewer confirms ADR title matches code purpose
+   - Reviewer checks `ADR.paths` and `ADR.commits` are accurate
+   - Blocks approval until valid
+
+**Exception Workflow (when ADR is NOT needed):**
+
+If you're absolutely certain no ADR is needed, add a skip flag to the commit message:
+
+```bash
+git commit -m "fix(module): urgent security patch [skip-adr-check]
+
+This is a one-line security hotfix with no structural change.
+
+Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+```
+
+Valid skip reasons (in commit message):
+- `[test-only]` — test fixtures or mock changes
+- `[docs-only]` — documentation-only, no code change
+- `[skip-adr-check]` — rare hotfix with documented justification (on same line)
+
+**Pre-commit hook does NOT enforce this offline** (it doesn't read commit messages yet);
+instead, **CI/CD gate catches it** and PR review catches it. The hook is a *helper*,
+not a hard block for genuinely exempt changes.
+
+→ Full reference: [adr-gate.md](docs/claude-ref/adr-gate.md)
+
+---
+
 ## LDD (Loss-Driven Development) — MANDATORY, ALL SESSIONS (load-bearing)
 
 **LDD is ALWAYS ON at MAXIMUM depth**, all 12 layers enabled. Config:
