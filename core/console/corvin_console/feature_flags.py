@@ -654,6 +654,24 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("multi-instance", "console"),
         release_tier="beta",
     ),
+    FeatureFlag(
+        id="validator_factory_enabled",
+        label="Input Validator Factory (ADR-0296)",
+        description=(
+            "Enable centralized, pluggable input validation with deny-by-default "
+            "behavior. When on, all user input is validated through the "
+            "ValidatorFactory before reaching business logic, with fail-closed "
+            "behavior on validation errors. Tenant-isolated validation via "
+            "keyword-only tenant_id parameter. Supports built-in validators "
+            "(string, integer, email, URL, peer_id, flag_id, UUID) and composite "
+            "validators (AND/OR/NOT). Invalid input returns 400 Bad Request with "
+            "non-specific error codes for security."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("validation", "security", "compliance"),
+        release_tier="alpha",
+    ),
 )
 
 
