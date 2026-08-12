@@ -501,15 +501,17 @@ def create_app() -> FastAPI:
     # non-skipped routes. Executed fail-closed: any gate failure denies access.
     from core.pipeline.wiring import create_dual_gate_middleware
 
+    # Create middleware once (not on every request)
+    dual_gate_middleware_fn = create_dual_gate_middleware(
+        skip_paths=[
+            '/healthz', '/static/', '/ws-live/', '/.well-known/',
+            '/v1/console/login', '/v1/console/login/local'
+        ]
+    )
+
     @app.middleware("http")
     async def dual_gate_middleware_wrapper(request: Request, call_next):
-        middleware_fn = create_dual_gate_middleware(
-            skip_paths=[
-                '/healthz', '/static/', '/ws-live/', '/.well-known/',
-                '/v1/console/login', '/v1/console/login/local'
-            ]
-        )
-        return await middleware_fn(request, call_next)
+        return await dual_gate_middleware_fn(request, call_next)
 
     # Allow the same-origin SPA to call the API in development.
     # In production (serving SPA from the same origin) this is a no-op.
