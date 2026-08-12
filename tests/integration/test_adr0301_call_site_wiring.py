@@ -103,6 +103,8 @@ class TestFlaskRouteWiring:
 
     def test_flask_route_success_path(self, mock_pipeline):
         """Test successful Flask route execution through pipeline."""
+        from flask import Flask
+
         pipeline, checker = mock_pipeline
 
         adapter = FlaskAdapter(pipeline)
@@ -112,18 +114,19 @@ class TestFlaskRouteWiring:
             return {"measurements": [1.0, 2.5, 3.0]}
 
         # Mock the Flask context within the decorator
-        with patch("core.pipeline.adapters.request") as mock_request, \
-             patch("core.pipeline.adapters.g") as mock_g:
-            mock_g.user_id = "test_user"
-            mock_g.tenant_id = "default"
-            mock_request.method = "GET"
-            mock_request.path = "/api/measurements/latest"
+        app = Flask(__name__)
+        with app.test_request_context('/api/measurements/latest', method='GET'):
+            with patch("core.pipeline.adapters.g") as mock_g:
+                mock_g.user_id = "test_user"
+                mock_g.tenant_id = "default"
 
-            result = get_measurements()
-            assert result == {"measurements": [1.0, 2.5, 3.0]}
+                result = get_measurements()
+                assert result == {"measurements": [1.0, 2.5, 3.0]}
 
     def test_flask_route_capability_denied(self, mock_pipeline):
         """Test Flask route with denied capability."""
+        from flask import Flask
+
         pipeline, checker = mock_pipeline
 
         adapter = FlaskAdapter(pipeline)
@@ -133,19 +136,20 @@ class TestFlaskRouteWiring:
             return {"secret": "data"}
 
         # Don't grant capability to unauthorized_user
-        with patch("core.pipeline.adapters.request") as mock_request, \
-             patch("core.pipeline.adapters.g") as mock_g:
-            mock_g.user_id = "unauthorized_user"
-            mock_g.tenant_id = "default"
-            mock_request.method = "GET"
-            mock_request.path = "/api/sensitive"
+        app = Flask(__name__)
+        with app.test_request_context('/api/sensitive', method='GET'):
+            with patch("core.pipeline.adapters.g") as mock_g:
+                mock_g.user_id = "unauthorized_user"
+                mock_g.tenant_id = "default"
 
-            # Should raise CapabilityGateError
-            with pytest.raises(CapabilityGateError):
-                get_sensitive()
+                # Should raise CapabilityGateError
+                with pytest.raises(CapabilityGateError):
+                    get_sensitive()
 
     def test_flask_route_audit_logged(self, mock_pipeline):
         """Test that Flask route execution is audit-logged."""
+        from flask import Flask
+
         pipeline, checker = mock_pipeline
 
         adapter = FlaskAdapter(pipeline)
@@ -154,19 +158,18 @@ class TestFlaskRouteWiring:
         def test_route():
             return {"ok": True}
 
-        with patch("core.pipeline.adapters.request") as mock_request, \
-             patch("core.pipeline.adapters.g") as mock_g:
-            mock_g.user_id = "test_user"
-            mock_g.tenant_id = "default"
-            mock_request.method = "GET"
-            mock_request.path = "/api/test"
+        app = Flask(__name__)
+        with app.test_request_context('/api/test', method='GET'):
+            with patch("core.pipeline.adapters.g") as mock_g:
+                mock_g.user_id = "test_user"
+                mock_g.tenant_id = "default"
 
-            result = test_route()
-            assert result == {"ok": True}
+                result = test_route()
+                assert result == {"ok": True}
 
-            # Verify audit trail was recorded
-            # (Audit chain should have at least 2 entries: pre-exec + post-exec)
-            # This would be verified by inspecting audit_chain.records
+                # Verify audit trail was recorded
+                # (Audit chain should have at least 2 entries: pre-exec + post-exec)
+                # This would be verified by inspecting audit_chain.records
 
 
 # ============================================================================
@@ -324,6 +327,10 @@ class TestInternalFunctionWiring:
         """Test successful internal function execution through pipeline."""
         pipeline, checker = mock_pipeline
 
+        # Mock get_actor and get_tenant_id
+        pipeline.get_actor = Mock(return_value="internal")
+        pipeline.get_tenant_id = Mock(return_value="default")
+
         # Create a new checker with the right capability
         checker.grant("internal", "update_config", "default")
 
@@ -444,6 +451,8 @@ class TestFullIntegration:
 
     def test_flask_through_full_pipeline(self, mock_pipeline):
         """Test Flask request through complete dual-gate pipeline."""
+        from flask import Flask
+
         pipeline, checker = mock_pipeline
 
         checker.grant("user_1", "write_feedback", "default")
@@ -454,16 +463,15 @@ class TestFullIntegration:
         def save_feedback(rating: int, comment: str):
             return {"saved": True, "rating": rating}
 
-        with patch("core.pipeline.adapters.request") as mock_request, \
-             patch("core.pipeline.adapters.g") as mock_g:
-            mock_g.user_id = "user_1"
-            mock_g.tenant_id = "default"
-            mock_request.method = "POST"
-            mock_request.path = "/api/feedback"
+        app = Flask(__name__)
+        with app.test_request_context('/api/feedback', method='POST'):
+            with patch("core.pipeline.adapters.g") as mock_g:
+                mock_g.user_id = "user_1"
+                mock_g.tenant_id = "default"
 
-            result = save_feedback(5, "Great!")
-            assert result["saved"] is True
-            assert result["rating"] == 5
+                result = save_feedback(5, "Great!")
+                assert result["saved"] is True
+                assert result["rating"] == 5
 
     @pytest.mark.asyncio
     async def test_async_through_full_pipeline(self, mock_pipeline):
@@ -493,6 +501,8 @@ class TestCapabilityAndAuditTrail:
 
     def test_denied_capability_audited(self, mock_pipeline):
         """Test that denied capabilities are recorded in audit."""
+        from flask import Flask
+
         pipeline, checker = mock_pipeline
 
         # Don't grant the capability
@@ -502,18 +512,19 @@ class TestCapabilityAndAuditTrail:
         def denied_endpoint():
             return "should not reach"
 
-        with patch("core.pipeline.adapters.request") as mock_request, \
-             patch("core.pipeline.adapters.g") as mock_g:
-            mock_g.user_id = "user"
-            mock_g.tenant_id = "default"
-            mock_request.method = "GET"
-            mock_request.path = "/denied"
+        app = Flask(__name__)
+        with app.test_request_context('/denied', method='GET'):
+            with patch("core.pipeline.adapters.g") as mock_g:
+                mock_g.user_id = "user"
+                mock_g.tenant_id = "default"
 
-            with pytest.raises(CapabilityGateError):
-                denied_endpoint()
+                with pytest.raises(CapabilityGateError):
+                    denied_endpoint()
 
     def test_successful_operation_audited(self, mock_pipeline):
         """Test that successful operations are recorded in audit."""
+        from flask import Flask
+
         pipeline, checker = mock_pipeline
 
         checker.grant("user", "read_data", "default")
@@ -524,15 +535,14 @@ class TestCapabilityAndAuditTrail:
         def fetch():
             return {"data": "value"}
 
-        with patch("core.pipeline.adapters.request") as mock_request, \
-             patch("core.pipeline.adapters.g") as mock_g:
-            mock_g.user_id = "user"
-            mock_g.tenant_id = "default"
-            mock_request.method = "GET"
-            mock_request.path = "/data"
+        app = Flask(__name__)
+        with app.test_request_context('/data', method='GET'):
+            with patch("core.pipeline.adapters.g") as mock_g:
+                mock_g.user_id = "user"
+                mock_g.tenant_id = "default"
 
-            result = fetch()
-            assert result["data"] == "value"
+                result = fetch()
+                assert result["data"] == "value"
 
 
 if __name__ == "__main__":
