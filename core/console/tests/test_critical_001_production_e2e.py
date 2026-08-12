@@ -80,6 +80,36 @@ class TestCritical001RouteWiring:
         response = client.get("/v1/console/settings")
         assert response.status_code != 404
 
+    def test_audit_tail_wired(self, client):
+        """GET /v1/console/audit/tail is wired."""
+        response = client.get("/v1/console/audit/tail")
+        assert response.status_code != 404
+
+    def test_settings_stream_wired(self, client):
+        """GET /v1/console/settings/stream is wired."""
+        response = client.get("/v1/console/settings/stream")
+        assert response.status_code != 404
+
+    def test_multiple_routes_wired(self, client):
+        """Verify batch of routes are all wired (not 404)."""
+        routes = [
+            ("/v1/console/chat/sessions", "GET"),
+            ("/v1/console/tasks", "GET"),
+            ("/v1/console/plugins", "GET"),
+            ("/v1/console/audit/layers", "GET"),
+            ("/v1/console/settings", "GET"),
+            ("/v1/console/voice/sessions", "POST"),
+        ]
+        for path, method in routes:
+            response = None
+            if method == "GET":
+                response = client.get(path)
+            elif method == "POST":
+                response = client.post(path, json={})
+
+            assert response.status_code != 404, \
+                f"Route {method} {path} not wired (404)"
+
 
 class TestMiddlewareProtectsRoutes:
     """Verify middleware is enforcing gates on all protected routes."""
