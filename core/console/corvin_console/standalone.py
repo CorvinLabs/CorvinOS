@@ -496,6 +496,21 @@ def create_app() -> FastAPI:
                     pass  # unparseable — let the handler's own check deal with it
         return await call_next(request)
 
+    # ── Layer 3 — Dual-Gate Pipeline Middleware (ADR-0300/0301) ──────────────
+    # Apply dual-gate protection (capability gate + validation + audit) to all
+    # non-skipped routes. Executed fail-closed: any gate failure denies access.
+    from core.pipeline.wiring import create_dual_gate_middleware
+
+    @app.middleware("http")
+    async def dual_gate_middleware_wrapper(request: Request, call_next):
+        middleware_fn = create_dual_gate_middleware(
+            skip_paths=[
+                '/healthz', '/static/', '/ws-live/', '/.well-known/',
+                '/v1/console/login', '/v1/console/login/local'
+            ]
+        )
+        return await middleware_fn(request, call_next)
+
     # Allow the same-origin SPA to call the API in development.
     # In production (serving SPA from the same origin) this is a no-op.
     app.add_middleware(
