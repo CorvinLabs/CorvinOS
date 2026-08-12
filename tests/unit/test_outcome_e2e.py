@@ -106,7 +106,7 @@ class TestOutcomeE2E:
 
         # Verify linkage
         outcomes = await emitter.store.read_outcomes(
-            "_default",
+            tenant_id="_default",
             decision_id=decision.decision_id
         )
         assert len(outcomes) == 1

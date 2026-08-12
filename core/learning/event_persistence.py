@@ -202,29 +202,28 @@ class EventStore:
 
         return count
 
-    async def read_decisions(
+    async def _read_by_type(
         self,
-        *,
         tenant_id: str,
-        session_id: Optional[str] = None,
-        choice_type: Optional[str] = None,
+        event_type_suffix: str,
+        filters: dict,
         limit: int = 1000,
     ) -> list[dict]:
-        """Read decision records (ADR-0316).
+        """Generic reader for typed events (shared implementation).
 
         Args:
             tenant_id: Tenant ID
-            session_id: Filter by session
-            choice_type: Filter by choice type
+            event_type_suffix: Event type to match (e.g. "decision.record")
+            filters: Dict of {field_name: value} to match on payload/top-level
             limit: Max results
 
         Returns:
-            Decision record payloads
+            Matching event payloads
         """
-        decisions = []
+        results = []
 
         for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
-            if len(decisions) >= limit:
+            if len(results) >= limit:
                 break
 
             with open(events_file) as f:
@@ -234,22 +233,54 @@ class EventStore:
 
                     event_dict = json.loads(line)
 
-                    # Filter
+                    # Tenant + type filter
                     if event_dict.get("tenant_id") != tenant_id:
                         continue
-                    if not event_dict["event_type"].endswith("decision.record"):
-                        continue
-                    if session_id and event_dict.get("session_id") != session_id:
-                        continue
-                    if choice_type and event_dict.get("payload", {}).get("choice_type") != choice_type:
+                    if not event_dict["event_type"].endswith(event_type_suffix):
                         continue
 
-                    decisions.append(event_dict.get("payload", {}))
+                    # Apply optional filters
+                    skip = False
+                    for key, value in filters.items():
+                        if key.startswith("payload."):
+                            # Payload field
+                            payload_key = key.replace("payload.", "")
+                            if event_dict.get("payload", {}).get(payload_key) != value:
+                                skip = True
+                                break
+                        else:
+                            # Top-level field
+                            if event_dict.get(key) != value:
+                                skip = True
+                                break
+                    if skip:
+                        continue
 
-                    if len(decisions) >= limit:
+                    results.append(event_dict.get("payload", {}))
+
+                    if len(results) >= limit:
                         break
 
-        return decisions
+        return results
+
+    async def read_decisions(
+        self,
+        *,
+        tenant_id: str,
+        session_id: Optional[str] = None,
+        choice_type: Optional[str] = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Read decision records (ADR-0316)."""
+        filters = {}
+        if session_id:
+            filters["session_id"] = session_id
+        if choice_type:
+            filters["payload.choice_type"] = choice_type
+
+        return await self._read_by_type(
+            tenant_id, "decision.record", filters, limit
+        )
 
     async def read_outcomes(
         self,
@@ -259,46 +290,16 @@ class EventStore:
         decision_id: Optional[str] = None,
         limit: int = 1000,
     ) -> list[dict]:
-        """Read outcome feedback records (ADR-0317).
+        """Read outcome feedback records (ADR-0317)."""
+        filters = {}
+        if session_id:
+            filters["session_id"] = session_id
+        if decision_id:
+            filters["payload.decision_id"] = decision_id
 
-        Args:
-            tenant_id: Tenant ID
-            session_id: Filter by session
-            decision_id: Filter by decision
-            limit: Max results
-
-        Returns:
-            Outcome record payloads
-        """
-        outcomes = []
-
-        for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
-            if len(outcomes) >= limit:
-                break
-
-            with open(events_file) as f:
-                for line in reversed(f.readlines()):
-                    if not line.strip():
-                        continue
-
-                    event_dict = json.loads(line)
-
-                    # Filter
-                    if event_dict.get("tenant_id") != tenant_id:
-                        continue
-                    if not event_dict["event_type"].endswith("outcome.observed"):
-                        continue
-                    if session_id and event_dict.get("session_id") != session_id:
-                        continue
-                    if decision_id and event_dict.get("payload", {}).get("decision_id") != decision_id:
-                        continue
-
-                    outcomes.append(event_dict.get("payload", {}))
-
-                    if len(outcomes) >= limit:
-                        break
-
-        return outcomes
+        return await self._read_by_type(
+            tenant_id, "outcome.observed", filters, limit
+        )
 
     async def read_preferences(
         self,
@@ -308,46 +309,16 @@ class EventStore:
         preference_type: Optional[str] = None,
         limit: int = 1000,
     ) -> list[dict]:
-        """Read preference change records (ADR-0318).
+        """Read preference change records (ADR-0318)."""
+        filters = {}
+        if user_id:
+            filters["payload.user_id"] = user_id
+        if preference_type:
+            filters["payload.preference_type"] = preference_type
 
-        Args:
-            tenant_id: Tenant ID
-            user_id: Filter by user
-            preference_type: Filter by preference type
-            limit: Max results
-
-        Returns:
-            Preference record payloads
-        """
-        preferences = []
-
-        for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
-            if len(preferences) >= limit:
-                break
-
-            with open(events_file) as f:
-                for line in reversed(f.readlines()):
-                    if not line.strip():
-                        continue
-
-                    event_dict = json.loads(line)
-
-                    # Filter
-                    if event_dict.get("tenant_id") != tenant_id:
-                        continue
-                    if not event_dict["event_type"].endswith("preference.set"):
-                        continue
-                    if user_id and event_dict.get("payload", {}).get("user_id") != user_id:
-                        continue
-                    if preference_type and event_dict.get("payload", {}).get("preference_type") != preference_type:
-                        continue
-
-                    preferences.append(event_dict.get("payload", {}))
-
-                    if len(preferences) >= limit:
-                        break
-
-        return preferences
+        return await self._read_by_type(
+            tenant_id, "preference.set", filters, limit
+        )
 
     async def read_metrics(
         self,
@@ -358,46 +329,15 @@ class EventStore:
         session_id: Optional[str] = None,
         limit: int = 1000,
     ) -> list[dict]:
-        """Read metric records (ADR-0320).
+        """Read metric records (ADR-0320)."""
+        filters = {}
+        if metric_type:
+            filters["payload.metric_type"] = metric_type
+        if skill_name:
+            filters["skill_name"] = skill_name
+        if session_id:
+            filters["session_id"] = session_id
 
-        Args:
-            tenant_id: Tenant ID
-            metric_type: Filter by metric type
-            skill_name: Filter by skill
-            session_id: Filter by session
-            limit: Max results
-
-        Returns:
-            Metric record payloads
-        """
-        metrics = []
-
-        for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
-            if len(metrics) >= limit:
-                break
-
-            with open(events_file) as f:
-                for line in reversed(f.readlines()):
-                    if not line.strip():
-                        continue
-
-                    event_dict = json.loads(line)
-
-                    # Filter
-                    if event_dict.get("tenant_id") != tenant_id:
-                        continue
-                    if not event_dict["event_type"].endswith("metric.aggregated"):
-                        continue
-                    if metric_type and event_dict.get("payload", {}).get("metric_type") != metric_type:
-                        continue
-                    if skill_name and event_dict.get("skill_name") != skill_name:
-                        continue
-                    if session_id and event_dict.get("session_id") != session_id:
-                        continue
-
-                    metrics.append(event_dict.get("payload", {}))
-
-                    if len(metrics) >= limit:
-                        break
-
-        return metrics
+        return await self._read_by_type(
+            tenant_id, "metric.aggregated", filters, limit
+        )

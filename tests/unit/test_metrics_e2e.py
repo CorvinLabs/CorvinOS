@@ -86,7 +86,7 @@ class TestMetricsE2E:
 
         # Filter by type
         accuracy_metrics = await emitter.store.read_metrics(
-            "_default", metric_type="accuracy"
+            tenant_id="_default", metric_type="accuracy"
         )
         assert len(accuracy_metrics) == 1
         assert accuracy_metrics[0]["value"] == 0.85
@@ -118,19 +118,19 @@ class TestMetricsE2E:
 
         # Filter by skill-a
         skill_a = await emitter.store.read_metrics(
-            "_default", skill_name="skill-a"
+            tenant_id="_default", skill_name="skill-a"
         )
         assert len(skill_a) == 2
 
         # Filter by session s1
         session_s1 = await emitter.store.read_metrics(
-            "_default", session_id="s1"
+            tenant_id="_default", session_id="s1"
         )
         assert len(session_s1) == 2
 
         # Filter by skill-a AND session s1
         specific = await emitter.store.read_metrics(
-            "_default", skill_name="skill-a", session_id="s1"
+            tenant_id="_default", skill_name="skill-a", session_id="s1"
         )
         assert len(specific) == 1
         assert specific[0]["value"] == 100.0
