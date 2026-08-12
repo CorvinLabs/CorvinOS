@@ -463,3 +463,44 @@ at runtime per `adapter.py` system prompt — that is runtime behavior, not repo
 ---
 
 **For full details, read the ref files in `docs/claude-ref/` as tasks require them.**
+
+---
+
+## Phase 3: Learning Infrastructure (ADR-0314+)
+
+**Status:** Phase 3.1 (ADR-0314) COMPLETE ✅  
+**Scope:** Event schema, persistence, async emission  
+**Tests:** 34 learning + 174 skill tests (208 total) green
+
+Phase 3 builds the learning layer on top of Phase 2 (Skill System). It enables confidence scoring, user feedback loops, decision history, and attention budgeting.
+
+**ADR-0314 (Learning Infrastructure):**
+- Event schema: 8 immutable learning event types (confidence, feedback, outcome, preference, attention, metric)
+- Persistence: EventStore with date-partitioned JSON storage + audit trail integration
+- Emission: EventEmitter (async queue, non-blocking, fire-and-forget on queue full)
+- Integration: Wired into SkillSystemIntegration
+
+**Tenant isolation:** All queries filtered by tenant_id (per GDPR Art. 5, 6, 32).
+
+**Compliance notes:**
+- Learning events are audit-logged and hash-chained (GDPR Art. 30, 32)
+- No PII in payloads (validation in downstream ADRs)
+- 90-day retention default (ADR-0319 will enforce)
+
+**Downstream ADRs (Phase 3.2–3.8):**
+- 0315: Confidence Intervals (relevance/reliability scoring)
+- 0316: Decision History (user choice tracking)
+- 0317: Outcome Feedback (closed-loop learning)
+- 0318: Style Preferences (user model)
+- 0319: Attention Budget (finite attention constraint)
+- 0320: Metric Collection (aggregation pipeline)
+- 0321: Reporting Dashboard (observability UI)
+
+**Must NOT do (ADR-0314 constraints):**
+- Don't emit untyped payloads (use frozen dataclasses)
+- Don't skip tenant_id isolation (every read/write must filter)
+- Don't weaken schema immutability (LearningEvent is frozen)
+- Don't bypass audit chain (write_event always attempts audit logging)
+
+→ Full spec: [decisions/0314-learning-infrastructure-event-schema.md](../Corvin-ADR/decisions/0314-learning-infrastructure-event-schema.md)
+
