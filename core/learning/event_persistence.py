@@ -344,3 +344,55 @@ class EventStore:
                         break
 
         return preferences
+
+    async def read_metrics(
+        self,
+        tenant_id: str,
+        metric_type: Optional[str] = None,
+        skill_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Read metric records (ADR-0320).
+
+        Args:
+            tenant_id: Tenant ID
+            metric_type: Filter by metric type
+            skill_name: Filter by skill
+            session_id: Filter by session
+            limit: Max results
+
+        Returns:
+            Metric record payloads
+        """
+        metrics = []
+
+        for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
+            if len(metrics) >= limit:
+                break
+
+            with open(events_file) as f:
+                for line in reversed(f.readlines()):
+                    if not line.strip():
+                        continue
+
+                    event_dict = json.loads(line)
+
+                    # Filter
+                    if event_dict.get("tenant_id") != tenant_id:
+                        continue
+                    if not event_dict["event_type"].endswith("metric.aggregated"):
+                        continue
+                    if metric_type and event_dict.get("payload", {}).get("metric_type") != metric_type:
+                        continue
+                    if skill_name and event_dict.get("skill_name") != skill_name:
+                        continue
+                    if session_id and event_dict.get("session_id") != session_id:
+                        continue
+
+                    metrics.append(event_dict.get("payload", {}))
+
+                    if len(metrics) >= limit:
+                        break
+
+        return metrics
