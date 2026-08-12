@@ -200,3 +200,51 @@ class EventStore:
                         count += 1
 
         return count
+
+    async def read_decisions(
+        self,
+        tenant_id: str,
+        session_id: Optional[str] = None,
+        choice_type: Optional[str] = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Read decision records (ADR-0316).
+
+        Args:
+            tenant_id: Tenant ID
+            session_id: Filter by session
+            choice_type: Filter by choice type
+            limit: Max results
+
+        Returns:
+            Decision record payloads
+        """
+        decisions = []
+
+        for events_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
+            if len(decisions) >= limit:
+                break
+
+            with open(events_file) as f:
+                for line in reversed(f.readlines()):
+                    if not line.strip():
+                        continue
+
+                    event_dict = json.loads(line)
+
+                    # Filter
+                    if event_dict.get("tenant_id") != tenant_id:
+                        continue
+                    if not event_dict["event_type"].endswith("decision.record"):
+                        continue
+                    if session_id and event_dict.get("session_id") != session_id:
+                        continue
+                    if choice_type and event_dict.get("payload", {}).get("choice_type") != choice_type:
+                        continue
+
+                    decisions.append(event_dict.get("payload", {}))
+
+                    if len(decisions) >= limit:
+                        break
+
+        return decisions
