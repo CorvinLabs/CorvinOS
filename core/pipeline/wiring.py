@@ -9,6 +9,7 @@ This module provides high-level wiring APIs that adapters use to guard routes.
 Fail-closed: any gate failure logs audit and denies the operation.
 """
 
+import asyncio
 import functools
 import logging
 from typing import Any, Callable, Optional
@@ -44,6 +45,143 @@ def get_pipeline_from_app(app_state: Any) -> Any:
     if not hasattr(app_state, "pipeline"):
         return get_global_pipeline()
     return app_state.pipeline
+
+
+# ============================================================================
+# FastAPI Middleware — Automatic Dual-Gate Protection for All Routes
+# ============================================================================
+
+
+def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
+    """Create middleware that applies dual-gate pipeline to all Console API requests."""
+    if skip_paths is None:
+        skip_paths = ['/healthz', '/static/', '/ws-live/', '/.well-known/']
+
+    def should_skip(path: str) -> bool:
+        for skip_pattern in skip_paths:
+            if path.startswith(skip_pattern):
+                return True
+        return False
+
+    async def dual_gate_middleware(request, call_next):
+        try:
+            if should_skip(request.url.path):
+                return await call_next(request)
+
+            pipeline = get_global_pipeline()
+
+            actor = request.headers.get("X-User-ID")
+            if not actor:
+                actor = request.cookies.get("sid", "unknown")[:8]
+            if not actor:
+                actor = "unknown"
+
+            tenant_id = request.headers.get("X-Tenant-ID", "_default")
+            capability = _infer_capability_from_request(request)
+            action = _infer_action_from_request(request)
+            resource = _infer_resource_from_request(request)
+
+            from core.pipeline.dual_gate import PipelineContext
+
+            ctx = PipelineContext(
+                actor=actor,
+                capability=capability,
+                action=action,
+                resource=resource,
+                tenant_id=tenant_id,
+                details={
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+            )
+
+            try:
+                pipeline.capability_gate.check(
+                    actor=ctx.actor,
+                    capability=ctx.capability,
+                    tenant_id=ctx.tenant_id,
+                )
+            except Exception as e:
+                logger.warning(f"Capability gate failed: {e}")
+                from starlette.responses import JSONResponse
+                return JSONResponse({"error": "Unauthorized"}, status_code=403)
+
+            response = await call_next(request)
+
+            try:
+                pipeline.audit_writer.write_event(
+                    actor=ctx.actor,
+                    action=ctx.action,
+                    resource=ctx.resource,
+                    tenant_id=ctx.tenant_id,
+                    success=200 <= response.status_code < 300,
+                    details=ctx.details,
+                )
+            except Exception as e:
+                logger.exception(f"Audit failed: {e}")
+
+            return response
+
+        except Exception as e:
+            logger.exception(f"Middleware error: {e}")
+            from starlette.responses import JSONResponse
+            return JSONResponse({"error": "Server error"}, status_code=500)
+
+    return dual_gate_middleware
+
+
+def _infer_capability_from_request(request) -> str:
+    """Infer capability from HTTP method + path."""
+    method = request.method
+    path = request.url.path
+
+    if method == "GET":
+        if "audit" in path:
+            return "read_audit_log"
+        elif "chat" in path:
+            return "read_chat_sessions"
+        elif "tasks" in path:
+            return "read_tasks"
+        elif "plugins" in path:
+            return "read_plugins"
+        else:
+            return "read"
+    elif method in ("POST", "PUT"):
+        if "chat" in path:
+            return "write_chat_sessions"
+        elif "tasks" in path:
+            return "write_tasks"
+        elif "plugins" in path:
+            return "write_plugins"
+        else:
+            return "write"
+    elif method == "DELETE":
+        return "delete"
+    else:
+        return "unknown"
+
+
+def _infer_action_from_request(request) -> str:
+    """Infer action from HTTP method + path."""
+    method = request.method
+    path = request.url.path.split("?")[0]
+    last_segment = path.rstrip("/").split("/")[-1] or "root"
+    return f"{method.lower()}_{last_segment}"
+
+
+def _infer_resource_from_request(request) -> str:
+    """Infer resource type from path."""
+    path = request.url.path.split("?")[0]
+    if "chat" in path:
+        return "chat_session"
+    elif "audit" in path:
+        return "audit_log"
+    elif "tasks" in path:
+        return "task"
+    elif "plugins" in path:
+        return "plugin"
+    else:
+        return "resource"
 
 
 # ============================================================================
@@ -111,6 +249,97 @@ def flask_route_guarded(
                 raise
 
         return wrapper
+
+    return decorator
+
+
+# ============================================================================
+# CLI Command Wiring
+# ============================================================================
+
+
+def fastapi_route_guarded(
+    capability: str,
+    action: str,
+    resource_extractor: Optional[Callable] = None,
+):
+    """
+    Decorator for FastAPI routes with dual-gate protection.
+
+    Usage:
+        @router.get('/chat/sessions')
+        @fastapi_route_guarded(
+            capability='read_chat_sessions',
+            action='list_sessions',
+            resource_extractor=lambda: 'chat_sessions'
+        )
+        def list_sessions(request: Request):
+            return {...}
+
+    Args:
+        capability: Required capability (e.g., 'read_users', 'write_config')
+        action: Action name for audit log
+        resource_extractor: Optional function to extract resource ID from scope/request
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                from starlette.requests import Request
+                from starlette.datastructures import MutableHeaders
+
+                pipeline = get_global_pipeline()
+
+                # Extract context from Starlette request (FastAPI compatible)
+                request = None
+                for arg in args:
+                    if isinstance(arg, Request):
+                        request = arg
+                        break
+
+                if request is None:
+                    # Fallback: check kwargs
+                    request = kwargs.get("request")
+
+                actor = "unknown"
+                tenant_id = "_default"
+
+                if request:
+                    # Extract user from request headers or session
+                    actor = request.headers.get("X-User-ID", "unknown")
+                    tenant_id = request.headers.get("X-Tenant-ID", "_default")
+
+                resource = resource_extractor() if resource_extractor else "unknown"
+
+                from core.pipeline.dual_gate import PipelineContext
+
+                ctx = PipelineContext(
+                    actor=actor,
+                    capability=capability,
+                    action=action,
+                    resource=resource,
+                    tenant_id=tenant_id,
+                    details={
+                        "method": request.method if request else "unknown",
+                        "path": request.url.path if request else "unknown",
+                    },
+                )
+
+                return await pipeline.execute_guarded_async(ctx, func, *args, **kwargs) \
+                    if asyncio.iscoroutinefunction(func) \
+                    else pipeline.execute_guarded(ctx, func, *args, **kwargs)
+
+            except Exception as e:
+                logger.exception(
+                    f"FastAPI route guard failed: {capability} on {action}. Error: {e}"
+                )
+                raise
+
+        # Return async wrapper for async functions
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return async_wrapper
 
     return decorator
 
