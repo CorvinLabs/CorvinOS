@@ -496,9 +496,21 @@ def create_app() -> FastAPI:
                     pass  # unparseable — let the handler's own check deal with it
         return await call_next(request)
 
+    # Allow the same-origin SPA to call the API in development.
+    # In production (serving SPA from the same origin) this is a no-op.
+    # (Registered FIRST for LIFO execution order)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     # ── Layer 3 — Dual-Gate Pipeline Middleware (ADR-0300/0301) ──────────────
     # Apply dual-gate protection (capability gate + validation + audit) to all
     # non-skipped routes. Executed fail-closed: any gate failure denies access.
+    # (Registered SECOND for LIFO execution order: Dual-Gate runs first)
     from core.pipeline.wiring import create_dual_gate_middleware
 
     # Create middleware once (not on every request)
@@ -512,16 +524,6 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def dual_gate_middleware_wrapper(request: Request, call_next):
         return await dual_gate_middleware_fn(request, call_next)
-
-    # Allow the same-origin SPA to call the API in development.
-    # In production (serving SPA from the same origin) this is a no-op.
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
     # Mount all console API routes at /v1/console
     # (includes packages router already registered in app.py)

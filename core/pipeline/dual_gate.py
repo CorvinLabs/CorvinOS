@@ -371,15 +371,22 @@ class DualGatePipeline:
             False otherwise (denial)
 
         Raises:
-            CapabilityGateError if check fails structurally
+            CapabilityGateError if check fails structurally (gate broken, not denied)
         """
         try:
             return self.capability_checker.has_capability(
                 actor=actor, capability=capability, tenant_id=tenant_id
             )
-        except Exception as e:
+        except (ValueError, AttributeError, KeyError) as e:
+            # Expected errors: missing field, wrong type, etc.
             raise CapabilityGateError(
                 f"Capability check failed for {actor}/{capability}: {e}"
+            )
+        except Exception as e:
+            # Unexpected errors: database down, connection lost, etc.
+            logger.exception(f"GATE BROKEN (not denied): {e}")
+            raise CapabilityGateError(
+                f"Capability gate broken (not denied): {e}"
             )
 
     def record_audit(
