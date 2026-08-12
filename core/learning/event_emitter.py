@@ -1,11 +1,11 @@
-"""Event Emitter — non-blocking learning event emission (ADR-0314)."""
+"""Event Emitter — non-blocking learning event emission (ADR-0314 + ADR-0315)."""
 
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .event_schema import LearningEvent, LearningEventType
 from .event_persistence import EventStore
@@ -82,6 +82,46 @@ class EventEmitter:
     async def get_event_count(self) -> int:
         """Get total persisted event count."""
         return await self.store.get_event_count(self.tenant_id)
+
+    async def emit_confidence_score(
+        self,
+        skill_name: str,
+        session_id: str,
+        relevance: float,
+        reliability: float,
+        combined: float,
+        band: str,
+        reasoning: Optional[str] = None,
+        instance_id: str = "unknown",
+    ) -> None:
+        """Emit a confidence score learning event (ADR-0315).
+
+        Args:
+            skill_name: Which skill
+            session_id: Session ID
+            relevance: Relevance score (0.0–1.0)
+            reliability: Reliability score (0.0–1.0)
+            combined: Combined score (0.0–1.0)
+            band: Band name ("very_high", "high", etc.)
+            reasoning: Debug reasoning
+            instance_id: Instance identifier
+        """
+        event = LearningEvent(
+            event_type=LearningEventType.CONFIDENCE_SCORE,
+            tenant_id=self.tenant_id,
+            instance_id=instance_id,
+            skill_name=skill_name,
+            session_id=session_id,
+            timestamp_utc=datetime.utcnow(),
+            payload={
+                "relevance_score": relevance,
+                "reliability_score": reliability,
+                "combined_score": combined,
+                "band": band,
+                "reasoning": reasoning,
+            },
+        )
+        await self.emit(event)
 
     async def read_events(
         self,

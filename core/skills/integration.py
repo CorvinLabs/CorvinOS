@@ -149,6 +149,39 @@ class SkillSystemIntegration:
         if self.event_emitter:
             await self.event_emitter.emit(event)
 
+    async def emit_confidence_score(
+        self,
+        skill_name: str,
+        session_id: str,
+        relevance: float,
+        reliability: float,
+        combined: float,
+        band: str,
+        reasoning: Optional[str] = None,
+    ) -> None:
+        """Emit a confidence score learning event (ADR-0315).
+
+        Args:
+            skill_name: Which skill
+            session_id: Session ID
+            relevance: Relevance score (0.0–1.0)
+            reliability: Reliability score (0.0–1.0)
+            combined: Combined score (0.0–1.0)
+            band: Band name
+            reasoning: Debug info
+        """
+        if self.event_emitter:
+            await self.event_emitter.emit_confidence_score(
+                skill_name=skill_name,
+                session_id=session_id,
+                relevance=relevance,
+                reliability=reliability,
+                combined=combined,
+                band=band,
+                reasoning=reasoning,
+                instance_id=self.tenant_id,
+            )
+
     async def read_learning_events(
         self,
         event_type: Optional[Any] = None,
