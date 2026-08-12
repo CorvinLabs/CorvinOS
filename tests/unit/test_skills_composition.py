@@ -1,10 +1,31 @@
 """Unit tests for Skill Composition (ADR-0311)."""
 
 import asyncio
+from functools import wraps
+from typing import Callable
 
 import pytest
 
 from core.skills.composition import CompositionStep, SkillComposition
+
+
+def mock_skill_learnable(fn: Callable) -> Callable:
+    """Test fixture: add _skill_metadata to satisfy K3-001 contract validation.
+
+    Preserves async/sync nature of the function.
+    """
+    if asyncio.iscoroutinefunction(fn):
+        @wraps(fn)
+        async def async_wrapper(*args, **kwargs):
+            return await fn(*args, **kwargs)
+        async_wrapper._skill_metadata = {"name": fn.__name__, "version": "1.0.0"}
+        return async_wrapper
+    else:
+        @wraps(fn)
+        def sync_wrapper(*args, **kwargs):
+            return fn(*args, **kwargs)
+        sync_wrapper._skill_metadata = {"name": fn.__name__, "version": "1.0.0"}
+        return sync_wrapper
 
 
 class TestCompositionStep:
@@ -30,6 +51,7 @@ class TestSkillComposition:
     def test_add_step(self):
         comp = SkillComposition(name="pipeline")
 
+        @mock_skill_learnable
         def skill1(x):
             return x + 1
 
@@ -41,9 +63,11 @@ class TestSkillComposition:
     async def test_execute_sync_pipeline(self):
         comp = SkillComposition(name="pipeline")
 
+        @mock_skill_learnable
         def add_one(x):
             return x + 1
 
+        @mock_skill_learnable
         def mul_two(x):
             return x * 2
 
@@ -57,10 +81,12 @@ class TestSkillComposition:
     async def test_execute_async_pipeline(self):
         comp = SkillComposition(name="async-pipeline")
 
+        @mock_skill_learnable
         async def async_add(x):
             await asyncio.sleep(0.01)
             return x + 1
 
+        @mock_skill_learnable
         async def async_mul(x):
             await asyncio.sleep(0.01)
             return x * 2
@@ -75,9 +101,11 @@ class TestSkillComposition:
     async def test_execute_mixed_pipeline(self):
         comp = SkillComposition(name="mixed")
 
+        @mock_skill_learnable
         def sync_add(x):
             return x + 10
 
+        @mock_skill_learnable
         async def async_mul(x):
             await asyncio.sleep(0.01)
             return x * 2
@@ -92,6 +120,7 @@ class TestSkillComposition:
     async def test_execute_step_failure(self):
         comp = SkillComposition(name="fail-pipeline")
 
+        @mock_skill_learnable
         def fail_step(x):
             raise ValueError("Intentional error")
 
@@ -103,11 +132,33 @@ class TestSkillComposition:
     def test_get_pipeline_info(self):
         comp = SkillComposition(name="info-test")
 
-        comp.add_step("s1", lambda x: x, tags=["math", "core"])
-        comp.add_step("s2", lambda x: x, tags=["core"])
+        s1 = mock_skill_learnable(lambda x: x)
+        s2 = mock_skill_learnable(lambda x: x)
+
+        comp.add_step("s1", s1, tags=["math", "core"])
+        comp.add_step("s2", s2, tags=["core"])
 
         info = comp.get_pipeline_info()
         assert info["name"] == "info-test"
         assert info["steps"] == 2
         assert "math" in info["all_tags"]
         assert "core" in info["all_tags"]
+
+    def test_add_step_contract_validation_k3_001(self):
+        """K3-001: Verify skill contract validation (must be @skill_learnable)."""
+        comp = SkillComposition(name="validate-test")
+
+        # Undecorated skill should raise ValueError
+        def undecorated_skill(x):
+            return x + 1
+
+        with pytest.raises(ValueError, match="must be decorated with @skill_learnable"):
+            comp.add_step("bad", undecorated_skill)
+
+        # Decorated skill should succeed
+        @mock_skill_learnable
+        def decorated_skill(x):
+            return x + 1
+
+        comp.add_step("good", decorated_skill)
+        assert len(comp.steps) == 1
