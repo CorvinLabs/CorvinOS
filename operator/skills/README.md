@@ -54,12 +54,30 @@ Quick-reference guide for academic writing best practices.
   --output ./Corvin-Publications/paper-003/
 ```
 
+### diagram-auditor-fixer/
+Automated TikZ diagram quality assurance for academic papers.
+
+**Dimensions:** Structural integrity, visual clarity, label quality, color/contrast, layout consistency
+
+**Use:** Phase 4b of paper-generator-orchestrator; iterative refinement until 0 findings
+
+See `diagram-auditor-fixer/README.md` and `/home/shumway/.claude/skills/diagram-auditor-fixer/SKILL.md`
+
+### paper-compliance-auditor/
+LaTeX document quality assurance for formatting, references, citations.
+
+**Dimensions:** Reference integrity, citation consistency, cross-refs, formatting, bibliography, structure
+
+**Use:** Phase 5a of paper-generator-orchestrator; iterative refinement until 0 findings
+
+See `paper-compliance-auditor/README.md` and `/home/shumway/.claude/skills/paper-compliance-auditor/SKILL.md`
+
 ## Integration with Claude Code
 
 These skills are auto-loaded when working in the CorvinOS repository.
-Use `/academic-paper-generation` or `/paper-generator-orchestrator` slash commands.
+Use `/academic-paper-generation`, `/paper-generator-orchestrator`, `/diagram-auditor-fixer`, or `/paper-compliance-auditor` slash commands.
 
 ---
 
 **Added:** 2026-08-13  
-**Status:** Production-ready
+**Status:** Production-ready (with quality assurance loop integrated)
