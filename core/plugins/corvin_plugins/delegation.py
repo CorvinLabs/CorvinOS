@@ -29,7 +29,7 @@ from .node import (
     BudgetExhausted,
     AuditHashMismatchError,
     ChildStatus,
-)
+)  # ChildStatus import at top-level (not lazy)
 from .graph import PluginGraph
 from .utils import now_utc
 
@@ -315,17 +315,18 @@ class PluginWorkHandler:
                 raise BudgetExhausted(f"Plugin {node.id} budget exhausted")
 
         # Delegate (recursive call)
-        try:
-            child_node = self.graph.get_node(target_child)
-            if not child_node:
-                raise ValueError(f"Child {target_child} not found")
+        child_node = self.graph.get_node(target_child)
+        if not child_node:
+            raise ValueError(f"Child {target_child} not found")
 
-            # Track time spent on this child's work only (not accumulated from root)
-            child_work_start = time.time()
+        # Track time spent on this child's work only (not accumulated from root)
+        child_work_start = time.time()
+
+        try:
             result = self.handle_work(target_child, work)
             latency_ms = int((time.time() - child_work_start) * 1000)
 
-            # Success
+            # Success - populate hash for audit trail integrity
             event = DelegationEvent(
                 event_type="work_delegated_success",
                 plugin_id=node.id,
@@ -337,6 +338,12 @@ class PluginWorkHandler:
                 reason="delegated",
                 timestamp_utc=now_utc(),
             )
+            # Populate audit hash fields (ADR-0345 compliance)
+            event.self_hash = event.compute_self_hash()
+            if tx.breadcrumbs:
+                event.prior_hash = tx.breadcrumbs[-1].self_hash
+            # tree_hash will be set at transaction completion
+            event.tree_hash = ""
             tx.breadcrumbs.append(event)
             node.delegation_history.append(event.to_dict())
 
@@ -346,7 +353,6 @@ class PluginWorkHandler:
                 # Update child status: latency and work count
                 # Defensive: initialize if missing (shouldn't happen if add_child was used)
                 if target_child not in node.child_status:
-                    from .node import ChildStatus
                     node.child_status[target_child] = ChildStatus(
                         child_id=target_child,
                         depth=self.graph._compute_depth(target_child)
@@ -399,9 +405,8 @@ class PluginWorkHandler:
             raise
 
         except (TimeoutError, Exception) as e:
-            # Compute time spent on this error (not accumulated from root)
-            # In case of exception, estimate from operation time
-            latency_ms = int((time.time() - start_time) * 1000)
+            # Compute time spent on child operation only (not accumulated from root)
+            latency_ms = int((time.time() - child_work_start) * 1000)
             event = DelegationEvent(
                 event_type="work_delegated_failed",
                 plugin_id=node.id,
