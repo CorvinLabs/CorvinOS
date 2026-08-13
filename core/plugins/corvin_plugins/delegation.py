@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
 import time
+import threading
 
 from .node import (
     PluginNode,
@@ -31,13 +31,9 @@ from .node import (
     ChildStatus,
 )
 from .graph import PluginGraph
+from .utils import now_utc
 
 log = logging.getLogger("corvin.plugins.delegation")
-
-
-def now_utc() -> str:
-    """Get current UTC timestamp in ISO format."""
-    return datetime.now(timezone.utc).isoformat()
 
 
 class PluginWorkHandler:
@@ -55,6 +51,8 @@ class PluginWorkHandler:
         self.audit_log = audit_log
         self.quarantine_registry = quarantine_registry
         self.active_transactions: Dict[str, DelegationTransaction] = {}
+        # Thread-safety lock for concurrent delegation access
+        self._budget_lock = threading.Lock()
 
     def handle_work(self, plugin_id: str, work: WorkRequest) -> Any:
         """
@@ -111,7 +109,10 @@ class PluginWorkHandler:
 
             tx.breadcrumbs.append(event)
             node.delegation_history.append(event.to_dict())
-            node.current_budget_used[work.priority_tier.value] += work.budget_cost
+
+            # Update budget under lock (thread-safe)
+            with self._budget_lock:
+                node.current_budget_used[work.priority_tier.value] += work.budget_cost
 
             if self.audit_log:
                 self.audit_log.record({
@@ -219,6 +220,7 @@ class PluginWorkHandler:
         work: WorkRequest,
         tx: DelegationTransaction,
         start_time: float,
+        failed_children: Optional[set] = None,
     ) -> Any:
         """Delegate work to sub-plugins based on routing policy.
 
@@ -227,6 +229,7 @@ class PluginWorkHandler:
             work: WorkRequest to delegate
             tx: DelegationTransaction being built
             start_time: Start time of top-level request
+            failed_children: Set of child IDs that already failed (to avoid retry)
 
         Returns:
             Result from delegated child
@@ -235,6 +238,8 @@ class PluginWorkHandler:
             WorkUnhandleable: If no capable children available
             BudgetExhausted: If budget constraints prevent delegation
         """
+        if failed_children is None:
+            failed_children = set()
         # Find candidates: children that are either:
         # 1. Directly capable of handling the work, OR
         # 2. Not quarantined and can delegate to their own children
@@ -328,8 +333,20 @@ class PluginWorkHandler:
             )
             tx.breadcrumbs.append(event)
             node.delegation_history.append(event.to_dict())
-            node.current_budget_used[work.priority_tier.value] += work.budget_cost
-            node.child_status[target_child].work_count += 1
+
+            # Update budget and child status under lock (thread-safe)
+            with self._budget_lock:
+                node.current_budget_used[work.priority_tier.value] += work.budget_cost
+                # Update child status: latency and work count
+                child_status = node.child_status[target_child]
+                child_status.work_count += 1
+                # Exponential moving average: new_avg = 0.7 * old_avg + 0.3 * new_latency
+                if child_status.avg_latency_ms == 0.0:
+                    child_status.avg_latency_ms = latency_ms
+                else:
+                    child_status.avg_latency_ms = (
+                        0.7 * child_status.avg_latency_ms + 0.3 * latency_ms
+                    )
 
             if self.audit_log:
                 self.audit_log.record({
@@ -358,11 +375,13 @@ class PluginWorkHandler:
                 # Try next fallback
                 pass
 
-            # Recursively try next candidate
-            if candidates:
-                candidates.remove(target_child)
-                if candidates:
-                    return self._delegate_to_children(node, work, tx, start_time)
+            # Track failed child and recursively try next candidate
+            failed_children.add(target_child)
+            remaining_candidates = [c for c in candidates if c not in failed_children]
+            if remaining_candidates:
+                return self._delegate_to_children(
+                    node, work, tx, start_time, failed_children
+                )
 
             raise
 
@@ -389,11 +408,13 @@ class PluginWorkHandler:
                     "error": str(e),
                 })
 
-            # Try next candidate
-            if candidates:
-                candidates.remove(target_child)
-                if candidates:
-                    return self._delegate_to_children(node, work, tx, start_time)
+            # Track failed child and try next candidate
+            failed_children.add(target_child)
+            remaining_candidates = [c for c in candidates if c not in failed_children]
+            if remaining_candidates:
+                return self._delegate_to_children(
+                    node, work, tx, start_time, failed_children
+                )
 
             raise WorkUnhandleable(
                 f"All children failed for work {work.work_id}: {str(e)}"
@@ -544,17 +565,22 @@ class PluginWorkHandler:
 
         Returns:
             The completed DelegationTransaction
+
+        Raises:
+            KeyError: If work_id not found
         """
         tx = self.active_transactions.get(work_id)
-        if tx:
-            tx.final_status = "success"
-            tx.total_latency_ms = sum(
-                bc.latency_ms for bc in tx.breadcrumbs
-            )
-            # Compute tree hash
-            if tx.breadcrumbs:
-                last_bc = tx.breadcrumbs[-1]
-                tx.tree_hash = last_bc.tree_hash or last_bc.self_hash
+        if not tx:
+            raise KeyError(f"Work {work_id} not found in active transactions")
+
+        tx.final_status = "success"
+        tx.total_latency_ms = sum(
+            bc.latency_ms for bc in tx.breadcrumbs
+        )
+        # Compute tree hash
+        if tx.breadcrumbs:
+            last_bc = tx.breadcrumbs[-1]
+            tx.tree_hash = last_bc.tree_hash or last_bc.self_hash
 
         return tx
 

@@ -17,20 +17,15 @@ import logging
 from typing import Dict, List, Optional, Set
 from hashlib import sha256
 import json
-from datetime import datetime, timezone
 
 from .node import (
     PluginNode,
     BootLayerMismatch,
     PluginCycleDetected,
 )
+from .utils import now_utc
 
 log = logging.getLogger("corvin.plugins.graph")
-
-
-def now_utc() -> str:
-    """Get current UTC timestamp in ISO format."""
-    return datetime.now(timezone.utc).isoformat()
 
 
 class PluginGraph:
@@ -108,7 +103,7 @@ class PluginGraph:
             child_id: ID of child plugin
 
         Raises:
-            ValueError: If either plugin not found
+            ValueError: If either plugin not found or child has different parent
             PluginCycleDetected: If would create cycle
         """
         parent = self.nodes.get(parent_id)
@@ -121,6 +116,13 @@ class PluginGraph:
 
         if child_id in parent.sub_plugins:
             return  # Already linked
+
+        # Check for multiple parents: a child can only have one parent
+        if child.parent_id and child.parent_id != parent_id:
+            raise ValueError(
+                f"Child {child_id} already has parent {child.parent_id}, "
+                f"cannot add as child of {parent_id}"
+            )
 
         # Check if child already has the right parent_id
         if child.parent_id == parent_id:
@@ -320,28 +322,23 @@ class PluginGraph:
         return [node for node in self.nodes.values() if node.parent_id is None]
 
     def verify_dag_integrity(self) -> bool:
-        """Verify the graph is a valid DAG (no cycles, no orphans)."""
-        # Check for cycles
-        for node_id in self.nodes:
-            if self._has_cycle_from(node_id):
-                log.error(f"Cycle detected from {node_id}")
-                return False
+        """Verify the graph is a valid DAG (no cycles, no orphans).
 
+        O(N) complexity using single DFS pass.
+        """
         # Check for orphans (children pointing to non-existent parents)
         for node_id, node in self.nodes.items():
             if node.parent_id and node.parent_id not in self.nodes:
                 log.error(f"Orphan node {node_id}: parent {node.parent_id} not found")
                 return False
 
-        return True
-
-    def _has_cycle_from(self, start_id: str) -> bool:
-        """Check if there's a cycle reachable from start_id using DFS."""
+        # Check for cycles in entire graph (O(N) single pass)
         visited: Set[str] = set()
         rec_stack: Set[str] = set()
 
         def dfs(node_id: str) -> bool:
             if node_id in rec_stack:
+                log.error(f"Cycle detected involving {node_id}")
                 return True  # Cycle found
             if node_id in visited:
                 return False
@@ -358,7 +355,14 @@ class PluginGraph:
             rec_stack.discard(node_id)
             return False
 
-        return dfs(start_id)
+        # Check all unvisited nodes (in case of disconnected components)
+        for node_id in self.nodes:
+            if node_id not in visited:
+                if dfs(node_id):
+                    return False
+
+        return True
+
 
     def to_dict(self) -> Dict:
         """Serialize entire graph to dict."""
