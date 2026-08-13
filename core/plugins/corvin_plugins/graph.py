@@ -117,6 +117,16 @@ class PluginGraph:
         if child_id in parent.sub_plugins:
             return  # Already linked
 
+        # Check for self-loops first
+        if parent_id == child_id:
+            raise PluginCycleDetected(f"Cannot link {child_id} to itself (self-loop)")
+
+        # Check for cycles BEFORE modifying any state
+        if self._would_create_cycle(parent_id, child_id):
+            raise PluginCycleDetected(
+                f"Adding {child_id} as child of {parent_id} would create cycle"
+            )
+
         # Check for multiple parents: a child can only have one parent
         if child.parent_id and child.parent_id != parent_id:
             raise ValueError(
@@ -133,11 +143,14 @@ class PluginGraph:
             log.info(f"Linked {parent_id} → {child_id} (already had parent_id)")
             return
 
-        # Different parent_id: would this create a cycle?
-        if self._would_create_cycle(parent_id, child_id):
-            raise PluginCycleDetected(
-                f"Adding {child_id} as child of {parent_id} would create cycle"
-            )
+        # Child has no parent yet: set it and link
+        if not child.parent_id:
+            child.parent_id = parent_id
+            parent.sub_plugins.append(child_id)
+            parent.child_status[child_id] = self._create_child_status(child_id, child)
+            parent.tree_hash = self._compute_tree_hash(parent_id)
+            log.info(f"Linked {parent_id} → {child_id} (set parent_id)")
+            return
 
         # Only add to graph after cycle check passes
         parent.sub_plugins.append(child_id)
@@ -184,7 +197,7 @@ class PluginGraph:
         """DFS cycle detection.
 
         Check if adding parent_id → child_id would create a cycle.
-        A cycle exists if child_id can reach parent_id through existing edges
+        A cycle exists if child_id can reach parent_id through existing sub_plugins edges
         (because adding parent_id → child_id would complete the cycle).
         """
         if not parent_id:
@@ -196,7 +209,7 @@ class PluginGraph:
         visited: Set[str] = set()
 
         def dfs(node_id: str) -> bool:
-            """DFS to find if we can reach parent_id from child_id."""
+            """DFS to find if we can reach parent_id from child_id via sub_plugins."""
             if node_id in visited:
                 return False
             if node_id == parent_id:
@@ -207,19 +220,14 @@ class PluginGraph:
             if not node:
                 return False
 
-            # Try to reach parent through this node's children
+            # Only check sub_plugins edges, not parent_id (parent_id is what we're establishing)
             for sub_id in node.sub_plugins:
                 if dfs(sub_id):
                     return True
 
-            # Also check parent link (in case of existing parent relationship)
-            if node.parent_id and node.parent_id not in visited:
-                if dfs(node.parent_id):
-                    return True
-
             return False
 
-        # Start DFS from child_id to see if it can reach parent_id
+        # Start DFS from child_id to see if it can reach parent_id via existing edges
         return dfs(child_id)
 
     def _compute_tree_hash(self, plugin_id: str) -> str:

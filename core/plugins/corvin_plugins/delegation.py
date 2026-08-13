@@ -243,8 +243,13 @@ class PluginWorkHandler:
         # Find candidates: children that are either:
         # 1. Directly capable of handling the work, OR
         # 2. Not quarantined and can delegate to their own children
+        # Exclude failed_children from retry
         candidates = []
         for child_id in node.sub_plugins:
+            # Skip previously failed children (avoid infinite retry)
+            if child_id in failed_children:
+                continue
+
             child = self.graph.get_node(child_id)
             if not child:
                 continue
@@ -315,9 +320,10 @@ class PluginWorkHandler:
             if not child_node:
                 raise ValueError(f"Child {target_child} not found")
 
+            # Track time spent on this child's work only (not accumulated from root)
+            child_work_start = time.time()
             result = self.handle_work(target_child, work)
-
-            latency_ms = int((time.time() - start_time) * 1000)
+            latency_ms = int((time.time() - child_work_start) * 1000)
 
             # Success
             event = DelegationEvent(
@@ -338,6 +344,13 @@ class PluginWorkHandler:
             with self._budget_lock:
                 node.current_budget_used[work.priority_tier.value] += work.budget_cost
                 # Update child status: latency and work count
+                # Defensive: initialize if missing (shouldn't happen if add_child was used)
+                if target_child not in node.child_status:
+                    from .node import ChildStatus
+                    node.child_status[target_child] = ChildStatus(
+                        child_id=target_child,
+                        depth=self.graph._compute_depth(target_child)
+                    )
                 child_status = node.child_status[target_child]
                 child_status.work_count += 1
                 # Exponential moving average: new_avg = 0.7 * old_avg + 0.3 * new_latency
@@ -386,6 +399,8 @@ class PluginWorkHandler:
             raise
 
         except (TimeoutError, Exception) as e:
+            # Compute time spent on this error (not accumulated from root)
+            # In case of exception, estimate from operation time
             latency_ms = int((time.time() - start_time) * 1000)
             event = DelegationEvent(
                 event_type="work_delegated_failed",
@@ -557,21 +572,18 @@ class PluginWorkHandler:
             log.warning(f"Plugin {child_id} degraded due to audit mismatch")
             return "degraded"
 
-    def complete_transaction(self, work_id: str) -> DelegationTransaction:
+    def complete_transaction(self, work_id: str) -> Optional[DelegationTransaction]:
         """Mark a transaction as complete and return it.
 
         Args:
             work_id: ID of the work request
 
         Returns:
-            The completed DelegationTransaction
-
-        Raises:
-            KeyError: If work_id not found
+            The completed DelegationTransaction, or None if not found
         """
         tx = self.active_transactions.get(work_id)
         if not tx:
-            raise KeyError(f"Work {work_id} not found in active transactions")
+            return None
 
         tx.final_status = "success"
         tx.total_latency_ms = sum(
