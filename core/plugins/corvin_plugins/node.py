@@ -244,8 +244,8 @@ class PluginNode:
         """
         if self.parent_id is None:
             return 0
-        # Depth is computed relative to parent; we return 1 + parent's depth
-        # The actual depth is computed by the graph when linking
+        # This node has a parent, so it's at least depth 1.
+        # For actual depth via recursion, use graph._compute_depth()
         return 1
 
     def can_handle_capability(self, capability: str) -> bool:

@@ -22,6 +22,7 @@ from .node import (
     PluginNode,
     BootLayerMismatch,
     PluginCycleDetected,
+    ChildStatus,
 )
 from .utils import now_utc
 
@@ -152,14 +153,12 @@ class PluginGraph:
             log.info(f"Linked {parent_id} → {child_id} (set parent_id)")
             return
 
-        # Only add to graph after cycle check passes
-        parent.sub_plugins.append(child_id)
-        parent.child_status[child_id] = self._create_child_status(child_id, child)
-
-        # Safe to compute tree hash now (no cycles)
-        parent.tree_hash = self._compute_tree_hash(parent_id)
-
-        log.info(f"Linked {parent_id} → {child_id}")
+        # All cases handled above (already linked | parent matches | no parent | cycle error | multiple parents error)
+        # This should never be reached
+        raise RuntimeError(
+            f"Unexpected state in add_child: {parent_id} → {child_id}, "
+            f"child.parent_id={child.parent_id}"
+        )
 
     def remove_child(self, parent_id: str, child_id: str) -> None:
         """Unlink parent → child in graph.
@@ -180,7 +179,6 @@ class PluginGraph:
 
     def _create_child_status(self, child_id: str, child_node: PluginNode):
         """Create a ChildStatus entry for tracking child health/capacity."""
-        from .node import ChildStatus
         return ChildStatus(child_id=child_id, depth=self._compute_depth(child_id))
 
     def _compute_depth(self, plugin_id: str) -> int:
