@@ -237,7 +237,11 @@ class PluginNode:
             self.delegation_history = []
 
     def get_depth(self) -> int:
-        """Get this node's depth in tree (root=0)."""
+        """Get this node's depth in tree (root=0).
+
+        NOTE: This returns 1 if parent_id is set (graph manages actual depth).
+        For actual depth computation, use graph._compute_depth(plugin_id).
+        """
         if self.parent_id is None:
             return 0
         # Depth is computed relative to parent; we return 1 + parent's depth
