@@ -112,7 +112,9 @@ class TypeValidator:
                         except TypeError as e:
                             # isinstance() fails on parameterized generics like List[int]
                             logger.debug(f"Cannot check isinstance for {field.name}: {e}")
-                            pass
+                            raise TypeContractError(
+                                f"Schema {schema.name}.{field.name}: type validation error for {field_type}: {e}"
+                            )
 
         # For lists/dicts, check container element types
         if origin is list:
