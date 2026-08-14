@@ -67,6 +67,12 @@ class _Plug:
 class _Base(unittest.TestCase):
     def setUp(self):
         self.reg = get_registry()
+        # Clear the same-epoch unregistration tracking. This prevents thread-escape
+        # detection (ADR-0233 D5) from triggering on re-registrations of the same
+        # plugin name across different tests. We don't advance the epoch because that
+        # would cause registered plugins to be downgraded on re-registration in a
+        # later epoch (a cross-epoch downgrade, also a thread-escape mitigation).
+        self.reg._unregistered_this_epoch.clear()
         ep.clear_all()
 
     def tearDown(self):
