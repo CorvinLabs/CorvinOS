@@ -495,8 +495,9 @@ class PluginWorkHandler:
         expected_latency_ms = status.avg_latency_ms * (work.budget_cost / 10)
         latency_score = min(1.0, expected_latency_ms / 1000)  # Normalize to [0.0, 1.0]
 
-        # Factor 3: Depth penalty (prefer shallower children)
-        depth_penalty = 1.0 / max(1, status.depth)
+        # Factor 3: Depth penalty (prefer shallower children; lower score = better)
+        # depth=1 (shallow) → 0.1, depth=10 (deep) → 1.0
+        depth_penalty = min(1.0, status.depth * 0.1)
 
         # Weighted average
         final_score = (0.6 * busyness) + (0.3 * latency_score) + (0.1 * depth_penalty)
@@ -586,7 +587,8 @@ class PluginWorkHandler:
         Returns:
             The completed DelegationTransaction, or None if not found
         """
-        tx = self.active_transactions.get(work_id)
+        # Remove from active_transactions to prevent memory leak
+        tx = self.active_transactions.pop(work_id, None)
         if not tx:
             return None
 
@@ -594,10 +596,13 @@ class PluginWorkHandler:
         tx.total_latency_ms = sum(
             bc.latency_ms for bc in tx.breadcrumbs
         )
-        # Compute tree hash
+        # Compute tree hash for entire transaction chain
         if tx.breadcrumbs:
             last_bc = tx.breadcrumbs[-1]
             tx.tree_hash = last_bc.tree_hash or last_bc.self_hash
+            # Propagate tree_hash to all breadcrumbs (transitive integrity)
+            for bc in tx.breadcrumbs:
+                bc.tree_hash = tx.tree_hash
 
         return tx
 

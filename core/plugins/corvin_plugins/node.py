@@ -68,6 +68,18 @@ class BudgetExhausted(PluginNodeError):
 class AuditHashMismatchError(PluginNodeError):
     """Child's audit chain hash does not match expected value."""
 
+    def __init__(self, message: str, expected_hash: str = "", actual_hash: str = ""):
+        """Initialize with hash details.
+
+        Args:
+            message: Error message
+            expected_hash: The hash we expected
+            actual_hash: The hash we got
+        """
+        super().__init__(message)
+        self.expected_hash = expected_hash
+        self.actual_hash = actual_hash
+
 
 # ── Work Request ───────────────────────────────────────────────────────────
 
