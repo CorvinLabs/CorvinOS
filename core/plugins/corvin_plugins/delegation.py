@@ -587,8 +587,9 @@ class PluginWorkHandler:
         Returns:
             The completed DelegationTransaction, or None if not found
         """
-        # Remove from active_transactions to prevent memory leak
-        tx = self.active_transactions.pop(work_id, None)
+        # Use get() not pop() to preserve idempotency (caller may call multiple times)
+        # Caller is responsible for cleanup via manual removal if needed
+        tx = self.active_transactions.get(work_id)
         if not tx:
             return None
 
@@ -596,13 +597,11 @@ class PluginWorkHandler:
         tx.total_latency_ms = sum(
             bc.latency_ms for bc in tx.breadcrumbs
         )
-        # Compute tree hash for entire transaction chain
+        # Compute tree hash for entire transaction chain from last breadcrumb
+        # DO NOT overwrite individual breadcrumb tree_hash (each hop has its own state proof)
         if tx.breadcrumbs:
             last_bc = tx.breadcrumbs[-1]
             tx.tree_hash = last_bc.tree_hash or last_bc.self_hash
-            # Propagate tree_hash to all breadcrumbs (transitive integrity)
-            for bc in tx.breadcrumbs:
-                bc.tree_hash = tx.tree_hash
 
         return tx
 
