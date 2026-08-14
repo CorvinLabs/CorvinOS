@@ -156,8 +156,8 @@ class AggregationPipeline:
             if metric.value < 0:
                 contract = self.registry.get_metric_contract(metric.name)
                 if contract:
-                if contract.metric_type == MetricType.COUNTER:
-                    errors.append(f"Metric {i}: counter cannot have negative value")
+                    if contract.metric_type == MetricType.COUNTER:
+                        errors.append(f"Metric {i}: counter cannot have negative value")
 
         if errors:
             raise ValueError("Validation failed:\n" + "\n".join(errors))
