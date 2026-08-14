@@ -103,6 +103,11 @@ class TypeValidator:
                         if isinstance(field_type, str):
                             logger.debug(f"Skipping type check for {field.name}: forward reference '{field_type}'")
                             continue
+                        # Skip isinstance check if field_type is a parameterized generic (List[int], Dict[str,int])
+                        field_origin = get_origin(field_type)
+                        if field_origin is not None:
+                            logger.debug(f"Skipping type check for {field.name}: parameterized generic {field_type}")
+                            continue
                         try:
                             if not isinstance(field_value, field_type):
                                 raise TypeContractError(
@@ -110,7 +115,7 @@ class TypeValidator:
                                     f"got {type(field_value).__name__}"
                                 )
                         except TypeError as e:
-                            # isinstance() fails on parameterized generics like List[int]
+                            # isinstance() fails on unexpected type issues
                             logger.debug(f"Cannot check isinstance for {field.name}: {e}")
                             raise TypeContractError(
                                 f"Schema {schema.name}.{field.name}: type validation error for {field_type}: {e}"
