@@ -17,6 +17,8 @@ import logging
 from typing import Any, Dict, List, Optional
 import time
 import threading
+import hashlib
+import json
 
 from .node import (
     PluginNode,
@@ -579,32 +581,40 @@ class PluginWorkHandler:
             return "degraded"
 
     def complete_transaction(self, work_id: str) -> Optional[DelegationTransaction]:
-        """Mark a transaction as complete and return it.
+        """Mark transaction complete, remove from active tracking, and return it.
+
+        MUST be called exactly once per work_id to prevent data corruption and memory leak.
 
         Args:
-            work_id: ID of the work request
+            work_id: ID of work request
 
         Returns:
-            The completed DelegationTransaction, or None if not found
+            Completed DelegationTransaction, or None if no active transaction
         """
-        # Use get() not pop() to preserve idempotency (caller may call multiple times)
-        # Caller is responsible for cleanup via manual removal if needed
-        tx = self.active_transactions.get(work_id)
+        # CRITICAL: pop() not get() to prevent reuse and memory leak
+        tx = self.active_transactions.pop(work_id, None)
         if not tx:
             return None
 
         tx.final_status = "success"
-        tx.total_latency_ms = sum(
-            bc.latency_ms for bc in tx.breadcrumbs
-        )
-        # Compute tree hash for entire transaction chain from last breadcrumb
-        # DO NOT overwrite individual breadcrumb tree_hash (each hop has its own state proof)
+        tx.total_latency_ms = sum(bc.latency_ms for bc in tx.breadcrumbs)
+
+        # Tree hash: hash entire breadcrumb chain (all self_hashes)
         if tx.breadcrumbs:
-            last_bc = tx.breadcrumbs[-1]
-            tx.tree_hash = last_bc.tree_hash or last_bc.self_hash
+            breadcrumb_hashes = [bc.self_hash for bc in tx.breadcrumbs]
+            tx.tree_hash = hashlib.sha256(
+                json.dumps(breadcrumb_hashes, sort_keys=True).encode()
+            ).hexdigest()
 
         return tx
 
     def get_transaction(self, work_id: str) -> Optional[DelegationTransaction]:
-        """Get a transaction by work ID."""
+        """Get active transaction by work ID (read-only, does NOT remove)."""
         return self.active_transactions.get(work_id)
+
+    def cleanup_transaction(self, work_id: str) -> None:
+        """Clean up abandoned transaction (error paths only).
+
+        Use when complete_transaction() won't be called to prevent memory leak.
+        """
+        self.active_transactions.pop(work_id, None)
