@@ -91,6 +91,13 @@ class PluginWorkHandler:
         else:
             tx = self.active_transactions[work.work_id]
 
+        # Recursion depth limit (prevent stack overflow on deep hierarchies)
+        # Breadcrumbs track delegation depth; allow up to 100 levels
+        if len(tx.breadcrumbs) > 100:
+            raise WorkUnhandleable(
+                f"Delegation depth limit (100) exceeded for work {work.work_id}"
+            )
+
         start_time = time.time()
 
         # Step 1: Can I handle this locally?
@@ -189,12 +196,13 @@ class PluginWorkHandler:
         if not node.can_handle_capability(work.required_capability):
             return False
 
-        # Budget check (tier-aware)
-        tier_budget = node.current_budget_used.get(work.priority_tier.value, 0)
-        tier_limit = node.budget_config.get_tier_limit(work.priority_tier)
+        # Budget check (tier-aware) - acquire lock to prevent TOCTOU race
+        with self._budget_lock:
+            tier_budget = node.current_budget_used.get(work.priority_tier.value, 0)
+            tier_limit = node.budget_config.get_tier_limit(work.priority_tier)
 
-        if tier_budget + work.budget_cost > tier_limit:
-            return False
+            if tier_budget + work.budget_cost > tier_limit:
+                return False
 
         return True
 
