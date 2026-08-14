@@ -6,6 +6,7 @@ Cross-tenant isolation enforced. Fail-closed on invalid queries.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import asdict, dataclass
@@ -224,7 +225,6 @@ class ObservabilityDashboard:
                 break
 
             # Wait before next update
-            import asyncio
             await asyncio.sleep(self.config.refresh_interval_seconds)
 
         logger.info(f"Stream ended for subscriber {connection_id}: {update_count} updates sent")

@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -84,15 +84,17 @@ class HealthCheckEngine:
             probe_timeout_seconds: Timeout for each probe
         """
         self.probe_timeout_seconds = probe_timeout_seconds
-        self._probes: dict[str, Callable[[], bool]] = {}
+        self._probes: dict[str, Union[Callable[[], bool], Callable[[], Awaitable[bool]]]] = {}
         self._last_reports: dict[str, ModuleHealthReport] = {}
 
-    def register_probe(self, module_id: str, probe_fn: Callable[[], bool]) -> None:
+    def register_probe(
+        self, module_id: str, probe_fn: Union[Callable[[], bool], Callable[[], Awaitable[bool]]]
+    ) -> None:
         """Register a health probe for a module.
 
         Args:
             module_id: Module identifier
-            probe_fn: Async function that returns True if healthy
+            probe_fn: Sync or async function that returns True if healthy
 
         Raises:
             ValueError: If module_id invalid

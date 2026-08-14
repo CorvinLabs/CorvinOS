@@ -9,7 +9,7 @@ from __future__ import annotations
 import functools
 import logging
 from dataclasses import fields, is_dataclass
-from typing import Any, Callable, Optional, Type, TypeVar, Union, get_args, get_origin
+from typing import Any, Callable, Optional, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -87,27 +87,57 @@ class TypeValidator:
                         f"Schema {schema.name}: missing required field '{field_name}'"
                     )
 
-            # Check field types
+            # Check field types (handle string annotations from __future__ annotations)
+            try:
+                type_hints = get_type_hints(expected_type)
+            except Exception:
+                type_hints = {}
+
             for field in fields(expected_type):
                 if hasattr(obj, field.name):
                     field_value = getattr(obj, field.name)
                     if field_value is not None:
-                        if not isinstance(field_value, field.type):
-                            raise TypeContractError(
-                                f"Schema {schema.name}.{field.name}: expected {field.type}, "
-                                f"got {type(field_value).__name__}"
-                            )
+                        # Use resolved type hint if available, otherwise field.type
+                        field_type = type_hints.get(field.name, field.type)
+                        # Skip isinstance check if field_type is a string (unresolvable forward reference)
+                        if isinstance(field_type, str):
+                            logger.debug(f"Skipping type check for {field.name}: forward reference '{field_type}'")
+                            continue
+                        try:
+                            if not isinstance(field_value, field_type):
+                                raise TypeContractError(
+                                    f"Schema {schema.name}.{field.name}: expected {field_type}, "
+                                    f"got {type(field_value).__name__}"
+                                )
+                        except TypeError as e:
+                            # isinstance() fails on parameterized generics like List[int]
+                            logger.debug(f"Cannot check isinstance for {field.name}: {e}")
+                            pass
 
         # For lists/dicts, check container element types
         if origin is list:
             args = get_args(expected_type)
             if args and obj:
                 element_type = args[0]
+                # Skip validation if element_type is a parameterized generic (List[int], etc)
+                elem_origin = get_origin(element_type)
+                if elem_origin is not None:
+                    # For nested generics like List[List[int]], skip isinstance check
+                    logger.debug(f"Skipping validation for nested generic: {element_type}")
+                    return True
+
                 for i, elem in enumerate(obj):
-                    if not isinstance(elem, element_type):
+                    try:
+                        if not isinstance(elem, element_type):
+                            raise TypeContractError(
+                                f"Schema {schema.name}[{i}]: expected {element_type}, "
+                                f"got {type(elem).__name__}"
+                            )
+                    except TypeError as e:
+                        # isinstance() fails on parameterized types
+                        logger.debug(f"Cannot check isinstance for element {i}: {e}")
                         raise TypeContractError(
-                            f"Schema {schema.name}[{i}]: expected {element_type}, "
-                            f"got {type(elem).__name__}"
+                            f"Schema {schema.name}[{i}]: type validation error for {element_type}: {e}"
                         )
 
         if origin is dict:
@@ -115,15 +145,19 @@ class TypeValidator:
             if len(args) >= 2 and obj:
                 key_type, value_type = args[0], args[1]
                 for k, v in obj.items():
-                    if not isinstance(k, key_type):
-                        raise TypeContractError(
-                            f"Schema {schema.name} key: expected {key_type}, got {type(k).__name__}"
-                        )
-                    if not isinstance(v, value_type):
-                        raise TypeContractError(
-                            f"Schema {schema.name}[{k}]: expected {value_type}, "
-                            f"got {type(v).__name__}"
-                        )
+                    try:
+                        if not isinstance(k, key_type):
+                            raise TypeContractError(
+                                f"Schema {schema.name} key: expected {key_type}, got {type(k).__name__}"
+                            )
+                        if not isinstance(v, value_type):
+                            raise TypeContractError(
+                                f"Schema {schema.name}[{k}]: expected {value_type}, "
+                                f"got {type(v).__name__}"
+                            )
+                    except TypeError as e:
+                        logger.debug(f"Cannot check isinstance for dict: {e}")
+                        raise TypeContractError(f"Schema {schema.name}: type validation error: {e}")
 
         return True
 

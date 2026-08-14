@@ -111,6 +111,28 @@ class TelemetryRegistry:
         self._audit_path: Optional[Path] = None
         self._initialized = True
 
+    def is_metric_registered(self, name: str) -> bool:
+        """Check if a metric is registered.
+
+        Args:
+            name: Metric name
+
+        Returns:
+            True if registered, False otherwise
+        """
+        return name in self._contracts
+
+    def get_metric_contract(self, name: str) -> Optional[MetricContract]:
+        """Get the contract for a registered metric.
+
+        Args:
+            name: Metric name
+
+        Returns:
+            MetricContract if registered, None otherwise
+        """
+        return self._contracts.get(name)
+
     def register_metric(
         self,
         name: str,
