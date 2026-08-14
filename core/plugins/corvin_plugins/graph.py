@@ -253,15 +253,11 @@ class PluginGraph:
             json.dumps(self_data, sort_keys=True).encode()
         ).hexdigest()
 
-        # Children hashes (recursively)
+        # Children hashes (recursively, NO side effects)
         children_hashes = []
         for child_id in sorted(node.sub_plugins):
             child_tree_hash = self._compute_tree_hash(child_id)
             children_hashes.append(child_tree_hash)
-            # Also set tree_hash on child node (transitive integrity)
-            child_node = self.nodes.get(child_id)
-            if child_node:
-                child_node.tree_hash = child_tree_hash
 
         # Tree hash = self + all children
         tree_data = {
@@ -271,9 +267,6 @@ class PluginGraph:
         tree_hash = sha256(
             json.dumps(tree_data, sort_keys=True).encode()
         ).hexdigest()
-
-        # Set tree_hash on this node
-        node.tree_hash = tree_hash
 
         return tree_hash
 
