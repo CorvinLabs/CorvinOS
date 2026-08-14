@@ -47,6 +47,12 @@ from core.pipeline.wiring import (
     get_global_pipeline,
     set_global_pipeline,
 )
+from core.pipeline.aggregation import (
+    AggregationPipeline,
+    AggregationConfig,
+    Metric,
+    AggregatedMetric,
+)
 
 __all__ = [
     # ADR-0300: Dual-Gate Pipeline
@@ -80,4 +86,9 @@ __all__ = [
     "plugin_entry_guarded",
     "get_global_pipeline",
     "set_global_pipeline",
+    # ADR-0326: Aggregation Pipeline
+    "AggregationPipeline",
+    "AggregationConfig",
+    "Metric",
+    "AggregatedMetric",
 ]
