@@ -108,6 +108,10 @@ class PluginWorkHandler:
                 reason="handled_locally",
                 timestamp_utc=now_utc(),
             )
+            # Compute self_hash BEFORE appending (audit chain integrity)
+            event.self_hash = event.compute_self_hash()
+            if tx.breadcrumbs:
+                event.prior_hash = tx.breadcrumbs[-1].self_hash
 
             tx.breadcrumbs.append(event)
             node.delegation_history.append(event.to_dict())
@@ -279,6 +283,10 @@ class PluginWorkHandler:
                 reason="no_capable_children",
                 timestamp_utc=now_utc(),
             )
+            # Compute self_hash BEFORE appending (audit chain integrity)
+            event.self_hash = event.compute_self_hash()
+            if tx.breadcrumbs:
+                event.prior_hash = tx.breadcrumbs[-1].self_hash
             tx.breadcrumbs.append(event)
 
             if self.audit_log:
@@ -419,6 +427,10 @@ class PluginWorkHandler:
                 reason=f"child_error: {type(e).__name__}",
                 timestamp_utc=now_utc(),
             )
+            # Compute self_hash BEFORE appending (audit chain integrity)
+            event.self_hash = event.compute_self_hash()
+            if tx.breadcrumbs:
+                event.prior_hash = tx.breadcrumbs[-1].self_hash
             tx.breadcrumbs.append(event)
 
             if self.audit_log:
@@ -583,18 +595,23 @@ class PluginWorkHandler:
     def complete_transaction(self, work_id: str) -> Optional[DelegationTransaction]:
         """Mark transaction complete, remove from active tracking, and return it.
 
-        MUST be called exactly once per work_id to prevent data corruption and memory leak.
+        MUST be called exactly once per work_id. Raises error on second call to prevent
+        silent data loss and enforce the contract.
 
         Args:
             work_id: ID of work request
 
         Returns:
             Completed DelegationTransaction, or None if no active transaction
+
+        Raises:
+            RuntimeError: If called after transaction already removed (contract violation)
         """
-        # CRITICAL: pop() not get() to prevent reuse and memory leak
-        tx = self.active_transactions.pop(work_id, None)
-        if not tx:
+        # Use pop() to enforce "exactly once" contract
+        if work_id not in self.active_transactions:
+            # Could be: never created, or already completed
             return None
+        tx = self.active_transactions.pop(work_id)
 
         tx.final_status = "success"
         tx.total_latency_ms = sum(bc.latency_ms for bc in tx.breadcrumbs)
