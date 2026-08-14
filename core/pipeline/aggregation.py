@@ -146,15 +146,16 @@ class AggregationPipeline:
                 errors.append(f"Metric {i}: missing tenant_id")
 
             # Metric registration check
-            if metric.name not in self.registry._contracts:
+            if not self.registry.is_metric_registered(metric.name):
                 errors.append(f"Metric {i}: '{metric.name}' not registered with TelemetryRegistry")
 
             # Value sanity check
             if not isinstance(metric.value, (int, float)):
                 errors.append(f"Metric {i}: value not numeric")
 
-            if metric.value < 0 and self.registry._contracts.get(metric.name, None):
-                contract = self.registry._contracts[metric.name]
+            if metric.value < 0:
+                contract = self.registry.get_metric_contract(metric.name)
+                if contract:
                 if contract.metric_type == MetricType.COUNTER:
                     errors.append(f"Metric {i}: counter cannot have negative value")
 
@@ -219,7 +220,7 @@ class AggregationPipeline:
                 p99 = max_val
 
             # Get metric contract
-            contract = self.registry._contracts.get(name)
+            contract = self.registry.get_metric_contract(name)
             metric_type = contract.metric_type if contract else MetricType.GAUGE
 
             agg = AggregatedMetric(
