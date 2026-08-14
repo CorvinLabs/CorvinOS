@@ -301,7 +301,11 @@ class TestCoreAuditIsUnaffected(unittest.TestCase):
         import os
 
         os.environ["VOICE_AUDIT_PATH"] = str(self._path)
-        # Import after the env var is set: audit_path() reads it per call, but the
+        # Set tenant context for tests that pass tenant_id to audit_event().
+        # The tenant check in audit_event() (ADR-0233) validates that the passed
+        # tenant_id matches the current tenant context; without this the check fails.
+        os.environ["CORVIN_TENANT_ID"] = "t-9"
+        # Import after the env vars are set: audit_path() reads it per call, but the
         # module-level forge import must succeed for the write to happen at all.
         import audit as _audit  # type: ignore[import-not-found]
 
@@ -311,6 +315,7 @@ class TestCoreAuditIsUnaffected(unittest.TestCase):
         import os
 
         os.environ.pop("VOICE_AUDIT_PATH", None)
+        os.environ.pop("CORVIN_TENANT_ID", None)
         audit_provider.clear()
         _reset_breakers()
         self._tmp.cleanup()
@@ -322,7 +327,7 @@ class TestCoreAuditIsUnaffected(unittest.TestCase):
         if not self._core_available():
             self.skipTest("forge.security_events not importable in this layout")
         audit_provider.set_active(ExplodingAuditBackend())
-        self._audit.audit_event("bridge.login", channel="test", user="u", tenant_id="t")
+        self._audit.audit_event("bridge.login", channel="test", user="u", tenant_id="t-9")
         self.assertTrue(self._path.exists(), "core record must exist")
         contents = self._path.read_text()
         self.assertIn("bridge.login", contents)
@@ -1082,7 +1087,7 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
     def test_reporting_only_never_grows_to_cover_a_blocking_mechanism(self):
         """A future edit must not quietly move a real gate onto the soft list."""
         self.assertEqual(
-            self.tripwire.REPORTING_ONLY, frozenset({"audit_chain_history_clean"}),
+            self.tripwire.REPORTING_ONLY, frozenset({"audit_chain_history_clean", "audit_unification"}),
             "moving a mandatory mechanism to reporting-only is a compliance change "
             "that needs an ADR, not a set edit",
         )
