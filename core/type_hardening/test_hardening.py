@@ -4,7 +4,7 @@ import pytest
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 
-from core.typing.hardening import (
+from core.type_hardening.hardening import (
     TypeContractError,
     TypeSchema,
     TypeValidator,

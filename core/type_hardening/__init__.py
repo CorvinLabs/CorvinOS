@@ -1,6 +1,6 @@
 """Type system hardening for module boundaries (ADR-0323)."""
 
-from core.typing.hardening import (
+from core.type_hardening.hardening import (
     TypeContractError,
     TypeSchema,
     TypeValidator,
