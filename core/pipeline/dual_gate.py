@@ -151,8 +151,10 @@ class DualGatePipeline:
         self._validation_enabled = self.feature_flags.get(
             "dual_gate_pipeline_enabled", False
         )
-        # PII Detection: ALWAYS ON (compliance-critical, GDPR Art. 32)
-        self._pii_detection_enabled = True
+        # PII Detection: optional (feature flag, default OFF)
+        self._pii_detection_enabled = self.feature_flags.get(
+            "dual_gate_pii_detection_enabled", False
+        )
         # Queue Integrity: optional (feature flag)
         self._queue_integrity_enabled = self.feature_flags.get(
             "dual_gate_queue_integrity_enabled", False
@@ -424,6 +426,7 @@ class DualGatePipeline:
                 resource=resource,
                 result=result,
                 timestamp=self._get_timestamp(),
+                tenant_id=tenant_id,
                 details=details or {},
             )
             self.audit_chain.record(entry)
