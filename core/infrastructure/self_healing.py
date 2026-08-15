@@ -46,6 +46,8 @@ class SelfHealingLoop:
         """Initialize self-healing loop."""
         self._recovery_tasks: list[asyncio.Task] = []
         self._recovery_history: dict[str, RecoveryResult] = {}
+        # Idempotency tracking: prevent duplicate recovery runs for same failure+tenant
+        self._in_progress_recoveries: set[str] = set()
 
     async def trigger_recovery(
         self,
@@ -57,6 +59,8 @@ class SelfHealingLoop:
     ) -> None:
         """Trigger recovery asynchronously (fire-and-forget).
 
+        Idempotent: prevents duplicate recovery runs for the same failure+tenant.
+
         Args:
             failure_type: Type of failure ("quota", "timeout", "unavailable")
             tenant_id: Tenant context
@@ -65,17 +69,53 @@ class SelfHealingLoop:
 
         Note:
             Never blocks main request path. Failures logged, never propagated.
+            Duplicate recovery requests are silently coalesced (idempotency).
         """
+        # Generate idempotency key to prevent duplicate recoveries
+        recovery_key = f"{failure_type}:{tenant_id}"
+
+        # Fail-closed: if recovery is already in progress for this key, skip
+        if recovery_key in self._in_progress_recoveries:
+            # Recovery already running for this failure+tenant; don't create duplicate
+            return
+
+        # Mark this recovery as in-progress
+        self._in_progress_recoveries.add(recovery_key)
+
         # Create background task for recovery (fire-and-forget)
         task = asyncio.create_task(
-            self._do_recovery(
+            self._do_recovery_with_idempotency(
+                failure_type=failure_type,
+                tenant_id=tenant_id,
+                strategy=strategy,
+                max_attempts=max_attempts,
+                recovery_key=recovery_key,
+            )
+        )
+        self._recovery_tasks.append(task)
+
+    async def _do_recovery_with_idempotency(
+        self,
+        failure_type: str,
+        tenant_id: str,
+        strategy: RecoveryStrategy,
+        max_attempts: int,
+        recovery_key: str,
+    ) -> RecoveryResult:
+        """Execute recovery and manage idempotency key lifecycle.
+
+        Ensures recovery_key is removed from in-progress set when done.
+        """
+        try:
+            return await self._do_recovery(
                 failure_type=failure_type,
                 tenant_id=tenant_id,
                 strategy=strategy,
                 max_attempts=max_attempts,
             )
-        )
-        self._recovery_tasks.append(task)
+        finally:
+            # Always remove from in-progress set when recovery completes
+            self._in_progress_recoveries.discard(recovery_key)
 
     async def _do_recovery(
         self,

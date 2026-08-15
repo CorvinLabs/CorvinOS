@@ -12,7 +12,7 @@ import asyncio
 from typing import Any, Callable, Dict, Optional, TypeVar
 
 from core.validators.factory import ValidatorFactory, ValidationResult
-from core.compliance.audit import audit_log
+from core.compliance.corvin_compliance_reports.audit import audit_log
 
 
 T = TypeVar("T")

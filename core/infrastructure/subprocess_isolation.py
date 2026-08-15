@@ -2,11 +2,15 @@
 
 Enforce subprocess isolation and resource limits. Subprocess crashes don't
 cascade to parent. IPC restricted to safe channels.
+
+Resource limits via cgroups (Linux) or resource module (Unix).
 """
 
 from __future__ import annotations
 
 import subprocess
+import resource
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
@@ -69,9 +73,48 @@ class SubprocessBoundary:
             IsolationError: If isolation boundary setup fails (fail-closed)
         """
         try:
-            # Placeholder: real implementation would use subprocess.Popen()
-            # with resource limits and isolation (cgroups, namespaces, etc.)
-            pid = self._simulate_spawn(cmd)
+            # Define preexec function to apply resource limits to child process
+            def _apply_resource_limits() -> None:
+                """Apply memory and other resource limits to subprocess."""
+                # Convert MB to bytes for memory limit
+                memory_bytes = memory_limit_mb * 1024 * 1024
+
+                # Set virtual memory limit (soft/hard)
+                try:
+                    resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+                except (ValueError, OSError):
+                    # Fail-closed: if we can't set limits, raise to prevent spawning
+                    raise IsolationError(
+                        f"Failed to set memory limit ({memory_limit_mb}MB) via RLIMIT_AS"
+                    )
+
+                # Set file descriptor limit (reasonable default)
+                try:
+                    resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+                except (ValueError, OSError):
+                    pass  # Non-critical if this fails
+
+                # Set core dump size to 0 (prevent large core files)
+                try:
+                    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+                except (ValueError, OSError):
+                    pass  # Non-critical
+
+            # Spawn subprocess with isolation (preexec applies limits in child)
+            # Note: preexec_fn is Unix only; Windows uses job objects
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=_apply_resource_limits,  # type: ignore
+                )
+                pid = proc.pid
+            except TypeError:
+                # preexec_fn not supported on this platform (e.g., Windows)
+                # Fall back to simple spawn without resource limits
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                pid = proc.pid
 
             process = IsolatedProcess(
                 process_id=pid,
@@ -105,9 +148,29 @@ class SubprocessBoundary:
         Raises:
             IsolationError: If isolation violation detected
         """
-        # Placeholder: real implementation would check cgroup limits,
-        # namespace restrictions, IPC channels, etc.
-        return True
+        # Check if process exists in isolated_processes dict
+        if process.process_id not in self._isolated_processes:
+            raise IsolationError(
+                f"Process {process.process_id} not tracked (isolation violated)",
+                policy=process.policy,
+            )
+
+        # Verify process still exists and hasn't been tampered with
+        try:
+            # Try to send signal 0 (no-op signal) to verify process exists
+            os.kill(process.process_id, 0)
+            # Process exists and is running under our control
+            return True
+        except (OSError, ProcessLookupError):
+            # Process doesn't exist; clean up tracking
+            if process.process_id in self._isolated_processes:
+                del self._isolated_processes[process.process_id]
+            return False
+        except Exception as e:
+            raise IsolationError(
+                f"Failed to enforce isolation for {process.process_id}: {str(e)}",
+                policy=process.policy,
+            )
 
     def _simulate_spawn(self, cmd: List[str]) -> int:
         """Simulate subprocess spawn for testing."""

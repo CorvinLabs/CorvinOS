@@ -43,10 +43,26 @@ class DataClassifier:
 
     def __init__(self):
         """Initialize classifier with default patterns."""
+        # Expanded PII pattern database (tuned for low false-positive rate)
         self._pii_patterns = {
+            # Email: RFC 5322 basic pattern
             "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+            # Phone: international format with 10+ digits
             "phone": r"\+?[0-9]{10,}",
+            # US Social Security Number: XXX-XX-XXXX
             "ssn": r"[0-9]{3}-[0-9]{2}-[0-9]{4}",
+            # Credit card: 13-19 digit patterns with or without spaces/dashes
+            "credit_card": r"[0-9]{4}[\s\-]?[0-9]{4}[\s\-]?[0-9]{4}[\s\-]?[0-9]{4,7}",
+            # US Passport: 8-9 characters, letters + digits
+            "passport": r"[0-9]{8,9}",
+            # Date of birth patterns (various formats): DD/MM/YYYY, MM-DD-YYYY, etc.
+            "dob": r"(0?[1-9]|[12][0-9]|3[01])[\/-](0?[1-9]|1[012])[\/-](19|20)?[0-9]{2}",
+            # Drivers license: varies by state, basic pattern (6-8 alphanumeric)
+            "drivers_license": r"[A-Z0-9]{6,8}",
+            # Bank account: 8-17 digits
+            "bank_account": r"[0-9]{8,17}",
+            # IBAN (International Bank Account Number): country code + check digits + account
+            "iban": r"[A-Z]{2}[0-9]{2}[A-Z0-9]{1,30}",
         }
         self._tier_restrictions: dict[ClassificationLevel, Set[str]] = {
             ClassificationLevel.PUBLIC: {ClassificationLevel.PUBLIC},

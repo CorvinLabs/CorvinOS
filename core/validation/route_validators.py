@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 from flask import request, jsonify, current_app
 from core.validators.factory import ValidatorFactory, ValidationResult
-from core.compliance.audit import audit_log
+from core.compliance.corvin_compliance_reports.audit import audit_log
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -197,10 +197,30 @@ def _extract_tenant_id(source: str, field_name: str) -> Optional[str]:
     if source == "header":
         return request.headers.get(field_name)
     elif source == "session":
-        # Placeholder for session-based extraction
-        # In real usage, would access Flask session or similar
+        # Session-based extraction: check Flask session dictionary
+        # Example: if session is used, tenant_id would be stored under field_name
+        try:
+            from flask import session
+            if session and field_name in session:
+                tenant_id = session.get(field_name)
+                if isinstance(tenant_id, str) and tenant_id:
+                    return tenant_id
+        except (ImportError, RuntimeError):
+            # Flask session not available (e.g., outside request context)
+            pass
         return None
     elif source == "path":
-        # Placeholder for path-based extraction
+        # Path-based extraction: check URL path variables (Flask url_map)
+        # Example: /tenants/<tenant_id>/resource → extract from view_args
+        try:
+            if hasattr(request, 'view_args') and request.view_args:
+                # field_name typically matches the URL variable name
+                # e.g., field_name="tenant_id" in /tenants/<tenant_id>/...
+                tenant_id = request.view_args.get(field_name)
+                if isinstance(tenant_id, str) and tenant_id:
+                    return tenant_id
+        except (AttributeError, RuntimeError):
+            # No view_args available
+            pass
         return None
     return None
