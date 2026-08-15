@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -858,6 +859,10 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     "TTS failed" banner — breaking the deliberate design (204-on-failure
     everywhere else) that a TTS problem never surfaces as an error to the user.
     Control characters are unspeakable anyway; dropping them loses nothing.
+
+    Uses `uv run` to ensure say.py executes in the project's virtual environment,
+    guaranteeing access to openai, edge-tts, piper-tts, and pywhispercpp (ADR-0194).
+    Falls back to sys.executable if uv is unavailable (e.g. in vendored wheels).
     """
     safe_text = "".join(
         ch for ch in text
@@ -865,8 +870,16 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     )
     voice = _resolve_tts_voice(lang)
     provider = _resolve_tts_provider()
-    cmd = [sys.executable, str(_VOICE_SCRIPTS / "say.py"),
-           str(out_path), safe_text, lang, voice or ""]
+
+    # Try to use uv run for correct venv isolation; fall back to sys.executable
+    try:
+        shutil.which("uv")  # noqa: B605
+        cmd = ["uv", "run", "python", str(_VOICE_SCRIPTS / "say.py"),
+               str(out_path), safe_text, lang, voice or ""]
+    except (OSError, TypeError):
+        cmd = [sys.executable, str(_VOICE_SCRIPTS / "say.py"),
+               str(out_path), safe_text, lang, voice or ""]
+
     if provider:
         cmd.append(provider)
     return cmd
