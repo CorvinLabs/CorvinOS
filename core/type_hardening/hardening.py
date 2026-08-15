@@ -151,6 +151,13 @@ class TypeValidator:
             args = get_args(expected_type)
             if len(args) >= 2 and obj:
                 key_type, value_type = args[0], args[1]
+                # Skip validation if key_type or value_type is parameterized generic
+                key_origin = get_origin(key_type)
+                value_origin = get_origin(value_type)
+                if key_origin is not None or value_origin is not None:
+                    logger.debug(f"Skipping dict validation for parameterized generics: key={key_type}, value={value_type}")
+                    return True
+
                 for k, v in obj.items():
                     try:
                         if not isinstance(k, key_type):
