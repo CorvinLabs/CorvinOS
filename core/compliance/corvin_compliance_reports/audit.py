@@ -148,8 +148,45 @@ def report_failed(
     )
 
 
+def audit_log(
+    *,
+    action: str,
+    reason: str = "",
+    source: str = "",
+    tenant_id: str = "unknown",
+) -> None:
+    """Log input validation and security events to audit trail.
+
+    Generic audit log function for Phase 10 validators and other subsystems.
+    Fail-closed: on error, silently skip (never propagate audit failures).
+
+    Args:
+        action: Action type (e.g., 'input_validation_failed', 'pii_detected')
+        reason: Reason code (e.g., 'invalid_type', 'missing_tenant_id')
+        source: Source identifier (e.g., 'route_json_name', 'async_task_foo')
+        tenant_id: Tenant context (defaults to 'unknown' for system events)
+    """
+    try:
+        payload: dict[str, Any] = {
+            "action": action,
+            "reason": reason,
+            "source": source,
+            "tenant_id": tenant_id,
+        }
+        # Write to audit trail via security events
+        _security_events.write_event(
+            event_type="validation.audit_log",
+            details=payload,
+            path=_audit_path(tenant_id),
+        )
+    except Exception:
+        # Fail-closed: audit failures never propagate to the business logic
+        pass
+
+
 __all__ = [
     "ComplianceAuditFieldNotAllowed",
     "report_generated",
     "report_failed",
+    "audit_log",
 ]

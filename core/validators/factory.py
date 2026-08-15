@@ -337,12 +337,17 @@ class ValidatorFactory:
 
     Fail-closed: unknown validators reject, invalid input rejects.
     Tenant isolation: all validators accept keyword-only tenant_id.
+    Recursion limit: composite validators capped at MAX_DEPTH to prevent stack overflow.
     """
+
+    # Maximum nesting depth for composite validators (prevents stack overflow)
+    MAX_RECURSION_DEPTH = 10
 
     def __init__(self) -> None:
         """Initialize factory."""
         self._validators: Dict[str, ValidatorFunc] = {}
         self._composite_validators: Dict[str, Union[CompositeValidator, NotValidator]] = {}
+        self._recursion_depth: int = 0
         self._register_builtins()
 
     def _register_builtins(self) -> None:
@@ -428,46 +433,60 @@ class ValidatorFactory:
         Raises:
             KeyError: if validator not registered (fail-closed)
         """
-        # Fail-closed: unknown validator rejects
-        if name not in self._validators and name not in self._composite_validators:
+        # Check recursion depth (fail-closed: prevent stack overflow)
+        self._recursion_depth += 1
+        if self._recursion_depth > self.MAX_RECURSION_DEPTH:
+            self._recursion_depth -= 1
             return ValidationResult(
                 is_valid=False,
-                error_message=f"Unknown validator: {name}",
-                error_code="unknown_validator",
+                error_message=f"Validator nesting exceeds maximum depth ({self.MAX_RECURSION_DEPTH})",
+                error_code="recursion_depth_exceeded",
             )
 
-        # Simple validators
-        if name in self._validators:
-            validator = self._validators[name]
-            try:
-                return validator(value, tenant_id=tenant_id, **kwargs)
-            except Exception as e:
-                # Fail-closed: catch validation errors
+        try:
+            # Fail-closed: unknown validator rejects
+            if name not in self._validators and name not in self._composite_validators:
                 return ValidationResult(
                     is_valid=False,
-                    error_message=f"Validation error: {str(e)}",
-                    error_code="validation_error",
+                    error_message=f"Unknown validator: {name}",
+                    error_code="unknown_validator",
                 )
 
-        # Composite validators
-        if name in self._composite_validators:
-            validator = self._composite_validators[name]
-            try:
-                return validator.validate(value, tenant_id=tenant_id)
-            except Exception as e:
-                # Fail-closed: catch validation errors
-                return ValidationResult(
-                    is_valid=False,
-                    error_message=f"Validation error: {str(e)}",
-                    error_code="validation_error",
-                )
+            # Simple validators
+            if name in self._validators:
+                validator = self._validators[name]
+                try:
+                    return validator(value, tenant_id=tenant_id, **kwargs)
+                except Exception as e:
+                    # Fail-closed: catch validation errors
+                    return ValidationResult(
+                        is_valid=False,
+                        error_message=f"Validation error: {str(e)}",
+                        error_code="validation_error",
+                    )
 
-        # Should not reach here
-        return ValidationResult(
-            is_valid=False,
-            error_message="Validator not found",
-            error_code="unknown_validator",
-        )
+            # Composite validators
+            if name in self._composite_validators:
+                validator = self._composite_validators[name]
+                try:
+                    return validator.validate(value, tenant_id=tenant_id)
+                except Exception as e:
+                    # Fail-closed: catch validation errors
+                    return ValidationResult(
+                        is_valid=False,
+                        error_message=f"Validation error: {str(e)}",
+                        error_code="validation_error",
+                    )
+
+            # Should not reach here
+            return ValidationResult(
+                is_valid=False,
+                error_message="Validator not found",
+                error_code="unknown_validator",
+            )
+        finally:
+            # Always decrement depth on exit (even on exception)
+            self._recursion_depth -= 1
 
     def list_validators(self) -> Dict[str, str]:
         """List all registered validators with descriptions."""
