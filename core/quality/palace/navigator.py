@@ -178,7 +178,7 @@ class IdeaPalace:
 
         return results
 
-    def summary(self) -> Dict[str, any]:
+    def summary(self) -> Dict[str, int]:
         """Global statistics."""
         total = {
             'ideas': 0,

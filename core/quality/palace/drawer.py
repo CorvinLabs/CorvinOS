@@ -153,8 +153,8 @@ class DrawerManager:
 
         return sorted(artifacts, key=lambda a: getattr(a, 'name', ''))
 
-    def list_all(self) -> Dict[str, List[Drawer]]:
-        """List all drawers organized by type."""
+    def list_all(self) -> Dict[str, List]:
+        """List all artifacts organized by type."""
         return {
             'ideas': self.list_by_type('idea'),
             'concepts': self.list_by_type('concept'),
