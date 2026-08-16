@@ -1,19 +1,24 @@
-"""File Permission Hardener — ADR-0295
+"""
+File Permission Hardener — ADR-0295
 
-Fine-grained file-write protection with fail-closed semantics.
-Integrates with L10 Path-Gate and audit trail for comprehensive access control.
+Fail-closed file-write protection. No file writes outside permitted zones.
+Integrates with L10 path-gate.
 """
 
-from .manager import (
-    FilePermissionManager,
-    PermissionDenied,
-    PermissionType,
-    PermissionRule,
+from core.file_permissions.hardener import (
+    HARDENER,
+    PermissionError,
+    PermissionHardener,
+    allow_zone,
+    check_write,
+    is_write_allowed,
 )
 
 __all__ = [
-    "FilePermissionManager",
-    "PermissionDenied",
-    "PermissionType",
-    "PermissionRule",
+    "PermissionHardener",
+    "PermissionError",
+    "HARDENER",
+    "check_write",
+    "is_write_allowed",
+    "allow_zone",
 ]

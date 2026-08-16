@@ -1,223 +1,98 @@
-"""Persona Capability Axis — ADR-0302
+"""
+Persona and Capability Model.
 
-Centralized, deny-by-default capability model for personas and roles.
-Every (persona, role, capability) tuple defaults to DENIED.
-Only explicit grants are permitted.
+Central registry for persona/role/capability checking. Deny-by-default:
+a capability is only True if explicitly in the registry.
 """
 
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Set, Dict, Tuple, Optional, Callable
-from datetime import datetime
+import contextvars
 import functools
-from contextvars import ContextVar
+from typing import Any, Callable, Dict, Set, Tuple
 
+from core.context_engineering.capabilities import Persona, Role, Tier
 
-# ============================================================================
-# Enums
-# ============================================================================
+# ContextVars: set by transport layer, used by logic layer
+_current_persona: contextvars.ContextVar[Persona] = contextvars.ContextVar(
+    'current_persona',
+    default=Persona.MCP_TOOL
+)
 
+_current_role: contextvars.ContextVar[Role] = contextvars.ContextVar(
+    'current_role',
+    default=Role.USER
+)
 
-class Persona(Enum):
-    """Identity + environment bundles for CorvinOS access."""
-
-    CONSOLE_OPERATOR = "console_operator"
-    VOICE_USER = "voice_user"
-    BRIDGE_ADAPTER = "bridge_adapter"
-    MCP_TOOL = "mcp_tool"
-
-
-class Role(Enum):
-    """Role partitions capabilities."""
-
-    ADMIN = "admin"
-    OPERATOR = "operator"
-    USER = "user"
-
-
-class Tier(Enum):
-    """Capability tier for bootstrap locking."""
-
-    COMPLIANCE = "compliance"
-    STANDARD = "standard"
-    USER = "user"
-
-
-# ============================================================================
-# Data Structures
-# ============================================================================
-
-
-@dataclass(frozen=True)
-class Capability:
-    """Atomic permission definition."""
-
-    id: str  # "read_audit_log", "write_feature_flag"
-    description: str
-    tier: Tier
-    requires_mfa: bool = False
-
-
-@dataclass
-class PersonaRoleCapabilities:
-    """Capabilities for a (persona, role) pair."""
-
-    persona: Persona
-    role: Role
-    capabilities: Set[str] = field(default_factory=set)
-    mfa_verified: bool = False
-
-
-PersonaRoleTuple = Tuple[Persona, Role]
-
-
-# ============================================================================
-# Exceptions
-# ============================================================================
+_current_tenant_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    'current_tenant_id',
+    default='_default'
+)
 
 
 class CapabilityLockError(Exception):
-    """Cannot register Tier.COMPLIANCE capability after boot."""
-
+    """Raised when attempting to modify Tier.COMPLIANCE capabilities after boot lock."""
     pass
 
 
-class CapabilityDeniedError(Exception):
-    """Capability check resulted in denial."""
-
-    pass
-
-
-class PersonaResolutionError(Exception):
-    """Cannot resolve current persona/role from context."""
-
-    pass
-
-
-# ============================================================================
-# Context Variables
-# ============================================================================
-
-current_persona: ContextVar[Persona] = ContextVar(
-    "current_persona", default=Persona.MCP_TOOL
-)
-current_role: ContextVar[Role] = ContextVar("current_role", default=Role.USER)
-
-
-def get_current_persona() -> Persona:
-    """Get current persona from context."""
-    return current_persona.get()
-
-
-def set_current_persona(persona: Persona) -> None:
-    """Set current persona in context."""
-    current_persona.set(persona)
-
-
-def get_current_role() -> Role:
-    """Get current role from context."""
-    return current_role.get()
-
-
-def set_current_role(role: Role) -> None:
-    """Set current role in context."""
-    current_role.set(role)
-
-
-# ============================================================================
-# Capability Registry
-# ============================================================================
+class CapabilityDenied(Exception):
+    """Raised when a capability check fails."""
+    def __init__(self, persona: Persona, role: Role, capability_id: str):
+        self.persona = persona
+        self.role = role
+        self.capability_id = capability_id
+        super().__init__(
+            f"Persona {persona.value} role {role.value} missing capability {capability_id}"
+        )
 
 
 class CapabilityRegistry:
-    """Central capability registry — deny-by-default.
+    """
+    Central capability registry — deny-by-default.
 
-    Every (persona, role, capability) tuple is DENIED by default.
-    Only explicit grants are permitted.
-    Tier.COMPLIANCE capabilities cannot be registered after lock_tier1() is called.
+    Load-bearing invariants:
+    1. If a capability is not in the registry, it is always False
+    2. Tier.COMPLIANCE capabilities cannot be revoked after boot lock
+    3. Capabilities are scoped to (tenant_id, persona, role)
     """
 
     def __init__(self):
-        """Initialize empty registry (all denied by default)."""
-        self._capabilities: Dict[PersonaRoleTuple, Set[str]] = {}
-        self._capability_defs: Dict[str, Capability] = {}
+        # Shape: (tenant_id, persona, role) -> Set[capability_id]
+        self._capabilities: Dict[Tuple[str, Persona, Role], Set[str]] = {}
         self._tier1_locked = False
 
     def register_capability(
         self,
-        capability_id: str,
-        description: str,
-        tier: Tier = Tier.STANDARD,
-        requires_mfa: bool = False,
-    ) -> Capability:
-        """Register a capability definition.
-
-        Args:
-            capability_id: Unique capability identifier
-            description: Human-readable description
-            tier: Capability tier (COMPLIANCE, STANDARD, USER)
-            requires_mfa: Whether this capability requires MFA
-
-        Returns:
-            Capability object
-
-        Raises:
-            CapabilityLockError if trying to register COMPLIANCE tier after lock_tier1()
-        """
-        if self._tier1_locked and tier == Tier.COMPLIANCE:
-            raise CapabilityLockError(
-                f"Cannot register Tier.COMPLIANCE capability '{capability_id}' after boot lock"
-            )
-
-        cap = Capability(
-            id=capability_id,
-            description=description,
-            tier=tier,
-            requires_mfa=requires_mfa,
-        )
-        self._capability_defs[capability_id] = cap
-        return cap
-
-    def grant(
-        self,
         persona: Persona,
         role: Role,
         capability_id: str,
+        tier: Tier = Tier.STANDARD,
+        tenant_id: str = '_default',
     ) -> None:
-        """Grant a capability to (persona, role) pair.
+        """Register a capability for (tenant_id, persona, role)."""
+        if self._tier1_locked and tier == Tier.COMPLIANCE:
+            raise CapabilityLockError(
+                f"Cannot register Tier.COMPLIANCE capability {capability_id} after boot lock"
+            )
 
-        Args:
-            persona: Persona that gets the capability
-            role: Role that gets the capability
-            capability_id: Capability to grant
-
-        Raises:
-            ValueError if capability_id is not registered
-        """
-        if capability_id not in self._capability_defs:
-            raise ValueError(f"Capability '{capability_id}' not registered")
-
-        key = (persona, role)
+        key = (tenant_id, persona, role)
         if key not in self._capabilities:
             self._capabilities[key] = set()
         self._capabilities[key].add(capability_id)
 
-    def revoke(
+    def revoke_capability(
         self,
         persona: Persona,
         role: Role,
         capability_id: str,
+        tier: Tier = Tier.STANDARD,
+        tenant_id: str = '_default',
     ) -> None:
-        """Revoke a capability from (persona, role) pair.
+        """Revoke a capability. Tier.COMPLIANCE cannot be revoked after boot lock."""
+        if self._tier1_locked and tier == Tier.COMPLIANCE:
+            raise CapabilityLockError(
+                f"Cannot revoke Tier.COMPLIANCE capability {capability_id} after boot lock"
+            )
 
-        Args:
-            persona: Persona to revoke from
-            role: Role to revoke from
-            capability_id: Capability to revoke
-        """
-        key = (persona, role)
+        key = (tenant_id, persona, role)
         if key in self._capabilities:
             self._capabilities[key].discard(capability_id)
 
@@ -226,101 +101,104 @@ class CapabilityRegistry:
         persona: Persona,
         role: Role,
         capability_id: str,
+        tenant_id: str = '_default',
     ) -> bool:
-        """Check if (persona, role) has capability (deny-by-default).
-
-        Args:
-            persona: Persona to check
-            role: Role to check
-            capability_id: Capability to check
-
-        Returns:
-            True if capability granted, False if denied (default)
         """
-        key = (persona, role)
+        Check: does (tenant_id, persona, role) have this capability?
+        Deny-by-default: if not explicitly granted, return False.
+        """
+        key = (tenant_id, persona, role)
         return capability_id in self._capabilities.get(key, set())
+
+    def lock_tier1(self) -> None:
+        """Lock Tier.COMPLIANCE capabilities (called at boot, fail-closed tripwire)."""
+        self._tier1_locked = True
+
+    def unlock_tier1(self) -> None:
+        """Unlock Tier.COMPLIANCE (for testing only)."""
+        self._tier1_locked = False
 
     def get_capabilities(
         self,
         persona: Persona,
         role: Role,
+        tenant_id: str = '_default',
     ) -> Set[str]:
-        """Get all capabilities for (persona, role).
-
-        Args:
-            persona: Persona
-            role: Role
-
-        Returns:
-            Set of capability IDs
-        """
-        key = (persona, role)
+        """Get all capabilities for (tenant_id, persona, role)."""
+        key = (tenant_id, persona, role)
         return self._capabilities.get(key, set()).copy()
 
-    def lock_tier1(self) -> None:
-        """Lock Tier.COMPLIANCE capabilities (called at boot).
 
-        After this is called, no new COMPLIANCE tier capabilities can be registered.
-        """
-        self._tier1_locked = True
-
-    def is_locked(self) -> bool:
-        """Check if Tier.COMPLIANCE capabilities are locked."""
-        return self._tier1_locked
-
-    def get_capability_def(self, capability_id: str) -> Optional[Capability]:
-        """Get capability definition by ID."""
-        return self._capability_defs.get(capability_id)
-
-    def list_capabilities(self) -> Dict[str, Capability]:
-        """Get all registered capabilities."""
-        return self._capability_defs.copy()
+# Global registry instance
+_REGISTRY = CapabilityRegistry()
 
 
-# ============================================================================
-# Global Registry
-# ============================================================================
+# Public API
+def get_registry() -> CapabilityRegistry:
+    """Get the global capability registry."""
+    return _REGISTRY
 
-REGISTRY = CapabilityRegistry()
+
+def get_current_persona() -> Persona:
+    """Get current persona from context."""
+    return _current_persona.get()
 
 
-# ============================================================================
-# Decorator: requires_capability
-# ============================================================================
+def set_current_persona(persona: Persona) -> None:
+    """Set current persona in context (called by transport layer)."""
+    _current_persona.set(persona)
+
+
+def get_current_role() -> Role:
+    """Get current role from context."""
+    return _current_role.get()
+
+
+def set_current_role(role: Role) -> None:
+    """Set current role in context (called by transport layer)."""
+    _current_role.set(role)
+
+
+def get_current_tenant_id() -> str:
+    """Get current tenant_id from context."""
+    return _current_tenant_id.get()
+
+
+def set_current_tenant_id(tenant_id: str) -> None:
+    """Set current tenant_id in context (called by transport layer)."""
+    _current_tenant_id.set(tenant_id)
+
+
+def has_capability(capability_id: str) -> bool:
+    """
+    Check if current context (persona, role, tenant) has a capability.
+    Convenience wrapper around registry.has_capability().
+    """
+    persona = get_current_persona()
+    role = get_current_role()
+    tenant_id = get_current_tenant_id()
+    return _REGISTRY.has_capability(persona, role, capability_id, tenant_id)
 
 
 def requires_capability(capability_id: str) -> Callable:
-    """Decorator: require a capability for function execution.
+    """
+    Decorator: enforce capability check before function execution.
 
-    Resolves persona/role from context and checks capability.
-    Raises CapabilityDeniedError if capability is not granted.
-
-    Usage:
+    Example:
         @requires_capability("read_audit_log")
         def verify_audit():
             ...
-
-    Args:
-        capability_id: Capability required
-
-    Returns:
-        Decorator function
     """
-
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             persona = get_current_persona()
             role = get_current_role()
+            tenant_id = get_current_tenant_id()
 
-            if not REGISTRY.has_capability(persona, role, capability_id):
-                raise CapabilityDeniedError(
-                    f"Persona {persona.value} role {role.value} "
-                    f"missing capability {capability_id}"
-                )
+            if not _REGISTRY.has_capability(persona, role, capability_id, tenant_id):
+                raise CapabilityDenied(persona, role, capability_id)
 
             return func(*args, **kwargs)
-
         return wrapper
-
     return decorator

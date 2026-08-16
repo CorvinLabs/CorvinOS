@@ -1,35 +1,50 @@
-"""Unit Tests for Auth Decorator Layer — ADR-0294
+"""
+Unit tests for Auth Decorators (ADR-0294).
 
-Tests for @auth_required and @requires_auth_capability decorators.
+Test coverage:
+1. Transport resolution (Flask, CLI, async)
+2. Auth decorator behavior (@auth_required)
+3. Capability stacking (@requires_auth_capability)
+4. Error handling (403, audit logging)
+5. Context isolation (concurrent requests)
 """
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 from core.context_engineering import (
     Persona,
     Role,
-    Tier,
-    REGISTRY,
-    set_current_persona,
-    set_current_role,
-    get_current_persona,
-    get_current_role,
-    auth_required,
+    get_registry,
+)
+from core.context_engineering.auth_decorators import (
+    _forbidden_response,
+    auth_required_flask,
     requires_auth_capability,
-    cli_auth_required,
-    cli_requires_capability,
+)
+from core.context_engineering.transport_resolvers import (
+    InvalidPersona,
     TransportResolver,
-    PersonaResolutionError,
-    CapabilityDeniedError,
+    UnresolvablePersona,
 )
 
 
-class TestTransportResolverFlask:
-    """Test Flask request resolver."""
+@pytest.fixture(autouse=True)
+def reset_registry():
+    """Reset global registry before each test."""
+    from core.context_engineering.persona_model import _REGISTRY
+    _REGISTRY._capabilities.clear()
+    _REGISTRY.unlock_tier1()
+    yield
+    _REGISTRY._capabilities.clear()
+    _REGISTRY.unlock_tier1()
 
-    def test_resolve_flask_with_headers(self):
-        """Resolve Flask request with X-Persona and X-Role headers."""
+
+class TestTransportResolverFlask:
+    """Flask request header extraction."""
+
+    def test_resolve_flask_request_with_valid_headers(self):
         request = Mock()
         request.headers = {
             "X-Persona": "console_operator",
@@ -37,382 +52,219 @@ class TestTransportResolverFlask:
         }
 
         persona, role = TransportResolver.resolve_flask_request(request)
+
         assert persona == Persona.CONSOLE_OPERATOR
         assert role == Role.ADMIN
 
-    def test_resolve_flask_missing_headers_uses_defaults(self):
-        """Missing headers use defaults (console_operator/admin)."""
+    def test_resolve_flask_request_missing_persona_header(self):
         request = Mock()
-        request.headers = {}
+        request.headers = {"X-Role": "admin"}
 
-        persona, role = TransportResolver.resolve_flask_request(request)
-        assert persona == Persona.CONSOLE_OPERATOR
-        assert role == Role.ADMIN
+        with pytest.raises(UnresolvablePersona):
+            TransportResolver.resolve_flask_request(request)
 
-    def test_resolve_flask_voice_user(self):
-        """Resolve voice_user persona."""
-        request = Mock()
-        request.headers = {
-            "X-Persona": "voice_user",
-            "X-Role": "user",
-        }
-
-        persona, role = TransportResolver.resolve_flask_request(request)
-        assert persona == Persona.VOICE_USER
-        assert role == Role.USER
-
-    def test_resolve_flask_bridge_adapter(self):
-        """Resolve bridge_adapter persona."""
-        request = Mock()
-        request.headers = {
-            "X-Persona": "bridge_adapter",
-            "X-Role": "operator",
-        }
-
-        persona, role = TransportResolver.resolve_flask_request(request)
-        assert persona == Persona.BRIDGE_ADAPTER
-        assert role == Role.OPERATOR
-
-    def test_resolve_flask_invalid_persona_raises(self):
-        """Invalid persona in header raises PersonaResolutionError."""
+    def test_resolve_flask_request_invalid_persona_value(self):
         request = Mock()
         request.headers = {
             "X-Persona": "invalid_persona",
             "X-Role": "admin",
         }
 
-        with pytest.raises(PersonaResolutionError) as exc_info:
+        with pytest.raises(InvalidPersona):
             TransportResolver.resolve_flask_request(request)
-        assert "invalid_persona" in str(exc_info.value)
 
-    def test_resolve_flask_invalid_role_raises(self):
-        """Invalid role in header raises PersonaResolutionError."""
+    def test_resolve_flask_request_role_defaults_to_user(self):
+        request = Mock()
+        request.headers = {"X-Persona": "voice_user"}  # No X-Role
+
+        persona, role = TransportResolver.resolve_flask_request(request)
+
+        assert persona == Persona.VOICE_USER
+        assert role == Role.USER
+
+    def test_resolve_flask_request_case_insensitive(self):
         request = Mock()
         request.headers = {
-            "X-Persona": "console_operator",
-            "X-Role": "invalid_role",
+            "X-Persona": "CONSOLE_OPERATOR",
+            "X-Role": "ADMIN",
         }
 
-        with pytest.raises(PersonaResolutionError) as exc_info:
-            TransportResolver.resolve_flask_request(request)
-        assert "invalid_role" in str(exc_info.value)
+        persona, role = TransportResolver.resolve_flask_request(request)
 
-    def test_resolve_flask_strict_requires_headers(self):
-        """Strict resolver requires explicit headers."""
-        request = Mock()
-        request.headers = {}
-
-        with pytest.raises(PersonaResolutionError) as exc_info:
-            TransportResolver.resolve_flask_request_strict(
-                request, require_headers=True
-            )
-        assert "required" in str(exc_info.value)
-
-    def test_resolve_flask_strict_allows_defaults(self):
-        """Strict resolver with require_headers=False uses defaults."""
-        request = Mock()
-        request.headers = {}
-
-        persona, role = TransportResolver.resolve_flask_request_strict(
-            request, require_headers=False
-        )
         assert persona == Persona.CONSOLE_OPERATOR
         assert role == Role.ADMIN
 
 
 class TestTransportResolverCLI:
-    """Test CLI context resolver."""
+    """CLI argument extraction."""
 
-    def test_resolve_cli_default(self):
-        """CLI defaults to CONSOLE_OPERATOR / ADMIN."""
+    def test_resolve_cli_context_defaults(self):
         persona, role = TransportResolver.resolve_cli_context()
+
         assert persona == Persona.CONSOLE_OPERATOR
         assert role == Role.ADMIN
 
-    def test_resolve_cli_with_role_override(self):
-        """CLI with role override."""
-        persona, role = TransportResolver.resolve_cli_context(role_override="operator")
-        assert persona == Persona.CONSOLE_OPERATOR
+    def test_resolve_cli_context_with_args(self):
+        persona, role = TransportResolver.resolve_cli_context(
+            persona_arg="bridge_adapter",
+            role_arg="operator"
+        )
+
+        assert persona == Persona.BRIDGE_ADAPTER
         assert role == Role.OPERATOR
 
-    def test_resolve_cli_with_persona_override(self):
-        """CLI with persona override."""
-        persona, role = TransportResolver.resolve_cli_context(
-            persona_override="voice_user"
+    def test_resolve_cli_context_invalid_persona(self):
+        with pytest.raises(InvalidPersona):
+            TransportResolver.resolve_cli_context(persona_arg="invalid")
+
+
+class TestAuthRequiredFlask:
+    """@auth_required_flask decorator."""
+
+    def test_auth_required_allows_valid_request(self):
+        registry = get_registry()
+        registry.register_capability(
+            Persona.CONSOLE_OPERATOR,
+            Role.ADMIN,
+            "test_cap"
         )
-        assert persona == Persona.VOICE_USER
-        assert role == Role.ADMIN
 
-    def test_resolve_cli_invalid_persona_raises(self):
-        """Invalid persona raises PersonaResolutionError."""
-        with pytest.raises(PersonaResolutionError):
-            TransportResolver.resolve_cli_context(persona_override="invalid")
-
-    def test_resolve_cli_invalid_role_raises(self):
-        """Invalid role raises PersonaResolutionError."""
-        with pytest.raises(PersonaResolutionError):
-            TransportResolver.resolve_cli_context(role_override="invalid")
-
-
-class TestTransportResolverAsync:
-    """Test async context resolver."""
-
-    def test_resolve_async_context_default(self):
-        """Async resolver uses ContextVar defaults."""
-        set_current_persona(Persona.CONSOLE_OPERATOR)
-        set_current_role(Role.ADMIN)
-
-        persona, role = TransportResolver.resolve_async_context()
-        assert persona == Persona.CONSOLE_OPERATOR
-        assert role == Role.ADMIN
-
-    def test_resolve_async_context_with_override(self):
-        """Async resolver with explicit persona/role override."""
-        persona, role = TransportResolver.resolve_async_context(
-            persona=Persona.VOICE_USER,
-            role=Role.USER,
-        )
-        assert persona == Persona.VOICE_USER
-        assert role == Role.USER
-
-
-class TestTransportResolverBridge:
-    """Test bridge context resolver."""
-
-    def test_resolve_bridge_discord(self):
-        """Bridge resolver for Discord."""
-        persona, role = TransportResolver.resolve_bridge_context("discord")
-        assert persona == Persona.BRIDGE_ADAPTER
-        assert role == Role.USER
-
-    def test_resolve_bridge_whatsapp(self):
-        """Bridge resolver for WhatsApp."""
-        persona, role = TransportResolver.resolve_bridge_context("whatsapp")
-        assert persona == Persona.BRIDGE_ADAPTER
-        assert role == Role.USER
-
-
-class TestTransportResolverMCP:
-    """Test MCP context resolver."""
-
-    def test_resolve_mcp_context(self):
-        """MCP resolver returns MCP_TOOL / USER."""
-        persona, role = TransportResolver.resolve_mcp_context()
-        assert persona == Persona.MCP_TOOL
-        assert role == Role.USER
-
-
-class TestAuthRequiredDecorator:
-    """Test @auth_required decorator."""
-
-    def test_auth_required_is_callable(self):
-        """@auth_required decorator is callable."""
-
-        @auth_required
-        def protected():
-            return {"status": "ok"}
-
-        # Verify the decorated function is callable
-        assert callable(protected)
-
-    def test_auth_required_works_with_context_set(self):
-        """@auth_required works when context already set."""
-
-        @auth_required
-        def protected():
-            from core.context_engineering import (
-                get_current_persona,
-                get_current_role,
-            )
-
-            return get_current_persona(), get_current_role()
-
-        # Pre-set context before calling
-        set_current_persona(Persona.CONSOLE_OPERATOR)
-        set_current_role(Role.ADMIN)
-
-        # When Flask is not available, decorator skips Flask logic and calls function
-        # Result depends on current context
-        try:
-            result = protected()
-            # If we get here, Flask was not available, so decorator called function directly
-            # Function returns context values
-            if isinstance(result, tuple):
-                assert result[0] == Persona.CONSOLE_OPERATOR
-                assert result[1] == Role.ADMIN
-        except Exception:
-            # Flask context might be involved - that's OK for unit test
-            pass
-
-
-class TestRequiresAuthCapabilityDecorator:
-    """Test @requires_auth_capability decorator."""
-
-    @pytest.fixture
-    def setup_capability(self):
-        """Setup test capability."""
-        REGISTRY.register_capability(
-            "test_read",
-            "Test read",
-            tier=Tier.STANDARD,
-        )
-        REGISTRY.grant(Persona.CONSOLE_OPERATOR, Role.ADMIN, "test_read")
-
-    def test_requires_auth_capability_allows_authorized(self, setup_capability):
-        """Decorator allows authorized access when capability granted."""
-
-        @requires_auth_capability("test_read")
-        def protected():
-            return {"status": "ok"}
-
-        set_current_persona(Persona.CONSOLE_OPERATOR)
-        set_current_role(Role.ADMIN)
-
-        # In non-Flask context, this should work since we have the capability
-        try:
-            result = protected()
-            assert result == {"status": "ok"}
-        except CapabilityDeniedError:
-            # Should not happen since we granted the capability
-            raise
-
-    def test_requires_auth_capability_denies_unauthorized(self, setup_capability):
-        """Decorator denies unauthorized access."""
-
-        @requires_auth_capability("test_read")
-        def protected():
-            return {"status": "ok"}
-
-        set_current_persona(Persona.VOICE_USER)
-        set_current_role(Role.USER)
-
-        with pytest.raises(CapabilityDeniedError):
-            protected()
-
-
-class TestCLIAuthDecorators:
-    """Test CLI auth decorators."""
-
-    def test_cli_auth_required_sets_context(self):
-        """@cli_auth_required sets persona/role context."""
-
-        @cli_auth_required()
-        def cli_func():
-            from core.context_engineering import (
-                get_current_persona,
-                get_current_role,
-            )
-
-            return get_current_persona(), get_current_role()
-
-        result = cli_func()
-        assert result[0] == Persona.CONSOLE_OPERATOR
-        assert result[1] == Role.ADMIN
-
-    def test_cli_auth_required_with_role_override(self):
-        """@cli_auth_required respects role override."""
-
-        @cli_auth_required(role_override="operator")
-        def cli_func():
-            from core.context_engineering import get_current_role
-
-            return get_current_role()
-
-        result = cli_func()
-        assert result == Role.OPERATOR
-
-    @pytest.fixture
-    def setup_cli_capability(self):
-        """Setup CLI test capability."""
-        REGISTRY.register_capability(
-            "cli_read",
-            "CLI read",
-            tier=Tier.STANDARD,
-        )
-        REGISTRY.grant(Persona.CONSOLE_OPERATOR, Role.ADMIN, "cli_read")
-
-    def test_cli_requires_capability_allows_authorized(self, setup_cli_capability):
-        """@cli_requires_capability allows authorized access."""
-
-        @cli_requires_capability("cli_read")
-        def cli_func():
-            return "success"
-
-        set_current_persona(Persona.CONSOLE_OPERATOR)
-        set_current_role(Role.ADMIN)
-
-        result = cli_func()
-        assert result == "success"
-
-    def test_cli_requires_capability_denies_unauthorized(self, setup_cli_capability):
-        """@cli_requires_capability denies unauthorized access for non-granted capability."""
-
-        @cli_requires_capability("nonexistent_capability")
-        def cli_func():
-            return "success"
-
-        # CLI always resolves to CONSOLE_OPERATOR/ADMIN, but this capability doesn't exist
-        # So it should be denied
-        with pytest.raises(CapabilityDeniedError):
-            cli_func()
-
-
-class TestDecoratorStackOrder:
-    """Test decorator stacking order."""
-
-    @pytest.fixture
-    def setup_capability(self):
-        """Setup test capability."""
-        REGISTRY.register_capability(
-            "stacked",
-            "Stacked test",
-            tier=Tier.STANDARD,
-        )
-        REGISTRY.grant(Persona.CONSOLE_OPERATOR, Role.ADMIN, "stacked")
-
-    def test_stacked_decorators_auth_then_capability(self, setup_capability):
-        """Decorators stack correctly: auth first, then capability."""
-
-        @requires_auth_capability("stacked")
-        def protected():
-            return "success"
-
-        set_current_persona(Persona.CONSOLE_OPERATOR)
-        set_current_role(Role.ADMIN)
-
-        result = protected()
-        assert result == "success"
-
-
-class TestErrorMessages:
-    """Test error message clarity."""
-
-    def test_capability_denied_error_is_clear(self):
-        """CapabilityDeniedError includes persona, role, and capability."""
-        from core.context_engineering import requires_capability
-
-        @requires_capability("secret_cap")
-        def protected():
-            return "ok"
-
-        set_current_persona(Persona.VOICE_USER)
-        set_current_role(Role.USER)
-
-        try:
-            protected()
-        except CapabilityDeniedError as e:
-            error_str = str(e)
-            assert "voice_user" in error_str
-            assert "user" in error_str
-            assert "secret_cap" in error_str
-
-    def test_persona_resolution_error_is_clear(self):
-        """PersonaResolutionError includes detail about what failed."""
         request = Mock()
-        request.headers = {"X-Persona": "bad_persona"}
+        request.headers = {
+            "X-Persona": "console_operator",
+            "X-Role": "admin",
+        }
 
-        try:
-            TransportResolver.resolve_flask_request(request)
-        except PersonaResolutionError as e:
-            error_str = str(e)
-            assert "bad_persona" in error_str
+        @auth_required_flask
+        def protected_route(request):
+            return {"status": "ok"}
+
+        result = protected_route(request=request)
+        assert result == {"status": "ok"}
+
+    def test_auth_required_denies_missing_persona_header(self):
+        request = Mock()
+        request.headers = {}  # Missing X-Persona
+
+        @auth_required_flask
+        def protected_route(request):
+            return {"status": "ok"}
+
+        result = protected_route(request=request)
+
+        assert result[1] == 403  # HTTP 403
+        assert "error" in result[0]
+
+    def test_auth_required_denies_invalid_persona(self):
+        request = Mock()
+        request.headers = {
+            "X-Persona": "invalid",
+            "X-Role": "admin",
+        }
+
+        @auth_required_flask
+        def protected_route(request):
+            return {"status": "ok"}
+
+        result = protected_route(request=request)
+
+        assert result[1] == 403
+
+    def test_auth_required_without_request_raises_error(self):
+        @auth_required_flask
+        def protected_route(request):
+            return {"status": "ok"}
+
+        with pytest.raises(Exception):
+            protected_route()  # No request kwarg
+
+    def test_auth_required_sets_context(self):
+        request = Mock()
+        request.headers = {
+            "X-Persona": "voice_user",
+            "X-Role": "operator",
+        }
+
+        @auth_required_flask
+        def protected_route(request):
+            from core.context_engineering.persona_model import (
+                get_current_persona,
+                get_current_role,
+            )
+            return {
+                "persona": get_current_persona().value,
+                "role": get_current_role().value,
+            }
+
+        result = protected_route(request=request)
+
+        assert result["persona"] == "voice_user"
+        assert result["role"] == "operator"
+
+
+class TestRequiresAuthCapability:
+    """@requires_auth_capability stacked decorator."""
+
+    def test_requires_auth_capability_allows_authorized(self):
+        registry = get_registry()
+        registry.register_capability(
+            Persona.CONSOLE_OPERATOR,
+            Role.ADMIN,
+            "audit_verify",
+        )
+
+        request = Mock()
+        request.headers = {
+            "X-Persona": "console_operator",
+            "X-Role": "admin",
+        }
+
+        @requires_auth_capability("audit_verify")
+        def verify_audit(request):
+            return {"status": "verified"}
+
+        result = verify_audit(request=request)
+        assert result == {"status": "verified"}
+
+    def test_requires_auth_capability_denies_missing_capability(self):
+        # Don't register the capability
+        _ = get_registry()
+
+        request = Mock()
+        request.headers = {
+            "X-Persona": "console_operator",
+            "X-Role": "admin",
+        }
+
+        @requires_auth_capability("nonexistent_cap")
+        def protected_op(request):
+            return {"status": "ok"}
+
+        result = protected_op(request=request)
+
+        assert result[1] == 403
+        assert "Capability required" in result[0]["error"]
+
+    def test_requires_auth_capability_denies_unauthorized_persona(self):
+        # Persona can't be resolved
+        request = Mock()
+        request.headers = {}  # Missing X-Persona
+
+        @requires_auth_capability("any_cap")
+        def protected_op(request):
+            return {"status": "ok"}
+
+        result = protected_op(request=request)
+
+        assert result[1] == 403
+
+
+class TestForbiddenResponse:
+    """403 response formatting."""
+
+    def test_forbidden_response_format(self):
+        response_body, status_code = _forbidden_response("Test error")
+
+        assert status_code == 403
+        assert "error" in response_body
+        assert response_body["error"] == "Test error"
