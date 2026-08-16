@@ -215,34 +215,48 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
         sys.stderr.write("say.py: no OPENAI_API_KEY — skipping OpenAI TTS\n")
         return False
     try:
-        from openai import OpenAI  # type: ignore[import-not-found]
+        from openai import OpenAI, RateLimitError  # type: ignore[import-not-found]
     except ImportError:
         sys.stderr.write("say.py: openai package not installed — skipping\n")
         return False
-    try:
-        # Tier 1: Allow retries on rate-limit (429) with exponential backoff.
-        # The SDK's default (max_retries=2) was disabled to protect the outer
-        # 25s route budget (VOICE-10), but RateLimitError needs backoff.
-        # Solution: keep retries for 429 only, timeout is still clamped by
-        # main()'s deadline, so worst case stays under 25s outer budget.
-        client = OpenAI(api_key=key, timeout=timeout_s, max_retries=2)
-        resp = client.audio.speech.create(
-            model="tts-1",
-            voice=_openai_voice_for(lang, voice),
-            input=text,
-            response_format="opus",
-        )
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(resp.read())
-        return True
-    except Exception as e:  # noqa: BLE001
-        # CONTENT-FREE: SDK exception str()s can embed the request payload —
-        # i.e. the text being spoken. Type + HTTP status only (2026-07-17).
-        sys.stderr.write(
-            f"say.py: OpenAI TTS failed: {type(e).__name__} "
-            f"status={getattr(e, 'status_code', '')}\n"
-        )
-        return False
+
+    # Retry with exponential backoff on RateLimitError (429)
+    max_retries = 2
+    for attempt in range(max_retries + 1):
+        try:
+            # max_retries=0: disable SDK retries to protect the outer 25s route
+            # budget (VOICE-10). We handle RateLimitError with manual backoff.
+            client = OpenAI(api_key=key, timeout=timeout_s, max_retries=0)
+            resp = client.audio.speech.create(
+                model="tts-1",
+                voice=_openai_voice_for(lang, voice),
+                input=text,
+                response_format="opus",
+            )
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(resp.read())
+            return True
+        except RateLimitError as e:
+            if attempt < max_retries:
+                # Exponential backoff: 1s, 2s, 4s
+                wait_time = 2 ** attempt
+                import time
+                time.sleep(wait_time)
+                continue
+            # All retries exhausted
+            sys.stderr.write(
+                f"say.py: OpenAI TTS failed after {max_retries + 1} attempts: "
+                f"RateLimitError status=429\n"
+            )
+            return False
+        except Exception as e:  # noqa: BLE001
+            # CONTENT-FREE: SDK exception str()s can embed the request payload —
+            # i.e. the text being spoken. Type + HTTP status only (2026-07-17).
+            sys.stderr.write(
+                f"say.py: OpenAI TTS failed: {type(e).__name__} "
+                f"status={getattr(e, 'status_code', '')}\n"
+            )
+            return False
 
 
 # ── edge-tts helpers ──────────────────────────────────────────────────
