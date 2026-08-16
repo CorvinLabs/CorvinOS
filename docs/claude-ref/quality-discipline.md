@@ -295,3 +295,11 @@ opts in.
 - **Audit Chain (L16):** Security foundation; ADRs often involve audit changes
 - **Path-Gate (L10):** Write protection; structural changes to forge/policy require ADRs
 - **SkillForge (L7):** Delivery mechanism; disciplines are bundled as skills
+
+---
+
+## See Also
+
+- **[quality-pipeline.md](quality-pipeline.md)** — Idea-to-Implementation Pipeline reference (CLI, artifact models, gates, lineage enforcement)
+- **ADR-0350** — Idea-Pipeline MVP architecture (Tier 1: filesystem + YAML)
+- **CONCEPT-0008** — Full Idea-Pipeline specification (all phases, migration strategy)
