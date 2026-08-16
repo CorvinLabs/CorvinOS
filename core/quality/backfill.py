@@ -59,6 +59,7 @@ class UpstreamBackfill:
             created_at=datetime.now(),
             tags=['auto-generated'],
             inspiration_context=f"Generated as upstream for {concept_id}",
+            downstream=[concept_id],  # Bidirectional link
         )
 
         # Save Idea
@@ -89,6 +90,7 @@ class UpstreamBackfill:
             status=Status.DRAFT,
             created_at=datetime.now(),
             tags=['auto-generated'],
+            downstream=[adr_id],  # Bidirectional link
         )
 
         # Save Concept
@@ -119,6 +121,7 @@ class UpstreamBackfill:
             status=Status.PROPOSED,
             created_at=datetime.now(),
             tags=['auto-generated'],
+            downstream=[plan_id],  # Bidirectional link
         )
 
         # Save ADR

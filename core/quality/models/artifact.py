@@ -151,7 +151,11 @@ class ADR(Artifact):
         super().__init__(**kwargs)
         self.adr_number = adr_number
         if self.id.startswith('ADR-'):
-            self.adr_number = int(self.id.split('-')[1])
+            try:
+                self.adr_number = int(self.id.split('-')[1])
+            except (ValueError, IndexError):
+                # Malformed ID; leave adr_number as provided (or None)
+                pass
 
 
 class ImplementationPlan(Artifact):

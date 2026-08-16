@@ -29,7 +29,15 @@ class IdeaPipelineCLI:
 
         # Generate ID
         artifact_list = room_obj.drawer_manager.list_all()
-        count = len(artifact_list.get(artifact_type.replace('-', '') + 's', []))
+        # Map artifact type to key in artifact_list
+        key_map = {
+            'idea': 'ideas',
+            'concept': 'concepts',
+            'adr': 'adrs',
+            'implementation-plan': 'plans',
+        }
+        key = key_map.get(artifact_type, artifact_type + 's')
+        count = len(artifact_list.get(key, []))
         artifact_id = f"{self._type_to_prefix(artifact_type)}-{count + 1:04d}"
 
         # Create artifact model
