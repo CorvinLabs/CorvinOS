@@ -257,22 +257,22 @@ def _try_install_edge_tts() -> bool:
 def check_tts_readiness() -> tuple[bool, str, str]:
     """Check TTS availability. Returns (ok, provider, action).
 
-    Priority: edge-tts first (no API key needed, always works with internet),
-    then piper (local, no internet), then openai (needs API key at runtime).
+    Priority: openai first (Tier 1 quality), then piper (local, no internet),
+    then edge-tts (universal fallback, no API key needed, works with internet).
     """
-    # Universal fallback — no API key, just internet. Always comes first.
-    if _edge_tts_importable():
-        return True, "edge", "none"
+    # Tier 1: OpenAI TTS (best quality, requires API key at runtime)
+    if _openai_importable():
+        return True, "openai", "none"
 
     # Local piper (no network needed once models are present)
     if _piper_available():
         return True, "piper", "none"
 
-    # OpenAI TTS (quality, but requires API key at runtime)
-    if _openai_importable():
-        return True, "openai", "none"
+    # Universal fallback — no API key, just internet
+    if _edge_tts_importable():
+        return True, "edge", "none"
 
-    # Try installing edge-tts (fast, ~1 MB, no models)
+    # Try installing edge-tts (fast, ~1 MB, no models) as last resort
     logger.info("[ACO] edge-tts not installed — attempting silent install")
     if _try_install_edge_tts() and _edge_tts_importable():
         logger.info("[ACO] edge-tts installed successfully")
