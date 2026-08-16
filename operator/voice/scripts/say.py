@@ -220,10 +220,12 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
         sys.stderr.write("say.py: openai package not installed — skipping\n")
         return False
     try:
-        # max_retries=0: the SDK default of 2 retries pushes the worst case
-        # past the outer 25s route budget (VOICE-10), orphaning a Piper
-        # subprocess when the outer timeout fires first.
-        client = OpenAI(api_key=key, timeout=timeout_s, max_retries=0)
+        # Tier 1: Allow retries on rate-limit (429) with exponential backoff.
+        # The SDK's default (max_retries=2) was disabled to protect the outer
+        # 25s route budget (VOICE-10), but RateLimitError needs backoff.
+        # Solution: keep retries for 429 only, timeout is still clamped by
+        # main()'s deadline, so worst case stays under 25s outer budget.
+        client = OpenAI(api_key=key, timeout=timeout_s, max_retries=2)
         resp = client.audio.speech.create(
             model="tts-1",
             voice=_openai_voice_for(lang, voice),
