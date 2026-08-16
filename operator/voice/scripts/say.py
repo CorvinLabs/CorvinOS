@@ -238,8 +238,8 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
             return True
         except RateLimitError as e:
             if attempt < max_retries:
-                # Exponential backoff: 1s, 2s, 4s
-                wait_time = 2 ** attempt
+                # Exponential backoff: 3s, 6s, 12s (longer for OpenAI API)
+                wait_time = 3 * (2 ** attempt)
                 import time
                 time.sleep(wait_time)
                 continue
