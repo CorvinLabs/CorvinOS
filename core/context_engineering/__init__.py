@@ -1,93 +1,47 @@
-"""Context Engineering — Persona Capability Axis (ADR-0302, ADR-0294)
+"""Context Engineering — Persona, Role, and Capability Model."""
 
-Centralized identity and capability management for CorvinOS.
-- Persona: identity + environment (console_operator, voice_user, bridge_adapter, mcp_tool)
-- Role: capability partition (admin, operator, user)
-- Capability: fine-grained permission (read_audit_log, write_feature_flag, etc.)
-"""
-
+from core.context_engineering.capabilities import Capability, Persona, Role, Tier
 from core.context_engineering.persona_model import (
-    # Enums
-    Persona,
-    Role,
-    Tier,
-    # Data structures
-    Capability,
-    PersonaRoleCapabilities,
-    # Registry
-    CapabilityRegistry,
-    REGISTRY,
-    # Context variables
-    current_persona,
-    current_role,
-    get_current_persona,
-    set_current_persona,
-    get_current_role,
-    set_current_role,
-    # Decorators
-    requires_capability,
-    # Exceptions
+    CapabilityDenied,
     CapabilityLockError,
-    CapabilityDeniedError,
-    PersonaResolutionError,
+    CapabilityRegistry,
+    get_current_persona,
+    get_current_role,
+    get_current_tenant_id,
+    get_registry,
+    has_capability,
+    requires_capability,
+    set_current_persona,
+    set_current_role,
+    set_current_tenant_id,
 )
-
-from core.context_engineering.transport_resolvers import TransportResolver
-
-from core.context_engineering.auth_decorators import (
-    # Flask decorators
-    auth_required,
-    requires_auth_capability,
-    audit_request,
-    # CLI decorators
-    cli_auth_required,
-    cli_requires_capability,
-    # Async decorators
-    async_auth_required,
-    async_requires_capability,
-    # Exceptions
+from core.context_engineering.transport_resolvers import (
     AuthError,
+    InvalidPersona,
+    TransportResolver,
     UnresolvablePersona,
-    MissingCapability,
+)
+from core.context_engineering.auth_decorators import (
+    auth_required_cli,
+    auth_required_flask,
+    requires_auth_capability,
 )
 
 __all__ = [
-    # Enums
     "Persona",
     "Role",
     "Tier",
-    # Data structures
     "Capability",
-    "PersonaRoleCapabilities",
-    # Registry
     "CapabilityRegistry",
-    "REGISTRY",
-    # Context variables
-    "current_persona",
-    "current_role",
+    "CapabilityDenied",
+    "CapabilityLockError",
+    "get_registry",
     "get_current_persona",
     "set_current_persona",
     "get_current_role",
     "set_current_role",
-    # Transport resolver
-    "TransportResolver",
-    # Decorators (Flask)
-    "auth_required",
-    "requires_auth_capability",
-    "audit_request",
-    # Decorators (CLI)
-    "cli_auth_required",
-    "cli_requires_capability",
-    # Decorators (Async)
-    "async_auth_required",
-    "async_requires_capability",
-    # Decorators (general)
+    "get_current_tenant_id",
+    "set_current_tenant_id",
+    "has_capability",
     "requires_capability",
-    # Exceptions
-    "CapabilityLockError",
-    "CapabilityDeniedError",
-    "PersonaResolutionError",
-    "AuthError",
-    "UnresolvablePersona",
-    "MissingCapability",
 ]

@@ -1,52 +1,49 @@
-"""Input Validator Factory — ADR-0296
+"""
+Validator Factory for Input Validation — ADR-0296
 
-Centralized, pluggable validator factory with deny-by-default validation.
-All user input validated before reaching logic.
-
-Validator registry: each input type has registered rules
-Composition: validators stack (type check → length → regex → custom)
-Fail-closed: invalid input → 400 Bad Request + audit log
-
-Tenant isolation: all validators are keyword-only and accept tenant_id parameter.
+Central, pluggable validator registry with deny-by-default validation.
+All user input validated before reaching business logic.
 """
 
-from core.validators.factory import (
-    FACTORY,
-    ValidationResult,
-    ValidatorFactory,
-    ValidatorFunc,
-    AndValidator,
-    OrValidator,
-    NotValidator,
-    validate_string,
-    validate_integer,
+from core.validators.factory import FACTORY, ValidatorFactory
+from core.validators.rules import (
+    validate_alphanumeric,
     validate_email,
-    validate_url,
-    validate_peer_id,
     validate_flag_id,
-    validate_uuid,
-    validate,
+    validate_non_empty_string,
+    validate_peer_id,
+    validate_plugin_id,
+    validate_port,
+    validate_string_length,
+    validate_tenant_id,
+    validate_url,
+    validate_uuid4,
 )
 
+# Register all built-in validators
+FACTORY.register("peer_id", validate_peer_id)
+FACTORY.register("flag_id", validate_flag_id)
+FACTORY.register("plugin_id", validate_plugin_id)
+FACTORY.register("tenant_id", validate_tenant_id)
+FACTORY.register("email", validate_email)
+FACTORY.register("url", validate_url)
+FACTORY.register("uuid4", validate_uuid4)
+FACTORY.register("port", validate_port)
+FACTORY.register("alphanumeric", validate_alphanumeric)
+FACTORY.register("non_empty_string", validate_non_empty_string)
+
 __all__ = [
-    # Factory
     "FACTORY",
     "ValidatorFactory",
-    "validate",
-    # Result type
-    "ValidationResult",
-    # Validator type
-    "ValidatorFunc",
-    # Built-in validators
-    "validate_string",
-    "validate_integer",
-    "validate_email",
-    "validate_url",
     "validate_peer_id",
     "validate_flag_id",
-    "validate_uuid",
-    # Composite validators
-    "AndValidator",
-    "OrValidator",
-    "NotValidator",
+    "validate_plugin_id",
+    "validate_tenant_id",
+    "validate_email",
+    "validate_url",
+    "validate_uuid4",
+    "validate_port",
+    "validate_alphanumeric",
+    "validate_non_empty_string",
+    "validate_string_length",
 ]
