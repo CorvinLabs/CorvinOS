@@ -13,6 +13,8 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import yaml
 
+# Status enum will be imported in list_by_type to avoid circular imports
+
 
 class Drawer:
     """Immutable markdown artifact with YAML frontmatter."""
@@ -106,17 +108,50 @@ class DrawerManager:
 
         return None
 
-    def list_by_type(self, artifact_type: str) -> List[Drawer]:
-        """List all drawers of a type."""
+    def list_by_type(self, artifact_type: str) -> List:
+        """List all artifacts of a type (as Artifact models)."""
+        from ..models.artifact import ARTIFACT_CLASSES, ArtifactType, Status
+        from datetime import datetime
+
         drawer_dir = self.drawers[artifact_type]
-        drawers = []
+        artifacts = []
+        artifact_class = ARTIFACT_CLASSES.get(ArtifactType(artifact_type))
 
         for file in drawer_dir.glob("*.md"):
             text = file.read_text(encoding='utf-8')
             drawer = Drawer.from_markdown(text, artifact_type)
-            drawers.append(drawer)
+            metadata = drawer.metadata
 
-        return sorted(drawers, key=lambda d: d.metadata.get('created_at', ''))
+            # Parse dates
+            created_at = metadata.get('created_at')
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at)
+
+            approved_at = metadata.get('approved_at')
+            if isinstance(approved_at, str):
+                approved_at = datetime.fromisoformat(approved_at)
+
+            # Convert status to enum
+            status = metadata.get('status')
+            if isinstance(status, str):
+                status = Status(status)
+
+            # Create artifact
+            artifact = artifact_class(
+                id=metadata.get('id'),
+                name=metadata.get('name'),
+                room=metadata.get('room', ''),
+                wing=metadata.get('wing', ''),
+                status=status,
+                created_at=created_at,
+                approved_at=approved_at,
+                upstream=metadata.get('upstream'),
+                downstream=metadata.get('downstream', []),
+                tags=metadata.get('tags', []),
+            )
+            artifacts.append(artifact)
+
+        return sorted(artifacts, key=lambda a: getattr(a, 'name', ''))
 
     def list_all(self) -> Dict[str, List[Drawer]]:
         """List all drawers organized by type."""
