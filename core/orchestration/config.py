@@ -19,12 +19,18 @@ logger = logging.getLogger(__name__)
 class BrainConfigLoader:
     """Load Brain configuration from YAML and instantiate subsystems."""
 
-    # Builtin subsystems registry
+    # Builtin subsystems registry (Phase 1 + Phase 2)
     BUILTIN_SUBSYSTEMS = {
+        # Phase 1: Core subsystems
         "health_monitor": "core.orchestration.subsystems.health_monitor:HealthMonitor",
         "context_bridge": "core.orchestration.subsystems.context_bridge:ContextBridge",
         "loop_engineer": "core.orchestration.subsystems.loop_engineer:LoopEngineer",
         "orchestrator": "core.orchestration.subsystems.orchestrator:Orchestrator",
+        # Phase 2: Advanced subsystems
+        "learning_engine": "core.orchestration.subsystems.learning_engine:LearningEngine",
+        "cost_controller": "core.orchestration.subsystems.cost_controller:CostController",
+        "safety_validator": "core.orchestration.subsystems.safety_validator:SafetyValidator",
+        "strategy_advisor": "core.orchestration.subsystems.strategy_advisor:StrategyAdvisor",
     }
 
     @classmethod
