@@ -17,6 +17,7 @@
   <a href="docs/overview.md">Overview</a> ·
   <a href="docs/plugin-architecture.md"><strong>🧩 Plugin System</strong></a> ·
   <a href="docs/architecture.md">Architecture</a> ·
+  <a href="docs/IDEA_EVOLUTION_SYSTEM.md"><strong>💡 Idea Evolution System (CIES)</strong></a> ·
   <a href="docs/audit-and-compliance.md">Audit &amp; Compliance</a> ·
   <a href="docs/agent-communication.md">A2A Network</a> ·
   <a href="docs/engine-layer.md">Engine Layer</a> ·
@@ -195,6 +196,38 @@ CorvinOS and the Worker Engines are two deliberately separate layers. Bridge dae
 Below the `WorkerEngine` protocol boundary sits a swappable set of **Worker Engines** — Claude Code, Codex CLI, OpenCode, Copilot CLI, and Hermes (the zero-config local default via Ollama) — each a thin adapter implementing the same interface. Compliance, audit, and the rest of the OS stay identical no matter which engine is plugged in; adding a new engine means implementing the protocol, not touching CorvinOS.
 
 Full breakdown: [docs/layer-model.md](docs/layer-model.md) · Diagrams: [docs/diagrams/](docs/diagrams/) · Full documentation: [docs/overview.md](docs/overview.md)
+
+---
+
+## Idea Evolution System (CIES)
+
+CorvinOS ships with **CIES** — a hierarchical knowledge management framework that tracks architectural concepts from initial ideation through production decisions.
+
+**Three-layer hierarchy:**
+- **IDEA-ADR:** Strategic vision + stakeholder alignment
+- **CONCEPT-ADR:** Reusable working methods (validated across 2+ tasks, minted as auto-injected skills)
+- **ADR-NNNN:** Code-binding architectural decisions (permanent record in Git)
+
+**Why it matters:**
+- **Lineage:** Every decision traces back to the idea and concept that motivated it
+- **Reusability:** Concepts become skills, automatically injected into future turns
+- **Audit trail:** GDPR Art. 30 compliance — full traceability from vision to code
+- **Knowledge capture:** Methods proven across tasks stay in the system, not the operator's notebook
+
+```bash
+# Query examples:
+cies-traverse --adr ADR-0314 --direction upstream
+# Output: ADR-0314 ← CONCEPT-ADR-0009 ← IDEA-ADR-0042
+
+cies-metrics --measure latency --from idea --to deployed
+# Output: 28 days | 3 iterations | 4 stakeholders
+```
+
+**Hybrid storage:**
+- MemPlace (FS): Ideas + Concepts — human-editable, append-only audit trail
+- Git (Corvin-ADR/): Decisions + code — code-binding contracts, hash-chained
+
+Read the full guide: [docs/IDEA_EVOLUTION_SYSTEM.md](docs/IDEA_EVOLUTION_SYSTEM.md) · Visual diagrams: [docs/diagrams/cies-*.svg](docs/diagrams/)
 
 ---
 
