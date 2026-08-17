@@ -1,4 +1,5 @@
 import * as React from "react";
+import { panelRoutes } from "@/panels/registry";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { AppLayout } from "@/components/layout";
@@ -9,7 +10,6 @@ import {
   LoginPage,
   DashboardPage,
   YourTalentPage,
-  VibeEngineeringPage,
   SettingsPage,
   EnginesPage,
   BrowserPage,
@@ -164,7 +164,8 @@ export default function App() {
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
             <Route path="talent" element={<YourTalentPage />} />
-            <Route path="vibe-engineering" element={<VibeEngineeringPage />} />
+            {/* ADR-0353 P1: panels render from the registry, not hardcoded routes */}
+            {panelRoutes()}
             <Route path="agent-hub" element={<AgentHubPage />} />
             <Route path="connectors" element={<ConnectorsPage />} />
             <Route path="workflows" element={<WorkflowsListPage />} />
