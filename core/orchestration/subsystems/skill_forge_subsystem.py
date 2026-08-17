@@ -469,8 +469,19 @@ class SkillForgeSubsystem(Subsystem):
 
         Returns:
             Result dict with skill record or error
+
+        Raises:
+            LicenseLimitError: If daily skill_forge quota exceeded.
         """
         try:
+            # ADR-0365: Enforce skill_forge_per_day quota
+            from pathlib import Path
+            from operator.license.quota_counter import increment_and_check
+            # Use _default tenant if not available from context
+            tenant_id = getattr(self, 'tenant_id', '_default')
+            corvin_home = Path.home() / ".corvin"
+            increment_and_check(corvin_home, "skill_forge_per_day", tenant_id)
+
             skill_record = await self.async_registry.skill_create(
                 name=payload["name"],
                 body_md=payload["body_md"],
