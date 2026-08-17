@@ -1,9 +1,6 @@
-"""Autonomous Chat Observatory (ACO) — ADR-0174.
-
-Layer 1: Observable Chat (chat_debug.jsonl) — implemented in chat_runtime.py
-Layer 2: Replay Engine        — replay.py
-Layer 3: Anomaly Detection    — anomaly_detector.py
-Layer 4: Autonomous Diagnosis — diagnosis.py
-Layer 5: Self-Repair Loop     — repair_actions.py, actuating, ADR-0178
-Layer 6: Self-Improving Maintenance Loop — maintenance_loop.py + maintainer_capability.py, ADR-0178
-"""
+"""Backward-compat shim — aco moved to corvin_core.aco (ADR-0352 P2.1). The 26 test
+files + intra-console relative imports keep importing corvin_console.aco.* while
+they migrate. Each corvin_console/aco/<mod>.py aliases sys.modules to the real
+corvin_core.aco.<mod> (no submodule double-load); this __init__ re-exports any
+package-level names."""
+from corvin_core.aco import *  # noqa: F401,F403
