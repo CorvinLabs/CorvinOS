@@ -18,6 +18,8 @@ export interface ConsolePanel {
   requiredFlag?: string;
   element:
     | { kind: "react"; load: () => Promise<{ default: ComponentType }> }
+    /** an already-lazy'd component (reuses the existing @/lazy-pages exports) */
+    | { kind: "react-component"; component: ComponentType }
     | { kind: "web-component"; tag: string; src: string }
     | { kind: "iframe"; src: string; sandbox: string };
   /** checked against the capability manifest's contract version (P3) */
