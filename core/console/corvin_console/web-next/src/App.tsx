@@ -1,6 +1,5 @@
 import * as React from "react";
-import { panelRoutes, PANELS } from "@/panels/registry";
-import { useCapabilities, gatePanels } from "@/adapters/capabilities";
+import { panelRoutes } from "@/panels/registry";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { AppLayout } from "@/components/layout";
@@ -91,12 +90,12 @@ function RootRedirect() {
 }
 
 export default function App() {
-  // ADR-0357 P3: the shell renders panel routes from the backend capability
-  // manifest. Before auth / on fetch error the manifest is undefined and
-  // gatePanels() returns the ungated core panels (fail-safe, never a blank shell);
-  // the /app routes are behind RequireAuth anyway.
-  const { data: capabilityManifest } = useCapabilities();
-  const gatedPanels = gatePanels(PANELS, capabilityManifest);
+  // Routes are rendered UNGATED: every panel route is mounted, always. Access is
+  // enforced by the backend (auth + flags), and the capability manifest can 401
+  // pre-auth — gating the ROUTES here made the vibe-engineering page (and others)
+  // disappear whenever the manifest had not loaded yet (a regression). The
+  // capability/flag GATING lives on the NAV instead (layout.tsx, in the authed
+  // shell where the manifest loads reliably) — that is the UX surface it belongs on.
   return (
     <AuthProvider>
       <ChunkErrorBoundary>
@@ -126,9 +125,9 @@ export default function App() {
             <Route path="personas/:name" element={<PersonaDetailPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
-            {/* ADR-0353 P1 + ADR-0357 P3: panels render from the registry, gated
-                by the backend capability manifest. */}
-            {panelRoutes(gatedPanels)}
+            {/* ADR-0353 P1: panels render from the registry (all routes mounted;
+                the nav gates visibility, layout.tsx). */}
+            {panelRoutes()}
             <Route path="workflows" element={<WorkflowsListPage />} />
             <Route path="workflows/:wid" element={<WorkflowEditorPage />} />
             <Route path="workflows/:wid/runs" element={<WorkflowRunsPage />} />
