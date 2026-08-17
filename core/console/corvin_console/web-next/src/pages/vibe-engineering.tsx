@@ -14,27 +14,13 @@ import {
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  useTraces, useBrief, useAssembly, useForged, usePipeline, useSavePipeline,
+  type Turn, type Stage,
+} from "@/adapters/vibe";
 
-interface Source { id: string; score: number }
-interface Stage {
-  stage: string;
-  status: string;
-  duration_ms?: number | null;
-  confidence_tier?: string;
-  sources?: Source[];
-  reason?: string;
-}
-interface Turn {
-  turn_id: string;
-  ts?: number;
-  hash?: string;
-  degraded?: string | null;
-  top_score?: number;
-  brief_sha256?: string | null;
-  stages: Stage[];
-}
-interface SessionGroup { session: string; turns: Turn[] }
-interface TracesResponse { tenant_id: string; sessions: SessionGroup[]; available: boolean }
+// Single source of truth for domain types is the adapter (ADR-0353 P0).
+// (domain types come from the adapter)
 
 const STAGE_META: Record<string, {
   icon: React.ComponentType<{ className?: string }>; label: string; short: string;
@@ -144,12 +130,12 @@ function StageGraph({ stage }: { stage: Stage }) {
         return (
           <g key={"e" + i}>
             <line x1={cx} y1={cy} x2={p.x} y2={p.y} stroke={col}
-                  strokeWidth={0.8 + p.s.score * 2.6} strokeOpacity={0.45} />
+                  strokeWidth={0.8 + (p.s.score ?? 0) * 2.6} strokeOpacity={0.45} />
             <rect x={mx - 15} y={my - 9} width={30} height={16} rx={4}
                   className="fill-background" stroke={col} strokeOpacity={0.5} />
             <text x={mx} y={my + 3} textAnchor="middle"
                   className="fill-muted-foreground" fontSize={10}>
-              {p.s.score.toFixed(2)}
+              {(p.s.score ?? 0).toFixed(2)}
             </text>
           </g>
         );
@@ -227,7 +213,7 @@ function StageModal({ stage, onClose }: { stage: Stage; onClose: () => void }) {
             {stage.sources!.map((s, i) => (
               <li key={i} className="flex justify-between gap-2 text-sm">
                 <span className="truncate font-mono text-xs" title={s.id}>{s.id}</span>
-                <span className="tabular-nums text-muted-foreground">{s.score.toFixed(2)}</span>
+                <span className="tabular-nums text-muted-foreground">{(s.score ?? 0).toFixed(2)}</span>
               </li>
             ))}
           </ul>
@@ -238,17 +224,12 @@ function StageModal({ stage, onClose }: { stage: Stage; onClose: () => void }) {
 }
 
 function BriefModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
-  const [brief, setBrief] = useState<string | null>(null);
-  const [state, setState] = useState<"loading" | "ok" | "erased" | "none">("loading");
-  useEffect(() => {
-    if (!turn.brief_sha256) { setState("none"); return; }
-    let alive = true;
-    fetch(`/v1/console/vibe-engineering/explain/${turn.brief_sha256}`)
-      .then((r) => r.json())
-      .then((d) => { if (!alive) return; d.found ? (setBrief(d.text), setState("ok")) : setState("erased"); })
-      .catch(() => alive && setState("erased"));
-    return () => { alive = false; };
-  }, [turn.brief_sha256]);
+  const q = useBrief(turn.brief_sha256);
+  const brief = q.data?.found ? (q.data.text ?? null) : null;
+  const state: "loading" | "ok" | "erased" | "none" =
+    !turn.brief_sha256 ? "none"
+      : q.isLoading ? "loading"
+        : q.data?.found ? "ok" : "erased";
   return (
     <Modal title="Injected context brief" subtitle={turn.turn_id} onClose={onClose}>
       <div className="mb-4 rounded-lg border border-border bg-muted/30 p-3">
@@ -271,28 +252,15 @@ function BriefModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
 
 /* ── turn card: header + one compact pipeline row ──────────────────────── */
 /* ── prompt inspector: bausteine → final prompt + forged tool/skill code ── */
-interface Section { kind: string; label: string; items?: string[]; text?: string }
-interface ForgedTool { name: string; description?: string; code: string; deterministic?: boolean }
-interface ForgedSkill { skill_id: string; body: string }
-
 function PromptInspectorModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
-  const [asm, setAsm] = useState<{ sections?: Section[]; final_prompt?: string } | null>(null);
-  const [forged, setForged] = useState<{ tools: ForgedTool[]; skills: ForgedSkill[] } | null>(null);
-  const [state, setState] = useState<"loading" | "ok" | "none">("loading");
   const [openCode, setOpenCode] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    Promise.all([
-      fetch(`/v1/console/vibe-engineering/prompt/${turn.turn_id}`).then((r) => r.json()).catch(() => null),
-      fetch(`/v1/console/vibe-engineering/forged/${turn.turn_id}`).then((r) => r.json()).catch(() => null),
-    ]).then(([a, f]) => {
-      if (!alive) return;
-      if (a && a.found) { setAsm(a); setState("ok"); } else { setState("none"); }
-      if (f && f.found) setForged({ tools: f.tools || [], skills: f.skills || [] });
-    });
-    return () => { alive = false; };
-  }, [turn.turn_id]);
+  const asmQ = useAssembly(turn.turn_id);
+  const forgedQ = useForged(turn.turn_id);
+  const asm = asmQ.data?.found ? asmQ.data : null;
+  const forged = forgedQ.data?.found
+    ? { tools: forgedQ.data.tools ?? [], skills: forgedQ.data.skills ?? [] } : null;
+  const state: "loading" | "ok" | "none" =
+    asmQ.isLoading ? "loading" : asm ? "ok" : "none";
 
   return (
     <Modal title="Prompt Inspector" subtitle={turn.turn_id} onClose={onClose}>
@@ -368,25 +336,21 @@ function PipelineEditorModal({ onClose, onSaved }: { onClose: () => void; onSave
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [csrf, setCsrf] = useState("");
   // Whether the egress/forge stages below can actually RUN. They are deferred to
   // the post-gate phase, which only the ACTIVE brain executes — with the
   // `vibe_engineering_active` flag off they sit permanently "deferred". Without
   // this the editor showed a pipeline that looked armed and silently was not.
   const [activeOn, setActiveOn] = useState(true);
 
+  const pipeQ = usePipeline();
+  const saveMut = useSavePipeline();
   useEffect(() => {
-    let alive = true;
-    fetch("/v1/console/vibe-engineering/pipeline").then((r) => r.json()).then((d) => {
-      if (!alive) return;
-      setCurrent(d.current || []); setPalette(d.palette || []);
-      setDef(d.default || []); setActiveOn(d.active_enabled !== false);
+    if (pipeQ.data) {
+      setCurrent(pipeQ.data.current || []); setPalette(pipeQ.data.palette || []);
+      setDef(pipeQ.data.default || []); setActiveOn(pipeQ.data.active_enabled !== false);
       setLoading(false);
-    }).catch(() => { if (alive) { setErr("failed to load pipeline"); setLoading(false); } });
-    fetch("/v1/console/auth/whoami").then((r) => r.json())
-      .then((d) => alive && setCsrf(d.csrf_token || "")).catch(() => {});
-    return () => { alive = false; };
-  }, []);
+    } else if (pipeQ.isError) { setErr("failed to load pipeline"); setLoading(false); }
+  }, [pipeQ.data, pipeQ.isError]);
 
   const meta = (id: string) => palette.find((p) => p.id === id);
   const move = (i: number, d: number) => {
@@ -404,16 +368,7 @@ function PipelineEditorModal({ onClose, onSaved }: { onClose: () => void; onSave
   const save = async () => {
     setSaving(true); setErr(null);
     try {
-      const r = await fetch("/v1/console/vibe-engineering/pipeline", {
-        method: "PUT",
-        headers: { "content-type": "application/json", "x-csrf-token": csrf },
-        body: JSON.stringify({ pipeline: current }),
-      });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        const errs = d.detail?.errors || d.detail || d;
-        throw new Error(Array.isArray(errs) ? errs.join("; ") : JSON.stringify(errs));
-      }
+      await saveMut.mutateAsync(current);
       onSaved(); onClose();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -552,30 +507,14 @@ function TurnCard({ turn, onStage, onBrief, onInspect }: {
 }
 
 export default function VibeEngineeringPage() {
-  const [data, setData] = useState<TracesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const q = useTraces(50);
+  const data = q.data ?? null;
+  const loading = q.isLoading;
+  const error = q.error instanceof Error ? q.error.message : q.error ? String(q.error) : null;
   const [stage, setStage] = useState<Stage | null>(null);
   const [briefTurn, setBriefTurn] = useState<Turn | null>(null);
   const [inspectTurn, setInspectTurn] = useState<Turn | null>(null);
   const [showEditor, setShowEditor] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    const run = async () => {
-      try {
-        const res = await fetch("/v1/console/vibe-engineering/traces?limit=50");
-        if (!res.ok) throw new Error(`Failed to load (${res.status})`);
-        const body = (await res.json()) as TracesResponse;
-        if (alive) { setData(body); setError(null); }
-      } catch (e) {
-        if (alive) setError(e instanceof Error ? e.message : String(e));
-      } finally { if (alive) setLoading(false); }
-    };
-    run();
-    const id = setInterval(run, 15000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
 
   if (loading && !data) {
     return <div className="flex items-center justify-center min-h-screen">
