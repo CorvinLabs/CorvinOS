@@ -90,11 +90,22 @@ class TaskBrain:
 
         Raises:
             BrainStartupError: If context initialization fails.
+            LicenseLimitError: If daily brain_tasks quota exceeded.
         """
         logger.info(
             f"Starting task: {task_id} (type={task_type}, "
             f"context={'v1+v2' if ctx_v1 else 'v2'})"
         )
+
+        # ADR-0365: Enforce brain_tasks_per_day quota
+        try:
+            from pathlib import Path
+            from operator.license.quota_counter import increment_and_check
+            corvin_home = Path(self._context_initializer._corvin_home or Path.home() / ".corvin")
+            increment_and_check(corvin_home, "brain_tasks_per_day", tenant_id)
+        except Exception as e:
+            logger.error(f"Brain task quota check failed: {e}")
+            raise
 
         try:
             # Override model from ctx_v1 if provided (v1 has priority)

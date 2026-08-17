@@ -485,8 +485,19 @@ class ToolForgeSubsystem(Subsystem):
             cost_units: float,
             created_at: str,
         }
+
+        Raises:
+            LicenseLimitError: If daily tool_forge quota exceeded.
         """
         try:
+            # ADR-0365: Enforce tool_forge_per_day quota
+            from pathlib import Path
+            from operator.license.quota_counter import increment_and_check
+            # Use _default tenant if not available from context
+            tenant_id = getattr(self, 'tenant_id', '_default')
+            corvin_home = Path.home() / ".corvin"
+            increment_and_check(corvin_home, "tool_forge_per_day", tenant_id)
+
             # Estimate cost
             impl = payload.get("impl", "")
             cost = self._estimate_forge_cost(impl)
