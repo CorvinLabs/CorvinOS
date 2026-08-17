@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vibe Inspector (external panel)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 16px;
+           background: transparent; color: #111; }
+    body.dark { color: #eee; }
+    h1 { font-size: 15px; margin: 0 0 12px; }
+    .status { color: #888; font-size: 12px; margin-bottom: 8px; }
+    .turn { border: 1px solid #8883; border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+    .sha { font-family: monospace; font-size: 11px; color: #888; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <!--
+    Vibe Inspector — the FIRST external Console panel (ADR-0363 P5).
+
+    It is served as a static asset and embedded by PanelHost as a sandboxed iframe.
+    It uses the raw postMessage protocol (ADR-0362) inline — a built panel would
+    import @corvin/panel-sdk instead, but a zero-build reference panel shows the
+    wire protocol directly. It receives ctx.baseUrl from the host and calls the
+    same-origin Vibe-Engineering API with the browser's own credentials; it never
+    holds a secret. This is the template a FrontendForge/community panel follows.
+  -->
+  <h1>Vibe Inspector</h1>
+  <div class="status" id="status">connecting to Console host…</div>
+  <div id="turns"></div>
+
+  <script>
+    (function () {
+      var PROTOCOL_VERSION = "1";
+      var statusEl = document.getElementById("status");
+      var turnsEl = document.getElementById("turns");
+
+      function reportHeight() {
+        parent.postMessage(
+          { type: "corvin:panel:resize", height: document.body.scrollHeight },
+          hostOrigin || "*"
+        );
+      }
+
+      var hostOrigin = null;
+
+      // 1. Wait for the host handshake.
+      window.addEventListener("message", function (ev) {
+        var m = ev.data;
+        if (!m || typeof m.type !== "string") return;
+        if (m.type === "corvin:host:hello") {
+          hostOrigin = ev.origin;
+          onHello(m.ctx);
+        }
+        if (m.type === "corvin:host:theme") {
+          document.body.classList.toggle("dark", m.theme === "dark");
+        }
+      });
+
+      // 2. Announce readiness (no secret in this message → "*" is fine here only).
+      parent.postMessage(
+        { type: "corvin:panel:ready", protocolVersion: PROTOCOL_VERSION }, "*"
+      );
+
+      // 3. On hello, call the Vibe-Engineering API through the host-given baseUrl.
+      function onHello(ctx) {
+        document.body.classList.toggle("dark", ctx.theme === "dark");
+        statusEl.textContent = "loading traces from " + ctx.baseUrl + " …";
+        fetch(ctx.baseUrl + "/vibe-engineering/traces", { credentials: "include" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("traces " + r.status);
+            return r.json();
+          })
+          .then(function (data) {
+            var sessions = (data && data.sessions) || [];
+            var turns = [];
+            sessions.forEach(function (s) {
+              (s.turns || []).forEach(function (t) { turns.push(t); });
+            });
+            statusEl.textContent = turns.length + " turn(s) across " +
+              sessions.length + " session(s)";
+            turnsEl.innerHTML = "";
+            turns.slice(0, 20).forEach(function (t) {
+              var div = document.createElement("div");
+              div.className = "turn";
+              div.innerHTML = '<span class="sha">' +
+                String(t.brief_sha256 || t.turn || "").slice(0, 16) + "</span>";
+              turnsEl.appendChild(div);
+            });
+            reportHeight();
+          })
+          .catch(function (err) {
+            statusEl.textContent = "could not load traces: " + err.message;
+            reportHeight();
+          });
+      }
+    })();
+  </script>
+</body>
+</html>

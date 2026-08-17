@@ -39,6 +39,18 @@ export const PANELS: ConsolePanel[] = [
     element: { kind: "react", load: () => import("@/pages/vibe-engineering") },
     contractVersion: "1",
   },
+  // ADR-0363 P5: the FIRST external panel — Vibe Inspector, embedded via the P4
+  // PanelHost (iframe). "Trusted" (first-party, origin=builtin) so it gets
+  // allow-same-origin for the credentialed API call; an untrusted community panel
+  // would NOT get allow-same-origin. Gated on the vibe-engineering capability.
+  {
+    id: "vibe-inspector", route: "vibe-inspector",
+    nav: { label: "Vibe Inspector", icon: "Boxes", group: "observability" },
+    requiredCapability: "vibe-engineering",
+    element: { kind: "iframe", src: "/external-panels/vibe-inspector/index.html",
+               sandbox: "allow-scripts allow-same-origin" },
+    contractVersion: "1",
+  },
   // simple top-level feature panels (reuse proven lazy components)
   rc("dashboard", "Dashboard", DashboardPage),
   rc("talent", "Your Talent", YourTalentPage),
