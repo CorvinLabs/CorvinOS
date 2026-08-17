@@ -40,8 +40,5 @@ export default function LearningPage() {
   );
 }
 
-// Export for lazy loading
-export default LearningPage;
-
 // Export for testing
 export const LearningPageTest = { queryKey: 'learning-nodes', url: '/v1/console/learning/nodes' };
