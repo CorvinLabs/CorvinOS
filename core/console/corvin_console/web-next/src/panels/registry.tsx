@@ -12,6 +12,7 @@ import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
+import PanelHost from "./PanelHost";
 import {
   DashboardPage, YourTalentPage, SettingsPage, EnginesPage, BrowserPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
@@ -99,6 +100,15 @@ export function panelRoutes(panels: readonly ConsolePanel[] = PANELS) {
       const C = p.element.component;
       return <Route key={p.id} path={p.route} element={<C />} />;
     }
-    return null; // web-component / iframe kinds land with P4/P7
+    if (p.element.kind === "iframe") {
+      // ADR-0362 P4: external panel, sandboxed, bridged via the postMessage
+      // protocol. This is the safe path for community / FrontendForge panels.
+      const el = p.element;
+      return (
+        <Route key={p.id} path={p.route}
+          element={<PanelHost src={el.src} sandbox={el.sandbox} />} />
+      );
+    }
+    return null; // web-component kind is vetted-only, lands with P7
   });
 }
