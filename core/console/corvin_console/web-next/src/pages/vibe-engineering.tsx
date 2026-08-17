@@ -16,6 +16,7 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/ca
 import { Badge } from "@/components/ui/badge";
 import {
   useTraces, useBrief, useAssembly, useForged, usePipeline, useSavePipeline,
+  useStageGrades, useGradeStage,
   type Turn, type Stage, type Assembly,
 } from "@/adapters/vibe";
 
@@ -189,6 +190,50 @@ function Modal({ title, subtitle, onClose, children }: {
   );
 }
 
+/* ── operator stage grading (G3): the missing UI for the CEL grade store ─────────
+ * The confidence tier was always visible but the accrued grades were not, and there
+ * was no way to add one. Only an operator grade (grader="operator") is promoting —
+ * this is the human-in-the-loop that governs stage default-eligibility (ADR-0285). */
+function StageGradePanel({ stageId }: { stageId: string }) {
+  const q = useStageGrades();
+  const grade = useGradeStage();
+  const g = q.data?.grades?.[stageId];
+  const buttons: Array<{ label: string; score: number; cls: string }> = [
+    { label: "👎", score: 0.0, cls: "hover:border-red-500/60 hover:bg-red-900/20" },
+    { label: "😐", score: 0.5, cls: "hover:border-amber-500/60 hover:bg-amber-900/20" },
+    { label: "👍", score: 1.0, cls: "hover:border-emerald-500/60 hover:bg-emerald-900/20" },
+  ];
+  return (
+    <div className="mt-4 rounded-lg border border-border bg-background/50 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-sm font-semibold">Stage-Vertrauen (Operator-Grade)</h3>
+        {g && (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {g.n_grades} Grade{g.n_grades === 1 ? "" : "s"} · ⌀ {g.mean_score.toFixed(2)}
+            {g.promoting != null ? ` · ${g.promoting} promotend` : ""}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        {buttons.map((b) => (
+          <button key={b.label} disabled={grade.isPending}
+            onClick={() => grade.mutate({ stage: stageId, score: b.score })}
+            className={`rounded-md border border-border px-3 py-1 text-lg transition disabled:opacity-40 ${b.cls}`}
+            title={`Grade ${b.score.toFixed(1)}`}>
+            {b.label}
+          </button>
+        ))}
+        {grade.isPending && <span className="text-xs text-muted-foreground">speichere…</span>}
+        {grade.isError && <span className="text-xs text-red-400">Fehler beim Speichern</span>}
+      </div>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Nur Operator-Grades zählen für die Default-Eignung einer Stage. Die Auto-Grades
+        des Outcome-Loops (G4) sind rein beratend.
+      </p>
+    </div>
+  );
+}
+
 function StageModal({ stage, onClose }: { stage: Stage; onClose: () => void }) {
   const meta = STAGE_META[stage.stage] ?? { label: stage.stage };
   return (
@@ -206,6 +251,7 @@ function StageModal({ stage, onClose }: { stage: Stage; onClose: () => void }) {
       <div className="rounded-lg border border-border bg-background/50 p-2">
         <StageGraph stage={stage} />
       </div>
+      <StageGradePanel stageId={stage.stage} />
       {(stage.sources?.length ?? 0) > 0 && (
         <div className="mt-4">
           <h3 className="text-sm font-semibold mb-2">Sources (relevance)</h3>
