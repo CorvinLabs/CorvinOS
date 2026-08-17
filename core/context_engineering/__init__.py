@@ -34,6 +34,12 @@ from core.context_engineering.execution_context import (
 from core.context_engineering.decision_record import DecisionRecord
 from core.context_engineering.context_bus import ContextBus
 from core.context_engineering.context_api import ContextAPI
+from core.context_engineering.memory_coordinator import (
+    MemoryCoordinator,
+    MemoryCoordinatorError,
+    MemoryLayerNotFound,
+    EventPersistenceError,
+)
 
 __all__ = [
     "Persona",
@@ -59,4 +65,8 @@ __all__ = [
     "DecisionRecord",
     "ContextBus",
     "ContextAPI",
+    "MemoryCoordinator",
+    "MemoryCoordinatorError",
+    "MemoryLayerNotFound",
+    "EventPersistenceError",
 ]
