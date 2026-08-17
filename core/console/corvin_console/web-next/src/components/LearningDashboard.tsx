@@ -86,7 +86,7 @@ const TreeView: React.FC<TreeViewProps> = ({ node, onSelect, selectedId }) => {
         <ConfidenceGauge value={node.confidence} />
       </div>
       
-      {expanded && node.children && node.children.map((childId, idx) => (
+      {expanded && node.children && node.children.map((_childId, idx) => (
         <div key={idx}>
           {/* Child nodes would be fetched here in real implementation */}
         </div>
