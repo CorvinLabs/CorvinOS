@@ -129,6 +129,7 @@ _cel_persist_trace = None
 _cel_emit_record = None
 _cel_persist_assembly = None  # G1: Glass-Box assembly persistence (console parity)
 _cel_build_sections = None
+_cel_record_outcome = None  # G4: outcome-feedback loop (ADR-0269 Phase-4b)
 try:
     import importlib.util as _ilu  # noqa: PLC0415
     # Source tree → <repo>/operator/context_engineering. Wheel → the vendored
@@ -170,6 +171,16 @@ try:
         _cel_render_skills = _cel_mod.render_skill_bindings
         _cel_apply_tools = _cel_mod.apply_tool_bindings
         _CEL_AVAILABLE = True
+        # G4 (ADR-0269 Phase-4b): record_turn_outcome lives in stages.grades and is
+        # NOT re-exported from the package __init__ — bind it from the submodule in a
+        # SEPARATE try so a miss here can never disable CEL (it once did: an
+        # AttributeError in the main block flipped _CEL_AVAILABLE to False).
+        try:
+            from context_engineering.stages.grades import (  # noqa: PLC0415
+                record_turn_outcome as _rto)
+            _cel_record_outcome = _rto
+        except Exception:  # noqa: BLE001 — outcome loop simply stays off
+            _cel_record_outcome = None
 except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
     _CEL_AVAILABLE = False
 _FORGE_PATH = _REPO / "operator" / "forge"
@@ -4613,6 +4624,7 @@ async def stream_turn(
     # CEL error runs the turn without a brief). Invariant I1: the brief only
     # shapes the prompt; the gates still inspect the task text, not the brief.
     _cel_brief_text = ""
+    _cel_ran_stage_ids: list[str] = []  # G4: stages that ran this turn, for the outcome loop
     if _CEL_AVAILABLE and _feature_flags.is_enabled("vibe_engineering", sess.tenant_id):
         try:
             # ACTIVE brain (ADR-0282/0283) — a SECOND ships-dark flag on top of
@@ -4727,6 +4739,14 @@ async def stream_turn(
                         forged_skills=_pa_forged_skills)
             except Exception:  # noqa: BLE001 — inspector detail is best-effort
                 pass
+            try:  # G4: remember which stages actually ran, for the outcome loop.
+                # A stage that did not run (not_run / deferred) must not be graded.
+                _cel_ran_stage_ids = [
+                    s.get("stage") for s in (_cel_trace.get("stages") or [])
+                    if s.get("stage") and s.get("status") not in ("not_run", "deferred")
+                ]
+            except Exception:  # noqa: BLE001
+                _cel_ran_stage_ids = []
         except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
             _cel_brief_text = ""
     args = _build_args(sess, resume=resume, model=_os_model,
@@ -6369,6 +6389,18 @@ async def stream_turn(
                "annotation_pending": False}
 
     touch(sess, increment_turn=True)
+
+    # G4 (ADR-0269 Phase-4b): close the outcome-feedback loop. This turn reached the
+    # completion point, so success=True; attribute it to the stages that actually ran.
+    # Ship-dark behind `outcome_feedback_loop` (default off): the grades are advisory
+    # (grader="__loop__", non-promoting), so this NEVER changes which stage is default-
+    # eligible — only an operator grade (G3) does that. Best-effort, never raises.
+    try:
+        if (_cel_record_outcome is not None and _cel_ran_stage_ids
+                and _feature_flags.is_enabled("outcome_feedback_loop", sess.tenant_id)):
+            _cel_record_outcome(sess.tenant_id, _cel_ran_stage_ids, True)
+    except Exception:  # noqa: BLE001 — the loop never breaks a turn
+        pass
 
     # ADR-0366: install any Console panels the worker generated this turn (it writes
     # them to corvin-panel*.html per the system prompt). Done here, in-console, so the
