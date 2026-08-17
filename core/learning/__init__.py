@@ -11,6 +11,7 @@ Core modules:
 - reachability: ReachabilityMonitor (verify coverage)
 - metrics: ExecutionMetrics, MetricsCollector
 - active_loop: ActiveLearningLoop (exec → event → confidence)
+- anomaly_detector: AnomalyDetector, AnomalyAlert (Phase 8: Anomaly Detection & Auto-Recovery)
 """
 
 from .models import TreeNode, LearningEvent, ConfidenceEvent, CompositionType
@@ -23,6 +24,7 @@ from .active_loop import ActiveLearningLoop
 from .integration import LearningIntegration
 from .audit import AuditTrail
 from .migration import MigrationPlanner
+from .anomaly_detector import AnomalyDetector, AnomalyAlert
 
 __all__ = [
     "TreeNode",
@@ -40,4 +42,6 @@ __all__ = [
     "LearningIntegration",
     "AuditTrail",
     "MigrationPlanner",
+    "AnomalyDetector",
+    "AnomalyAlert",
 ]
