@@ -1,46 +1,102 @@
 /**
- * Panel registry (ADR-0353 P1) — the single list the shell renders from. First
- * entry is vibe-engineering (the reference panel, live via the registry, not a
- * hardcoded <Route>). The other ~40 pages migrate here incrementally (P1-rest);
- * once P3 lands, `requiredCapability`/`requiredFlag` are matched against the
- * backend capability manifest so the nav renders backend-driven.
+ * Panel registry (ADR-0353 P1) — the single list the shell renders routes from.
+ * The ~35 simple top-level feature panels reuse the existing (proven) @/lazy-pages
+ * lazy components via the `react-component` kind; vibe-engineering uses the `react`
+ * load kind as the reference. Complex/param/redirect routes (personas/:name,
+ * chat/:sid, workflows/:wid, engine-control redirect, index) stay hardcoded in
+ * App.tsx — they are not simple panels. Nav metadata (label/icon/group) is minimal
+ * for now; P3 matches requiredCapability/Flag against the backend capability
+ * manifest and renders the nav from here.
  */
 import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
+import {
+  DashboardPage, YourTalentPage, SettingsPage, EnginesPage, BrowserPage,
+  ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
+  CoworkPage, LddPage, CompliancePage, FilesPage, SpacePage, MemoryPage,
+  AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
+  RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
+  ExtensionsPage, McpPluginsPage, PluginsPage, ActivityFeedPage,
+  LearningObjectivesPage, MultiInstancePage,
+} from "@/lazy-pages";
+import type { ComponentType } from "react";
+
+const rc = (route: string, label: string, component: ComponentType,
+            extra?: Partial<ConsolePanel>): ConsolePanel => ({
+  id: route, route, nav: { label, icon: "" },
+  element: { kind: "react-component", component }, contractVersion: "1", ...extra,
+});
 
 export const PANELS: ConsolePanel[] = [
+  // reference panel (react load kind)
   {
-    id: "vibe-engineering",
-    route: "vibe-engineering",
+    id: "vibe-engineering", route: "vibe-engineering",
     nav: { label: "Vibe Engineering", icon: "Layers", group: "observability" },
     requiredFlag: "vibe_engineering",
     element: { kind: "react", load: () => import("@/pages/vibe-engineering") },
     contractVersion: "1",
   },
+  // simple top-level feature panels (reuse proven lazy components)
+  rc("dashboard", "Dashboard", DashboardPage),
+  rc("talent", "Your Talent", YourTalentPage),
+  rc("settings", "Settings", SettingsPage),
+  rc("engines", "AI Engines", EnginesPage),
+  rc("browser", "Browser", BrowserPage),
+  rc("compute", "Compute", ComputePage),
+  rc("bridges", "Bridges", BridgesPage),
+  rc("voice", "Voice", VoicePage),
+  rc("forge", "Forge", ForgePage),
+  rc("skills", "Skills", SkillsPage),
+  rc("packages", "Packages", PackagesPage),
+  rc("cowork", "Cowork", CoworkPage),
+  rc("ldd", "LDD", LddPage),
+  rc("compliance", "Compliance", CompliancePage),
+  rc("files", "Files", FilesPage),
+  rc("space", "Space", SpacePage),
+  rc("memory", "Memory", MemoryPage),
+  rc("agent-hub", "Agent Hub", AgentHubPage),
+  rc("connectors", "Connectors", ConnectorsPage),
+  rc("api-keys", "API Keys", ApiKeysPage),
+  rc("orgs", "Orgs", OrgsPage),
+  rc("people", "People", PeoplePage),
+  rc("license", "License", LicensePage),
+  rc("rag", "RAG", RAGPage),
+  rc("rag-hub", "RAG Hub", RAGHubPage),
+  rc("custom-provider", "Custom Provider", CustomProviderPage),
+  rc("data-sources", "Data Sources", DataSourcesPage),
+  rc("flows", "Flows", FlowsPage),
+  rc("agents", "Agents", AgentsPage),
+  rc("extensions", "Extensions", ExtensionsPage),
+  rc("mcp-plugins", "MCP Plugins", McpPluginsPage),
+  rc("plugins", "Plugins", PluginsPage),
+  rc("activity", "Activity", ActivityFeedPage),
+  rc("learning-objectives", "Learning Objectives", LearningObjectivesPage),
+  rc("multi-instance", "Multi-Instance", MultiInstancePage),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {
   return PANELS.find((p) => p.id === id);
 }
 
-/** Render every react-kind panel as a <Route> under /app. Returns an array of
- *  <Route> elements (react-router accepts fragments of routes). */
+/** Render every react-kind panel as a <Route> under /app. */
 export function panelRoutes() {
-  return PANELS.filter((p) => p.element.kind === "react").map((p) => {
-    const el = p.element as Extract<ConsolePanel["element"], { kind: "react" }>;
-    const Lazy = lazy(el.load);
-    return (
-      <Route
-        key={p.id}
-        path={p.route}
-        element={
+  return PANELS.map((p) => {
+    if (p.element.kind === "react") {
+      const Lazy = lazy(p.element.load);
+      return (
+        <Route key={p.id} path={p.route} element={
           <Suspense fallback={<div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>}>
             <Lazy />
           </Suspense>
-        }
-      />
-    );
+        } />
+      );
+    }
+    if (p.element.kind === "react-component") {
+      const C = p.element.component;
+      return <Route key={p.id} path={p.route} element={<C />} />;
+    }
+    return null; // web-component / iframe kinds land with P4/P7
   });
 }

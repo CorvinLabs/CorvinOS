@@ -8,49 +8,14 @@ import { ChunkErrorBoundary } from "@/components/error-boundary";
 import {
   LandingPage,
   LoginPage,
-  DashboardPage,
-  YourTalentPage,
-  SettingsPage,
-  EnginesPage,
-  BrowserPage,
-  ComputePage,
   PersonaDetailPage,
   PersonasListPage,
-  BridgesPage,
-  VoicePage,
-  ForgePage,
-  SkillsPage,
-  PackagesPage,
-  CoworkPage,
-  LddPage,
-  CompliancePage,
   ChatPage,
   WorkflowsListPage,
   WorkflowEditorPage,
   WorkflowRunsPage,
   WorkflowRunDetailPage,
-  FilesPage,
-  SpacePage,
-  MemoryPage,
-  AgentHubPage,
-  ConnectorsPage,
-  ApiKeysPage,
-  OrgsPage,
-  PeoplePage,
   NotFoundPage,
-  LicensePage,
-  RAGPage,
-  RAGHubPage,
-  CustomProviderPage,
-  DataSourcesPage,
-  FlowsPage,
-  AgentsPage,
-  ExtensionsPage,
-  McpPluginsPage,
-  PluginsPage,
-  ActivityFeedPage,
-  LearningObjectivesPage,
-  MultiInstancePage,
 } from "@/lazy-pages";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -150,54 +115,19 @@ export default function App() {
             }
           >
             <Route index element={<Navigate to="/app/chat" replace />} />
-            <Route path="dashboard" element={<DashboardPage />} />
             <Route path="personas" element={<PersonasListPage />} />
             <Route path="personas/:name" element={<PersonaDetailPage />} />
-            <Route path="bridges" element={<BridgesPage />} />
-            <Route path="voice" element={<VoicePage />} />
-            <Route path="forge" element={<ForgePage />} />
-            <Route path="skills" element={<SkillsPage />} />
-            <Route path="packages" element={<PackagesPage />} />
-            <Route path="cowork" element={<CoworkPage />} />
-            <Route path="ldd" element={<LddPage />} />
-            <Route path="compliance" element={<CompliancePage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
-            <Route path="talent" element={<YourTalentPage />} />
             {/* ADR-0353 P1: panels render from the registry, not hardcoded routes */}
             {panelRoutes()}
-            <Route path="agent-hub" element={<AgentHubPage />} />
-            <Route path="connectors" element={<ConnectorsPage />} />
             <Route path="workflows" element={<WorkflowsListPage />} />
             <Route path="workflows/:wid" element={<WorkflowEditorPage />} />
             <Route path="workflows/:wid/runs" element={<WorkflowRunsPage />} />
             <Route path="workflows/:wid/runs/:rid" element={<WorkflowRunDetailPage />} />
-            <Route path="compute" element={<ComputePage />} />
-            <Route path="data-sources" element={<DataSourcesPage />} />
-            <Route path="engines" element={<EnginesPage />} />
-            <Route path="browser" element={<BrowserPage />} />
             {/* Engine Control merged into the AI Engine page (Control tab). */}
             <Route path="engine-control" element={<Navigate to="/app/engines" replace />} />
-            <Route path="api-keys" element={<ApiKeysPage />} />
-            <Route path="files" element={<FilesPage />} />
-            <Route path="memory" element={<MemoryPage />} />
-            <Route path="space" element={<SpacePage />} />
-            <Route path="orgs" element={<OrgsPage />} />
-            <Route path="people" element={<PeoplePage />} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="license" element={<LicensePage />} />
-            <Route path="rag" element={<RAGPage />} />
-            <Route path="rag-hub" element={<RAGHubPage />} />
-            <Route path="custom-provider" element={<CustomProviderPage />} />
-            <Route path="flows" element={<FlowsPage />} />
-            <Route path="agents" element={<AgentsPage />} />
-            <Route path="extensions" element={<ExtensionsPage />} />
-            <Route path="mcp-plugins" element={<McpPluginsPage />} />
-            <Route path="plugins" element={<PluginsPage />} />
-            <Route path="activity" element={<ActivityFeedPage />} />
-            <Route path="learning-objectives" element={<LearningObjectivesPage />} />
             {/* ADR-0275/0277 — Multi-Instance Cross-Device Learning */}
-            <Route path="multi-instance" element={<MultiInstancePage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
           </Routes>
