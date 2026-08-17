@@ -762,6 +762,36 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("security", "compliance", "audit"),
         release_tier="alpha",
     ),
+    FeatureFlag(
+        id="frontend_forge",
+        label="FrontendForge (in-browser panel authoring)",
+        description=(
+            "Show the FrontendForge page in the Console — an in-browser editor for "
+            "authoring external Console panels with a live, sandboxed preview "
+            "(ADR-0364). Operator-only: off by default, so a normal install does not "
+            "surface it. Turning it on adds the nav entry and route; it does not "
+            "change how existing panels are served."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("console", "plugins", "ui"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="console_web_surface_plugin",
+        label="Console as web_surface plugin",
+        description=(
+            "Declare the Console itself as a bundled web_surface plugin (ADR-0356) so "
+            "the plugin loader loads it and it appears in the loaded-surfaces list. "
+            "Off by default (ship-dark): the Console is still served the existing "
+            "hard-wired way, so a normal install is unchanged. This is the first step "
+            "toward the Console being a replaceable UI surface."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("console", "plugins"),
+        release_tier="alpha",
+    ),
 )
 
 
