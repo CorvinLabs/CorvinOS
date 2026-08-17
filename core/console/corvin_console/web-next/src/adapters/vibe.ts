@@ -175,6 +175,42 @@ export function usePipeline() {
     queryFn: () => getJSON("/pipeline", zPipeline),
   });
 }
+// ── CEL stage grades (G3) ───────────────────────────────────────────────────────
+const zGrades = z.object({
+  available: z.boolean(),
+  grades: z.record(z.object({
+    n_grades: z.number(), mean_score: z.number(), promoting: z.number().optional(),
+  })),
+});
+export type StageGrades = z.infer<typeof zGrades>;
+
+export function useStageGrades() {
+  return useQuery({
+    queryKey: ["vibe", "grades"],
+    queryFn: () => getJSON("/grades", zGrades),
+    staleTime: 10_000,
+  });
+}
+
+export function useGradeStage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ stage, score, notes }: { stage: string; score: number; notes?: string }) => {
+      const csrf = await getCsrf();
+      const r = await fetch(`${BASE}/grades/${encodeURIComponent(stage)}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ score, notes: notes ?? "" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.detail || `HTTP ${r.status}`);
+      return d;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["vibe", "grades"] }),
+  });
+}
+
 export function useSavePipeline() {
   const qc = useQueryClient();
   return useMutation({
