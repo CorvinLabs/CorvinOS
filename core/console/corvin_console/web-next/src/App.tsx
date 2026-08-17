@@ -1,5 +1,6 @@
 import * as React from "react";
-import { panelRoutes } from "@/panels/registry";
+import { panelRoutes, PANELS } from "@/panels/registry";
+import { useCapabilities, gatePanels } from "@/adapters/capabilities";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { AppLayout } from "@/components/layout";
@@ -90,6 +91,12 @@ function RootRedirect() {
 }
 
 export default function App() {
+  // ADR-0357 P3: the shell renders panel routes from the backend capability
+  // manifest. Before auth / on fetch error the manifest is undefined and
+  // gatePanels() returns the ungated core panels (fail-safe, never a blank shell);
+  // the /app routes are behind RequireAuth anyway.
+  const { data: capabilityManifest } = useCapabilities();
+  const gatedPanels = gatePanels(PANELS, capabilityManifest);
   return (
     <AuthProvider>
       <ChunkErrorBoundary>
@@ -119,8 +126,9 @@ export default function App() {
             <Route path="personas/:name" element={<PersonaDetailPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
-            {/* ADR-0353 P1: panels render from the registry, not hardcoded routes */}
-            {panelRoutes()}
+            {/* ADR-0353 P1 + ADR-0357 P3: panels render from the registry, gated
+                by the backend capability manifest. */}
+            {panelRoutes(gatedPanels)}
             <Route path="workflows" element={<WorkflowsListPage />} />
             <Route path="workflows/:wid" element={<WorkflowEditorPage />} />
             <Route path="workflows/:wid/runs" element={<WorkflowRunsPage />} />

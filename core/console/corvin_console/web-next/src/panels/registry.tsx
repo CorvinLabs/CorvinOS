@@ -80,9 +80,11 @@ export function getPanel(id: string): ConsolePanel | undefined {
   return PANELS.find((p) => p.id === id);
 }
 
-/** Render every react-kind panel as a <Route> under /app. */
-export function panelRoutes() {
-  return PANELS.map((p) => {
+/** Render every react-kind panel as a <Route> under /app.
+ *  Pass a gated subset (ADR-0357 P3: gatePanels(PANELS, manifest)) to render only
+ *  the panels the backend capability manifest permits; defaults to all PANELS. */
+export function panelRoutes(panels: readonly ConsolePanel[] = PANELS) {
+  return panels.map((p) => {
     if (p.element.kind === "react") {
       const Lazy = lazy(p.element.load);
       return (
