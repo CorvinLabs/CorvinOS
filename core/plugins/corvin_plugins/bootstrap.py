@@ -465,6 +465,11 @@ def bootstrap_declared(
         if only_types is None or "bridge_channel" in only_types
         else []
     )
+    # ADR-0356 P2.5 — the Console as a bundled web_surface, symmetric to the
+    # bridges: injected only when its own ship-dark flag is on, skipped for a
+    # type-filtered worker call that does not want web_surface.
+    if only_types is None or "web_surface" in only_types:
+        bundled = bundled + _bundled_console_declaration(tenant_id, declared + bundled)
     if bundled:
         declared = declared + bundled
         # `discover_and_load` re-reads the config rather than taking `declared`,
@@ -558,6 +563,44 @@ def bootstrap_declared(
             "loaded %d declared plugin(s) for tenant %r: %s", len(loaded), tenant_id, loaded
         )
     return loaded
+
+
+def _bundled_console_declaration(
+    tenant_id: str, declared: list[dict]
+) -> list[dict]:
+    """The bundled Console web surface, as a declaration (ADR-0356, P2.5).
+
+    Symmetric to :func:`_bundled_bridge_declarations`. Three properties preserved:
+
+    * **Off is quiet and total.** With ``console_web_surface_plugin`` off — the
+      default — nothing is injected. standalone.py still mounts the SPA the old
+      hard-wired way, so a default install is byte-for-byte unchanged.
+    * **The operator's own entry always wins.** A ``{id: console}`` already in
+      ``spec.plugins.installed`` is skipped here, so an operator can park or
+      override the Console surface.
+    * **Declaring is not mounting.** This entry makes the Console *loadable* as a
+      plugin. Actually mounting the SPA THROUGH the plugin (instead of the
+      standalone.py hard-wire) is the loader's job — P7, deliberately not here.
+    """
+    try:
+        from .console.plugin import console_flag_enabled  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — no console plugin in this install (stripped wheel)
+        return []
+    if not console_flag_enabled(tenant_id):
+        return []
+    try:
+        from .console.registry_entries import declaration_entry  # noqa: PLC0415
+
+        already = {e.get("id") for e in declared if isinstance(e, dict)}
+        entry = declaration_entry()
+        return [] if entry.get("id") in already else [entry]
+    except Exception as exc:  # noqa: BLE001 — a bad declaration must not stop boot
+        log.error(
+            "bundled console declaration unavailable for %r (%s) — Console keeps "
+            "being served as before",
+            tenant_id, exc,
+        )
+        return []
 
 
 def _bundled_bridge_declarations(

@@ -276,6 +276,32 @@ class PluginReplacementRefused(PermissionError):
     """
 
 
+# ── Web surface protocol (ADR-0356, P2.5) ─────────────────────────────────────
+
+@runtime_checkable
+class WebSurface(Protocol):
+    """A browser UI surface mounted on the OS's HTTP server (ADR-0356, P2.5).
+
+    The Console is the first bundled/builtin ``web_surface``. Declaring the UI as
+    a plugin TYPE — rather than hard-wiring the SPA mount into standalone.py — is
+    what lets a second UI (a FrontendForge-built panel set, an alternative
+    console) be mounted without touching core: it implements this same contract.
+
+    A WebSurface does NOT run its own server. The OS already owns the uvicorn/ASGI
+    app; the surface only declares WHERE it mounts and WHAT static bundle it
+    serves. In headless mode (``corvinos-run``) no web_surface is mounted at all —
+    the plugin stays declared but the host never asks it for a dist dir.
+    """
+
+    #: URL prefix the surface mounts at, e.g. ``"/console/"``.
+    mount_path: str
+
+    def spa_dist_dir(self) -> "Path | None":
+        """Absolute path to the built SPA (index.html + assets), or None when the
+        surface has no static bundle (headless, or a server-rendered UI)."""
+        ...
+
+
 # ── Known plugin types ────────────────────────────────────────────────────────
 
 KNOWN_PLUGIN_TYPES: frozenset[str] = frozenset({
@@ -293,4 +319,6 @@ KNOWN_PLUGIN_TYPES: frozenset[str] = frozenset({
     "router_backend",        # L5   — RouterBackend
     # ADR-0233 (additive backends; core keeps its own guarantees)
     "user_backend",          # L18-21 — UserBackend
+    # ADR-0356 (P2.5 — the Console as a bundled/builtin web UI surface)
+    "web_surface",           # UI  — WebSurface (Console is the first instance)
 })
