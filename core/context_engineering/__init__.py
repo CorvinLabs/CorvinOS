@@ -32,6 +32,8 @@ from core.context_engineering.execution_context import (
     ExecutionContext,
 )
 from core.context_engineering.decision_record import DecisionRecord
+from core.context_engineering.context_bus import ContextBus
+from core.context_engineering.context_api import ContextAPI
 
 __all__ = [
     "Persona",
@@ -55,4 +57,6 @@ __all__ = [
     "ContextStack",
     "ContextStackFrame",
     "DecisionRecord",
+    "ContextBus",
+    "ContextAPI",
 ]
