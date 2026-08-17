@@ -827,6 +827,7 @@ def start(
     open_path: str = "/console/",
     host: str = "127.0.0.1",
     log_level: str = "warning",
+    headless: bool = False,
 ) -> int:
     """Start the console with uvicorn and (optionally) open the browser.
 
@@ -898,9 +899,13 @@ def start(
         except Exception:  # noqa: BLE001 — best-effort; falls back to paths.py auto-detect
             pass
 
+    # Headless launch (ADR-0352 P2.3b) picks the create_app_headless factory so the
+    # serving process forces headless mode itself — no browser UI, boot+bridges+API
+    # as usual. The factory choice travels as the uvicorn --factory arg, not an env.
+    _factory = f"{_CONSOLE_MODULE}:create_app_headless" if headless else _APP_FACTORY
     cmd = [
         sys.executable, "-m", "uvicorn",
-        _APP_FACTORY,
+        _factory,
         "--factory",
         "--host", host,
         "--port", str(port),

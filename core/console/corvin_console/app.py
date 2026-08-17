@@ -362,6 +362,19 @@ _NEXT_DIST_DIR = _PKG_DIR / "web-next" / "dist"
 HEADLESS_FLAG_ID = "headless_api_mode"
 
 
+# Per-process headless override (ADR-0352 P2.3b). None = defer to the tenant flag;
+# True/False = this process was launched headless (or explicitly with UI). Set by
+# the create_app_headless factory that `corvinos run` starts uvicorn with — NOT an
+# env var (see headless_enabled's docstring for why that shape was rejected).
+_HEADLESS_OVERRIDE: "bool | None" = None
+
+
+def set_headless_override(value: "bool | None") -> None:
+    """Force this PROCESS into (or out of) headless mode, ahead of the tenant flag."""
+    global _HEADLESS_OVERRIDE
+    _HEADLESS_OVERRIDE = value
+
+
 def headless_enabled(tenant_id: str | None = None) -> bool:
     """True when this process should serve the API without a browser UI.
 
@@ -378,7 +391,16 @@ def headless_enabled(tenant_id: str | None = None) -> bool:
     mechanism, not a second meaning for this flag.
 
     Every failure mode resolves to False (= today's behaviour, UI mounted).
+
+    Per-PROCESS override (ADR-0352 P2.3b — the "own mechanism" this docstring called
+    for): ``corvinos run`` starts uvicorn with the ``create_app_headless`` factory,
+    which calls ``set_headless_override(True)`` INSIDE the serving process before the
+    app is built. That is not the rejected env-var kill-flag — it is the factory the
+    operator explicitly launched — and it takes precedence over the per-tenant flag
+    so a headless launch never depends on tenant config being pre-set.
     """
+    if _HEADLESS_OVERRIDE is not None:
+        return _HEADLESS_OVERRIDE
     try:
         from .feature_flags import is_enabled
     except Exception:  # noqa: BLE001 — no flag registry means no headless mode
