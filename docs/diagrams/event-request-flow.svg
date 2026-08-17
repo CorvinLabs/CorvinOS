@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" width="1200" height="900">
+  <defs>
+    <style>
+      .event-flow { stroke: #667eea; stroke-width: 2.5; }
+      .request-flow { stroke: #48bb78; stroke-width: 2.5; stroke-dasharray: 5,5; }
+      .box { fill: white; stroke: #e2e8f0; stroke-width: 1; }
+    </style>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#667eea"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#48bb78"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="900" fill="#f8f9fa"/>
+
+  <text x="600" y="40" font-size="28" font-weight="bold" text-anchor="middle" fill="#1a202c">
+    CorvinOS Brain Communication Patterns
+  </text>
+  <text x="600" y="65" font-size="14" text-anchor="middle" fill="#4a5568">
+    Event-Driven (Pub/Sub) vs. Request/Response Architectures
+  </text>
+
+  <!-- EVENT FLOW SECTION -->
+  <text x="50" y="130" font-size="16" font-weight="bold" fill="#2d3748">EVENT FLOW (Pub/Sub — One-way Broadcasts)</text>
+
+  <!-- Publisher -->
+  <rect x="50" y="160" width="200" height="100" rx="8" class="box"/>
+  <text x="150" y="190" font-size="12" font-weight="bold" text-anchor="middle" fill="#1a202c">Publisher</text>
+  <text x="60" y="215" font-size="10" fill="#4a5568">(Any Subsystem)</text>
+  <text x="60" y="240" font-size="10" fill="#4a5568">calls:</text>
+  <text x="80" y="255" font-size="9" fill="#667eea" font-family="monospace">publish_event(</text>
+  <text x="80" y="268" font-size="9" fill="#667eea" font-family="monospace">  "error_detected",</text>
+  <text x="80" y="281" font-size="9" fill="#667eea" font-family="monospace">  {data...})</text>
+
+  <!-- Hub (Events) -->
+  <rect x="350" y="160" width="200" height="100" rx="8" class="box" stroke="#667eea" stroke-width="2"/>
+  <text x="450" y="190" font-size="12" font-weight="bold" text-anchor="middle" fill="#667eea">SubsystemHub</text>
+  <text x="360" y="215" font-size="10" fill="#4a5568">Event Queue</text>
+  <text x="360" y="230" font-size="9" fill="#667eea" font-family="monospace">asyncio.Queue</text>
+  <text x="360" y="245" font-size="9" fill="#667eea" font-family="monospace">(max_size=10k)</text>
+  <text x="360" y="260" font-size="10" fill="#4a5568">Poll: 5s interval</text>
+
+  <!-- Arrow: Publish -->
+  <path d="M 250 210 L 350 210" class="event-flow" marker-end="url(#arrow-blue)"/>
+  <text x="290" y="200" font-size="10" fill="#667eea">put_nowait()</text>
+
+  <!-- Subscribers -->
+  <rect x="650" y="160" width="200" height="100" rx="8" class="box"/>
+  <text x="750" y="190" font-size="12" font-weight="bold" text-anchor="middle" fill="#1a202c">Subscribers</text>
+  <text x="660" y="215" font-size="10" fill="#4a5568">All listening on</text>
+  <text x="660" y="232" font-size="10" fill="#4a5568">"error_detected"</text>
+  <text x="660" y="249" font-size="10" fill="#4a5568">receive async:</text>
+  <text x="680" y="264" font-size="9" fill="#667eea" font-family="monospace">on_event(name, data)</text>
+
+  <!-- Arrow: Broadcast -->
+  <path d="M 550 210 L 650 210" class="event-flow" marker-end="url(#arrow-blue)"/>
+  <text x="590" y="200" font-size="10" fill="#667eea">broadcast</text>
+
+  <!-- Event Examples -->
+  <text x="50" y="310" font-size="12" font-weight="bold" fill="#2d3748">Common Events (Fire-and-Forget):</text>
+  <g font-size="10" fill="#4a5568">
+    <text x="70" y="335">• task_started — Task begins execution</text>
+    <text x="70" y="355">• error_detected — Error occurred, LoopEngineer listens</text>
+    <text x="70" y="375">• strategy_applied — LoopEngineer applied strategy, Learning listens</text>
+    <text x="70" y="395">• strategy_succeeded — Strategy worked, Learning reinforces</text>
+    <text x="70" y="415">• strategy_failed — Strategy didn't work, Learning penalizes</text>
+    <text x="70" y="435">• session_split — Context checkpoint created</text>
+  </g>
+
+  <!-- Characteristics -->
+  <g font-size="10" fill="#4a5568">
+    <text x="50" y="470" font-weight="bold" fill="#2d3748">Characteristics:</text>
+    <text x="70" y="492">✓ Non-blocking (put_nowait) • No response expected • Async handlers • Concurrent execution</text>
+    <text x="70" y="510">✓ Error isolation (try/except per handler) • Multiple subscribers per event</text>
+  </g>
+
+  <!-- REQUEST/RESPONSE SECTION -->
+  <text x="50" y="580" font-size="16" font-weight="bold" fill="#2d3748">REQUEST/RESPONSE FLOW (Req/Resp — Two-way Queries)</text>
+
+  <!-- Requester -->
+  <rect x="50" y="610" width="200" height="120" rx="8" class="box"/>
+  <text x="150" y="640" font-size="12" font-weight="bold" text-anchor="middle" fill="#1a202c">Requester</text>
+  <text x="60" y="665" font-size="10" fill="#4a5568">(Any Subsystem)</text>
+  <text x="60" y="682" font-size="10" fill="#4a5568">calls:</text>
+  <text x="80" y="697" font-size="9" fill="#48bb78" font-family="monospace">await hub.</text>
+  <text x="80" y="710" font-size="9" fill="#48bb78" font-family="monospace">request_from_subsystem(</text>
+  <text x="80" y="723" font-size="9" fill="#48bb78" font-family="monospace">  "learning_engine",</text>
+  <text x="80" y="736" font-size="9" fill="#48bb78" font-family="monospace">  "recommend_strategy")</text>
+
+  <!-- Hub (Requests) -->
+  <rect x="350" y="610" width="200" height="120" rx="8" class="box" stroke="#48bb78" stroke-width="2"/>
+  <text x="450" y="640" font-size="12" font-weight="bold" text-anchor="middle" fill="#48bb78">SubsystemHub</text>
+  <text x="360" y="665" font-size="10" fill="#4a5568">Request Router</text>
+  <text x="360" y="682" font-size="9" fill="#48bb78" font-family="monospace">await subsystem.</text>
+  <text x="360" y="695" font-size="9" fill="#48bb78" font-family="monospace">handle_request(</text>
+  <text x="360" y="708" font-size="9" fill="#48bb78" font-family="monospace">  type, **kwargs)</text>
+  <text x="360" y="725" font-size="10" fill="#4a5568">Wait for response</text>
+
+  <!-- Arrow: Request -->
+  <path d="M 250 670 L 350 670" class="request-flow" marker-end="url(#arrow-green)"/>
+  <text x="290" y="660" font-size="10" fill="#48bb78">await</text>
+
+  <!-- Handler -->
+  <rect x="650" y="610" width="200" height="120" rx="8" class="box"/>
+  <text x="750" y="640" font-size="12" font-weight="bold" text-anchor="middle" fill="#1a202c">Target Subsystem</text>
+  <text x="660" y="665" font-size="10" fill="#4a5568">implements:</text>
+  <text x="680" y="682" font-size="9" fill="#48bb78" font-family="monospace">async def</text>
+  <text x="680" y="695" font-size="9" fill="#48bb78" font-family="monospace">handle_request(</text>
+  <text x="680" y="708" font-size="9" fill="#48bb78" font-family="monospace">  type, **kw):</text>
+  <text x="680" y="725" font-size="9" fill="#48bb78" font-family="monospace">return response</text>
+
+  <!-- Arrow: Response -->
+  <path d="M 550 670 L 650 670" class="request-flow" marker-end="url(#arrow-green)"/>
+  <text x="590" y="660" font-size="10" fill="#48bb78">return</text>
+
+  <!-- Request Examples -->
+  <text x="50" y="800" font-size="12" font-weight="bold" fill="#2d3748">Common Requests (Expect Response):</text>
+  <g font-size="10" fill="#4a5568">
+    <text x="70" y="825">• health_status — Get current health metrics from HealthMonitor</text>
+    <text x="70" y="845">• recommend_strategy — Ask LearningEngine for recommended strategies</text>
+    <text x="70" y="865">• budget_status — Get current spending from CostController</text>
+  </g>
+
+  <!-- Characteristics -->
+  <g font-size="10" fill="#4a5568">
+    <text x="50" y="900" font-weight="bold" fill="#2d3748">Characteristics:</text>
+  </g>
+</svg>
