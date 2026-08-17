@@ -68,7 +68,20 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
             if should_skip(request.url.path):
                 return await call_next(request)
 
-            pipeline = get_global_pipeline()
+            # Ship-dark: when the DualGatePipeline feature is off (the default),
+            # instantiate_pipeline() leaves the pipeline as None. The middleware
+            # is registered unconditionally, so it must degrade to a transparent
+            # pass-through — the pre-feature code path — rather than crash.
+            # "Off must be a quiet path, never an error." Note get_global_pipeline()
+            # RAISES RuntimeError on a None pipeline (it treats None as "not
+            # initialized"); in the ship-dark world None is the legitimate off
+            # state, so that RuntimeError means "feature off" → pass through.
+            try:
+                pipeline = get_global_pipeline()
+            except RuntimeError:
+                return await call_next(request)
+            if pipeline is None:
+                return await call_next(request)
 
             actor = request.headers.get("X-User-ID", "")
             if not actor:

@@ -189,6 +189,9 @@ corvinos = "ops.launcher.corvin.cli:main"
 # Shortcut for native (no-Docker) mode: `corvin-serve` == `corvin serve`
 corvin-serve = "ops.launcher.corvin.serve_entry:main"
 corvinos-serve = "ops.launcher.corvin.serve_entry:main"
+# ADR-0352 P2.3b: headless launch — OS + API + bridges, NO browser console.
+corvin-run = "ops.launcher.corvin.run_entry:main"
+corvinos-run = "ops.launcher.corvin.run_entry:main"
 # ADR-0109: WDAT compliance report generator
 # Shim needed because operator/ conflicts with Python stdlib 'operator' module name.
 corvin-wdat-report = "ops.launcher.wdat_report_entry:main"
@@ -410,6 +413,7 @@ disallow_untyped_defs = false
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "--verbose"
+asyncio_mode = "auto"
 markers = [
     "live: real-LLM end-to-end tests (opt-in via CLAUDE_LIVE_E2E=1)",
 ]

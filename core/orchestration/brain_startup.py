@@ -1,0 +1,172 @@
+"""Brain Startup — Initialization and context setup for TaskBrain (ADR-0358).
+
+Handles:
+- MemoryCoordinator initialization
+- ExecutionContext creation from templates
+- ContextBus initialization
+- Initial context broadcasting
+"""
+
+import asyncio
+import logging
+from typing import Optional, Dict, Any
+
+from core.context_engineering.memory_coordinator import MemoryCoordinator
+from core.context_engineering.context_bus import ContextBus
+from core.context_engineering.context_api import ContextAPI
+from core.context_engineering.execution_context import ExecutionContext, ContextStack
+
+logger = logging.getLogger(__name__)
+
+
+class BrainStartupError(Exception):
+    """Raised when brain startup fails."""
+
+    pass
+
+
+class ContextInitializer:
+    """Handles ExecutionContext initialization for a task.
+
+    Responsibilities:
+    - Load task template from MemoryCoordinator
+    - Create ExecutionContext from template
+    - Initialize ContextBus
+    - Broadcast context_initialized event
+    """
+
+    def __init__(self, corvin_home: Optional[str] = None):
+        """Initialize ContextInitializer.
+
+        Args:
+            corvin_home: Path to CORVIN_HOME (falls back to env var if None).
+
+        Raises:
+            ValueError: If corvin_home not provided and CORVIN_HOME env var not set.
+        """
+        self.memory_coordinator = MemoryCoordinator(corvin_home)
+        self.context_bus: Optional[ContextBus] = None
+        self.execution_context: Optional[ExecutionContext] = None
+        self.context_api: Optional[ContextAPI] = None
+
+    async def initialize_context(
+        self,
+        task_id: str,
+        tenant_id: str,
+        task_type: str,
+        budget_remaining: float = 1000.0,
+        time_remaining: int = 3600,
+        model: str = "claude-3-sonnet",
+    ) -> Dict[str, Any]:
+        """Initialize ExecutionContext for a task.
+
+        Loads task template from MemoryCoordinator (PROJECT > GLOBAL hierarchy),
+        creates ExecutionContext, initializes ContextBus, and broadcasts
+        context_initialized event.
+
+        Args:
+            task_id: Unique task identifier
+            tenant_id: Tenant identifier (usually '_default')
+            task_type: Task type for template lookup (e.g., 'code_fix')
+            budget_remaining: Initial budget (tokens or cost)
+            time_remaining: Time available for task (seconds)
+            model: LLM model identifier
+
+        Returns:
+            Dict with initialization result: {
+                'task_id': str,
+                'tenant_id': str,
+                'context_initialized': bool,
+                'template_source': str,  # 'project' or 'global'
+                'context_stack_depth': int,
+            }
+
+        Raises:
+            BrainStartupError: If initialization fails.
+        """
+        try:
+            # Step 1: Load task template from MemoryCoordinator
+            task_template = self.memory_coordinator.load_task_template(task_type)
+            template_source = task_template.get("_source", "unknown")
+
+            logger.info(
+                f"Loaded task template '{task_type}' from {template_source} memory layer"
+            )
+
+            # Step 2: Create ContextStack (initially at root)
+            context_stack = ContextStack()
+            context_stack.push("task", task_id)
+
+            # Step 3: Create ExecutionContext
+            self.execution_context = ExecutionContext(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                task_template=task_template,
+                context_stack=context_stack,
+                budget_remaining=budget_remaining,
+                time_remaining=time_remaining,
+                model=model,
+                strategy="",
+                strategy_confidence=0.5,
+            )
+
+            logger.info(f"Created ExecutionContext for task '{task_id}'")
+
+            # Step 4: Initialize ContextBus
+            self.context_bus = ContextBus()
+            await self.context_bus.start()
+            ContextBus.set_context(self.execution_context)
+
+            logger.info("ContextBus started and ExecutionContext registered")
+
+            # Step 5: Create ContextAPI for root subsystem access
+            self.context_api = ContextAPI("TaskBrain", self.context_bus)
+
+            # Step 6: Broadcast context_initialized event
+            await self.context_bus.publish(
+                "context_initialized",
+                {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "template_source": template_source,
+                    "context_stack": str(self.execution_context.context_stack),
+                    "budget_remaining": budget_remaining,
+                    "time_remaining": time_remaining,
+                    "model": model,
+                    "timestamp": self.execution_context.decision_history.__class__.now_iso()
+                    if hasattr(self.execution_context.decision_history.__class__, "now_iso")
+                    else "",
+                },
+            )
+
+            logger.info(f"Broadcasting context_initialized for task '{task_id}'")
+
+            return {
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "context_initialized": True,
+                "template_source": template_source,
+                "context_stack_depth": self.execution_context.context_stack.depth,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to initialize context: {str(e)}")
+            raise BrainStartupError(f"Context initialization failed: {str(e)}") from e
+
+    async def shutdown(self) -> None:
+        """Gracefully shutdown context bus and cleanup."""
+        if self.context_bus:
+            await self.context_bus.stop()
+            logger.info("ContextBus stopped")
+
+    def get_execution_context(self) -> Optional[ExecutionContext]:
+        """Get the initialized ExecutionContext."""
+        return self.execution_context
+
+    def get_context_api(self) -> Optional[ContextAPI]:
+        """Get the ContextAPI for subsystem use."""
+        return self.context_api
+
+    def get_context_bus(self) -> Optional[ContextBus]:
+        """Get the ContextBus for event pub/sub."""
+        return self.context_bus
