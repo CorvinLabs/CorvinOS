@@ -82,3 +82,52 @@ async def get_capabilities(session: Any = Depends(require_session)) -> dict:
         "capabilities": list(CORE_CAPABILITIES),
         "flags": _read_flags(tenant_id),
     }
+
+
+def _loaded_web_surfaces() -> list[dict]:
+    """List the web_surface plugins the plugin loader actually loaded (ADR-0365 P7).
+
+    Closes the P2.5→P7 loop: the Console (and any future UI) is DECLARED as a
+    web_surface plugin (ADR-0356), the loader loads it when its ship-dark flag is on,
+    and this reads them back from the live registry so the shell can see which
+    surfaces exist — not what the SPA bundle happened to hardcode. Every failure
+    (registry absent, plugin missing an attr) degrades to an empty list: on a default
+    install no web_surface is declared, so this is empty, and the shell falls back to
+    its built-in panel list exactly as before (ship-dark)."""
+    try:
+        from corvin_plugins.registry import plugins_by_boot_layer  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001
+        return []
+    surfaces: list[dict] = []
+    seen: set[str] = set()
+    for boot_layer in ("bundled", "installed"):
+        try:
+            plugins = plugins_by_boot_layer(boot_layer)
+        except Exception:  # noqa: BLE001
+            continue
+        for p in plugins:
+            if getattr(p, "plugin_type", None) != "web_surface":
+                continue
+            pid = getattr(p, "plugin_id", None)
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            has_spa = False
+            try:
+                fn = getattr(p, "spa_dist_dir", None)
+                has_spa = callable(fn) and fn() is not None
+            except Exception:  # noqa: BLE001 — a surface that can't answer is not mounted
+                has_spa = False
+            surfaces.append({
+                "id": pid,
+                "mount_path": getattr(p, "mount_path", None),
+                "boot_layer": boot_layer,
+                "has_spa": has_spa,
+            })
+    return surfaces
+
+
+@router.get("/surfaces")
+async def get_surfaces(session: Any = Depends(require_session)) -> dict:
+    """Return the web_surface plugins the loader has loaded (ADR-0365 P7)."""
+    return {"surfaces": _loaded_web_surfaces()}
