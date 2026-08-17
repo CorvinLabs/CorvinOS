@@ -1,0 +1,159 @@
+<svg viewBox="0 0 1000 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .node-idea { fill: #e6f2ff; stroke: #0066cc; stroke-width: 2; }
+      .node-concept { fill: #fff4e6; stroke: #ff8800; stroke-width: 2; }
+      .node-adr { fill: #e6ffe6; stroke: #00aa44; stroke-width: 2; }
+      .text-node { font-size: 11px; font-weight: bold; fill: #1a1a1a; }
+      .text-label { font-size: 9px; fill: #666; }
+      .arrow-down { stroke: #0066cc; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-up { stroke: #cc6600; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead-up); stroke-dasharray: 4,4; }
+      .line-related { stroke: #9999ff; stroke-width: 1; fill: none; marker-end: url(#arrowhead-related); stroke-dasharray: 2,2; }
+      .title { font-size: 20px; font-weight: bold; fill: #1a1a1a; }
+      .subtitle { font-size: 12px; fill: #555; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0066cc" />
+    </marker>
+    <marker id="arrowhead-up" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#cc6600" />
+    </marker>
+    <marker id="arrowhead-related" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#9999ff" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="35" class="title" text-anchor="middle">CIES Lineage & Traceability</text>
+  <text x="500" y="55" class="subtitle" text-anchor="middle">Full journey from Idea through Implementation</text>
+
+  <!-- Main lineage path -->
+
+  <!-- IDEA-ADR at top -->
+  <rect x="350" y="100" width="300" height="80" class="node-idea" rx="6"/>
+  <text x="500" y="125" class="text-node" text-anchor="middle">IDEA-ADR-0042</text>
+  <text x="500" y="145" class="text-label" text-anchor="middle">Multi-Tenant Learning Infrastructure</text>
+  <text x="500" y="162" class="text-label" text-anchor="middle">created: 2026-08-01 | stakeholders: 4</text>
+
+  <!-- Arrow down -->
+  <path d="M 500 180 L 500 240" class="arrow-down"/>
+  <text x="520" y="215" class="text-label">downstream:</text>
+  <text x="520" y="228" class="text-label">[CONCEPT-ADR-0009]</text>
+
+  <!-- CONCEPT-ADR middle -->
+  <rect x="350" y="240" width="300" height="100" class="node-concept" rx="6"/>
+  <text x="500" y="270" class="text-node" text-anchor="middle">CONCEPT-ADR-0009</text>
+  <text x="500" y="290" class="text-label" text-anchor="middle">Live-Report-Driven Root Cause Method</text>
+  <text x="500" y="307" class="text-label" text-anchor="middle">evidence: [task-1, task-2, task-3]</text>
+  <text x="500" y="324" class="text-label" text-anchor="middle">skills: [assistant.corvinOS_live_report_root_cause]</text>
+
+  <!-- Back-reference arrow (upstream) -->
+  <path d="M 350 290 L 320 150" class="arrow-up"/>
+  <text x="300" y="220" class="text-label" fill="#cc6600">upstream</text>
+
+  <!-- Arrow down to ADRs -->
+  <path d="M 500 340 L 500 400" class="arrow-down"/>
+  <text x="520" y="375" class="text-label">downstream:</text>
+  <text x="520" y="388" class="text-label">[ADR-0314, ADR-0315]</text>
+
+  <!-- ADR nodes (3 columns) -->
+  <!-- Left ADR -->
+  <rect x="80" y="400" width="240" height="120" class="node-adr" rx="6"/>
+  <text x="200" y="430" class="text-node" text-anchor="middle">ADR-0314</text>
+  <text x="200" y="450" class="text-label" text-anchor="middle">Learning Infrastructure</text>
+  <text x="200" y="467" class="text-label" text-anchor="middle">paths: core/learning/**</text>
+  <text x="200" y="484" class="text-label" text-anchor="middle">depends_on: [ADR-0312]</text>
+  <text x="200" y="501" class="text-label" text-anchor="middle">commits: [9f3a8e2c]</text>
+
+  <!-- Center ADR -->
+  <rect x="380" y="400" width="240" height="120" class="node-adr" rx="6"/>
+  <text x="500" y="430" class="text-node" text-anchor="middle">ADR-0315</text>
+  <text x="500" y="450" class="text-label" text-anchor="middle">Confidence Intervals</text>
+  <text x="500" y="467" class="text-label" text-anchor="middle">paths: core/learning/confidence.py</text>
+  <text x="500" y="484" class="text-label" text-anchor="middle">depends_on: [ADR-0314]</text>
+  <text x="500" y="501" class="text-label" text-anchor="middle">commits: [3c2b1f8a]</text>
+
+  <!-- Right ADR -->
+  <rect x="680" y="400" width="240" height="120" class="node-adr" rx="6"/>
+  <text x="800" y="430" class="text-node" text-anchor="middle">ADR-0316</text>
+  <text x="800" y="450" class="text-label" text-anchor="middle">Decision History</text>
+  <text x="800" y="467" class="text-label" text-anchor="middle">paths: core/learning/history.py</text>
+  <text x="800" y="484" class="text-label" text-anchor="middle">depends_on: [ADR-0315]</text>
+  <text x="800" y="501" class="text-label" text-anchor="middle">commits: [7e4a9d2c]</text>
+
+  <!-- Back-reference arrows (upstream) -->
+  <path d="M 200 400 L 350 340" class="arrow-up"/>
+  <path d="M 500 400 L 500 340" class="arrow-up"/>
+  <path d="M 800 400 L 650 340" class="arrow-up"/>
+  <text x="280" y="360" class="text-label" fill="#cc6600" font-size="8">upstream</text>
+
+  <!-- Related links (horizontal) -->
+  <path d="M 320 460 L 380 460" class="line-related"/>
+  <text x="340" y="450" class="text-label" fill="#9999ff" font-size="8">depends_on</text>
+
+  <path d="M 620 460 L 680 460" class="line-related"/>
+  <text x="640" y="450" class="text-label" fill="#9999ff" font-size="8">depends_on</text>
+
+  <!-- Git commits section -->
+  <rect x="100" y="580" width="800" height="100" fill="#f5f5f5" stroke="#ddd" stroke-width="1" rx="6"/>
+  <text x="120" y="605" class="text-node" font-size="12">Git Commit History (Hash-Chained)</text>
+
+  <!-- Commit 1 -->
+  <rect x="120" y="620" width="220" height="50" fill="white" stroke="#00aa44" stroke-width="1" rx="4"/>
+  <text x="230" y="635" class="text-label" text-anchor="middle" font-weight="bold" font-size="9">commit: 9f3a8e2c</text>
+  <text x="230" y="650" class="text-label" text-anchor="middle" font-size="8">ADR-0314: Learning Infrastructure</text>
+  <text x="230" y="663" class="text-label" text-anchor="middle" font-size="8">upstream: CONCEPT-ADR-0009</text>
+
+  <!-- Arrow -->
+  <path d="M 340 645 L 380 645" class="arrow-down" stroke-width="1.5" marker-end="url(#arrowhead-small)"/>
+
+  <!-- Commit 2 -->
+  <rect x="380" y="620" width="220" height="50" fill="white" stroke="#00aa44" stroke-width="1" rx="4"/>
+  <text x="490" y="635" class="text-label" text-anchor="middle" font-weight="bold" font-size="9">commit: 3c2b1f8a</text>
+  <text x="490" y="650" class="text-label" text-anchor="middle" font-size="8">ADR-0315: Confidence Intervals</text>
+  <text x="490" y="663" class="text-label" text-anchor="middle" font-size="8">depends_on: ADR-0314 → 9f3a8e2c</text>
+
+  <!-- Arrow -->
+  <path d="M 600 645 L 640 645" class="arrow-down" stroke-width="1.5" marker-end="url(#arrowhead-small)"/>
+
+  <!-- Commit 3 -->
+  <rect x="640" y="620" width="240" height="50" fill="white" stroke="#00aa44" stroke-width="1" rx="4"/>
+  <text x="760" y="635" class="text-label" text-anchor="middle" font-weight="bold" font-size="9">commit: 7e4a9d2c</text>
+  <text x="760" y="650" class="text-label" text-anchor="middle" font-size="8">ADR-0316: Decision History</text>
+  <text x="760" y="663" class="text-label" text-anchor="middle" font-size="8">depends_on: ADR-0315 → 3c2b1f8a</text>
+
+  <defs>
+    <marker id="arrowhead-small" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0066cc" />
+    </marker>
+  </defs>
+
+  <!-- Query examples -->
+  <rect x="100" y="720" width="800" height="150" fill="#f0f7ff" stroke="#0066cc" stroke-width="1" rx="6"/>
+  <text x="120" y="745" class="text-node" font-size="12">Lineage Queries (Examples)</text>
+
+  <!-- Query 1 -->
+  <rect x="120" y="765" width="360" height="80" fill="white" stroke="#0066cc" stroke-width="1" rx="4"/>
+  <text x="135" y="782" class="text-label" font-weight="bold">↑ Upstream (What led to this?)</text>
+  <text x="135" y="798" class="text-label" font-family="monospace" font-size="8">cies-traverse --adr ADR-0315 --direction upstream</text>
+  <text x="135" y="814" class="text-label" font-size="8">Output: ADR-0315 ← CONCEPT-ADR-0009 ← IDEA-ADR-0042</text>
+  <text x="135" y="828" class="text-label" font-size="8">Latency: 28 days | Stakeholders: 4 | Confidence: HIGH</text>
+
+  <!-- Query 2 -->
+  <rect x="520" y="765" width="360" height="80" fill="white" stroke="#00aa44" stroke-width="1" rx="4"/>
+  <text x="535" y="782" class="text-label" font-weight="bold">↓ Downstream (What depends on this?)</text>
+  <text x="535" y="798" class="text-label" font-family="monospace" font-size="8">cies-traverse --concept CONCEPT-ADR-0009 --direction downstream</text>
+  <text x="535" y="814" class="text-label" font-size="8">Output: CONCEPT-ADR-0009 → [ADR-0314, ADR-0315, ADR-0316]</text>
+  <text x="535" y="828" class="text-label" font-size="8">Skills minted: 1 | Auto-injected: 8 turns | Grade: 0.67</text>
+
+  <!-- Legend -->
+  <text x="100" y="50" class="text-label" font-weight="bold">Legend:</text>
+  <rect x="200" y="35" width="15" height="15" class="node-idea"/>
+  <text x="225" y="47" class="text-label">Idea (Strategic vision)</text>
+
+  <rect x="430" y="35" width="15" height="15" class="node-concept"/>
+  <text x="455" y="47" class="text-label">Concept (Reusable method)</text>
+
+  <rect x="680" y="35" width="15" height="15" class="node-adr"/>
+  <text x="705" y="47" class="text-label">Decision (Architecture)</text>
+</svg>

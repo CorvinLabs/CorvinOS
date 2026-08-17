@@ -1,0 +1,145 @@
+<svg viewBox="0 0 1200 850" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .storage { fill: #f5f5f5; stroke: #666; stroke-width: 2; }
+      .storage-fs { fill: #e6ffe6; stroke: #00aa44; stroke-width: 2; }
+      .storage-git { fill: #e6f2ff; stroke: #0066cc; stroke-width: 2; }
+      .text-title { font-size: 16px; font-weight: bold; fill: #1a1a1a; }
+      .text-label { font-size: 11px; fill: #555; }
+      .text-file { font-size: 10px; fill: #666; font-family: monospace; }
+      .arrow-flow { stroke: #0066cc; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-ref { stroke: #ff8800; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead-ref); stroke-dasharray: 4,4; }
+      .gate { fill: #fff0e6; stroke: #ff8800; stroke-width: 2; }
+      .gate-pass { fill: #e6ffe6; stroke: #00aa44; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0066cc" />
+    </marker>
+    <marker id="arrowhead-ref" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ff8800" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="35" class="text-title" text-anchor="middle" font-size="24">
+    CIES Storage & Integration Architecture
+  </text>
+  <text x="600" y="55" class="text-label" text-anchor="middle" font-size="13">
+    Hybrid Model: MemPlace (FS) + Git (Code-binding decisions)
+  </text>
+
+  <!-- Left side: MemPlace -->
+  <rect x="50" y="100" width="500" height="700" class="storage-fs" rx="8"/>
+  <text x="300" y="135" class="text-title" text-anchor="middle">MemPlace Storage (Filesystem)</text>
+  <text x="300" y="155" class="text-label" text-anchor="middle">Location: ~/.corvin/tenants/_default/idea-pipeline/</text>
+
+  <!-- MemPlace structure -->
+  <rect x="70" y="180" width="460" height="600" fill="white" stroke="#00aa44" stroke-width="1" stroke-dasharray="2,2" rx="6"/>
+
+  <!-- IDEA layer -->
+  <rect x="90" y="200" width="420" height="140" fill="#f0fff0" stroke="#00aa44" stroke-width="1" rx="4"/>
+  <text x="300" y="225" class="text-file" text-anchor="middle" font-weight="bold">IDEA-ADR/</text>
+  <text x="100" y="245" class="text-file">IDEA-ADR-0001.md</text>
+  <text x="100" y="262" class="text-label">• vision: "Multi-tenant learning"</text>
+  <text x="100" y="277" class="text-label">• problem: "Central model..."</text>
+  <text x="100" y="292" class="text-label">• stakeholders: [ops, ml-lead]</text>
+  <text x="100" y="307" class="text-label">• downstream: [CONCEPT-ADR-0009]</text>
+  <text x="100" y="322" class="text-label">• immutable: yes | created: 2026-08-01</text>
+
+  <!-- Arrow down -->
+  <path d="M 300 340 L 300 360" class="arrow-flow" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- CONCEPT layer -->
+  <rect x="90" y="360" width="420" height="160" fill="#fffbf0" stroke="#ff8800" stroke-width="1" rx="4"/>
+  <text x="300" y="385" class="text-file" text-anchor="middle" font-weight="bold">CONCEPT-ADR/</text>
+  <text x="100" y="405" class="text-file">CONCEPT-ADR-0009.md</text>
+  <text x="100" y="422" class="text-label">• method: "Live-report-driven..."</text>
+  <text x="100" y="437" class="text-label">• recurrence: [task-1, task-2, task-3]</text>
+  <text x="100" y="452" class="text-label">• skills: [assistant.corvinOS_...]</text>
+  <text x="100" y="467" class="text-label">• upstream: [IDEA-ADR-0001]</text>
+  <text x="100" y="482" class="text-label">• downstream: [ADR-0232, ADR-0233]</text>
+  <text x="100" y="497" class="text-label">• append-only operator_notes section</text>
+
+  <!-- Arrow down -->
+  <path d="M 300 520 L 300 540" class="arrow-flow" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- Metadata layer -->
+  <rect x="90" y="540" width="420" height="110" fill="#f9f9f9" stroke="#999" stroke-width="1" rx="4"/>
+  <text x="300" y="563" class="text-file" text-anchor="middle" font-weight="bold">Metadata (Both layers)</text>
+  <text x="100" y="583" class="text-label">• Hash-chain: immutability proof</text>
+  <text x="100" y="598" class="text-label">• Atomic writes: tempfile + rename pattern</text>
+  <text x="100" y="613" class="text-label">• TOCTOU protection: no race conditions</text>
+  <text x="100" y="628" class="text-label">• Audit trail: every write logged</text>
+
+  <!-- Right side: Git -->
+  <rect x="620" y="100" width="530" height="700" class="storage-git" rx="8"/>
+  <text x="885" y="135" class="text-title" text-anchor="middle">Git Repository (Code-binding)</text>
+  <text x="885" y="155" class="text-label" text-anchor="middle">Location: Corvin-ADR/decisions/</text>
+
+  <!-- Git structure -->
+  <rect x="640" y="180" width="490" height="600" fill="white" stroke="#0066cc" stroke-width="1" stroke-dasharray="2,2" rx="6"/>
+
+  <!-- ADR layer -->
+  <rect x="660" y="200" width="450" height="160" fill="#f0f7ff" stroke="#0066cc" stroke-width="1" rx="4"/>
+  <text x="885" y="225" class="text-file" text-anchor="middle" font-weight="bold">ADR-NNNN/</text>
+  <text x="670" y="245" class="text-file">ADR-0314-learning-infrastructure.md</text>
+  <text x="670" y="262" class="text-label">• status: proposed | depends_on: [ADR-0312]</text>
+  <text x="670" y="277" class="text-label">• paths: [core/learning/**]</text>
+  <text x="670" y="292" class="text-label">• docs: [docs/claude-ref/layer-*.md]</text>
+  <text x="670" y="307" class="text-label">• upstream: [CONCEPT-ADR-0009]</text>
+  <text x="670" y="322" class="text-label">• commits: [9f3a8e2c]</text>
+
+  <!-- Arrow down -->
+  <path d="M 885 360 L 885 380" class="arrow-flow" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- Implementation layer -->
+  <rect x="660" y="380" width="450" height="140" fill="#e6ffe6" stroke="#00aa44" stroke-width="1" rx="4"/>
+  <text x="885" y="405" class="text-file" text-anchor="middle" font-weight="bold">Implementation (Same commit)</text>
+  <text x="670" y="425" class="text-file">core/learning/event_store.py</text>
+  <text x="670" y="442" class="text-file">core/learning/schemas.py</text>
+  <text x="670" y="459" class="text-label">docs/claude-ref/learning-infrastructure.md</text>
+  <text x="670" y="474" class="text-label">Commit: ADR-0314 + code + docs (atomic)</text>
+
+  <!-- Arrow down -->
+  <path d="M 885 520 L 885 540" class="arrow-flow" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- Gates layer -->
+  <rect x="660" y="540" width="450" height="110" fill="#fff0e6" stroke="#ff8800" stroke-width="1" rx="4"/>
+  <text x="885" y="563" class="text-file" text-anchor="middle" font-weight="bold">Validation Gates</text>
+  <text x="670" y="583" class="text-label">✓ Pre-commit hook: ADR-path sync</text>
+  <text x="670" y="598" class="text-label">✓ CI/CD gate: code-ADR binding</text>
+  <text x="670" y="613" class="text-label">✓ Code review: frontmatter + depends_on</text>
+  <text x="670" y="628" class="text-label">✓ Permanent archive in Git history</text>
+
+  <!-- Cross-references (arrows between systems) -->
+  <path d="M 530 350 L 620 350" class="arrow-ref"/>
+  <text x="560" y="340" class="text-label" fill="#ff8800" font-size="10">upstream link</text>
+  <text x="560" y="352" class="text-label" fill="#ff8800" font-size="10">(CONCEPT→ADR)</text>
+
+  <path d="M 620 400 L 530 400" class="arrow-ref"/>
+  <text x="550" y="390" class="text-label" fill="#ff8800" font-size="10">downstream</text>
+  <text x="555" y="402" class="text-label" fill="#ff8800" font-size="10">reference</text>
+
+  <!-- Query flow -->
+  <rect x="50" y="850" width="1110" height="0" fill="none"/>
+
+  <!-- Bottom section: Why Split? -->
+  <rect x="50" y="830" width="1110" height="2" fill="#ddd"/>
+
+  <text x="60" y="850" class="text-title" font-size="12">Why This Hybrid Model?</text>
+
+  <rect x="50" y="860" width="360" height="60" fill="#e6ffe6" stroke="#00aa44" stroke-width="1" rx="4"/>
+  <text x="65" y="878" class="text-label" font-weight="bold">MemPlace (Ideas + Concepts)</text>
+  <text x="65" y="893" class="text-label">✓ Working knowledge, human-editable</text>
+  <text x="65" y="908" class="text-label">✓ Append-only audit trail (compliance)</text>
+
+  <rect x="440" y="860" width="360" height="60" fill="#e6f2ff" stroke="#0066cc" stroke-width="1" rx="4"/>
+  <text x="455" y="878" class="text-label" font-weight="bold">Git (Decisions + Code)</text>
+  <text x="455" y="893" class="text-label">✓ Code-binding ADRs must version with code</text>
+  <text x="455" y="908" class="text-label">✓ Hash-chain: immutability + traceability</text>
+
+  <rect x="830" y="860" width="320" height="60" fill="#fff0e6" stroke="#ff8800" stroke-width="1" rx="4"/>
+  <text x="845" y="878" class="text-label" font-weight="bold">Reference Link</text>
+  <text x="845" y="893" class="text-label">CONCEPT-ADR.downstream → ADR-NNNN</text>
+  <text x="845" y="908" class="text-label">ADR-NNNN.upstream → CONCEPT-ADR</text>
+</svg>
