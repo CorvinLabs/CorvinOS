@@ -793,6 +793,21 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         release_tier="alpha",
     ),
     FeatureFlag(
+        id="outcome_feedback_loop",
+        label="Outcome-feedback loop (self-improving CEL)",
+        description=(
+            "After each console turn, attribute the turn's outcome to the CEL stages "
+            "that ran (ADR-0269 Phase-4b / ADR-0369-sibling G4). Off by default "
+            "(ship-dark): a normal install records no outcome. The grades written are "
+            "ADVISORY (grader='__loop__', non-promoting) — they never change which "
+            "stage is default-eligible; only an explicit operator grade does that."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("vibe-engineering", "learning"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
         id="cross_device_sync",
         label="Cross-device tenant sync",
         description=(
