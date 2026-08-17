@@ -1,5 +1,7 @@
 import * as React from "react";
 import { panelRoutes } from "@/panels/registry";
+import PanelHost from "@/panels/PanelHost";
+import { useAiPanels, aiPanelSrc } from "@/adapters/ai-panels";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { AppLayout } from "@/components/layout";
@@ -90,6 +92,10 @@ function RootRedirect() {
 }
 
 export default function App() {
+  // AI-generated panels (ADR-0366): mounted dynamically as sandboxed iframes, so a
+  // panel the KI just created is reachable without a rebuild. Trusted (first-party,
+  // same-origin API) → allow-same-origin for its credentialed fetches.
+  const { data: aiPanels } = useAiPanels();
   // Routes are rendered UNGATED: every panel route is mounted, always. Access is
   // enforced by the backend (auth + flags), and the capability manifest can 401
   // pre-auth — gating the ROUTES here made the vibe-engineering page (and others)
@@ -128,6 +134,14 @@ export default function App() {
             {/* ADR-0353 P1: panels render from the registry (all routes mounted;
                 the nav gates visibility, layout.tsx). */}
             {panelRoutes()}
+            {/* ADR-0366: AI-generated panels, mounted dynamically. */}
+            {(aiPanels ?? []).map((p) => (
+              <Route
+                key={p.id}
+                path={p.id}
+                element={<PanelHost src={aiPanelSrc(p.id)} sandbox="allow-scripts allow-same-origin" />}
+              />
+            ))}
             <Route path="workflows" element={<WorkflowsListPage />} />
             <Route path="workflows/:wid" element={<WorkflowEditorPage />} />
             <Route path="workflows/:wid/runs" element={<WorkflowRunsPage />} />

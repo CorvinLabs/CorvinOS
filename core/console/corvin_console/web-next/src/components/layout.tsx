@@ -47,6 +47,7 @@ import { getOsEngineSetting, getLicenseInfo } from "@/lib/api";
 import { LicenseBadge } from "@/components/license-gate";
 import { cn } from "@/lib/utils";
 import { useCapabilities, type CapabilityManifest } from "@/adapters/capabilities";
+import { useAiPanels } from "@/adapters/ai-panels";
 
 // ── Engine chip — shows the active tenant-default engine in the header ───
 
@@ -364,10 +365,19 @@ export function AppLayout() {
   // hides its nav entry without an SPA rebuild. Fires in the authed shell, so the
   // manifest loads reliably (unlike App pre-auth).
   const { data: capabilityManifest } = useCapabilities();
-  const navGroups = React.useMemo(
-    () => gateNavGroups(NAV_GROUPS, capabilityManifest),
-    [capabilityManifest],
-  );
+  const { data: aiPanels } = useAiPanels();
+  const navGroups = React.useMemo(() => {
+    const gated = gateNavGroups(NAV_GROUPS, capabilityManifest);
+    // ADR-0366: the operator's AI-generated panels get their own nav group.
+    if (aiPanels && aiPanels.length) {
+      gated.push({
+        id: "ai-panels",
+        label: "Your panels",
+        items: aiPanels.map((p) => ({ to: `/app/${p.id}`, label: p.title, icon: Sparkles })),
+      });
+    }
+    return gated;
+  }, [capabilityManifest, aiPanels]);
   const [assistantOpen, setAssistantOpen] = React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   useSettingsStream();
