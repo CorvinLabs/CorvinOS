@@ -1,4 +1,4 @@
-"""Context Engineering — Persona, Role, and Capability Model."""
+"""Context Engineering — Persona, Role, Capability Model, and ExecutionContext v2."""
 
 from core.context_engineering.capabilities import Capability, Persona, Role, Tier
 from core.context_engineering.persona_model import (
@@ -26,6 +26,12 @@ from core.context_engineering.auth_decorators import (
     auth_required_flask,
     requires_auth_capability,
 )
+from core.context_engineering.execution_context import (
+    ContextStack,
+    ContextStackFrame,
+    ExecutionContext,
+)
+from core.context_engineering.decision_record import DecisionRecord
 
 __all__ = [
     "Persona",
@@ -44,4 +50,9 @@ __all__ = [
     "set_current_tenant_id",
     "has_capability",
     "requires_capability",
+    # ADR-0358: ExecutionContext v2
+    "ExecutionContext",
+    "ContextStack",
+    "ContextStackFrame",
+    "DecisionRecord",
 ]
