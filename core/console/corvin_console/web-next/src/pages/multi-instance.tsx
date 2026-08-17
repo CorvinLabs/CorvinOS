@@ -94,39 +94,16 @@ export function MultiInstanceDashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        let apiBase = window.location.origin;
-
-        if (window.location.hostname === 'localhost' &&
-            (window.location.port === '3000' || window.location.port === '5173')) {
-          const ports = ['8765', '8000', '8080'];
-          let foundPort = null;
-
-          for (const port of ports) {
-            try {
-              const testRes = await fetch(`http://localhost:${port}/v1/console/api/multi-instance/status`, {
-                method: 'HEAD'
-              });
-              if (testRes.ok || testRes.status === 404) {
-                foundPort = port;
-                break;
-              }
-            } catch (e) {
-              continue;
-            }
-          }
-
-          if (foundPort) {
-            apiBase = `http://localhost:${foundPort}`;
-          }
-        }
-
+        // G5 (ADR-0369): the Console is served same-origin, so use relative URLs
+        // with credentials. The old localhost:8765/8000/8080 port-probing was a dev
+        // artifact that broke same-origin auth and leaked a hardcoded port list.
         const [statusRes, patternsRes] = await Promise.all([
-          fetch(`${apiBase}/v1/console/api/multi-instance/status`),
-          fetch(`${apiBase}/v1/console/api/multi-instance/patterns`),
+          fetch('/v1/console/api/multi-instance/status', { credentials: 'include' }),
+          fetch('/v1/console/api/multi-instance/patterns', { credentials: 'include' }),
         ]);
 
         if (!statusRes.ok || !patternsRes.ok) {
-          throw new Error(`Failed to fetch from ${apiBase}`);
+          throw new Error('Failed to fetch multi-instance status');
         }
 
         const statusData = await statusRes.json();

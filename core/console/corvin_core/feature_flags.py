@@ -792,6 +792,23 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("console", "plugins"),
         release_tier="alpha",
     ),
+    FeatureFlag(
+        id="cross_device_sync",
+        label="Cross-device tenant sync",
+        description=(
+            "Sync this tenant's learnable state (CEL stage grades, learning-event "
+            "JSONL, skills, memory) across the operator's own instances through a Git "
+            "remote, using the type-specific merge engine (ADR-0369). Off by default "
+            "(ship-dark): a normal install never syncs. Turning it on requires an "
+            "explicit consent step, a configured remote + PAT (in the Vault), and "
+            "mandatory GPG encryption of the payload before push — learning state can "
+            "carry end-user-derived PII, so the push is a real GDPR egress event."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("cross-device", "learning"),
+        release_tier="alpha",
+    ),
 )
 
 
