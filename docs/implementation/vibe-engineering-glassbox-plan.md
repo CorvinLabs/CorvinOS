@@ -19,8 +19,18 @@ Korrekturen sind inline als „Review-korrigiert (Fn)" markiert. **Verdikt nach 
   HTTP-verifiziert (Flag-off → „disabled"). Flag `cross_device_sync` default-off. Frontend Port-Probing entfernt.
   **Offen (nächstes Inkrement, hinter default-off Flag):** live `git clone/pull/push` + GPG-Wiring gegen ein echtes
   Remote — braucht Operator-PAT im Vault + `sync_remote`-Config.
-- **G2/G3/G4 — geplant, noch nicht gebaut.** (G2 Inspector-Entfernung + Overview; G3 Learning Ledger + Grade-UI;
-  G4 Outcome-Wiring.) Nebenbei erledigt: der verwaiste `learning.tsx`-Build-Blocker (doppelter Default-Export).
+- **G2 — GEBAUT & E2E-verifiziert** (ADR-0370). Vibe Inspector entfernt (redundant); neue `vibe-overview.tsx`
+  (Aggregate + CEL-Flow-Erklärung). Playwright: Overview rendert, Nav zeigt Inspector nicht mehr.
+- **G3 — GEBAUT & E2E-verifiziert** (ADR-0371). Operator-Grade-Surface: `GET/POST /vibe-engineering/grades` +
+  `StageGradePanel` im StageModal (👎/😐/👍). HTTP-E2E: Grade `memory` 0→1 reflektiert. Fokussiert auf die
+  CEL-Grade-UI — die TreeOfThoughts-Verdrahtung hat eine Parallel-Session übernommen, bewusst nicht berührt.
+- **G4 — GEBAUT & E2E-verifiziert** (ADR-0371). `record_turn_outcome` bekommt seinen ersten Production-Caller,
+  ship-dark hinter `outcome_feedback_loop`. `stream_turn`-E2E: Flag on → 8 advisory Grades/Turn, off → 0.
+  Dabei gefunden+behoben: eine AttributeError-Bindung hätte CEL komplett deaktiviert (`_CEL_AVAILABLE=False`).
+- Nebenbei erledigt: der verwaiste `learning.tsx`-Build-Blocker (doppelter Default-Export).
+
+**Damit sind G1–G5 alle gebaut** (G5 mit ship-dark Transport-Rest). Offene Folge-Arbeit: G5 Live-git+GPG-Transport;
+G4 reicheres Erfolgs-Signal (echter Task-Erfolg statt „kein Fehler").
 
 ---
 
