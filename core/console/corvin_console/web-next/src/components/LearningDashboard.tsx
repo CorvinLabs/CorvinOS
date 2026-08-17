@@ -168,7 +168,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({ node, onGrade, onAddNote }) =
   );
 };
 
-export const LearningDashboard: React.FC = () => {
+export const LearningDashboard: React.FC<{ nodes?: any[] }> = () => {
   const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   
