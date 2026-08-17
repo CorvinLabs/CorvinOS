@@ -173,7 +173,6 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/extensions",  label: "Extensions",      icon: Puzzle },
       { to: "/app/mcp-plugins", label: "MCP Plugins",     icon: Package },
       { to: "/app/plugins",     label: "Plugins",         icon: Blocks },
-      { to: "/app/frontend-forge", label: "FrontendForge", icon: Hammer, requiredFlag: "frontend_forge" },
     ],
   },
   {
