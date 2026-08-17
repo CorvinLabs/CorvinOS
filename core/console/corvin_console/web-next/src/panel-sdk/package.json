@@ -1,0 +1,12 @@
+{
+  "name": "@corvin/panel-sdk",
+  "version": "0.1.0",
+  "description": "Client SDK for building external CorvinOS Console panels (ADR-0362 P4).",
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "license": "Apache-2.0",
+  "publishConfig": { "access": "public" },
+  "peerDependencies": {},
+  "sideEffects": false
+}
