@@ -127,6 +127,8 @@ _cel_build_brief = None
 _cel_render = None
 _cel_persist_trace = None
 _cel_emit_record = None
+_cel_persist_assembly = None  # G1: Glass-Box assembly persistence (console parity)
+_cel_build_sections = None
 try:
     import importlib.util as _ilu  # noqa: PLC0415
     # Source tree → <repo>/operator/context_engineering. Wheel → the vendored
@@ -150,6 +152,13 @@ try:
         _cel_render = _cel_mod.render_brief_to_text
         _cel_persist_trace = _cel_mod.persist_trace
         _cel_emit_record = _cel_mod.emit_decision_record
+        # G1 (Glass Box): the console must persist the assembly record too, not
+        # just the trace + decision record. Until now persist_assembly ran ONLY on
+        # the bridge path (adapter.py), so GET /vibe-engineering/prompt/{turn}
+        # returned found:false for console turns — the Glass Box was empty on the
+        # very surface it lives on. These give the console the same Layer-B record.
+        _cel_persist_assembly = _cel_mod.persist_assembly
+        _cel_build_sections = _cel_mod.build_sections
         # ACTIVE brain (ADR-0282/0283), wired in review R6. The console owns the
         # Vibe Engineering surface AND the pipeline editor, yet only ever called
         # the deterministic `build_brief`: an operator who dragged `llm_synthesis`
@@ -4694,6 +4703,29 @@ async def stream_turn(
                     tenant_id=sess.tenant_id, workdir=sess.workdir,
                     session_id=Path(sess.workdir).name)
             except Exception:  # noqa: BLE001 — auditability never breaks the turn
+                pass
+            try:  # G1 (Glass Box): persist the assembly record so the console's
+                # own turns show their final_prompt at GET /prompt/{turn}. Mirrors
+                # the bridge (adapter.py:3373). final_prompt is the assembled system
+                # prompt WITH the CEL block — exactly what the worker engine receives.
+                if _cel_persist_assembly is not None:
+                    # _bundle exists only on the active-brain branch; the common
+                    # deterministic turn defines _cbrief instead. Fetch both safely.
+                    _pa_bundle = locals().get("_bundle")
+                    _pa_src = _pa_bundle if _pa_bundle is not None else locals().get("_cbrief")
+                    _pa_forged_skills = [
+                        getattr(s, "skill_id", "?")
+                        for s in (getattr(_pa_bundle, "skills_to_bind", None) or [])
+                    ]
+                    _cel_persist_assembly(
+                        sess.workdir, f"turn-{sess.turn_count}",
+                        sections=(_cel_build_sections(_pa_src)
+                                  if (_pa_src is not None and _cel_build_sections) else []),
+                        cel_text=_cel_brief_text,
+                        final_prompt=_turn_system_prompt(sess, prompt, _cel_brief_text),
+                        forged_tools=list(_cel_trace.get("tools_bound", []) or []),
+                        forged_skills=_pa_forged_skills)
+            except Exception:  # noqa: BLE001 — inspector detail is best-effort
                 pass
         except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
             _cel_brief_text = ""
