@@ -38,6 +38,18 @@ export interface PanelHostProps {
   baseUrl?: string;
 }
 
+/** True iff `to` is a safe SPA-internal navigation target. Rejects protocol-relative
+ *  ("//host") and backslash ("/\\host") forms the browser resolves to an external
+ *  origin — a hostile panel must not be able to drive a top-level redirect. */
+export function isSafeInternalNavTarget(to: unknown): to is string {
+  return (
+    typeof to === "string" &&
+    to.startsWith("/") &&
+    !to.startsWith("//") &&
+    !to.startsWith("/\\")
+  );
+}
+
 export function makeHostContext(p: PanelHostProps): PanelHostContext {
   return {
     baseUrl: p.baseUrl ?? "/v1/console",
@@ -83,7 +95,7 @@ export default function PanelHost(props: PanelHostProps) {
         }
         case "corvin:panel:navigate":
           // Whitelisted action: navigate only WITHIN the Console SPA.
-          if (typeof msg.to === "string" && msg.to.startsWith("/")) navigate(msg.to);
+          if (isSafeInternalNavTarget(msg.to)) navigate(msg.to);
           break;
         case "corvin:panel:resize":
           if (typeof msg.height === "number" && msg.height > 0 && msg.height < 20000) {

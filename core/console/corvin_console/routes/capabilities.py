@@ -49,6 +49,12 @@ CORE_CAPABILITIES: tuple[str, ...] = (
 #: Feature flags a panel may gate on (ConsolePanel.requiredFlag). Read live per
 #: tenant. A flag absent from the flags module resolves to False (ship-dark safe).
 GATED_FLAGS: tuple[str, ...] = (
+    # `vibe_engineering` (feature_flags.py) gates the Vibe panel's VISIBILITY and is
+    # what the registry's vibe-engineering panel declares as requiredFlag — it MUST
+    # be here or that panel is always hidden. `vibe_engineering_active` is a distinct
+    # flag (the CEL pipeline being live, not the panel showing); kept too for any
+    # panel that gates on it.
+    "vibe_engineering",
     "vibe_engineering_active",
     "console_web_surface_plugin",
     "dual_gate_pipeline_enabled",

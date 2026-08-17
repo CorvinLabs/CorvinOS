@@ -56,3 +56,19 @@ describe("PanelHost dispatch (host side)", () => {
     expect(post).not.toHaveBeenCalled();
   });
 });
+
+import { isSafeInternalNavTarget } from "@/panels/PanelHost";
+describe("isSafeInternalNavTarget (P4/review hardening)", () => {
+  it("accepts SPA-internal paths", () => {
+    expect(isSafeInternalNavTarget("/app/dashboard")).toBe(true);
+    expect(isSafeInternalNavTarget("/")).toBe(true);
+  });
+  it("rejects external / protocol-relative / backslash / non-string targets", () => {
+    expect(isSafeInternalNavTarget("//evil.com")).toBe(false);
+    expect(isSafeInternalNavTarget("/\\evil.com")).toBe(false);
+    expect(isSafeInternalNavTarget("https://evil.com")).toBe(false);
+    expect(isSafeInternalNavTarget("app/x")).toBe(false);
+    expect(isSafeInternalNavTarget(42)).toBe(false);
+    expect(isSafeInternalNavTarget(null)).toBe(false);
+  });
+});

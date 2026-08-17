@@ -32,7 +32,18 @@ async function fetchManifest(): Promise<CapabilityManifest> {
 }
 
 export function useCapabilities() {
-  return useQuery({ queryKey: ["capabilities"], queryFn: fetchManifest, staleTime: 60_000 });
+  // The shell calls this from App, which renders before auth, so the first fetch
+  // can 401. That is fine — gatePanels() treats an absent manifest as fail-safe
+  // (ungated core panels) and the /app routes are behind RequireAuth anyway.
+  // retry:false avoids a pre-auth retry storm; refetchOnWindowFocus (RQ default)
+  // re-fetches once the user is authenticated, so gated panels appear without a
+  // reload. Moving the query into the authed shell is a tracked follow-up.
+  return useQuery({
+    queryKey: ["capabilities"],
+    queryFn: fetchManifest,
+    staleTime: 60_000,
+    retry: false,
+  });
 }
 
 /**
