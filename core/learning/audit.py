@@ -20,10 +20,14 @@ class AuditTrail:
         """Load the hash of the last record in the chain."""
         chain_file = self.audit_dir / "chain.txt"
         if chain_file.exists():
-            lines = chain_file.read_text().strip().split('\n')
-            if lines:
-                return lines[-1].split(' ')[0]  # Extract hash from "hash timestamp"
-        return "0" * 64  # Initial hash
+            content = chain_file.read_text().strip()
+            if content:
+                lines = [l for l in content.split('\n') if l.strip()]
+                if lines:
+                    parts = lines[-1].split(' ')
+                    if len(parts) > 0 and parts[0]:
+                        return parts[0]
+        return "0" * 64
     
     def write(self, event_type: str, subject_id: str, payload: dict) -> str:
         """Write event to audit log with hash chain.
@@ -61,39 +65,56 @@ class AuditTrail:
         return record_hash
     
     def verify(self) -> bool:
-        """Verify audit chain integrity.
-        
+        """Verify audit chain integrity against persisted chain.txt.
+
         Returns: True if all hashes chain correctly, False if corrupted
         """
         chain_file = self.audit_dir / "chain.txt"
         if not chain_file.exists():
-            return True  # Empty chain is valid
-        
-        # Read all records
+            return True
+
+        # Load persisted chain
+        try:
+            persisted_hashes = []
+            for line in chain_file.read_text().strip().split('\n'):
+                if line.strip():
+                    parts = line.split(' ')
+                    if len(parts) > 0:
+                        persisted_hashes.append(parts[0])
+        except Exception:
+            return False
+
+        # Read and verify all records
         all_records = []
         for daily_file in sorted(self.audit_dir.glob("audit-*.jsonl")):
-            for line in daily_file.read_text().strip().split('\n'):
-                if line.strip():
-                    all_records.append(json.loads(line))
-        
-        if not all_records:
-            return True
-        
-        # Verify hash chain
+            try:
+                for line in daily_file.read_text().strip().split('\n'):
+                    if line.strip():
+                        all_records.append(json.loads(line))
+            except (json.JSONDecodeError, IOError):
+                return False
+
+        if len(all_records) != len(persisted_hashes):
+            return False
+
+        # Verify each record's hash against chain.txt
         prev_hash = "0" * 64
-        for record in all_records:
+        for i, record in enumerate(all_records):
             if record.get("previous_hash") != prev_hash:
-                return False  # Chain broken
-            
+                return False
+
             # Recompute hash
             record_copy = {k: v for k, v in record.items() if k != "previous_hash"}
             record_copy["previous_hash"] = prev_hash
             json_str = json.dumps(record_copy, sort_keys=True)
             computed_hash = hashlib.sha256(json_str.encode()).hexdigest()
-            
-            # This is a simplified check; real implementation would verify against chain.txt
+
+            # Verify against persisted hash
+            if computed_hash != persisted_hashes[i]:
+                return False
+
             prev_hash = computed_hash
-        
+
         return True
     
     def get_events_in_range(self, start: datetime, end: datetime) -> list[dict]:
@@ -113,7 +134,7 @@ class AuditTrail:
     def compact(self, older_than_days: int = 365) -> None:
         """Archive old records (future: migrate to Parquet)."""
         cutoff = datetime.utcnow() - timedelta(days=older_than_days)
-        current = datetime.utcnow() - timedelta(days=365)
+        current = datetime.utcnow() - timedelta(days=older_than_days)
         
         summary = {}
         while current <= cutoff:
@@ -121,17 +142,24 @@ class AuditTrail:
             daily_file = self.audit_dir / f"audit-{date_str}.jsonl"
             
             if daily_file.exists():
-                events = [json.loads(line) for line in daily_file.read_text().strip().split('\n')]
-                
-                # Aggregate by event_type and subject_id
-                for event in events:
-                    key = (event["event_type"], event["subject_id"])
-                    if key not in summary:
-                        summary[key] = {"count": 0, "first_timestamp": event["timestamp"]}
-                    summary[key]["count"] += 1
-                
-                # Archive the daily file
-                daily_file.rename(daily_file.with_suffix('.archived'))
+                try:
+                    events = []
+                    for line in daily_file.read_text().strip().split('\n'):
+                        if line.strip():
+                            events.append(json.loads(line))
+
+                    # Aggregate by event_type and subject_id
+                    for event in events:
+                        key = (event["event_type"], event["subject_id"])
+                        if key not in summary:
+                            summary[key] = {"count": 0, "first_timestamp": event["timestamp"]}
+                        summary[key]["count"] += 1
+
+                    # Archive the daily file
+                    daily_file.rename(daily_file.with_suffix('.archived'))
+                except (json.JSONDecodeError, IOError, KeyError):
+                    # Skip corrupted files; they remain for manual recovery
+                    pass
             
             current += timedelta(days=1)
         

@@ -86,7 +86,10 @@ async def test_execute_tts_with_learning(integration):
     )
     
     assert result["success"]
-    assert "pattern_tts_openai" in result or "pattern_tts_openai" in str(result)
+    # Verify pattern tracking actually occurred
+    node = integration.store.get_node("pattern_tts_openai")
+    assert node is not None
+    assert node.calls_in_production >= 1
 
 
 def test_antipattern_detection(integration):
@@ -145,9 +148,15 @@ def test_pattern_suggestions(integration):
         mock
     ))
     
-    # Should have suggestions if confidence dropped
-    if result["new_confidence"] < 0.5:
-        assert len(result["suggestions"]) > 0 or result["suggestions"] == []
+    # Low confidence should trigger suggestions
+    assert result["new_confidence"] < 0.5  # Failure → confidence drops
+    # If good alternatives exist, suggestions should be populated
+    if result["suggestions"]:
+        assert len(result["suggestions"]) > 0
+        for suggestion_id in result["suggestions"]:
+            alt_node = integration.store.get_node(suggestion_id)
+            assert alt_node is not None
+            assert alt_node.confidence >= 0.7
 
 
 if __name__ == "__main__":
