@@ -20,6 +20,7 @@ class LearningEventType(str, Enum):
     ATTENTION_CONSUMED = "attention.consumed"
     ATTENTION_REFUNDED = "attention.refunded"
     METRIC_AGGREGATED = "metric.aggregated"
+    TOKEN_METRICS = "token.metrics"  # Phase 1: Token measurement
 
 
 @dataclass(frozen=True)
@@ -135,3 +136,41 @@ class MetricAggregatedPayload:
     window_seconds: int
     value: float
     sample_count: int
+
+
+@dataclass(frozen=True)
+class TokenMetricsPayload:
+    """Token consumption measurement (Phase 1: TMF)."""
+
+    turn_id: str
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+
+    # Engine & inference info
+    engine: str                           # "claude-opus-5" | "hermes" | etc
+    engine_tier: str                      # "cloud" | "local" | "tiered"
+    model_id: Optional[str] = None
+
+    # Baseline comparison
+    baseline_tokens: Optional[int] = None  # Native engine cost
+    savings_tokens: Optional[int] = None   # baseline - total
+    savings_percent: Optional[float] = None
+
+    # Task metadata (for slicing)
+    task_type: Optional[str] = None       # "code" | "research" | "analysis" | "chat"
+    task_domain: Optional[str] = None     # "backend" | "frontend" | "data" | "general"
+    task_complexity: Optional[str] = None # "trivial" | "simple" | "moderate" | "complex"
+
+    # Subsystem breakdown (which subsystems consumed tokens?)
+    subsystem_tokens: dict[str, int] = field(default_factory=dict)  # {"confidence": 200, "cache": 150, ...}
+
+    # Inference details
+    iterations_count: int = 1
+    latency_ms: Optional[int] = None
+    error_rate: Optional[float] = None
+
+    # Outcome & quality
+    outcome_quality: Optional[str] = None  # "excellent" | "good" | "acceptable" | "poor"
+    required_followup: bool = False        # did user need to ask again?
+    user_satisfaction: Optional[int] = None  # 1-5 rating
