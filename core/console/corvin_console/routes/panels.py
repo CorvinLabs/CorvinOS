@@ -51,6 +51,55 @@ def _validate_id(panel_id: str) -> str:
     return panel_id
 
 
+def slugify(text: str) -> str:
+    """A safe panel id from a human title."""
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:48] or "panel"
+
+
+def extract_title(html: str) -> str:
+    """Best-effort panel title from generated HTML (<title>/<h1>/<h2>)."""
+    for pat in (r"<title[^>]*>(.*?)</title>", r"<h1[^>]*>(.*?)</h1>", r"<h2[^>]*>(.*?)</h2>"):
+        m = re.search(pat, html or "", re.IGNORECASE | re.DOTALL)
+        if m:
+            t = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            if t:
+                return t[:80]
+    return "Panel"
+
+
+def store_panel(
+    tenant_id: str,
+    panel_id: str,
+    title: str,
+    html: str,
+    *,
+    nav_group: str = "ai",
+    icon: str = "Sparkles",
+    created_by: str = "ai",
+) -> dict:
+    """Write a panel to the store. SSOT used by both the POST route and the chat
+    worker's post-turn install (ADR-0366). Raises ValueError on a bad id / no store."""
+    if not _ID_RE.match(panel_id or ""):
+        raise ValueError(f"invalid panel id: {panel_id!r}")
+    d = _panels_dir(tenant_id)
+    if d is None:
+        raise ValueError("panel store unavailable (forge paths absent)")
+    pdir = d / panel_id
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "index.html").write_text(html, encoding="utf-8")
+    meta = {
+        "id": panel_id,
+        "title": title,
+        "nav_group": nav_group,
+        "icon": icon,
+        "created_at": time.time(),
+        "created_by": created_by,
+    }
+    (pdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return meta
+
+
 class PanelCreate(BaseModel):
     id: str = Field(..., description="stable id / route segment, e.g. 'recent-sessions'")
     title: str = Field(..., max_length=80)
@@ -81,23 +130,18 @@ async def create_panel(
     body: PanelCreate,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict:
-    """Install a generated panel. Called by the chat worker after it writes the HTML."""
+    """Install a panel directly (operator/API path). The chat worker uses the
+    post-turn workdir scan (chat_runtime) instead, but this endpoint is the SSOT
+    surface and what the E2E test drives."""
     _validate_id(body.id)
-    d = _panels_dir(rec.tenant_id)
-    if d is None:
-        raise HTTPException(status_code=503, detail="panel store unavailable (forge paths absent)")
-    pdir = d / body.id
-    pdir.mkdir(parents=True, exist_ok=True)
-    (pdir / "index.html").write_text(body.html, encoding="utf-8")
-    meta = {
-        "id": body.id,
-        "title": body.title,
-        "nav_group": body.nav_group,
-        "icon": body.icon,
-        "created_at": time.time(),
-        "created_by": getattr(rec, "fingerprint", None) or "operator",
-    }
-    (pdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    try:
+        meta = store_panel(
+            rec.tenant_id, body.id, body.title, body.html,
+            nav_group=body.nav_group, icon=body.icon,
+            created_by=getattr(rec, "fingerprint", None) or "operator",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, "panel": meta, "route": f"/app/{body.id}"}
 
 

@@ -1213,6 +1213,38 @@ def _console_base_url() -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def _install_generated_panels(tenant_id: str, workdir: "Path") -> list[dict]:
+    """Install any AI-generated Console panels the worker wrote to its workdir
+    (ADR-0366). The system prompt tells the worker: to build a panel, write its full
+    HTML to ``corvin-panel*.html``. This is the transfer of those files into the
+    panel store, done IN the console process (no HTTP, no auth dance). The consumed
+    file is removed so it is not re-installed on a later turn. Never raises — a panel
+    install must not break a chat turn."""
+    try:
+        from .routes.panels import store_panel, slugify, extract_title  # lazy
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        wd = Path(workdir)
+        if not wd.is_dir():
+            return []
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[dict] = []
+    for f in sorted(wd.glob("corvin-panel*.html")):
+        try:
+            html = f.read_text(encoding="utf-8", errors="replace")
+            if not html.strip():
+                continue
+            title = extract_title(html)
+            meta = store_panel(tenant_id, slugify(title), title, html, created_by="ai-chat")
+            out.append(meta)
+            f.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001 — one bad file must not stop the rest
+            continue
+    return out
+
+
 # Engine ids the console web-chat can actually drive for an OS turn.
 #   * claude_code → the direct `claude -p --output-format stream-json` subprocess
 #     path (below). This is the historical path; behaviour is byte-for-byte.
@@ -1442,6 +1474,19 @@ _WEB_CHAT_SYSTEM_PROMPT = (
     "(e.g. ./dog.svg, ./output.png, ./report.pdf). "
     "Do NOT write to the playground repository or any absolute path outside the current directory. "
     "Files saved in the current directory are automatically detected and displayed in the web chat.\n\n"
+    # ADR-0366 — the KI builds Console panels on request.
+    "BUILDING A CONSOLE PANEL: When the operator asks you to build/create a panel, a "
+    "dashboard, or a live view of some data for their Console, write the panel's FULL, "
+    "self-contained HTML+JS to a file named `corvin-panel.html` in the current directory "
+    "(use `corvin-panel-2.html`, etc. for more than one). It is installed automatically "
+    "and appears in the sidebar under 'Your panels' — do NOT try to POST it anywhere. "
+    "The panel runs sandboxed inside the Console and talks to it via postMessage: on load "
+    "it must `parent.postMessage({type:'corvin:panel:ready',protocolVersion:'1'},'*')`, then "
+    "listen for a `corvin:host:hello` message whose `ctx.baseUrl` is the Console API base and "
+    "`ctx.theme` is 'dark'|'light'. Fetch Console data from `ctx.baseUrl` with "
+    "`credentials:'include'` (e.g. `${ctx.baseUrl}/vibe-engineering/traces` → {sessions:[{turns:[]}]}, "
+    "or `${ctx.baseUrl}/sessions`). Give the panel an <h1> or <h2> title (it becomes the nav "
+    "label). Style it for a dark UI (light text). Keep it one file, no external assets.\n\n"
     # The LANGUAGE paragraph is the AUTO-DETECT default; _web_chat_system_prompt()
     # swaps it for the pinned-language rule when the operator set a Display
     # Language in Settings → Profile (see _language_rule()). `+` — not implicit
@@ -6292,6 +6337,18 @@ async def stream_turn(
                "annotation_pending": False}
 
     touch(sess, increment_turn=True)
+
+    # ADR-0366: install any Console panels the worker generated this turn (it writes
+    # them to corvin-panel*.html per the system prompt). Done here, in-console, so the
+    # panel lands in the store with the tenant's own authority. Best-effort.
+    try:
+        _installed_panels = _install_generated_panels(sess.tenant_id, sess.workdir)
+    except Exception:  # noqa: BLE001 — never let a panel install break the turn
+        _installed_panels = []
+    for _p in _installed_panels:
+        yield {"type": "delta",
+               "text": f"\n\n✨ I built a panel — **{_p.get('title', 'Panel')}** — "
+                       "you'll find it in the sidebar under **Your panels**."}
 
     # Persist the assistant turn (combined text-delta-runs + any
     # tool-use cards). The frontend's `<MessageBubble>` consumes the
