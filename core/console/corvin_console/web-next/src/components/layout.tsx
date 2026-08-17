@@ -46,6 +46,7 @@ import { useSettingsStream } from "@/hooks/use-settings-stream";
 import { getOsEngineSetting, getLicenseInfo } from "@/lib/api";
 import { LicenseBadge } from "@/components/license-gate";
 import { cn } from "@/lib/utils";
+import { useCapabilities, type CapabilityManifest } from "@/adapters/capabilities";
 
 // ── Engine chip — shows the active tenant-default engine in the header ───
 
@@ -100,6 +101,11 @@ interface NavItem {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   end?: boolean;
+  /** Nav gating (ADR-0357 P3): shown only when the capability manifest reports the
+   *  capability present and/or the flag on. Undefined = always shown (core item).
+   *  Gating lives here in the authed shell, where the manifest loads reliably. */
+  requiredCapability?: string;
+  requiredFlag?: string;
 }
 
 interface NavGroup {
@@ -166,7 +172,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/extensions",  label: "Extensions",      icon: Puzzle },
       { to: "/app/mcp-plugins", label: "MCP Plugins",     icon: Package },
       { to: "/app/plugins",     label: "Plugins",         icon: Blocks },
-      { to: "/app/frontend-forge", label: "FrontendForge", icon: Hammer },
+      { to: "/app/frontend-forge", label: "FrontendForge", icon: Hammer, requiredFlag: "frontend_forge" },
     ],
   },
   {
@@ -327,10 +333,41 @@ function LicenseTierFooter() {
 
 // ── AppLayout ───────────────────────────────────────────────────────────
 
+/** Filter the nav against the capability manifest (ADR-0357 P3). An item with no
+ *  gate always shows (core nav). With no manifest yet (still loading), gated items
+ *  hide — the authed shell resolves the manifest fast, and hiding an opt-in feature
+ *  briefly beats flashing one that is off. Empty groups are dropped. */
+function gateNavGroups(groups: NavGroup[], manifest: CapabilityManifest | undefined): NavGroup[] {
+  const caps = manifest ? new Set(manifest.capabilities) : null;
+  const flags = manifest?.flags ?? {};
+  const visible = (it: NavItem): boolean => {
+    if (!it.requiredCapability && !it.requiredFlag) return true;
+    // FAIL-SAFE: no manifest yet (loading / query not ready) → show the item.
+    // Hiding on a missing manifest risks a feature never appearing if the query is
+    // slow or blocked; the backend flag is the real gate, this is only a UX hint.
+    if (!manifest) return true;
+    if (it.requiredCapability && !caps!.has(it.requiredCapability)) return false;
+    if (it.requiredFlag && !flags[it.requiredFlag]) return false;
+    return true;
+  };
+  return groups
+    .map((g) => ({ ...g, items: g.items.filter(visible) }))
+    .filter((g) => g.items.length > 0);
+}
+
 export function AppLayout() {
   const { session, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  // Nav is gated against the backend capability manifest (ADR-0357 P3): the plugin
+  // system's visibility is backend-driven, so a disabled flag / absent capability
+  // hides its nav entry without an SPA rebuild. Fires in the authed shell, so the
+  // manifest loads reliably (unlike App pre-auth).
+  const { data: capabilityManifest } = useCapabilities();
+  const navGroups = React.useMemo(
+    () => gateNavGroups(NAV_GROUPS, capabilityManifest),
+    [capabilityManifest],
+  );
   const [assistantOpen, setAssistantOpen] = React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   useSettingsStream();
@@ -350,7 +387,7 @@ export function AppLayout() {
         </div>
       </Link>
       <nav className="flex flex-1 flex-col gap-4 overflow-y-auto">
-        {NAV_GROUPS.map((group, i) => (
+        {navGroups.map((group, i) => (
           <React.Fragment key={group.id}>
             {i > 0 && <div className="mx-3 border-t border-border/60" />}
             <NavGroupSection group={group} />
