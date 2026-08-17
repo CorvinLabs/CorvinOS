@@ -50,20 +50,23 @@ export function isSafeInternalNavTarget(to: unknown): to is string {
   );
 }
 
-/** The Console's effective theme, read from the `dark` class the theme-toggle sets
- *  on <html>, and kept in sync reactively so a theme switch reaches the panel. This
- *  is why a panel must NOT be handed a hardcoded "light": the iframe has no access
- *  to the Console's theme otherwise, so it rendered light-on-dark (mismatched). */
+/** The Console's effective theme, read from the `data-theme` attribute the
+ *  theme-toggle sets on <html> (theme-toggle.tsx:
+ *  `documentElement.setAttribute("data-theme", effective)`), kept in sync reactively
+ *  so a theme switch reaches the panel. This is why a panel must NOT be handed a
+ *  hardcoded "light": the iframe has no access to the Console's theme otherwise, so
+ *  it rendered light-on-dark (mismatched). NB: the Console uses a data-attribute,
+ *  NOT a `dark` class — reading the class gave "light" forever. */
 export function useConsoleTheme(): "light" | "dark" {
-  const read = () =>
+  const read = (): "light" | "dark" =>
     typeof document !== "undefined" &&
-    document.documentElement.classList.contains("dark")
+    document.documentElement.getAttribute("data-theme") === "dark"
       ? "dark"
       : "light";
   const [theme, setTheme] = useState<"light" | "dark">(read);
   useEffect(() => {
     const obs = new MutationObserver(() => setTheme(read()));
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => obs.disconnect();
   }, []);
   return theme;
@@ -91,16 +94,23 @@ export default function PanelHost(props: PanelHostProps) {
   const ctx = useMemo(() => makeHostContext(props, consoleTheme), [
     props.baseUrl, props.tenantId, props.theme, props.contractVersion, consoleTheme,
   ]);
+  // Keep a live ref so the panel:ready handler answers host:hello with the CURRENT
+  // theme — panel:ready can arrive before useConsoleTheme has read data-theme, so a
+  // closed-over ctx would send stale "light". The ref is always current.
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
 
-  // Push theme changes to an already-connected panel (it received the initial
-  // theme in host:hello; this keeps it in sync when the operator toggles).
+  function targetOriginFor(): string {
+    return props.srcDoc != null ? "*" : new URL(src ?? "/", window.location.href).origin;
+  }
+
+  // Push theme changes to an already-connected panel (initial theme rides in
+  // host:hello; this covers the operator toggling AND the case where the panel
+  // connected before the theme was resolved).
   useEffect(() => {
     const win = ref.current?.contentWindow;
     if (!win) return;
-    const targetOrigin = props.srcDoc != null
-      ? "*"
-      : new URL(src ?? "/", window.location.href).origin;
-    win.postMessage({ type: "corvin:host:theme", theme: ctx.theme }, targetOrigin);
+    win.postMessage({ type: "corvin:host:theme", theme: ctx.theme }, targetOriginFor());
   }, [ctx.theme, src, props.srcDoc]);
 
   useEffect(() => {
@@ -113,19 +123,17 @@ export default function PanelHost(props: PanelHostProps) {
 
       switch (msg.type) {
         case "corvin:panel:ready": {
+          // ctxRef.current, NOT the closed-over ctx: answer with the CURRENT theme
+          // even if panel:ready arrived before the theme resolved. targetOrigin is
+          // never "*" for a real src panel (it would leak the ctx to a navigated
+          // frame); srcDoc iframes are origin "null", where "*" is the only option
+          // and the ctx carries no secret anyway.
           const hello: HostToPanel = {
             type: "corvin:host:hello",
             protocolVersion: PANEL_PROTOCOL_VERSION,
-            ctx,
+            ctx: ctxRef.current,
           };
-          // A srcDoc iframe is origin "null" (FrontendForge live preview) — there
-          // is no specific origin to target, and the ctx carries no secret, so "*"
-          // is acceptable there. For a real src panel, target its EXACT origin,
-          // never "*", so the host context can't leak to a navigated-away frame.
-          const targetOrigin = props.srcDoc != null
-            ? "*"
-            : new URL(src ?? "/", window.location.href).origin;
-          win.postMessage(hello, targetOrigin);
+          win.postMessage(hello, targetOriginFor());
           break;
         }
         case "corvin:panel:navigate":
@@ -141,14 +149,32 @@ export default function PanelHost(props: PanelHostProps) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [ctx, src, props.srcDoc, navigate]);
+    // ctx read via ctxRef → listener need not rebind on theme change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src, props.srcDoc, navigate]);
+
+  // Pass the theme as a URL query param on the src — the ONLY reliable channel for
+  // a sandboxed iframe: postMessage races the handshake, and window.parent.document
+  // is blocked cross-origin even with allow-same-origin. The panel reads
+  // location.search at load. ctx.theme drives it, so a toggle re-renders → new src →
+  // the panel reloads in the new theme (host:theme still updates it live in between).
+  const srcWithTheme =
+    src != null
+      ? src + (src.includes("?") ? "&" : "?") + "corvinTheme=" + ctx.theme
+      : undefined;
 
   return (
     <iframe
       ref={ref}
-      {...(props.srcDoc != null ? { srcDoc: props.srcDoc } : { src })}
+      {...(props.srcDoc != null ? { srcDoc: props.srcDoc } : { src: srcWithTheme })}
       sandbox={sandbox}
       title="Console panel"
+      onLoad={() => {
+        // Belt-and-suspenders: if the panel was ready before we could answer,
+        // push the current theme once the frame has loaded.
+        const win = ref.current?.contentWindow;
+        if (win) win.postMessage({ type: "corvin:host:theme", theme: ctxRef.current.theme }, targetOriginFor());
+      }}
       style={{ width: "100%", height, border: "none" }}
     />
   );

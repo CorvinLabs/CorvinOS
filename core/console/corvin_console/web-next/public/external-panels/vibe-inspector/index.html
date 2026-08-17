@@ -107,16 +107,26 @@
           hostOrigin || "*");
       }
 
+      function applyTheme(t) { if (t) document.body.classList.toggle("dark", t === "dark"); }
+
+      // The reliable theme source for a sandboxed iframe is the URL query param the
+      // host (PanelHost) sets: ?corvinTheme=dark|light. No cross-origin read, no
+      // postMessage race. host:theme still updates it live if the operator toggles.
+      try {
+        var urlTheme = new URLSearchParams(location.search).get("corvinTheme");
+        if (urlTheme) applyTheme(urlTheme);
+      } catch (e) {}
+
       window.addEventListener("message", function (ev) {
         var m = ev.data;
         if (!m || typeof m.type !== "string") return;
         if (m.type === "corvin:host:hello") { hostOrigin = ev.origin; onHello(m.ctx); }
-        if (m.type === "corvin:host:theme") document.body.classList.toggle("dark", m.theme === "dark");
+        if (m.type === "corvin:host:theme") applyTheme(m.theme);
       });
       parent.postMessage({ type: "corvin:panel:ready", protocolVersion: PROTOCOL_VERSION }, "*");
 
       function onHello(ctx) {
-        document.body.classList.toggle("dark", ctx.theme === "dark");
+        applyTheme(ctx.theme);
         $status.textContent = "loading traces…";
         fetch(ctx.baseUrl + "/vibe-engineering/traces", { credentials: "include" })
           .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
