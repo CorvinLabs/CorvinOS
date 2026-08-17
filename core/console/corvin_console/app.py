@@ -98,6 +98,7 @@ from .routes import (
     custom_provider as custom_provider_route,
     mcp_plugins as mcp_plugins_route,
     plugins as plugins_route,
+    learning as learning_route,
     admin as admin_route,
     data_sources as data_sources_route,
     chain_dual_track as chain_dual_track_route,
@@ -162,6 +163,7 @@ router.include_router(skills_manual_route.router, tags=["console-skills-manual"]
 router.include_router(tools_manual_route.router, tags=["console-tools-manual"])
 router.include_router(tools.router, tags=["console-tools"])
 router.include_router(skills.router, tags=["console-skills"])
+router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(memory.router, tags=["console-memory"])
 # Phase D — realtime SSE streams
 router.include_router(streams.router, tags=["console-streams"])
