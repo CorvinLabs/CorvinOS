@@ -1,6 +1,6 @@
 """Settings → Features — the ship-dark feature-flag panel + worker-engine choice.
 
-Two surfaces over ``corvin_console.feature_flags``:
+Two surfaces over ``corvin_core.feature_flags``:
 
   * ``/settings/features``               — registry + resolved per-tenant state
   * ``/settings/features/{flag_id}``     — flip one flag

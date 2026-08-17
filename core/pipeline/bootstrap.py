@@ -117,7 +117,7 @@ def instantiate_pipeline(
         # Step 1: Load feature flags (dark by default)
         if feature_flags is None:
             try:
-                from core.console.corvin_console.feature_flags import get_flag
+                from core.console.corvin_core.feature_flags import get_flag
                 feature_flags = {
                     "dual_gate_pipeline_enabled": get_flag(
                         "dual_gate_pipeline_enabled"

@@ -394,7 +394,7 @@ def create_app() -> FastAPI:
         try:
             import a2a_friendship as _relay_ft  # type: ignore[import-not-found]
 
-            from corvin_console import feature_flags as _relay_ff
+            from corvin_core import feature_flags as _relay_ff
             if _a2a_available and _a2a_receiver is not None and _relay_ff.is_enabled("a2a_relay_fallback"):
                 _relay_url = _relay_ft.get_my_relay_url()
                 if _relay_url:

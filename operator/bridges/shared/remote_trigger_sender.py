@@ -1599,7 +1599,7 @@ class RemoteTriggerSender:
         instance_id.
         """
         try:
-            from corvin_console import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
+            from corvin_core import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
             if not _ff.is_enabled("a2a_relay_fallback"):
                 raise TransportError("relay_fallback_disabled")
         except ImportError:
@@ -1665,7 +1665,7 @@ class RemoteTriggerSender:
         change since ping_request has no signed slot for it.
         """
         try:
-            from corvin_console import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
+            from corvin_core import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
             if not _ff.is_enabled("a2a_relay_fallback"):
                 raise TransportError("relay_fallback_disabled")
         except ImportError:

@@ -1339,7 +1339,7 @@ def _relay_send_ack(
     direct-HTTP ``/v1/a2a/friendship-ack`` route also verifies.
     """
     try:
-        from corvin_console import feature_flags as _ff  # type: ignore[import-not-found]
+        from corvin_core import feature_flags as _ff  # type: ignore[import-not-found]
         if not _ff.is_enabled("a2a_relay_fallback"):
             return None
     except ImportError:

@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any
 import json
 from pathlib import Path
 from datetime import datetime
-from corvin_console.feature_flags import is_enabled
+from corvin_core.feature_flags import is_enabled
 
 router = APIRouter(prefix="/api/multi-instance", tags=["multi-instance"])
 

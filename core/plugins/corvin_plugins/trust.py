@@ -305,7 +305,7 @@ def evaluate(
 def enforcement_enabled(tenant_id: str = "_default") -> bool:
     """Resolve the ship-dark flag. Never raises; unknown flag → False."""
     try:
-        from corvin_console import feature_flags
+        from corvin_core import feature_flags
 
         return bool(feature_flags.is_enabled(TRUST_ENFORCEMENT_FLAG, tenant_id))
     except Exception:

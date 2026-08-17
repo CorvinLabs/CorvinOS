@@ -112,7 +112,7 @@ try:
     _console_root = Path(__file__).parents[3] / "core" / "console"
     if _console_root.exists() and str(_console_root) not in sys.path:
         sys.path.insert(0, str(_console_root))
-    from corvin_console import task_manager as _task_manager  # type: ignore
+    from corvin_core import task_manager as _task_manager  # type: ignore
 except ImportError:  # pragma: no cover
     try:
         # Fallback: local operator/bridges/shared (if duplicated)
@@ -3267,7 +3267,7 @@ def _resolve_spawn_inputs(
         _cel_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
         _cel_on = False
         try:
-            from corvin_console import feature_flags as _cel_ff  # noqa: PLC0415
+            from corvin_core import feature_flags as _cel_ff  # noqa: PLC0415
             _cel_on = _cel_ff.is_enabled("vibe_engineering", _cel_tid)
         except Exception:  # noqa: BLE001 — no flag subsystem → feature off
             _cel_on = False
@@ -7698,7 +7698,7 @@ def _maybe_delegate_big_data(
 
     # 1. Flag — ships dark; absent/unreadable config means off.
     try:
-        from corvin_console import feature_flags as _ff  # type: ignore  # noqa: PLC0415
+        from corvin_core import feature_flags as _ff  # type: ignore  # noqa: PLC0415
         if not _ff.is_enabled("bridge_big_data_delegation", tid):
             return None
     except Exception:  # noqa: BLE001 — console package absent → feature is off
@@ -7755,7 +7755,7 @@ def _worker_engine_target(
     quota_ok = False
     if mode == "tde" and not force_delegate and not _is_bd:
         try:
-            from corvin_console import feature_flags as _ff  # noqa: PLC0415
+            from corvin_core import feature_flags as _ff  # noqa: PLC0415
             if _ff.is_enabled("bridge_tde_execution", tenant_id):
                 # Reuse the console's real probes (TDE modules importable + the
                 # `claude` CLI resolvable + shared-pool headroom). The bridge
@@ -7979,7 +7979,7 @@ def _maybe_delegate_worker(
     tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
 
     try:
-        from corvin_console import feature_flags as _ff  # type: ignore  # noqa: PLC0415
+        from corvin_core import feature_flags as _ff  # type: ignore  # noqa: PLC0415
         parity_on = _ff.is_enabled("bridge_worker_engine_parity", tid)
         tde_on = _ff.is_enabled("bridge_tde_execution", tid)
     except Exception:  # noqa: BLE001 — console package absent → feature is off
@@ -9497,7 +9497,7 @@ def _mirror_new_artifacts(
 
 def _plugin_builder_flag_enabled(tenant_id: str) -> bool:
     try:
-        from corvin_console import feature_flags as _pb_ff  # type: ignore
+        from corvin_core import feature_flags as _pb_ff  # type: ignore
     except ImportError:
         return False
     try:
@@ -9510,7 +9510,7 @@ def _plugin_builder_sub_flag(flag_id: str, tenant_id: str) -> bool:
     """One of the three ADR-0262 flags, or ADR-0263's `plugin_builder_ideas_mode`
     — same lazy, exception-swallowing lookup as the base flag above."""
     try:
-        from corvin_console import feature_flags as _pb_ff  # type: ignore
+        from corvin_core import feature_flags as _pb_ff  # type: ignore
     except ImportError:
         return False
     try:
@@ -10876,10 +10876,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         _badge_mode = _deleg_meta.get("mode")
         if answer:
             try:
-                from corvin_console import feature_flags as _ff_badge  # noqa: PLC0415
+                from corvin_core import feature_flags as _ff_badge  # noqa: PLC0415
                 _badge_tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
                 if _ff_badge.is_enabled("delegation_badge", _badge_tid):
-                    from corvin_console.execution_context import (  # noqa: PLC0415
+                    from corvin_core.execution_context import (  # noqa: PLC0415
                         format_delegation_badge,
                     )
                     answer = (f"{answer}\n\n— ⚙ "

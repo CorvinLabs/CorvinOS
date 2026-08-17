@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Lazy imports — subsystems may not be available in all environments
 try:
-    from corvin_console.task_manager import TaskManager as _TaskManager
+    from corvin_core.task_manager import TaskManager as _TaskManager
 except ImportError:
     _TaskManager = None  # type: ignore[assignment,misc]
 
