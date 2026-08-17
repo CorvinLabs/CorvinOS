@@ -20,7 +20,7 @@ import {
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, ActivityFeedPage,
-  LearningObjectivesPage, MultiInstancePage,
+  LearningObjectivesPage, MultiInstancePage, LearningPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 
@@ -90,6 +90,7 @@ export const PANELS: ConsolePanel[] = [
   rc("plugins", "Plugins", PluginsPage),
   rc("activity", "Activity", ActivityFeedPage),
   rc("learning-objectives", "Learning Objectives", LearningObjectivesPage),
+  rc("learning", "TreeOfThoughts", LearningPage, { nav: { label: "TreeOfThoughts", icon: "Brain", group: "observability" } }),
   rc("multi-instance", "Multi-Instance", MultiInstancePage),
 ];
 

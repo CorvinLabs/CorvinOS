@@ -190,3 +190,7 @@ export const VibeEngineeringPage = React.lazy(() =>
 export const MultiInstancePage = React.lazy(() =>
   import("@/pages/multi-instance").then((m) => ({ default: m.MultiInstanceDashboard }))
 );
+
+export const LearningPage = React.lazy(() =>
+  import("@/pages/learning").then((m) => ({ default: m.default }))
+);
