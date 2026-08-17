@@ -137,6 +137,8 @@ from .routes import (
     vibe_engineering as vibe_engineering_route,
     # ADR-0357 P3 — versioned capability manifest (shell renders nav from it)
     capabilities as capabilities_route,
+    # ADR-0366 — AI-generated Console panels
+    panels as panels_route,
     # ADR-0275/0277 — Multi-Instance Cross-Device Learning
     multi_instance as multi_instance_route,
 )
@@ -280,6 +282,7 @@ router.include_router(stats_features_route.router, tags=["console-stats"])
 router.include_router(talent_route.router, tags=["console-talent"])
 router.include_router(vibe_engineering_route.router, tags=["console-vibe-engineering"])
 router.include_router(capabilities_route.router, tags=["console-capabilities"])
+router.include_router(panels_route.router, tags=["console-panels"])
 # ADR-0275/0277 — Multi-Instance Cross-Device Learning Dashboard
 router.include_router(multi_instance_route.router, tags=["console-multi-instance"])
 
