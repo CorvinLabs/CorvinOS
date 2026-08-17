@@ -18,6 +18,7 @@ class SubsystemHub:
     - Event pub/sub (one-way broadcasts)
     - Request/response routing (two-way queries)
     - Subsystem lifecycle management
+    - API registry for loose coupling (ADR-0361)
     """
 
     def __init__(self, max_event_queue_size: int = 10000):
@@ -25,6 +26,7 @@ class SubsystemHub:
         self.subscribers: Dict[str, List[Callable]] = {}
         self.event_queue: asyncio.Queue = asyncio.Queue(maxsize=max_event_queue_size)
         self._running = False
+        self._apis: Dict[str, Any] = {}  # API registry (ADR-0361)
 
     def register_subsystem(self, subsystem: "Subsystem") -> None:  # noqa: F821
         """Register a subsystem and call its startup hook."""
@@ -112,3 +114,51 @@ class SubsystemHub:
     def stop(self) -> None:
         """Stop the hub."""
         self._running = False
+
+    # ========================================================================
+    # API Registry (ADR-0361): Loose coupling for subsystems
+    # ========================================================================
+
+    def register_api(self, api_name: str, api_impl: Any) -> None:
+        """Register an API for loose coupling.
+
+        Called during subsystem startup to expose its API to other subsystems.
+
+        Args:
+            api_name: API identifier (e.g., "forged_tool", "forged_skill")
+            api_impl: API implementation object (must implement the interface)
+
+        Raises:
+            ValueError: If API already registered
+        """
+        if api_name in self._apis:
+            raise ValueError(f"API already registered: {api_name}")
+        self._apis[api_name] = api_impl
+        logger.debug(f"Registered API: {api_name}")
+
+    def get_api(self, api_name: str) -> Any:
+        """Get an API by name.
+
+        Args:
+            api_name: API identifier (e.g., "forged_tool", "forged_skill")
+
+        Returns:
+            API implementation object
+
+        Raises:
+            KeyError: If API not found
+        """
+        if api_name not in self._apis:
+            raise KeyError(f"API not found: {api_name}")
+        return self._apis[api_name]
+
+    def has_api(self, api_name: str) -> bool:
+        """Check if API is available.
+
+        Args:
+            api_name: API identifier
+
+        Returns:
+            True if API is registered, False otherwise
+        """
+        return api_name in self._apis
