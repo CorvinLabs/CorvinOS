@@ -18,39 +18,7 @@ The **Corvin Idea Evolution System (CIES)** is a hierarchical knowledge manageme
 
 ### Three-Layer Hierarchy
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     IDEA-ADR (Root Layer)                       │
-│                   Strategic Direction                           │
-│  "Why do we need to change? What problem does this solve?"      │
-├─────────────────────────────────────────────────────────────────┤
-│  Properties: vision, problem statement, scope, stakeholders     │
-│  Validation: stakeholder alignment, market fit, urgency         │
-│  Output: Ideas archive for future reference                     │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ Upstream link
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                  CONCEPT-ADR (Middle Layer)                     │
-│              Reusable Working Method                            │
-│ "How do we solve this? What pattern emerges? When NOT to use?" │
-├─────────────────────────────────────────────────────────────────┤
-│  Properties: method, alternatives, when/when-not, evidence      │
-│  Validation: multi-task recurrence, real evidence citations     │
-│  Output: Skill minted for auto-injection into future turns      │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ Upstream link
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    ADR-NNNN (Leaf Layer)                        │
-│           Architectural Decision Record                         │
-│  "What specifically changes? Which files? Which contracts?"     │
-├─────────────────────────────────────────────────────────────────┤
-│  Properties: design choice, alternatives, constraints, paths    │
-│  Validation: code + docs sync, pre-commit gate, CI check        │
-│  Output: Permanent record in Corvin-ADR/decisions/              │
-└─────────────────────────────────────────────────────────────────┘
-```
+![CIES Hierarchy Diagram](diagrams/cies-hierarchy.svg)
 
 ### Data Model
 
@@ -92,6 +60,8 @@ ADR-NNNN
 ---
 
 ## Lifecycle & Validation Gates
+
+![CIES Lifecycle & Validation](diagrams/cies-hierarchy.svg)
 
 ### Stage 1: IDEA-ADR (Strategic Layer)
 
@@ -166,68 +136,22 @@ docs: ["docs/claude-ref/learning-infrastructure.md"]
 
 ## Visual Workflow
 
-### The Evolution Path
+### The Evolution Path & Lineage Traversal
 
-```
-                    Market Opportunity
-                           │
-                           ▼
-                   ┌────────────────┐
-                   │   IDEA-ADR     │ ◄── Stakeholder alignment
-                   │  (Vision)      │     Feasibility study
-                   └────────┬───────┘
-                            │
-                      Has proven
-                       recurrence?
-                            │
-                 YES ────────┼────── NO → Dormant (File away)
-                            │
-                            ▼
-                   ┌────────────────┐
-                   │  CONCEPT-ADR   │ ◄── Evidence gathering
-                   │  (Method)      │     Skill generation
-                   └────────┬───────┘
-                            │
-                     Ready for
-                    implementation?
-                            │
-                 YES ────────┼────── NO → Under review
-                            │
-                            ▼
-                   ┌────────────────┐
-                   │   ADR-NNNN     │ ◄── Code change
-                   │ (Decision)     │     Contract binding
-                   └────────┬───────┘
-                            │
-                    Git commit → Deploy
-                            │
-                            ▼
-                   Permanent archive
-                   (Corvin-ADR/decisions/)
-```
-
-### Lineage Traversal
-
-```
-IDEA-ADR-0001
-  └─ downstream: [CONCEPT-ADR-0009]
-       │
-       CONCEPT-ADR-0009
-         ├─ upstream: [IDEA-ADR-0001]
-         ├─ downstream: [ADR-0314, ADR-0315]
-         └─ skills: [skill-X]
-             │
-             ADR-0314
-             ├─ upstream: [CONCEPT-ADR-0009]
-             ├─ depends_on: [ADR-0312]
-             ├─ paths: [core/learning/**]
-             ├─ docs: [docs/claude-ref/layer-N.md]
-             └─ commits: [abc123def]
-```
+![CIES Lineage & Traceability](diagrams/cies-lineage.svg)
 
 ---
 
 ## Storage & Implementation
+
+### Hybrid Model: ADRs + MemPlace
+
+![CIES Storage & Integration Architecture](diagrams/cies-storage.svg)
+
+**Why split:**
+- **ADRs** (Git/Corvin-ADR) — code constraints must version with code; hash-chained for immutability
+- **Ideas/Concepts** (MemPlace/FS) — working knowledge benefits from append-only audit trail + human operator notes
+- **References** — IDEA → CONCEPT → ADR (downward), ADR ← CONCEPT ← IDEA (backref for traversal)
 
 ### File Layout
 
@@ -237,7 +161,7 @@ CorvinOS/
 │   └── decisions/
 │       ├── ADR-0314-learning-infrastructure.md
 │       ├── ADR-0315-confidence-intervals.md
-│       └── ... (50+ ADRs, original location)
+│       └── ... (50+ ADRs, original location, in Git)
 │
 └── ~/.corvin/tenants/_default/idea-pipeline/
     └── corvin-adrs/
@@ -246,21 +170,8 @@ CorvinOS/
             ├── IDEA-ADR-0002-multi-tenant.md
             ├── CONCEPT-ADR-0001-root-cause-method.md
             ├── CONCEPT-ADR-0002-live-report-driven.md
-            └── ... (45 Concepts + 45 Ideas)
+            └── ... (45 Concepts + 45 Ideas, in MemPlace/FS)
 ```
-
-### Hybrid Model: ADRs + MemPlace
-
-| Artifact | Location | Role | Edited by |
-|---|---|---|---|
-| **IDEA-ADR** | MemPlace (FS) | Strategic vision + stakeholder alignment | Team leads + operators |
-| **CONCEPT-ADR** | MemPlace (FS) | Working methods + skills | Engineers (after multi-task proof) |
-| **ADR-NNNN** | Corvin-ADR (Git) | Code-binding decisions + compliance | Engineers (pre-commit gate) |
-
-**Why split:**
-- ADRs are code constraints → must be in Git with the code they constrain
-- Ideas/Concepts are working knowledge → benefit from FS-based MemPlace (append-only audit trail, operator notes)
-- References flow: IDEA → CONCEPT → ADR (downward), ADR ← CONCEPT ← IDEA (backref for traversal)
 
 ---
 
