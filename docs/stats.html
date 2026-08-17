@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CorvinOS Telemetry Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+            color: #e6edf3;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid #30363d;
+            padding-bottom: 1rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            color: #79c0ff;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #8b949e;
+            font-size: 1rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 1.5rem;
+            transition: all 0.2s ease;
+        }
+
+        .stat-card:hover {
+            border-color: #58a6ff;
+            box-shadow: 0 0 12px rgba(88, 166, 255, 0.1);
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #79c0ff;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-detail {
+            font-size: 0.9rem;
+            color: #8b949e;
+        }
+
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .chart-container {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 1.5rem;
+            position: relative;
+            height: 400px;
+        }
+
+        #map {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            height: 500px;
+            margin-bottom: 2rem;
+        }
+
+        .instances-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .instances-table thead {
+            background: #21262d;
+            border-bottom: 2px solid #30363d;
+        }
+
+        .instances-table th {
+            padding: 1rem;
+            text-align: left;
+            color: #8b949e;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+        }
+
+        .instances-table td {
+            padding: 1rem;
+            border-bottom: 1px solid #30363d;
+            color: #e6edf3;
+        }
+
+        .instances-table tbody tr:hover {
+            background: #0d1117;
+        }
+
+        .status-online {
+            color: #3fb950;
+            font-weight: bold;
+        }
+
+        .status-offline {
+            color: #f85149;
+        }
+
+        .footer {
+            text-align: center;
+            padding-top: 2rem;
+            border-top: 1px solid #30363d;
+            color: #8b949e;
+            font-size: 0.9rem;
+        }
+
+        .last-updated {
+            font-size: 0.85rem;
+            color: #8b949e;
+            margin-top: 0.5rem;
+        }
+
+        /* Leaflet dark theme */
+        .leaflet-tile {
+            filter: invert(0.93) hue-rotate(200deg) brightness(0.95);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚡ CorvinOS Telemetry</h1>
+            <p class="subtitle">Live token metrics across all instances</p>
+            <p class="last-updated" id="lastUpdated">Last updated: loading...</p>
+        </header>
+
+        <!-- Cluster Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Instances Online</div>
+                <div class="stat-value" id="instanceCount">—</div>
+                <div class="stat-detail">Active CorvinOS instances</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Turns</div>
+                <div class="stat-value" id="totalTurns">—</div>
+                <div class="stat-detail">Across all instances</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Tokens</div>
+                <div class="stat-value" id="totalTokens">—</div>
+                <div class="stat-detail">Consumed by Vibe</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Savings</div>
+                <div class="stat-value" id="avgSavings">—</div>
+                <div class="stat-detail">vs Native baseline</div>
+            </div>
+        </div>
+
+        <!-- World Map -->
+        <div id="map"></div>
+
+        <!-- Charts -->
+        <div class="charts-grid">
+            <div class="chart-container">
+                <canvas id="tokenChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="savingsChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Instances Table -->
+        <h2 style="margin: 2rem 0 1rem; color: #79c0ff;">Instances</h2>
+        <table class="instances-table" id="instancesTable">
+            <thead>
+                <tr>
+                    <th>Instance ID</th>
+                    <th>Location</th>
+                    <th>Status</th>
+                    <th>Turns</th>
+                    <th>Tokens</th>
+                    <th>Savings %</th>
+                </tr>
+            </thead>
+            <tbody id="instancesBody">
+                <tr>
+                    <td colspan="6" style="text-align: center; color: #8b949e;">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="footer">
+            <p>CorvinOS Telemetry Dashboard</p>
+            <p>Real-time metrics aggregated from all instances</p>
+        </div>
+    </div>
+
+    <script>
+        const STATS_API = 'https://api.corvin-labs.com/api/metrics/stats';
+        const REFRESH_INTERVAL = 5000; // 5 seconds
+
+        let tokenChart, savingsChart, map;
+
+        async function fetchStats() {
+            try {
+                const response = await fetch(STATS_API);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                updateDashboard(data);
+            } catch (error) {
+                console.error('Failed to fetch stats:', error);
+                document.getElementById('lastUpdated').textContent =
+                    `Error: ${error.message}`;
+            }
+        }
+
+        function updateDashboard(data) {
+            const cluster = data.cluster || {};
+            const summary = data.summary || {};
+
+            // Update stats cards
+            document.getElementById('instanceCount').textContent =
+                cluster.instance_count || 0;
+            document.getElementById('totalTurns').textContent =
+                (cluster.total_turns || 0).toLocaleString();
+            document.getElementById('totalTokens').textContent =
+                (cluster.total_tokens || 0).toLocaleString();
+            document.getElementById('avgSavings').textContent =
+                `${(cluster.avg_savings_percent || 0).toFixed(1)}%`;
+
+            // Update timestamp
+            const timestamp = new Date(data.timestamp);
+            document.getElementById('lastUpdated').textContent =
+                `Last updated: ${timestamp.toLocaleTimeString()}`;
+
+            // Update tables and charts
+            updateInstancesTable(cluster.instances || []);
+            updateCharts(cluster.instances || []);
+            updateMap(cluster.instances || []);
+        }
+
+        function updateInstancesTable(instances) {
+            const tbody = document.getElementById('instancesBody');
+            if (instances.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #8b949e;">No instances online</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = instances.map(inst => `
+                <tr>
+                    <td><code>${inst.instance_id.substring(0, 12)}</code></td>
+                    <td>${inst.location}</td>
+                    <td><span class="status-online">●</span> Online</td>
+                    <td>${inst.turn_count}</td>
+                    <td>${inst.total_tokens.toLocaleString()}</td>
+                    <td>${inst.savings_percent.toFixed(1)}%</td>
+                </tr>
+            `).join('');
+        }
+
+        function updateCharts(instances) {
+            const labels = instances.map(i => i.hostname || i.instance_id.substring(0, 8));
+            const tokens = instances.map(i => i.total_tokens);
+            const savings = instances.map(i => i.savings_percent);
+
+            // Token distribution
+            if (!tokenChart) {
+                const ctx = document.getElementById('tokenChart').getContext('2d');
+                tokenChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Total Tokens',
+                            data: tokens,
+                            backgroundColor: '#79c0ff',
+                            borderColor: '#58a6ff',
+                            borderWidth: 1,
+                        }],
+                    },
+                    options: {
+                        indexAxis: 'y',
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: true } },
+                    },
+                });
+            } else {
+                tokenChart.data.labels = labels;
+                tokenChart.data.datasets[0].data = tokens;
+                tokenChart.update();
+            }
+
+            // Savings distribution
+            if (!savingsChart) {
+                const ctx = document.getElementById('savingsChart').getContext('2d');
+                savingsChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Savings %',
+                            data: savings,
+                            backgroundColor: ['#3fb950', '#79c0ff', '#d29922', '#f85149'],
+                        }],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { position: 'bottom' } },
+                    },
+                });
+            } else {
+                savingsChart.data.labels = labels;
+                savingsChart.data.datasets[0].data = savings;
+                savingsChart.update();
+            }
+        }
+
+        function updateMap(instances) {
+            if (!map) {
+                map = L.map('map').setView([20, 0], 2);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap',
+                    maxZoom: 19,
+                }).addTo(map);
+            }
+
+            // Add markers for each instance
+            map.eachLayer(layer => {
+                if (layer instanceof L.Marker) map.removeLayer(layer);
+            });
+
+            instances.forEach(inst => {
+                const coords = inst.location.split(',');
+                if (coords.length === 2) {
+                    const [lat, lon] = coords.map(Number);
+                    L.circleMarker([lat, lon], {
+                        radius: 8,
+                        fillColor: '#3fb950',
+                        color: '#79c0ff',
+                        weight: 2,
+                        opacity: 1,
+                        fillOpacity: 0.8,
+                    }).bindPopup(`
+                        <strong>${inst.hostname}</strong><br>
+                        Turns: ${inst.turn_count}<br>
+                        Tokens: ${inst.total_tokens}<br>
+                        Savings: ${inst.savings_percent.toFixed(1)}%
+                    `).addTo(map);
+                }
+            });
+        }
+
+        // Initial load and polling
+        fetchStats();
+        setInterval(fetchStats, REFRESH_INTERVAL);
+    </script>
+</body>
+</html>

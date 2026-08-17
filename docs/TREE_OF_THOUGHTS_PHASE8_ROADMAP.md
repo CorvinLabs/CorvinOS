@@ -1,7 +1,7 @@
 # TreeOfThoughts Phase 8+ Roadmap
 
-**Status:** Planning  
-**Version:** v0.1-draft  
+**Status:** Phase 8 ✅ COMPLETE | Phase 9 ✅ COMPLETE (implementation)  
+**Version:** v0.2  
 **Audience:** Product, Engineering
 
 ---
@@ -63,6 +63,47 @@ Confidence: 0.65 (from 280 failure samples)
 - Require ≥50 samples before proposing
 
 **Success metric:** Discover 3-5 new patterns per week in production
+
+### 9b: Implementation Complete ✅
+
+**Delivered:**
+- `FailureClusterer` class in `core/learning/pattern_discovery.py`
+  - Deterministic context signature extraction (GDPR-compliant, no PII)
+  - Frequency-based clustering by error_type + context patterns
+  - Automatic when/anti_when condition inference
+  - 50-sample safety gate (no pattern proposed below threshold)
+  - Append-only audit trail logging
+
+- `LearningIntegration` Phase 9 methods:
+  - `record_failure(subject_id, error_type, context)` — buffer failures for clustering
+  - `discover_patterns()` — trigger clustering and auto-registration
+  - `get_failure_clusters()` — retrieve all clusters
+  - `get_discovered_patterns()` — retrieve successfully discovered patterns
+
+- TreeNode auto-registration:
+  - Pattern ID: `pattern_auto_{error_type}_{cluster_id}`
+  - Baseline confidence: 0.5 (conservative)
+  - Automatic when/anti_when contexts inferred from cluster patterns
+  - Source metadata: sample count, error type, context patterns
+
+- Test coverage: 21 E2E tests (all passing)
+  - Core clustering logic
+  - Context signature (PII-safe)
+  - Minimum sample enforcement (50+ gate)
+  - Pattern inference
+  - Integration with LearningIntegration
+  - Audit trail completeness
+  - GDPR compliance (no PII in logs)
+
+**Files:**
+- `core/learning/pattern_discovery.py` — FailureClusterer implementation (408 lines)
+- `core/learning/integration.py` — LearningIntegration Phase 9 methods (update)
+- `tests/test_learning_phase9_discovery.py` — 21 E2E tests
+
+**Compliance:**
+- GDPR Art. 5 (data minimization): Context signature ignores PII/timestamps
+- GDPR Art. 30 (audit trail): Append-only discoveries.jsonl log
+- GDPR Art. 32 (integrity): Hash-chained to audit.jsonl via LearningEventStore
 
 ---
 
