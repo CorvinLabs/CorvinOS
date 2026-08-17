@@ -16,7 +16,7 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/ca
 import { Badge } from "@/components/ui/badge";
 import {
   useTraces, useBrief, useAssembly, useForged, usePipeline, useSavePipeline,
-  type Turn, type Stage,
+  type Turn, type Stage, type Assembly,
 } from "@/adapters/vibe";
 
 // Single source of truth for domain types is the adapter (ADR-0353 P0).
@@ -250,6 +250,51 @@ function BriefModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
   );
 }
 
+/* ── Glass Box: the exact prompt the worker engine received, split by origin ──
+ * v1 honest annotation (see docs/implementation/vibe-engineering-glassbox-plan.md,
+ * Review F2): final_prompt = base_system_prompt + "\n\n" + cel_text. The CEL block is
+ * the ONLY boundary cleanly locatable from existing data — so we colour the base
+ * prompt vs the injected CEL context distinctly and list the retrieval sections as a
+ * legend. We deliberately do NOT fake per-stage spans inside cel_text (not derivable). */
+function GlassBoxPrompt({ asm }: { asm: Assembly }) {
+  const full = asm.final_prompt || "";
+  const cel = (asm.cel_text || "").trim();
+  // Split at the CEL block if it is present as a suffix of the final prompt.
+  let base = full, injected = "";
+  if (cel && full.includes(cel)) {
+    const idx = full.lastIndexOf(cel);
+    base = full.slice(0, idx).replace(/\n+$/, "");
+    injected = full.slice(idx);
+  }
+  const sections = asm.sections ?? [];
+  if (!full) return <pre className="rounded-lg border border-slate-700/40 bg-slate-900/20 p-3 font-mono text-xs text-slate-400">(leer — dieser Turn hat keinen persistierten Prompt)</pre>;
+  return (
+    <div className="space-y-2">
+      {sections.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {sections.map((s, i) => (
+            <span key={i} className="rounded-full border border-violet-700/40 bg-violet-900/20 px-2 py-0.5 text-[10px] font-medium text-violet-200" title={s.kind}>
+              {s.label}{Array.isArray(s.items) && s.items.length ? ` · ${s.items.length}` : ""}
+            </span>
+          ))}
+        </div>
+      )}
+      <div>
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Basis-System-Prompt</div>
+        <pre className="max-h-[30vh] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-700/40 bg-slate-900/30 p-3 font-mono text-xs leading-relaxed text-slate-300">{base || "(kein Basis-Teil)"}</pre>
+      </div>
+      {injected && (
+        <div>
+          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">
+            <Layers className="h-3 w-3" /> CEL-Kontext (eingespeist)
+          </div>
+          <pre className="max-h-[30vh] overflow-auto whitespace-pre-wrap rounded-lg border border-emerald-700/50 bg-emerald-900/15 p-3 font-mono text-xs leading-relaxed text-emerald-50">{injected}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── turn card: header + one compact pipeline row ──────────────────────── */
 /* ── prompt inspector: bausteine → final prompt + forged tool/skill code ── */
 function PromptInspectorModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
@@ -312,7 +357,7 @@ function PromptInspectorModal({ turn, onClose }: { turn: Turn; onClose: () => vo
           )}
           <div>
             <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400"><FileText className="h-3.5 w-3.5" /> Finaler Prompt → Worker-Engine</div>
-            <pre className="max-h-[45vh] overflow-auto whitespace-pre-wrap rounded-lg border border-emerald-700/40 bg-emerald-900/10 p-3 font-mono text-xs leading-relaxed text-slate-100">{asm.final_prompt || "(leer)"}</pre>
+            <GlassBoxPrompt asm={asm} />
           </div>
         </div>
       )}
