@@ -47,7 +47,11 @@ export const PANELS: ConsolePanel[] = [
     id: "vibe-inspector", route: "vibe-inspector",
     nav: { label: "Vibe Inspector", icon: "Boxes", group: "observability" },
     requiredCapability: "vibe-engineering",
-    element: { kind: "iframe", src: "/external-panels/vibe-inspector/index.html",
+    // BASE_URL-relative, NOT a root-absolute "/external-panels/…": the SPA is
+    // served under vite base "/console/", so a root path would 404. BASE_URL is
+    // "/console/" in prod and "/" in dev, so this resolves correctly in both.
+    element: { kind: "iframe",
+               src: import.meta.env.BASE_URL + "external-panels/vibe-inspector/index.html",
                sandbox: "allow-scripts allow-same-origin" },
     contractVersion: "1",
   },
