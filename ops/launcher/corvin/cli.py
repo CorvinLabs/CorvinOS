@@ -837,6 +837,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # diagnose — installation and runtime error diagnostics (v0.10.116+)
     _diagnose_cmd.add_parser(sub)
 
+    # audit + consent — headless compliance surface (ADR-0352 P2.4): verify the
+    # hash-chained audit log and inspect/revoke per-user consent without the
+    # browser Console — the compliance half of "Corvin without the Console".
+    from . import compliance_cmd as _compliance_cmd
+    _compliance_cmd.add_parser(sub)
+
     return p
 
 
@@ -918,6 +924,10 @@ def main() -> None:
             sys.exit(_diagnose_cmd.cmd_diagnose_windows(args))
         else:
             parser.parse_args(["diagnose", "--help"])
+
+    elif args.command in ("audit", "consent"):
+        from . import compliance_cmd as _compliance_cmd
+        sys.exit(_compliance_cmd.dispatch(args))
 
     else:
         # No subcommand: behave like `corvin start` (the most useful default)
