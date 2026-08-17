@@ -132,10 +132,10 @@ const NAV_GROUPS: NavGroup[] = [
     collapsible: true,
     defaultOpen: true,
     items: [
+      { to: "/app/vibe-overview",    label: "Overview", icon: Boxes },
       { to: "/app/talent",           label: "Your Talent", icon: Sparkles },
       { to: "/app/vibe-engineering", label: "Context Pipeline", icon: Workflow },
       { to: "/app/learning",         label: "TreeOfThoughts", icon: Brain },
-      { to: "/app/vibe-inspector",   label: "Vibe Inspector", icon: Blocks },
       { to: "/app/multi-instance",   label: "Cross-Device Learning", icon: Network },
     ],
   },
