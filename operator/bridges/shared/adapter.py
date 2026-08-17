@@ -6886,7 +6886,7 @@ def call_claude_streaming(
     # the real engine. Allow-list validated + fail-soft inside record_active_engine.
     try:
         _eff_engine = (profile or {}).get("default_engine") or "claude_code"
-        from corvin_console.aco.htrace_uploader import (  # noqa: PLC0415
+        from corvin_core.aco.htrace_uploader import (  # noqa: PLC0415
             record_active_engine as _record_active_engine,
         )
         from forge.paths import corvin_home as _rae_home  # noqa: PLC0415
@@ -11519,7 +11519,7 @@ def _start_telemetry_threads() -> None:
       limiter absorbs a console+bridge pair sharing one CORVIN_HOME.
     """
     try:
-        from corvin_console.aco.htrace_uploader import (  # noqa: PLC0415
+        from corvin_core.aco.htrace_uploader import (  # noqa: PLC0415
             start_ping_thread as _start_ping,
             start_upload_thread as _start_upload,
         )
@@ -11536,7 +11536,7 @@ def _start_telemetry_threads() -> None:
     except Exception as _tele_e:  # noqa: BLE001
         log(f"telemetry: ping/upload thread initialization failed (best-effort): {_tele_e}")
     try:
-        from corvin_console.aco.heartbeat import (  # noqa: PLC0415
+        from corvin_core.aco.heartbeat import (  # noqa: PLC0415
             start_heartbeat_thread as _start_heartbeat,
         )
         from forge.paths import corvin_home as _hb_home  # noqa: PLC0415

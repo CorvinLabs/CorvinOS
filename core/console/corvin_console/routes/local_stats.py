@@ -56,7 +56,7 @@ def _heartbeat_alive() -> bool:
 
 def _instance_id() -> str:
     try:
-        from corvin_console.aco.htrace_consent import load_or_create_instance_id  # type: ignore
+        from corvin_core.aco.htrace_consent import load_or_create_instance_id  # type: ignore
         home = _forge_paths.corvin_home()
         iid = load_or_create_instance_id(home)
         return iid[:8] + "…" if iid else "—"
@@ -66,7 +66,7 @@ def _instance_id() -> str:
 
 def _ping_enabled() -> bool:
     try:
-        from corvin_console.aco.htrace_consent import ping_enabled  # type: ignore
+        from corvin_core.aco.htrace_consent import ping_enabled  # type: ignore
         home = _forge_paths.corvin_home()
         return ping_enabled(home)
     except Exception:

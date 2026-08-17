@@ -2895,7 +2895,7 @@ class ACSRuntime:
         if self._session_debug_log is None:
             return
         try:
-            from corvin_console.aco.debug_logger import write_event
+            from corvin_core.aco.debug_logger import write_event
             write_event(self._session_debug_log, event, **fields)
         except Exception:  # noqa: BLE001 — observability must never break execution
             pass
