@@ -13,10 +13,17 @@ class MigrationPlanner:
         self.store = store
         self.migration_log = []
     
-    def migrate_concept_to_framework(self, concept_path: Path, framework_id: str) -> TreeNode:
-        """Convert a Concept doc → Framework node."""
-        content = concept_path.read_text()
-        
+    def migrate_concept_to_framework(self, concept_path: Path, framework_id: str) -> TreeNode | None:
+        """Convert a Concept doc → Framework node. Returns None if file not found."""
+        try:
+            content = concept_path.read_text()
+        except FileNotFoundError:
+            self.migration_log.append(f"❌ File not found: {concept_path}")
+            return None
+        except Exception as e:
+            self.migration_log.append(f"❌ Error reading {concept_path}: {e}")
+            return None
+
         # Parse frontmatter
         framework = TreeNode(
             id=framework_id,
@@ -26,10 +33,10 @@ class MigrationPlanner:
             anti_when=self._extract_anti_when(content),
             adr_link=concept_path.name,
         )
-        
+
         self.store.register_node(framework)
         self.migration_log.append(f"✅ Migrated {concept_path} → {framework_id}")
-        
+
         return framework
     
     def migrate_metapher_to_pattern(self, metapher_dict: dict, pattern_id: str) -> TreeNode:
