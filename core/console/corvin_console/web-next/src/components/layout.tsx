@@ -126,6 +126,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/talent",           label: "Your Talent", icon: Sparkles },
       { to: "/app/vibe-engineering", label: "Context Pipeline", icon: Workflow },
+      { to: "/app/vibe-inspector",   label: "Vibe Inspector", icon: Blocks },
       { to: "/app/multi-instance",   label: "Cross-Device Learning", icon: Network },
     ],
   },
@@ -165,6 +166,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/extensions",  label: "Extensions",      icon: Puzzle },
       { to: "/app/mcp-plugins", label: "MCP Plugins",     icon: Package },
       { to: "/app/plugins",     label: "Plugins",         icon: Blocks },
+      { to: "/app/frontend-forge", label: "FrontendForge", icon: Hammer },
     ],
   },
   {
