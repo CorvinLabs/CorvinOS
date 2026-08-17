@@ -54,6 +54,21 @@ def get_learning_integration(session = Depends(require_session)) -> LearningInte
     return LearningIntegration(store_path)
 
 
+@router.get("/v1/console/learning/debug", response_model=dict)
+async def debug_learning(session = Depends(require_session)):
+    """Debug endpoint — test if learning system is initialized."""
+    try:
+        store_path = Path.home() / ".corvin" / "tenants" / session.tenant_id / "learning"
+        return {
+            "tenant_id": session.tenant_id,
+            "store_path": str(store_path),
+            "store_exists": store_path.exists(),
+            "store_is_dir": store_path.is_dir() if store_path.exists() else None,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Debug error: {str(e)}")
+
+
 @router.get("/v1/console/learning/nodes", response_model=dict)
 async def get_learning_nodes(
     integration: LearningIntegration = Depends(get_learning_integration),
@@ -63,7 +78,7 @@ async def get_learning_nodes(
     try:
         store = integration.store
         nodes = store.all_nodes()
-        
+
         # Serialize to JSON
         serialized = []
         for node in nodes:
@@ -79,10 +94,12 @@ async def get_learning_nodes(
                 operator_notes=node.operator_notes,
                 adr_link=node.adr_link,
             ).model_dump())
-        
+
         return {"nodes": serialized}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_detail = f"{str(e)}\n{traceback.format_exc()}"
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.post("/v1/console/learning/grade")
