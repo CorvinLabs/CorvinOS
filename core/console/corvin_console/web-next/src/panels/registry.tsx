@@ -51,6 +51,15 @@ export const PANELS: ConsolePanel[] = [
                sandbox: "allow-scripts allow-same-origin" },
     contractVersion: "1",
   },
+  // ADR-0364 P6: FrontendForge — operator-only, gated on the frontend_forge flag
+  // (default off), so it does not appear on a normal install.
+  {
+    id: "frontend-forge", route: "frontend-forge",
+    nav: { label: "FrontendForge", icon: "Wand2", group: "build" },
+    requiredFlag: "frontend_forge",
+    element: { kind: "react", load: () => import("@/pages/frontend-forge") },
+    contractVersion: "1",
+  },
   // simple top-level feature panels (reuse proven lazy components)
   rc("dashboard", "Dashboard", DashboardPage),
   rc("talent", "Your Talent", YourTalentPage),

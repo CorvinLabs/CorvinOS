@@ -52,6 +52,7 @@ GATED_FLAGS: tuple[str, ...] = (
     "vibe_engineering_active",
     "console_web_surface_plugin",
     "dual_gate_pipeline_enabled",
+    "frontend_forge",  # ADR-0364 P6 — operator-only in-browser panel authoring
 )
 
 
