@@ -5,6 +5,7 @@ import {
   AudioLines,
   BookOpen,
   Boxes,
+  Brain,
   Building2,
   ChevronDown,
   Cloud,
@@ -133,6 +134,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/talent",           label: "Your Talent", icon: Sparkles },
       { to: "/app/vibe-engineering", label: "Context Pipeline", icon: Workflow },
+      { to: "/app/learning",         label: "TreeOfThoughts", icon: Brain },
       { to: "/app/vibe-inspector",   label: "Vibe Inspector", icon: Blocks },
       { to: "/app/multi-instance",   label: "Cross-Device Learning", icon: Network },
     ],
