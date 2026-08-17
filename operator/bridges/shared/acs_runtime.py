@@ -905,7 +905,7 @@ def _build_manager_prompt(ctx: RunContext) -> str:
     # (ADR-0217). Injected once; later iterations already carry ctx.state.
     if _CEL_AVAILABLE and ctx.iteration == 0:
         try:
-            from corvin_console import feature_flags as _cel_ff  # noqa: PLC0415
+            from corvin_core import feature_flags as _cel_ff  # noqa: PLC0415
             if _cel_ff.is_enabled("vibe_engineering", ctx.tenant_id):
                 _cbundle, _ = _cel_build_context(
                     f"{wf_name}. {description}".strip(), ctx.tenant_id, None)

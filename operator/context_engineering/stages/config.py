@@ -44,7 +44,7 @@ def _read_ce_config(tenant_id: str) -> dict:
     try:
         # Reuse the console's tenant-spec reader (already importable from the CEL
         # call sites); a shared public reader is the P-A follow-up, not a 3rd copy.
-        from corvin_console import feature_flags as _ff  # noqa: PLC0415
+        from corvin_core import feature_flags as _ff  # noqa: PLC0415
         spec = _ff._tenant_spec(tenant_id) or {}  # type: ignore[attr-defined]
         ce = spec.get("context_engineering") or {}
         return ce if isinstance(ce, dict) else {}

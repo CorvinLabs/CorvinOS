@@ -184,9 +184,9 @@ def _import_bridge_manager() -> Any | None:
 
 
 def _load_is_enabled() -> Any | None:
-    """Return ``corvin_console.feature_flags.is_enabled``, or None if absent."""
+    """Return ``corvin_core.feature_flags.is_enabled``, or None if absent."""
     try:
-        from corvin_console.feature_flags import is_enabled  # type: ignore[import-not-found]
+        from corvin_core.feature_flags import is_enabled  # type: ignore[import-not-found]
         return is_enabled
     except ImportError:
         pass
@@ -194,7 +194,7 @@ def _load_is_enabled() -> Any | None:
     if console.is_dir() and str(console) not in sys.path:
         sys.path.append(str(console))
     try:
-        from corvin_console.feature_flags import is_enabled  # type: ignore[import-not-found]
+        from corvin_core.feature_flags import is_enabled  # type: ignore[import-not-found]
         return is_enabled
     except ImportError:
         return None

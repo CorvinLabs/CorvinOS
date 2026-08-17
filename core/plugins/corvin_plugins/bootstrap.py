@@ -1307,7 +1307,7 @@ def boot_platform() -> list[str]:
 
     loaded: list[str] = []
     try:
-        from corvin_console import feature_flags as _flags  # noqa: PLC0415
+        from corvin_core import feature_flags as _flags  # noqa: PLC0415
         from forge.paths import corvin_home as _corvin_home  # noqa: PLC0415
         from forge.tenants import current_tenant as _current_tenant  # noqa: PLC0415
 

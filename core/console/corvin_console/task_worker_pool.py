@@ -621,7 +621,7 @@ async def main():
     )
 
     from corvin_console.task_queue import TaskQueue
-    from corvin_console.task_manager import TaskManager
+    from corvin_core.task_manager import TaskManager
 
     tenant_global_dir = _forge_paths.tenant_global_dir("_default")
     queue = TaskQueue(tenant_global_dir)

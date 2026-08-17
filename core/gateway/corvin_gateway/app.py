@@ -166,7 +166,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Flag off (the default) means NO timer is created at all: the /plugins
         # health route still answers from the breaker state, which costs nothing.
         try:
-            from corvin_console import feature_flags as _hflags
+            from corvin_core import feature_flags as _hflags
             from corvin_console.routes import plugins as _plugins_route
             from corvin_plugins.bootstrap import build_context as _build_ctx
             from corvin_plugins.health import HealthCollector as _HealthCollector
@@ -305,7 +305,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     _relay_listener = None
     _relay_task = None
     try:
-        from corvin_console import feature_flags as _relay_ff
+        from corvin_core import feature_flags as _relay_ff
         import a2a_friendship as _relay_ft  # type: ignore[import-not-found]
         if _A2A_AVAILABLE and _a2a_receiver is not None and _relay_ff.is_enabled("a2a_relay_fallback"):
             _relay_url = _relay_ft.get_my_relay_url()
