@@ -49,7 +49,6 @@ def verify_audit_durability(tenant_id: str = "_default") -> tuple[bool, str]:
         SystemExit: if chain is corrupted (fail-closed)
     """
     try:
-        from core.audit import AuditDurabilityManager
         from forge.paths import tenant_home as get_tenant_home  # type: ignore
 
         tenant_dir = Path(get_tenant_home(tenant_id))
@@ -59,31 +58,35 @@ def verify_audit_durability(tenant_id: str = "_default") -> tuple[bool, str]:
             logger.info(f"Audit chain not yet created: {audit_file}")
             return True, "new_audit_chain"
 
-        mgr = AuditDurabilityManager(audit_file, tenant_id)
-        is_valid, msg = mgr.verify_durability()
+        # Use the CANONICAL bridge audit verifier — the SAME one the boot
+        # tripwire uses (``audit.verify_audit``). The core ``audit.jsonl`` is
+        # written in the CLAG hash-chain schema (ts/hash/mac/prev_hash/
+        # instance_sig); the ``core.audit.AuditChain`` loader expects a
+        # different schema (actor/action/resource/self_hash) and raises
+        # KeyError('actor') on a real CLAG record. Reusing the canonical
+        # verifier rather than re-implementing chain logic is exactly the rule
+        # the tripwire docstring states — a second hash-chain re-implementation
+        # is a bug, not defence in depth.
+        import audit  # type: ignore[import-not-found]
+
+        is_valid, problems = audit.verify_audit(audit_file)
 
         if not is_valid:
             logger.critical(
-                f"AUDIT CHAIN CORRUPTED: {msg}. "
+                f"AUDIT CHAIN CORRUPTED: {len(problems)} problem record(s). "
                 f"File: {audit_file}. "
                 f"This is a GDPR Art. 30, 32 compliance failure. "
                 f"Boot aborted (fail-closed)."
             )
-            # Log to audit trail before exiting (best-effort)
-            try:
-                mgr.write_event(
-                    event_type="audit_chain_verification_failed",
-                    details={"reason": msg, "verdict": "abort_boot"},
-                )
-            except Exception:
-                pass
-
             # FAIL-CLOSED: non-overridable
             sys.exit(1)
 
-        logger.info(f"Audit chain verified: {msg}")
+        msg = f"verified ({len(problems)} problems)"
+        logger.info(f"Audit chain verified: {audit_file} — {msg}")
         return True, msg
 
+    except SystemExit:
+        raise
     except Exception as e:
         logger.critical(f"Audit verification error: {e}. Aborting boot (fail-closed).")
         sys.exit(1)
@@ -130,6 +133,28 @@ def instantiate_pipeline(
             except Exception as e:
                 logger.warning(f"Could not load feature flags: {e}. Defaulting to off.")
                 feature_flags = {}
+
+        # Ship-dark: the DualGatePipeline is a default-OFF feature (ADR-0300,
+        # ``dual_gate_pipeline_enabled``). When it is off — the default on every
+        # install and after every upgrade — instantiating it (and its AuditChain
+        # over the shared CLAG ``audit.jsonl``, whose schema AuditChain cannot
+        # load) MUST be a quiet no-op, never a boot error. "Off must be a quiet
+        # path, never an error" (Feature-Flags baseline). The pipeline stays
+        # None; the dual-gate middleware degrades to a transparent pass-through.
+        if not feature_flags.get("dual_gate_pipeline_enabled", False):
+            logger.info(
+                "DualGatePipeline disabled (dual_gate_pipeline_enabled=off) — "
+                "skipping instantiation (ship-dark quiet path)."
+            )
+            app_state.pipeline = None
+            app_state.tenant_id = tenant_id
+            app_state.feature_flags = feature_flags
+            try:
+                from core.pipeline.wiring import set_global_pipeline
+                set_global_pipeline(None)
+            except Exception as e:
+                logger.warning(f"Could not clear global pipeline: {e}")
+            return None
 
         # Step 2: Initialize AuditChain (ADR-0299)
         try:

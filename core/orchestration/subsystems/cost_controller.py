@@ -1,9 +1,15 @@
-"""Cost Controller subsystem: Budget-aware allocation."""
+"""Cost Controller subsystem: Budget-aware allocation (ADR-0358).
 
+Maintains budget state via ContextAPI; records all cost estimates in audit trail.
+Subscribes to context updates to react to model changes.
+"""
+
+import asyncio
 import logging
 from typing import Any, Dict
 
 from .base import Subsystem
+from core.context_engineering.context_api import ContextAPI
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,7 @@ class CostController(Subsystem):
         self.cost_warning_threshold = cost_warning_threshold
         self.spent_today: float = 0.0
         self.token_count: Dict[str, int] = {"input": 0, "output": 0}
+        self.context_api: ContextAPI = None
 
     @property
     def name(self) -> str:
@@ -39,10 +46,42 @@ class CostController(Subsystem):
         return "1.0.0"
 
     def startup(self, hub) -> None:
-        """Subscribe to token/cost events."""
+        """Inject ContextAPI and subscribe to events."""
         self.hub = hub
+
+        # Inject ContextAPI for context access
+        self.context_api = ContextAPI(self.name, hub.context_bus)
+
+        # Subscribe to hub events
         hub.subscribe("task_started", self.on_task_started)
-        logger.info("CostController started")
+
+        # Subscribe to context updates
+        asyncio.create_task(
+            self.context_api.subscribe_context_updates(self.on_context_updated)
+        )
+
+        logger.info("CostController started with ContextAPI")
+
+    async def on_context_updated(self, payload: Dict[str, Any]) -> None:
+        """React when context changes (e.g., model, budget updates).
+
+        Args:
+            payload: Contains subsystem, updates, context_stack, timestamp
+        """
+        updates = payload.get("updates", {})
+        if "model" in updates:
+            old_model, new_model = updates["model"]
+            logger.debug(
+                f"Model changed: {old_model} -> {new_model}. "
+                "Cost estimation will use new model rates."
+            )
+        if "budget_remaining" in updates:
+            old_budget, new_budget = updates["budget_remaining"]
+            # Check if we're approaching threshold
+            if new_budget / self.daily_budget_usd < self.cost_warning_threshold:
+                logger.warning(
+                    f"Budget warning: {new_budget:.2f}/${self.daily_budget_usd} remaining"
+                )
 
     async def on_event(self, event_name: str, event_data: Dict[str, Any]) -> None:
         """React to events."""
@@ -69,12 +108,30 @@ class CostController(Subsystem):
         return (input_tokens * costs["input"]) + (output_tokens * costs["output"])
 
     async def handle_request(self, request_type: str, **kwargs) -> Any:
-        """Handle cost queries."""
+        """Handle cost queries via ContextAPI."""
         if request_type == "approve_action":
             cost = kwargs.get("cost", 0.0)
-            remaining_budget = self.daily_budget_usd - self.spent_today
+
+            # Try to read budget from context
+            try:
+                remaining_budget = self.context_api.query_context("budget_remaining")
+                if remaining_budget is None:
+                    remaining_budget = self.daily_budget_usd - self.spent_today
+            except RuntimeError:
+                remaining_budget = self.daily_budget_usd - self.spent_today
 
             if cost > remaining_budget:
+                # Record cost approval denial
+                try:
+                    self.context_api.record_decision(
+                        decision_type="cost_approval",
+                        value="denied",
+                        reasoning=f"Cost {cost:.4f} exceeds remaining budget {remaining_budget:.4f}",
+                        confidence=1.0,
+                    )
+                except RuntimeError:
+                    pass
+
                 self.publish_event(
                     "cost_exceeded",
                     {
@@ -94,16 +151,50 @@ class CostController(Subsystem):
                     },
                 )
 
+            # Update budget via ContextAPI
+            new_remaining = remaining_budget - cost
+            try:
+                self.context_api.update_context(budget_remaining=new_remaining)
+                self.context_api.record_decision(
+                    decision_type="cost_approval",
+                    value="approved",
+                    reasoning=f"Cost {cost:.4f} approved; {new_remaining:.4f} remaining",
+                    confidence=1.0,
+                )
+            except RuntimeError:
+                pass
+
             self.spent_today += cost
             return True
 
         elif request_type == "estimate_cost":
             input_tokens = kwargs.get("input_tokens", 0)
             output_tokens = kwargs.get("output_tokens", 0)
-            model = kwargs.get("model", self.preferred_model)
+            model = kwargs.get("model")
+
+            # If model not specified, try to read from context
+            if model is None:
+                try:
+                    context_model = self.context_api.query_context("model")
+                    model = context_model if context_model else self.preferred_model
+                except RuntimeError:
+                    model = self.preferred_model
+
+            estimated = self._estimate_cost(input_tokens, output_tokens, model)
+
+            # Record estimate
+            try:
+                self.context_api.record_decision(
+                    decision_type="cost_estimate",
+                    value=f"{estimated:.6f}",
+                    reasoning=f"Input: {input_tokens} tokens, Output: {output_tokens} tokens, Model: {model}",
+                    confidence=0.9,
+                )
+            except RuntimeError:
+                pass
 
             return {
-                "estimated_cost": self._estimate_cost(input_tokens, output_tokens, model),
+                "estimated_cost": estimated,
                 "model": model,
             }
 
@@ -119,7 +210,14 @@ class CostController(Subsystem):
             return sorted(alternatives, key=lambda x: x["cost"])
 
         elif request_type == "budget_status":
-            remaining = self.daily_budget_usd - self.spent_today
+            # Try to read from context first
+            try:
+                remaining = self.context_api.query_context("budget_remaining")
+                if remaining is None:
+                    remaining = self.daily_budget_usd - self.spent_today
+            except RuntimeError:
+                remaining = self.daily_budget_usd - self.spent_today
+
             return {
                 "spent": self.spent_today,
                 "remaining": remaining,
