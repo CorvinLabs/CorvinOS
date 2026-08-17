@@ -23,6 +23,10 @@ export const SettingsPage = React.lazy(() =>
   import("@/pages/settings").then((m) => ({ default: m.SettingsPage }))
 );
 
+export const VibeOverviewPage = React.lazy(() =>
+  import("@/pages/vibe-overview").then((m) => ({ default: m.default }))
+);
+
 export const EnginesPage = React.lazy(() =>
   import("@/pages/engines").then((m) => ({ default: m.EnginesPage }))
 );

@@ -20,7 +20,7 @@ import {
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, ActivityFeedPage,
-  LearningObjectivesPage, MultiInstancePage,
+  LearningObjectivesPage, MultiInstancePage, VibeOverviewPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 
@@ -39,22 +39,12 @@ export const PANELS: ConsolePanel[] = [
     element: { kind: "react", load: () => import("@/pages/vibe-engineering") },
     contractVersion: "1",
   },
-  // ADR-0363 P5: the FIRST external panel — Vibe Inspector, embedded via the P4
-  // PanelHost (iframe). "Trusted" (first-party, origin=builtin) so it gets
-  // allow-same-origin for the credentialed API call; an untrusted community panel
-  // would NOT get allow-same-origin. Gated on the vibe-engineering capability.
-  {
-    id: "vibe-inspector", route: "vibe-inspector",
-    nav: { label: "Vibe Inspector", icon: "Boxes", group: "observability" },
-    requiredCapability: "vibe-engineering",
-    // BASE_URL-relative, NOT a root-absolute "/external-panels/…": the SPA is
-    // served under vite base "/console/", so a root path would 404. BASE_URL is
-    // "/console/" in prod and "/" in dev, so this resolves correctly in both.
-    element: { kind: "iframe",
-               src: import.meta.env.BASE_URL + "external-panels/vibe-inspector/index.html",
-               sandbox: "allow-scripts allow-same-origin" },
-    contractVersion: "1",
-  },
+  // G2 (ADR-0370): Vibe Overview — replaces the removed Vibe Inspector, which was a
+  // read-only subset of the Context Pipeline page (same /traces data) adding only
+  // aggregate counters. Those counters + a CEL-flow explainer live here now, as a
+  // first-party React page (no more sandboxed-iframe external panel to maintain).
+  rc("vibe-overview", "Overview", VibeOverviewPage,
+     { nav: { label: "Overview", icon: "" }, requiredFlag: "vibe_engineering" }),
   // simple top-level feature panels (reuse proven lazy components)
   rc("dashboard", "Dashboard", DashboardPage),
   rc("talent", "Your Talent", YourTalentPage),
