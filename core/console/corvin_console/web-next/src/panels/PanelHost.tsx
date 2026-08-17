@@ -20,8 +20,14 @@ import {
 } from "./protocol";
 
 export interface PanelHostProps {
-  /** iframe src (external panel entry). Must be same-origin or an allowlisted origin. */
-  src: string;
+  /** iframe src (external panel entry). Must be same-origin or an allowlisted origin.
+   *  Mutually exclusive with srcDoc; srcDoc wins if both are given. */
+  src?: string;
+  /** Inline HTML for the panel, used by FrontendForge's live preview (ADR-0364 P6)
+   *  so an operator sees the panel they are editing without saving it first. A
+   *  srcDoc iframe is origin "null" (fully sandboxed) — the safe default for
+   *  unsaved, in-editor code. */
+  srcDoc?: string;
   /** iframe sandbox tokens, e.g. "allow-scripts allow-forms". NEVER allow-same-origin
    *  for a community panel — that would defeat the sandbox. */
   sandbox: string;
@@ -65,10 +71,14 @@ export default function PanelHost(props: PanelHostProps) {
             protocolVersion: PANEL_PROTOCOL_VERSION,
             ctx,
           };
-          // Same-origin panel → "/"; a cross-origin allowlisted panel would need
-          // its exact origin here. targetOrigin is never "*": that would leak the
-          // host context to whatever origin the frame navigated to.
-          win.postMessage(hello, new URL(src, window.location.href).origin);
+          // A srcDoc iframe is origin "null" (FrontendForge live preview) — there
+          // is no specific origin to target, and the ctx carries no secret, so "*"
+          // is acceptable there. For a real src panel, target its EXACT origin,
+          // never "*", so the host context can't leak to a navigated-away frame.
+          const targetOrigin = props.srcDoc != null
+            ? "*"
+            : new URL(src ?? "/", window.location.href).origin;
+          win.postMessage(hello, targetOrigin);
           break;
         }
         case "corvin:panel:navigate":
@@ -84,12 +94,12 @@ export default function PanelHost(props: PanelHostProps) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [ctx, src, navigate]);
+  }, [ctx, src, props.srcDoc, navigate]);
 
   return (
     <iframe
       ref={ref}
-      src={src}
+      {...(props.srcDoc != null ? { srcDoc: props.srcDoc } : { src })}
       sandbox={sandbox}
       title="Console panel"
       style={{ width: "100%", height, border: "none" }}
