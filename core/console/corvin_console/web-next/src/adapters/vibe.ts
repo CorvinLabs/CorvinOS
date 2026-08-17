@@ -26,6 +26,13 @@ async function getCsrf(): Promise<string> {
 }
 
 // ── schemas (the contract; drift becomes a zod parse error, not a runtime bug) ──
+// Observability rule: a trace panel must NEVER blank out on backend drift. The inner
+// object schemas stay STRICT (so consumers keep clean non-null types), but each is
+// wrapped in `z.preprocess()` that normalises the backend's legitimate nulls (a
+// still-running or errored stage emits stage=null / status=null) to placeholders
+// BEFORE validation. A single null degrades to a placeholder for ONE field instead of
+// throwing and wiping the whole page. (Regression "context pipeline läd nicht":
+// backend shipped a stage with stage=null and strict z.string() sank the entire render.)
 const zSource = z.object({ id: z.string(), score: z.number().nullable().optional() });
 const zStage = z.object({
   stage: z.string(),
@@ -44,6 +51,43 @@ const zTurn = z.object({
   brief_sha256: z.string().nullable().optional(),
   stages: z.array(zStage),
 });
+
+// Observability rule: a trace panel must NEVER blank out on backend drift. The schemas
+// above stay STRICT (consumers keep clean non-null types), and `scrubTraces` normalises
+// the backend's legitimate nulls (a still-running or errored stage emits stage=null /
+// status=null) to placeholders BEFORE the strict parse. A single null degrades to a
+// placeholder for ONE field instead of throwing and wiping the whole page. (Regression
+// "context pipeline läd nicht": backend shipped a stage with stage=null and strict
+// z.string() sank the entire render.)
+// Drop every key whose value is null so an `.optional()` field (confidence_tier,
+// reason, hash, top_score, ts, …) is treated as absent rather than tripping strict
+// z.string()/z.number(). Fields the schema declares `.nullable()` still accept null,
+// so dropping their null is equally fine (undefined ⊆ nullable-optional).
+function dropNulls(o: any): void {
+  if (!o || typeof o !== "object") return;
+  for (const k of Object.keys(o)) if (o[k] === null) delete o[k];
+}
+function scrubTraces(raw: unknown): unknown {
+  const r = raw as any;
+  if (!r || typeof r !== "object" || !Array.isArray(r.sessions)) return raw;
+  for (const sg of r.sessions) {
+    for (const t of sg?.turns ?? []) {
+      dropNulls(t);
+      if (t.turn_id == null) t.turn_id = "?";
+      if (!Array.isArray(t.stages)) t.stages = [];
+      for (const s of t.stages) {
+        dropNulls(s);
+        if (s.stage == null) s.stage = "?";
+        if (s.status == null) s.status = "unknown";
+        for (const src of s.sources ?? []) {
+          dropNulls(src);
+          if (src.id == null) src.id = "?";
+        }
+      }
+    }
+  }
+  return raw;
+}
 const zTraces = z.object({
   tenant_id: z.string(),
   available: z.boolean(),
@@ -96,7 +140,11 @@ export type Pipeline = z.infer<typeof zPipeline>;
 export function useTraces(limit = 50) {
   return useQuery({
     queryKey: ["vibe", "traces", limit],
-    queryFn: () => getJSON(`/traces?limit=${limit}`, zTraces),
+    queryFn: async () => {
+      const r = await fetch(`${BASE}/traces?limit=${limit}`, { credentials: "include" });
+      if (!r.ok) throw new Error(`HTTP ${r.status} on /traces`);
+      return zTraces.parse(scrubTraces(await r.json()));
+    },
     refetchInterval: 15_000,
   });
 }
