@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" width="1400" height="900">
+  <!-- Background -->
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f8f9fa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#e2e8f0;stop-opacity:1" />
+    </linearGradient>
+    <style>
+      .subsystem-box { fill: white; stroke: #e2e8f0; stroke-width: 2; }
+      .subsystem-title { font-weight: bold; font-size: 13px; fill: #1a202c; }
+      .subsystem-detail { font-size: 11px; fill: #4a5568; }
+      .phase-label { font-size: 12px; font-weight: bold; fill: #718096; }
+      .event-arrow { stroke: #667eea; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .request-arrow { stroke: #48bb78; stroke-width: 2; fill: none; stroke-dasharray: 5,5; marker-end: url(#arrowhead-green); }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#667eea" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#48bb78" />
+    </marker>
+  </defs>
+
+  <rect width="1400" height="900" fill="url(#grad1)"/>
+
+  <!-- Title -->
+  <text x="700" y="40" font-size="28" font-weight="bold" text-anchor="middle" fill="#1a202c">
+    CorvinOS Brain v0.2 — Subsystems Architecture
+  </text>
+  <text x="700" y="65" font-size="14" text-anchor="middle" fill="#4a5568">
+    8 Subsystems coordinated through pub/sub Event Bus and Request/Response Router
+  </text>
+
+  <!-- Central Hub -->
+  <rect x="550" y="100" width="300" height="120" rx="10" class="subsystem-box" stroke="#f687b3" stroke-width="3" fill="#fce4ec"/>
+  <text x="700" y="130" font-size="15" font-weight="bold" text-anchor="middle" fill="#c2185b">SubsystemHub</text>
+  <text x="700" y="155" font-size="11" text-anchor="middle" fill="#4a5568">Event Bus (Pub/Sub)</text>
+  <text x="700" y="172" font-size="11" text-anchor="middle" fill="#4a5568">Request/Response Router</text>
+  <text x="700" y="189" font-size="11" text-anchor="middle" fill="#4a5568">Subsystem Registry</text>
+  <text x="700" y="206" font-size="10" text-anchor="middle" fill="#718096">Poll Interval: 5s | Max Queue: 10k</text>
+
+  <!-- PHASE 1: Core Subsystems (Top Row) -->
+  <text x="50" y="280" font-size="12" font-weight="bold" fill="#2d3748">PHASE 1: CORE SUBSYSTEMS</text>
+
+  <!-- HealthMonitor -->
+  <rect x="50" y="300" width="280" height="140" rx="8" class="subsystem-box"/>
+  <text x="190" y="325" font-size="13" font-weight="bold" text-anchor="middle" fill="#38a169">HealthMonitor</text>
+  <text x="60" y="350" font-size="11" fill="#4a5568">v1.0.0</text>
+  <text x="60" y="370" font-size="10" fill="#4a5568">• Stall detection (10+ min)</text>
+  <text x="60" y="385" font-size="10" fill="#4a5568">• Error rate tracking</text>
+  <text x="60" y="400" font-size="10" fill="#4a5568">• Token burn monitoring</text>
+  <text x="60" y="415" font-size="10" fill="#4a5568">Events: task_stalled, error_rate_high</text>
+  <text x="60" y="430" font-size="10" fill="#4a5568">Requests: health_status, error_rate</text>
+
+  <!-- ContextBridge -->
+  <rect x="360" y="300" width="280" height="140" rx="8" class="subsystem-box"/>
+  <text x="500" y="325" font-size="13" font-weight="bold" text-anchor="middle" fill="#4299e1">ContextBridge</text>
+  <text x="370" y="350" font-size="11" fill="#4a5568">v1.0.0</text>
+  <text x="370" y="370" font-size="10" fill="#4a5568">• Session split management</text>
+  <text x="370" y="385" font-size="10" fill="#4a5568">• Memory checkpoints</text>
+  <text x="370" y="400" font-size="10" fill="#4a5568">• 3-tier memory compression</text>
+  <text x="370" y="415" font-size="10" fill="#4a5568">Events: session_split, context_transferred</text>
+  <text x="370" y="430" font-size="10" fill="#4a5568">Requests: create_checkpoint, retrieve</text>
+
+  <!-- LoopEngineer -->
+  <rect x="670" y="300" width="280" height="140" rx="8" class="subsystem-box"/>
+  <text x="810" y="325" font-size="13" font-weight="bold" text-anchor="middle" fill="#ed8936">LoopEngineer</text>
+  <text x="680" y="350" font-size="11" fill="#4a5568">v1.0.0</text>
+  <text x="680" y="370" font-size="10" fill="#4a5568">• Strategy ladder</text>
+  <text x="680" y="385" font-size="10" fill="#4a5568">  1. direct_fix</text>
+  <text x="680" y="400" font-size="10" fill="#4a5568">  2. pivot_approach</text>
+  <text x="680" y="415" font-size="10" fill="#4a5568">  3. decompose</text>
+  <text x="680" y="430" font-size="10" fill="#4a5568">  4. escalate</text>
+
+  <!-- Orchestrator -->
+  <rect x="980" y="300" width="280" height="140" rx="8" class="subsystem-box"/>
+  <text x="1120" y="325" font-size="13" font-weight="bold" text-anchor="middle" fill="#9f7aea">Orchestrator</text>
+  <text x="990" y="350" font-size="11" fill="#4a5568">v1.0.0</text>
+  <text x="990" y="370" font-size="10" fill="#4a5568">• Task spawning</text>
+  <text x="990" y="385" font-size="10" fill="#4a5568">• Parallelism control (max 3)</text>
+  <text x="990" y="400" font-size="10" fill="#4a5568">• Dependency tracking</text>
+  <text x="990" y="415" font-size="10" fill="#4a5568">• Failover handling</text>
+  <text x="990" y="430" font-size="10" fill="#4a5568">Requests: spawn_task, get_active</text>
+
+  <!-- PHASE 2: Advanced Subsystems (Bottom Row) -->
+  <text x="50" y="510" font-size="12" font-weight="bold" fill="#2d3748">PHASE 2: ADVANCED SUBSYSTEMS</text>
+
+  <!-- LearningEngine -->
+  <rect x="50" y="530" width="280" height="140" rx="8" class="subsystem-box" stroke="#48bb78" stroke-width="2"/>
+  <text x="190" y="555" font-size="13" font-weight="bold" text-anchor="middle" fill="#22863a">LearningEngine</text>
+  <text x="60" y="580" font-size="11" fill="#4a5568">v1.0.0</text>
+  <text x="60" y="600" font-size="10" fill="#4a5568">• Error/strategy database</text>
+  <text x="60" y="615" font-size="10" fill="#4a5568">• Confidence scoring</text>
+  <text x="60" y="630" font-size="10" fill="#4a5568">• Learning window: 100 turns</text>
+  <text x="60" y="645" font-size="10" fill="#4a5568">• Persistent JSON DB</text>
+  <text x="60" y="660" font-size="10" fill="#4a5568">Requests: recommend_strategy</text>
+
+  <!-- CostController -->
+  <rect x="360" y="530" width="280" height="140" rx="8" class="subsystem-box" stroke="#48bb78" stroke-width="2"/>
+  <text x="500" y="555" font-size="13" font-weight="bold" text-anchor="middle" fill="#22863a">CostController</text>
+  <text x="370" y="580" font-size="11" fill="#4a5568">v1.0.0</text>
+  <text x="370" y="600" font-size="10" fill="#4a5568">• Budget enforcement</text>
+  <text x="370" y="615" font-size="10" fill="#4a5568">• API cost estimation</text>
+  <text x="370" y="630" font-size="10" fill="#4a5568">• Daily limit: $50 (default)</text>
+  <text x="370" y="645" font-size="10" fill="#4a5568">• Model pricing (Haiku/Sonnet)</text>
+  <text x="370" y="660" font-size="10" fill="#4a5568">Requests: approve_action, budget_status</text>
+
+  <!-- SafetyValidator -->
+  <rect x="670" y="530" width="280" height="140" rx="8" class="subsystem-box" stroke="#48bb78" stroke-width="2"/>
+  <text x="810" y="555" font-size="13" font-weight="bold" text-anchor="middle" fill="#22863a">SafetyValidator</text>
+  <text x="680" y="580" font-size="11" fill="#4a5568">v1.0.0</text>
+  <text x="680" y="600" font-size="10" fill="#4a5568">• Forbidden action detection</text>
+  <text x="680" y="615" font-size="10" fill="#4a5568">• Resource protection</text>
+  <text x="680" y="630" font-size="10" fill="#4a5568">• Violation tracking</text>
+  <text x="680" y="645" font-size="10" fill="#4a5568">• Blocked: rm -rf, sudo, delete</text>
+  <text x="680" y="660" font-size="10" fill="#4a5568">Requests: is_safe, check_resource</text>
+
+  <!-- StrategyAdvisor -->
+  <rect x="980" y="530" width="280" height="140" rx="8" class="subsystem-box" stroke="#48bb78" stroke-width="2"/>
+  <text x="1120" y="555" font-size="13" font-weight="bold" text-anchor="middle" fill="#22863a">StrategyAdvisor</text>
+  <text x="990" y="580" font-size="11" fill="#4a5568">v1.0.0</text>
+  <text x="990" y="600" font-size="10" fill="#4a5568">• Success prediction (0.0-1.0)</text>
+  <text x="990" y="615" font-size="10" fill="#4a5568">• Empirical scoring</text>
+  <text x="990" y="630" font-size="10" fill="#4a5568">• Strategy ranking</text>
+  <text x="990" y="645" font-size="10" fill="#4a5568">• Prediction caching</text>
+  <text x="990" y="660" font-size="10" fill="#4a5568">Requests: predict_success, rank</text>
+
+  <!-- Communication Arrows -->
+  <!-- Events (Pub/Sub) -->
+  <path d="M 700 220 L 700 300" class="event-arrow"/>
+  <text x="720" y="260" font-size="10" fill="#667eea">Events (async)</text>
+
+  <!-- Requests (Req/Resp) -->
+  <path d="M 700 220 L 700 300" class="request-arrow"/>
+  <text x="720" y="280" font-size="10" fill="#48bb78">Requests</text>
+
+  <!-- Legend -->
+  <g font-size="11" fill="#4a5568">
+    <rect x="50" y="750" width="300" height="100" rx="5" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+    <text x="60" y="770" font-weight="bold" fill="#1a202c">EVENT FLOW (One-way broadcasts)</text>
+    <line x1="60" y1="780" x2="100" y2="780" class="event-arrow"/>
+    <text x="110" y="785" fill="#4a5568">Async pub/sub, fire-and-forget</text>
+    <text x="60" y="810" font-size="10" fill="#4a5568">Core: task_started, error_detected,</text>
+    <text x="60" y="825" font-size="10" fill="#4a5568">strategy_applied, strategy_succeeded</text>
+
+    <rect x="400" y="750" width="300" height="100" rx="5" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+    <text x="410" y="770" font-weight="bold" fill="#1a202c">REQUEST/RESPONSE (Two-way queries)</text>
+    <line x1="410" y1="780" x2="450" y2="780" class="request-arrow"/>
+    <text x="460" y="785" fill="#4a5568">Sync queries, blocking response</text>
+    <text x="410" y="810" font-size="10" fill="#4a5568">Example: get_active_tasks,</text>
+    <text x="410" y="825" font-size="10" fill="#4a5568">health_status, budget_status</text>
+
+    <rect x="750" y="750" width="550" height="100" rx="5" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+    <text x="760" y="770" font-weight="bold" fill="#1a202c">METRICS & PERFORMANCE</text>
+    <text x="760" y="795" font-size="10" fill="#4a5568">Hub Latency: &lt; 1ms | Event Queue: 10,000 items | Poll Interval: 5s | Async Timeout: 60s</text>
+    <text x="760" y="815" font-size="10" fill="#4a5568">8 Subsystems Registered | 20+ E2E Tests Passing | Production Ready v0.2</text>
+  </g>
+</svg>
