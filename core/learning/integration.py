@@ -1,12 +1,14 @@
 """Integration: wire active_loop into method execution (Phase 3).
 
 Phase 8: Integrated anomaly detection and auto-recovery.
+Phase 9: Pattern discovery from production failures.
 """
 from __future__ import annotations
 from .active_loop import ActiveLearningLoop
 from .storage import LearningEventStore
 from .metrics import ExecutionMetrics, MetricsCollector
 from .anomaly_detector import AnomalyDetector, AnomalyAlert
+from .pattern_discovery import FailureClusterer, DiscoveredPattern
 from pathlib import Path
 import time
 from typing import Callable, Any, Optional
@@ -16,6 +18,7 @@ class LearningIntegration:
     """Bridge between execution (chat_runtime, say.py) and learning loop.
 
     Includes Phase 8 anomaly detection and auto-recovery features.
+    Includes Phase 9 pattern discovery from production failures.
     """
 
     def __init__(self, store_path: Path = None):
@@ -25,6 +28,7 @@ class LearningIntegration:
         self.metrics = MetricsCollector(self.store)
         self.loop = ActiveLearningLoop(self.store)
         self.anomaly_detector = AnomalyDetector(self.store)
+        self.pattern_clusterer = FailureClusterer(self.store)
     
     async def execute_method_with_learning(
         self,
@@ -201,3 +205,46 @@ class LearningIntegration:
             Number of files deleted.
         """
         return self.anomaly_detector.clear_alerts_before(days_ago)
+
+    # Phase 9: Pattern Discovery
+
+    def record_failure(
+        self,
+        subject_id: str,
+        error_type: str,
+        context: dict = None,
+    ) -> None:
+        """Record a failure for pattern discovery clustering.
+
+        This is typically called after a method fails (e2e execution).
+        The FailureClusterer accumulates these and discovers patterns when
+        there are >=50 samples.
+
+        Args:
+            subject_id: Pattern or method that failed
+            error_type: Type of error (e.g., "timeout", "rate_limit", "auth_failed")
+            context: Context dict from the failure (provider, endpoint, etc.)
+        """
+        if context is None:
+            context = {}
+        self.pattern_clusterer.add_failure(subject_id, error_type, context)
+
+    def discover_patterns(self) -> list[DiscoveredPattern]:
+        """Discover new patterns from accumulated failures.
+
+        Clusters failures by error_type and context, infers when/anti_when
+        conditions, and auto-registers patterns with 0.5 baseline confidence
+        when a cluster has >=50 samples.
+
+        Returns:
+            List of newly discovered patterns.
+        """
+        return self.pattern_clusterer.discover_patterns(integration=self)
+
+    def get_failure_clusters(self):
+        """Get all discovered failure clusters."""
+        return self.pattern_clusterer.get_clusters()
+
+    def get_discovered_patterns(self) -> list[DiscoveredPattern]:
+        """Get all successfully discovered patterns."""
+        return self.pattern_clusterer.get_discoveries()

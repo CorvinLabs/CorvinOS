@@ -21,6 +21,7 @@ except ImportError:
 from core.learning.token_metrics_store import TokenMetricsStore
 from core.learning.token_metrics_aggregator import TokenMetricsAggregator
 from core.learning.token_baseline import ComparisonEngine
+from core.learning.instance_registry import get_instance_registry
 
 
 # ===== Request/Response Models =====
@@ -204,31 +205,23 @@ async def get_session_summary(
 
 @router.get("/stats", response_model=dict)
 async def get_cluster_stats(current_user: dict = Depends(get_current_user)):
-    """Get cluster-wide statistics (all sessions).
+    """Get cluster-wide statistics (all instances, all sessions).
 
     Returns:
-        Aggregate stats across all instances
+        Aggregate stats across entire cluster
     """
-    deps = get_metrics_dependencies()
-    store = deps["store"]
-    comparison_engine = deps["comparison_engine"]
+    registry = get_instance_registry()
+    cluster_stats = registry.aggregate_stats()
 
-    # Query last 24 hours across all sessions
-    end = datetime.utcnow()
-    start = end - timedelta(hours=24)
-
-    # Note: requires tenant_id to be known; for now, return empty or tenant-scoped
     return {
         "timestamp": datetime.utcnow().isoformat(),
-        "time_range": {
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        },
+        "cluster": cluster_stats,
         "summary": {
-            "total_sessions": 0,  # Would query DB
-            "total_turns": 0,
-            "avg_savings_percent": 0,
-            "high_confidence_rate": 0,
+            "instance_count": cluster_stats["instance_count"],
+            "total_turns": cluster_stats["total_turns"],
+            "total_tokens": cluster_stats["total_tokens"],
+            "avg_tokens_per_turn": cluster_stats["avg_tokens_per_turn"],
+            "avg_savings_percent": cluster_stats["avg_savings_percent"],
         },
     }
 
