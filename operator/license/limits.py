@@ -127,6 +127,26 @@ FREE_TIER: dict[str, Any] = {
     # Tier-A (prompt/skill) layers are always free; only B and C are gated.
     "active_custom_layers_bc": 1,
 
+    # Brain v0.2 (ADR-0365)
+    # Daily limit for Brain tasks (learning-driven orchestration, v0.2+).
+    # Free tier: 10 tasks/day; Member: unlimited.
+    "brain_tasks_per_day":      10,
+
+    # Tool Forge (ADR-0365)
+    # Daily limit for Tool Forge tool generations (L30, Forge compute_run).
+    # Free tier: 3/day; Member: unlimited.
+    "tool_forge_per_day":       3,
+
+    # Skill Forge (ADR-0365)
+    # Daily limit for Skill Forge skill generations (L7, SkillForge compute_run).
+    # Free tier: 3/day; Member: unlimited.
+    "skill_forge_per_day":      3,
+
+    # Plugin Limit (ADR-0365)
+    # Maximum number of simultaneously loaded custom plugins.
+    # Free tier: 1 plugin; Member: unlimited.
+    "max_plugins":              1,
+
     # Compliance
     "data_residency":         False,  # zone enforcement not available on free tier
     # RESERVED — NOT YET ENFORCED (cloud-phase features). The three keys below
@@ -167,6 +187,10 @@ TIER_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
         "engines_allowed":              None,
         "datasource_adapters_allowed":  None,   # all adapters
         "active_custom_layers_bc":      None,   # unlimited (ADR-0156 M2)
+        "brain_tasks_per_day":          None,   # unlimited (ADR-0365)
+        "tool_forge_per_day":           None,   # unlimited (ADR-0365)
+        "skill_forge_per_day":          None,   # unlimited (ADR-0365)
+        "max_plugins":                  None,   # unlimited (ADR-0365)
         "data_residency":               True,
         "audit_export":                 True,
         "sso_enabled":                  True,
