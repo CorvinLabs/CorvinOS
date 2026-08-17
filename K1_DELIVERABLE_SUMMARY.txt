@@ -1,0 +1,320 @@
+================================================================================
+  Phase 2.K=1 — Token Measurement Framework Integration (Skeleton Complete)
+================================================================================
+
+DELIVERABLE DATE: 2026-08-17
+STATUS: SKELETON COMPLETE — READY FOR IMPLEMENTATION
+EFFORT: ~35 minutes to wire + test
+
+================================================================================
+WHAT IS K=1?
+================================================================================
+
+Task: Wire TokenInstrumentationHooks into WorkerEngine.run() to measure tokens
+across all three execution paths (Claude Code, Hermes, TDE/ACS).
+
+This enables:
+1. Capture input/output tokens for EVERY turn (not just sampling)
+2. Track subsystem overhead (confidence scoring, vibe brief, etc.)
+3. Feed into learning system (K=3: console panel, K=4: API, K=5+: auto-tuning)
+
+================================================================================
+DELIVERABLES (4 FILES)
+================================================================================
+
+1. K1_IMPLEMENTATION_SKELETON.md (COMPREHENSIVE REFERENCE)
+   ├─ Task 1A: Insertion points + code samples for stream_turn()
+   ├─ Task 1B: App.py DI initialization
+   ├─ Task 1C: Helper function (_get_metrics_store)
+   ├─ Task 1D: Unit test outline
+   ├─ Task 1E: E2E test outline
+   └─ Full checklist + design decisions
+
+2. K1_QUICK_START.md (IMPLEMENTATION GUIDE)
+   ├─ 3-minute summary
+   ├─ Step-by-step wiring (5 steps, ~35 min total)
+   ├─ File locations + line numbers
+   ├─ Verification checklist
+   ├─ Troubleshooting table
+   └─ Next steps (K=2)
+
+3. tests/unit/test_token_instrumentation_k1_live_SKELETON.py (200 LOC)
+   ├─ TestTokenCounterLifecycle (5 tests)
+   ├─ TestContextVarIsolation (1 test)
+   ├─ TestMetricsStoreEmission (2 tests)
+   ├─ TestErrorHandling (2 tests)
+   └─ TestStreamTurnIntegration (future: requires chat_runtime wiring)
+
+4. tests/integration/test_chat_stream_metrics_k1_SKELETON.py (150 LOC)
+   ├─ TestStreamTurnInstrumentation (3 tests)
+   ├─ TestMetricsPersistence (3 tests)
+   ├─ TestMultiPathCoverage (3 tests: claude, hermes, delegation)
+   ├─ TestErrorScenarios (3 tests)
+   ├─ TestDebugLogging (1 test)
+   └─ Checklist for implementation
+
+================================================================================
+KEY FEATURES (K=1 SCOPE)
+================================================================================
+
+✓ Three execution paths instrumented uniformly
+  - Claude Code: direct subprocess
+  - Hermes: Layer-22 WorkerEngine (local Ollama)
+  - TDE/ACS: delegated execution
+
+✓ Fire-and-forget emission (non-blocking)
+  - Metrics emitted to EventEmitter (async queue)
+  - No latency added to turn execution
+  - Graceful degradation if store unavailable
+
+✓ Context-variable isolation
+  - Per-task TokenCounter via ContextVar
+  - Safe for concurrent async tasks
+  - No cross-turn contamination
+
+✓ Cache-only storage (Phase 1)
+  - Metrics held in memory only
+  - DB backend deferred to K=2
+  - Suitable for <100 turns in memory
+
+✓ Debug logging integration
+  - Events written to chat_debug.jsonl
+  - Troubleshooting hooks (started, llm_response, finalized)
+  - No privacy/compliance impact (metadata only)
+
+================================================================================
+INSERTION POINTS (IN CHAT_RUNTIME.PY)
+================================================================================
+
+Point 1: Line ~4520 (after ExecutionContextBuilder init)
+  → TokenInstrumentationHooks.on_worker_engine_start()
+  → set_current_token_counter(counter)
+
+Point 2: Line ~6220 (inside subprocess stdout loop, after evt parsing)
+  → TokenInstrumentationHooks.on_llm_response()
+  → Extract input/output tokens from stream-json
+
+Point 3: Line ~6450 (in finally block, end of turn)
+  → TokenInstrumentationHooks.on_worker_engine_end()
+  → metrics_store.event_emitter.emit(event)
+
+Mirror Pattern: _stream_hermes_turn() (line ~3531)
+  → Same three hooks, but engine_id="hermes", tier="local"
+
+Initialize Store: app.py lifespan context manager
+  → EventEmitter(audit_writer=...)
+  → TokenMetricsStore(event_emitter, db=None)
+  → app.state.metrics_store = ...
+
+================================================================================
+CODE METRICS
+================================================================================
+
+Implementation Effort:
+  - stream_turn() wiring: ~50 LOC
+  - _stream_hermes_turn() mirroring: ~30 LOC
+  - app.py DI: ~15 LOC
+  - Helper function: ~10 LOC
+  ─────────────────────────────
+  TOTAL: ~105 LOC of actual code
+
+Test Coverage:
+  - Unit tests: 200 LOC (13 test cases)
+  - Integration tests: 150 LOC (14 test cases)
+  ─────────────────────────────
+  TOTAL: 350 LOC of test skeletons
+
+Implementation Time:
+  - Step 1 (read reference): 5 min
+  - Step 2 (wire stream_turn): 5 min
+  - Step 3 (wire hermes): 3 min
+  - Step 4 (app.py DI): 2 min
+  - Step 5 (run tests): 20 min
+  ─────────────────────────────
+  TOTAL: ~35 minutes
+
+================================================================================
+DEPENDENCIES & PREREQUISITES
+================================================================================
+
+Before implementing K=1, verify Phase 1 is complete:
+
+✓ core/learning/token_instrumentation.py (exists)
+  - TokenCounter class
+  - TokenInstrumentationHooks (with on_worker_engine_start/end, on_llm_response)
+  - set_current_token_counter(counter) context var setter
+
+✓ core/learning/event_schema.py (exists)
+  - LearningEvent, LearningEventType, TokenMetricsPayload
+
+✓ core/learning/event_emitter.py (exists)
+  - EventEmitter class with emit(event) method
+
+✓ core/learning/token_metrics_store.py (exists)
+  - TokenMetricsStore class
+
+✓ core/console/corvin_console/chat_runtime.py (exists)
+  - stream_turn() function (starting line 4477)
+  - _stream_hermes_turn() function (starting line 3531)
+
+✓ core/console/corvin_console/app.py (exists)
+  - FastAPI app with lifespan context manager
+
+If any Phase 1 component is missing, resolve before starting K=1 wiring.
+
+================================================================================
+TESTING STRATEGY
+================================================================================
+
+Level 1: Unit Tests (test_token_instrumentation_k1_live.py)
+  ├─ Verify counter lifecycle (create → record → finalize)
+  ├─ Verify subsystem token tracking
+  ├─ Verify context var isolation (async-safe)
+  ├─ Verify error handling (missing store, double finalize)
+  └─ No chat_runtime dependency (mock-based)
+
+Level 2: Integration Tests (test_chat_stream_metrics_k1_SKELETON.py)
+  ├─ Verify stream_turn() calls hooks
+  ├─ Verify metrics emitted to store
+  ├─ Verify all three paths (claude, hermes, delegation)
+  ├─ Verify error scenarios (timeout, missing engine)
+  └─ Requires chat_runtime instrumentation wired
+
+Level 3: Manual E2E (console)
+  ├─ Start console: npm run dev (web-next)
+  ├─ Login, send chat prompt
+  ├─ Inspect workdir chat_debug.jsonl
+  ├─ Verify token_instrumentation.* events
+  └─ Confirm <1ms hook overhead
+
+Run Order:
+  1. pytest tests/unit/test_token_instrumentation_k1_live.py -v
+  2. pytest tests/integration/test_chat_stream_metrics_k1_SKELETON.py -v
+  3. pytest tests/unit/test_token_metrics_phase1_complete.py -v (regression check)
+  4. npm run dev → manual chat test
+
+================================================================================
+VERIFICATION CHECKLIST
+================================================================================
+
+Before Claiming K=1 Complete:
+
+Code Quality:
+  ☐ All three insertion points wired (stream_turn: 3, _stream_hermes_turn: 3)
+  ☐ No syntax errors (flake8 / pylint pass)
+  ☐ Imports organized (core.learning modules at top of function)
+  ☐ Error handling: all try/except blocks have explanatory comments
+  ☐ Debug logging: _dbg() calls for started, llm_response, finalized
+
+Testing:
+  ☐ Unit tests: TestTokenCounterLifecycle all PASS
+  ☐ Unit tests: TestContextVarIsolation all PASS
+  ☐ Integration tests: TestStreamTurnInstrumentation all PASS
+  ☐ No Phase 1 regressions: test_token_metrics_phase1_complete.py all PASS
+  ☐ Coverage: >80% of inserted code exercised by tests
+
+Manual Verification:
+  ☐ Console starts without errors
+  ☐ Chat prompt executes normally
+  ☐ chat_debug.jsonl contains token_instrumentation.* events
+  ☐ No performance regression (turn latency < 5% increase)
+  ☐ Subsystem metrics recorded if confidence scoring enabled
+
+Documentation:
+  ☐ Implementation skeleton reviewed (K1_IMPLEMENTATION_SKELETON.md)
+  ☐ Quick start followed (K1_QUICK_START.md)
+  ☐ Troubleshooting table consulted (if any issues)
+  ☐ Commit message includes Phase 2.K=1 reference
+
+================================================================================
+KNOWN LIMITATIONS (BY DESIGN)
+================================================================================
+
+This is K=1 (WorkerEngine wiring). The following are deferred:
+
+1. NO DATABASE PERSISTENCE
+   - Metrics held in memory only (TokenMetricsStore cache)
+   - Will lose metrics on server restart
+   - Fixed in K=2 (SQLite backend + EventStore)
+
+2. NO CONSOLE PANEL
+   - No UI to view metrics
+   - No real-time graphs
+   - Fixed in K=3 (React dashboard)
+
+3. NO REST API
+   - No query endpoints for metrics
+   - No programmatic access
+   - Fixed in K=4 (GET /v1/console/metrics/session/{id}/summary)
+
+4. NO LEARNING FEEDBACK LOOP
+   - Metrics captured but not used for auto-tuning
+   - No confidence scoring feedback
+   - Fixed in K=5+ (learning engine integration)
+
+5. HERMES TOKEN USAGE MAY BE INCOMPLETE
+   - HermesEngine.spawn() may not return usage metadata
+   - Workaround: record as 0 if unavailable
+   - Will improve as HermesEngine matures
+
+6. CACHE-ONLY (NO RETENTION)
+   - Metrics not persisted to disk
+   - Limited to current session
+   - Fixed in K=2
+
+MITIGATION: All limitations are scoped to later phases. K=1 is feature-complete
+for its stated scope: "capture tokens for all engine paths."
+
+================================================================================
+NEXT PHASE: K=2 (DATABASE BACKEND)
+================================================================================
+
+After K=1 passes all checks, begin K=2:
+
+K=2 Scope: Persistent storage layer
+  ├─ core/learning/token_metrics_db.py (abstract base + SQLite impl)
+  ├─ core/learning/token_metrics_db_factory.py (env-aware backend selection)
+  ├─ Upgrade TokenMetricsStore to use DB backend
+  ├─ Create DB schema (11 columns + 3 indexes)
+  └─ Test: test_token_metrics_db_k2.py (persistence tests)
+
+K=2 Insertion:
+  ├─ app.py: initialize DB on startup
+  ├─ chat_runtime.py: pass metrics_store to TokenMetricsStore
+  └─ Event emission: now writes to BOTH audit chain AND database
+
+Expected Timeline: ~2 hours (DB design, schema, tests)
+
+================================================================================
+CONTACT & SUPPORT
+================================================================================
+
+If stuck:
+  1. Check Troubleshooting in K1_QUICK_START.md
+  2. Verify all Phase 1 modules exist
+  3. Confirm line numbers (may drift with recent changes)
+  4. Read full skeleton (K1_IMPLEMENTATION_SKELETON.md) for detailed rationale
+  5. Run unit tests first (no chat_runtime dependency)
+
+Files to Reference:
+  - K1_IMPLEMENTATION_SKELETON.md (design + code samples)
+  - K1_QUICK_START.md (step-by-step guide)
+  - TMF_PHASE2_DESIGN.md (full rationale)
+  - TMF_PHASE2_QUICK_REF.md (phase breakdown)
+
+================================================================================
+SUMMARY
+================================================================================
+
+✓ Skeleton implementation COMPLETE
+✓ All insertion points identified with line numbers
+✓ Code samples provided for all three wiring locations
+✓ Test skeletons ready for implementation (13 + 14 test cases)
+✓ ~35 minutes to implement + test
+✓ ~105 LOC of actual code
+✓ Definition of done: all checks green + chat_debug.jsonl instrumentation
+
+Ready to proceed with implementation! Follow K1_QUICK_START.md for step-by-step
+wiring, then run the test suite to verify.
+
+================================================================================

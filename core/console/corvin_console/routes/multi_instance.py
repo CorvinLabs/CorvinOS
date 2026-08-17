@@ -11,7 +11,37 @@ from pathlib import Path
 from datetime import datetime
 from corvin_core.feature_flags import is_enabled
 
+from .. import auth as session_auth
+from ..deps import require_csrf
+
 router = APIRouter(prefix="/api/multi-instance", tags=["multi-instance"])
+
+
+def tenant_learning_dir(tenant_id: str) -> Path:
+    """The tenant's learnable-state directory (grades, learning-event JSONL, …).
+    Tenant-isolated — no hardcoded 'shumway-corvin' (G5, ADR-0369)."""
+    try:
+        from forge.paths import tenant_home  # noqa: PLC0415
+        return Path(tenant_home(tenant_id)) / "learning"
+    except Exception:  # noqa: BLE001
+        return Path.home() / ".corvin" / "tenants" / tenant_id / "learning"
+
+
+def _configured_remote_dir(tenant_id: str) -> "Path | None":
+    """Resolve spec.cross_device.sync_remote for this tenant (a local checkout of the
+    remote). Returns None when unconfigured — no hardcoded path/repo (G5, ADR-0369)."""
+    try:
+        from forge.paths import tenant_home  # noqa: PLC0415
+        cfg = Path(tenant_home(tenant_id)) / "tenant.corvin.yaml"
+        if not cfg.is_file():
+            return None
+        import yaml  # noqa: PLC0415
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        remote = (((data.get("spec") or {}).get("cross_device") or {})
+                  .get("sync_remote"))
+        return Path(remote) if remote else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # Data Models
@@ -209,15 +239,32 @@ async def get_merge_conflicts() -> Dict[str, Any]:
 
 
 @router.post("/sync")
-async def trigger_manual_sync() -> Dict[str, str]:
-    """Trigger immediate sync (for testing)."""
-
-    try:
-        # In production, this would call the merge algorithm
-        # For now, just return status
+async def trigger_manual_sync(
+    rec: "session_auth.SessionRecord" = Depends(require_csrf),
+) -> Dict[str, Any]:
+    """Run a cross-device tenant sync (G5, ADR-0369). Ship-dark: gated on the
+    ``cross_device_sync`` flag (default off). When off, this returns a clear disabled
+    response instead of the old always-success stub. When on, it merges a configured
+    remote checkout INTO the tenant's learning dir via the type-specific merge engine
+    and returns the merge report. Auth + CSRF required (the old stub had neither)."""
+    if not is_enabled("cross_device_sync", rec.tenant_id):
         return {
-            "status": "sync_triggered",
-            "message": "Manual sync requested. Will run next scheduled job or manually via cron."
+            "status": "disabled",
+            "message": ("Cross-device sync is off. Enable it in Settings → Features "
+                        "(cross_device_sync) after configuring a remote + PAT."),
         }
-    except Exception as e:
+    # Resolve the configured remote checkout for this tenant. No hardcoded path/repo.
+    remote_dir = _configured_remote_dir(rec.tenant_id)
+    if remote_dir is None or not remote_dir.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=("No sync remote configured. Set spec.cross_device.sync_remote to a "
+                    "local checkout of the tenant remote."),
+        )
+    try:
+        from core.cross_device import tenant_sync as _ts  # noqa: PLC0415
+        local_dir = tenant_learning_dir(rec.tenant_id)
+        report = _ts.merge_tenant_dirs(local_dir, remote_dir)
+        return {"status": "merged", "tenant_id": rec.tenant_id, **report.as_dict()}
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))

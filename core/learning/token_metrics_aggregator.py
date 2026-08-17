@@ -14,7 +14,7 @@ class TokenMetricsAggregator:
 
     def __init__(self, store: TokenMetricsStore, comparison_engine: ComparisonEngine):
         self.store = store
-        comparison_engine = comparison_engine
+        self.comparison_engine = comparison_engine
 
     def get_session_dashboard_data(self, session_id: str) -> dict:
         """Get complete dashboard data for a session.
@@ -25,7 +25,7 @@ class TokenMetricsAggregator:
         Returns:
             Complete dashboard JSON (summary + trends + breakdowns)
         """
-        summary = self.store.summary(session_id)
+        summary = self.store.summary_sync(session_id)
 
         return {
             "session_id": session_id,
@@ -61,7 +61,7 @@ class TokenMetricsAggregator:
         Returns:
             List of turn metrics (for detailed view)
         """
-        events = self.store.query_by_session(session_id, limit=100)
+        events = self.store.query_by_session_sync(session_id, limit=100)
         metrics_list = []
 
         for event in events:
