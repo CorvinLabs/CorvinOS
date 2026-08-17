@@ -54,7 +54,7 @@ def get_learning_integration(session = Depends(require_session)) -> LearningInte
     return LearningIntegration(store_path)
 
 
-@router.get("/v1/console/learning/debug", response_model=dict)
+@router.get("/learning/debug", response_model=dict)
 async def debug_learning(session = Depends(require_session)):
     """Debug endpoint — test if learning system is initialized."""
     try:
@@ -69,7 +69,7 @@ async def debug_learning(session = Depends(require_session)):
         raise HTTPException(status_code=500, detail=f"Debug error: {str(e)}")
 
 
-@router.get("/v1/console/learning/nodes", response_model=dict)
+@router.get("/learning/nodes", response_model=dict)
 async def get_learning_nodes(
     integration: LearningIntegration = Depends(get_learning_integration),
     session = Depends(require_session),
@@ -102,7 +102,7 @@ async def get_learning_nodes(
         raise HTTPException(status_code=500, detail=error_detail)
 
 
-@router.post("/v1/console/learning/grade")
+@router.post("/learning/grade")
 async def grade_pattern(
     request: GradeRequest,
     integration: LearningIntegration = Depends(get_learning_integration),
@@ -130,7 +130,7 @@ async def grade_pattern(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/v1/console/learning/note")
+@router.post("/learning/note")
 async def add_operator_note(
     request: NoteRequest,
     integration: LearningIntegration = Depends(get_learning_integration),
