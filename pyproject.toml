@@ -372,7 +372,7 @@ path = "hatch_build.py"
 # into a non-existent operator/ inside site-packages on a wheel install
 # (ModuleNotFoundError: No module named 'forge'). The hook stages PRUNED copies
 # (tests stripped — force-include ignores `exclude`, so pruning must happen in
-# the hook) of the needed subtrees into corvin_console/_vendor/operator/<same-
+# the hook) of the needed subtrees into corvin_core/_vendor/operator/<same-
 # relative-layout>; _operator_bootstrap.py then prepends them onto sys.path at
 # import time. Source-tree mode never gains a _vendor/ dir, so the bootstrap
 # stays a no-op there and the existing per-module injection keeps working.

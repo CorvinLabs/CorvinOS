@@ -13,26 +13,22 @@ design rationale.
 from __future__ import annotations
 
 
-# Windows compatibility shim — MUST be the very first import so the no-op
-# fcntl/resource stand-ins land in sys.modules before any submodule (or vendored
-# operator subtree) does a module-level ``import fcntl``. No-op on POSIX.
-from . import _wincompat  # noqa: F401  (import side-effect installs the shim)
+# The operator-dependency bootstrap (wincompat shim → operator/ subtrees on
+# sys.path → source-tree injection) moved to corvin_core (ADR-0352 P2.3) — it is an
+# OS-kernel concern, not a Console one, and headless mode needs it without the
+# Console. Importing corvin_core runs it, in the same critical order, and MUST be
+# the first import here so forge/etc. resolve before any submodule loads.
+import corvin_core as _core  # noqa: F401
 
-# Wheel-install operator-dependency bootstrap (must run before any submodule
-# import).  In a source-tree checkout this is a no-op; in a wheel install it
-# makes the vendored ``operator/`` subtrees importable so the per-module
-# ``from forge import paths`` / ``import engine_switch`` / ``import
-# license.validator`` injections resolve.  See _operator_bootstrap.py.
-from ._operator_bootstrap import ensure_operator_on_path as _ensure_operator_on_path
-
-# MUST run before ``from . import _bootstrap``: _bootstrap eagerly executes a
-# module-level ``from forge import paths``, and on a WHEEL install the vendored
-# ``operator/`` subtrees are only put on sys.path by ensure_operator_on_path().
-# Importing _bootstrap first left _bootstrap.forge_paths permanently None, so
-# every route module that captured ``_forge_paths = _bootstrap.forge_paths`` at
-# import time crashed with 500 on a fresh ``pip install`` (round-7 #5).
-_ensure_operator_on_path()
-
-from . import _bootstrap  # noqa: F401,E402  (source-tree sys.path injection)
+# Backward-compat: existing route modules still do `from .._bootstrap import
+# forge_paths` / `from .._wincompat import …`. Alias those names to the real
+# corvin_core modules so they keep resolving through corvin_console.*.
+import sys as _sys  # noqa: E402
+from corvin_core import (  # noqa: E402
+    _operator_bootstrap as _ob, _wincompat as _wc, _bootstrap as _bs,
+)
+_sys.modules[__name__ + "._operator_bootstrap"] = _ob
+_sys.modules[__name__ + "._wincompat"] = _wc
+_sys.modules[__name__ + "._bootstrap"] = _bs
 
 __version__ = "0.1.4"
