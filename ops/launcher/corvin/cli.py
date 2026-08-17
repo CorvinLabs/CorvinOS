@@ -255,6 +255,28 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return serve_backend.start(port=port, open_browser=not no_browser, open_path=open_path, host=host)
 
 
+# ── run (headless — OS without the browser Console) ───────────────────────────
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Start CorvinOS HEADLESS (ADR-0352 P2.3b) — the compliance boot, bridges, A2A
+    and the API all run, but no browser Console/SPA is served. The concrete "Corvin
+    without the Console". A missing SPA build is fine here (nothing serves it)."""
+    port: int = getattr(args, "port", 8765)
+    host: str = getattr(args, "host", None) or _default_bind_host()
+    if not serve_backend.is_available():
+        reason, _detail = serve_backend.unavailable_reason()
+        if reason != "spa":  # only a genuine import failure blocks headless
+            print(_red("\n  CorvinOS backend is not importable."))
+            print(f"  Reinstall: {_bold('pip install --upgrade corvinos')}\n")
+            return 1
+    print(f"\n  {_bold('CorvinOS — headless')}")
+    print(f"  {_green('●')} OS + API + bridges on {_bold(f'http://{host}:{port}')}  "
+          f"{_yellow('(no browser console)')}")
+    _print_hermes_status()
+    print("  Press Ctrl-C to stop.\n")
+    return serve_backend.start(port=port, open_browser=False, host=host, headless=True)
+
+
 # ── start (smart one-shot) ────────────────────────────────────────────────────
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -659,9 +681,25 @@ def cmd_status(args: argparse.Namespace) -> int:
     running = docker_backend.is_running(conf["container_name"])
     ollama_url = oll.detect_url(conf["ollama_url"])
 
+    # Mode-aware (ADR-0352 P2.3b): probe the running process's root — a headless
+    # launch answers {"ui":"headless"} and serves no browser Console.
+    _headless = False
+    if running:
+        try:
+            import json as _json
+            import urllib.request as _u
+            with _u.urlopen(docker_backend.console_url().rsplit("/console/", 1)[0] + "/",
+                            timeout=2) as _r:
+                _headless = _json.loads(_r.read() or b"{}").get("ui") == "headless"
+        except Exception:  # noqa: BLE001 — probe failure = assume UI mode
+            _headless = False
+
     print(f"\n{_bold('Corvin status')}")
     print(f"  Gateway:  {'running' if running else _yellow('stopped')}")
-    print(f"  Console:  {_green(docker_backend.console_url()) if running else '—'}")
+    if running and _headless:
+        print(f"  Console:  {_yellow('— (headless: OS + API + bridges, no browser UI)')}")
+    else:
+        print(f"  Console:  {_green(docker_backend.console_url()) if running else '—'}")
     print(f"  Ollama:   {_green(ollama_url) if ollama_url else _red('unreachable')}")
     print(f"  Model:    {conf.get('model', '—')}")
     print(f"  Bridge:   {conf.get('bridge') or '—'}")
@@ -708,6 +746,13 @@ def _build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default=None, metavar="HOST",
                     help="Bind address (default: 127.0.0.1, or 0.0.0.0 if "
                          "Settings -> Features -> a2a_lan_bind is on)")
+
+    # run (headless — OS without the browser Console, ADR-0352 P2.3b)
+    rn = sub.add_parser("run", help="Start CorvinOS headless — OS + API + bridges, NO browser console")
+    rn.add_argument("--port", "-p", type=int, default=8765, metavar="PORT",
+                    help="TCP port for the API/A2A surface (default: 8765)")
+    rn.add_argument("--host", default=None, metavar="HOST",
+                    help="Bind address (default: 127.0.0.1)")
 
     # start
     st = sub.add_parser("start", help="Setup if needed, start gateway, open browser")
@@ -804,6 +849,9 @@ def main() -> None:
 
     elif args.command == "serve":
         sys.exit(cmd_serve(args))
+
+    elif args.command == "run":
+        sys.exit(cmd_run(args))
 
     elif args.command == "start":
         sys.exit(cmd_start(args))

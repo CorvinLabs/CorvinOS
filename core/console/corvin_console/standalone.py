@@ -205,6 +205,17 @@ def _configure_persistent_logging() -> None:
 # ── App factory ──────────────────────────────────────────────────────────────
 
 
+def create_app_headless() -> FastAPI:
+    """App factory for headless launch (ADR-0352 P2.3b, `corvinos run`). Forces this
+    process into headless mode BEFORE building the app — no browser UI is mounted, /
+    answers ``{"status":"ok","ui":"headless"}`` — while boot, bridges, A2A and the
+    API run exactly as in serve mode. This is the per-process mechanism the
+    headless_enabled docstring called for; not an env-var kill-flag."""
+    from .app import set_headless_override
+    set_headless_override(True)
+    return create_app()
+
+
 def create_app() -> FastAPI:
     """Build and return the standalone CorvinOS console application.
 
