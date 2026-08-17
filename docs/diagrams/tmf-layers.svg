@@ -1,0 +1,178 @@
+<svg viewBox="0 0 1200 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .layer-title { font-size: 18px; font-weight: bold; fill: #1a1a1a; }
+      .layer-desc { font-size: 12px; fill: #555; }
+      .box-layer1 { fill: #e6f2ff; stroke: #0066cc; stroke-width: 2; }
+      .box-layer2 { fill: #fff4e6; stroke: #ff8800; stroke-width: 2; }
+      .box-layer3 { fill: #e6ffe6; stroke: #00aa44; stroke-width: 2; }
+      .text-component { font-size: 11px; fill: #333; }
+      .arrow-flow { stroke: #0066cc; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .label-arrow { font-size: 10px; fill: #0066cc; font-weight: bold; }
+      .box-metric { fill: white; stroke: #ddd; stroke-width: 1; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0066cc" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="35" class="layer-title" text-anchor="middle" font-size="24">
+    Token Measurement Framework (TMF)
+  </text>
+  <text x="600" y="55" class="layer-desc" text-anchor="middle" font-size="13">
+    Three-Layer Architecture: Instrumentation → Aggregation → Dashboarding
+  </text>
+
+  <!-- LAYER 1: Instrumentation -->
+  <rect x="50" y="90" width="1100" height="240" class="box-layer1" rx="8"/>
+  <text x="70" y="120" class="layer-title">LAYER 1: Instrumentation (Data Collection)</text>
+  <text x="70" y="140" class="layer-desc">Every token movement tracked at source</text>
+
+  <!-- Instrumentation components -->
+  <rect x="70" y="160" width="200" height="150" class="box-metric" rx="4"/>
+  <text x="170" y="180" class="text-component" text-anchor="middle" font-weight="bold">Turn-Level</text>
+  <text x="80" y="200" class="text-component">• input_tokens</text>
+  <text x="80" y="217" class="text-component">• output_tokens</text>
+  <text x="80" y="234" class="text-component">• subsystem split</text>
+  <text x="80" y="251" class="text-component">• baseline_tokens</text>
+  <text x="80" y="268" class="text-component">• task metadata</text>
+  <text x="80" y="285" class="text-component">• outcome_quality</text>
+
+  <rect x="320" y="160" width="200" height="150" class="box-metric" rx="4"/>
+  <text x="420" y="180" class="text-component" text-anchor="middle" font-weight="bold">Subsystem</text>
+  <text x="330" y="200" class="text-component">• Confidence Exit</text>
+  <text x="330" y="217" class="text-component">• Cache Hit/Miss</text>
+  <text x="330" y="234" class="text-component">• Skill Injection</text>
+  <text x="330" y="251" class="text-component">• Context Load</text>
+  <text x="330" y="268" class="text-component">• Vibe Intent</text>
+  <text x="330" y="285" class="text-component">• Learning Cost</text>
+
+  <rect x="570" y="160" width="200" height="150" class="box-metric" rx="4"/>
+  <text x="670" y="180" class="text-component" text-anchor="middle" font-weight="bold">Inference</text>
+  <text x="580" y="200" class="text-component">• Engine type</text>
+  <text x="580" y="217" class="text-component">• Model ID</text>
+  <text x="580" y="234" class="text-component">• Latency</text>
+  <text x="580" y="251" class="text-component">• Error rate</text>
+  <text x="580" y="268" class="text-component">• Iterations</text>
+  <text x="580" y="285" class="text-component">• Confidence score</text>
+
+  <rect x="820" y="160" width="200" height="150" class="box-metric" rx="4"/>
+  <text x="920" y="180" class="text-component" text-anchor="middle" font-weight="bold">Storage</text>
+  <text x="830" y="200" class="text-component">• EventStore</text>
+  <text x="830" y="217" class="text-component">  (immutable)</text>
+  <text x="830" y="234" class="text-component">• Hash-chained</text>
+  <text x="830" y="251" class="text-component">• Pseudonymized</text>
+  <text x="830" y="268" class="text-component">• GDPR Art. 30</text>
+  <text x="830" y="285" class="text-component">• 90-day retention</text>
+
+  <!-- Arrow down from Layer 1 -->
+  <path d="M 600 330 L 600 370" class="arrow-flow" stroke-width="2"/>
+  <text x="610" y="355" class="label-arrow">Aggregate</text>
+
+  <!-- LAYER 2: Aggregation -->
+  <rect x="50" y="370" width="1100" height="240" class="box-layer2" rx="8"/>
+  <text x="70" y="400" class="layer-title">LAYER 2: Aggregation (Analysis & Comparison)</text>
+  <text x="70" y="420" class="layer-desc">Native (baseline) vs Vibe (stateful) comparison with confidence scoring</text>
+
+  <!-- Aggregation components -->
+  <rect x="70" y="440" width="220" height="150" class="box-metric" rx="4"/>
+  <text x="180" y="460" class="text-component" text-anchor="middle" font-weight="bold">Baseline</text>
+  <text x="80" y="480" class="text-component">Native Engine:</text>
+  <text x="80" y="495" class="text-component">• No cache</text>
+  <text x="80" y="510" class="text-component">• No learning</text>
+  <text x="80" y="525" class="text-component">• No skill inject</text>
+  <text x="80" y="540" class="text-component">• Full re-derive</text>
+  <text x="80" y="555" class="text-component">• Stateless</text>
+
+  <rect x="340" y="440" width="220" height="150" class="box-metric" rx="4"/>
+  <text x="450" y="460" class="text-component" text-anchor="middle" font-weight="bold">Comparison</text>
+  <text x="350" y="480" class="text-component">Native vs Vibe:</text>
+  <text x="350" y="495" class="text-component">• Savings token</text>
+  <text x="350" y="510" class="text-component">• Savings %</text>
+  <text x="350" y="525" class="text-component">• Per task type</text>
+  <text x="350" y="540" class="text-component">• Per domain</text>
+  <text x="350" y="555" class="text-component">• Per subsystem</text>
+
+  <rect x="610" y="440" width="220" height="150" class="box-metric" rx="4"/>
+  <text x="720" y="460" class="text-component" text-anchor="middle" font-weight="bold">Confidence</text>
+  <text x="620" y="480" class="text-component">Statistical rigor:</text>
+  <text x="620" y="495" class="text-component">• Effect size (σ)</text>
+  <text x="620" y="510" class="text-component">• Sample count (n)</text>
+  <text x="620" y="525" class="text-component">• Z-score</text>
+  <text x="620" y="540" class="text-component">• Only show if</text>
+  <text x="620" y="555" class="text-component">  confidence > 68%</text>
+
+  <rect x="880" y="440" width="220" height="150" class="box-metric" rx="4"/>
+  <text x="990" y="460" class="text-component" text-anchor="middle" font-weight="bold">Dimensions</text>
+  <text x="890" y="480" class="text-component">Slice by:</text>
+  <text x="890" y="495" class="text-component">• Task type</text>
+  <text x="890" y="510" class="text-component">• Domain</text>
+  <text x="890" y="525" class="text-component">• Complexity</text>
+  <text x="890" y="540" class="text-component">• Time bucket</text>
+  <text x="890" y="555" class="text-component">• User level</text>
+
+  <!-- Arrow down from Layer 2 -->
+  <path d="M 600 610 L 600 650" class="arrow-flow" stroke-width="2"/>
+  <text x="610" y="635" class="label-arrow">Visualize</text>
+
+  <!-- LAYER 3: Dashboard -->
+  <rect x="50" y="650" width="1100" height="300" class="box-layer3" rx="8"/>
+  <text x="70" y="680" class="layer-title">LAYER 3: Dashboard (VibeMetrics Console Panel)</text>
+  <text x="70" y="700" class="layer-desc">Real-time visualization + Historical trends + Export</text>
+
+  <!-- Dashboard sections -->
+  <rect x="70" y="720" width="240" height="200" class="box-metric" rx="4"/>
+  <text x="190" y="742" class="text-component" text-anchor="middle" font-weight="bold">Summary</text>
+  <text x="80" y="762" class="text-component">📊 Current Session:</text>
+  <text x="80" y="780" class="text-component">• 42 turns</text>
+  <text x="80" y="798" class="text-component">• 287.5k tokens</text>
+  <text x="80" y="816" class="text-component">• 168.7k saved</text>
+  <text x="80" y="834" class="text-component">• 36.9% savings</text>
+  <text x="80" y="852" class="text-component">• ✅ High conf.</text>
+  <text x="80" y="870" class="text-component">  (p=0.94)</text>
+  <text x="80" y="888" class="text-component">• ⭐⭐⭐</text>
+
+  <rect x="360" y="720" width="240" height="200" class="box-metric" rx="4"/>
+  <text x="480" y="742" class="text-component" text-anchor="middle" font-weight="bold">Trends</text>
+  <text x="370" y="762" class="text-component">📈 Last 7 Days:</text>
+  <text x="370" y="778" class="text-component">Mon 28% ↗ Tue 31%</text>
+  <text x="370" y="794" class="text-component">Wed 26% ↘ Thu 35%</text>
+  <text x="370" y="810" class="text-component">Fri 37% ↗ Sat 34%</text>
+  <text x="370" y="826" class="text-component">Sun 39%</text>
+  <text x="370" y="846" class="text-component">Avg: 32.9%</text>
+  <text x="370" y="862" class="text-component">Trend: ↗ Rising</text>
+  <text x="370" y="880" class="text-component">Volatility: Low</text>
+
+  <rect x="650" y="720" width="240" height="200" class="box-metric" rx="4"/>
+  <text x="770" y="742" class="text-component" text-anchor="middle" font-weight="bold">By Task Type</text>
+  <text x="660" y="762" class="text-component">Code: 36.2%</text>
+  <text x="660" y="778" class="text-component">  ✅ HighConf</text>
+  <text x="660" y="794" class="text-component">Research: 41.8%</text>
+  <text x="660" y="810" class="text-component">  ✅ HighConf</text>
+  <text x="660" y="826" class="text-component">Analysis: 28.5%</text>
+  <text x="660" y="842" class="text-component">  ⚠️ Moderate</text>
+  <text x="660" y="858" class="text-component">Chat: 12.1%</text>
+  <text x="660" y="874" class="text-component">  ⚠️ Low</text>
+
+  <rect x="940" y="720" width="210" height="200" class="box-metric" rx="4"/>
+  <text x="1045" y="742" class="text-component" text-anchor="middle" font-weight="bold">Actions</text>
+  <text x="950" y="762" class="text-component">[Details]</text>
+  <text x="950" y="780" class="text-component">[Subsystem]</text>
+  <text x="950" y="798" class="text-component">[Trends]</text>
+  <text x="950" y="816" class="text-component">[Domain]</text>
+  <text x="950" y="834" class="text-component">[Export JSON]</text>
+  <text x="950" y="852" class="text-component">[Export CSV]</text>
+  <text x="950" y="870" class="text-component">[Grafana]</text>
+  <text x="950" y="888" class="text-component">[Settings]</text>
+
+  <!-- Footer: Expandability -->
+  <rect x="50" y="980" width="1100" height="30" fill="#f5f5f5" stroke="#ddd" stroke-width="1" rx="4"/>
+  <text x="70" y="1005" class="text-component" font-weight="bold">
+    ✨ Expandable: Add new subsystems, dimensions, and exports without modifying dashboard code (generic aggregation pipeline)
+  </text>
+
+  <!-- Legend -->
+  <text x="70" y="950" class="layer-desc" font-weight="bold">Native vs Vibe Comparison:</text>
+  <text x="70" y="968" class="text-component">Native = Stateless (no learning, no cache, no skill-inject) | Vibe = Full CorvinOS (all subsystems on)</text>
+</svg>
