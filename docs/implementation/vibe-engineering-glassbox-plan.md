@@ -10,6 +10,18 @@ gefunden und **in diesem Dokument bereits korrigiert** (v2): G4 rief `record_tur
 Box wäre auf Console-Turns leer (F3). Plus MEDIUM (PII-Backstop überverkauft, F4) und Naming-Fixes. Alle
 Korrekturen sind inline als „Review-korrigiert (Fn)" markiert. **Verdikt nach Revision: baubar.**
 
+**Implementierungsstand (2026-08-17):**
+- **G1 — GEBAUT & E2E-verifiziert** (ADR-0368). Backend: `persist_assembly` im Console-Pfad (F3-Fix), verifiziert
+  durch echten `stream_turn`-Turn (final_prompt 11 439 Zeichen). Frontend: `GlassBoxPrompt` — Basis-Prompt vs.
+  CEL-Block-Split + Sektions-Legende, Playwright-verifiziert. Kein neuer Flag (lebt in der `vibe_engineering`-Page).
+- **G5 — KERN GEBAUT & getestet, Transport ships-dark** (ADR-0369). Merge-Engine `core/cross_device/tenant_sync.py`
+  (Grade-Array-Union, JSONL-Union, LWW, PII-Backstop) — 4/4 Tests. Route `POST /sync` mit Auth+CSRF+Flag-Gate,
+  HTTP-verifiziert (Flag-off → „disabled"). Flag `cross_device_sync` default-off. Frontend Port-Probing entfernt.
+  **Offen (nächstes Inkrement, hinter default-off Flag):** live `git clone/pull/push` + GPG-Wiring gegen ein echtes
+  Remote — braucht Operator-PAT im Vault + `sync_remote`-Config.
+- **G2/G3/G4 — geplant, noch nicht gebaut.** (G2 Inspector-Entfernung + Overview; G3 Learning Ledger + Grade-UI;
+  G4 Outcome-Wiring.) Nebenbei erledigt: der verwaiste `learning.tsx`-Build-Blocker (doppelter Default-Export).
+
 ---
 
 ## Phase 1 — Constraint-Tabelle
