@@ -20,6 +20,9 @@ from .decorators import e2e_for
 from .reachability import ReachabilityMonitor
 from .metrics import ExecutionMetrics, MetricsCollector
 from .active_loop import ActiveLearningLoop
+from .integration import LearningIntegration
+from .audit import AuditTrail
+from .migration import MigrationPlanner
 
 __all__ = [
     "TreeNode",
@@ -34,4 +37,7 @@ __all__ = [
     "ExecutionMetrics",
     "MetricsCollector",
     "ActiveLearningLoop",
+    "LearningIntegration",
+    "AuditTrail",
+    "MigrationPlanner",
 ]
