@@ -50,11 +50,34 @@ export function isSafeInternalNavTarget(to: unknown): to is string {
   );
 }
 
-export function makeHostContext(p: PanelHostProps): PanelHostContext {
+/** The Console's effective theme, read from the `dark` class the theme-toggle sets
+ *  on <html>, and kept in sync reactively so a theme switch reaches the panel. This
+ *  is why a panel must NOT be handed a hardcoded "light": the iframe has no access
+ *  to the Console's theme otherwise, so it rendered light-on-dark (mismatched). */
+export function useConsoleTheme(): "light" | "dark" {
+  const read = () =>
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("dark")
+      ? "dark"
+      : "light";
+  const [theme, setTheme] = useState<"light" | "dark">(read);
+  useEffect(() => {
+    const obs = new MutationObserver(() => setTheme(read()));
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return theme;
+}
+
+export function makeHostContext(
+  p: PanelHostProps,
+  effectiveTheme?: "light" | "dark",
+): PanelHostContext {
   return {
     baseUrl: p.baseUrl ?? "/v1/console",
     tenantId: p.tenantId ?? "_default",
-    theme: p.theme ?? "light",
+    // explicit prop wins (FrontendForge preview), else the live Console theme.
+    theme: p.theme ?? effectiveTheme ?? "light",
     contractVersion: p.contractVersion ?? "1",
   };
 }
@@ -64,9 +87,21 @@ export default function PanelHost(props: PanelHostProps) {
   const ref = useRef<HTMLIFrameElement>(null);
   const navigate = useNavigate();
   const [height, setHeight] = useState<number>(600);
-  const ctx = useMemo(() => makeHostContext(props), [
-    props.baseUrl, props.tenantId, props.theme, props.contractVersion,
+  const consoleTheme = useConsoleTheme();
+  const ctx = useMemo(() => makeHostContext(props, consoleTheme), [
+    props.baseUrl, props.tenantId, props.theme, props.contractVersion, consoleTheme,
   ]);
+
+  // Push theme changes to an already-connected panel (it received the initial
+  // theme in host:hello; this keeps it in sync when the operator toggles).
+  useEffect(() => {
+    const win = ref.current?.contentWindow;
+    if (!win) return;
+    const targetOrigin = props.srcDoc != null
+      ? "*"
+      : new URL(src ?? "/", window.location.href).origin;
+    win.postMessage({ type: "corvin:host:theme", theme: ctx.theme }, targetOrigin);
+  }, [ctx.theme, src, props.srcDoc]);
 
   useEffect(() => {
     function onMessage(ev: MessageEvent) {

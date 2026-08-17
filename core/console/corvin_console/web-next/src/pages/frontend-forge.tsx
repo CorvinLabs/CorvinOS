@@ -14,7 +14,10 @@
  * blocker (Monaco is not a project dependency today).
  */
 import { useState } from "react";
+import { Wand2, Download, RotateCcw, Code2, Eye } from "lucide-react";
 import PanelHost from "@/panels/PanelHost";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 
 export const STARTER_PANEL = `<!doctype html>
 <html>
@@ -55,38 +58,62 @@ export function downloadPanel(html: string, filename = "panel.html"): void {
 export default function FrontendForgePage() {
   const [code, setCode] = useState<string>(STARTER_PANEL);
 
+  const dirty = code !== STARTER_PANEL;
   return (
-    <div className="p-4">
-      <h1 className="text-lg font-semibold mb-1">FrontendForge</h1>
-      <p className="text-sm text-muted-foreground mb-4">
-        Author an external Console panel. The live preview runs through the real
-        panel host, sandboxed. Download it when ready; the loader (P7) will mount
-        saved panels.
-      </p>
-      <div className="grid grid-cols-2 gap-4" style={{ minHeight: 480 }}>
-        <div className="flex flex-col">
-          <label className="text-xs font-medium mb-1">Panel HTML</label>
+    <div className="p-6 max-w-[1400px] mx-auto">
+      {/* header */}
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div className="flex items-start gap-3">
+          <div className="grid place-items-center h-10 w-10 rounded-lg bg-primary/10 text-primary shrink-0">
+            <Wand2 className="h-5 w-5" />
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">FrontendForge</h1>
+            <p className="text-sm text-muted-foreground mt-0.5 max-w-xl">
+              Author an external Console panel and see it running live through the real,
+              sandboxed panel host. Download it when ready — the plugin loader mounts saved panels.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="ghost" size="sm" onClick={() => setCode(STARTER_PANEL)} disabled={!dirty}>
+            <RotateCcw className="h-4 w-4 mr-1.5" /> Reset
+          </Button>
+          <Button size="sm" onClick={() => downloadPanel(code)}>
+            <Download className="h-4 w-4 mr-1.5" /> Download panel.html
+          </Button>
+        </div>
+      </div>
+
+      {/* editor + preview */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5" style={{ minHeight: 540 }}>
+        <Card className="flex flex-col overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-2.5 border-b bg-muted/40 text-sm font-medium">
+            <Code2 className="h-4 w-4 text-muted-foreground" /> Panel source
+            {dirty && <span className="ml-auto text-xs text-muted-foreground">edited</span>}
+          </div>
           <textarea
-            className="flex-1 font-mono text-xs border rounded p-2"
+            className="flex-1 font-mono text-xs leading-relaxed p-4 bg-transparent text-foreground resize-none outline-none focus:ring-0"
             spellCheck={false}
             value={code}
             onChange={(e) => setCode(e.target.value)}
             aria-label="Panel HTML source"
           />
-          <button
-            className="mt-2 self-start rounded border px-3 py-1 text-sm"
-            onClick={() => downloadPanel(code)}
-          >
-            Download panel.html
-          </button>
-        </div>
-        <div className="flex flex-col">
-          <label className="text-xs font-medium mb-1">Live preview (sandboxed)</label>
-          <div className="flex-1 border rounded overflow-auto">
-            {/* srcDoc → origin "null", allow-scripts only: unsaved code stays isolated. */}
-            <PanelHost srcDoc={code} sandbox="allow-scripts" theme="light" />
+        </Card>
+
+        <Card className="flex flex-col overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-2.5 border-b bg-muted/40 text-sm font-medium">
+            <Eye className="h-4 w-4 text-muted-foreground" /> Live preview
+            <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> sandboxed
+            </span>
           </div>
-        </div>
+          <div className="flex-1 overflow-auto bg-background">
+            {/* srcDoc → origin "null", allow-scripts only: unsaved code stays isolated.
+                No theme prop → the preview follows the live Console theme (PanelHost). */}
+            <PanelHost srcDoc={code} sandbox="allow-scripts" />
+          </div>
+        </Card>
       </div>
     </div>
   );
