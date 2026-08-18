@@ -61,7 +61,12 @@ const TreeView: React.FC<{ node: TreeNode; onSelect: (n: TreeNode) => void; sele
   );
 };
 
-const DetailPanel: React.FC<{ node: TreeNode | null; onGrade: (score: number) => void; busy: boolean }> = ({ node, onGrade, busy }) => {
+const btnStyle: React.CSSProperties = {
+  padding: '4px 12px', border: '1px solid rgba(127,127,127,0.4)', background: 'transparent',
+  color: 'inherit', borderRadius: 6, cursor: 'pointer', fontSize: 16,
+};
+
+const DetailPanel: React.FC<{ node: TreeNode | null; onGrade: (score: number) => void; busy: boolean; error: string | null }> = ({ node, onGrade, busy, error }) => {
   if (!node) return <div style={{ padding: 16, opacity: 0.6 }}>Wähle links einen Knoten, um Details zu sehen.</div>;
   const isStage = node.id.startsWith('stage-');
   const ev = node.evidence;
@@ -84,12 +89,13 @@ const DetailPanel: React.FC<{ node: TreeNode | null; onGrade: (score: number) =>
       {isStage ? (
         <div style={{ marginTop: 16 }}>
           <label style={{ fontSize: 12, fontWeight: 600, opacity: 0.7 }}>Operator-Override</label>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button disabled={busy} onClick={() => onGrade(0.0)} style={{ padding: '4px 12px' }}>👎</button>
-            <button disabled={busy} onClick={() => onGrade(0.5)} style={{ padding: '4px 12px' }}>😐</button>
-            <button disabled={busy} onClick={() => onGrade(1.0)} style={{ padding: '4px 12px' }}>👍</button>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+            <button disabled={busy} onClick={() => onGrade(0.0)} style={btnStyle}>👎</button>
+            <button disabled={busy} onClick={() => onGrade(0.5)} style={btnStyle}>😐</button>
+            <button disabled={busy} onClick={() => onGrade(1.0)} style={btnStyle}>👍</button>
             {busy && <span style={{ fontSize: 12, opacity: 0.7 }}>speichere…</span>}
           </div>
+          {error && <p style={{ fontSize: 12, color: '#ef4444', marginTop: 8 }}>{error}</p>}
           <p style={{ fontSize: 11, opacity: 0.6, marginTop: 8 }}>
             Nur nötig als Korrektur — die Confidence verdient sich sonst automatisch aus echten Turns.
           </p>
@@ -104,23 +110,34 @@ const DetailPanel: React.FC<{ node: TreeNode | null; onGrade: (score: number) =>
 };
 
 export const LearningDashboard: React.FC<{ nodes?: any[] }> = ({ nodes = [] }) => {
-  const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
+  // Store the selected ID, not the node object: after an override the query refetches
+  // and `nodes` changes, so deriving the node from the fresh list keeps the detail panel
+  // in sync instead of showing pre-grade numbers (review M2).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const qc = useQueryClient();
   const tree = nodes as TreeNode[];
+  const selectedNode = tree.find((n) => n.id === selectedId) ?? null;
 
   const grade = async (score: number) => {
     if (!selectedNode || !selectedNode.id.startsWith('stage-')) return;
     const stage = selectedNode.id.replace(/^stage-/, '');
     setBusy(true);
+    setError(null);
     try {
-      const who = await (await fetch('/v1/console/auth/whoami', { credentials: 'include' })).json();
-      await fetch(`/v1/console/vibe-engineering/grades/${encodeURIComponent(stage)}`, {
+      const whoRes = await fetch('/v1/console/auth/whoami', { credentials: 'include' });
+      if (!whoRes.ok) throw new Error('Sitzung abgelaufen — bitte neu laden.');
+      const who = await whoRes.json();
+      const r = await fetch(`/v1/console/vibe-engineering/grades/${encodeURIComponent(stage)}`, {
         method: 'POST', credentials: 'include',
         headers: { 'content-type': 'application/json', 'x-csrf-token': who.csrf_token || '' },
         body: JSON.stringify({ score, notes: 'operator override (learning dashboard)' }),
       });
+      if (!r.ok) throw new Error(`Bewertung fehlgeschlagen (HTTP ${r.status}).`);
       await qc.invalidateQueries({ queryKey: ['learning-nodes'] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Bewertung fehlgeschlagen.');
     } finally {
       setBusy(false);
     }
@@ -139,10 +156,10 @@ export const LearningDashboard: React.FC<{ nodes?: any[] }> = ({ nodes = [] }) =
         <div style={{ borderRight: '1px solid rgba(127,127,127,0.25)', paddingRight: 16 }}>
           {tree.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>Noch keine Daten.</div>}
           {tree.map((node) => (
-            <TreeView key={node.id} node={node} onSelect={setSelectedNode} selectedId={selectedNode?.id} />
+            <TreeView key={node.id} node={node} onSelect={(n) => setSelectedId(n.id)} selectedId={selectedNode?.id} />
           ))}
         </div>
-        <DetailPanel node={selectedNode} onGrade={grade} busy={busy} />
+        <DetailPanel node={selectedNode} onGrade={grade} busy={busy} error={error} />
       </div>
     </div>
   );
