@@ -95,7 +95,19 @@ async def get_learning_nodes(
                 adr_link=node.adr_link,
             ).model_dump())
 
-        return {"nodes": serialized}
+        # Weg A: the in-memory node store is empty in production (nodes are not
+        # persisted). Rather than return an empty tree, project the SELF-EARNED
+        # confidence from the CEL stage-grade store (auto-filled by the outcome loop
+        # G4 + operator overrides G3). This makes the tree real and earned, not mock.
+        source = "nodes"
+        if not serialized:
+            try:
+                from core.learning.earned_tree import build_earned_tree  # noqa: PLC0415
+                serialized = build_earned_tree(session.tenant_id)
+                source = "earned"
+            except Exception:  # noqa: BLE001 — fall back to the (empty) node list
+                pass
+        return {"nodes": serialized, "source": source}
     except Exception as e:
         import traceback
         error_detail = f"{str(e)}\n{traceback.format_exc()}"

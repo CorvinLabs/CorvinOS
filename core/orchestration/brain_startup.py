@@ -1,6 +1,7 @@
 """Brain Startup — Initialization and context setup for TaskBrain (ADR-0358).
 
 Handles:
+- Compliance tripwire verification (ADR-0232, CLAUDE.md)
 - MemoryCoordinator initialization
 - ExecutionContext creation from templates
 - ContextBus initialization
@@ -38,12 +39,27 @@ class ContextInitializer:
     def __init__(self, corvin_home: Optional[str] = None):
         """Initialize ContextInitializer.
 
+        Per CLAUDE.md and ADR-0232, verifies compliance tripwire on startup.
+        Tripwire is non-overridable and fail-closed: if core audit mechanisms
+        are unreachable, the platform shuts down.
+
         Args:
             corvin_home: Path to CORVIN_HOME (falls back to env var if None).
 
         Raises:
+            RuntimeError: If compliance tripwire check fails (non-recoverable).
             ValueError: If corvin_home not provided and CORVIN_HOME env var not set.
         """
+        # Per CLAUDE.md: Boot tripwire (fail-closed; asserts the CORE audit writer is reachable)
+        # ADR-0232: Tripwire assertions at boot: Missing mechanism → platform SHUTS DOWN
+        try:
+            from core.compliance.tripwire import assert_all
+            assert_all()
+            logger.info("Compliance tripwire passed — core audit mechanisms reachable")
+        except Exception as e:
+            logger.critical(f"COMPLIANCE TRIPWIRE FAILED: {e}")
+            raise RuntimeError(f"Platform shutdown: compliance tripwire failure: {e}") from e
+
         self.memory_coordinator = MemoryCoordinator(corvin_home)
         self.context_bus: Optional[ContextBus] = None
         self.execution_context: Optional[ExecutionContext] = None
