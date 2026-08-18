@@ -9,6 +9,11 @@ relates_to:
   - ADR-0233
 paths:
   - core/learning/instance_registry.py
+  - core/learning/token_metrics_db.py
+  - core/console/corvin_console/routes/vibe_engineering.py
+  - core/console/corvin_console/web-next/src/lib/api.ts
+  - core/console/corvin_console/web-next/src/components/layout.tsx
+  - core/console/corvin_console/web-next/tests/e2e-live/token-metrics-panel.spec.ts
   - core/learning/token_metrics_store.py
   - core/learning/token_instrumentation.py
   - core/learning/token_measurement_hook.py
@@ -28,6 +33,70 @@ docs:
 ---
 
 # ADR-0365: Real-Time Telemetry Dashboard (corvin-labs.com/stats)
+
+### Amendment 2026-08-18 — the console panel is wired, and the write path now actually writes
+
+The Token Metrics page shipped complete and unreachable: registered as a panel
+route, absent from the navigation, pointed at a 404, and fed by a write path
+that could not survive its own first line. Five separate defects, each of which
+alone was enough to keep the dashboard empty:
+
+1. **No navigation entry.** `panels/registry.tsx` carried the route, but the
+   nav is still hand-maintained in `components/layout.tsx` (registry-driven nav
+   is the unbuilt "P3"). Added under the Vibe Engineering group.
+2. **The page fetched a path that exists nowhere.**
+   `/v1/console/api/metrics/session/{id}` blends the standalone stats-server
+   prefix (`/api/metrics/...`, port 8000) with the console prefix. The only
+   route ever serving `/metrics/session/{id}` lives in
+   `gateway/corvin_gateway/console_api.py`, which nothing imports. Replaced by
+   a real endpoint on the mounted console router:
+   `GET /v1/console/vibe-engineering/token-metrics/{session_id}`, tenant-scoped
+   through `rec.tenant_id`, with `"current"` resolving to the tenant's most
+   recent session.
+3. **The endpoint it replaced was a stub that could never return data** — it
+   imported `..corvin_core.learning.*` (wrong package), built a store with
+   `db=None`, and read `rec.session_id`, which `SessionRecord` has no such
+   attribute for. Every call landed in its own `except` branch.
+4. **`TokenMeasurementHook.end_turn()` raised on its first statement.** It
+   called `counter.total_tokens()` / `counter.baseline_tokens()` (plain int
+   attributes → "'int' object is not callable"), read `subsystem_breakdown`
+   (the field is `subsystem_tokens`), called `store.insert_token_metrics(**kw)`
+   (the store's API is `write_token_metrics(counter, ...)`), and passed
+   `emitter.emit(name, dict)` where a `LearningEvent` is expected. The call site
+   in `chat_runtime.py` wraps all of it in `except Exception: pass`, so every
+   turn failed silently. **No turn has ever been recorded**; the 50 rows in the
+   database came from `scripts/seed-token-metrics.py`.
+5. **Even a fixed hook stored nothing.** `TokenMetricsStore.write_token_metrics`
+   called the coroutine `EventEmitter.emit(event)` without awaiting it, and its
+   DB branch logged "consider making caller async" and returned *without
+   writing* whenever no event loop was running. And `TokenMetricsDB.insert_
+   token_metrics` read `instance_id` from the payload (it lives on the event),
+   producing `None` against a `NOT NULL` column — an `IntegrityError` swallowed
+   by a bare `except`, while the caller received an event id back. Fixed by a
+   `_dispatch()` helper that runs the coroutine in both sync and async callers,
+   by using `event.instance_id`, and by narrowing the swallow to genuine
+   `UNIQUE` re-writes so a dropped row is logged instead of hidden.
+
+**Host coverage.** The hook was initialised only in `corvin_console.standalone`,
+while `corvin-service` runs `corvin_gateway.app` — the same one-host-only trap
+CLAUDE.md records for the boot tripwire. Rather than adding a second call site
+that can drift again, `get_token_hook()` now auto-initialises on first use, so
+every host is covered.
+
+**Honesty (ADR-0215).** `total_tokens`, `turn_count` and `avg_tokens_per_turn`
+are measured. `baseline_tokens` is NOT: it is `1800 * complexity` from
+`token_baseline.py`, so `saved_tokens`, `savings_percent` and every cost figure
+are estimates. The endpoint states this in `baseline_measured: false`, and the
+API client type documents it. The operator was shown this and chose to keep the
+dashboard's existing savings/cost tiles as they are — the flag exists so nothing
+downstream mistakes them for measurements. The subsystem numbers fed in by
+`chat_runtime.py` are likewise fixed constants (50/100/25), not measurements.
+
+**Proof.** `tests/e2e-live/token-metrics-panel.spec.ts` drives the real console
+on :8765 (production build, real login redirect), asserts the nav entry is
+visible, clicks it, and requires the page to render live data having called the
+real endpoint — run with `playwright.live.config.ts`, which skips the default
+global setup's Vite-dev-server assumption.
 
 ## Status: ACCEPTED
 

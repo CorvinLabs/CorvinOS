@@ -136,7 +136,7 @@ class ForgeStagesTests(unittest.TestCase):
         clean_impl = "import json,sys\nprint(json.dumps({'ok':True}))\n"
         for cfg in ({}, {"allow_llm_impl": True}):
             b = self.Bundle(task="x")
-            b.scratch["needs"] = {"tools": [{"name": "t1", "impl": clean_impl}]}
+            b.scratch["needs"] = {"tools": [{"name": "t1", "description": "d", "impl": clean_impl}]}
             ctx = self.Ctx(tenant_id="_default", config=cfg)
             with patch.object(self.tf, "_forge_create") as fc:
                 self.stages.get_stage("toolforge").run(b, ctx)
@@ -152,7 +152,9 @@ class ForgeStagesTests(unittest.TestCase):
         # Namespaced `cel_` like forged TOOLS are (review R6 / R3 finding A4):
         # `_skill_create` writes with overwrite=True, so an LLM-proposed name taken
         # from the task would otherwise clobber an operator's own session skill.
-        self.assertEqual([s.skill_id for s in b.skills_to_bind], ["cel_sql-explain"])
+        # Hyphen → "_" (SkillRegistry contract; see skillforge.py). The old
+        # expectation pinned a name the registry rejects.
+        self.assertEqual([s.skill_id for s in b.skills_to_bind], ["cel_sql_explain"])
         self.assertEqual(b.tools_to_bind, [], "skills are NOT on the tool channel")
 
     def test_forged_skill_cannot_clobber_an_operator_skill(self):
@@ -167,7 +169,7 @@ class ForgeStagesTests(unittest.TestCase):
 
     def test_forge_failure_is_fail_safe(self):
         b = self.Bundle(task="x")
-        b.scratch["needs"] = {"tools": [{"name": "t1"}]}
+        b.scratch["needs"] = {"tools": [{"name": "t1", "description": "d"}]}
         ctx = self.Ctx(tenant_id="_default")
         with patch.object(self.tf, "_forge_create", side_effect=RuntimeError("forge down")):
             b, tel = self.stages.get_stage("toolforge").run(b, ctx)

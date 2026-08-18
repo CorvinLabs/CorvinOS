@@ -49,6 +49,16 @@ def _skill_create(tenant_id: str, name: str, body: str) -> None:
         created_by="context_engineering")
 
 
+def _skill_exists(tenant_id: str, name: str) -> bool:
+    """Does the tenant's SkillForge registry already carry this skill? Errors read
+    as "no" — the create path is itself best-effort, so a probe failure must not
+    turn into a silent skip."""
+    try:
+        return _skill_registry(tenant_id).get(name) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def uncreate_skills(tenant_id: str, names) -> None:
     """Roll back forged skills that Gate-2 rejected (ADR-0283 R3 / review R2 A4).
     Best-effort; a failed delete never breaks the turn."""
@@ -72,12 +82,33 @@ class SkillForgeStage:
     def run(self, bundle, ctx):
         needs = (bundle.scratch.get("needs") or {}).get("skills") or []
         bound: list = []
+        skipped_shape = 0
         for s in needs[:MAX_BINDINGS]:
-            name = s.get("name") if isinstance(s, dict) else str(s)
-            if not name:
+            # A skill without a BODY is an empty injection: `render_skill_bindings`
+            # would emit a heading with nothing under it, and the artifact on disk
+            # would hold `# cel_<title>` and no instruction. A title alone ("CSV
+            # parsing", "error reporting") is what a model returns when asked which
+            # skills are needed — it is a topic, not a skill (ADR-0283 amendment,
+            # 2026-08-18). Require the text; count and skip the rest.
+            if not isinstance(s, dict) or not s.get("name"):
+                skipped_shape += 1
                 continue
-            safe = "".join(c for c in str(name) if c.isalnum() or c in "._-")[:48]
-            if not safe:
+            if not str(s.get("body") or "").strip():
+                skipped_shape += 1
+                continue
+            name = s.get("name")
+            # The SkillRegistry contract is "alphanumeric + . + _" — a hyphen RAISES
+            # ValueError there. Letting one through was a live defect (found
+            # 2026-08-18 by an unmocked E2E): an LLM names skills the way skills are
+            # named — `loop-driven-engineering`, `concept-gate`, `code-review` — so
+            # in practice EVERY forged skill hit the `except: pass` below, reached no
+            # disk, and never entered `_forged_skills`, which also made the Gate-2
+            # skill rollback a no-op again (the ADR-0283 R7 defect, second edition).
+            # Map the separator instead of filtering it: dropping it would fuse words
+            # ("loopdrivenengineering"), and a name is an operator-facing identifier.
+            safe = "".join(c if (c.isalnum() or c in "._") else "_"
+                           for c in str(name))[:48]
+            if not safe.strip("._"):
                 continue
             # Namespace CEL-forged skills exactly like ToolForge namespaces forged
             # tools (review R3 finding A4, applied to skills in R6): `_skill_create`
@@ -85,22 +116,34 @@ class SkillForgeStage:
             # task ("notes", "meeting-summary") would silently CLOBBER the
             # operator's own session skill of that name. The prefix also keeps the
             # rollback set (`_forged_skills`) disjoint from operator-authored ids.
-            safe = safe.lstrip("._-")
+            safe = safe.lstrip("._")
             if not safe:
                 continue   # a name of only separators would collapse every skill
                            # onto the bare prefix `cel_` (review R7)
             safe = "cel_" + safe
-            body = (s.get("body") if isinstance(s, dict) else "") or f"# {safe}\n"
-            try:
-                _skill_create(ctx.tenant_id, safe, body)
-                # Track for rollback if Gate-2 rejects the payload (review R2 A4).
-                bundle.scratch.setdefault("_forged_skills", []).append(safe)
-            except Exception:  # noqa: BLE001 — fail-safe; still bind the ref
-                pass
+            body = str(s.get("body"))
+            # PRE-EXISTING skills are bound, never re-created and never rolled back
+            # (found 2026-08-18): `_skill_create` writes with overwrite=True, and the
+            # rollback deletes by NAME, so a turn whose payload Gate-2 denies used to
+            # delete the same-named artifact an EARLIER turn had legitimately forged
+            # and bound. LLM-proposed names repeat across turns constantly, so this
+            # was reachable in ordinary use, not a corner case. Roll back only what
+            # this turn actually brought into existence.
+            pre_existing = _skill_exists(ctx.tenant_id, safe)
+            if not pre_existing:
+                try:
+                    _skill_create(ctx.tenant_id, safe, body)
+                    # Track for rollback if Gate-2 rejects the payload (review R2 A4).
+                    bundle.scratch.setdefault("_forged_skills", []).append(safe)
+                except Exception:  # noqa: BLE001 — fail-safe; still bind the ref
+                    pass
             bound.append(SkillRef(skill_id=safe, body=body))
         bundle.skills_to_bind.extend(bound)
+        reason = None
+        if not bound:
+            reason = "no_forgeable_skill_needs" if skipped_shape else "no_skill_needs"
         return bundle, StageTelemetry(
-            stage=self.id, status="ok",
+            stage=self.id, status="ok", reason=reason,
             confidence_tier="high" if bound else "low",
             sources=[{"id": b.skill_id, "score": 1.0} for b in bound])
 

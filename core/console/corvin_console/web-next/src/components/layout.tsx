@@ -35,6 +35,7 @@ import {
   Menu,
   Workflow,
   X,
+  Zap,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -135,6 +136,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/vibe-overview",    label: "Overview", icon: Boxes },
       { to: "/app/talent",           label: "Your Talent", icon: Sparkles },
       { to: "/app/vibe-engineering", label: "Context Pipeline", icon: Workflow },
+      { to: "/app/token-metrics",    label: "Token Metrics", icon: Zap },
       { to: "/app/learning",         label: "TreeOfThoughts", icon: Brain },
       { to: "/app/multi-instance",   label: "Cross-Device Learning", icon: Network },
     ],

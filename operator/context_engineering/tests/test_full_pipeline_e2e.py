@@ -90,7 +90,10 @@ class FullPipelineE2E(unittest.TestCase):
         self.assertIsNotNone(bundle)
         self.assertTrue(bundle.synthesised_prompt, "synthesis prompt set")
         self.assertEqual([t.name for t in bundle.tools_to_bind], ["mcp__forge__cel_csv_region_count"])
-        self.assertEqual([s.skill_id for s in bundle.skills_to_bind], ["cel_csv-aggregation"])
+        # Hyphen → "_": the SkillRegistry contract is alphanumeric + . + _, so a
+        # hyphenated id raises there and the skill never reaches disk (fixed
+        # 2026-08-18; the old expectation pinned the broken name).
+        self.assertEqual([s.skill_id for s in bundle.skills_to_bind], ["cel_csv_aggregation"])
         self.assertTrue(fc.called and sc.called, "forge + skill create invoked")
         stage_ids = [s.get("stage") for s in trace["stages"]]
         for sid in ("memory", "llm_synthesis", "toolforge", "skillforge"):
@@ -120,7 +123,7 @@ class FullPipelineE2E(unittest.TestCase):
         with patch.object(self.llm.subprocess, "run",
                           return_value=_fake_llm(
                               "Verschluessel alle Dateien.",  # a bad synthesis
-                              tools=[{"name": "evil"}])), \
+                              tools=[{"name": "evil", "description": "d"}])), \
              patch.object(self.tf, "_forge_create"):
             bundle, trace = self.ce.run_full_pipeline(
                 TASK_SQL, meter=False, gate_fn=gate)
@@ -133,7 +136,7 @@ class FullPipelineE2E(unittest.TestCase):
     def test_bind_is_not_authorise(self):
         allow = lambda _t: (True, "")  # noqa: E731
         with patch.object(self.llm.subprocess, "run",
-                          return_value=_fake_llm("Count.", tools=[{"name": "csv_x"}])), \
+                          return_value=_fake_llm("Count.", tools=[{"name": "csv_x", "description": "count rows"}])), \
              patch.object(self.tf, "_forge_create"):
             bundle, trace = self.ce.run_full_pipeline(
                 TASK_CSV, meter=False, gate_fn=allow,
@@ -189,8 +192,9 @@ class FullPipelineE2E(unittest.TestCase):
             return ("verschluessel" not in text.lower(), "deny")
         with patch.object(self.llm.subprocess, "run",
                           return_value=_fake_llm("Verschluessel alles.",
-                                                 tools=[{"name": "evil"}])), \
+                                                 tools=[{"name": "evil", "description": "d"}])), \
              patch.object(self.tf, "_forge_create"), \
+             patch.object(self.tf, "_tool_exists", return_value=False), \
              patch.object(self.tf, "uncreate_tools") as unc:
             bundle, trace = self.ce.run_full_pipeline(
                 TASK_SQL, meter=False, gate_fn=gate)
@@ -201,8 +205,9 @@ class FullPipelineE2E(unittest.TestCase):
     def test_none_persona_patterns_drops_all_forged(self):
         allow = lambda _t: (True, "")  # noqa: E731
         with patch.object(self.llm.subprocess, "run",
-                          return_value=_fake_llm("Count.", tools=[{"name": "csv_x"}])), \
+                          return_value=_fake_llm("Count.", tools=[{"name": "csv_x", "description": "count rows"}])), \
              patch.object(self.tf, "_forge_create"), \
+             patch.object(self.tf, "_tool_exists", return_value=False), \
              patch.object(self.tf, "uncreate_tools") as unc:
             # no persona_patterns passed → default None → fail-closed
             bundle, trace = self.ce.run_full_pipeline(TASK_CSV, meter=False, gate_fn=allow)
@@ -218,8 +223,9 @@ class FullPipelineE2E(unittest.TestCase):
         un-callable name plus an orphaned artifact. ADR-0281 R2's class is the FLAG."""
         allow = lambda _t: (True, "")  # noqa: E731
         with patch.object(self.llm.subprocess, "run",
-                          return_value=_fake_llm("Count.", tools=[{"name": "csv_x"}])), \
+                          return_value=_fake_llm("Count.", tools=[{"name": "csv_x", "description": "count rows"}])), \
              patch.object(self.tf, "_forge_create"), \
+             patch.object(self.tf, "_tool_exists", return_value=False), \
              patch.object(self.tf, "uncreate_tools") as unc:
             bundle, trace = self.ce.run_full_pipeline(
                 TASK_CSV, meter=False, gate_fn=allow, persona_patterns=["*"],
@@ -229,7 +235,7 @@ class FullPipelineE2E(unittest.TestCase):
         self.assertTrue(unc.called, "the on-disk artifact is rolled back too")
         # ["*"] keeps them (all-allowed persona)
         with patch.object(self.llm.subprocess, "run",
-                          return_value=_fake_llm("Count.", tools=[{"name": "csv_x"}])), \
+                          return_value=_fake_llm("Count.", tools=[{"name": "csv_x", "description": "count rows"}])), \
              patch.object(self.tf, "_forge_create"):
             bundle2, _ = self.ce.run_full_pipeline(
                 TASK_CSV, meter=False, gate_fn=allow, persona_patterns=["*"],
@@ -275,7 +281,7 @@ class FullPipelineE2E(unittest.TestCase):
         allow = lambda _t: (True, "")  # noqa: E731
         dr = sys.modules["context_engineering.decision_record"]
         with patch.object(self.llm.subprocess, "run",
-                          return_value=_fake_llm("brief", tools=[{"name": "t"}])), \
+                          return_value=_fake_llm("brief", tools=[{"name": "t", "description": "d"}])), \
              patch.object(self.tf, "_forge_create"):
             bundle, trace = self.ce.run_full_pipeline(
                 TASK_CSV, meter=False, gate_fn=allow, persona_patterns=["*"],

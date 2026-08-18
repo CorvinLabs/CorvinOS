@@ -18,6 +18,7 @@ Load-bearing safety (ADR-0282 R1/R2, baked in):
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from typing import Any
 
@@ -25,15 +26,102 @@ from .base import StageTelemetry
 from .registry import register_stage
 
 _DEFAULT_MODEL = "claude-haiku-4-5-20251001"
-_TIMEOUT_S = 45
+# 45s was the original budget; a real Haiku synthesis (thinking tokens + a ~7k
+# cache-creation prefix) measured 19–45s+ across six live tasks on 2026-08-18, so
+# one task in six hit the ceiling and degraded. 60s covers the observed spread
+# without letting a hung child stall the turn indefinitely; per-stage config
+# (`timeout_s`) lets an operator on a slower model raise it.
+_TIMEOUT_S = 60
 
+# `needs` is not a wish-list of technologies — it is the ORDER the forge stages
+# execute. Asked for "the tools/skills the worker will need", a model answers with
+# a tech stack ("Python csv module oder pandas", "pydantic", "argparse") or with
+# built-ins it already has ("Read", "Bash"), and ToolForge dutifully forged each one
+# into an echo-template tool called `cel_pydantic` (observed 2026-08-18). Demanding
+# a NEW-tool OBJECT (name + description + input_schema) and a skill BODY makes the
+# distinction the model's job, where it belongs, and gives the stages a shape they
+# can refuse: anything less specific is not forgeable and is skipped + counted.
 _SYS = (
     "You are CorvinOS's context engineer. Given a user task and retrieved context, "
     "assemble the tightest, most useful briefing for a worker that must solve it: "
-    "restate the goal, select ONLY relevant context, name the constraints, and list "
-    "the tools/skills the worker will need. Respond as strict JSON: "
-    '{"brief": "<the briefing>", "needs": {"tools": [], "skills": []}}.'
+    "restate the goal, select ONLY relevant context, name the constraints. "
+    "Then declare what the worker is MISSING, as strict JSON: "
+    '{"brief": "<the briefing>", "needs": {"tools": [{"name": "snake_case_name", '
+    '"description": "<what it does>", "input_schema": {"type": "object"}}], '
+    '"skills": [{"name": "snake_case_name", "body": "<the instructions, markdown>"}]}}. '
+    "needs.tools is for a DETERMINISTIC helper the worker lacks (validate an id "
+    "format, transform a fixed structure) — never a built-in (Read, Write, Edit, "
+    "Bash, Grep, Glob, WebFetch, WebSearch), and never a programming language, "
+    "library, framework or technique. Most tasks need none; say so with []. "
+    "needs.skills is the load-bearing one: whenever the task calls for domain "
+    "knowledge, a method or a convention the briefing above does not already carry, "
+    "write it out as a skill — `name` plus the INSTRUCTIONS THEMSELVES in `body` "
+    "(markdown, concrete, actionable), never a bare title. "
+    "Output the raw JSON object ONLY — no markdown code fences, no prose "
+    "before or after it."
 )
+
+
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+
+def parse_llm_json(text: str) -> "dict | None":
+    """Extract the model's JSON object from a `claude -p` reply. None when there
+    is none.
+
+    A bare ``json.loads`` on the reply was the LIVE defect (found 2026-08-18 by an
+    unmocked E2E): every real Haiku reply wraps the object in a ```json fence and
+    appends prose, so the stage recorded `parse_error` on EVERY turn — which left
+    `scratch['needs']` unset, which made the ToolForge and SkillForge stages forge
+    nothing at all. The whole active pipeline silently degraded to the
+    deterministic brief. All 15 existing tests mocked `subprocess.run` with a
+    clean JSON string, so none of them could see it (the same "mock the boundary
+    under test" class as the ADR-0283 R7 SkillForge defect).
+
+    Three passes, cheapest first, each fail-safe: raw parse → fenced block →
+    first balanced ``{...}`` span. Never `eval`, never a regex-built dict."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    for cand in _json_candidates(text):
+        try:
+            obj = json.loads(cand)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def _json_candidates(text: str):
+    """Yield the substrings that might be the JSON object, most likely first."""
+    yield text.strip()
+    for m in _FENCE_RE.finditer(text):
+        yield m.group(1).strip()
+    # Balanced-brace scan for an unfenced object embedded in prose. String-aware
+    # so a brace inside a value ("use {} for a dict") cannot end the span early.
+    start = text.find("{")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(text)):
+            c = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    yield text[start:i + 1]
+                    break
+        start = text.find("{", start + 1)
 
 
 _CLOUD_HOST = "api.anthropic.com"
@@ -122,6 +210,10 @@ class LLMSynthesisStage:
                                           reason="gate_unavailable")
 
         model = cfg.get("model") or _DEFAULT_MODEL
+        try:
+            timeout_s = float(cfg.get("timeout_s") or _TIMEOUT_S)
+        except (TypeError, ValueError):
+            timeout_s = _TIMEOUT_S
         prompt = (f"TASK:\n{bundle.task}\n\nRETRIEVED CONTEXT:\n"
                   f"{_context_digest(bundle)}")
         try:
@@ -129,18 +221,43 @@ class LLMSynthesisStage:
                 [_resolve_bin(), "-p", prompt, "--append-system-prompt", _SYS,
                  "--model", model, "--disallowedTools", "*",
                  "--output-format", "json", "--max-turns", "1"],
-                capture_output=True, text=True, timeout=_TIMEOUT_S, check=True)
-        except Exception as e:  # noqa: BLE001 — timeout / nonzero / unavailable → degrade
+                # stdin=DEVNULL: without it the child INHERITS the host's stdin and
+                # `claude -p` blocks up to 3s polling it ("no stdin data received in
+                # 3s") on every synthesis — and a host holding an open stdin (a
+                # service, a TTY) can stall it until the 45s timeout kills the turn's
+                # enrichment. It never has stdin input to read; say so explicitly.
+                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=timeout_s, check=True)
+        except subprocess.TimeoutExpired as e:
+            # DISTINCT from llm_unavailable (found 2026-08-18): collapsing both into
+            # one reason made the console's pipeline view report "unavailable" for a
+            # call that ran fine and was merely slower than the budget — the
+            # operator's fix for the two is opposite (raise `timeout_s` vs. install
+            # the binary), so the trace has to tell them apart.
+            return bundle, StageTelemetry(stage=self.id, status="failed",
+                                          reason="llm_timeout", error=str(e)[:120])
+        except Exception as e:  # noqa: BLE001 — nonzero / unavailable → degrade
             return bundle, StageTelemetry(stage=self.id, status="failed",
                                           reason="llm_unavailable", error=str(e)[:120])
 
         try:
             payload = json.loads(out.stdout)
             # claude -p --output-format json wraps the reply; the assistant text
-            # is the model's JSON string — parse defensively.
+            # is the model's answer, which in practice carries a ```json fence and
+            # trailing prose — `parse_llm_json` extracts the object from either
+            # shape (raw / fenced / embedded). Anything else → degrade.
             text = payload.get("result") if isinstance(payload, dict) else None
-            inner = json.loads(text) if isinstance(text, str) else (
-                payload if isinstance(payload, dict) else {})
+            inner = parse_llm_json(text) if isinstance(text, str) else None
+            if inner is None:
+                # The model replied, but not in JSON — on a vague task it answers
+                # conversationally ("Um dir das zu sagen, bräuchte ich…"). Report
+                # that distinctly: the operator's response differs from "JSON with
+                # no brief in it" (prompt problem vs. task-shape problem), and the
+                # old code fell through to the `claude -p` ENVELOPE here, whose keys
+                # are is_error/usage/result — so `.get("brief")` was always None and
+                # every such turn reported the misleading `empty_synthesis`.
+                return bundle, StageTelemetry(stage=self.id, status="skipped",
+                                              reason="non_json_reply")
             brief_text = inner.get("brief")
             needs = inner.get("needs")
             needs = needs if isinstance(needs, dict) else {}  # finding #8

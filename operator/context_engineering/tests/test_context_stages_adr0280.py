@@ -42,7 +42,14 @@ class ContextStagesTests(unittest.TestCase):
         self.stages = sys.modules["context_engineering.stages"]
 
     def test_default_pipeline_is_five_stages(self):
-        specs, dropped = self.stages.resolve_pipeline("_default")
+        # Isolate the tenant read: `resolve_pipeline` consults the AMBIENT
+        # `spec.context_engineering.pipeline`, so on any install whose operator
+        # authored a pipeline in the console editor this asserted against their
+        # config instead of the default (it did — the test was red before the
+        # 2026-08-18 session touched anything).
+        with patch.object(self.stages.config, "_read_pipeline_config",
+                          return_value=None):
+            specs, dropped = self.stages.resolve_pipeline("_default")
         self.assertEqual([s.id for s in specs], self.stages.DEFAULT_PIPELINE)
         self.assertEqual(dropped, [])
 

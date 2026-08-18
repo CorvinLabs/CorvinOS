@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence
@@ -126,7 +127,13 @@ class TokenMetricsDB:
                         event.session_id,
                         event.tenant_id,
                         event.user_id,
-                        payload.get("instance_id"),
+                        # instance_id lives on the EVENT, not in the payload.
+                        # Reading it from the payload yielded None against a
+                        # NOT NULL column, so EVERY insert raised IntegrityError
+                        # and was swallowed below while the caller still got an
+                        # event_id back — a write path that reported success and
+                        # stored nothing.
+                        event.instance_id,
                         payload.get("input_tokens"),
                         payload.get("output_tokens"),
                         payload.get("total_tokens"),
@@ -141,9 +148,13 @@ class TokenMetricsDB:
                         event.timestamp_utc.isoformat() if event.timestamp_utc else None,
                     ))
                     conn.commit()
-            except sqlite3.IntegrityError:
-                # Event already exists (idempotent write)
-                pass
+            except sqlite3.IntegrityError as exc:
+                # A repeated event_id is a legitimate idempotent re-write and
+                # stays silent. Anything else (NOT NULL, CHECK, …) means the row
+                # was DROPPED, so it must be visible rather than swallowed.
+                if "UNIQUE" in str(exc).upper():
+                    return
+                logging.warning("token metrics row rejected: %s", exc)
 
         # Run blocking I/O in thread pool, don't block event loop
         await asyncio.to_thread(_insert_sync)

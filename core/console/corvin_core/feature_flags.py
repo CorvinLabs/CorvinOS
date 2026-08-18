@@ -962,10 +962,23 @@ def _coerce_flag(value: object) -> bool:
 def is_enabled(flag_id: str, tenant_id: str = "_default") -> bool:
     """Resolve a flag for a tenant. Unregistered id → ``False`` (fail-dark).
 
-    Whitelist strategy (ADR-0XXX):
-    1. If `spec.features_whitelist` exists, ONLY those features are ON (deny-all-else)
-    2. Fallback to old `spec.features` + console overlay (backwards-compat)
-    3. Unregistered id → False (fail-dark)
+    Whitelist strategy (ADR-0386/0390, amended — see below):
+    1. An explicit operator decision in the console overlay ALWAYS wins.
+    2. Otherwise, if `spec.features_whitelist` exists, only listed features
+       are ON (deny-all-else).
+    3. Otherwise fall back to `spec.features` (backwards-compat).
+    4. Unregistered id → False (fail-dark)
+
+    Step 1 is the amendment. The whitelist branch used to return a hard
+    ``False`` for every unlisted flag WITHOUT consulting the overlay, which
+    made the Console's own Settings → Features toggle a no-op for 36 of 41
+    registered flags: it wrote the overlay, answered ``200 {"enabled": true}``,
+    and the flag stayed off. That contradicts the load-bearing rule that every
+    flag is toggleable from the Console with no file editing — and it already
+    contradicted ``_source_of()``, which reported such a flag as coming from
+    "console". Deny-by-default is untouched: a flag the operator never toggled
+    still resolves through the whitelist (unlisted → OFF), so nothing turns on
+    by itself.
 
     Never raises: a feature check on a broken config must degrade to the
     pre-feature code path, not to an exception in the middle of a turn.
@@ -979,16 +992,16 @@ def is_enabled(flag_id: str, tenant_id: str = "_default") -> bool:
 
     # If whitelist exists, use whitelist strategy
     if isinstance(whitelist, list):
-        if flag_id in whitelist:
-            # Feature is on whitelist — check overlay for per-tenant override
-            overlay = _read_overlay(tenant_id).get("flags")
-            if isinstance(overlay, dict) and flag_id in overlay:
-                return _coerce_flag(overlay[flag_id])
-            # No overlay override — whitelisted = ON
-            return True
-        else:
-            # Feature not on whitelist — OFF (deny-all-else)
-            return False
+        # An explicit console toggle is an operator decision and outranks the
+        # whitelist in BOTH directions — on for an unlisted flag, off for a
+        # listed one. Checked before the membership test so the Settings panel
+        # can actually switch a flag on; see the docstring.
+        overlay = _read_overlay(tenant_id).get("flags")
+        if isinstance(overlay, dict) and flag_id in overlay:
+            return _coerce_flag(overlay[flag_id])
+        # No operator decision recorded — the whitelist decides, and anything
+        # not on it stays dark (deny-all-else).
+        return flag_id in whitelist
 
     # Whitelist does not exist — fallback to old behavior
     overlay = _read_overlay(tenant_id).get("flags")

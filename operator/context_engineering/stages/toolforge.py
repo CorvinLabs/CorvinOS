@@ -42,6 +42,14 @@ _FORBIDDEN_ATTRS = {"system", "popen", "spawn", "spawnl", "spawnv", "fork",
 # A safe deterministic template: reads a JSON payload on stdin, echoes it. The LLM
 # `needs` only names a tool; the real impl is a reviewed template unless the
 # operator explicitly opts into LLM-authored impls.
+# Built-ins the worker already has — forging a namesake would hand it a second,
+# useless tool under a familiar name.
+_BUILTIN_TOOL_NAMES = {
+    "read", "write", "edit", "multiedit", "bash", "bashoutput", "killshell",
+    "grep", "glob", "ls", "webfetch", "websearch", "task", "todowrite",
+    "notebookedit", "slashcommand", "skill",
+}
+
 _TEMPLATE_IMPL = (
     "import json, sys\n"
     "data = json.load(sys.stdin)\n"
@@ -103,6 +111,17 @@ def _forge_create(tenant_id: str, name: str, description: str,
                           meta={"deterministic": True})
 
 
+def _tool_exists(tenant_id: str, name: str) -> bool:
+    """Does the tenant's Forge registry already carry this tool? Errors read as
+    "no" (the create path is best-effort; a probe failure must not skip forging)."""
+    try:
+        from forge.paths import tenant_home  # noqa: PLC0415
+        from forge.registry import Registry  # noqa: PLC0415
+        return Registry(Path(tenant_home(tenant_id)) / "forge").get(name) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def uncreate_tools(tenant_id: str, names) -> None:
     """Roll back forged tools that Gate-2 or bind re-validation rejected (ADR-0283
     R3 / review R2 finding A4). Best-effort — a failed delete never breaks the turn;
@@ -129,9 +148,25 @@ class ToolForgeStage:
     def run(self, bundle, ctx):
         needs = (bundle.scratch.get("needs") or {}).get("tools") or []
         bound: list = []
+        skipped_shape = skipped_builtin = 0
         for t in needs[:MAX_BINDINGS]:
-            name = t.get("name") if isinstance(t, dict) else str(t)
-            if not name:
+            # A bare string is NOT a forgeable tool (ADR-0283 amendment, 2026-08-18).
+            # Accepting one is how `cel_Pythoncsvmoduleoderpandas` and `cel_pydantic`
+            # got written: the model answers a "which tools?" question with a tech
+            # stack, and every entry became an echo-template tool bound to the worker.
+            # A real request carries a name AND what the tool does; anything less is
+            # counted and skipped, so the trace shows the refusal instead of hiding it.
+            if not isinstance(t, dict) or not t.get("name"):
+                skipped_shape += 1
+                continue
+            if not (t.get("description") or t.get("input_schema")):
+                skipped_shape += 1
+                continue
+            name = t.get("name")
+            # A built-in the worker already has must never be shadowed by an
+            # echo-template namesake (`mcp__forge__cel_Read`).
+            if str(name).strip().lower().replace("-", "_") in _BUILTIN_TOOL_NAMES:
+                skipped_builtin += 1
                 continue
             safe = "".join(c for c in str(name) if c.isalnum() or c in "_")[:44]
             if not safe:
@@ -146,23 +181,42 @@ class ToolForgeStage:
             # retired to a no-op here; LLM impls belong to a future out-of-band
             # human-reviewed promotion path, not the hot turn path.
             impl = _TEMPLATE_IMPL
+            # PRE-EXISTING tools are bound, never re-created and never rolled back
+            # (found 2026-08-18 by an unmocked E2E): `_forge_create` writes with
+            # overwrite=True and `uncreate_tools` deletes by NAME, so turn B could
+            # delete the artifact turn A had legitimately forged and bound — turn A's
+            # worker then holds a name with nothing behind it. The `cel_` namespace
+            # only separates CEL tools from MANUALLY forged ones (review R3 A4); it
+            # does not separate one CEL turn from the next, and LLM-proposed names
+            # (`cel_Read`, `cel_Bash`) repeat across turns constantly. Re-creating is
+            # unnecessary anyway: the impl is always the same deterministic template.
+            pre_existing = _tool_exists(ctx.tenant_id, safe)
             try:
-                _forge_create(ctx.tenant_id, safe,
-                              (t.get("description") if isinstance(t, dict) else "") or "",
-                              (t.get("input_schema") if isinstance(t, dict) else None) or {},
-                              impl)
+                if not pre_existing:
+                    _forge_create(ctx.tenant_id, safe,
+                                  (t.get("description") if isinstance(t, dict) else "") or "",
+                                  (t.get("input_schema") if isinstance(t, dict) else None) or {},
+                                  impl)
                 bound.append(ToolRef(name=f"mcp__forge__{safe}", origin="forge"))
                 # Track the on-disk artifact so the pipeline can ROLL IT BACK if
                 # Gate-2 or bind re-validation rejects it (review R2 finding A4: a
                 # forged tool is written pre-Gate-2; a denial must un-create it, or
                 # a forge_enabled persona could invoke the denied tool by name).
-                bundle.scratch.setdefault("_forged_tools", []).append(
-                    {"name": safe, "ref": f"mcp__forge__{safe}"})
+                if not pre_existing:
+                    bundle.scratch.setdefault("_forged_tools", []).append(
+                        {"name": safe, "ref": f"mcp__forge__{safe}"})
             except Exception:  # noqa: BLE001 — a forge failure is fail-safe
                 continue
         bundle.tools_to_bind.extend(bound)
+        # A stage that forged NOTHING used to report a bare `status=ok`, which is how
+        # 166 live turns rendered as "7/7 stages ok" in the console while this stage
+        # produced not one artifact. The reason makes the empty run legible.
+        reason = None
+        if not bound:
+            reason = ("no_forgeable_tool_needs" if (skipped_shape or skipped_builtin)
+                      else "no_tool_needs")
         return bundle, StageTelemetry(
-            stage=self.id, status="ok",
+            stage=self.id, status="ok", reason=reason,
             confidence_tier="high" if bound else "low",
             sources=[{"id": b.name, "score": 1.0} for b in bound])
 
