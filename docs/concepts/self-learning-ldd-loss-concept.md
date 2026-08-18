@@ -54,9 +54,10 @@ Damit lösen sich mehrere Review-Findings *strukturell*, nicht per Behauptung:
   automatisch optimiert (kein Auto-Gate), kann kein Signal Optimierungsziel sein. Die Sperre ist die
   Abwesenheit eines Auto-Optimierers, nicht ein Versprechen.
 - **M1/M2/M4 (Konsument existiert nicht/passt nicht/Cold-Start):** entfallen — der „Konsument" ist der
-  **Operator**, dem verdiente/abgewertete Confidence als **Empfehlung** angezeigt wird („Stage X war in 5
-  fehlerhaften Turns — abwerten?"). Kein Auto-Gate → kein Henne-Ei, kein θ-Problem, kein
-  attention_budget-Umbau.
+  **Operator**, dem verdiente/abgewertete Confidence + eine **stage-lokal begründete Empfehlung** angezeigt
+  wird (z. B. „das Tool von `toolforge` lief in diesem Turn mit Fehler — abwerten?" oder „injizierte Quelle X
+  wurde nie referenziert — deprioritisieren?" — NIE ein bloßer Häufigkeits-Count, s. §3.3). Kein Auto-Gate →
+  kein Henne-Ei, kein θ-Problem, kein attention_budget-Umbau.
 
 Auto-Gating von Verhalten (z. B. Opt-in-Stages überspringen) ist **explizit außerhalb v3-Scope** — es käme
 frühestens, wenn ein kalibrierter Anker über G5-Volumen *und* ein sauberer Cold-Start-Seed existieren, als
@@ -66,14 +67,18 @@ eigene, separat gereviewte Entscheidung.
 
 ## 3. Was v3 konkret baut (klein, ehrlich) — Review-v3.1-korrigiert
 
-1. **Frei-negativ verdrahten (P1) — auf der richtigen Ebene.** Das pauschale `record_turn_outcome(..., True)`
-   wird ersetzt. **Aber NICHT „alle gelaufenen Stages abwerten"** (das wäre Uniform-Blame: `rc` ist der
-   *Worker*-Exit-Code, entsteht *nach* der Kontext-Assemblierung — einen Worker-Crash den Kontext-Stages
-   anzulasten ist ein Kategorienfehler, Review F1). Stattdessen:
-   - Ein harter Fehler wird **auf Turn-Ebene** vermerkt (Turn-Health), nicht per-Stage.
+1. **Frei-negativ verdrahten (P1) — nur attribuierbar.** Das pauschale `record_turn_outcome(..., True)`
+   wird ersetzt. **Kein Uniform-Blame** (das wäre falsch: `rc` ist der *Worker*-Exit-Code, entsteht *nach*
+   der Kontext-Assemblierung — einen Worker-Crash den Kontext-Stages anzulasten ist ein Kategorienfehler,
+   Review F1). Regel:
    - Per-Stage negativ **nur mit direktem Link:** ein geforgtes Tool, das mit Fehler lief → `toolforge`;
-     ein Artefakt, das nicht installierte → die erzeugende Stage. Sonst kein Stage-Grade.
-   - Sonst gar nichts (kein pauschales True). Turn-Zähler ist damit weg, ohne falsche Schuldzuweisung.
+     ein Artefakt, das nicht installierte → die erzeugende Stage.
+   - **Ein nicht-attribuierbarer harter Fehler (Worker-Crash ohne Stage-Link) erzeugt KEIN Lern-Signal** —
+     er gehört ehrlich keiner Stage, und ein „Turn-Health"-Eintrag ohne Leser wäre ein Dead-End-Write
+     (die Klasse, die ADR-0372 gerade killt, Review R1). Der Operator sieht den Fehler ohnehin (Fehler-Event
+     im Chat + „Degraded"-Aggregat der Overview) — dafür braucht es keinen neuen Store.
+   - Sonst gar nichts (kein pauschales True). Turn-Zähler ist damit weg, ohne falsche Schuldzuweisung und
+     ohne reader-losen Write.
 2. **Coding-Verifikation als echter Anker (P2, opt-in) — ehrlich zur Isolation.** Für einen Turn, der
    Code/Tests produziert hat: die produzierten Tests **tatsächlich laufen lassen** → objektives pass/fail →
    positiver `__signal__`-Grade, **task-attribuiert** (löst M6). **Korrektur (Review F2):** das
