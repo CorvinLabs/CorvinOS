@@ -21,7 +21,7 @@ export default function LearningPage() {
   const { data, isLoading, error } = useQuery<FetchResponse>({
     queryKey: ['learning-nodes'],
     queryFn: async () => {
-      const response = await fetch('/learning/nodes');
+      const response = await fetch('/v1/console/learning/nodes', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch learning nodes');
       return response.json();
     },
@@ -41,4 +41,4 @@ export default function LearningPage() {
 }
 
 // Export for testing
-export const LearningPageTest = { queryKey: 'learning-nodes', url: '/learning/nodes' };
+export const LearningPageTest = { queryKey: 'learning-nodes', url: '/v1/console/learning/nodes' };
