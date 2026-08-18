@@ -2,6 +2,7 @@
 
 ADR-0347: Brain Subsystem Hub Architecture
 ADR-0348: Event Bus Pattern
+ADR-0358: Context Engineering v2 integration
 """
 
 import asyncio
@@ -19,14 +20,35 @@ class SubsystemHub:
     - Request/response routing (two-way queries)
     - Subsystem lifecycle management
     - API registry for loose coupling (ADR-0361)
+    - ContextBus integration for context-aware subsystems (ADR-0358)
     """
 
-    def __init__(self, max_event_queue_size: int = 10000):
+    def __init__(self, max_event_queue_size: int = 10000, context_bus: Optional[Any] = None):
+        """Initialize SubsystemHub.
+
+        Args:
+            max_event_queue_size: Max size of event queue before dropping events
+            context_bus: Optional ContextBus instance for subsystem context updates.
+                        If None, one will be imported and created lazily.
+        """
         self.subsystems: Dict[str, Any] = {}
         self.subscribers: Dict[str, List[Callable]] = {}
         self.event_queue: asyncio.Queue = asyncio.Queue(maxsize=max_event_queue_size)
         self._running = False
         self._apis: Dict[str, Any] = {}  # API registry (ADR-0361)
+        self._context_bus = context_bus  # ContextBus for context updates (ADR-0358)
+
+    @property
+    def context_bus(self) -> Any:
+        """Get or lazily initialize ContextBus.
+
+        Subsystems call this during startup() to access context updates.
+        Lazy initialization avoids circular imports.
+        """
+        if self._context_bus is None:
+            from core.context_engineering.context_bus import ContextBus
+            self._context_bus = ContextBus()
+        return self._context_bus
 
     def register_subsystem(self, subsystem: "Subsystem") -> None:  # noqa: F821
         """Register a subsystem and call its startup hook."""
@@ -60,11 +82,21 @@ class SubsystemHub:
         logger.debug(f"Subscribed to {event_name}")
 
     def publish_event(self, event_name: str, event_data: Dict[str, Any]) -> None:
-        """Publish event (non-blocking queue)."""
+        """Publish event (fail-closed on queue full, per ADR-0347).
+
+        Per ADR-0347 L198 "Must NOT do: silently drop events", this method
+        fails-closed: raises exception on queue full so caller knows event
+        wasn't delivered. Caller can then decide to retry, buffer, or escalate.
+
+        Raises:
+            RuntimeError: If event queue is full.
+        """
         try:
             self.event_queue.put_nowait((event_name, event_data))
         except asyncio.QueueFull:
-            logger.error(f"Event queue full, dropping {event_name}")
+            error_msg = f"Event queue full, cannot queue {event_name} event (max_size={self.event_queue.maxsize})"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from None
 
     async def request_from_subsystem(
         self, subsystem_name: str, request_type: str, **kwargs
@@ -77,7 +109,19 @@ class SubsystemHub:
         return await subsystem.handle_request(request_type, **kwargs)
 
     async def process_events(self, timeout_s: float = 60.0) -> None:
-        """Process one batch of queued events."""
+        """Process one queued event (FIFO order, per ADR-0358 BLOCKER #3).
+
+        ADR-0358 BLOCKER #3 specifies: "Choose Option A (FIFO): Sequential event
+        processing; higher latency but predictable" instead of concurrent processing.
+
+        This method processes events in strict FIFO order. All handlers for an event
+        are invoked sequentially before the next event is processed. This ensures:
+        - No race conditions on shared state
+        - Subsystems see consistent ordering of state changes
+        - Cost updates and budget reads are atomic w.r.t. event ordering
+
+        Per ADR-0358 L272-274: "Typical ~10ms per event for 100 subscribers is acceptable."
+        """
         try:
             event_name, event_data = await asyncio.wait_for(
                 self.event_queue.get(), timeout=timeout_s
@@ -89,12 +133,18 @@ class SubsystemHub:
             return
 
         handlers = self.subscribers[event_name]
-        tasks = [handler(event_name, event_data) for handler in handlers]
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Error in {event_name} handler {i}: {result}")
+        # Process handlers SEQUENTIALLY (not concurrent) to maintain FIFO ordering
+        # ADR-0358 L268-274: sequential processing prevents CostController and
+        # LoopEngineer from reading stale state concurrently
+        for i, handler in enumerate(handlers):
+            try:
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(event_name, event_data)
+                else:
+                    handler(event_name, event_data)
+            except Exception as e:
+                logger.error(f"Error in {event_name} handler {i}: {e}")
 
     async def run_forever(self, poll_interval_s: float = 5.0) -> None:
         """Main orchestration loop."""

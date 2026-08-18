@@ -1,9 +1,18 @@
 /**
- * TreeOfThoughts Learning Dashboard
- * Displays Pattern/Method/Framework tree with confidence scores
+ * TreeOfThoughts Learning Dashboard (Weg A — self-earned confidence).
+ *
+ * The tree is NOT hand-built any more. It renders the nodes fetched from
+ * GET /v1/console/learning/nodes, which projects the CEL stage-grade store — confidence
+ * CorvinOS EARNS ITSELF from real turns via the outcome-feedback loop (G4), refined by
+ * operator overrides (G3). So the operator's job here is oversight + the occasional
+ * correction, not data entry. A grade is an OPERATOR OVERRIDE that writes straight to the
+ * CEL store (POST /vibe-engineering/grades/{stage}), so it lands in the same place the
+ * confidence is computed from and shows up on the next refresh.
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
+interface Evidence { auto_earned: number; operator: number }
 interface TreeNode {
   id: string;
   level: 'pattern' | 'method' | 'framework';
@@ -13,213 +22,128 @@ interface TreeNode {
   calls_in_production: number;
   operator_notes: Array<[string, string, string]>;
   adr_link?: string;
+  when?: string[];
+  evidence?: Evidence;
 }
 
-interface ConfidenceGaugeProps {
-  value: number;
-}
-
-const ConfidenceGauge: React.FC<ConfidenceGaugeProps> = ({ value }) => {
+const ConfidenceGauge: React.FC<{ value: number }> = ({ value }) => {
   const color = value < 0.3 ? '#ef4444' : value < 0.7 ? '#f59e0b' : '#10b981';
   const percentage = Math.round(value * 100);
-  
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-      <div style={{
-        width: '120px',
-        height: '8px',
-        backgroundColor: '#e5e7eb',
-        borderRadius: '4px',
-        overflow: 'hidden'
-      }}>
-        <div style={{
-          width: `${percentage}%`,
-          height: '100%',
-          backgroundColor: color,
-          transition: 'width 0.3s ease'
-        }} />
+      <div style={{ width: '120px', height: '8px', background: 'rgba(127,127,127,0.25)', borderRadius: '4px', overflow: 'hidden' }}>
+        <div style={{ width: `${percentage}%`, height: '100%', backgroundColor: color, transition: 'width 0.3s ease' }} />
       </div>
-      <span style={{ fontSize: '14px', fontWeight: '500' }}>{percentage}%</span>
+      <span style={{ fontSize: '14px', fontWeight: 500 }}>{percentage}%</span>
     </div>
   );
 };
 
-interface TreeViewProps {
-  node: TreeNode;
-  onSelect: (node: TreeNode) => void;
-  selectedId?: string;
-}
-
-const TreeView: React.FC<TreeViewProps> = ({ node, onSelect, selectedId }) => {
-  const [expanded, setExpanded] = useState(false);
+const TreeView: React.FC<{ node: TreeNode; onSelect: (n: TreeNode) => void; selectedId?: string }> = ({ node, onSelect, selectedId }) => {
   const isSelected = selectedId === node.id;
-  
   return (
-    <div style={{ marginLeft: '16px' }}>
-      <div
-        onClick={() => onSelect(node)}
-        style={{
-          padding: '8px',
-          backgroundColor: isSelected ? '#dbeafe' : 'transparent',
-          borderLeft: isSelected ? '3px solid #0284c7' : '3px solid transparent',
-          cursor: 'pointer',
-          borderRadius: '4px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {node.children?.length > 0 && (
-            <button
-              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-              style={{ background: 'none', border: 'none', cursor: 'pointer' }}
-            >
-              {expanded ? '▼' : '▶'}
-            </button>
-          )}
-          <span style={{ fontWeight: '500' }}>{node.name}</span>
-          <span style={{ fontSize: '12px', color: '#666' }}>
-            [{node.level}]
-          </span>
-        </div>
-        <ConfidenceGauge value={node.confidence} />
+    <div
+      onClick={() => onSelect(node)}
+      style={{
+        padding: '8px', marginLeft: node.level === 'framework' ? 0 : 16,
+        background: isSelected ? 'rgba(2,132,199,0.15)' : 'transparent',
+        borderLeft: isSelected ? '3px solid #0284c7' : '3px solid transparent',
+        cursor: 'pointer', borderRadius: 4,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <span style={{ fontWeight: 500 }}>{node.name}</span>
+        <span style={{ fontSize: 12, opacity: 0.6 }}>[{node.level}]</span>
       </div>
-      
-      {expanded && node.children && node.children.map((_childId, idx) => (
-        <div key={idx}>
-          {/* Child nodes would be fetched here in real implementation */}
-        </div>
-      ))}
+      <ConfidenceGauge value={node.confidence} />
     </div>
   );
 };
 
-interface DetailPanelProps {
-  node: TreeNode | null;
-  onGrade: (delta: number) => void;
-  onAddNote: (text: string) => void;
-}
-
-const DetailPanel: React.FC<DetailPanelProps> = ({ node, onGrade, onAddNote }) => {
-  const [noteText, setNoteText] = useState('');
-  
-  if (!node) {
-    return <div style={{ padding: '16px', color: '#999' }}>Select a pattern to view details</div>;
-  }
-  
+const DetailPanel: React.FC<{ node: TreeNode | null; onGrade: (score: number) => void; busy: boolean }> = ({ node, onGrade, busy }) => {
+  if (!node) return <div style={{ padding: 16, opacity: 0.6 }}>Wähle links einen Knoten, um Details zu sehen.</div>;
+  const isStage = node.id.startsWith('stage-');
+  const ev = node.evidence;
   return (
-    <div style={{ padding: '16px', borderLeft: '1px solid #e5e7eb' }}>
-      <h3>{node.name}</h3>
-      
-      <div style={{ marginTop: '16px' }}>
-        <label style={{ fontSize: '12px', fontWeight: '600', color: '#666' }}>
-          Confidence
-        </label>
+    <div style={{ padding: 16, borderLeft: '1px solid rgba(127,127,127,0.25)' }}>
+      <h3 style={{ margin: 0 }}>{node.name}</h3>
+      {node.when?.[0] && <p style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{node.when[0]}</p>}
+
+      <div style={{ marginTop: 16 }}>
+        <label style={{ fontSize: 12, fontWeight: 600, opacity: 0.7 }}>Verdiente Confidence</label>
         <ConfidenceGauge value={node.confidence} />
       </div>
-      
-      <div style={{ marginTop: '16px' }}>
-        <label style={{ fontSize: '12px', fontWeight: '600', color: '#666' }}>
-          Quick Grade
-        </label>
-        <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-          <button onClick={() => onGrade(-1.0)} style={{ padding: '4px 12px' }}>
-            👎 Failed
-          </button>
-          <button onClick={() => onGrade(0)} style={{ padding: '4px 12px' }}>
-            😐 Neutral
-          </button>
-          <button onClick={() => onGrade(+1.0)} style={{ padding: '4px 12px' }}>
-            👍 Good
-          </button>
+
+      <div style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
+        <p style={{ margin: '2px 0' }}>Bewertungen gesamt: {node.calls_in_production}</p>
+        {ev && <p style={{ margin: '2px 0' }}>↳ automatisch (Outcome-Loop): {ev.auto_earned} · Operator: {ev.operator}</p>}
+        {node.adr_link && <p style={{ margin: '2px 0' }}>ADR: {node.adr_link}</p>}
+      </div>
+
+      {isStage ? (
+        <div style={{ marginTop: 16 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, opacity: 0.7 }}>Operator-Override</label>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button disabled={busy} onClick={() => onGrade(0.0)} style={{ padding: '4px 12px' }}>👎</button>
+            <button disabled={busy} onClick={() => onGrade(0.5)} style={{ padding: '4px 12px' }}>😐</button>
+            <button disabled={busy} onClick={() => onGrade(1.0)} style={{ padding: '4px 12px' }}>👍</button>
+            {busy && <span style={{ fontSize: 12, opacity: 0.7 }}>speichere…</span>}
+          </div>
+          <p style={{ fontSize: 11, opacity: 0.6, marginTop: 8 }}>
+            Nur nötig als Korrektur — die Confidence verdient sich sonst automatisch aus echten Turns.
+          </p>
         </div>
-      </div>
-      
-      <div style={{ marginTop: '16px' }}>
-        <label style={{ fontSize: '12px', fontWeight: '600', color: '#666' }}>
-          Operator Notes
-        </label>
-        <textarea
-          value={noteText}
-          onChange={(e) => setNoteText(e.target.value)}
-          placeholder="Add a note..."
-          style={{
-            width: '100%',
-            minHeight: '60px',
-            padding: '8px',
-            fontSize: '12px',
-            marginTop: '8px'
-          }}
-        />
-        <button
-          onClick={() => { onAddNote(noteText); setNoteText(''); }}
-          style={{ marginTop: '8px', padding: '4px 12px' }}
-        >
-          Save Note
-        </button>
-      </div>
-      
-      <div style={{ marginTop: '16px', fontSize: '12px', color: '#666' }}>
-        <p>Production calls: {node.calls_in_production}</p>
-        {node.adr_link && <p>ADR: <a href={`#${node.adr_link}`}>{node.adr_link}</a></p>}
-      </div>
+      ) : (
+        <p style={{ fontSize: 11, opacity: 0.6, marginTop: 16 }}>
+          Aggregat-Knoten — bewerte die einzelnen Stages darunter.
+        </p>
+      )}
     </div>
   );
 };
 
-export const LearningDashboard: React.FC<{ nodes?: any[] }> = () => {
+export const LearningDashboard: React.FC<{ nodes?: any[] }> = ({ nodes = [] }) => {
   const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
-  const [nodes, setNodes] = useState<TreeNode[]>([]);
-  
-  useEffect(() => {
-    // Fetch nodes from backend (TODO: implement API endpoint)
-    const mockRootNode: TreeNode = {
-      id: 'framework_voice',
-      level: 'framework',
-      name: 'Voice Synthesis Framework',
-      confidence: 0.78,
-      children: ['method_tts_fallback'],
-      calls_in_production: 150,
-      operator_notes: []
-    };
-    setNodes([mockRootNode]);
-  }, []);
-  
+  const [busy, setBusy] = useState(false);
+  const qc = useQueryClient();
+  const tree = nodes as TreeNode[];
+
+  const grade = async (score: number) => {
+    if (!selectedNode || !selectedNode.id.startsWith('stage-')) return;
+    const stage = selectedNode.id.replace(/^stage-/, '');
+    setBusy(true);
+    try {
+      const who = await (await fetch('/v1/console/auth/whoami', { credentials: 'include' })).json();
+      await fetch(`/v1/console/vibe-engineering/grades/${encodeURIComponent(stage)}`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'content-type': 'application/json', 'x-csrf-token': who.csrf_token || '' },
+        body: JSON.stringify({ score, notes: 'operator override (learning dashboard)' }),
+      });
+      await qc.invalidateQueries({ queryKey: ['learning-nodes'] });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '300px 1fr',
-      gap: '16px',
-      padding: '16px',
-      height: '100%'
-    }}>
-      <div style={{ borderRight: '1px solid #e5e7eb', paddingRight: '16px' }}>
-        <h2>TreeOfThoughts</h2>
-        <div style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>
-          Patterns, Methods, Frameworks
-        </div>
-        {nodes.map((node) => (
-          <TreeView
-            key={node.id}
-            node={node}
-            onSelect={setSelectedNode}
-            selectedId={selectedNode?.id}
-          />
-        ))}
+    <div style={{ padding: 16 }}>
+      <div style={{ marginBottom: 12 }}>
+        <h2 style={{ margin: 0 }}>TreeOfThoughts — verdientes Vertrauen</h2>
+        <p style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+          Die Confidence verdient sich CorvinOS selbst aus echten Turns (Outcome-Loop). Du greifst nur
+          korrigierend ein.
+        </p>
       </div>
-      
-      <DetailPanel
-        node={selectedNode}
-        onGrade={(delta) => {
-          console.log(`Grade ${selectedNode?.id} with ${delta}`);
-          // TODO: wire to backend
-        }}
-        onAddNote={(text) => {
-          console.log(`Add note to ${selectedNode?.id}: ${text}`);
-          // TODO: wire to backend
-        }}
-      />
+      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16 }}>
+        <div style={{ borderRight: '1px solid rgba(127,127,127,0.25)', paddingRight: 16 }}>
+          {tree.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>Noch keine Daten.</div>}
+          {tree.map((node) => (
+            <TreeView key={node.id} node={node} onSelect={setSelectedNode} selectedId={selectedNode?.id} />
+          ))}
+        </div>
+        <DetailPanel node={selectedNode} onGrade={grade} busy={busy} />
+      </div>
     </div>
   );
 };
