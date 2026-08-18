@@ -962,26 +962,62 @@ def _coerce_flag(value: object) -> bool:
 def is_enabled(flag_id: str, tenant_id: str = "_default") -> bool:
     """Resolve a flag for a tenant. Unregistered id → ``False`` (fail-dark).
 
+    Whitelist strategy (ADR-0XXX):
+    1. If `spec.features_whitelist` exists, ONLY those features are ON (deny-all-else)
+    2. Fallback to old `spec.features` + console overlay (backwards-compat)
+    3. Unregistered id → False (fail-dark)
+
     Never raises: a feature check on a broken config must degrade to the
     pre-feature code path, not to an exception in the middle of a turn.
     """
     entry = _BY_ID.get(flag_id)
     if entry is None:
         return False
+
+    spec = _tenant_spec(tenant_id)
+    whitelist = spec.get("features_whitelist")
+
+    # If whitelist exists, use whitelist strategy
+    if isinstance(whitelist, list):
+        if flag_id in whitelist:
+            # Feature is on whitelist — check overlay for per-tenant override
+            overlay = _read_overlay(tenant_id).get("flags")
+            if isinstance(overlay, dict) and flag_id in overlay:
+                return _coerce_flag(overlay[flag_id])
+            # No overlay override — whitelisted = ON
+            return True
+        else:
+            # Feature not on whitelist — OFF (deny-all-else)
+            return False
+
+    # Whitelist does not exist — fallback to old behavior
     overlay = _read_overlay(tenant_id).get("flags")
     if isinstance(overlay, dict) and flag_id in overlay:
         return _coerce_flag(overlay[flag_id])
-    spec_flags = _tenant_spec(tenant_id).get("features")
+    spec_flags = spec.get("features")
     if isinstance(spec_flags, dict) and flag_id in spec_flags:
         return _coerce_flag(spec_flags[flag_id])
     return entry.default
 
 
 def _source_of(flag_id: str, tenant_id: str) -> str:
+    spec = _tenant_spec(tenant_id)
+    whitelist = spec.get("features_whitelist")
+
+    # If whitelist mode is active
+    if isinstance(whitelist, list):
+        overlay = _read_overlay(tenant_id).get("flags")
+        if isinstance(overlay, dict) and flag_id in overlay:
+            return "console"
+        if flag_id in whitelist:
+            return "whitelist"
+        return "default"
+
+    # Fallback to old behavior (no whitelist)
     overlay = _read_overlay(tenant_id).get("flags")
     if isinstance(overlay, dict) and flag_id in overlay:
         return "console"
-    spec_flags = _tenant_spec(tenant_id).get("features")
+    spec_flags = spec.get("features")
     if isinstance(spec_flags, dict) and flag_id in spec_flags:
         return "tenant_yaml"
     return "default"
