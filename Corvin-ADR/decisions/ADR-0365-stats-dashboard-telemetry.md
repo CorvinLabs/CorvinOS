@@ -14,10 +14,12 @@ paths:
   - core/learning/token_measurement_hook.py
   - core/console/corvin_console/routes/vibe_metrics_api.py
   - core/console/corvin_console/chat_runtime.py
+  - core/console/corvin_console/standalone.py
   - core/console/corvin_console/web-next/src/pages/token-metrics.tsx
   - core/console/corvin_console/web-next/src/panels/registry.tsx
   - core/console/frontend/src/pages/VibeEngineeringDashboard.tsx
   - scripts/run-stats-server.py
+  - scripts/seed-token-metrics.py
   - docs/stats.html
   - docs/INTEGRATE_TOKEN_METRICS.md
 docs:
@@ -200,4 +202,8 @@ All supported (no breaking changes in old paths):
 
 ## Operator Notes
 
-(none yet)
+**2026-08-18:** Fixed Token Measurement Hook initialization at console startup (standalone.py lifespan). 
+The hook was previously unreachable because initialize_token_hook() was never called. Added explicit 
+initialization with graceful degradation (if token measurement fails, console still boots). Also added 
+scripts/seed-token-metrics.py for development/testing with realistic test data. Token metrics panel 
+is now fully functional and visible in Console under Vibe Engineering when feature flag is enabled.
