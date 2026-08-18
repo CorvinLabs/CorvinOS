@@ -14,7 +14,10 @@ confidence is computed from — closing the loop instead of forking a second gra
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+
+_MAX_GRADES = 5000  # bound the per-stage read so a huge store can't slow /nodes (L3)
 
 # The CEL pipeline stages, in pipeline order, with human labels + a "when" hint.
 _STAGES: list[tuple[str, str, str]] = [
@@ -37,7 +40,8 @@ def _store(tenant_id: str) -> dict:
     try:
         from forge.paths import tenant_global_dir  # noqa: PLC0415
         p = Path(tenant_global_dir(tenant_id)) / "ce_stage_grades.json"
-        return json.loads(p.read_text("utf-8")) if p.is_file() else {}
+        data = json.loads(p.read_text("utf-8")) if p.is_file() else {}
+        return data if isinstance(data, dict) else {}  # non-dict store → neutral (L1)
     except Exception:  # noqa: BLE001
         return {}
 
@@ -47,28 +51,37 @@ def build_earned_tree(tenant_id: str) -> list[dict]:
     Each stage node carries its evidence split (auto-earned from the outcome loop vs.
     explicit operator grades). Returns node dicts in the dashboard's TreeNode shape."""
     store = _store(tenant_id)
+    if not isinstance(store, dict):  # defence in depth — _store already guards this
+        store = {}
     methods: list[dict] = []
     confs: list[float] = []
     total_calls = 0
     for sid, label, when in _STAGES:
-        grades = (store.get(sid) or {}).get("grades") or []
-        scores = [g.get("score") for g in grades
-                  if isinstance(g.get("score"), (int, float))]
-        n = len(scores)
-        conf = round(sum(scores) / n, 3) if n else 0.5  # 0.5 = no evidence yet
-        auto = sum(1 for g in grades if g.get("grader") == "__loop__")
-        op = sum(1 for g in grades if g.get("grader") in _PROMOTING)
+        entry = store.get(sid)
+        raw = entry.get("grades") if isinstance(entry, dict) else None  # L1: non-dict → none
+        grades = raw[-_MAX_GRADES:] if isinstance(raw, list) else []     # L3: bound the read
+        # Re-clamp on read: grade_stage clamps on write, but a hand-edited/legacy store
+        # could carry a score outside [0,1] or a NaN — never let that reach the gauge (L2).
+        scores = [max(0.0, min(1.0, float(g["score"]))) for g in grades
+                  if isinstance(g.get("score"), (int, float)) and math.isfinite(g["score"])]
+        n_grades = len(grades)          # every record — what "Bewertungen gesamt" means
+        n_scored = len(scores)
+        conf = round(sum(scores) / n_scored, 3) if n_scored else 0.5  # 0.5 = no evidence
+        # Evidence split MUST sum to n_grades (M1): operator = explicit human grades,
+        # auto_earned = everything else the SYSTEM produced (outcome loop + bootstrap seed).
+        operator = sum(1 for g in grades if g.get("grader") in _PROMOTING)
+        auto = n_grades - operator
         op_notes = [["", g.get("grader", "operator"), g.get("notes", "")]
                     for g in grades if g.get("grader") in _PROMOTING and g.get("notes")]
         methods.append({
             "id": f"stage-{sid}", "level": "method", "name": label,
-            "confidence": conf, "calls_in_production": n,
+            "confidence": conf, "calls_in_production": n_grades,
             "when": [when], "anti_when": [], "children": [],
             "operator_notes": op_notes, "adr_link": "ADR-0285",
-            "evidence": {"auto_earned": auto, "operator": op},
+            "evidence": {"auto_earned": auto, "operator": operator},
         })
         confs.append(conf)
-        total_calls += n
+        total_calls += n_grades
     framework = {
         "id": "framework-cel", "level": "framework",
         "name": "Context Engineering — self-earned confidence",
