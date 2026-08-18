@@ -727,19 +727,18 @@ async def get_features(
     """List all available feature flags.
 
     Returns the feature registry with current enabled/disabled state.
+    Respects the whitelist strategy if spec.features_whitelist exists.
     """
-    # Read feature flags state from config
-    config = _read_features_config(rec.tenant_id)
-    enabled_flags = config.get("flags", {})
-
-    # Build feature list from registry
+    # Build feature list from registry with proper resolution logic
     features: list[FeatureState] = []
     for flag in _feature_flags_module.REGISTRY:
+        # Use is_enabled() which respects whitelist, overlay, and defaults
+        enabled = _feature_flags_module.is_enabled(flag.id, rec.tenant_id)
         features.append(FeatureState(
             id=flag.id,
             label=flag.label,
             description=flag.description,
-            enabled=enabled_flags.get(flag.id, False),
+            enabled=enabled,
             release_tier=flag.release_tier,
             self_locking=flag.self_locking,
         ))
