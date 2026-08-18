@@ -10,10 +10,16 @@ relates_to:
 paths:
   - core/learning/instance_registry.py
   - core/learning/token_metrics_store.py
+  - core/learning/token_instrumentation.py
+  - core/learning/token_measurement_hook.py
   - core/console/corvin_console/routes/vibe_metrics_api.py
+  - core/console/corvin_console/chat_runtime.py
+  - core/console/corvin_console/web-next/src/pages/token-metrics.tsx
+  - core/console/corvin_console/web-next/src/panels/registry.tsx
   - core/console/frontend/src/pages/VibeEngineeringDashboard.tsx
   - scripts/run-stats-server.py
   - docs/stats.html
+  - docs/INTEGRATE_TOKEN_METRICS.md
 docs:
   - docs/claude-ref/layer-16-security.md
   - docs/claude-ref/compliance-baseline.md

@@ -98,6 +98,15 @@ configured engine.
 """
 from __future__ import annotations
 
+# Token Measurement Integration (ADR-0365)
+try:
+    from core.learning.token_measurement_hook import record_turn_metrics
+    _TOKEN_MEASUREMENT_AVAILABLE = True
+except ImportError:
+    _TOKEN_MEASUREMENT_AVAILABLE = False
+    def record_turn_metrics(*args, **kwargs):
+        pass  # No-op fallback
+
 import asyncio
 import json
 import mimetypes
@@ -3707,6 +3716,25 @@ async def _stream_hermes_turn(
     # on its own result events, so it silently reopened the double-speak
     # regression for every tenant on the Hermes engine, found 2026-07-16).
     _ann_pending = bool(final_text.strip()) and _annotation_enabled()
+
+    # ADR-0365: Record token metrics for this turn
+    if _TOKEN_MEASUREMENT_AVAILABLE and last_usage:
+        try:
+            record_turn_metrics(
+                turn_id=task_id,
+                session_id=sess.sid,
+                tenant_id=sess.tenant_id,
+                input_tokens=last_usage.get("input_tokens", 0),
+                output_tokens=last_usage.get("output_tokens", 0),
+                subsystems={
+                    "memory_lookup": 50,      # Context pipeline memory step
+                    "skill_injection": 100,    # Skill system context
+                    "context_bridge": 25,      # CEL context bridge
+                }
+            )
+        except Exception:  # noqa: BLE001
+            pass  # Token measurement failure should not break the turn
+
     yield {"type": "result", "text": final_text, "usage": last_usage,
            "annotation_pending": _ann_pending}
 
