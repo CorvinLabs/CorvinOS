@@ -34,6 +34,22 @@ _STAGES: list[tuple[str, str, str]] = [
 _PROMOTING = {"operator"}  # the only grader that moves default-eligibility (ADR-0285)
 
 
+def _clamp_score(raw: object) -> "float | None":
+    """A grade's score as a clean [0,1] float, or None if it isn't a usable number.
+    Rejects bools (bool ⊂ int), non-numbers, NaN/Inf, AND an over-range int whose float
+    conversion overflows (a 310+-digit literal in a hand-edited store) — the last of which
+    would otherwise raise OverflowError inside math.isfinite and blank the whole tree."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    try:
+        f = float(raw)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    return max(0.0, min(1.0, f))
+
+
 def _store(tenant_id: str) -> dict:
     """Read the CEL stage-grade store (the self-earned confidence source). Empty on any
     error — the tree then shows the neutral 0.5 prior, never crashes."""
@@ -64,12 +80,9 @@ def build_earned_tree(tenant_id: str) -> list[dict]:
         # element must NOT blank the whole tree (review MEDIUM-1, the L1 gap).
         grades = [g for g in raw if isinstance(g, dict)]
         # Re-clamp on read: grade_stage clamps on write, but a hand-edited/legacy store
-        # could carry a score outside [0,1], a NaN/Inf, or a bool (bool ⊂ int) — none of
-        # those may reach the gauge (review L2 + LOW-1).
-        scores = [max(0.0, min(1.0, float(g["score"]))) for g in grades
-                  if isinstance(g.get("score"), (int, float))
-                  and not isinstance(g.get("score"), bool)
-                  and math.isfinite(g["score"])]
+        # could carry a score outside [0,1], NaN/Inf, a bool, or an over-range int —
+        # _clamp_score rejects all of them without ever raising (review L2 / LOW-1 / R3).
+        scores = [s for g in grades if (s := _clamp_score(g.get("score"))) is not None]
         n_grades = len(grades)          # every valid record — what "Bewertungen gesamt" means
         n_scored = len(scores)
         conf = round(sum(scores) / n_scored, 3) if n_scored else 0.5  # 0.5 = no evidence
