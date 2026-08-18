@@ -29,8 +29,11 @@ Korrekturen sind inline als „Review-korrigiert (Fn)" markiert. **Verdikt nach 
   Dabei gefunden+behoben: eine AttributeError-Bindung hätte CEL komplett deaktiviert (`_CEL_AVAILABLE=False`).
 - Nebenbei erledigt: der verwaiste `learning.tsx`-Build-Blocker (doppelter Default-Export).
 
-**Damit sind G1–G5 alle gebaut** (G5 mit ship-dark Transport-Rest). Offene Folge-Arbeit: G5 Live-git+GPG-Transport;
-G4 reicheres Erfolgs-Signal (echter Task-Erfolg statt „kein Fehler").
+**Damit sind G1–G5 alle vollständig gebaut & E2E-verifiziert.** G5-Live-Transport (`run_git_sync`: pull →
+GPG-decrypt → Merge → re-encrypt → push) ist gebaut: 6/6 Unit-Tests inkl. echtem Zwei-Instanzen-Roundtrip +
+voller HTTP-E2E (Flag-on POST /sync → „synced", Remote erhält OpenPGP-Ciphertext-Blob). Offene Folge-Arbeit:
+Konflikt-Auflösungs-Screen für den LWW-Fall; ein Scheduler statt manuellem `POST /sync`; G4 reicheres
+Erfolgs-Signal (echter Task-Erfolg statt „kein Fehler") — alle hinter dem default-off Flag.
 
 ---
 
