@@ -683,3 +683,92 @@ def settings_write(
         "ok":          True,
         "warning":     err,  # may carry "no PyYAML — skipped" etc.
     }
+
+
+# ── ADR-0365 Features Endpoint ──────────────────────────────────────
+# Endpoint to list all available feature flags for the Settings UI
+
+class FeatureState(BaseModel):
+    """Feature flag state."""
+    id: str
+    label: str
+    description: str
+    enabled: bool
+    release_tier: str | None = None
+    self_locking: bool = False
+
+
+@router.get("/settings/features")
+async def get_features(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, list[FeatureState]]:
+    """List all available feature flags.
+
+    Returns the feature registry with current enabled/disabled state
+    for each flag in the tenant's features.json.
+    """
+    from corvin_core import feature_flags as ff_module
+
+    # Read tenant's feature state
+    tenant_config = _read_tenant_config(rec.tenant_id)
+    enabled_flags = tenant_config.get("spec", {}).get("features", {})
+
+    # Build feature list from registry
+    features: list[FeatureState] = []
+    for flag in ff_module.REGISTRY:
+        features.append(FeatureState(
+            id=flag.id,
+            label=flag.label,
+            description=flag.description,
+            enabled=enabled_flags.get(flag.id, False),
+            release_tier=flag.release_tier,
+            self_locking=flag.self_locking,
+        ))
+
+    return {"features": features}
+
+
+class FeatureToggleRequest(BaseModel):
+    """Request to toggle a feature flag."""
+    id: str
+    enabled: bool
+
+
+@router.post("/settings/features/{flag_id}")
+async def set_feature(
+    flag_id: str,
+    body: FeatureToggleRequest,
+    csrf: Annotated[str, Depends(require_csrf)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    verify_reauth_result: Annotated[bool, Depends(verify_reauth)],
+) -> dict[str, Any]:
+    """Toggle a feature flag for the tenant.
+
+    Updates the tenant's feature configuration.
+    """
+    # Read current config
+    tenant_config = _read_tenant_config(rec.tenant_id)
+    if "spec" not in tenant_config:
+        tenant_config["spec"] = {}
+    if "features" not in tenant_config["spec"]:
+        tenant_config["spec"]["features"] = {}
+
+    # Update feature
+    tenant_config["spec"]["features"][flag_id] = body.enabled
+
+    # Write back
+    _write_tenant_config(rec.tenant_id, tenant_config)
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="feature.toggle",
+        target_kind="feature_flag",
+        target_id=flag_id,
+    )
+
+    return {
+        "id": flag_id,
+        "enabled": body.enabled,
+        "ok": True,
+    }
