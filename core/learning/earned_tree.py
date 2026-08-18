@@ -63,9 +63,9 @@ def _store(tenant_id: str) -> dict:
 
 
 def _is_operator(grader: object) -> bool:
-    """True iff grader is the promoting operator. String equality, NEVER a set-membership
-    test — an unhashable grader (a dict/list in a corrupt store) returns False instead of
-    raising ``TypeError: unhashable type`` (review R4)."""
+    """True iff grader is the promoting operator. The ``isinstance(str)`` guard runs FIRST,
+    so the set-membership only ever sees a hashable str — an unhashable grader (a dict/list
+    in a corrupt store) returns False instead of raising ``TypeError: unhashable type`` (R4)."""
     return isinstance(grader, str) and grader in _PROMOTING
 
 
