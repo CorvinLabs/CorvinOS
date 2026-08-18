@@ -151,21 +151,43 @@ spec:
     # max_workers: 4
     # max_iterations: 6
 
-  # ── Feature flags — ship dark by default ────────────────────────────────────
-  # Every new feature is off until switched on, so an update never changes how
-  # an existing install behaves. Console → Settings → Features toggles these
-  # (writes features.json, which overrides this file). An absent key means OFF.
-  # Security/compliance mechanisms are NOT listed here — they stay always-on.
-  features: {}
-    # ccc_command_routing: true       # entity extraction on every turn
-    # acs_context_sync: true          # ADR-0213 transcript replay after delegation
-    # bridge_big_data_delegation: true  # big-data messenger tasks → ACS
-    # bridge_worker_engine_parity: true # bridges use the SAME native/acs decision
-    #                                   # as the console (mode + /delegate + triage),
-    #                                   # not only the big-data carve-out (ADR-0255)
-    # browser_automation: true        # /browser — launches a real Chrome
-    # execution_context_badge: true   # per-turn engine/model/token badge
-    # plugin_builder_enabled: true    # /plugin-builder — interview-driven plugin design (ADR-0253)
+  # ── Feature flags (Whitelist Strategy) ──────────────────────────────────────
+  # ADR-0XXX: Whitelist strategy allows operator to declare verified features.
+  #
+  # Two modes:
+  #   1. Whitelist mode (RECOMMENDED): spec.features_whitelist = [list of enabled features]
+  #      Only whitelisted features are ON; all others are OFF (deny-all-else).
+  #      Console → Settings → Features can toggle individual features on/off.
+  #
+  #   2. Legacy mode: spec.features = {flag_id: bool}
+  #      Individual flags are ON/OFF; absent = OFF.
+  #      Security/compliance mechanisms are NOT listed here — they stay always-on.
+  #
+  # Default (fresh install): whitelist mode with Vibe Engineering enabled.
+  # Ship dark by default: add to whitelist only after testing.
+  # Console → Settings → Features writes to features.json (overrides this file).
+
+  # Enable whitelist strategy with Vibe Engineering features
+  features_whitelist:
+    - vibe_engineering              # CEL brief on live turns (deterministic)
+    - vibe_engineering_active       # CEL ACTIVE brain (LLM + Toolforge + SkillForge)
+    - tree_of_thoughts              # Learning dashboard (Phase 1-7)
+    - learning_objectives           # User-defined learning objectives
+    - token_metrics                 # Token usage + cost visualization
+    - outcome_feedback_loop         # Auto-grade CEL stages post-turn
+    - cross_device_sync             # Sync learning state across instances
+    # Phase 8-12 features (proactive learning):
+    # - learning_anomaly_detection   # Detect confidence drops
+    # - learning_pattern_discovery   # Auto-discover patterns from failures
+    # - learning_predictive_alerts   # Warn before failures occur
+    # - learning_strategy_synthesis  # Combine patterns into workflows
+    # - learning_causal_analysis     # Explain why confidence changed
+
+  # Legacy mode (commented-out; uncomment to disable whitelist):
+  # features: {}
+  #   # ccc_command_routing: true    # entity extraction on every turn
+  #   # acs_context_sync: true       # ADR-0213 transcript replay after delegation
+  #   # browser_automation: true     # /browser — launches a real Chrome
 
   # ── User-Defined Learning Objectives (ADR-0163) ────────────────────────────────
   # Deny-by-default: ULO is inactive unless a tenant explicitly opts in.

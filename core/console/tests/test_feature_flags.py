@@ -240,5 +240,78 @@ def test_flag_on_is_reachable_for_all_new_flags(tenant_home):
         assert ff.is_enabled(fid) is False
 
 
+# ── Whitelist Strategy Tests (ADR-0XXX) ──────────────────────────────────
+
+def test_whitelist_mode_denies_all_by_default(tenant_home):
+    """Whitelist strategy: only whitelisted features are ON."""
+    _write_yaml(tenant_home, """
+spec:
+  features_whitelist:
+    - browser_automation
+""")
+    # On whitelist → ON
+    assert ff.is_enabled("browser_automation") is True
+    # Not on whitelist → OFF
+    assert ff.is_enabled("ccc_command_routing") is False
+    assert ff.is_enabled("acs_context_sync") is False
+
+
+def test_whitelist_mode_empty_whitelist_denies_all(tenant_home):
+    """Empty whitelist = everything OFF (deny-all-else)."""
+    _write_yaml(tenant_home, """
+spec:
+  features_whitelist: []
+""")
+    for entry in ff.REGISTRY:
+        assert ff.is_enabled(entry.id) is False
+
+
+def test_whitelist_overlay_can_override(tenant_home):
+    """Whitelist can be toggled per-tenant via console overlay."""
+    _write_yaml(tenant_home, """
+spec:
+  features_whitelist:
+    - browser_automation
+""")
+    # Write overlay (simulates Console Settings toggle)
+    ff.set_enabled("browser_automation", False)
+    # Overlay toggles OFF even if on whitelist
+    assert ff.is_enabled("browser_automation") is False
+
+
+def test_fallback_to_legacy_mode_when_no_whitelist(tenant_home):
+    """No whitelist → fallback to legacy spec.features behavior."""
+    _write_yaml(tenant_home, """
+spec:
+  features:
+    browser_automation: true
+    ccc_command_routing: false
+""")
+    assert ff.is_enabled("browser_automation") is True
+    assert ff.is_enabled("ccc_command_routing") is False
+    # Others default to OFF
+    assert ff.is_enabled("acs_context_sync") is False
+
+
+def test_source_of_reports_whitelist_correctly(tenant_home):
+    """_source_of() identifies whitelist as the source."""
+    _write_yaml(tenant_home, """
+spec:
+  features_whitelist:
+    - browser_automation
+""")
+    assert ff._source_of("browser_automation", "_default") == "whitelist"
+    assert ff._source_of("ccc_command_routing", "_default") == "default"
+
+
+def test_vibe_engineering_features_are_whitelisted(tenant_home):
+    """The live _default tenant has vibe_engineering on whitelist."""
+    # Use the real tenant config (not a tmp fixture)
+    assert ff.is_enabled("vibe_engineering", "_default") is True
+    assert ff.is_enabled("vibe_engineering_active", "_default") is True
+    assert ff.is_enabled("tree_of_thoughts", "_default") is True
+    assert ff.is_enabled("token_metrics", "_default") is True
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
