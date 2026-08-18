@@ -64,20 +64,34 @@ eigene, separat gereviewte Entscheidung.
 
 ---
 
-## 3. Was v3 konkret baut (klein, ehrlich)
+## 3. Was v3 konkret baut (klein, ehrlich) — Review-v3.1-korrigiert
 
-1. **Frei-negativ verdrahten (P1).** Das pauschale `record_turn_outcome(..., True)` wird ersetzt: bei
-   `rc≠0` / Healing / Artefakt-Fehler ein **Abwerter**-Grade (`grader="__signal__"`, non-promoting); sonst
-   **nichts** (kein pauschales True mehr). Sofort ehrlicher als heute (Turn-Zähler weg).
-2. **Coding-Verifikation als echter Anker (P2, opt-in, das eigentliche Neue).** Für einen Turn, der
-   Code/Tests produziert hat: nach dem Turn die produzierten Tests/den Build **tatsächlich laufen lassen**
-   (sandboxed, wie das Reproduction-Gate) → objektives pass/fail → positiver `__signal__`-Grade, **task-**
-   (nicht turn-)attribuiert (löst M6: der grüne Test gehört der ganzen Coding-Aufgabe, nicht einem Turn).
-3. **Anzeige + Empfehlung, kein Auto-Verhalten (P3).** Weg-A-Baum zeigt die abgewertete/verdiente Confidence
-   + Evidence-Split; wo ein Muster klar ist, eine **Operator-Empfehlung** (er entscheidet).
+1. **Frei-negativ verdrahten (P1) — auf der richtigen Ebene.** Das pauschale `record_turn_outcome(..., True)`
+   wird ersetzt. **Aber NICHT „alle gelaufenen Stages abwerten"** (das wäre Uniform-Blame: `rc` ist der
+   *Worker*-Exit-Code, entsteht *nach* der Kontext-Assemblierung — einen Worker-Crash den Kontext-Stages
+   anzulasten ist ein Kategorienfehler, Review F1). Stattdessen:
+   - Ein harter Fehler wird **auf Turn-Ebene** vermerkt (Turn-Health), nicht per-Stage.
+   - Per-Stage negativ **nur mit direktem Link:** ein geforgtes Tool, das mit Fehler lief → `toolforge`;
+     ein Artefakt, das nicht installierte → die erzeugende Stage. Sonst kein Stage-Grade.
+   - Sonst gar nichts (kein pauschales True). Turn-Zähler ist damit weg, ohne falsche Schuldzuweisung.
+2. **Coding-Verifikation als echter Anker (P2, opt-in) — ehrlich zur Isolation.** Für einen Turn, der
+   Code/Tests produziert hat: die produzierten Tests **tatsächlich laufen lassen** → objektives pass/fail →
+   positiver `__signal__`-Grade, **task-attribuiert** (löst M6). **Korrektur (Review F2):** das
+   Reproduction-Gate (`aco/reproduction.py`) ist **kein Sandbox** — sein eigener Header sagt „full sandbox /
+   uid-drop out of scope, nur env-scrub", gedacht für *maintainer-beaufsichtigten, engine-authored* Code.
+   Beliebigen Turn-produzierten Code auszuführen ist ein *anderes* Bedrohungsmodell. Daher zwingend:
+   - **echte Isolation** (Container/Namespace/uid-drop) — nicht der env-scrub; und **nur single-tenant**
+     bis die Isolation steht (Konsole ist multi-tenant, L18–21).
+   - **Runnability-Vorbedingung:** ein Test, der nicht laufen *kann* (fehlende Deps/Fixtures), ist
+     **„inconclusive", NICHT rot** — sonst labelt der Anker gute Arbeit systematisch als Fehlschlag (F2b).
+3. **Anzeige + Empfehlung aus STAGE-LOKALEN Signalen (P3), kein Auto-Verhalten.** Weg-A-Baum zeigt
+   verdiente/abgewertete Confidence + Evidence-Split. Eine Operator-**Empfehlung** kommt **nur aus direkten
+   Stage-lokalen Signalen** (Tool lief mit Fehler; injizierte Quelle wurde nie referenziert) — **NICHT** aus
+   rohen „Stage war in N Fehler-Turns"-Zählungen (Base-Rate-Confound: Always-on-Stages dominieren jeden Count,
+   sind aber nicht die Ursache und ohnehin nicht abwertbar; Review F1). Das hält §4 konsistent.
 4. **Kalibrierung nur wo ein Anker existiert (P4).** Verrauschte Signale bekommen Gewicht nur, wenn sie den
-   *Coding-Verifikations-Anker* + Operator-Override vorhersagen. Da Anker nur auf Coding-Turns existiert, wird
-   ehrlich benannt: außerhalb Coding bleibt alles Gewicht 0 (H2 akzeptiert, nicht wegdefiniert).
+   *Coding-Verifikations-Anker* + Operator-Override vorhersagen. Anker existiert nur auf Coding-Turns →
+   außerhalb bleibt alles Gewicht 0 (H2 akzeptiert, nicht wegdefiniert).
 
 ---
 

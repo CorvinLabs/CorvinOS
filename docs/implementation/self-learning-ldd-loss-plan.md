@@ -21,25 +21,27 @@
 
 ---
 
-## Phase 1 — Frei-negatives Signal verdrahten *(billig, sofort ehrlicher)*
-Ersetzt das pauschale `True` an `chat_runtime.py:6401`:
-- `rc≠0` / Healing/Anomaly gefeuert / Artefakt-Install-Fehler → `grade_stage(..., grader="__signal__", score=0.0, notes="hard_failure:<kind>")` für die gelaufenen Stages (Abwerter).
-- **Sonst: gar nichts schreiben** (kein `True`). Flag `ldd_loss_learning` (default off).
-- **Test (E2E):** Fehler-Turn → Abwerter-Grade sichtbar in `build_earned_tree`; sauberer Turn → **kein** Grade (nicht 1.0). Durch die `stream_turn`-Grenze.
+## Phase 1 — Frei-negatives Signal verdrahten *(billig, richtige Ebene)*
+Ersetzt das pauschale `True` an `chat_runtime.py:6401`. **Kein Uniform-Blame** (Review F1 — `rc` ist der
+*Worker*-Exit-Code, entsteht nach der Kontext-Assemblierung):
+- Harter Fehler (`rc≠0` / Healing / Artefakt-Fehler) → **Turn-Health-Record** (Turn-Ebene), NICHT auf alle gelaufenen Stages verteilt.
+- Per-Stage-Abwerter **nur mit direktem Link:** geforgtes Tool lief mit Fehler → `toolforge`; Artefakt installierte nicht → erzeugende Stage. Sonst kein Stage-Grade.
+- **Sonst: gar nichts** (kein `True`). Flag `ldd_loss_learning` (default off).
+- **Test (E2E):** Fehler-Turn → Turn-Health negativ + (bei Tool-Fehler) genau `toolforge` abgewertet, **nicht** alle Stages; sauberer Turn → **kein** Grade. Durch die `stream_turn`-Grenze.
 
-## Phase 2 — Coding-Verifikation als echter Anker *(opt-in, das Neue)*
+## Phase 2 — Coding-Verifikation als echter Anker *(opt-in; echte Isolation, nicht env-scrub)*
 `core/learning/turn_verification.py`:
-- Erkennt, ob der Turn Tests/Build produziert hat (Artefakte im Workdir).
-- Läuft sie **sandboxed** (Reproduction-Gate-Muster, `aco/reproduction.py` als Vorbild) → objektives pass/fail.
-- Positiver `__signal__`-Grade, **task-attribuiert** (Aufgabe = Turn-Kette bis grün; C5/M6): das Signal kreditiert die genutzten Stages/Tools der Aufgabe, nicht den Zufalls-Turn.
-- Flag `coding_verification` (default off, kostet Compute).
-- **Test:** ein Coding-Turn mit grünen Tests → positiver task-attribuierter Grade; roter Test → Abwerter; Nicht-Coding-Turn → kein Verifikations-Grade.
+- Erkennt, ob der Turn Tests/Build produziert hat (Workdir-Diff, `is_test_path`).
+- **Isolation (Review F2):** das Reproduction-Gate ist **kein Sandbox** (sein Header: „full sandbox/uid-drop out of scope, nur env-scrub"). Turn-produzierten Code auszuführen braucht **echte Isolation** (Container/Namespace/uid-drop) und ist **single-tenant only**, bis die Isolation steht (Konsole ist multi-tenant, L18–21). Ohne echte Isolation wird P2 nicht ausgeliefert.
+- **Runnability (Review F2b):** ein Test, der nicht laufen *kann* (fehlende Deps/Fixtures), ist **`inconclusive`, NICHT rot** — sonst wird gute Arbeit systematisch als Fehlschlag gelabelt. Nur ein *laufender, roter* Test ist ein Negativ; nur ein *laufender, grüner* ein Positiv.
+- Positiver `__signal__`-Grade, **task-attribuiert** (C5/M6). Flag `coding_verification` (default off, kostet Compute).
+- **Test:** grüner produzierter Test → positiver task-Grade; roter → Abwerter; nicht-lauffähiger → `inconclusive` (kein Grade); Nicht-Coding-Turn → nichts. In echter Isolation.
 
-## Phase 3 — Anzeige + Operator-Empfehlung *(der Konsument, kein Auto-Verhalten)*
-- Weg-A-Baum (ADR-0372) zeigt abgewertete/verdiente Confidence + Evidence-Split (schon da).
-- Neu: wo ein Muster stark ist, eine **Empfehlung** („Stage X war in N harten Fehler-Turns — abwerten?"), die der Operator per Klick annimmt (schreibt einen `operator`-Grade) oder ignoriert.
+## Phase 3 — Anzeige + Operator-Empfehlung aus STAGE-LOKALEN Signalen *(kein Auto-Verhalten)*
+- Weg-A-Baum (ADR-0372) zeigt verdiente/abgewertete Confidence + Evidence-Split (schon da).
+- Empfehlung **nur aus direkten Stage-lokalen Signalen** (Tool lief mit Fehler; injizierte Quelle nie referenziert) — **NICHT** aus rohen „Stage in N Fehler-Turns"-Zählungen (Base-Rate-Confound, Review F1; hält §4 konsistent). Operator nimmt per Klick an (schreibt `operator`-Grade) oder ignoriert.
 - **Kein** Auto-Gate. Promotion bleibt operator-only (C4).
-- **Test:** Empfehlung erscheint bei klarem Muster; Annehmen schreibt einen `operator`-Grade; nichts ändert sich ohne Klick.
+- **Test:** Empfehlung erscheint nur bei einem stage-lokalen Signal (nicht bei einem bloßen Häufigkeits-Count einer Always-on-Stage); Annehmen schreibt `operator`-Grade; nichts ändert sich ohne Klick.
 
 ## Phase 4 — Kalibrierung, ehrlich begrenzt
 - `core/learning/signal_calibration.py`: Gewicht eines Signals = Funktion seiner rollierenden Korrelation mit dem **Verifikations-Anker + Operator-Override**.
