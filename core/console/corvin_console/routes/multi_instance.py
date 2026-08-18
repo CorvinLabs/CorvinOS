@@ -27,9 +27,9 @@ def tenant_learning_dir(tenant_id: str) -> Path:
         return Path.home() / ".corvin" / "tenants" / tenant_id / "learning"
 
 
-def _configured_remote_dir(tenant_id: str) -> "Path | None":
-    """Resolve spec.cross_device.sync_remote for this tenant (a local checkout of the
-    remote). Returns None when unconfigured — no hardcoded path/repo (G5, ADR-0369)."""
+def _configured_remote(tenant_id: str) -> "str | None":
+    """Resolve spec.cross_device.sync_remote — a git URL (https:// or file://). Returns
+    None when unconfigured; no hardcoded path/repo (G5, ADR-0369)."""
     try:
         from forge.paths import tenant_home  # noqa: PLC0415
         cfg = Path(tenant_home(tenant_id)) / "tenant.corvin.yaml"
@@ -39,7 +39,26 @@ def _configured_remote_dir(tenant_id: str) -> "Path | None":
         data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
         remote = (((data.get("spec") or {}).get("cross_device") or {})
                   .get("sync_remote"))
-        return Path(remote) if remote else None
+        return str(remote) if remote else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _sync_cache_dir(tenant_id: str) -> Path:
+    """Per-tenant working cache for the git clone + decrypted remote state."""
+    try:
+        from forge.paths import tenant_home  # noqa: PLC0415
+        return Path(tenant_home(tenant_id)) / "cross_device" / "cache"
+    except Exception:  # noqa: BLE001
+        return Path.home() / ".corvin" / "tenants" / tenant_id / "cross_device" / "cache"
+
+
+def _vault_item(name: str) -> "str | None":
+    """Read a secret from the Vault (PAT / GPG passphrase). None if absent."""
+    try:
+        from vault import get_item  # noqa: PLC0415
+        v = get_item(name, source="cross_device_sync")
+        return str(v) if v else None
     except Exception:  # noqa: BLE001
         return None
 
@@ -243,28 +262,36 @@ async def trigger_manual_sync(
     rec: "session_auth.SessionRecord" = Depends(require_csrf),
 ) -> Dict[str, Any]:
     """Run a cross-device tenant sync (G5, ADR-0369). Ship-dark: gated on the
-    ``cross_device_sync`` flag (default off). When off, this returns a clear disabled
-    response instead of the old always-success stub. When on, it merges a configured
-    remote checkout INTO the tenant's learning dir via the type-specific merge engine
-    and returns the merge report. Auth + CSRF required (the old stub had neither)."""
+    ``cross_device_sync`` flag (default off). When on, it runs the LIVE transport —
+    pull → GPG-decrypt → type-specific merge INTO the tenant learning dir → re-encrypt
+    → push — against the configured git remote. The remote only ever holds ciphertext.
+    Auth + CSRF required; GPG is mandatory (the passphrase comes from the Vault)."""
     if not is_enabled("cross_device_sync", rec.tenant_id):
         return {
             "status": "disabled",
             "message": ("Cross-device sync is off. Enable it in Settings → Features "
-                        "(cross_device_sync) after configuring a remote + PAT."),
+                        "(cross_device_sync) after configuring a remote + passphrase."),
         }
-    # Resolve the configured remote checkout for this tenant. No hardcoded path/repo.
-    remote_dir = _configured_remote_dir(rec.tenant_id)
-    if remote_dir is None or not remote_dir.is_dir():
+    remote_url = _configured_remote(rec.tenant_id)
+    if not remote_url:
         raise HTTPException(
             status_code=400,
             detail=("No sync remote configured. Set spec.cross_device.sync_remote to a "
-                    "local checkout of the tenant remote."),
+                    "git URL (https or file://)."),
         )
+    passphrase = _vault_item("cross_device_sync_passphrase")
+    if not passphrase:
+        raise HTTPException(
+            status_code=400,
+            detail=("GPG is mandatory for tenant sync. Store a "
+                    "'cross_device_sync_passphrase' secret in the Vault first."),
+        )
+    pat = _vault_item("cross_device_sync_pat")  # optional (for https remotes)
     try:
         from core.cross_device import tenant_sync as _ts  # noqa: PLC0415
         local_dir = tenant_learning_dir(rec.tenant_id)
-        report = _ts.merge_tenant_dirs(local_dir, remote_dir)
-        return {"status": "merged", "tenant_id": rec.tenant_id, **report.as_dict()}
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(e))
+        cache_dir = _sync_cache_dir(rec.tenant_id)
+        report = _ts.run_git_sync(local_dir, remote_url, cache_dir, passphrase, pat=pat)
+        return {"status": "synced", "tenant_id": rec.tenant_id, **report.as_dict()}
+    except Exception as e:  # noqa: BLE001 — SyncError et al.; never leak the PAT
+        raise HTTPException(status_code=502, detail=f"sync failed: {str(e)[:200]}")
