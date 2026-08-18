@@ -22,6 +22,7 @@ import {
   ExtensionsPage, McpPluginsPage, PluginsPage, ActivityFeedPage,
   LearningObjectivesPage, MultiInstancePage, VibeOverviewPage,
 } from "@/lazy-pages";
+import TokenMetricsPage from "@/pages/token-metrics";
 import type { ComponentType } from "react";
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -45,6 +46,9 @@ export const PANELS: ConsolePanel[] = [
   // first-party React page (no more sandboxed-iframe external panel to maintain).
   rc("vibe-overview", "Overview", VibeOverviewPage,
      { nav: { label: "Overview", icon: "" }, requiredFlag: "vibe_engineering" }),
+  // Token Metrics Dashboard — Real-time token usage, cost savings, Vibe Engineering ROI
+  rc("token-metrics", "Token Metrics", TokenMetricsPage,
+     { nav: { label: "Token Metrics", icon: "Zap", group: "observability" }, requiredFlag: "vibe_engineering" }),
   // simple top-level feature panels (reuse proven lazy components)
   rc("dashboard", "Dashboard", DashboardPage),
   rc("talent", "Your Talent", YourTalentPage),
