@@ -49,7 +49,7 @@ export default function TokenMetricsPage() {
                          localStorage.getItem("current_session_id") ||
                          "current";
 
-        const response = await fetch(`/api/metrics/session/${sessionId}`);
+        const response = await fetch(`/v1/console/api/metrics/session/${sessionId}`);
         if (!response.ok) throw new Error("Failed to fetch metrics");
 
         const data = await response.json();
@@ -112,7 +112,9 @@ export default function TokenMetricsPage() {
   }
 
   const costSaved = metrics.estimated_savings;
-  const costSavedPercentage = (costSaved / metrics.estimated_baseline_cost) * 100;
+  const costSavedPercentage = metrics.estimated_baseline_cost > 0
+    ? (costSaved / metrics.estimated_baseline_cost) * 100
+    : 0;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-8">

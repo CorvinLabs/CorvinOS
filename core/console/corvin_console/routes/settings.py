@@ -688,6 +688,9 @@ def settings_write(
 # ── ADR-0365 Features Endpoint ──────────────────────────────────────
 # Endpoint to list all available feature flags for the Settings UI
 
+# Import feature flag module at module level (not inside handler)
+from corvin_core import feature_flags as _feature_flags_module
+
 class FeatureState(BaseModel):
     """Feature flag state."""
     id: str
@@ -698,24 +701,40 @@ class FeatureState(BaseModel):
     self_locking: bool = False
 
 
+def _read_features_config(tenant_id: str) -> dict:
+    """Read feature flag state from tenant config."""
+    try:
+        path = _forge_paths.tenant_home(tenant_id) / "global" / "features.json"
+        if path.exists():
+            return _json.load(open(path))
+    except Exception:
+        pass
+    return {"flags": {}}
+
+
+def _write_features_config(tenant_id: str, config: dict) -> None:
+    """Write feature flag state to tenant config."""
+    path = _forge_paths.tenant_home(tenant_id) / "global" / "features.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        _json.dump(config, f, indent=2)
+
+
 @router.get("/settings/features")
 async def get_features(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, list[FeatureState]]:
     """List all available feature flags.
 
-    Returns the feature registry with current enabled/disabled state
-    for each flag in the tenant's features.json.
+    Returns the feature registry with current enabled/disabled state.
     """
-    from corvin_core import feature_flags as ff_module
-
-    # Read tenant's feature state
-    tenant_config = _read_tenant_config(rec.tenant_id)
-    enabled_flags = tenant_config.get("spec", {}).get("features", {})
+    # Read feature flags state from config
+    config = _read_features_config(rec.tenant_id)
+    enabled_flags = config.get("flags", {})
 
     # Build feature list from registry
     features: list[FeatureState] = []
-    for flag in ff_module.REGISTRY:
+    for flag in _feature_flags_module.REGISTRY:
         features.append(FeatureState(
             id=flag.id,
             label=flag.label,
@@ -747,17 +766,11 @@ async def set_feature(
     Updates the tenant's feature configuration.
     """
     # Read current config
-    tenant_config = _read_tenant_config(rec.tenant_id)
-    if "spec" not in tenant_config:
-        tenant_config["spec"] = {}
-    if "features" not in tenant_config["spec"]:
-        tenant_config["spec"]["features"] = {}
-
-    # Update feature
-    tenant_config["spec"]["features"][flag_id] = body.enabled
+    config = _read_features_config(rec.tenant_id)
+    config["flags"][flag_id] = body.enabled
 
     # Write back
-    _write_tenant_config(rec.tenant_id, tenant_config)
+    _write_features_config(rec.tenant_id, config)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
