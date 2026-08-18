@@ -22,6 +22,10 @@ class FeedbackAnomaly:
     recommended_action: str
 
 
+# Alias for backward compatibility
+AnomalyAlert = FeedbackAnomaly
+
+
 class AnomalyDetector:
     """Detects anomalies in operator feedback patterns."""
 
