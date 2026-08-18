@@ -62,45 +62,68 @@ def _store(tenant_id: str) -> dict:
         return {}
 
 
+def _is_operator(grader: object) -> bool:
+    """True iff grader is the promoting operator. String equality, NEVER a set-membership
+    test — an unhashable grader (a dict/list in a corrupt store) returns False instead of
+    raising ``TypeError: unhashable type`` (review R4)."""
+    return isinstance(grader, str) and grader in _PROMOTING
+
+
+def _neutral_method(sid: str, label: str, when: str) -> dict:
+    """A no-evidence stage node — the safe fallback when a stage's store slice is too
+    corrupt to read, so ONE bad stage degrades to neutral instead of blanking all eight."""
+    return {
+        "id": f"stage-{sid}", "level": "method", "name": label,
+        "confidence": 0.5, "calls_in_production": 0,
+        "when": [when], "anti_when": [], "children": [],
+        "operator_notes": [], "adr_link": "ADR-0285",
+        "evidence": {"auto_earned": 0, "operator": 0},
+    }
+
+
+def _method_node(sid: str, label: str, when: str, store: dict) -> dict:
+    """Project one CEL stage's grades into a method node with earned confidence."""
+    entry = store.get(sid)
+    raw = entry.get("grades") if isinstance(entry, dict) else None      # non-dict entry → none
+    raw = raw[-_MAX_GRADES:] if isinstance(raw, list) else []           # bound the read (L3)
+    grades = [g for g in raw if isinstance(g, dict)]                    # drop non-dict leaves
+    # _clamp_score rejects out-of-range / NaN / Inf / bool / over-range-int without raising.
+    scores = [s for g in grades if (s := _clamp_score(g.get("score"))) is not None]
+    n_grades = len(grades)
+    conf = round(sum(scores) / len(scores), 3) if scores else 0.5  # 0.5 = no evidence yet
+    operator = sum(1 for g in grades if _is_operator(g.get("grader")))
+    op_notes = [["", g.get("grader", "operator"), g.get("notes", "")]
+                for g in grades if _is_operator(g.get("grader")) and g.get("notes")]
+    return {
+        "id": f"stage-{sid}", "level": "method", "name": label,
+        "confidence": conf, "calls_in_production": n_grades,
+        "when": [when], "anti_when": [], "children": [],
+        "operator_notes": op_notes, "adr_link": "ADR-0285",
+        # Evidence sums to n_grades (M1): operator = explicit human grades, auto_earned =
+        # everything else the SYSTEM produced (outcome loop + bootstrap seed).
+        "evidence": {"auto_earned": n_grades - operator, "operator": operator},
+    }
+
+
 def build_earned_tree(tenant_id: str) -> list[dict]:
     """A Framework→Method tree whose confidence is EARNED from the CEL grade store.
     Each stage node carries its evidence split (auto-earned from the outcome loop vs.
-    explicit operator grades). Returns node dicts in the dashboard's TreeNode shape."""
+    explicit operator grades). Returns node dicts in the dashboard's TreeNode shape.
+
+    Per-stage failures degrade that ONE stage to neutral (try/except around each) — a
+    corrupt store can NEVER blank the whole tree, the invariant every prior review round
+    chipped at one field at a time (score, grader, …). This closes the class structurally."""
     store = _store(tenant_id)
     if not isinstance(store, dict):  # defence in depth — _store already guards this
         store = {}
     methods: list[dict] = []
-    confs: list[float] = []
-    total_calls = 0
     for sid, label, when in _STAGES:
-        entry = store.get(sid)
-        raw = entry.get("grades") if isinstance(entry, dict) else None  # L1: non-dict → none
-        raw = raw[-_MAX_GRADES:] if isinstance(raw, list) else []        # L3: bound the read
-        # Drop any non-dict leaf up front so every .get below is safe — a single corrupt
-        # element must NOT blank the whole tree (review MEDIUM-1, the L1 gap).
-        grades = [g for g in raw if isinstance(g, dict)]
-        # Re-clamp on read: grade_stage clamps on write, but a hand-edited/legacy store
-        # could carry a score outside [0,1], NaN/Inf, a bool, or an over-range int —
-        # _clamp_score rejects all of them without ever raising (review L2 / LOW-1 / R3).
-        scores = [s for g in grades if (s := _clamp_score(g.get("score"))) is not None]
-        n_grades = len(grades)          # every valid record — what "Bewertungen gesamt" means
-        n_scored = len(scores)
-        conf = round(sum(scores) / n_scored, 3) if n_scored else 0.5  # 0.5 = no evidence
-        # Evidence split MUST sum to n_grades (M1): operator = explicit human grades,
-        # auto_earned = everything else the SYSTEM produced (outcome loop + bootstrap seed).
-        operator = sum(1 for g in grades if g.get("grader") in _PROMOTING)
-        auto = n_grades - operator
-        op_notes = [["", g.get("grader", "operator"), g.get("notes", "")]
-                    for g in grades if g.get("grader") in _PROMOTING and g.get("notes")]
-        methods.append({
-            "id": f"stage-{sid}", "level": "method", "name": label,
-            "confidence": conf, "calls_in_production": n_grades,
-            "when": [when], "anti_when": [], "children": [],
-            "operator_notes": op_notes, "adr_link": "ADR-0285",
-            "evidence": {"auto_earned": auto, "operator": operator},
-        })
-        confs.append(conf)
-        total_calls += n_grades
+        try:
+            methods.append(_method_node(sid, label, when, store))
+        except Exception:  # noqa: BLE001 — one bad stage must never sink the tree
+            methods.append(_neutral_method(sid, label, when))
+    confs = [m["confidence"] for m in methods]
+    total_calls = sum(m["calls_in_production"] for m in methods)
     framework = {
         "id": "framework-cel", "level": "framework",
         "name": "Context Engineering — self-earned confidence",
