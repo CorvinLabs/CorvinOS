@@ -766,6 +766,9 @@ async def set_feature(
     """
     # Read current config
     config = _read_features_config(rec.tenant_id)
+    # Ensure flags dict exists
+    if "flags" not in config:
+        config["flags"] = {}
     config["flags"][flag_id] = body.enabled
 
     # Write back
