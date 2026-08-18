@@ -16,6 +16,7 @@ Integration points:
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime
 from typing import Optional
@@ -95,55 +96,77 @@ class TokenMeasurementHook:
         )
 
     def end_turn(self) -> None:
-        """Record turn completion and store metrics."""
+        """Record turn completion and store metrics.
+
+        Rewritten 2026-08-18 — as written, this method could not complete even
+        once. It called `counter.total_tokens()` and `counter.baseline_tokens()`
+        (both plain int attributes on TokenCounter, so: "'int' object is not
+        callable"), read `counter.subsystem_breakdown` (the field is
+        `subsystem_tokens`), invoked `store.insert_token_metrics(...)` with
+        keyword arguments the store does not accept (its API is
+        `write_token_metrics(counter, tenant_id=..., ...)`), and finally called
+        `emitter.emit(name, dict)` where EventEmitter takes a LearningEvent.
+        Every real turn therefore raised on the first line of measurement and
+        was swallowed by the `except Exception: pass` around the call site in
+        chat_runtime.py — which is why the dashboard only ever showed rows that
+        had been inserted by hand.
+        """
         if not self._turn_context:
             return
 
         ctx = self._turn_context
-
-        # Calculate turn duration
-        duration_ms = (time.time() - ctx.start_time) * 1000
-
-        # Get final counter data
         counter = ctx.counter
-        total_tokens = counter.total_tokens()
-        baseline_tokens = counter.baseline_tokens()
-        savings_tokens = baseline_tokens - total_tokens
-        savings_percent = (savings_tokens / baseline_tokens * 100) if baseline_tokens > 0 else 0
 
-        # Store metrics in database
-        self.store.insert_token_metrics(
-            session_id=ctx.session_id,
+        # Stamps end_time + latency_ms on the counter (to_event reads both).
+        counter.finalize()
+
+        # The baseline is an ESTIMATE, never a measurement — see
+        # token_baseline.py. Left as None it would make savings_* None and the
+        # dashboard blank, so fill it from the same heuristic the rest of the
+        # pipeline uses, and keep saying out loud that it is not measured.
+        if counter.baseline_tokens is None:
+            try:
+                from core.learning.token_baseline import BaselineMetrics  # noqa: PLC0415
+                counter.baseline_tokens = BaselineMetrics(
+                    turn_id=ctx.turn_id,
+                    task_complexity=counter.task_complexity or "moderate",
+                ).baseline_tokens
+            except Exception:  # noqa: BLE001
+                counter.baseline_tokens = counter.total_tokens
+
+        # write_token_metrics() converts the counter to a hash-chained
+        # LearningEvent, emits it, and mirrors it into the SQLite backend — so
+        # it already performs the emit this method used to attempt separately.
+        self.store.write_token_metrics(
+            counter,
             tenant_id=ctx.tenant_id,
-            turn_id=ctx.turn_id,
-            input_tokens=counter.input_tokens,
-            output_tokens=counter.output_tokens,
-            total_tokens=total_tokens,
-            baseline_tokens=baseline_tokens,
-            savings_tokens=savings_tokens,
-            savings_percent=savings_percent,
-            latency_ms=duration_ms,
-            task_type=counter.task_type,
-            outcome_quality="success",  # Will be updated by outcome loop
-            subsystem_breakdown=counter.subsystem_breakdown,
+            instance_id=_instance_id(),
+            session_id=ctx.session_id,
         )
-
-        # Emit event for real-time dashboards
-        self.emitter.emit("token_metrics_recorded", {
-            "timestamp": datetime.utcnow().isoformat(),
-            "turn_id": ctx.turn_id,
-            "session_id": ctx.session_id,
-            "total_tokens": total_tokens,
-            "baseline_tokens": baseline_tokens,
-            "savings_percent": savings_percent,
-        })
 
         # Clear context for next turn
         self._turn_context = None
 
 
+logger = logging.getLogger(__name__)
+
+
+def _instance_id() -> str:
+    """Stable id for this install; "local" when the registry is unavailable."""
+    try:
+        from core.learning.instance_registry import get_instance_registry  # noqa: PLC0415
+        reg = get_instance_registry()
+        current = getattr(reg, "instance_id", None) or getattr(reg, "current_instance_id", None)
+        if isinstance(current, str) and current:
+            return current
+    except Exception:  # noqa: BLE001
+        pass
+    return "local"
+
 # Global hook instance (singleton pattern)
 _hook: Optional[TokenMeasurementHook] = None
+# One-shot latch: a failed auto-init must not be retried on every single turn.
+_autoinit_attempted: bool = False
 
 
 def initialize_token_hook(store: TokenMetricsStore, emitter: EventEmitter) -> TokenMeasurementHook:
@@ -153,8 +176,51 @@ def initialize_token_hook(store: TokenMetricsStore, emitter: EventEmitter) -> To
     return _hook
 
 
+def _autoinit_token_hook() -> Optional[TokenMeasurementHook]:
+    """Best-effort default wiring, used when no host called initialize_token_hook.
+
+    Why this exists: the explicit initialisation lives in
+    `corvin_console.standalone`, but CorvinOS ships TWO hosts — the other one,
+    `corvin_gateway.app`, is what `corvin-service` actually runs. On that host
+    the hook stayed None, `record_turn_metrics()` returned at its first line,
+    and not a single turn was ever recorded, while the dashboard sat there
+    looking merely empty. Same one-host-only trap CLAUDE.md records for the
+    boot tripwire. Initialising on first use covers every host, including
+    future ones, instead of adding a second call site that can drift again.
+
+    Never raises: token measurement is telemetry, and telemetry must not be
+    able to break a chat turn.
+    """
+    global _hook
+    try:
+        from pathlib import Path  # noqa: PLC0415
+
+        from core.learning.event_emitter import EventEmitter  # noqa: PLC0415
+        from core.learning.token_metrics_db import TokenMetricsDB  # noqa: PLC0415
+        from core.learning.token_metrics_store import TokenMetricsStore  # noqa: PLC0415
+
+        tenant_id = "_default"
+        try:
+            from forge.paths import tenant_home  # noqa: PLC0415
+            tenant_dir = tenant_home(tenant_id)
+        except Exception:  # noqa: BLE001
+            tenant_dir = Path.home() / ".corvin" / "tenants" / tenant_id
+
+        emitter = EventEmitter(Path(tenant_dir), tenant_id)
+        _hook = TokenMeasurementHook(TokenMetricsStore(emitter, db=TokenMetricsDB()), emitter)
+        logger.info("Token measurement hook auto-initialized")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Token measurement hook auto-init skipped: %s", exc)
+        _hook = None
+    return _hook
+
+
 def get_token_hook() -> Optional[TokenMeasurementHook]:
-    """Get the global token measurement hook."""
+    """Get the global token measurement hook, auto-initialising on first use."""
+    global _autoinit_attempted
+    if _hook is None and not _autoinit_attempted:
+        _autoinit_attempted = True
+        return _autoinit_token_hook()
     return _hook
 
 

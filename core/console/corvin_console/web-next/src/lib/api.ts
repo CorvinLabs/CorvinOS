@@ -2671,6 +2671,47 @@ export function setFeatureFlag(
   });
 }
 
+export interface TokenMetricsSummary {
+  timestamp: string;
+  session_id: string;
+  turn_count: number;
+  total_tokens: number;
+  avg_tokens_per_turn: number;
+  baseline_tokens: number;
+  saved_tokens: number;
+  savings_percent: number;
+  estimated_baseline_cost: number;
+  estimated_actual_cost: number;
+  estimated_savings: number;
+  cost_per_1k_tokens: number;
+}
+
+export interface TokenMetricsResponse {
+  /** null when the session has no recorded turns yet. */
+  metrics: TokenMetricsSummary | null;
+  /** Subsystem → percent of attributed tokens; null when nothing was attributed. */
+  breakdown: Record<string, number> | null;
+  by_task_type?: Record<string, unknown>;
+  /**
+   * ADR-0215 honesty flag: `baseline_tokens` (and everything derived from it —
+   * saved_tokens, savings_percent, every cost figure) comes from the
+   * `1800 * complexity` heuristic in core/learning/token_baseline.py, NOT from
+   * a measurement. Only total_tokens / turn_count / avg_tokens_per_turn are
+   * measured. Always false today.
+   */
+  baseline_measured: boolean;
+  session_id: string;
+  error?: string;
+}
+
+/** Token usage for one session. Pass "current" for the tenant's latest session. */
+export function getTokenMetrics(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<TokenMetricsResponse> {
+  return api(`/vibe-engineering/token-metrics/${encodeURIComponent(sessionId)}`, { signal });
+}
+
 export type WorkerEngineMode = "native" | "acs" | "tde";
 
 export interface WorkerEngineStatus {

@@ -572,6 +572,81 @@ def put_delegation_budget(
     return {"values": new_values, "ok": True}
 
 
+# ── Worker engine (ADR-0255) ─────────────────────────────────────────────────
+# MUST stay ABOVE `PUT /settings/{label}`. Starlette matches in registration
+# order, so the parameterised config-file writer below swallows every later
+# `PUT /settings/<anything>` in this module and validates it against
+# SettingsWriteRequest — which is why this endpoint answered
+# 422 {"loc": ["body", "body"], "msg": "Field required"} while its own schema
+# was perfectly fine. Same trap ADR-0067 documented for `PUT /settings/engine`;
+# app.py solves it for OTHER routers by include order, which cannot help a
+# route defined in this same file.
+class WorkerEngineRequest(BaseModel):
+    """Request to change worker engine."""
+    engine: str
+    re_auth_token: str | None = None
+
+
+@router.get("/settings/worker-engine")
+async def get_worker_engine(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, str]:
+    """Get the current worker engine setting."""
+    config = _read_features_config(rec.tenant_id)
+    engine = config.get("worker_engine", "native")
+    return {"engine": engine}
+
+
+@router.put("/settings/worker-engine")
+async def set_worker_engine(
+    body: WorkerEngineRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, str]:
+    """Change the worker engine setting.
+
+    See ``set_feature`` for why ``verify_reauth`` is called inline instead of
+    through ``Depends()``.
+    """
+    if not verify_reauth(rec, body.re_auth_token):
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="settings.worker_engine",
+            target_kind="setting",
+            target_id="worker_engine",
+            reason="reauth-failed",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail={"reason": "reauth-failed"},
+        )
+
+    # Validate engine choice
+    valid_engines = ["native", "acs", "tde"]
+    if body.engine not in valid_engines:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "invalid-engine", "valid": valid_engines},
+        )
+
+    # Read current config
+    config = _read_features_config(rec.tenant_id)
+    config["worker_engine"] = body.engine
+
+    # Write back
+    _write_features_config(rec.tenant_id, config)
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="settings.worker_engine",
+        target_kind="setting",
+        target_id="worker_engine",
+    )
+
+    return {"engine": body.engine, "status": "updated"}
+
+
 @router.put("/settings/{label}")
 def settings_write(
     label: str,
@@ -750,20 +825,49 @@ class FeatureToggleRequest(BaseModel):
     """Request to toggle a feature flag."""
     id: str
     enabled: bool
+    re_auth_token: str | None = None
 
 
 @router.post("/settings/features/{flag_id}/toggle")
 async def set_feature(
     flag_id: str,
     body: FeatureToggleRequest,
-    csrf: Annotated[str, Depends(require_csrf)],
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-    verify_reauth_result: Annotated[bool, Depends(verify_reauth)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Toggle a feature flag for the tenant.
 
     Updates the tenant's feature configuration.
+
+    ``verify_reauth`` is a PLAIN helper, not a FastAPI dependency — it takes a
+    ``SessionRecord`` and the presented token as ordinary arguments. Wiring it
+    through ``Depends()`` made FastAPI read its signature as request params:
+    ``rec`` (a dataclass) became a second BODY field and ``presented_token`` a
+    REQUIRED query param, so the generated schema demanded
+    ``{"body": {...}, "rec": {...}}?presented_token=…`` and every console
+    toggle got a 422. Call it inline, like the settings-write endpoint does.
     """
+    if not verify_reauth(rec, body.re_auth_token):
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="feature.toggle",
+            target_kind="feature_flag",
+            target_id=flag_id,
+            reason="reauth-failed",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail={"reason": "reauth-failed"},
+        )
+
+    # The path segment is authoritative; a body carrying a different id is a
+    # client bug we refuse loudly rather than silently toggling the wrong flag.
+    if body.id != flag_id:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail={"reason": "flag-id-mismatch", "path": flag_id, "body": body.id},
+        )
+
     # Read current config
     config = _read_features_config(rec.tenant_id)
     # Ensure flags dict exists
@@ -786,4 +890,30 @@ async def set_feature(
         "id": flag_id,
         "enabled": body.enabled,
         "ok": True,
+    }
+
+
+@router.get("/settings/features/{feature_id}")
+async def get_feature(
+    feature_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Get a single feature flag by ID."""
+    # Find the feature in the registry
+    try:
+        from .. import feature_flags as _feature_flags_module
+        flag = _feature_flags_module.flag(feature_id)
+    except Exception:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": f"feature-not-found", "feature_id": feature_id},
+        )
+
+    enabled = _feature_flags_module.is_enabled(feature_id, rec.tenant_id)
+    return {
+        "id": flag.id,
+        "label": flag.label,
+        "description": flag.description,
+        "enabled": enabled,
+        "release_tier": flag.release_tier,
     }

@@ -12,6 +12,7 @@ rooted at the authenticated `rec.tenant_id`.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 from pathlib import Path
@@ -433,36 +434,127 @@ async def post_stage_grade(
             "mean_score": updated.get("mean_score", 0.0)}
 
 
-@router.get("/token-savings")
-async def get_token_savings(
+# ── Token metrics (ADR-0365) ────────────────────────────────────────────────
+# Cost model for the dashboard's money figures. Blended $/1k tokens; override
+# per tenant with `spec.token_metrics.cost_per_1k_tokens` in tenant.corvin.yaml.
+_DEFAULT_COST_PER_1K = 0.009
+
+
+def _token_cost_per_1k(tenant_id: str) -> float:
+    """Operator-overridable $/1k-token rate, with a safe default."""
+    try:
+        from corvin_core import feature_flags as _ff  # noqa: PLC0415
+        spec = _ff._tenant_spec(tenant_id)
+        raw = (spec.get("token_metrics") or {}).get("cost_per_1k_tokens")
+        if isinstance(raw, (int, float)) and raw >= 0:
+            return float(raw)
+    except Exception:  # noqa: BLE001 — a broken spec must not 500 the panel
+        pass
+    return _DEFAULT_COST_PER_1K
+
+
+def _resolve_session_id(db: Any, tenant_id: str, requested: str) -> str | None:
+    """Map the caller's session id to one that actually has rows.
+
+    The page sends "current" when it has no explicit session in the URL or in
+    localStorage, so treat that as "the most recent session of this tenant"
+    rather than a literal id — otherwise the panel is empty for every operator
+    who did not hand-craft a query string.
+    """
+    if requested and requested != "current":
+        return requested
+    try:
+        import sqlite3  # noqa: PLC0415
+        with sqlite3.connect(db.db_path) as conn:
+            row = conn.execute(
+                "SELECT session_id FROM token_metrics WHERE tenant_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (tenant_id,),
+            ).fetchone()
+        return row[0] if row else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@router.get("/token-metrics/{session_id}")
+async def get_token_metrics(
+    session_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    """Token savings dashboard data for the authenticated session.
+    """Token-usage dashboard data for one session of the authenticated tenant.
 
-    Returns aggregated metrics: tokens saved, confidence, subsystem breakdown.
-    Used by VibeEngineeringDashboard component in the Console.
+    Replaces a placeholder that could never return data: it imported
+    `..corvin_core.learning.*` (no such package — the modules live in
+    `core.learning`), built a store with `db=None`, and read `rec.session_id`,
+    which SessionRecord does not have. Every call fell into its own except
+    branch and answered `{"status": "unavailable"}`.
+
+    Tenant isolation is structural: `rec.tenant_id` is passed to every query,
+    never a value from the request.
+
+    HONESTY NOTE (ADR-0215): `total_tokens`, `turn_count` and `avg_tokens_per_
+    turn` are MEASURED. `baseline_tokens` is NOT — it is the heuristic
+    `1800 * complexity` from `core/learning/token_baseline.py`, so every value
+    derived from it (`saved_tokens`, `savings_percent`, all cost figures) is an
+    estimate, not a measurement. `baseline_measured: false` says so in the
+    payload. Kept because the operator explicitly chose to keep the dashboard's
+    existing savings tiles; do not present these as measured elsewhere.
     """
-    from ..corvin_core.learning.token_metrics_store import TokenMetricsStore
-    from ..corvin_core.learning.token_metrics_aggregator import TokenMetricsAggregator
-    from ..corvin_core.learning.token_baseline import ComparisonEngine
+    empty = {
+        "metrics": None,
+        "breakdown": None,
+        "baseline_measured": False,
+        "session_id": session_id,
+    }
+    try:
+        from core.learning.token_metrics_db import TokenMetricsDB  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001 — module absent → honest "no data"
+        return {**empty, "error": f"token metrics unavailable: {exc}"}
 
     try:
-        store = TokenMetricsStore(None, db=None)  # Would come from DI
-        comparison_engine = ComparisonEngine()
-        aggregator = TokenMetricsAggregator(store, comparison_engine)
-
-        # Get session metrics (would need session_id context)
-        # For now, return placeholder that Console will populate with real data
-        return {
-            "session_id": rec.session_id or "unknown",
-            "tenant_id": rec.tenant_id,
-            "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
-            "message": "Token savings data will be populated from active session",
-        }
+        db = TokenMetricsDB()
+        resolved = _resolve_session_id(db, rec.tenant_id, session_id)
+        if resolved is None:
+            return empty
+        summary = db.summary(resolved, rec.tenant_id)
     except Exception as exc:  # noqa: BLE001
-        return {
-            "session_id": rec.session_id or "unknown",
-            "tenant_id": rec.tenant_id,
-            "error": str(exc),
-            "status": "unavailable",
-        }
+        return {**empty, "error": f"token metrics query failed: {exc}"}
+
+    if not summary.get("turn_count"):
+        return {**empty, "session_id": resolved}
+
+    total = int(summary.get("total_tokens") or 0)
+    baseline = int(summary.get("baseline_tokens") or 0)
+    saved = int(summary.get("savings_tokens") or 0)
+    rate = _token_cost_per_1k(rec.tenant_id)
+
+    # Subsystem attribution as PERCENTAGES of attributed tokens — the panel
+    # renders these straight into progress bars.
+    subsystems = summary.get("subsystems") or {}
+    attributed = sum(int(v.get("total_tokens") or 0) for v in subsystems.values())
+    breakdown = {
+        name: round(int(vals.get("total_tokens") or 0) * 100.0 / attributed, 1)
+        for name, vals in subsystems.items()
+    } if attributed > 0 else None
+
+    return {
+        "metrics": {
+            "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "session_id": resolved,
+            "turn_count": int(summary.get("turn_count") or 0),
+            "total_tokens": total,
+            "avg_tokens_per_turn": float(summary.get("avg_tokens_per_turn") or 0),
+            "baseline_tokens": baseline,
+            "saved_tokens": saved,
+            "savings_percent": float(summary.get("savings_percent") or 0.0),
+            "estimated_baseline_cost": round(baseline / 1000.0 * rate, 4),
+            "estimated_actual_cost": round(total / 1000.0 * rate, 4),
+            "estimated_savings": round(saved / 1000.0 * rate, 4),
+            "cost_per_1k_tokens": rate,
+        },
+        "breakdown": breakdown,
+        "by_task_type": summary.get("by_task_type") or {},
+        # False until a real stateless-engine baseline exists; see docstring.
+        "baseline_measured": False,
+        "session_id": resolved,
+    }

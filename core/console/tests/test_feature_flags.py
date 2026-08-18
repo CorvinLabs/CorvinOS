@@ -279,6 +279,47 @@ spec:
     assert ff.is_enabled("browser_automation") is False
 
 
+def test_whitelist_unlisted_flag_can_be_switched_on_from_console(tenant_home):
+    """An explicit console toggle outranks the whitelist (flag-ON state).
+
+    Regression: the whitelist branch used to return a hard False for every
+    unlisted flag without reading the overlay, so the Settings panel answered
+    200 {"enabled": true} and the flag stayed off for 36 of 41 flags.
+    """
+    _write_yaml(tenant_home, """
+spec:
+  features_whitelist:
+    - browser_automation
+""")
+    # Precondition: unlisted and untouched → OFF (deny-by-default intact)
+    assert ff.is_enabled("a2a_relay_fallback") is False
+
+    # Operator switches it on from the Console
+    ff.set_enabled("a2a_relay_fallback", True)
+    assert ff.is_enabled("a2a_relay_fallback") is True
+    assert ff._source_of("a2a_relay_fallback", "_default") == "console"
+
+    # ...and can switch it back off
+    ff.set_enabled("a2a_relay_fallback", False)
+    assert ff.is_enabled("a2a_relay_fallback") is False
+
+
+def test_whitelist_untouched_flags_stay_dark(tenant_home):
+    """Flag-OFF state: no operator toggle → whitelist still denies all else."""
+    _write_yaml(tenant_home, """
+spec:
+  features_whitelist:
+    - browser_automation
+""")
+    ff.set_enabled("acs_context_sync", True)  # a DIFFERENT flag
+    # The toggled one is on, every other unlisted flag stays dark
+    assert ff.is_enabled("acs_context_sync") is True
+    for entry in ff.REGISTRY:
+        if entry.id in ("browser_automation", "acs_context_sync"):
+            continue
+        assert ff.is_enabled(entry.id) is False, entry.id
+
+
 def test_fallback_to_legacy_mode_when_no_whitelist(tenant_home):
     """No whitelist → fallback to legacy spec.features behavior."""
     _write_yaml(tenant_home, """
@@ -304,13 +345,38 @@ spec:
     assert ff._source_of("ccc_command_routing", "_default") == "default"
 
 
-def test_vibe_engineering_features_are_whitelisted(tenant_home):
-    """The live _default tenant has vibe_engineering on whitelist."""
-    # Use the real tenant config (not a tmp fixture)
+def test_shipped_whitelist_enables_vibe_engineering(tenant_home):
+    """The tenant config SHIPPED IN THE REPO whitelists the vibe flags.
+
+    Rewritten: the old version claimed to "use the real tenant config" while
+    taking the tmp-home fixture, so it actually resolved against an EMPTY
+    config — and it asserted on `tree_of_thoughts` / `token_metrics`, the
+    phantom ids ADR-0390 removed from the whitelist without updating this
+    test. It had been failing before the whitelist-precedence change.
+    """
+    repo_cfg = (Path(__file__).resolve().parents[3]
+                / ".corvin" / "tenants" / "_default" / "global" / "tenant.corvin.yaml")
+    assert repo_cfg.is_file(), f"shipped tenant config missing: {repo_cfg}"
+    _write_yaml(tenant_home, repo_cfg.read_text(encoding="utf-8"))
+
     assert ff.is_enabled("vibe_engineering", "_default") is True
     assert ff.is_enabled("vibe_engineering_active", "_default") is True
-    assert ff.is_enabled("tree_of_thoughts", "_default") is True
-    assert ff.is_enabled("token_metrics", "_default") is True
+
+
+def test_shipped_whitelist_has_no_phantom_ids(tenant_home):
+    """Every whitelisted id must exist in REGISTRY (ADR-0390 root cause).
+
+    A whitelist entry for an unregistered id is silently inert — that is what
+    made ADR-0390's phantom entries look like "all features disabled".
+    """
+    import yaml
+    repo_cfg = (Path(__file__).resolve().parents[3]
+                / ".corvin" / "tenants" / "_default" / "global" / "tenant.corvin.yaml")
+    spec = (yaml.safe_load(repo_cfg.read_text(encoding="utf-8")) or {}).get("spec") or {}
+    whitelist = spec.get("features_whitelist")
+    assert isinstance(whitelist, list), "shipped config must declare features_whitelist"
+    phantom = [fid for fid in whitelist if fid not in ff._BY_ID]
+    assert not phantom, f"whitelist references unregistered flag ids: {phantom}"
 
 
 if __name__ == "__main__":

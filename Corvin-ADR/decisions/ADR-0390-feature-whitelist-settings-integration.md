@@ -6,6 +6,7 @@ depends_on: [ADR-0386]
 related: [ADR-0286, ADR-0288]
 commits: []
 paths:
+  - core/console/corvin_core/feature_flags.py
   - core/console/corvin_console/routes/settings.py
   - .corvin/tenants/_default/global/tenant.corvin.yaml
   - .corvin/tenants/_default/global/features.json
@@ -19,6 +20,64 @@ docs:
 **Date:** 2026-08-18  
 **Deciders:** shumway (Claude)  
 **Status:** Accepted
+
+### Amendment 2026-08-18 — an explicit console toggle outranks the whitelist
+
+The deny-all-else branch of `is_enabled()` returned a hard `False` for every
+unlisted flag **without reading the overlay at all**. Consequence, measured on
+the live `_default` tenant: **36 of 41** registered flags could not be switched
+on from the Console. `POST /settings/features/{id}/toggle` wrote the overlay,
+answered `200 {"enabled": true}`, and the flag stayed off — the API reported
+success for something that could not happen. This contradicted two things at
+once: the load-bearing CLAUDE.md rule that every flag is *"toggleable from the
+Console Settings → Features panel, no file editing, no restart"*, and this
+repo's own `_source_of()`, which already reported such a flag as coming from
+`"console"` while `is_enabled()` ignored it.
+
+**Amended resolution order** (`core/console/corvin_core/feature_flags.py`):
+
+1. An explicit operator decision in the `features.json` overlay wins — in
+   **both** directions (on for an unlisted flag, off for a listed one).
+2. Otherwise the whitelist decides: listed → ON, unlisted → OFF.
+3. Otherwise (no whitelist) the legacy `spec.features` path, then the registry
+   default.
+
+**Deny-by-default is intact.** A flag the operator never toggled still resolves
+through the whitelist, so nothing turns itself on; the whitelist keeps its
+meaning as "what is on when the operator has said nothing". What changed is
+that the whitelist is no longer a ceiling the Console cannot raise.
+
+The Verification asserts below still hold as written — they describe flags with
+no overlay entry. They are no longer complete, though: with an overlay entry
+present, the overlay is the answer. See `test_whitelist_unlisted_flag_can_be_
+switched_on_from_console` and `test_whitelist_untouched_flags_stay_dark` in
+`core/console/tests/test_feature_flags.py` for both states.
+
+Also fixed in the same pass: `verify_reauth` — a plain helper, not a FastAPI
+dependency — was wired into `set_feature` and `set_worker_engine` via
+`Depends()`. FastAPI read its signature as request params, making `rec` a
+second body field and `presented_token` a required query param, so every
+console toggle returned **422** before any of the above could even be reached.
+It is now called inline, and its result is actually checked (under `Depends()`
+the return value was never read, so the re-auth gate was inert).
+
+And `PUT /settings/worker-engine` was unreachable for a third, independent
+reason: it was declared BELOW `PUT /settings/{label}` in the same module, so
+Starlette's registration-order matching handed every call to the config-file
+writer, which validated it against `SettingsWriteRequest` and answered
+`422 {"loc": ["body","body"]}`. This is exactly the trap ADR-0067 documented
+for `PUT /settings/engine`; `app.py`'s include-order comment solves it only for
+*other* routers and cannot help a route defined in the same file. The
+worker-engine routes now sit above the wildcard, with a comment saying why they
+must stay there. `PUT /settings/{label}` itself is unaffected (verified: an
+unknown label still returns 404).
+
+Note for whoever picks this up next: `core/gateway/corvin_gateway/console_api.py`
+carries a SECOND, shadow implementation of these same settings endpoints backed
+by an in-process `_SETTINGS` dict rather than `features.json`. It is imported by
+nothing (grep confirms) — dead demo code, consistent with what CLAUDE.md already
+records about that module's `/auth/login`. It was NOT changed here, but it is a
+live trap: editing it looks like fixing the API and changes nothing.
 
 ## Context
 

@@ -16,6 +16,27 @@ if TYPE_CHECKING:
     from core.learning.token_metrics_db import TokenMetricsDB
 
 
+def _dispatch(coro) -> None:
+    """Run a coroutine from sync OR async code, without ever raising.
+
+    Inside a running loop the work is scheduled fire-and-forget (a telemetry
+    write must not block a chat turn); outside one it is run to completion,
+    because "there is no loop" previously meant "silently write nothing".
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            asyncio.run(coro)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.warning("token metrics dispatch failed: %s", exc)
+            coro.close()
+        return
+    loop.create_task(coro)
+
+
 class TokenMetricsStore:
     """Persistence layer for token measurements.
 
@@ -72,24 +93,19 @@ class TokenMetricsStore:
             skill_name=skill_name,
         )
 
-        # Write to EventEmitter (immutable, hash-chained) — always, first
-        self.event_emitter.emit(event)
+        # Write to EventEmitter (immutable, hash-chained) — always, first.
+        # emit() is a COROUTINE: calling it bare only built an un-awaited object
+        # ("RuntimeWarning: coroutine 'EventEmitter.emit' was never awaited") and
+        # the event was silently dropped, in sync and async callers alike.
+        _dispatch(self.event_emitter.emit(event))
 
-        # Write to DB backend if available (non-blocking, log errors only)
+        # Write to DB backend if available (never fatal — telemetry must not be
+        # able to break a turn). The sync branch used to log "consider making
+        # caller async" and RETURN WITHOUT WRITING, so any caller outside a
+        # running loop persisted nothing at all.
         if self.db:
             try:
-                import asyncio
-                # If we're already in an async context, use create_task to avoid blocking
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(self.db.insert_token_metrics(event))
-                except RuntimeError:
-                    # No event loop running; attempt sync write with warning
-                    import logging
-                    logging.warning(
-                        "DB write called from sync context; "
-                        "consider making caller async"
-                    )
+                _dispatch(self.db.insert_token_metrics(event))
             except Exception as e:
                 import logging
                 logging.warning(f"Failed to write token metrics to DB: {e}")

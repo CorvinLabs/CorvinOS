@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { Loader2, TrendingDown, Zap, DollarSign, Target, BarChart3 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { getTokenMetrics } from "@/lib/api";
 
 interface TokenMetrics {
   timestamp: string;
@@ -28,16 +29,9 @@ interface TokenMetrics {
   cost_per_1k_tokens: number;
 }
 
-interface SavingsBreakdown {
-  confidence_cache: number;
-  context_bridge: number;
-  skill_injection: number;
-  learning_system: number;
-}
-
 export default function TokenMetricsPage() {
   const [metrics, setMetrics] = useState<TokenMetrics | null>(null);
-  const [breakdown, setBreakdown] = useState<SavingsBreakdown | null>(null);
+  const [breakdown, setBreakdown] = useState<Record<string, number> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -49,17 +43,13 @@ export default function TokenMetricsPage() {
                          localStorage.getItem("current_session_id") ||
                          "current";
 
-        const response = await fetch(`/v1/console/api/metrics/session/${sessionId}`);
-        if (!response.ok) throw new Error("Failed to fetch metrics");
-
-        const data = await response.json();
+        // Was `/v1/console/api/metrics/session/…`, which 404s: the only route
+        // ever serving that path lives in gateway/console_api.py, a module
+        // nothing imports. This one is on the real, mounted console router and
+        // carries the session cookie via the shared api() wrapper.
+        const data = await getTokenMetrics(sessionId);
         setMetrics(data.metrics);
-        setBreakdown(data.breakdown || {
-          confidence_cache: 35,
-          context_bridge: 28,
-          skill_injection: 22,
-          learning_system: 15,
-        });
+        setBreakdown(data.breakdown);
         setLastUpdated(new Date());
         setError(null);
       } catch (err) {
@@ -265,12 +255,12 @@ export default function TokenMetricsPage() {
             <CardDescription>Where the savings come from</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {breakdown && Object.entries({
-              "Confidence Cache": breakdown.confidence_cache,
-              "Context Bridge": breakdown.context_bridge,
-              "Skill Injection": breakdown.skill_injection,
-              "Learning System": breakdown.learning_system,
-            }).map(([name, pct]) => (
+            {!breakdown && (
+              <p className="text-sm text-muted-foreground">
+                No per-subsystem attribution recorded for this session.
+              </p>
+            )}
+            {breakdown && Object.entries(breakdown).map(([name, pct]) => (
               <div key={name}>
                 <div className="flex justify-between items-center mb-1">
                   <span className="text-sm font-medium">{name}</span>

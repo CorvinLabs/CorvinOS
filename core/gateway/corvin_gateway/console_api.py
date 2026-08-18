@@ -43,6 +43,29 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 
 
+# ── Session Dependencies ─────────────────────────────────────────────────
+
+class SessionRecord(BaseModel):
+    """Session info record."""
+    email: str
+    tier: str
+    tenant_id: str
+    csrf_token: str
+
+
+def require_session(request: Request) -> SessionRecord:
+    """Dependency to require an active session."""
+    session = _get_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="no session")
+    return SessionRecord(
+        email=session["email"],
+        tier=session["tier"],
+        tenant_id=session["tenant_id"],
+        csrf_token=session["csrf_token"],
+    )
+
+
 # ── Token Metrics Configuration ──────────────────────────────────────────
 # Claude Opus 4.1 pricing as of 2026-08-18
 # Source: https://www.anthropic.com/pricing
@@ -534,6 +557,141 @@ async def get_learning_nodes(session: SessionRecord = Depends(require_session)) 
     except Exception as e:
         print(f"Error fetching learning nodes: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch learning nodes")
+
+
+class SettingsResponse(BaseModel):
+    """Settings response."""
+    worker_engine: str
+    features: dict[str, bool]
+
+
+class WorkerEngineRequest(BaseModel):
+    """Worker engine change request."""
+    engine: str
+
+
+class FeatureToggleRequest(BaseModel):
+    """Feature toggle request."""
+    enabled: bool
+
+
+# Default settings storage (in-memory for now)
+_DEFAULT_SETTINGS = {
+    "worker_engine": "native",
+    "features": {
+        "acs_context_sync": False,
+        "bridge_big_data_delegation": False,
+        "bridge_worker_engine_parity": False,
+    },
+}
+
+_SETTINGS: dict[str, dict[str, Any]] = {}
+
+
+@router.get("/settings", response_model=SettingsResponse)
+async def get_settings(session: SessionRecord = Depends(require_session)) -> SettingsResponse:
+    """Get all settings for the current tenant."""
+    tenant_id = session.tenant_id
+    if tenant_id not in _SETTINGS:
+        _SETTINGS[tenant_id] = _DEFAULT_SETTINGS.copy()
+
+    settings = _SETTINGS[tenant_id]
+    return SettingsResponse(
+        worker_engine=settings.get("worker_engine", "native"),
+        features=settings.get("features", {}),
+    )
+
+
+@router.get("/settings/worker-engine", response_model=dict)
+async def get_worker_engine(session: SessionRecord = Depends(require_session)) -> dict:
+    """Get current worker engine setting."""
+    tenant_id = session.tenant_id
+    if tenant_id not in _SETTINGS:
+        _SETTINGS[tenant_id] = _DEFAULT_SETTINGS.copy()
+
+    engine = _SETTINGS[tenant_id].get("worker_engine", "native")
+    return {"engine": engine}
+
+
+@router.put("/settings/worker-engine", response_model=dict, status_code=200)
+async def set_worker_engine(
+    request: Request,
+    payload: WorkerEngineRequest,
+    session: SessionRecord = Depends(require_session),
+) -> dict:
+    """Change worker engine setting."""
+    # Verify CSRF token
+    csrf_token = request.headers.get("X-CSRF-Token")
+    if not _verify_csrf(request, csrf_token):
+        raise HTTPException(status_code=403, detail="CSRF token invalid")
+
+    # Validate engine choice
+    valid_engines = ["native", "acs", "tde"]
+    if payload.engine not in valid_engines:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid engine. Must be one of: {', '.join(valid_engines)}",
+        )
+
+    tenant_id = session.tenant_id
+    if tenant_id not in _SETTINGS:
+        _SETTINGS[tenant_id] = _DEFAULT_SETTINGS.copy()
+
+    _SETTINGS[tenant_id]["worker_engine"] = payload.engine
+    return {"engine": payload.engine, "status": "updated"}
+
+
+@router.get("/settings/features", response_model=dict)
+async def get_features(session: SessionRecord = Depends(require_session)) -> dict:
+    """Get all feature flags."""
+    tenant_id = session.tenant_id
+    if tenant_id not in _SETTINGS:
+        _SETTINGS[tenant_id] = _DEFAULT_SETTINGS.copy()
+
+    features = _SETTINGS[tenant_id].get("features", {})
+    return {"features": features}
+
+
+@router.get("/settings/features/{feature_id}", response_model=dict)
+async def get_feature(
+    feature_id: str,
+    session: SessionRecord = Depends(require_session),
+) -> dict:
+    """Get a specific feature flag."""
+    tenant_id = session.tenant_id
+    if tenant_id not in _SETTINGS:
+        _SETTINGS[tenant_id] = _DEFAULT_SETTINGS.copy()
+
+    features = _SETTINGS[tenant_id].get("features", {})
+    if feature_id not in features:
+        raise HTTPException(status_code=404, detail=f"Feature '{feature_id}' not found")
+
+    return {"feature_id": feature_id, "enabled": features[feature_id]}
+
+
+@router.put("/settings/features/{feature_id}", response_model=dict, status_code=200)
+async def set_feature(
+    feature_id: str,
+    request: Request,
+    payload: FeatureToggleRequest,
+    session: SessionRecord = Depends(require_session),
+) -> dict:
+    """Toggle a feature flag."""
+    # Verify CSRF token
+    csrf_token = request.headers.get("X-CSRF-Token")
+    if not _verify_csrf(request, csrf_token):
+        raise HTTPException(status_code=403, detail="CSRF token invalid")
+
+    tenant_id = session.tenant_id
+    if tenant_id not in _SETTINGS:
+        _SETTINGS[tenant_id] = _DEFAULT_SETTINGS.copy()
+
+    features = _SETTINGS[tenant_id].get("features", {})
+    if feature_id not in features:
+        raise HTTPException(status_code=404, detail=f"Feature '{feature_id}' not found")
+
+    features[feature_id] = payload.enabled
+    return {"feature_id": feature_id, "enabled": payload.enabled, "status": "updated"}
 
 
 @router.get("/health")

@@ -224,7 +224,22 @@ savings = baseline_cost - actual_cost
 
 ## 🎯 API Endpoints (nach Integration)
 
-### Get Session Metrics
+> **Zwei verschiedene Server — nicht verwechseln.**
+> Die `/api/metrics/*`-Pfade unten gehören zum **eigenständigen Stats-Server**
+> (`scripts/run-stats-server.py`, Port 8000). Das **Console-Panel** (Settings →
+> Vibe Engineering → Token Metrics) benutzt sie NICHT, sondern:
+>
+> ```bash
+> GET /v1/console/vibe-engineering/token-metrics/{session_id}   # "current" = juengste Session des Tenants
+> ```
+>
+> Die Console-Seite zeigte zunaechst auf `/v1/console/api/metrics/session/{id}`
+> — eine Mischung aus beiden Praefixen, die auf keinem der beiden Server
+> existiert (404). Die einzige Route, die je `/metrics/session/{id}` bediente,
+> liegt in `core/gateway/corvin_gateway/console_api.py`, einem Modul, das
+> nirgends importiert wird.
+
+### Get Session Metrics (Stats-Server, Port 8000)
 ```bash
 GET /api/metrics/session/{session_id}
 Response:
