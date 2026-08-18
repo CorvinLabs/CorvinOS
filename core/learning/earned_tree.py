@@ -59,12 +59,18 @@ def build_earned_tree(tenant_id: str) -> list[dict]:
     for sid, label, when in _STAGES:
         entry = store.get(sid)
         raw = entry.get("grades") if isinstance(entry, dict) else None  # L1: non-dict → none
-        grades = raw[-_MAX_GRADES:] if isinstance(raw, list) else []     # L3: bound the read
+        raw = raw[-_MAX_GRADES:] if isinstance(raw, list) else []        # L3: bound the read
+        # Drop any non-dict leaf up front so every .get below is safe — a single corrupt
+        # element must NOT blank the whole tree (review MEDIUM-1, the L1 gap).
+        grades = [g for g in raw if isinstance(g, dict)]
         # Re-clamp on read: grade_stage clamps on write, but a hand-edited/legacy store
-        # could carry a score outside [0,1] or a NaN — never let that reach the gauge (L2).
+        # could carry a score outside [0,1], a NaN/Inf, or a bool (bool ⊂ int) — none of
+        # those may reach the gauge (review L2 + LOW-1).
         scores = [max(0.0, min(1.0, float(g["score"]))) for g in grades
-                  if isinstance(g.get("score"), (int, float)) and math.isfinite(g["score"])]
-        n_grades = len(grades)          # every record — what "Bewertungen gesamt" means
+                  if isinstance(g.get("score"), (int, float))
+                  and not isinstance(g.get("score"), bool)
+                  and math.isfinite(g["score"])]
+        n_grades = len(grades)          # every valid record — what "Bewertungen gesamt" means
         n_scored = len(scores)
         conf = round(sum(scores) / n_scored, 3) if n_scored else 0.5  # 0.5 = no evidence
         # Evidence split MUST sum to n_grades (M1): operator = explicit human grades,
