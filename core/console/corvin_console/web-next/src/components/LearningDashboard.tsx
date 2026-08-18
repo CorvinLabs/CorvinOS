@@ -82,7 +82,7 @@ const DetailPanel: React.FC<{ node: TreeNode | null; onGrade: (score: number) =>
 
       <div style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
         <p style={{ margin: '2px 0' }}>Bewertungen gesamt: {node.calls_in_production}</p>
-        {ev && <p style={{ margin: '2px 0' }}>↳ automatisch (Outcome-Loop): {ev.auto_earned} · Operator: {ev.operator}</p>}
+        {ev && <p style={{ margin: '2px 0' }}>↳ automatisch (System: Loop + Seed): {ev.auto_earned} · Operator: {ev.operator}</p>}
         {node.adr_link && <p style={{ margin: '2px 0' }}>ADR: {node.adr_link}</p>}
       </div>
 
@@ -90,9 +90,9 @@ const DetailPanel: React.FC<{ node: TreeNode | null; onGrade: (score: number) =>
         <div style={{ marginTop: 16 }}>
           <label style={{ fontSize: 12, fontWeight: 600, opacity: 0.7 }}>Operator-Override</label>
           <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
-            <button disabled={busy} onClick={() => onGrade(0.0)} style={btnStyle}>👎</button>
-            <button disabled={busy} onClick={() => onGrade(0.5)} style={btnStyle}>😐</button>
-            <button disabled={busy} onClick={() => onGrade(1.0)} style={btnStyle}>👍</button>
+            <button disabled={busy} aria-label="Schlecht bewerten" onClick={() => onGrade(0.0)} style={{ ...btnStyle, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>👎</button>
+            <button disabled={busy} aria-label="Neutral bewerten" onClick={() => onGrade(0.5)} style={{ ...btnStyle, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>😐</button>
+            <button disabled={busy} aria-label="Gut bewerten" onClick={() => onGrade(1.0)} style={{ ...btnStyle, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>👍</button>
             {busy && <span style={{ fontSize: 12, opacity: 0.7 }}>speichere…</span>}
           </div>
           {error && <p style={{ fontSize: 12, color: '#ef4444', marginTop: 8 }}>{error}</p>}
@@ -156,7 +156,7 @@ export const LearningDashboard: React.FC<{ nodes?: any[] }> = ({ nodes = [] }) =
         <div style={{ borderRight: '1px solid rgba(127,127,127,0.25)', paddingRight: 16 }}>
           {tree.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>Noch keine Daten.</div>}
           {tree.map((node) => (
-            <TreeView key={node.id} node={node} onSelect={(n) => setSelectedId(n.id)} selectedId={selectedNode?.id} />
+            <TreeView key={node.id} node={node} onSelect={(n) => { setSelectedId(n.id); setError(null); }} selectedId={selectedNode?.id} />
           ))}
         </div>
         <DetailPanel node={selectedNode} onGrade={grade} busy={busy} error={error} />

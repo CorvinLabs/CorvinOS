@@ -17,10 +17,14 @@ community stages — the non-builtin subject this gate was written for — now e
 because they run in the subprocess sandbox. Was "dormant until P-G" (review R3
 finding B1) up to 2026-08-11.
 
-``record_turn_outcome`` is STILL without a production caller: the
-outcome-feedback loop (ADR-0269 Phase-4b) that would attribute a turn's success
-to the stages that ran is not wired. Grades therefore accrue only from explicit
-operator grading today — which is also the only kind that promotes.
+``record_turn_outcome`` is wired as of G4 (ADR-0371): ``chat_runtime.stream_turn``
+calls it after a completed console turn, behind the default-off ``outcome_feedback_loop``
+flag. Those grades are ADVISORY (``grader="__loop__"``) — only an explicit ``operator``
+grade promotes. On a default install (flag off) grades still accrue only from operator
+grading + the bootstrap seed. NOTE: the loop records ``success=True`` for every completed
+turn (no richer signal yet), so with the flag on the auto-earned mean trends toward 1.0 —
+treat it as "the stage participated in completed turns," not a quality score, until a real
+success signal (user 👍/👎 or task outcome) feeds it.
 """
 from __future__ import annotations
 
