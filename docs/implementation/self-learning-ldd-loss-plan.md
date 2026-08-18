@@ -24,10 +24,10 @@
 ## Phase 1 — Frei-negatives Signal verdrahten *(billig, richtige Ebene)*
 Ersetzt das pauschale `True` an `chat_runtime.py:6401`. **Kein Uniform-Blame** (Review F1 — `rc` ist der
 *Worker*-Exit-Code, entsteht nach der Kontext-Assemblierung):
-- Harter Fehler (`rc≠0` / Healing / Artefakt-Fehler) → **Turn-Health-Record** (Turn-Ebene), NICHT auf alle gelaufenen Stages verteilt.
 - Per-Stage-Abwerter **nur mit direktem Link:** geforgtes Tool lief mit Fehler → `toolforge`; Artefakt installierte nicht → erzeugende Stage. Sonst kein Stage-Grade.
+- **Nicht-attribuierbarer Worker-Crash → KEIN Grade** (kein „Turn-Health"-Store — das wäre ein reader-loser Write, Review R1; der Operator sieht den Fehler via Fehler-Event + Overview-„Degraded").
 - **Sonst: gar nichts** (kein `True`). Flag `ldd_loss_learning` (default off).
-- **Test (E2E):** Fehler-Turn → Turn-Health negativ + (bei Tool-Fehler) genau `toolforge` abgewertet, **nicht** alle Stages; sauberer Turn → **kein** Grade. Durch die `stream_turn`-Grenze.
+- **Test (E2E):** Tool-Fehler-Turn → genau `toolforge` abgewertet, **nicht** alle Stages; reiner Worker-Crash ohne Link → **kein** Grade; sauberer Turn → **kein** Grade. Durch die `stream_turn`-Grenze.
 
 ## Phase 2 — Coding-Verifikation als echter Anker *(opt-in; echte Isolation, nicht env-scrub)*
 `core/learning/turn_verification.py`:
