@@ -329,7 +329,16 @@ def create_app() -> FastAPI:
             from core.learning.token_metrics_store import TokenMetricsStore
             from core.learning.token_measurement_hook import initialize_token_hook
 
-            _emitter = EventEmitter()
+            # Get tenant paths
+            _tenant_id = "_default"
+            try:
+                from forge.paths import tenant_home  # type: ignore[import-not-found]
+                _tenant_dir = tenant_home(_tenant_id)
+            except ImportError:
+                # Fallback for testing environments
+                _tenant_dir = Path.home() / ".corvin" / "tenants" / _tenant_id
+
+            _emitter = EventEmitter(Path(_tenant_dir), _tenant_id)
             _db = TokenMetricsDB()  # Auto-creates ~/.corvin/token_metrics.db
             _store = TokenMetricsStore(_emitter, db=_db)
             _hook = initialize_token_hook(_store, _emitter)
