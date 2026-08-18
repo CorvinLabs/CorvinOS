@@ -181,3 +181,151 @@ def merge_tenant_dirs(local_dir: Path, remote_dir: Path) -> SyncReport:
                 elif _read(rpath) != _read(lpath):
                     report.collisions.append(Collision(str(rel), "mtime LWW", "local"))
     return report
+
+
+# ── live transport: GPG (mandatory) + git (transport) — G5 ─────────────────────
+# The remote git repo only ever holds CIPHERTEXT: the tenant learning bundle is tarred
+# and GPG-symmetric-encrypted before it is written into the clone and pushed. On pull it
+# is decrypted into a temp dir, merged into the local state, re-encrypted, and pushed.
+# So third-party PII (ADR-0369 C14) never lands on the remote in cleartext, and the
+# assert_no_raw_pii backstop runs on the OUTBOUND bytes: they are ciphertext, so it
+# passes — and would fire (drop the push) only if encryption silently produced plaintext.
+import subprocess  # noqa: E402
+import tarfile  # noqa: E402
+import io  # noqa: E402
+
+_ENC_NAME = "learning.tar.gz.gpg"
+
+
+class SyncError(Exception):
+    """A live-sync step (gpg/git) failed. The turn/route degrades, never crashes."""
+
+
+def gpg_available() -> bool:
+    try:
+        subprocess.run(["gpg", "--version"], capture_output=True, check=True, timeout=10)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _gpg(args: list[str], *, data: bytes, passphrase: str) -> bytes:
+    """Run gpg with the passphrase on fd 3 (never argv/env) and ``data`` on stdin."""
+    import os  # noqa: PLC0415
+    r_fd, w_fd = os.pipe()
+    try:
+        os.write(w_fd, (passphrase + "\n").encode("utf-8"))
+        os.close(w_fd)
+        w_fd = -1
+        # pass_fds keeps r_fd at its own number in the child — reference that number,
+        # not a hardcoded 3 (subprocess does not renumber passed fds).
+        proc = subprocess.run(
+            ["gpg", "--batch", "--yes", "--quiet", "--passphrase-fd", str(r_fd),
+             "--pinentry-mode", "loopback", *args],
+            input=data, capture_output=True, pass_fds=(r_fd,), timeout=120)
+    finally:
+        os.close(r_fd)
+        if w_fd != -1:
+            os.close(w_fd)
+    if proc.returncode != 0:
+        raise SyncError(f"gpg failed: {proc.stderr.decode('utf-8', 'replace')[:200]}")
+    return proc.stdout
+
+
+def gpg_encrypt(data: bytes, passphrase: str) -> bytes:
+    """Symmetric AES-256 encryption (no keyring needed — passphrase from the Vault)."""
+    return _gpg(["--symmetric", "--cipher-algo", "AES256", "-o", "-"],
+                data=data, passphrase=passphrase)
+
+
+def gpg_decrypt(blob: bytes, passphrase: str) -> bytes:
+    return _gpg(["--decrypt", "-o", "-"], data=blob, passphrase=passphrase)
+
+
+def bundle_dir(path: Path) -> bytes:
+    """Deterministic-ish tar.gz of a directory tree (sorted names)."""
+    path = Path(path)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for f in sorted(path.rglob("*")):
+            if f.is_file():
+                tar.add(f, arcname=str(f.relative_to(path)))
+    return buf.getvalue()
+
+
+def unbundle(blob: bytes, dest: Path) -> None:
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+        for m in tar.getmembers():
+            # contain extraction to dest (no absolute paths / .. traversal)
+            tgt = (dest / m.name).resolve()
+            if not str(tgt).startswith(str(dest.resolve())):
+                continue
+            try:
+                tar.extract(m, dest, filter="data")  # Py 3.12+: reject unsafe members
+            except TypeError:  # older Python without the filter kwarg
+                tar.extract(m, dest)
+
+
+def _git(args: list[str], cwd: Path) -> str:
+    proc = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                          text=True, timeout=180,
+                          env={"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "true",
+                               "HOME": str(cwd), "PATH": "/usr/bin:/bin"})
+    if proc.returncode != 0:
+        raise SyncError(f"git {args[0]} failed: {proc.stderr.strip()[:200]}")
+    return proc.stdout
+
+
+def run_git_sync(local_dir: Path, remote_url: str, cache_dir: Path, passphrase: str,
+                 *, pat: "str | None" = None,
+                 author: str = "Corvin <corvin@localhost>") -> SyncReport:
+    """The full live sync (G5): pull → decrypt → merge remote INTO local → re-encrypt →
+    push. Git is transport+history only; the remote holds ONLY the GPG ciphertext blob.
+    Raises SyncError on any gpg/git failure (the caller degrades, never crashes)."""
+    if not gpg_available():
+        raise SyncError("gpg not available — mandatory encryption cannot run")
+    local_dir = Path(local_dir)
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    clone = cache_dir / "clone"
+
+    # PAT is injected into the URL for https remotes; never logged (SyncError truncates).
+    url = remote_url
+    if pat and remote_url.startswith("https://"):
+        url = remote_url.replace("https://", f"https://{pat}@", 1)
+
+    if (clone / ".git").is_dir():
+        _git(["pull", "--ff-only", "origin", "HEAD"], clone)
+    else:
+        _git(["clone", "--depth", "1", url, str(clone)], cache_dir)
+        _git(["config", "user.email", "corvin@localhost"], clone)
+        _git(["config", "user.name", "Corvin"], clone)
+
+    # decrypt the remote bundle (if any) and merge it INTO the local state
+    remote_state = cache_dir / "remote_state"
+    if remote_state.exists():
+        for f in sorted(remote_state.rglob("*"), reverse=True):
+            f.unlink() if f.is_file() else f.rmdir()
+    enc = clone / _ENC_NAME
+    if enc.is_file():
+        try:
+            unbundle(gpg_decrypt(enc.read_bytes(), passphrase), remote_state)
+        except SyncError:
+            raise  # wrong passphrase / corrupt remote → surface, do not merge garbage
+    report = merge_tenant_dirs(local_dir, remote_state)
+
+    # re-bundle the merged local state, encrypt, and stage the ciphertext ONLY
+    blob = gpg_encrypt(bundle_dir(local_dir), passphrase)
+    assert_no_raw_pii(blob)  # ciphertext → passes; cleartext leak → drop the push
+    (clone / _ENC_NAME).write_bytes(blob)
+
+    _git(["add", _ENC_NAME], clone)
+    status = _git(["status", "--porcelain"], clone)
+    if status.strip():
+        _git(["commit", "-m", "corvin: tenant learning sync", "--author", author], clone)
+        _git(["push", "origin", "HEAD"], clone)
+    else:
+        report.collisions.append(Collision(_ENC_NAME, "no change to push", "local"))
+    return report

@@ -70,3 +70,60 @@ def test_merge_tenant_dirs_end_to_end(tmp_path: Path):
     # the OUTBOUND payload assert is what guards the push
     with pytest.raises(ts.PiiLeak):
         ts.assert_no_raw_pii("contact: bob@corp.io")
+
+
+# ── live transport (G5): GPG + git ─────────────────────────────────────────────
+gpg_missing = not ts.gpg_available()
+
+
+@pytest.mark.skipif(gpg_missing, reason="gpg not available")
+def test_gpg_and_bundle_roundtrip(tmp_path: Path):
+    blob = ts.gpg_encrypt(b"secret learning state: alice@example.com", "pw-123")
+    assert b"alice@example.com" not in blob  # ciphertext hides the PII
+    assert ts.gpg_decrypt(blob, "pw-123") == b"secret learning state: alice@example.com"
+    # bundle/unbundle a dir
+    src = tmp_path / "src"; _write(src / "a/b.txt", "hello")
+    ts.unbundle(ts.bundle_dir(src), tmp_path / "out")
+    assert (tmp_path / "out" / "a" / "b.txt").read_text() == "hello"
+
+
+@pytest.mark.skipif(gpg_missing, reason="gpg not available")
+def test_two_instance_git_sync(tmp_path: Path):
+    """The real E2E: a bare repo is the remote; instance A pushes encrypted state,
+    instance B pulls it, merges, and pushes the union — and the remote holds ONLY
+    ciphertext (no PII in the blob)."""
+    import subprocess
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    # seed an initial commit so clone --depth 1 has a HEAD
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", str(bare), str(seed)], check=True, capture_output=True)
+    (seed / "README").write_text("corvin tenant remote")
+    for a in (["add", "."], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"],
+              ["push", "origin", "HEAD"]):
+        subprocess.run(["git", *a], cwd=str(seed), check=True, capture_output=True)
+    remote = f"file://{bare}"
+    pw = "tenant-pass-xyz"
+
+    # instance A: has memory grade + one event, plus a memory note with an email
+    a_dir = tmp_path / "A_state"
+    _write(a_dir / "ce_stage_grades.json", json.dumps({"memory": {"grades": [{"score": 0.9, "ts": 1}]}}))
+    _write(a_dir / "events.jsonl", '{"a":1}\n')
+    _write(a_dir / "memory" / "note.md", "remember alice@example.com prefers dark mode")
+    ts.run_git_sync(a_dir, remote, tmp_path / "A_cache", pw)
+
+    # the remote blob is ciphertext — the email must NOT appear in it
+    blob = (tmp_path / "A_cache" / "clone" / "learning.tar.gz.gpg").read_bytes()
+    assert b"alice@example.com" not in blob
+
+    # instance B: has a DIFFERENT grade + event; pulls A, merges, pushes union
+    b_dir = tmp_path / "B_state"
+    _write(b_dir / "ce_stage_grades.json", json.dumps({"graph": {"grades": [{"score": 0.5, "ts": 2}]}}))
+    _write(b_dir / "events.jsonl", '{"b":2}\n')
+    ts.run_git_sync(b_dir, remote, tmp_path / "B_cache", pw)
+
+    merged = json.loads((b_dir / "ce_stage_grades.json").read_text())
+    assert "memory" in merged and "graph" in merged  # A's + B's stages both present
+    events = (b_dir / "events.jsonl").read_text()
+    assert '{"a":1}' in events and '{"b":2}' in events  # event union
+    assert (b_dir / "memory" / "note.md").exists()  # A's memory file arrived at B
