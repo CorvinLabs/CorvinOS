@@ -752,7 +752,7 @@ class FeatureToggleRequest(BaseModel):
     enabled: bool
 
 
-@router.post("/settings/features/{flag_id}")
+@router.post("/settings/features/{flag_id}/toggle")
 async def set_feature(
     flag_id: str,
     body: FeatureToggleRequest,
