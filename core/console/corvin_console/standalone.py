@@ -318,6 +318,25 @@ def create_app() -> FastAPI:
             )
             raise
 
+        # ── ADR-0365 — Token Metrics Measurement Hook (best-effort) ─────────
+        # Initialize the global token measurement hook. This hook records token
+        # usage (input/output) for every turn, enabling the Vibe Engineering
+        # dashboard and cost-savings analysis. Best-effort: if initialization
+        # fails, token metrics simply won't be recorded (graceful degradation).
+        try:
+            from core.learning.event_emitter import EventEmitter
+            from core.learning.token_metrics_db import TokenMetricsDB
+            from core.learning.token_metrics_store import TokenMetricsStore
+            from core.learning.token_measurement_hook import initialize_token_hook
+
+            _emitter = EventEmitter()
+            _db = TokenMetricsDB()  # Auto-creates ~/.corvin/token_metrics.db
+            _store = TokenMetricsStore(_emitter, db=_db)
+            _hook = initialize_token_hook(_store, _emitter)
+            log.info("✓ Token measurement hook initialized")
+        except Exception as e:
+            log.warning(f"Token measurement hook initialization skipped: {e}")
+
         # Start presence heartbeat (best-effort — never blocks startup).
         try:
             import forge.paths as _fp  # type: ignore[import]
