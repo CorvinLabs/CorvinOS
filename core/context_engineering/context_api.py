@@ -21,6 +21,8 @@ class ContextAPI:
     - Recording subsystem decisions in audit trail
     - Managing nested scopes
     - Subscribing to context updates
+
+    Per PERF #2 fix: tracks pending broadcast tasks to prevent resource leaks.
     """
 
     def __init__(self, subsystem_name: str, context_bus: ContextBus):
@@ -32,6 +34,22 @@ class ContextAPI:
         """
         self.name = subsystem_name
         self.bus = context_bus
+        self._pending_broadcasts: set = set()  # Track fire-and-forget tasks for cleanup
+
+    async def shutdown(self) -> None:
+        """Gracefully shutdown, ensuring all pending broadcasts complete.
+
+        Called by TaskBrain.shutdown() to ensure no broadcasts are lost
+        during shutdown.
+        """
+        if self._pending_broadcasts:
+            await asyncio.gather(*self._pending_broadcasts, return_exceptions=True)
+            self._pending_broadcasts.clear()
+
+    def _track_broadcast(self, task: asyncio.Task) -> None:
+        """Track a broadcast task for cleanup."""
+        self._pending_broadcasts.add(task)
+        task.add_done_callback(self._pending_broadcasts.discard)
 
     @property
     def current_context(self) -> ExecutionContext:
@@ -89,8 +107,8 @@ class ContextAPI:
             ctx.set_field(key, value)  # Raises if field doesn't exist
             updates[key] = (old_value, value)
 
-        # Broadcast via ContextBus
-        asyncio.create_task(
+        # Broadcast via ContextBus (tracked to prevent resource leaks)
+        task = asyncio.create_task(
             self.bus.publish("context_updated", {
                 "subsystem": self.name,
                 "updates": {k: {"old": v[0], "new": v[1]} for k, v in updates.items()},
@@ -98,6 +116,7 @@ class ContextAPI:
                 "timestamp": DecisionRecord.now_iso(),
             })
         )
+        self._track_broadcast(task)
 
         return updates
 
@@ -136,8 +155,8 @@ class ContextAPI:
             guidance_applied=guidance_applied,
         )
 
-        # Optionally broadcast decision recorded
-        asyncio.create_task(
+        # Broadcast decision recorded (tracked to prevent resource leaks)
+        task = asyncio.create_task(
             self.bus.publish("decision_recorded", {
                 "subsystem": self.name,
                 "decision_type": decision_type,
@@ -148,6 +167,7 @@ class ContextAPI:
                 "timestamp": record.timestamp,
             })
         )
+        self._track_broadcast(task)
 
         return record
 
@@ -168,8 +188,8 @@ class ContextAPI:
         ctx = self.current_context
         ctx.context_stack.push(level, id, **metadata)
 
-        # Broadcast scope change
-        asyncio.create_task(
+        # Broadcast scope change (tracked to prevent resource leaks)
+        task = asyncio.create_task(
             self.bus.publish("scope_entered", {
                 "subsystem": self.name,
                 "level": level,
@@ -178,6 +198,7 @@ class ContextAPI:
                 "context_stack": str(ctx.context_stack),
             })
         )
+        self._track_broadcast(task)
 
     def pop_scope(self, level: Optional[str] = None) -> None:
         """Exit the current scope.
@@ -193,8 +214,8 @@ class ContextAPI:
         popped = ctx.context_stack.pop(level)
 
         if popped:
-            # Broadcast scope exit
-            asyncio.create_task(
+            # Broadcast scope exit (tracked to prevent resource leaks)
+            task = asyncio.create_task(
                 self.bus.publish("scope_exited", {
                     "subsystem": self.name,
                     "level": popped.level,
@@ -202,6 +223,7 @@ class ContextAPI:
                     "context_stack": str(ctx.context_stack),
                 })
             )
+            self._track_broadcast(task)
 
     async def subscribe_context_updates(self, callback: Callable) -> None:
         """Subscribe to context update events.
@@ -269,8 +291,8 @@ class ContextAPI:
         ctx = self.current_context
         ctx.checkpoint(name, data)
 
-        # Optionally broadcast checkpoint
-        asyncio.create_task(
+        # Broadcast checkpoint (tracked to prevent resource leaks)
+        task = asyncio.create_task(
             self.bus.publish("checkpoint_created", {
                 "subsystem": self.name,
                 "checkpoint_name": name,
@@ -278,3 +300,4 @@ class ContextAPI:
                 "timestamp": DecisionRecord.now_iso(),
             })
         )
+        self._track_broadcast(task)
