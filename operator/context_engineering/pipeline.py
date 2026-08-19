@@ -396,14 +396,20 @@ def render_brief_to_text(brief: Any, *, include_content: bool = False) -> str:
     mc = getattr(brief, "memory_context", None)
     matches = getattr(mc, "matches", []) if mc else []
     if matches:
-        lines.append("Relevant past memory:")
-        for m in matches[:5]:
+        _top = matches[:5]
+        # Precompute bodies once (each read hits disk). EXP-001 Entry 19: when content is present,
+        # frame it ASSERTIVELY and present the fact DIRECTLY (no "past memory" hedge, no title
+        # prefix) — the "Relevant past memory:" framing made the model discount a name-type fact
+        # ("unknown") even though the fact was in the brief, while an authoritative framing answers
+        # it. Title-only mode (include_content off) keeps the original framing byte-for-byte.
+        _bodies = {id(m): (_memory_body(m) if include_content else "") for m in _top}
+        _has_content = any(_bodies.values())
+        lines.append("Established facts from this project (authoritative — answer from these):"
+                     if _has_content else "Relevant past memory:")
+        for m in _top:
+            _b = _bodies[id(m)]
             _title = getattr(m, 'title', None) or getattr(m, 'filename', '?')
-            _body = _memory_body(m) if include_content else ""
-            if _body:
-                lines.append(f"  - {_title}: {_body}")
-            else:
-                lines.append(f"  - {_title}")
+            lines.append(f"  - {_b}" if _b else f"  - {_title}")
     rel = getattr(brief, "related_decisions", None) or []
     if rel:
         lines.append("Related decisions (ADRs):")
