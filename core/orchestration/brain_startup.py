@@ -17,6 +17,7 @@ from core.context_engineering.context_bus import ContextBus
 from core.context_engineering.context_api import ContextAPI
 from core.context_engineering.execution_context import ExecutionContext, ContextStack
 from core.context_engineering.session_checkpoint import SessionContinuationManager, CheckpointNotFoundError
+from core.orchestration.context_coherence_manager import ContextCoherenceManager, CoherenceNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class ContextInitializer:
 
         self.memory_coordinator = MemoryCoordinator(corvin_home)
         self.session_continuation_manager = SessionContinuationManager(corvin_home)
+        self.context_coherence_manager = ContextCoherenceManager(corvin_home)
         self.context_bus: Optional[ContextBus] = None
         self.execution_context: Optional[ExecutionContext] = None
         self.context_api: Optional[ContextAPI] = None
@@ -125,6 +127,23 @@ class ContextInitializer:
                         f"Resumed task '{task_id}' from checkpoint '{checkpoint_id}' "
                         f"at turn {checkpoint.turn_number}"
                     )
+
+                    # Step 1b: Load parent coherence if available (ADR-0369)
+                    try:
+                        parent_coherence = self.context_coherence_manager.load_coherence(
+                            task_id
+                        )
+                        logger.info(
+                            f"Loaded parent coherence for task '{task_id}': "
+                            f"{len(parent_coherence.tools_known_good)} good tools"
+                        )
+                        # Store in metadata for subsystems to use
+                        if not hasattr(self, "_coherence_data"):
+                            self._coherence_data = {}
+                        self._coherence_data[task_id] = parent_coherence
+                    except CoherenceNotFoundError:
+                        logger.info(f"No prior coherence for task '{task_id}'")
+
                 except CheckpointNotFoundError as e:
                     logger.warning(f"Checkpoint not found: {e}. Using fresh task template.")
                     # Fall through to template-based initialization
