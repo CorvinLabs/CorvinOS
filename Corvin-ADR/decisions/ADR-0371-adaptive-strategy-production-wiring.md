@@ -123,6 +123,17 @@ Measurement (Week 1): Observe adaptive vs. static strategy selection rates, succ
 
 ---
 
+## Amendment (k=3 — Empirical Data Wiring)
+
+**Date:** 2026-08-19 (k=3, LDD iteration)  
+**Status:** PROPOSED → ACCEPTED (after adversarial review k=1, k=2 fixes applied)
+
+Initial wiring used hardcoded success rates (0.8 - i*0.15) and metrics. K=2 code review identified that adaptive ranking was using phantom data instead of empirical measurements.
+
+**k=3 Fix:** Added `StrategyAdvisor.build_strategy_options()` method that constructs StrategyOption list with REAL empirical success rates from `strategy_scores`, plus derived cost/latency estimates. Rewired `LoopEngineer._apply_strategy()` to use this method instead of hardcoded formulas. Fixed silent exception handling in fingerprint retrieval.
+
+Result: Adaptive ranking now uses real data across both adaptive and empirical paths, eliminating the data-source inconsistency.
+
 ## Operator Notes
 
 *None yet.*

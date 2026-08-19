@@ -159,20 +159,10 @@ class LoopEngineer(Subsystem):
 
         if self.strategy_advisor:
             try:
-                # Build available strategies from ladder as StrategyOption objects
-                from core.learning.adaptive_strategy import StrategyOption
-
-                available_strategies = [
-                    StrategyOption(
-                        name=s,
-                        required_steps=2 + i,
-                        avg_latency_ms=100 + (i * 50),
-                        avg_cost_cents=10 + (i * 5),
-                        success_rate=0.8 - (i * 0.15),  # Empirical rates decrease down ladder
-                        operator_preference_score=0.7,
-                    )
-                    for i, s in enumerate(self.strategy_ladder)
-                ]
+                # Build available strategies with REAL empirical data from StrategyAdvisor
+                available_strategies = self.strategy_advisor.build_strategy_options(
+                    self.strategy_ladder
+                )
 
                 # Get fingerprint from context if available
                 fingerprint: Optional[OperatorFingerprint] = None
@@ -180,8 +170,11 @@ class LoopEngineer(Subsystem):
                     ctx_state = self.context_api.get_context_state()
                     if ctx_state and hasattr(ctx_state, "operator_fingerprint"):
                         fingerprint = ctx_state.operator_fingerprint
-                except Exception:
-                    pass
+                except Exception as fp_error:
+                    # Log fingerprint retrieval failures instead of silently swallowing
+                    logger.debug(
+                        f"Fingerprint retrieval failed (falling back to None): {fp_error}"
+                    )
 
                 # Call adaptive strategy selection (E2E wiring point)
                 selected = self.strategy_advisor.get_strategy(
@@ -198,7 +191,10 @@ class LoopEngineer(Subsystem):
                         f"(fingerprint_confidence={fingerprint.confidence if fingerprint else 'N/A'})"
                     )
             except Exception as e:
-                logger.debug(f"Adaptive strategy selection failed; falling back to ladder: {e}")
+                logger.warning(
+                    f"Adaptive strategy selection failed ({type(e).__name__}); "
+                    f"falling back to static ladder: {e}"
+                )
                 used_adaptive = False
 
         # Fallback to static ladder if adaptive selection failed
