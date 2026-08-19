@@ -361,11 +361,35 @@ async def build_context_post_gate(bundle: Any, trace: dict) -> Any:
     return bundle
 
 
-def render_brief_to_text(brief: Any) -> str:
+def _memory_body(match: Any, cap: int = 800) -> str:
+    """Clean body of a memory match's source file (frontmatter + HTML comment stripped, capped).
+    ``content_preview`` is only ~50 chars of frontmatter, so it never carries the actual fact —
+    read the source file. Used only by the content-injecting render path (EXP-001 Entry 17)."""
+    try:
+        from pathlib import Path as _P  # noqa: PLC0415
+        sf = getattr(match, "source_file", "") or ""
+        if not sf or not _P(sf).is_file():
+            return ""
+        raw = _P(sf).read_text(encoding="utf-8")
+        body = raw.split("-->")[-1] if "-->" in raw else raw
+        if body.lstrip().startswith("---"):          # strip a leading YAML frontmatter block
+            parts = body.split("---")
+            body = parts[2] if len(parts) >= 3 else body
+        return " ".join(body.split())[:cap].strip()
+    except Exception:  # noqa: BLE001 — content injection is best-effort, never break the brief
+        return ""
+
+
+def render_brief_to_text(brief: Any, *, include_content: bool = False) -> str:
     """Format the brief into a compact system-prompt block. Empty string when
     there is nothing useful (I5: off is a quiet path). Unchanged from pre-P-A for
     parity; the LLM synthesis stage (P-C) may set a ``synthesised_prompt`` that
-    the boundary prefers over this rendering."""
+    the boundary prefers over this rendering.
+
+    ``include_content`` (EXP-001 Entry 17, default False = ship-dark): when True, each relevant
+    memory renders its actual BODY, not just its title. The tool-disabled measurement showed the
+    title-only brief carries no answerable fact (cel=0.00) while injected content answers (oracle
+    =0.944); this path closes that gap. Default False keeps every existing caller byte-identical."""
     if brief is None:
         return ""
     lines: list[str] = []
@@ -374,7 +398,12 @@ def render_brief_to_text(brief: Any) -> str:
     if matches:
         lines.append("Relevant past memory:")
         for m in matches[:5]:
-            lines.append(f"  - {getattr(m, 'title', None) or getattr(m, 'filename', '?')}")
+            _title = getattr(m, 'title', None) or getattr(m, 'filename', '?')
+            _body = _memory_body(m) if include_content else ""
+            if _body:
+                lines.append(f"  - {_title}: {_body}")
+            else:
+                lines.append(f"  - {_title}")
     rel = getattr(brief, "related_decisions", None) or []
     if rel:
         lines.append("Related decisions (ADRs):")

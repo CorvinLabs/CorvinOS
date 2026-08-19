@@ -9,7 +9,7 @@
     "note": "Until a metric passes the gate it informs search DIRECTION only, never accept/reject."
   },
   "controllable_parameters_theta": [
-    {"name": "brief_includes_content", "type": "bool", "note": "PRIMARY target (Entry 16): the deterministic brief injects memory/ADR TITLES only, not bodies. Tool-disabled it scores 0.00 while injecting CONTENT (oracle) scores 0.944. Make the brief carry answer-bearing content. Loss = distance from the oracle ceiling."},
+    {"name": "brief_includes_content", "type": "bool", "status": "VALIDATED (Entry 17)", "note": "PRIMARY lever. The deterministic brief injected TITLES only (tool-disabled: 0.00). Prototype fix (render_brief_to_text include_content=True, reads source_file body) lifts tool-disabled correctness to 0.833 (~87% of the 1.0 oracle ceiling), default-off/ship-dark. Residual gap = retrieval reliability. Production rollout needs a cel_brief_includes_content flag + ADR + a cost re-measure (bodies > titles)."},
     {"name": "cel_cache_stable", "type": "bool", "note": "relocate volatile brief out of cached prefix (already a cost win)"},
     {"name": "selective_injection.threshold", "type": "float", "range": [0.0, 1.0], "note": "min relevance for a memory to be injected (ADR-0394)"},
     {"name": "memory_pruning.min_confidence", "type": "float", "range": [0.0, 1.0]},
@@ -88,8 +88,8 @@
   "valid_cel_value_protocol": {
     "note": "The full agentic console turn CANNOT measure CEL's injection value: it self-retrieves off disk (Anomaly B). Use the tool-disabled probe.",
     "runner": "benchmark/token-savings/measure_tooldisabled.py --n <n> (needs bench-cel-*.md seeded via seed-memory-fixtures.sh)",
-    "arms": {"none": "floor (no context)", "cel": "real deterministic brief = pointers", "oracle": "content injected = ceiling"},
-    "result_2026_08_19_n3": {"none": 0.0, "cel": 0.0, "oracle": 0.944},
-    "loss_signal": "L_cel_value = oracle_quality - cel_quality (currently 0.944 - 0.0 = 0.944 of latent value unrealized; drive to 0 by making brief_includes_content=true)"
+    "arms": {"none": "floor (no context)", "cel": "real deterministic brief = pointers", "cel_content": "prototype fix = brief injects bodies", "oracle": "content injected = ceiling"},
+    "result_2026_08_19_n3": {"none": 0.0, "cel": 0.0, "cel_content": 0.833, "oracle": 1.0},
+    "loss_signal": "L_cel_value = oracle_quality - cel_quality. Was 1.0 - 0.0 = 1.0 latent+unrealized; the brief_includes_content fix delivers 0.833 (L now 0.167, residual = retrieval reliability)."
   }
 }

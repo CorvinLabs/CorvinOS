@@ -36,11 +36,11 @@ def quality(text: str, check: dict) -> float:
     return present / len(exp)
 
 
-def cel_brief(question: str, tenant: str) -> str:
+def cel_brief(question: str, tenant: str, include_content: bool = False) -> str:
     try:
         out = ce.build_brief(question, tenant, None)
         brief = out[0] if isinstance(out, tuple) else out
-        return (ce.render_brief_to_text(brief) or "").strip()
+        return (ce.render_brief_to_text(brief, include_content=include_content) or "").strip()
     except Exception as e:  # noqa: BLE001
         return f"(CEL brief unavailable: {e})"
 
@@ -85,7 +85,7 @@ def main() -> int:
     tasks = [t for t in suite["tasks"] if not t.get("turns")]
     arms = {}
     raw = []
-    for arm in ("none", "cel", "oracle"):
+    for arm in ("none", "cel", "cel_content", "oracle"):
         scores = []
         for tk in tasks:
             q = tk["prompt"]
@@ -94,6 +94,9 @@ def main() -> int:
                     prompt = q
                 elif arm == "cel":
                     b = cel_brief(q, args.tenant)
+                    prompt = f"{b}\n\n{q}" if b else q
+                elif arm == "cel_content":
+                    b = cel_brief(q, args.tenant, include_content=True)
                     prompt = f"{b}\n\n{q}" if b else q
                 else:  # oracle
                     c = oracle_content(tk)
@@ -113,6 +116,8 @@ def main() -> int:
                   "none": "no context, no tools -> the model cannot know the fact (floor)",
                   "cel": "real deterministic CEL brief (pointers/titles) -> tests if a pointer is "
                          "answerable without agentic pull",
+                  "cel_content": "the PROTOTYPE fix (render_brief_to_text include_content=True): "
+                                 "CEL brief now injects memory BODIES, not just titles",
                   "oracle": "the memory CONTENT injected -> proves the fact IS answerable when "
                             "actually injected (ceiling)"}}
     Path(args.out).write_text(json.dumps({"report": report, "raw": raw}, indent=2))

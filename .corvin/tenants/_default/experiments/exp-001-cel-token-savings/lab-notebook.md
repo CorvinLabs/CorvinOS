@@ -352,6 +352,40 @@ and is redundant with agentic pull in a tool-enabled one. Its proven, non-null w
 cache-stable **cost** neutrality (Entry 2). The correctness value is **latent** — realizable only
 by injecting content (oracle 0.944), which the current brief does not do.
 
+### 2026-08-19 · Entry 17 — Prototype fix: brief injects CONTENT → latent value realized (0.00 → 0.833)
+
+**Goal.** Close the pointer-vs-content gap Entry 16 found: make the CEL brief carry memory bodies,
+then measure tool-disabled against the oracle ceiling.
+
+**Method (LDD inner loop, ship-dark).** Added `include_content` (keyword-only, default **False**)
+to `render_brief_to_text` (`operator/context_engineering/pipeline.py`) + a `_memory_body` helper
+that reads the match's `source_file`, strips frontmatter + the HTML disclaimer, caps to 800 chars.
+`content_preview` was useless (~50 chars of frontmatter, no fact), so the body is read from disk.
+Regression: a positional call equals `include_content=False` byte-for-byte (verified) → **no
+production behavior change**. Added a 4th measurement arm `cel_content` (the fix on).
+
+**Result (tool-disabled, n=3, 6 single-turn memory tasks, Haiku):**
+
+| arm | quality |
+|---|---|
+| none | 0.00 |
+| cel (titles) | 0.00 |
+| **cel_content (fix)** | **0.833** |
+| oracle (full content) | 1.00 |
+
+Per task: 5/6 perfect (1.00); only `mem-mascot` missed (0.00) — a residual *retrieval* miss (the
+fixture wasn't surfaced/rendered for that question), not a rendering-of-content failure.
+
+**Conclusion.** The fix **realizes CEL's latent correctness value**: 0.00 → 0.833, ~87 % of the
+oracle ceiling, from a one-function, default-off change. This validates θ `brief_includes_content`
+as the primary lever (Entry 16's prediction confirmed). The remaining gap to 1.0 is the *other*
+known weakness — **retrieval reliability** (keyword TF-IDF sometimes misses the right fixture),
+the second training target.
+
+**Not yet production.** The param is prototype-only; a production rollout needs a `cel_brief_
+includes_content` feature flag wired into the console/bridge callers (ship-dark, + an ADR for the
+brief-content change) and a token-cost check (bodies are larger than titles → re-measure cost).
+
 ---
 
 ## 3. Metrics registry (the measured quantities)
