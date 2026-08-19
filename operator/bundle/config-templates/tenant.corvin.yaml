@@ -167,7 +167,7 @@ spec:
   # Ship dark by default: add to whitelist only after testing.
   # Console → Settings → Features writes to features.json (overrides this file).
 
-  # Enable whitelist strategy with Vibe Engineering features
+  # Enable whitelist strategy with all stable features
   features_whitelist:
     - vibe_engineering              # CEL brief on live turns (deterministic)
     - vibe_engineering_active       # CEL ACTIVE brain (LLM + Toolforge + SkillForge)
@@ -176,10 +176,10 @@ spec:
     - token_metrics                 # Token usage + cost visualization
     - outcome_feedback_loop         # Auto-grade CEL stages post-turn
     - cross_device_sync             # Sync learning state across instances
-    # Context Engineering Optimization (ADR-0387/0389):
-    # - memory_confidence_gate_enabled  # Filter low-confidence memory matches (Phase 1)
-    # Phase 3 Context Optimization (ADR-0391):
-    # - adaptive_context_routing     # Route simple tasks fast, rebalance budgets
+    # Context Engineering Optimization (Phase 1-3, ADR-0387/0388/0391):
+    - memory_confidence_gate_enabled  # Filter low-confidence memory matches (Phase 1)
+    - per_stage_token_budgeting       # Cascade-based allocation (Phase 2)
+    - adaptive_context_routing        # Route simple tasks fast, rebalance budgets (Phase 3)
     # Phase 8-12 features (proactive learning):
     # - learning_anomaly_detection   # Detect confidence drops
     # - learning_pattern_discovery   # Auto-discover patterns from failures
