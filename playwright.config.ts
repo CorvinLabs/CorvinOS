@@ -16,8 +16,8 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: 'python -m corvin_console.standalone',
-    url: 'http://localhost:8000',
+    command: 'python -m corvin_console.standalone --port 8765',
+    url: 'http://127.0.0.1:8765/console',
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,
   },
@@ -40,7 +40,7 @@ export default defineConfig({
 
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: 'http://localhost:8000',
+    baseURL: 'http://127.0.0.1:8765/console',
 
     /* Collect trace when retrying the failed test */
     trace: 'on-first-retry',
