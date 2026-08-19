@@ -104,6 +104,8 @@ from .routes import (
     chain_dual_track as chain_dual_track_route,
     flows as flows_route,
     packages as packages_route,
+    # GitHub Cross-Device-Learning Sync (Iteration 1-5)
+    github as github_route,
     # ADR-0124 — Open Platform Extensibility (M1–M7)
     custom_engines as custom_engines_route,
     connectors_custom as connectors_custom_route,
@@ -184,6 +186,8 @@ router.include_router(compute.router,       tags=["console-compute"])
 # "Field required + 5x Extra inputs are not permitted".
 router.include_router(engine_route.router, tags=["console-engine"])
 router.include_router(engine_pref_route.router, tags=["console-engine-pref"])
+# GitHub Cross-Device-Learning integration
+router.include_router(github_route.router, tags=["console-github"])
 # MUST precede settings_route: its `PUT /settings/{label}` (config-file writer)
 # would otherwise swallow `PUT /settings/worker-engine` as a file label.
 router.include_router(features_route.router, tags=["console-settings"])

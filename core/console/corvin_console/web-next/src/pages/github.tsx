@@ -128,8 +128,10 @@ export default function GitHubIntegrationPanel() {
       if (result.connected) {
         await fetchStatus()
         setIsDirty(false)
+      } else if (result.details && result.details.error) {
+        setError(result.details.error)
       } else {
-        setError(result.details.error || 'Failed to connect to GitHub repository')
+        setError('Failed to connect to GitHub repository')
       }
     } catch (error) {
       setError(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
