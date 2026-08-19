@@ -37,6 +37,17 @@ interface GeneratedSkill {
   created_at: string;
 }
 
+const PHASE_LABELS: Record<string, string> = {
+  "API-Design": "🏗️ API Design",
+  "Dialectical": "⚖️ Dialectical Review",
+  "Ideation": "💡 Ideation & Concept",
+  "Adversarial": "🎯 Adversarial Review",
+  "Implementation": "⚙️ Implementation",
+  "E2E-Test": "✅ E2E Testing",
+  "planning": "📋 Planning",
+  "promotion": "🚀 Promotion",
+};
+
 export const SkillCreatorPanel: React.FC = () => {
   const [userRequest, setUserRequest] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -167,9 +178,23 @@ export const SkillCreatorPanel: React.FC = () => {
 
         {/* Error Display */}
         {error && (
-          <div className="flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{error}</span>
+          <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setError(null);
+                setIsGenerating(false);
+                setCurrentRun(null);
+              }}
+              className="shrink-0"
+            >
+              Dismiss
+            </Button>
           </div>
         )}
 
@@ -183,10 +208,12 @@ export const SkillCreatorPanel: React.FC = () => {
               </Badge>
             </div>
 
-            <div className="space-y-2 text-xs font-mono text-muted-foreground">
-              <div className="flex justify-between">
-                <span>Run ID: {currentRun.run_id.slice(0, 12)}...</span>
-                <span>Phase: {currentRun.phase}</span>
+            <div className="space-y-2 text-xs text-muted-foreground">
+              <div className="flex justify-between items-center">
+                <span className="font-mono text-[10px]">Run: {currentRun.run_id.slice(0, 12)}...</span>
+                <span className="text-sm font-medium">
+                  {PHASE_LABELS[currentRun.phase] || currentRun.phase}
+                </span>
               </div>
             </div>
 
