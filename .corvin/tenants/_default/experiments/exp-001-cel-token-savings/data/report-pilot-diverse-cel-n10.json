@@ -1,0 +1,178 @@
+{
+  "suite_version": "v3-diverse",
+  "n_per_arm": 10,
+  "tenant": "_default",
+  "run_id": "pilot-diverse-cel-n10",
+  "arms": "cel",
+  "tainted_reps_dropped": 0,
+  "measurement_isolation": [
+    "outcome_feedback_loop",
+    "tde_shadow_measurement",
+    "vibe_engineering_active"
+  ],
+  "model": "claude-haiku-4-5-20251001",
+  "cost_available": true,
+  "input_captured": true,
+  "components_per_arm": {
+    "A_cel_off": {
+      "fresh_input": 15.0,
+      "cache_creation": 25419.6,
+      "cache_read": 39443.9,
+      "output": 335.6,
+      "tokens_total": 65214.0,
+      "cost_usd": 0.056476
+    },
+    "B_cel_on": {
+      "fresh_input": 14.6,
+      "cache_creation": 25382.5,
+      "cache_read": 37764.1,
+      "output": 425.4,
+      "tokens_total": 63586.7,
+      "cost_usd": 0.056683
+    }
+  },
+  "dimensions": {
+    "_status": "ADVISORY / exploratory \u2014 deterministic from raw fields; NOT a calibrated decision gate (define-metric: advisory_only until n>=5 and MAE<=0.15).",
+    "better_for": {
+      "quality_mean": "higher",
+      "quality_stdev": "lower",
+      "quality_per_1k_tokens": "higher",
+      "cost_per_correct_usd": "lower",
+      "output_tokens_mean": "lower"
+    },
+    "A_cel_off": {
+      "quality_mean": 0.9389,
+      "quality_stdev": 0.2395,
+      "quality_per_1k_tokens": 0.0144,
+      "cost_per_correct_usd": 0.060152,
+      "output_tokens_mean": 335.6
+    },
+    "B_cel_on": {
+      "quality_mean": 0.9222,
+      "quality_stdev": 0.2678,
+      "quality_per_1k_tokens": 0.0145,
+      "cost_per_correct_usd": 0.061464,
+      "output_tokens_mean": 425.4
+    }
+  },
+  "note": "tokens_total = fresh_input + cache_creation + cache_read + output (all 4 classes). Savings (raw count) = (median A \u2212 median B)/median A, quality-gated, bootstrap 95% CI, Mann-Whitney-U (B<A). RAW COUNT \u2260 COST: cache-read ~0.1x, cache-creation ~1.25x, output ~5x \u2014 apply your model's prices to components_per_arm for a cost figure. suite-v1 is single-turn: it measures CEL's per-task COLD cost (always pays cache_creation, never amortized) \u2014 CEL's best case (warm reuse over a session) needs multi-turn tasks, not yet in the suite.",
+  "overall": {
+    "task_type": "overall",
+    "n_pairs": 176,
+    "a_median": 43108.5,
+    "b_median": 43385.5,
+    "savings_point": -0.006425646914181658,
+    "ci_low": -0.008557031395132825,
+    "ci_high": -0.004323484751892249,
+    "p_value": 0.9999999999999881,
+    "significant": false,
+    "quality_ok_frac": 0.9777777777777777,
+    "dropped_quality": 4
+  },
+  "per_type": {
+    "coding": {
+      "task_type": "coding",
+      "n_pairs": 50,
+      "a_median": 43246.0,
+      "b_median": 43629.0,
+      "savings_point": -0.008856310410211348,
+      "ci_low": -0.011513345374002419,
+      "ci_high": -0.006229845467469573,
+      "p_value": 0.9999999775398439,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "data": {
+      "task_type": "data",
+      "n_pairs": 20,
+      "a_median": 85781.5,
+      "b_median": 86748.5,
+      "savings_point": -0.011272826891579187,
+      "ci_low": -2.0342290020510747,
+      "ci_high": 0.6643089216036812,
+      "p_value": 0.9965887840665459,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "extraction": {
+      "task_type": "extraction",
+      "n_pairs": 20,
+      "a_median": 42925.5,
+      "b_median": 43166.5,
+      "savings_point": -0.005614378399785675,
+      "ci_low": -0.009161447134710666,
+      "ci_high": -0.0004309692148206819,
+      "p_value": 0.999973831407087,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "format": {
+      "task_type": "format",
+      "n_pairs": 10,
+      "a_median": 42943.5,
+      "b_median": 43222.0,
+      "savings_point": -0.006485265523303876,
+      "ci_low": -0.0066615174048173225,
+      "ci_high": -0.00599408738564678,
+      "p_value": 0.9999228096274596,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "planning": {
+      "task_type": "planning",
+      "n_pairs": 10,
+      "a_median": 43010.5,
+      "b_median": 43319.0,
+      "savings_point": -0.0071726671394194445,
+      "ci_low": -0.011483284906223563,
+      "ci_high": -0.0015480159416269082,
+      "p_value": 0.993694427950343,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "qa": {
+      "task_type": "qa",
+      "n_pairs": 10,
+      "a_median": 43052.5,
+      "b_median": 43246.5,
+      "savings_point": -0.004506126241217118,
+      "ci_low": -0.008408338656291738,
+      "ci_high": -0.002598547597503538,
+      "p_value": 0.9999223662640706,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "reasoning": {
+      "task_type": "reasoning",
+      "n_pairs": 46,
+      "a_median": 43124.5,
+      "b_median": 43528.0,
+      "savings_point": -0.009356630221799674,
+      "ci_low": -2.023606694366426,
+      "ci_high": 0.6626971179989124,
+      "p_value": 0.9995543250819274,
+      "significant": false,
+      "quality_ok_frac": 0.92,
+      "dropped_quality": 4
+    },
+    "string": {
+      "task_type": "string",
+      "n_pairs": 10,
+      "a_median": 43014.5,
+      "b_median": 43209.0,
+      "savings_point": -0.004521731044182776,
+      "ci_low": -0.006697728596389051,
+      "ci_high": -0.0020520073733146294,
+      "p_value": 0.9998950692758488,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    }
+  }
+}

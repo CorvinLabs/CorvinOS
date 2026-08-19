@@ -1,0 +1,148 @@
+{
+  "suite_version": "v3-diverse",
+  "notes": "Stratified, PII-free suite spanning the axes along which CEL's token effect should VARY (category x turns x cross-turn-reuse x length). Answers are chosen NOT to appear verbatim in the prompt, so an echo cannot pass the objective check. `strata` is analysis metadata (ignored by the harness) for per-stratum breakdown. This is the DIVERSE SEED (18 tasks / ~10 strata); scale by adding N tasks per stratum toward the 50/100 targets in docs/concepts/cel-token-savings-paper-concept.md.",
+  "tasks": [
+    {
+      "id": "code-factorial",
+      "type": "coding",
+      "strata": {"category": "coding", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "Write a Python function factorial(n). Then state the value of factorial(6) as ONLY the integer.",
+      "check": {"kind": "contains_all", "expect": ["720"], "case_insensitive": true}
+    },
+    {
+      "id": "code-secondmax",
+      "type": "coding",
+      "strata": {"category": "coding", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "Write a function second_largest(xs) returning the second-largest DISTINCT value. For the list [30, 90, 50, 90, 10], give second_largest MINUS the smallest value, as ONLY the integer.",
+      "check": {"kind": "contains_all", "expect": ["40"], "case_insensitive": true}
+    },
+    {
+      "id": "string-reverse-upper",
+      "type": "string",
+      "strata": {"category": "string", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "Take the word 'hello', reverse it, then uppercase it. Give ONLY the resulting string.",
+      "check": {"kind": "contains_all", "expect": ["OLLEH"], "case_insensitive": false}
+    },
+    {
+      "id": "math-speed",
+      "type": "reasoning",
+      "strata": {"category": "math", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "A train covers 240 kilometres in 3 hours at constant speed. What is its speed in km/h? Give ONLY the number.",
+      "check": {"kind": "contains_all", "expect": ["80"], "case_insensitive": true}
+    },
+    {
+      "id": "unit-hours-minutes",
+      "type": "reasoning",
+      "strata": {"category": "unit-conversion", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "How many minutes are there in 2.5 hours? Give ONLY the number.",
+      "check": {"kind": "contains_all", "expect": ["150"], "case_insensitive": true}
+    },
+    {
+      "id": "format-date",
+      "type": "format",
+      "strata": {"category": "format-conversion", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "Convert the ISO date 2026-07-09 into DD.MM.YYYY format. Give ONLY the converted date.",
+      "check": {"kind": "contains_all", "expect": ["09.07.2026"], "case_insensitive": true}
+    },
+    {
+      "id": "reason-syllogism",
+      "type": "reasoning",
+      "strata": {"category": "logic", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "All Bloops are Razzies. All Razzies are Lazzies. Are all Bloops necessarily Lazzies? Answer ONLY Yes or No.",
+      "check": {"kind": "contains_all", "expect": ["yes"], "case_insensitive": true, "forbid": ["no,"]}
+    },
+    {
+      "id": "extract-to-grams",
+      "type": "extraction",
+      "strata": {"category": "extraction", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "From this line: 'Parcel P-19 shipped weighing 5.4 kg to the depot.' — give the weight expressed in GRAMS, as ONLY the number.",
+      "check": {"kind": "contains_all", "expect": ["5400"], "case_insensitive": true}
+    },
+    {
+      "id": "data-sum-table",
+      "type": "data",
+      "strata": {"category": "data-aggregate", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "Given the rows  region,units:  North,10 / East,25 / West,15  — what is the TOTAL of the units column? Give ONLY the number.",
+      "check": {"kind": "contains_all", "expect": ["50"], "case_insensitive": true}
+    },
+    {
+      "id": "debug-avg-offbyone",
+      "type": "coding",
+      "strata": {"category": "debug", "turns": 1, "cross_turn_reuse": false, "length": "medium"},
+      "prompt": "This function is buggy: def avg(x): return sum(x)/len(x) - 1. In a few words say what the bug is, then give the CORRECT average of [10, 20, 30, 40] as ONLY a number.",
+      "check": {"kind": "contains_all", "expect": ["25"], "case_insensitive": true, "forbid": ["24"]}
+    },
+    {
+      "id": "qa-hexagon",
+      "type": "qa",
+      "strata": {"category": "factual-qa", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "How many sides does a regular hexagon have? Give ONLY the number.",
+      "check": {"kind": "contains_all", "expect": ["6"], "case_insensitive": true}
+    },
+    {
+      "id": "refactor-sum-oneliner",
+      "type": "coding",
+      "strata": {"category": "refactor", "turns": 1, "cross_turn_reuse": false, "length": "medium"},
+      "prompt": "Refactor this into a one-liner using sum():  def total(xs):\n    t = 0\n    for x in xs:\n        t += x\n    return t\nThen give total([1, 2, 3, 4]) as ONLY the integer.",
+      "check": {"kind": "contains_all", "expect": ["10"], "case_insensitive": true}
+    },
+    {
+      "id": "plan-boil-egg",
+      "type": "planning",
+      "strata": {"category": "planning", "turns": 1, "cross_turn_reuse": false, "length": "short"},
+      "prompt": "List exactly 3 sequential steps to boil an egg. Each step must start with an imperative verb. Keep it very short.",
+      "check": {"kind": "contains_all", "expect": ["water", "boil", "egg"], "case_insensitive": true}
+    },
+    {
+      "id": "long-context-extract",
+      "type": "extraction",
+      "strata": {"category": "long-context", "turns": 1, "cross_turn_reuse": false, "length": "long"},
+      "prompt": "A warehouse holds 340 boxes. Each box weighs 12 kg. The delivery truck arrived at 08:15, departed at 09:40, and serves 7 stores across 3 districts using 2 drivers. Ignore everything except boxes and their weight: what is the TOTAL weight of all boxes in kg? Give ONLY the number.",
+      "check": {"kind": "contains_all", "expect": ["4080"], "case_insensitive": true}
+    },
+    {
+      "id": "mt-fib-build-use-extend",
+      "type": "coding",
+      "strata": {"category": "coding", "turns": 3, "cross_turn_reuse": true, "length": "medium"},
+      "turns": [
+        "Write a Python function fib(n) with fib(0)=0 and fib(1)=1. Just the function.",
+        "Using it, what is fib(10)?",
+        "Now sum fib(0) through fib(10) inclusive and give ONLY the final integer."
+      ],
+      "check": {"kind": "contains_all", "expect": ["143"], "case_insensitive": true}
+    },
+    {
+      "id": "mt-budget-chain",
+      "type": "reasoning",
+      "strata": {"category": "math", "turns": 3, "cross_turn_reuse": true, "length": "medium"},
+      "turns": [
+        "I have a monthly budget of 2000 euros. Rent is 40% of it. How much is rent in euros?",
+        "Groceries take another 25% of the same budget. How much is groceries in euros?",
+        "After rent and groceries, how much of the budget is left? Give ONLY the number in euros."
+      ],
+      "check": {"kind": "contains_all", "expect": ["700"], "case_insensitive": true}
+    },
+    {
+      "id": "mt-state-reuse",
+      "type": "reasoning",
+      "strata": {"category": "state-recall", "turns": 3, "cross_turn_reuse": true, "length": "short"},
+      "turns": [
+        "Please remember these two values for later: a = 7 and b = 3. Just acknowledge.",
+        "Now compute a * b.",
+        "Subtract 1 from that result and give ONLY the integer."
+      ],
+      "check": {"kind": "contains_all", "expect": ["20"], "case_insensitive": true}
+    },
+    {
+      "id": "mt-list-recall",
+      "type": "data",
+      "strata": {"category": "state-recall", "turns": 3, "cross_turn_reuse": true, "length": "short"},
+      "turns": [
+        "Here is my list: [4, 8, 15, 16, 23, 42]. Just acknowledge you have it.",
+        "What is the largest number in my list?",
+        "Add the smallest and the largest numbers of my list and give ONLY the integer."
+      ],
+      "check": {"kind": "contains_all", "expect": ["46"], "case_insensitive": true}
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "experiment_id": "exp-001-cel-token-savings",
+  "tenant": "_default",
+  "created": "2026-08-19",
+  "intent": "Formalise the experiment's metrics as LDD loss components so CEL can later be trained (its controllable parameters tuned to descend this loss). Loss is a VECTOR: cost<->quality is a real trade-off and must not be collapsed into one gamed scalar.",
+  "define_metric_discipline": {
+    "advisory_only_until_calibrated": true,
+    "calibration_gate": {"min_n": 5, "max_mae": 0.15},
+    "note": "Until a metric passes the gate it informs search DIRECTION only, never accept/reject."
+  },
+  "controllable_parameters_theta": [
+    {"name": "cel_cache_stable", "type": "bool", "note": "relocate volatile brief out of cached prefix (already a cost win)"},
+    {"name": "selective_injection.threshold", "type": "float", "range": [0.0, 1.0], "note": "min relevance for a memory to be injected (ADR-0394)"},
+    {"name": "memory_pruning.min_confidence", "type": "float", "range": [0.0, 1.0]},
+    {"name": "memory_pruning.max_age_days", "type": "int"},
+    {"name": "memory_pruning.top_k_per_tenant", "type": "int"},
+    {"name": "adr_reranking.top_k", "type": "int"},
+    {"name": "brief_size_cap_tokens", "type": "int"},
+    {"name": "stages_enabled", "type": "set", "values": ["memory", "graph", "skill", "approach_synthesis", "blocker_id", "llm_synthesis", "toolforge", "skillforge"]}
+  ],
+  "nuisance_parameters_hold_fixed": [
+    "model_id", "cache_regime(cold|warm)", "tenant_runtime_state_hash",
+    "tde_shadow_measurement=false", "vibe_engineering_active=false", "outcome_feedback_loop=false",
+    "task_order", "bootstrap_seed"
+  ],
+  "loss_vector": [
+    {
+      "component": "cost_per_correct_usd",
+      "formula": "mean(cost_usd) / mean(quality)  [quality>0]",
+      "direction": "minimize",
+      "unit": "usd_per_correct",
+      "weight": 1.0,
+      "status": "advisory",
+      "depends_on_theta": ["cel_cache_stable", "selective_injection.threshold", "brief_size_cap_tokens", "stages_enabled"]
+    },
+    {
+      "component": "quality_error",
+      "formula": "1 - mean(quality)  [quality = objective fact-presence check in 0..1]",
+      "direction": "minimize",
+      "unit": "rate",
+      "weight": 1.0,
+      "status": "advisory",
+      "depends_on_theta": ["selective_injection.threshold", "stages_enabled", "adr_reranking.top_k"]
+    },
+    {
+      "component": "quality_stdev",
+      "formula": "pstdev(quality) across reps",
+      "direction": "minimize",
+      "unit": "rate",
+      "weight": 0.5,
+      "status": "advisory",
+      "rationale": "reliability: steadier correctness is a distinct good from higher mean"
+    },
+    {
+      "component": "tokens_to_correct",
+      "formula": "mean(cumulative tokens until the answer first passes the per-turn check)",
+      "direction": "minimize",
+      "unit": "count",
+      "weight": 1.0,
+      "status": "advisory",
+      "instrumented": "2026-08-19 (run_benchmark._run_task per-turn check; fields turn_to_correct/tokens_to_correct/q_trajectory)",
+      "rationale": "most direct measure of CEL cross-turn value; discriminates only on tasks whose answer can appear before the last turn — needs early-answerable / context-relevant tasks",
+      "depends_on_theta": ["stages_enabled", "selective_injection.threshold", "brief_size_cap_tokens"]
+    },
+    {
+      "component": "output_tokens_mean",
+      "formula": "mean(output_tokens)",
+      "direction": "minimize",
+      "unit": "count",
+      "weight": 0.25,
+      "status": "advisory",
+      "rationale": "verbosity regulariser: pilot showed CEL +27% output; output is priced ~5x"
+    }
+  ],
+  "data_contract": {
+    "sample_source": "benchmark/token-savings/results/raw-<run_id>.jsonl",
+    "per_record_fields": ["task_id", "task_type", "arm", "cel_on", "cel_on_actual", "tainted", "rep", "n_turns", "fresh_input", "cache_creation", "cache_read", "output", "tokens_total", "cost_usd", "quality"],
+    "aggregate_source": "benchmark/token-savings/results/report-<run_id>.json",
+    "aggregate_fields": ["components_per_arm", "dimensions", "overall", "per_type", "tainted_reps_dropped", "measurement_isolation"],
+    "exclusion_rule": "drop any record with tainted=true before computing loss (measure reality, not the arm label)"
+  },
+  "reproducibility": {
+    "runner": "benchmark/token-savings/run_benchmark.sh --arms cel --tasks tasks/suite-v3-diverse.json --n <n> --model claude-haiku-4-5-20251001",
+    "seed": 12345,
+    "stats": "bootstrap 95% CI + Mann-Whitney-U (stats.py)"
+  }
+}

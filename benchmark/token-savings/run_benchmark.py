@@ -89,17 +89,35 @@ async def _run_task(cr, tenant: str, task: dict, model: str, prices: dict) -> tu
     c5_sum = c1_sum = 0
     cost_sum: "float | None" = 0.0
     final_text = ""
-    for p in prompts:
+    cum_tokens = 0
+    turn_to_correct: "int | None" = None
+    tokens_to_correct: "int | None" = None
+    q_trajectory: list = []
+    for i, p in enumerate(prompts):
         final_text, usage = await _one_turn(cr, sess, p)
         comp = token_components(usage)
         for k in summed:
             summed[k] += comp[k]
+        cum_tokens += comp["fresh_input"] + comp["cache_creation"] + comp["cache_read"] + comp["output"]
+        # Per-turn correctness against the SAME objective check (deterministic, no LLM judge).
+        # tokens_to_correct = cumulative tokens until the answer FIRST passes — the most direct
+        # probe of CEL cross-turn value. Only discriminates on tasks whose answer can appear
+        # before the last turn; on answer-only-at-the-end tasks it equals the task total.
+        q_turn = quality_score(final_text, task["check"])
+        q_trajectory.append(round(q_turn, 3))
+        if turn_to_correct is None and q_turn >= 1.0:
+            turn_to_correct = i + 1
+            tokens_to_correct = cum_tokens
         c5, c1 = pricing.creation_split(usage)
         c5_sum += c5
         c1_sum += c1
         turn_cost = pricing.cost_usd(usage, model, prices)
         cost_sum = None if (turn_cost is None or cost_sum is None) else cost_sum + turn_cost
-    return final_text, summed, {"c5": c5_sum, "c1": c1_sum, "n_turns": len(prompts)}, cost_sum
+    return final_text, summed, {
+        "c5": c5_sum, "c1": c1_sum, "n_turns": len(prompts),
+        "turn_to_correct": turn_to_correct, "tokens_to_correct": tokens_to_correct,
+        "q_trajectory": q_trajectory,
+    }, cost_sum
 
 
 # Quiet-turn confounders: features that fire EXTRA per-turn work (a discarded TDE shadow turn,
@@ -269,6 +287,10 @@ async def run(args) -> int:
                             **comp, "cache_creation_5m": extra["c5"], "cache_creation_1h": extra["c1"],
                             "input_all": total - comp["output"], "tokens_total": total,
                             "cost_usd": cost, "quality": quality_score(text, tk["check"]),
+                            # tokens_to_correct instrumentation (LDD define-metric, advisory):
+                            "turn_to_correct": extra.get("turn_to_correct"),
+                            "tokens_to_correct": extra.get("tokens_to_correct"),
+                            "q_trajectory": extra.get("q_trajectory"),
                         }
                         runs.append(rec)
                         fh.write(json.dumps(rec) + "\n")
@@ -353,6 +375,10 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
         q_mean = statistics.mean(q)
         tot_mean = statistics.mean(tot)
         cost_mean = statistics.mean(costs) if costs else None
+        # tokens_to_correct: only over reps that ever reached the correct answer.
+        ttc = [r["tokens_to_correct"] for r in rs if r.get("tokens_to_correct") is not None]
+        ttrn = [r["turn_to_correct"] for r in rs if r.get("turn_to_correct") is not None]
+        reached = sum(1 for r in rs if r.get("turn_to_correct") is not None)
         return {
             # correctness of the objective fact-presence check, averaged over reps (0..1)
             "quality_mean": round(q_mean, 4),
@@ -365,6 +391,13 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
                                      if (cost_mean is not None and q_mean > 0) else None),
             # mean generated tokens — DIRECTNESS proxy (fewer at equal quality = more direct)
             "output_tokens_mean": round(statistics.mean(outp), 1),
+            # cumulative tokens until the answer FIRST passed the check (cross-turn value; lower
+            # = CEL got there sooner). None if no rep ever reached correctness.
+            "tokens_to_correct_mean": round(statistics.mean(ttc), 1) if ttc else None,
+            # 1-indexed turn where the answer first passed, averaged (lower = sooner)
+            "turn_to_correct_mean": round(statistics.mean(ttrn), 2) if ttrn else None,
+            # fraction of reps that ever reached the correct answer (higher = better)
+            "reached_rate": round(reached / len(rs), 3),
         }
 
     total_input_all = sum(r["input_all"] for r in runs)
@@ -393,7 +426,8 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
                        "decision gate (define-metric: advisory_only until n>=5 and MAE<=0.15).",
             "better_for": {"quality_mean": "higher", "quality_stdev": "lower",
                            "quality_per_1k_tokens": "higher", "cost_per_correct_usd": "lower",
-                           "output_tokens_mean": "lower"},
+                           "output_tokens_mean": "lower", "tokens_to_correct_mean": "lower",
+                           "turn_to_correct_mean": "lower", "reached_rate": "higher"},
             a_label: _arm_dimensions("A"), b_label: _arm_dimensions("B"),
         },
         "note": "tokens_total = fresh_input + cache_creation + cache_read + output (all 4 classes). "
