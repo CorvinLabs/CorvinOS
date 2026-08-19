@@ -1,0 +1,13 @@
+---
+name: bench-cel-retry-limit
+description: Benchmark ingestion pipeline retry limit (BENCHMARK FIXTURE for EXP-001 — synthetic, safe to delete)
+metadata:
+  type: reference
+---
+
+<!-- BENCHMARK FIXTURE (EXP-001 CEL token-savings). Synthetic, PII-free, removable:
+     rm ~/.claude/projects/-home-shumway-projects-CorvinOS/memory/bench-cel-*.md -->
+
+# Benchmark ingestion pipeline retry limit
+
+The maximum **retry limit** for the **ingestion pipeline** is **29**.

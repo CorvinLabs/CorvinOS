@@ -1,0 +1,68 @@
+{
+  "suite_version": "v4-memory-grounded",
+  "notes": "Tasks whose correct answer is an UNGUESSABLE fact stored ONLY in a benchmark memory fixture (bench-cel-*.md in the repo Claude-memory dir that CEL reads). CEL-on injects the fact -> correct; CEL-off cannot know it -> wrong. This isolates CEL's real value: not token savings, but ANSWER CORRECTNESS on context-dependent questions. The discriminating dimensions are quality_mean / reached_rate (not raw cost). REQUIRES the fixtures: create with the EXP-001 fixture writer; remove with `rm ~/.claude/projects/-home-shumway-projects-CorvinOS/memory/bench-cel-*.md`. All facts are synthetic and PII-free (ADR-0297).",
+  "tasks": [
+    {
+      "id": "mem-staging-cluster",
+      "type": "recall",
+      "strata": {"category": "memory-grounded", "turns": 1, "memory_dependence": "high", "guessable": false},
+      "prompt": "What is the internal codename of the staging cluster for this project? Answer with ONLY the codename. If you do not have that information, say 'unknown'.",
+      "check": {"kind": "contains_all", "expect": ["halberd-9"], "case_insensitive": true}
+    },
+    {
+      "id": "mem-token-rotation",
+      "type": "recall",
+      "strata": {"category": "memory-grounded", "turns": 1, "memory_dependence": "high", "guessable": false},
+      "prompt": "How many minutes is the build-token rotation interval for this project? Answer with ONLY the number. If you do not have that information, say 'unknown'.",
+      "check": {"kind": "contains_all", "expect": ["47"], "case_insensitive": true}
+    },
+    {
+      "id": "mem-retry-limit",
+      "type": "recall",
+      "strata": {"category": "memory-grounded", "turns": 1, "memory_dependence": "high", "guessable": false},
+      "prompt": "What is the maximum retry limit for the ingestion pipeline in this project? Answer with ONLY the number. If you do not have that information, say 'unknown'.",
+      "check": {"kind": "contains_all", "expect": ["29"], "case_insensitive": true}
+    },
+    {
+      "id": "mem-mascot",
+      "type": "recall",
+      "strata": {"category": "memory-grounded", "turns": 1, "memory_dependence": "high", "guessable": false},
+      "prompt": "What is the name of the internal project mascot? Answer with ONLY the name. If you do not have that information, say 'unknown'.",
+      "check": {"kind": "contains_all", "expect": ["quill-7"], "case_insensitive": true}
+    },
+    {
+      "id": "mem-analytics-port",
+      "type": "recall",
+      "strata": {"category": "memory-grounded", "turns": 1, "memory_dependence": "high", "guessable": false},
+      "prompt": "Which port is reserved for the internal analytics database in this project? Answer with ONLY the number. If you do not have that information, say 'unknown'.",
+      "check": {"kind": "contains_all", "expect": ["8813"], "case_insensitive": true}
+    },
+    {
+      "id": "mem-residency-region",
+      "type": "recall",
+      "strata": {"category": "memory-grounded", "turns": 1, "memory_dependence": "high", "guessable": false},
+      "prompt": "What is the primary data-residency region for tenant benchmarks in this project? Answer with ONLY the region code. If you do not have that information, say 'unknown'.",
+      "check": {"kind": "contains_all", "expect": ["eu-fra-3"], "case_insensitive": true}
+    },
+    {
+      "id": "mem-mt-staging-derive",
+      "type": "recall",
+      "strata": {"category": "memory-grounded", "turns": 2, "memory_dependence": "high", "cross_turn_reuse": true, "guessable": false},
+      "turns": [
+        "What is the internal codename of the staging cluster for this project? If you do not have it, say 'unknown'.",
+        "Append the suffix '-prod' to that codename and give ONLY the resulting string."
+      ],
+      "check": {"kind": "contains_all", "expect": ["halberd-9-prod"], "case_insensitive": true}
+    },
+    {
+      "id": "mem-mt-port-derive",
+      "type": "recall",
+      "strata": {"category": "memory-grounded", "turns": 2, "memory_dependence": "high", "cross_turn_reuse": true, "guessable": false},
+      "turns": [
+        "Which port is reserved for the internal analytics database in this project? If you do not have it, say 'unknown'.",
+        "Add exactly 100 to that port number and give ONLY the resulting number."
+      ],
+      "check": {"kind": "contains_all", "expect": ["8913"], "case_insensitive": true}
+    }
+  ]
+}
