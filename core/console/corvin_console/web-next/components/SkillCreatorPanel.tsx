@@ -1,16 +1,17 @@
 /**
  * Skill-Creator UI Panel — Console Quality subsystem
  *
- * Location: Console Settings → Quality → Skill Creator
- * Features:
- *  - Generate new skills via natural language prompts
- *  - Monitor generation progress (real-time status polling)
- *  - List and manage generated skills
- *  - View quality scores and iteration history
+ * Integrated into LDD page (/app/ldd)
+ * Generates reusable skills via 6-phase orchestration
  */
 
 import React, { useState, useEffect } from "react";
-import { useState as useState2 } from "react";
+import { Loader2, Brain, CheckCircle, AlertCircle, Trash2 } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 
 interface GenerationRun {
   run_id: string;
@@ -74,7 +75,7 @@ export const SkillCreatorPanel: React.FC = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           user_request: userRequest,
-          async: true, // Always use async for UI
+          async: true,
         }),
       });
 
@@ -86,14 +87,12 @@ export const SkillCreatorPanel: React.FC = () => {
       setCurrentRun({
         run_id: data.run_id,
         status: "running",
-        phase: "planning",
-        progress: 0,
-        message: "Starting skill generation...",
+        phase: "API-Design",
+        progress: 10,
+        message: "Starting skill generation (Phase 1/6)...",
       });
 
       setUserRequest("");
-
-      // Initial status check
       setTimeout(() => checkGenerationStatus(data.run_id), 500);
     } catch (err) {
       setError(`Error: ${err instanceof Error ? err.message : String(err)}`);
@@ -103,24 +102,16 @@ export const SkillCreatorPanel: React.FC = () => {
 
   const checkGenerationStatus = async (runId: string) => {
     try {
-      const response = await fetch(
-        `/api/quality/skill-creator/status/${runId}`
-      );
+      const response = await fetch(`/api/quality/skill-creator/status/${runId}`);
 
-      if (!response.ok) {
-        throw new Error("Status check failed");
-      }
+      if (!response.ok) throw new Error("Status check failed");
 
       const data: GenerationRun = await response.json();
       setCurrentRun(data);
 
       if (data.status === "success" || data.status === "failed") {
         setIsGenerating(false);
-
-        if (data.status === "success") {
-          // Refresh skills list
-          loadGeneratedSkills();
-        }
+        if (data.status === "success") loadGeneratedSkills();
       }
     } catch (err) {
       console.error("Status check error:", err);
@@ -130,399 +121,176 @@ export const SkillCreatorPanel: React.FC = () => {
   const loadGeneratedSkills = async () => {
     try {
       const response = await fetch("/api/quality/skill-creator/skills");
-
-      if (!response.ok) {
-        console.error("Failed to load skills");
-        return;
-      }
-
+      if (!response.ok) return;
       const data = await response.json();
-      setGeneratedSkills(data.skills);
+      setGeneratedSkills(data.skills || []);
     } catch (err) {
       console.error("Error loading skills:", err);
     }
   };
 
   return (
-    <div className="skill-creator-panel">
-      <div className="skill-creator-header">
-        <h2>🧠 Skill Creator</h2>
-        <p className="subtitle">
-          Generate reusable skills via natural language. The system uses
-          Loss-Driven Development to refine skills until zero flaws are found.
-        </p>
-      </div>
-
-      {/* Generation Form */}
-      <div className="generation-form">
-        <label htmlFor="user-request">What skill do you want to create?</label>
-        <textarea
-          id="user-request"
-          className="request-input"
-          placeholder="e.g., 'erzeuge einen Skill der JSON-Dateien validiert' or 'create a skill that analyzes code coverage'"
-          value={userRequest}
-          onChange={(e) => setUserRequest(e.target.value)}
-          disabled={isGenerating}
-          rows={3}
-        />
-        <button
-          className="generate-button"
-          onClick={handleGenerate}
-          disabled={isGenerating || !userRequest.trim()}
-        >
-          {isGenerating ? "Generating..." : "Generate Skill"}
-        </button>
-      </div>
-
-      {/* Error Display */}
-      {error && (
-        <div className="error-message">
-          <strong>Error:</strong> {error}
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Brain className="h-5 w-5 text-accent" />
+          <CardTitle className="text-base">Skill Creator</CardTitle>
         </div>
-      )}
-
-      {/* Generation Progress */}
-      {currentRun && (
-        <div className="generation-progress">
-          <h3>Generation Progress</h3>
-          <div className="progress-info">
-            <span className="run-id">Run ID: {currentRun.run_id}</span>
-            <span className="status">{currentRun.status.toUpperCase()}</span>
-            <span className="phase">Phase: {currentRun.phase}</span>
-          </div>
-          <div className="progress-bar">
-            <div
-              className="progress-fill"
-              style={{ width: `${currentRun.progress}%` }}
-            />
-          </div>
-          <p className="progress-message">{currentRun.message}</p>
-
-          {currentRun.status === "success" && currentRun.skill && (
-            <div className="success-box">
-              <h4>✅ Skill Generated Successfully</h4>
-              <div className="skill-details">
-                <div className="detail-row">
-                  <strong>Name:</strong> <code>{currentRun.skill.name}</code>
-                </div>
-                <div className="detail-row">
-                  <strong>Purpose:</strong> {currentRun.skill.purpose}
-                </div>
-                <div className="detail-row">
-                  <strong>Scope:</strong> {currentRun.skill.scope}
-                </div>
-                <div className="detail-row">
-                  <strong>Quality:</strong>
-                  <span className="quality-badge">
-                    {(currentRun.skill.quality * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="detail-row">
-                  <strong>LDD Iterations:</strong> {currentRun.skill.iterations}
-                </div>
-                {currentRun.skill.dependencies.length > 0 && (
-                  <div className="detail-row">
-                    <strong>Dependencies:</strong>
-                    <code>{currentRun.skill.dependencies.join(", ")}</code>
-                  </div>
-                )}
-              </div>
-              <p className="success-note">
-                The skill is now available in ~/.claude/skills/ and will be
-                injected into future turns.
-              </p>
-            </div>
-          )}
-
-          {currentRun.status === "failed" && (
-            <div className="error-box">
-              <h4>❌ Generation Failed</h4>
-              <p>{currentRun.message}</p>
-            </div>
-          )}
+        <CardDescription>
+          Generate reusable skills using 6-phase LDD orchestration (API-Design, Dialectical, Ideation, Adversarial, Implementation, E2E-Test)
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Generation Form */}
+        <div className="space-y-3">
+          <Label htmlFor="skill-request" className="text-sm font-medium">
+            What skill do you want to create?
+          </Label>
+          <Textarea
+            id="skill-request"
+            placeholder="e.g., 'Create a skill that validates JSON files and reports errors' or 'erzeuge einen Skill für CSV-Analyse'"
+            value={userRequest}
+            onChange={(e) => setUserRequest(e.target.value)}
+            disabled={isGenerating}
+            rows={3}
+            className="font-mono text-xs"
+          />
+          <Button
+            onClick={handleGenerate}
+            disabled={isGenerating || !userRequest.trim()}
+            className="w-full"
+          >
+            {isGenerating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {isGenerating ? "Generating Skill..." : "Generate Skill"}
+          </Button>
         </div>
-      )}
 
-      {/* Generated Skills List */}
-      <div className="generated-skills">
-        <h3>Generated Skills ({generatedSkills.length})</h3>
-
-        {generatedSkills.length === 0 ? (
-          <p className="empty-state">
-            No skills generated yet. Create your first skill above!
-          </p>
-        ) : (
-          <div className="skills-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Skill Name</th>
-                  <th>Created</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {generatedSkills.map((skill) => (
-                  <tr key={skill.name}>
-                    <td className="skill-name">
-                      <code>{skill.name}</code>
-                    </td>
-                    <td className="created-at">
-                      {new Date(skill.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="actions">
-                      <button className="action-btn view-btn">View</button>
-                      <button className="action-btn test-btn">Test</button>
-                      <button className="action-btn delete-btn">Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {/* Error Display */}
+        {error && (
+          <div className="flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
           </div>
         )}
-      </div>
 
-      <style jsx>{`
-        .skill-creator-panel {
-          padding: 20px;
-          background: var(--bg-secondary);
-          border-radius: 8px;
-          max-width: 900px;
-        }
+        {/* Generation Progress */}
+        {currentRun && (
+          <div className="space-y-3 rounded-md border border-accent/40 bg-accent/5 p-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium text-sm">Generation Progress</h3>
+              <Badge variant="outline" className="font-mono text-xs">
+                {currentRun.status.toUpperCase()}
+              </Badge>
+            </div>
 
-        .skill-creator-header h2 {
-          margin: 0 0 8px 0;
-          font-size: 1.5rem;
-        }
+            <div className="space-y-2 text-xs font-mono text-muted-foreground">
+              <div className="flex justify-between">
+                <span>Run ID: {currentRun.run_id.slice(0, 12)}...</span>
+                <span>Phase: {currentRun.phase}</span>
+              </div>
+            </div>
 
-        .subtitle {
-          margin: 0 0 20px 0;
-          color: var(--text-secondary);
-          font-size: 0.95rem;
-        }
+            {/* Progress Bar */}
+            <div className="h-2 w-full overflow-hidden rounded-full border border-border/60 bg-muted/30">
+              <div
+                className="h-full bg-accent transition-all"
+                style={{ width: `${Math.min(currentRun.progress, 100)}%` }}
+              />
+            </div>
 
-        .generation-form {
-          margin-bottom: 30px;
-          padding: 15px;
-          background: var(--bg-primary);
-          border-radius: 6px;
-        }
+            <p className="text-xs text-muted-foreground">{currentRun.message}</p>
 
-        .generation-form label {
-          display: block;
-          margin-bottom: 8px;
-          font-weight: 500;
-        }
+            {/* Success Details */}
+            {currentRun.status === "success" && currentRun.skill && (
+              <div className="mt-3 space-y-2 rounded-sm border border-emerald-500/40 bg-emerald-500/5 p-2">
+                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
+                  <CheckCircle className="h-4 w-4" />
+                  <span className="text-sm font-medium">Skill Generated Successfully</span>
+                </div>
 
-        .request-input {
-          width: 100%;
-          padding: 10px;
-          border: 1px solid var(--border-color);
-          border-radius: 4px;
-          font-family: inherit;
-          font-size: 1rem;
-          margin-bottom: 12px;
-          background: var(--bg-secondary);
-          color: var(--text-primary);
-        }
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="font-mono text-muted-foreground">Name:</span>
+                    <code className="text-foreground">{currentRun.skill.name}</code>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-mono text-muted-foreground">Purpose:</span>
+                    <span className="text-foreground">{currentRun.skill.purpose}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-mono text-muted-foreground">Scope:</span>
+                    <Badge variant="secondary" className="h-5 text-[10px]">
+                      {currentRun.skill.scope}
+                    </Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-mono text-muted-foreground">Quality:</span>
+                    <Badge className="h-5 text-[10px]">
+                      {(currentRun.skill.quality * 100).toFixed(0)}%
+                    </Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-mono text-muted-foreground">Iterations:</span>
+                    <span className="text-foreground">{currentRun.skill.iterations}</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
-        .request-input:disabled {
-          opacity: 0.6;
-        }
+            {/* Failed Status */}
+            {currentRun.status === "failed" && (
+              <div className="rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
+                ❌ {currentRun.message}
+              </div>
+            )}
+          </div>
+        )}
 
-        .generate-button {
-          padding: 10px 20px;
-          background: var(--color-primary);
-          color: white;
-          border: none;
-          border-radius: 4px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: opacity 0.2s;
-        }
+        {/* Generated Skills List */}
+        <div className="space-y-3">
+          <h3 className="flex items-center gap-2 text-sm font-medium">
+            Generated Skills
+            <Badge variant="secondary" className="h-5 text-[10px]">
+              {generatedSkills.length}
+            </Badge>
+          </h3>
 
-        .generate-button:hover:not(:disabled) {
-          opacity: 0.9;
-        }
-
-        .generate-button:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-
-        .error-message {
-          padding: 12px;
-          background: var(--color-error-light);
-          color: var(--color-error);
-          border-radius: 4px;
-          margin-bottom: 20px;
-        }
-
-        .generation-progress {
-          padding: 15px;
-          background: var(--bg-primary);
-          border-radius: 6px;
-          margin-bottom: 30px;
-          border-left: 4px solid var(--color-primary);
-        }
-
-        .progress-info {
-          display: flex;
-          gap: 20px;
-          margin-bottom: 12px;
-          font-size: 0.9rem;
-        }
-
-        .progress-bar {
-          width: 100%;
-          height: 8px;
-          background: var(--bg-secondary);
-          border-radius: 4px;
-          overflow: hidden;
-          margin-bottom: 12px;
-        }
-
-        .progress-fill {
-          height: 100%;
-          background: var(--color-primary);
-          transition: width 0.3s ease;
-        }
-
-        .progress-message {
-          margin: 0;
-          color: var(--text-secondary);
-          font-size: 0.9rem;
-        }
-
-        .success-box,
-        .error-box {
-          margin-top: 15px;
-          padding: 12px;
-          border-radius: 4px;
-        }
-
-        .success-box {
-          background: var(--color-success-light);
-          border-left: 4px solid var(--color-success);
-        }
-
-        .error-box {
-          background: var(--color-error-light);
-          border-left: 4px solid var(--color-error);
-        }
-
-        .success-box h4,
-        .error-box h4 {
-          margin: 0 0 12px 0;
-        }
-
-        .skill-details {
-          font-size: 0.9rem;
-        }
-
-        .detail-row {
-          display: flex;
-          justify-content: space-between;
-          padding: 6px 0;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .detail-row strong {
-          min-width: 150px;
-        }
-
-        .detail-row code {
-          background: rgba(255, 255, 255, 0.1);
-          padding: 2px 6px;
-          border-radius: 3px;
-        }
-
-        .quality-badge {
-          display: inline-block;
-          padding: 4px 12px;
-          background: var(--color-primary);
-          color: white;
-          border-radius: 12px;
-          font-weight: 600;
-        }
-
-        .success-note {
-          margin: 12px 0 0 0;
-          font-size: 0.85rem;
-          color: var(--text-secondary);
-          font-style: italic;
-        }
-
-        .generated-skills {
-          padding: 15px;
-          background: var(--bg-primary);
-          border-radius: 6px;
-        }
-
-        .generated-skills h3 {
-          margin: 0 0 15px 0;
-        }
-
-        .empty-state {
-          text-align: center;
-          color: var(--text-secondary);
-          padding: 20px;
-        }
-
-        .skills-table {
-          overflow-x: auto;
-        }
-
-        .skills-table table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 0.9rem;
-        }
-
-        .skills-table th {
-          text-align: left;
-          padding: 10px;
-          background: var(--bg-secondary);
-          border-bottom: 2px solid var(--border-color);
-        }
-
-        .skills-table td {
-          padding: 10px;
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .skill-name code {
-          background: var(--bg-secondary);
-          padding: 2px 6px;
-          border-radius: 3px;
-        }
-
-        .actions {
-          display: flex;
-          gap: 8px;
-        }
-
-        .action-btn {
-          padding: 6px 12px;
-          border: 1px solid var(--border-color);
-          background: var(--bg-secondary);
-          border-radius: 3px;
-          cursor: pointer;
-          font-size: 0.85rem;
-          transition: all 0.2s;
-        }
-
-        .action-btn:hover {
-          background: var(--border-color);
-        }
-
-        .delete-btn:hover {
-          color: var(--color-error);
-          border-color: var(--color-error);
-        }
-      `}</style>
-    </div>
+          {generatedSkills.length === 0 ? (
+            <p className="rounded-md border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
+              No skills generated yet. Create your first skill above!
+            </p>
+          ) : (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {generatedSkills.map((skill) => (
+                <div
+                  key={skill.name}
+                  className="flex items-center justify-between rounded-md border border-border/60 bg-card/40 p-2.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="font-mono text-xs font-medium">{skill.name}</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {new Date(skill.created_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button size="sm" variant="outline" className="h-6 px-2 text-xs">
+                      View
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 };
 

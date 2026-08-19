@@ -1,0 +1,13 @@
+{
+  "measurement": "tool-disabled cel_content new assertive framing",
+  "n": 5,
+  "per_task": {
+    "mem-staging-cluster": 1.0,
+    "mem-token-rotation": 1.0,
+    "mem-retry-limit": 1.0,
+    "mem-mascot": 0.0,
+    "mem-analytics-port": 1.0,
+    "mem-residency-region": 1.0
+  },
+  "cel_content_overall": 0.833
+}
