@@ -386,6 +386,31 @@ the second training target.
 includes_content` feature flag wired into the console/bridge callers (ship-dark, + an ADR for the
 brief-content change) and a token-cost check (bodies are larger than titles → re-measure cost).
 
+### 2026-08-19 · Entry 18 — Lever 2 (retrieval) diagnosed + content-fix productionized (flag + ADR-0396)
+
+**Lever 2 — retrieval reliability (the `mem-mascot` miss): NOT retrieval.** Reproduced: `build_brief`
+retrieves `bench-cel-mascot` as the **top hit**, and the content-brief **contains "Quill-7"** — yet
+the model answered "unknown" (3/3), while the oracle (same fact, clean framing) answered "Quill-7"
+(3/3). Even a top-1-only brief still failed. So the residual gap is **not retrieval and not simple
+noise** — it is a **brief-framing effect specific to name-type answers**: the "Relevant past memory:
+- <title>:" framing makes the model treat a *name* as non-authoritative, where it will still extract
+a *number*. Follow-up lever: assertive brief framing / selective injection (ADR-0394), not retrieval.
+
+**Productionization — the validated content-fix, behind a real flag (ship-dark).**
+- New flag **`cel_brief_includes_content`** (default off, alpha) in `feature_flags.py`.
+- Wired into both deterministic-brief callers: console `chat_runtime.py:4733`, bridge
+  `adapter.py:3373` — each reads the flag and passes `include_content=` to `render_brief_to_text`,
+  with a `TypeError` fallback to title-only for an older render signature.
+- **ADR-0396** documents the decision (`../Corvin-ADR/decisions/0396-…`).
+- **e2e-wiring-proof:** through the real `feature_flags.is_enabled` call — flag off → brief lacks
+  the fact; flag on → brief carries it. Verified.
+- **Cost re-measure:** content brief adds ~1904 chars ≈ **+476 tokens/turn** ≈ **$0.0005/turn** at
+  Haiku (cheap fresh user-turn input under ADR-0395) — negligible vs the 0.00→0.833 correctness lift.
+
+**Status.** The primary correctness lever is now a real, default-off, cost-characterized feature an
+operator can flip per workload after re-running the benchmark. Lever 2 is redirected from "retrieval"
+to "brief framing".
+
 ---
 
 ## 3. Metrics registry (the measured quantities)
