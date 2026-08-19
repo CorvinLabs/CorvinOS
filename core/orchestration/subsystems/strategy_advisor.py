@@ -80,9 +80,13 @@ class StrategyAdvisor(Subsystem):
             del self.prediction_cache[strategy]
 
     def _get_success_rate(self, strategy: str) -> float:
-        """Get empirical success rate for strategy."""
+        """Get empirical success rate for strategy.
+
+        Returns STRATEGY_DEFAULT_SUCCESS_RATE (0.5) if no history exists
+        (e.g., fresh install, unknown strategy).
+        """
         if strategy not in self.strategy_scores or not self.strategy_scores[strategy]:
-            return 0.5
+            return STRATEGY_DEFAULT_SUCCESS_RATE
 
         scores = self.strategy_scores[strategy]
         return sum(scores) / len(scores)
@@ -248,20 +252,19 @@ class StrategyAdvisor(Subsystem):
                 )
             return top_strategy
 
-        # Fallback: empirical ranking (success rate only)
+        # Fallback: empirical ranking (success rate only, already in StrategyOption)
         logger.debug(
             f"Using empirical fallback ranking "
             f"(fingerprint confidence={fingerprint.confidence if fingerprint else 'N/A'})"
         )
-        scored = []
-        for strategy in available_strategies:
-            success_rate = self._get_success_rate(strategy.name)
-            scored.append(
-                {
-                    "strategy": strategy,
-                    "success_rate": success_rate,
-                }
-            )
+        # Reuse StrategyOption.success_rate already computed in build_strategy_options()
+        scored = [
+            {
+                "strategy": strategy,
+                "success_rate": strategy.success_rate,
+            }
+            for strategy in available_strategies
+        ]
 
         ranked = sorted(scored, key=lambda x: x["success_rate"], reverse=True)
         return ranked[0]["strategy"] if ranked else None
