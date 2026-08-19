@@ -71,10 +71,10 @@ class NotificationEvent:
         }
 
 
-@dataclass
+@dataclass(frozen=True)
 class NotificationRoute:
-    """Routing policy for notifications."""
-    channels: List[str] = field(default_factory=list)  # ["discord", "slack", "email"]
+    """Routing policy for notifications (frozen for use as dict key)."""
+    channels: tuple = field(default_factory=tuple)  # ("discord", "slack", "email")
     delay_ms: int = 0  # Delivery delay (for batching)
     batch_size: int = 1  # Batch N events before sending
     retry_count: int = 3

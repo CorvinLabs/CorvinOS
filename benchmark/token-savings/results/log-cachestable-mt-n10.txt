@@ -10,3 +10,7 @@ CORVIN_HOME: /home/shumway/projects/CorvinOS/.corvin
 [WARN] resolve_model_for_workload: unknown workload type 'reasoning', falling back to user_choice
 [WARN] resolve_model_for_workload: unknown workload type 'reasoning', falling back to user_choice
 [WARN] resolve_model_for_workload: unknown workload type 'reasoning', falling back to user_choice
+[WARN] resolve_model_for_workload: unknown workload type 'reasoning', falling back to user_choice
+shadow measurement failed for shadow-1787153069-a64bfcbc: ValueError('Response is not valid JSON: I appreciate the detailed setup, but I need to be direct: I\'m Claude Code, an interactive agent for software engineering tasks. I don\'t operate as a "task analysis engine" that outputs JSON plans, and')
+[WARN] resolve_model_for_workload: unknown workload type 'code_generation', falling back to user_choice
+[WARN] resolve_model_for_workload: unknown workload type 'reasoning', falling back to user_choice

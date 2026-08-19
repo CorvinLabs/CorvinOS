@@ -1,0 +1,73 @@
+python: /home/shumway/projects/CorvinOS/core/console/.venv/bin/python
+CORVIN_HOME: /home/shumway/projects/CorvinOS/.corvin
+2026-08-19T17:45:17 [INFO] [corvin.license] license: loaded — tier=member jti=5400aba3
+2026-08-19T17:45:18 [INFO] [corvin.bridge-adapter] logger online level=INFO file=/home/shumway/projects/CorvinOS/.corvin/logs/corvin.log
+[helper_model] site=house_rules_adjudicator model=claude-haiku-4-5-20251001
+suite multiturn-v1 · 3 tasks · n=8 · tenant=_default
+  mt-primes-build arm A rep 0 (3t): total=131578 (fresh=30 +create=75926 +read=54417 +out=1205) q=1.00
+  mt-primes-build arm A rep 1 (3t): total=131015 (fresh=30 +create=75656 +read=54417 +out=912) q=1.00
+  mt-primes-build arm A rep 2 (3t): total=131783 (fresh=30 +create=76067 +read=54417 +out=1269) q=1.00
+  mt-primes-build arm A rep 3 (3t): total=132342 (fresh=30 +create=76349 +read=54417 +out=1546) q=1.00
+  mt-primes-build arm A rep 4 (3t): total=131374 (fresh=30 +create=75877 +read=54417 +out=1050) q=1.00
+  mt-primes-build arm A rep 5 (3t): total=131969 (fresh=30 +create=76130 +read=54417 +out=1392) q=1.00
+  mt-primes-build arm A rep 6 (3t): total=132265 (fresh=30 +create=76420 +read=54417 +out=1398) q=1.00
+  mt-primes-build arm A rep 7 (3t): total=132651 (fresh=30 +create=76588 +read=54417 +out=1616) q=1.00
+  mt-primes-build arm B rep 0 (3t): total=133679 (fresh=30 +create=51814 +read=80055 +out=1780) q=1.00
+  mt-primes-build arm B rep 1 (3t): total=131837 (fresh=30 +create=51727 +read=79304 +out=776) q=1.00
+  mt-primes-build arm B rep 2 (3t): total=131858 (fresh=30 +create=26147 +read=104908 +out=773) q=1.00
+  mt-primes-build arm B rep 3 (3t): total=133300 (fresh=30 +create=26676 +read=105263 +out=1331) q=1.00
+  mt-primes-build arm B rep 4 (3t): total=132208 (fresh=30 +create=26211 +read=105063 +out=904) q=1.00
+  mt-primes-build arm B rep 5 (3t): total=133685 (fresh=30 +create=26994 +read=105023 +out=1638) q=1.00
+  mt-primes-build arm B rep 6 (3t): total=133923 (fresh=30 +create=26887 +read=105437 +out=1569) q=1.00
+  mt-primes-build arm B rep 7 (3t): total=134261 (fresh=30 +create=27102 +read=105240 +out=1889) q=1.00
+  mt-budget-plan arm A rep 0 (3t): total=130368 (fresh=30 +create=75480 +read=54417 +out=441) q=1.00
+  mt-budget-plan arm A rep 1 (3t): total=130409 (fresh=30 +create=75520 +read=54417 +out=442) q=1.00
+  mt-budget-plan arm A rep 2 (3t): total=131294 (fresh=30 +create=76096 +read=54417 +out=751) q=1.00
+  mt-budget-plan arm A rep 3 (3t): total=131086 (fresh=30 +create=75969 +read=54417 +out=670) q=1.00
+  mt-budget-plan arm A rep 4 (3t): total=131072 (fresh=30 +create=75945 +read=54417 +out=680) q=1.00
+  mt-budget-plan arm A rep 5 (3t): total=130510 (fresh=30 +create=75586 +read=54417 +out=477) q=1.00
+  mt-budget-plan arm A rep 6 (3t): total=130510 (fresh=30 +create=75573 +read=54417 +out=490) q=1.00
+  mt-budget-plan arm A rep 7 (3t): total=130615 (fresh=30 +create=75625 +read=54417 +out=543) q=1.00
+  mt-budget-plan arm B rep 0 (3t): total=131752 (fresh=30 +create=26139 +read=104902 +out=681) q=1.00
+  mt-budget-plan arm B rep 1 (3t): total=131065 (fresh=30 +create=25905 +read=104697 +out=433) q=1.00
+  mt-budget-plan arm B rep 2 (3t): total=131381 (fresh=30 +create=26006 +read=104785 +out=560) q=1.00
+  mt-budget-plan arm B rep 3 (3t): total=131346 (fresh=30 +create=26003 +read=104810 +out=503) q=0.00
+  mt-budget-plan arm B rep 4 (3t): total=131130 (fresh=30 +create=25916 +read=104731 +out=453) q=1.00
+  mt-budget-plan arm B rep 5 (3t): total=131765 (fresh=30 +create=26149 +read=104911 +out=675) q=1.00
+  mt-budget-plan arm B rep 6 (3t): total=132048 (fresh=30 +create=26240 +read=104971 +out=807) q=1.00
+  mt-budget-plan arm B rep 7 (3t): total=131400 (fresh=30 +create=26028 +read=104798 +out=544) q=1.00
+  mt-refactor arm A rep 0 (3t): total=130914 (fresh=30 +create=75876 +read=54417 +out=591) q=1.00
+  mt-refactor arm A rep 1 (3t): total=131585 (fresh=30 +create=76346 +read=54417 +out=792) q=1.00
+  mt-refactor arm A rep 2 (3t): total=130921 (fresh=30 +create=75887 +read=54417 +out=587) q=1.00
+  mt-refactor arm A rep 3 (3t): total=130884 (fresh=30 +create=75863 +read=54417 +out=574) q=1.00
+  mt-refactor arm A rep 4 (3t): total=131145 (fresh=30 +create=76003 +read=54417 +out=695) q=1.00
+  mt-refactor arm A rep 5 (3t): total=131295 (fresh=30 +create=76127 +read=54417 +out=721) q=1.00
+  mt-refactor arm A rep 6 (3t): total=131050 (fresh=30 +create=75953 +read=54417 +out=650) q=1.00
+  mt-refactor arm A rep 7 (3t): total=131184 (fresh=30 +create=76058 +read=54417 +out=679) q=1.00
+  mt-refactor arm B rep 0 (3t): total=131849 (fresh=30 +create=26186 +read=104985 +out=648) q=1.00
+  mt-refactor arm B rep 1 (3t): total=132124 (fresh=30 +create=26249 +read=105076 +out=769) q=1.00
+  mt-refactor arm B rep 2 (3t): total=131684 (fresh=30 +create=26132 +read=104969 +out=553) q=1.00
+  mt-refactor arm B rep 3 (3t): total=131610 (fresh=30 +create=26081 +read=104927 +out=572) q=1.00
+  mt-refactor arm B rep 4 (3t): total=131594 (fresh=30 +create=26107 +read=104891 +out=566) q=1.00
+  mt-refactor arm B rep 5 (3t): total=131883 (fresh=30 +create=26206 +read=104967 +out=680) q=1.00
+  mt-refactor arm B rep 6 (3t): total=132328 (fresh=30 +create=26307 +read=105104 +out=887) q=1.00
+  mt-refactor arm B rep 7 (3t): total=131801 (fresh=30 +create=26161 +read=104967 +out=643) q=1.00
+
+============================================================
+TOKEN-SAVINGS BENCHMARK — measured, quality-gated
+============================================================
+OVERALL: no significant saving measured (point -0.5%, 95% CI -0.8%..-0.3%, p=0.9999, n=23) — DO NOT claim a saving
+  (1 pair(s) dropped: B answered worse than A)
+  coding      :   -0.5%  [-1.5%..-0.1%]  p=0.999  n=16  n.s.
+  reasoning   :   -0.7%  [-1.0%..-0.2%]  p=0.997  n=7  n.s.
+
+mean tokens per run (RAW COUNT — cost differs: read~0.1x, create~1.25x, out~5x):
+  arm               fresh  cache_cr  cache_rd   output     total
+  A_fix_off            30     75955     54417      840    131242
+  B_fix_on             30     28390    102866      860    132146
+
+COST per run (claude-haiku-4-5-20251001, cache-weighted): A_fix_off=$0.16158  B_fix_on=$0.07140  → +55.8% (CHEAPER)
+
+raw evidence: /home/shumway/projects/CorvinOS/benchmark/token-savings/results/raw-cachestable-clean-n8.jsonl
+report: /home/shumway/projects/CorvinOS/benchmark/token-savings/results/report-cachestable-clean-n8.json
+BENCH_EXIT=0

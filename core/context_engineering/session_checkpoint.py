@@ -334,26 +334,34 @@ class SessionContinuationManager:
             stack_str = checkpoint.context_state.get("context_stack", "root")
             context_stack = ContextStack()
 
-            # Parse stack string back to frames
+            # Parse stack string back to frames (with graceful error handling)
             if stack_str and stack_str != "root":
-                for frame_str in stack_str.split(" → "):
-                    # Simple parsing: "level:id" or "level:id [metadata]"
-                    parts = frame_str.split(":")
-                    if len(parts) >= 2:
-                        level = parts[0]
-                        id_part = ":".join(parts[1:])
-                        # Extract id and metadata
-                        if "[" in id_part:
-                            id_val, meta_str = id_part.split("[", 1)
-                            meta_str = meta_str.rstrip("]")
-                            metadata = {}
-                            for pair in meta_str.split():
-                                if "=" in pair:
-                                    k, v = pair.split("=", 1)
-                                    metadata[k] = v
-                            context_stack.push(level, id_val.strip(), **metadata)
-                        else:
-                            context_stack.push(level, id_val.strip())
+                try:
+                    for frame_str in stack_str.split(" → "):
+                        if not frame_str.strip():
+                            continue
+                        # Simple parsing: "level:id" or "level:id [metadata]"
+                        parts = frame_str.split(":", 1)
+                        if len(parts) == 2:
+                            level, id_part = parts
+                            # Extract id and metadata
+                            if "[" in id_part:
+                                id_val, meta_str = id_part.split("[", 1)
+                                meta_str = meta_str.rstrip("]")
+                                metadata = {}
+                                for pair in meta_str.split():
+                                    if "=" in pair:
+                                        k, v = pair.split("=", 1)
+                                        metadata[k] = v
+                                context_stack.push(level.strip(), id_val.strip(), **metadata)
+                            else:
+                                context_stack.push(level.strip(), id_part.strip())
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to parse context stack '{stack_str}' from checkpoint: {e}. "
+                        f"Resuming with empty stack."
+                    )
+                    context_stack = ContextStack()
 
             # Reconstruct ExecutionContext
             ctx = execution_context_cls(
@@ -370,11 +378,28 @@ class SessionContinuationManager:
                 checkpoints=checkpoint.checkpoints,
             )
 
-            # Restore decision history
+            # Restore decision history (with type safety)
             from .decision_record import DecisionRecord
             for dh in checkpoint.decision_history:
-                dr = DecisionRecord(**dh) if isinstance(dh, dict) else dh
-                ctx.decision_history.append(dr)
+                try:
+                    if isinstance(dh, dict):
+                        # Safely reconstruct from dict, ignoring extra keys
+                        valid_fields = {
+                            k: v
+                            for k, v in dh.items()
+                            if k in ["timestamp", "subsystem", "decision_type", "value",
+                                    "reasoning", "context_stack", "confidence", "guidance_applied"]
+                        }
+                        dr = DecisionRecord(**valid_fields)
+                    elif isinstance(dh, DecisionRecord):
+                        dr = dh
+                    else:
+                        logger.warning(f"Skipping decision history entry of unknown type: {type(dh)}")
+                        continue
+                    ctx.decision_history.append(dr)
+                except Exception as e:
+                    logger.error(f"Failed to restore decision history entry: {e}")
+                    continue
 
             logger.info(
                 f"Resumed ExecutionContext for task '{checkpoint.task_id}' "

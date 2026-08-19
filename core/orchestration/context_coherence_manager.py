@@ -205,9 +205,6 @@ class ContextCoherenceManager:
         """
         try:
             coherence = self.load_coherence(task_id)
-            created_at = datetime.fromisoformat(
-                json.loads(coherence.__class__.__name__)  # Hack to get created_at
-            )
         except Exception:
             return {}
 
