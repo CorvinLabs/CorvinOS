@@ -16,6 +16,7 @@ from core.context_engineering.memory_coordinator import MemoryCoordinator
 from core.context_engineering.context_bus import ContextBus
 from core.context_engineering.context_api import ContextAPI
 from core.context_engineering.execution_context import ExecutionContext, ContextStack
+from core.context_engineering.session_checkpoint import SessionContinuationManager, CheckpointNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +62,11 @@ class ContextInitializer:
             raise RuntimeError(f"Platform shutdown: compliance tripwire failure: {e}") from e
 
         self.memory_coordinator = MemoryCoordinator(corvin_home)
+        self.session_continuation_manager = SessionContinuationManager(corvin_home)
         self.context_bus: Optional[ContextBus] = None
         self.execution_context: Optional[ExecutionContext] = None
         self.context_api: Optional[ContextAPI] = None
+        self._corvin_home = corvin_home
 
     async def initialize_context(
         self,
@@ -73,10 +76,12 @@ class ContextInitializer:
         budget_remaining: float = 1000.0,
         time_remaining: int = 3600,
         model: str = "claude-3-sonnet",
+        checkpoint_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Initialize ExecutionContext for a task.
 
-        Loads task template from MemoryCoordinator (PROJECT > GLOBAL hierarchy),
+        If checkpoint_id is provided, resumes from a prior checkpoint.
+        Otherwise, loads task template from MemoryCoordinator (PROJECT > GLOBAL hierarchy),
         creates ExecutionContext, initializes ContextBus, and broadcasts
         context_initialized event.
 
@@ -87,44 +92,69 @@ class ContextInitializer:
             budget_remaining: Initial budget (tokens or cost)
             time_remaining: Time available for task (seconds)
             model: LLM model identifier
+            checkpoint_id: Optional checkpoint ID to resume from (ADR-0367)
 
         Returns:
             Dict with initialization result: {
                 'task_id': str,
                 'tenant_id': str,
                 'context_initialized': bool,
-                'template_source': str,  # 'project' or 'global'
+                'template_source': str,  # 'project', 'global', or 'checkpoint'
                 'context_stack_depth': int,
+                'resumed_from_checkpoint': bool,  # New field
             }
 
         Raises:
             BrainStartupError: If initialization fails.
         """
         try:
-            # Step 1: Load task template from MemoryCoordinator
-            task_template = self.memory_coordinator.load_task_template(task_type)
-            template_source = task_template.get("_source", "unknown")
+            resumed_from_checkpoint = False
 
-            logger.info(
-                f"Loaded task template '{task_type}' from {template_source} memory layer"
-            )
+            # Step 1: Try to resume from checkpoint if provided (ADR-0367)
+            if checkpoint_id:
+                try:
+                    checkpoint = self.session_continuation_manager.load_checkpoint(
+                        task_id, checkpoint_id
+                    )
+                    self.execution_context = self.session_continuation_manager.resume_from_checkpoint(
+                        checkpoint, ExecutionContext
+                    )
+                    template_source = "checkpoint"
+                    resumed_from_checkpoint = True
+                    logger.info(
+                        f"Resumed task '{task_id}' from checkpoint '{checkpoint_id}' "
+                        f"at turn {checkpoint.turn_number}"
+                    )
+                except CheckpointNotFoundError as e:
+                    logger.warning(f"Checkpoint not found: {e}. Using fresh task template.")
+                    # Fall through to template-based initialization
 
-            # Step 2: Create ContextStack (initially at root)
-            context_stack = ContextStack()
-            context_stack.push("task", task_id)
+            # If no checkpoint or checkpoint failed, load task template
+            if not resumed_from_checkpoint:
+                # Load task template from MemoryCoordinator
+                task_template = self.memory_coordinator.load_task_template(task_type)
+                template_source = task_template.get("_source", "unknown")
 
-            # Step 3: Create ExecutionContext
-            self.execution_context = ExecutionContext(
-                task_id=task_id,
-                tenant_id=tenant_id,
-                task_template=task_template,
-                context_stack=context_stack,
-                budget_remaining=budget_remaining,
-                time_remaining=time_remaining,
-                model=model,
-                strategy="",
-                strategy_confidence=0.5,
-            )
+                logger.info(
+                    f"Loaded task template '{task_type}' from {template_source} memory layer"
+                )
+
+                # Create ContextStack (initially at root)
+                context_stack = ContextStack()
+                context_stack.push("task", task_id)
+
+                # Create ExecutionContext
+                self.execution_context = ExecutionContext(
+                    task_id=task_id,
+                    tenant_id=tenant_id,
+                    task_template=task_template,
+                    context_stack=context_stack,
+                    budget_remaining=budget_remaining,
+                    time_remaining=time_remaining,
+                    model=model,
+                    strategy="",
+                    strategy_confidence=0.5,
+                )
 
             logger.info(f"Created ExecutionContext for task '{task_id}'")
 
@@ -163,6 +193,7 @@ class ContextInitializer:
                 "context_initialized": True,
                 "template_source": template_source,
                 "context_stack_depth": self.execution_context.context_stack.depth,
+                "resumed_from_checkpoint": resumed_from_checkpoint,
             }
 
         except Exception as e:
