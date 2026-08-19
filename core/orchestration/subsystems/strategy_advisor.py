@@ -1,9 +1,14 @@
 """Strategy Advisor subsystem: Predict strategy success."""
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .base import Subsystem
+from core.learning.adaptive_strategy import (
+    AdaptiveStrategyEngine,
+    StrategyOption,
+)
+from core.learning.operator_fingerprint import OperatorFingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +25,7 @@ class StrategyAdvisor(Subsystem):
         self.cache_predictions = cache_predictions
         self.prediction_cache: Dict[str, float] = {}
         self.strategy_scores: Dict[str, List[float]] = {}
+        self.adaptive_engine = AdaptiveStrategyEngine()
 
     @property
     def name(self) -> str:
@@ -138,6 +144,65 @@ class StrategyAdvisor(Subsystem):
             }
 
         raise ValueError(f"Unknown request type: {request_type}")
+
+    def get_strategy(
+        self,
+        available_strategies: List[StrategyOption],
+        fingerprint: Optional[OperatorFingerprint] = None,
+        task_type: str = "general",
+    ) -> Optional[StrategyOption]:
+        """Get top-ranked strategy using fingerprint-gated adaptive ranking.
+
+        Algorithm:
+        1. If fingerprint is provided and confidence > 0.7:
+           Use adaptive ranking combining success rate, operator preference, and cost.
+        2. Else:
+           Use empirical fallback (success rate only).
+        3. Return top-ranked strategy.
+
+        Args:
+            available_strategies: List of StrategyOption objects to rank.
+            fingerprint: Optional operator fingerprint for adaptive ranking.
+            task_type: Type of task for expertise lookup (default "general").
+
+        Returns:
+            Top-ranked StrategyOption, or None if no strategies available.
+        """
+        if not available_strategies:
+            logger.warning("No strategies available for ranking")
+            return None
+
+        # If fingerprint provided and confident, use adaptive ranking
+        if fingerprint is not None and fingerprint.confidence >= 0.7:
+            ranked_strategies = self.adaptive_engine.rank_strategies_by_fingerprint(
+                fingerprint, available_strategies, task_type
+            )
+            top_strategy = ranked_strategies[0] if ranked_strategies else None
+
+            if top_strategy:
+                logger.info(
+                    f"Selected strategy '{top_strategy.name}' (adaptive ranking, "
+                    f"fingerprint confidence={fingerprint.confidence:.2f})"
+                )
+            return top_strategy
+
+        # Fallback: empirical ranking (success rate only)
+        logger.debug(
+            f"Using empirical fallback ranking "
+            f"(fingerprint confidence={fingerprint.confidence if fingerprint else 'N/A'})"
+        )
+        scored = []
+        for strategy in available_strategies:
+            success_rate = self._get_success_rate(strategy.name)
+            scored.append(
+                {
+                    "strategy": strategy,
+                    "success_rate": success_rate,
+                }
+            )
+
+        ranked = sorted(scored, key=lambda x: x["success_rate"], reverse=True)
+        return ranked[0]["strategy"] if ranked else None
 
     def shutdown(self) -> None:
         """Cleanup."""
