@@ -4730,7 +4730,13 @@ async def stream_turn(
                         pass
             else:
                 _cbrief, _cel_trace = _cel_build_brief(prompt, sess.tenant_id, sess)
-                _cel_brief_text = _cel_render(_cbrief) or ""
+                # ADR-0396: inject memory BODIES, not just titles, when the flag is on (ship-dark,
+                # default off). EXP-001: title-only brief answers 0.00 tool-disabled; content 0.833.
+                _incl_content = _feature_flags.is_enabled("cel_brief_includes_content", sess.tenant_id)
+                try:
+                    _cel_brief_text = _cel_render(_cbrief, include_content=_incl_content) or ""
+                except TypeError:  # older render signature — fall back to title-only
+                    _cel_brief_text = _cel_render(_cbrief) or ""
             try:  # persist the trace for the read-only pipeline view (P1, cache)
                 _cel_persist_trace(_cel_trace, sess.workdir,
                                    f"turn-{sess.turn_count}")

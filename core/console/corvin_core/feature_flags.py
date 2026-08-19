@@ -826,6 +826,24 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         release_tier="alpha",
     ),
     FeatureFlag(
+        id="cel_brief_includes_content",
+        label="CEL brief injects memory content (not just titles)",
+        description=(
+            "Render each relevant memory's BODY into the deterministic CEL brief, not only its "
+            "title (ADR-0396). Off (default) = today's behaviour: the brief lists memory/ADR "
+            "titles only. EXP-001 measured that the title-only brief carries no answerable fact "
+            "(tool-disabled correctness 0.00) while injecting the body lifts it to 0.833 (~87% of "
+            "the oracle ceiling) — CEL's latent correctness value. On = the brief carries the "
+            "content, so an air-gapped / tool-less turn can answer from CEL alone. Bodies are "
+            "larger than titles, so re-run the token-savings benchmark before flipping on: the "
+            "cost of the bigger brief must be justified by the correctness lift on your workload."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("vibe-engineering", "learning"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
         id="cross_device_sync",
         label="Cross-device tenant sync",
         description=(

@@ -3370,7 +3370,16 @@ def _resolve_spawn_inputs(
                             _cel_text = _skill_block
                 else:
                     _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid, None)
-                    _cel_text = (_cel_render(_cbrief) or "").strip()
+                    # ADR-0396: inject memory BODIES, not just titles, when the flag is on
+                    # (ship-dark, default off). EXP-001: title-only 0.00 vs content 0.833 tool-off.
+                    try:
+                        _bic = _cel_ff.is_enabled("cel_brief_includes_content", _cel_tid)
+                    except Exception:  # noqa: BLE001 — no flag subsystem → off
+                        _bic = False
+                    try:
+                        _cel_text = (_cel_render(_cbrief, include_content=_bic) or "").strip()
+                    except TypeError:  # older render signature — title-only fallback
+                        _cel_text = (_cel_render(_cbrief) or "").strip()
                 if _cel_text:
                     if _cel_cache_stable:
                         # Relocate: keep the appended system file byte-stable so claude's
