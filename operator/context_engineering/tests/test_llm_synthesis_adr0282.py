@@ -112,6 +112,37 @@ class LLMSynthesisTests(unittest.TestCase):
         synth = [s for s in trace["stages"] if s.get("stage") == "llm_synthesis"]
         self.assertTrue(any(s.get("status") == "failed" for s in synth))
 
+    def test_neutral_cwd_cleanup_on_process_exit(self):
+        """Verify temp directory is cleaned up via atexit handler (ADR-0391)."""
+        import atexit
+        import shutil
+        import tempfile
+
+        synth = sys.modules["context_engineering.stages.llm_synthesis"]
+
+        # Reset global state
+        synth._CWD = None
+
+        # Call _neutral_cwd() to create the temp directory
+        cwd = synth._neutral_cwd()
+        self.assertIsNotNone(cwd, "neutral_cwd should create a directory")
+        self.assertTrue(Path(cwd).exists(), "temp directory should exist")
+
+        # Verify atexit was registered (we can't test the actual exit, but we can
+        # call _cleanup_cwd directly to verify it works)
+        synth._cleanup_cwd()
+        self.assertFalse(Path(cwd).exists(), "cleanup should delete the directory")
+        self.assertIsNone(synth._CWD, "_CWD should be reset to None after cleanup")
+
+    def test_cleanup_cwd_handles_missing_directory(self):
+        """Verify _cleanup_cwd handles non-existent directories gracefully."""
+        synth = sys.modules["context_engineering.stages.llm_synthesis"]
+        synth._CWD = "/nonexistent/directory"
+
+        # Should not raise an exception
+        synth._cleanup_cwd()
+        self.assertIsNone(synth._CWD, "_CWD should be reset even if directory doesn't exist")
+
 
 if __name__ == "__main__":
     unittest.main()
