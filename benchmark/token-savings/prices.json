@@ -1,0 +1,15 @@
+{
+  "_README": "Fill base_input_per_mtok and base_output_per_mtok with YOUR real, current prices ($ per 1,000,000 tokens) for each model. The benchmark applies the official cache multipliers (fresh 1x, cache-write-5m 1.25x, cache-write-1h 2x, cache-read 0.1x) itself — do NOT bake those in here. While a value is null the cost view stays blank for that model (no fabricated number). The benchmark measures the WORKER turn, so the worker model's prices are the ones that matter.",
+  "models": {
+    "claude-opus-5": {
+      "base_input_per_mtok": null,
+      "base_output_per_mtok": null,
+      "_note": "worker model on this tenant (spec.engine_models.claude_code.worker_model)"
+    },
+    "claude-haiku-4-5-20251001": {
+      "base_input_per_mtok": null,
+      "base_output_per_mtok": null,
+      "_note": "OS model"
+    }
+  }
+}

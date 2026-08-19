@@ -33,6 +33,7 @@ import stats  # noqa: E402  (local module)
 # place that sums usage correctly, shared with the dashboard fix. Reading only input_tokens
 # (as the first draft did) undercounts real input by ~99.99% on a cached turn.
 from core.learning.token_accounting import token_components, total_tokens  # noqa: E402
+import pricing  # noqa: E402  (local: cache-aware cost, real prices from prices.json)
 
 
 def quality_score(text: str, check: dict) -> float:
@@ -121,11 +122,14 @@ async def run(args) -> int:
                     text, usage = await _run_one(cr, args.tenant, tk["prompt"])
                     comp = token_components(usage)   # fresh_input/cache_creation/cache_read/output
                     total = total_tokens(usage)      # full input (all 3 classes) + output
+                    c5, c1 = pricing.creation_split(usage)  # 5m/1h split for cost
+                    cost = pricing.cost_usd(usage, args.model, args.prices)  # None if no real price
                     rec = {
                         "task_id": tk["id"], "task_type": tk["type"], "arm": arm,
                         "cel_on": cel_on, "rep": rep,
-                        **comp, "input_all": total - comp["output"], "tokens_total": total,
-                        "quality": quality_score(text, tk["check"]),
+                        **comp, "cache_creation_5m": c5, "cache_creation_1h": c1,
+                        "input_all": total - comp["output"], "tokens_total": total,
+                        "cost_usd": cost, "quality": quality_score(text, tk["check"]),
                     }
                     runs.append(rec)
                     fh.write(json.dumps(rec) + "\n")
@@ -165,12 +169,17 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
     def _arm_components(arm: str) -> dict:
         rs = [r for r in runs if r["arm"] == arm]
         n = max(1, len(rs))
-        return {k: round(sum(r[k] for r in rs) / n, 1)
-                for k in ("fresh_input", "cache_creation", "cache_read", "output", "tokens_total")}
+        out = {k: round(sum(r[k] for r in rs) / n, 1)
+               for k in ("fresh_input", "cache_creation", "cache_read", "output", "tokens_total")}
+        costs = [r["cost_usd"] for r in rs if r.get("cost_usd") is not None]
+        out["cost_usd"] = round(sum(costs) / len(costs), 6) if costs else None
+        return out
     total_input_all = sum(r["input_all"] for r in runs)
+    cost_available = pricing.prices_available(args.model, args.prices)
     return {
         "suite_version": suite.get("suite_version"), "n_per_arm": args.n,
         "tenant": args.tenant, "run_id": args.run_id,
+        "model": args.model, "cost_available": cost_available,
         # Guard now keys on the SUMMED input (all 3 classes), not fresh input_tokens — the old
         # guard false-passed because input_tokens=2>0 while 62k cache tokens were uncounted.
         "input_captured": total_input_all > 0,
@@ -219,7 +228,17 @@ def print_report(rep: dict) -> None:
         for arm, c in cp.items():
             print(f"  {arm:14s} {c['fresh_input']:8.0f} {c['cache_creation']:9.0f} "
                   f"{c['cache_read']:9.0f} {c['output']:8.0f} {c['tokens_total']:9.0f}")
-        print("  → 'saved' on RAW COUNT is above; for COST apply your model's prices to these.")
+        # Cost view — the honest headline (cache-weighted). Blank until real prices are filled.
+        a, b = cp.get("A_cel_off", {}), cp.get("B_cel_on", {})
+        if rep.get("cost_available") and a.get("cost_usd") and b.get("cost_usd"):
+            ac, bc = a["cost_usd"], b["cost_usd"]
+            saved = (ac - bc) / ac * 100 if ac else 0.0
+            print(f"\nCOST per run ({rep.get('model')}, cache-weighted): "
+                  f"A=${ac:.5f}  B=${bc:.5f}  → {saved:+.1f}% "
+                  f"({'CHEAPER' if saved>0 else 'more expensive'})")
+        else:
+            print(f"\nCOST: not shown — fill real prices for '{rep.get('model')}' in prices.json "
+                  f"(raw components above; cache-read ~0.1x, create ~1.25–2x, output ~5x).")
 
 
 def main() -> int:
@@ -230,9 +249,30 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=12345, help="bootstrap seed (reproducible CI)")
     ap.add_argument("--out", default=str(HERE / "results"))
     ap.add_argument("--run-id", default=time.strftime("%Y%m%d-%H%M%S"))
+    ap.add_argument("--model", default="", help="worker model for pricing (default: read from tenant config)")
+    ap.add_argument("--prices", default=str(HERE / "prices.json"))
     ap.add_argument("--dry-run", action="store_true", help="validate wiring only, no LLM, no numbers")
     args = ap.parse_args()
+    args.prices = pricing.load_prices(args.prices)
+    if not args.model:
+        args.model = _worker_model(args.tenant) or "claude-opus-5"
     return asyncio.run(run(args))
+
+
+def _worker_model(tenant: str) -> "str | None":
+    """The worker model from tenant.corvin.yaml (what the benchmark turn actually runs on)."""
+    try:
+        import os
+        import yaml  # noqa: PLC0415
+        home = os.environ.get("CORVIN_HOME", str(Path.home() / ".corvin"))
+        cfg = Path(home) / "tenants" / tenant / "global" / "tenant.corvin.yaml"
+        if not cfg.is_file():
+            cfg = Path(home) / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        return (((data.get("spec") or {}).get("engine_models") or {})
+                .get("claude_code") or {}).get("worker_model")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 if __name__ == "__main__":
