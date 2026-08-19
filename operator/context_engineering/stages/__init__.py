@@ -27,6 +27,8 @@ from . import toolforge, skillforge  # noqa: F401,E402  (opt-in, ADR-0283)
 from .grades import (  # noqa: E402  (ADR-0285)
     grade_stage, get_grade, bootstrap_seed, is_default_eligible, record_turn_outcome,
 )
+# Phase 5: Advanced Context Optimizations (ADR-0394)
+from . import selective_injection_stage, memory_pruning_stage, adr_reranking_stage  # noqa: F401,E402
 
 __all__ = [
     "ContextBundle", "StageCtx", "StageTelemetry", "ContextStage", "SCRATCH_KEYS",

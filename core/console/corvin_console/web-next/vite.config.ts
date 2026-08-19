@@ -63,6 +63,10 @@ export default defineConfig({
         changeOrigin: false,
         ws: true,   // WebSocket upgrade proxying for the design-chat endpoint
       },
+      "/api": {
+        target: process.env.CORVIN_GATEWAY_URL || "http://127.0.0.1:8765",
+        changeOrigin: false,
+      },
       "/healthz": process.env.CORVIN_GATEWAY_URL || "http://127.0.0.1:8765",
     },
   },

@@ -25,6 +25,12 @@ from .integration import LearningIntegration
 from .audit import AuditTrail
 from .migration import MigrationPlanner
 from .anomaly_detector import AnomalyDetector, AnomalyAlert
+# Phase 4: Learned Classification for Context Engineering (ADR-0393)
+from .task_features import TaskFeatureExtractor, FeatureVector
+from .classifier_model import LearnedClassifier, PredictionResult, ClassifierMetrics
+from .classifier_trainer import ClassifierTrainer, TrainingDataset, TrainingDataPoint
+from .active_feedback import ActiveFeedbackCollector, FeedbackRecord, FeedbackMetrics
+from .classifier_serving import ClassifierService
 
 __all__ = [
     "TreeNode",
@@ -44,4 +50,17 @@ __all__ = [
     "MigrationPlanner",
     "AnomalyDetector",
     "AnomalyAlert",
+    # Phase 4: Learned Classifier (ADR-0393)
+    "TaskFeatureExtractor",
+    "FeatureVector",
+    "LearnedClassifier",
+    "PredictionResult",
+    "ClassifierMetrics",
+    "ClassifierTrainer",
+    "TrainingDataset",
+    "TrainingDataPoint",
+    "ActiveFeedbackCollector",
+    "FeedbackRecord",
+    "FeedbackMetrics",
+    "ClassifierService",
 ]

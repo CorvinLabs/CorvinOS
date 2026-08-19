@@ -4,16 +4,22 @@ Endpoints:
   GET /v1/console/learning/nodes    — fetch all TreeNodes with confidences
   POST /v1/console/learning/grade   — operator grades a pattern
   POST /v1/console/learning/note    — operator adds note to pattern
+  POST /v1/console/learning/tools/{tool_id}/rating     — rate a tool (Gap 7)
+  POST /v1/console/learning/skills/{skill_id}/rating   — rate a skill (Gap 7)
+  GET /v1/console/learning/tools/{tool_id}/feedback    — get tool feedback stats (Gap 7)
+  GET /v1/console/learning/skills/{skill_id}/feedback  — get skill feedback stats (Gap 7)
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from core.learning import LearningEventStore, LearningIntegration
+from core.learning.event_store import EventStore
+from core.learning.operator_feedback import OperatorFeedbackHandler
 import corvin_console.auth as _auth
 from ..deps import require_session
 
@@ -45,6 +51,48 @@ class TreeNodeJSON(BaseModel):
     children: list[str] = []
     operator_notes: list = []
     adr_link: str | None = None
+
+
+# Gap 7: Operator Feedback Loop (ADR-0327)
+
+
+class ToolRatingRequest(BaseModel):
+    """Operator rates a tool execution."""
+    rating: int  # 1-5
+    feedback_text: Optional[str] = None
+    task_id: Optional[str] = None
+
+
+class SkillRatingRequest(BaseModel):
+    """Operator rates a skill execution."""
+    rating: int  # 1-5
+    feedback_text: Optional[str] = None
+    task_id: Optional[str] = None
+
+
+class FeedbackStatsResponse(BaseModel):
+    """Aggregated feedback statistics."""
+    entity_id: str
+    entity_type: str  # "tool" | "skill"
+    entity_name: str
+    sample_count: int
+    average_rating: float
+    median_rating: float
+    std_dev: Optional[float]
+    min_rating: int
+    max_rating: int
+    confidence: float
+    feedback_sentiment: str
+    window_days: int
+
+
+def get_feedback_handler(session = Depends(require_session)) -> OperatorFeedbackHandler:
+    """Get OperatorFeedbackHandler for this tenant."""
+    # Per-tenant storage: ~/.corvin/tenants/{tenant_id}/learning/events.db
+    tenant_home = Path.home() / ".corvin" / "tenants" / session.tenant_id
+    db_path = tenant_home / "learning" / "events.db"
+    event_store = EventStore(db_path)
+    return OperatorFeedbackHandler(event_store)
 
 
 def get_learning_integration(session = Depends(require_session)) -> LearningIntegration:
@@ -153,9 +201,9 @@ async def add_operator_note(
         node = integration.store.get_node(request.pattern_id)
         if not node:
             raise HTTPException(status_code=404, detail="Pattern not found")
-        
+
         node.add_operator_note(session.user_id, request.text)
-        
+
         return {
             "pattern_id": request.pattern_id,
             "notes_count": len(node.operator_notes),
@@ -163,3 +211,214 @@ async def add_operator_note(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Gap 7: Operator Feedback Loop API Endpoints
+# ============================================================================
+
+
+@router.post("/tools/{tool_id}/rating", response_model=dict)
+async def rate_tool(
+    tool_id: str,
+    request: ToolRatingRequest,
+    handler: OperatorFeedbackHandler = Depends(get_feedback_handler),
+    session = Depends(require_session),
+):
+    """Record an operator rating for a tool (Gap 7).
+
+    Args:
+        tool_id: Tool identifier
+        request: Rating (1-5) and optional feedback text
+        session: Current user session (for tenant isolation)
+
+    Returns:
+        Confirmation and aggregated feedback stats
+    """
+    try:
+        # Validate rating
+        if not 1 <= request.rating <= 5:
+            raise HTTPException(status_code=400, detail="Rating must be 1-5")
+
+        # Record rating
+        import asyncio
+        await handler.record_tool_rating(
+            tool_id=tool_id,
+            tool_name=tool_id,  # Will be overridden by event payload if available
+            rating=request.rating,
+            tenant_id=session.tenant_id,
+            feedback_text=request.feedback_text,
+            task_id=request.task_id,
+            session_id=session.session_id if hasattr(session, 'session_id') else None,
+            instance_id=session.instance_id if hasattr(session, 'instance_id') else "console",
+        )
+
+        # Get updated feedback stats
+        stats = handler.get_tool_feedback_stats(
+            tool_id=tool_id,
+            tenant_id=session.tenant_id,
+            use_cache=False,  # Force fresh calculation
+        )
+
+        return {
+            "tool_id": tool_id,
+            "rating_recorded": request.rating,
+            "feedback_stats": {
+                "sample_count": stats.sample_count,
+                "average_rating": round(stats.average_rating, 2),
+                "confidence": round(stats.confidence, 2),
+                "sentiment": stats.feedback_sentiment,
+            },
+            "status": "success",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to record tool rating: {str(e)}")
+
+
+@router.post("/skills/{skill_id}/rating", response_model=dict)
+async def rate_skill(
+    skill_id: str,
+    request: SkillRatingRequest,
+    handler: OperatorFeedbackHandler = Depends(get_feedback_handler),
+    session = Depends(require_session),
+):
+    """Record an operator rating for a skill (Gap 7).
+
+    Args:
+        skill_id: Skill identifier
+        request: Rating (1-5) and optional feedback text
+        session: Current user session (for tenant isolation)
+
+    Returns:
+        Confirmation and aggregated feedback stats
+    """
+    try:
+        # Validate rating
+        if not 1 <= request.rating <= 5:
+            raise HTTPException(status_code=400, detail="Rating must be 1-5")
+
+        # Record rating
+        import asyncio
+        await handler.record_skill_rating(
+            skill_id=skill_id,
+            skill_name=skill_id,  # Will be overridden by event payload if available
+            rating=request.rating,
+            tenant_id=session.tenant_id,
+            feedback_text=request.feedback_text,
+            task_id=request.task_id,
+            session_id=session.session_id if hasattr(session, 'session_id') else None,
+            instance_id=session.instance_id if hasattr(session, 'instance_id') else "console",
+        )
+
+        # Get updated feedback stats
+        stats = handler.get_skill_feedback_stats(
+            skill_id=skill_id,
+            tenant_id=session.tenant_id,
+            use_cache=False,  # Force fresh calculation
+        )
+
+        return {
+            "skill_id": skill_id,
+            "rating_recorded": request.rating,
+            "feedback_stats": {
+                "sample_count": stats.sample_count,
+                "average_rating": round(stats.average_rating, 2),
+                "confidence": round(stats.confidence, 2),
+                "sentiment": stats.feedback_sentiment,
+            },
+            "status": "success",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to record skill rating: {str(e)}")
+
+
+@router.get("/tools/{tool_id}/feedback", response_model=FeedbackStatsResponse)
+async def get_tool_feedback(
+    tool_id: str,
+    window_days: int = 7,
+    handler: OperatorFeedbackHandler = Depends(get_feedback_handler),
+    session = Depends(require_session),
+):
+    """Retrieve aggregated feedback statistics for a tool (Gap 7).
+
+    Args:
+        tool_id: Tool identifier
+        window_days: Time window for aggregation (default 7 days)
+        session: Current user session (for tenant isolation)
+
+    Returns:
+        Aggregated feedback statistics
+    """
+    try:
+        stats = handler.get_tool_feedback_stats(
+            tool_id=tool_id,
+            tenant_id=session.tenant_id,
+            window_days=window_days,
+        )
+
+        return FeedbackStatsResponse(
+            entity_id=stats.entity_id,
+            entity_type=stats.entity_type,
+            entity_name=stats.entity_name,
+            sample_count=stats.sample_count,
+            average_rating=round(stats.average_rating, 2),
+            median_rating=float(stats.median_rating),
+            std_dev=round(stats.std_dev, 2) if stats.std_dev else None,
+            min_rating=stats.min_rating,
+            max_rating=stats.max_rating,
+            confidence=round(stats.confidence, 2),
+            feedback_sentiment=stats.feedback_sentiment,
+            window_days=stats.window_days,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve tool feedback: {str(e)}")
+
+
+@router.get("/skills/{skill_id}/feedback", response_model=FeedbackStatsResponse)
+async def get_skill_feedback(
+    skill_id: str,
+    window_days: int = 7,
+    handler: OperatorFeedbackHandler = Depends(get_feedback_handler),
+    session = Depends(require_session),
+):
+    """Retrieve aggregated feedback statistics for a skill (Gap 7).
+
+    Args:
+        skill_id: Skill identifier
+        window_days: Time window for aggregation (default 7 days)
+        session: Current user session (for tenant isolation)
+
+    Returns:
+        Aggregated feedback statistics
+    """
+    try:
+        stats = handler.get_skill_feedback_stats(
+            skill_id=skill_id,
+            tenant_id=session.tenant_id,
+            window_days=window_days,
+        )
+
+        return FeedbackStatsResponse(
+            entity_id=stats.entity_id,
+            entity_type=stats.entity_type,
+            entity_name=stats.entity_name,
+            sample_count=stats.sample_count,
+            average_rating=round(stats.average_rating, 2),
+            median_rating=float(stats.median_rating),
+            std_dev=round(stats.std_dev, 2) if stats.std_dev else None,
+            min_rating=stats.min_rating,
+            max_rating=stats.max_rating,
+            confidence=round(stats.confidence, 2),
+            feedback_sentiment=stats.feedback_sentiment,
+            window_days=stats.window_days,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve skill feedback: {str(e)}")
