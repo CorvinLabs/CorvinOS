@@ -8,14 +8,14 @@ Public API:
   * load_metrics, compare_groups, generate_report: analysis
 """
 
-from operator.measurement.analysis import (
+from .analysis import (
     compare_groups,
     generate_report,
     load_metrics,
     split_by_group,
 )
-from operator.measurement.canary_router import CanaryRouter
-from operator.measurement.token_metrics import MetricsCollector, TokenMetric
+from .canary_router import CanaryRouter
+from .token_metrics import MetricsCollector, TokenMetric
 
 __all__ = [
     "CanaryRouter",
