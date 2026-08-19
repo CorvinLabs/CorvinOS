@@ -12,6 +12,11 @@ from uuid import uuid4
 class LearningEventType(str, Enum):
     """Canonical learning event types."""
 
+    # Gap 1: Tool Execution (ADR-0321)
+    TOOL_EXECUTED = "tool.executed"
+    OPERATOR_RATED_TOOL = "operator.rated_tool"
+
+    # Core learning events (ADR-0314+)
     CONFIDENCE_SCORE = "confidence.score"
     DECISION_RECORD = "decision.record"
     USER_FEEDBACK = "feedback.user_provided"
@@ -56,6 +61,48 @@ class LearningEvent:
 
 
 # Event payload dataclasses
+
+
+# Gap 1: Tool Execution Payloads (ADR-0321)
+
+
+@dataclass(frozen=True)
+class ToolExecutedPayload:
+    """Tool execution telemetry (ADR-0321, Gap 1)."""
+
+    tool_id: str
+    tool_name: str
+    tool_type: str  # "generated" | "promoted" | "builtin"
+    status: str  # "success" | "failure" | "timeout" | "error"
+    latency_ms: int
+    input_tokens: int
+    output_tokens: int
+    subsystem_tokens: dict[str, int] = field(default_factory=dict)
+    estimated_cost_cents: int = 0
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None  # PII-sanitized
+    error_class: Optional[str] = None
+    user_satisfaction: int = -1  # 1-5 or -1 (not available)
+    required_followup: bool = False
+    error_resolved: Optional[bool] = None
+    model_id: str = "claude-opus-5"
+    task_type: Optional[str] = None
+    task_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class OperatorRatedToolPayload:
+    """Operator feedback on tool execution (ADR-0321, Gap 1)."""
+
+    tool_id: str
+    tool_name: str
+    rating: int  # 1-5
+    feedback_text: Optional[str] = None
+    task_id: Optional[str] = None
+    session_id: Optional[str] = None
+    timestamp_utc: Optional[str] = None
 
 
 @dataclass(frozen=True)
