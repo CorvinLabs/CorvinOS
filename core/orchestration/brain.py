@@ -18,6 +18,7 @@ from .hub import SubsystemHub
 from .brain_startup import ContextInitializer, BrainStartupError
 from .context_bridge import ContextBridge
 from core.console.corvin_core.execution_context import ExecutionContext as ExecutionContextV1
+from core.context_engineering.session_checkpoint import SessionContinuationManager
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,84 @@ class TaskBrain:
         self.hub = SubsystemHub(max_event_queue_size=max_event_queue_size)
         self._tasks: Dict[str, Any] = {}
         self._context_initializer = ContextInitializer(corvin_home)
+        self._session_continuation_manager = SessionContinuationManager(corvin_home)
+        self._corvin_home = corvin_home
 
     def register_subsystem(self, subsystem):
         """Register a subsystem with the brain."""
         self.hub.register_subsystem(subsystem)
+
+    def save_task_checkpoint(
+        self,
+        task_id: str,
+        tenant_id: str,
+        turn_number: int = 0,
+        tokens_consumed: int = 0,
+        cost_consumed_cents: float = 0.0,
+        error_recovery_state: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Save a checkpoint for task continuation (ADR-0367).
+
+        Called by subsystems (e.g., HealthMonitor) after each turn to enable
+        resuming the task in a new session if needed (e.g., on token overflow).
+
+        Feature flag: FEATURE_SESSION_CHECKPOINTS (default: True)
+
+        Args:
+            task_id: Unique task identifier
+            tenant_id: Tenant identifier
+            turn_number: Which turn created this checkpoint
+            tokens_consumed: Total tokens consumed so far
+            cost_consumed_cents: Total cost incurred so far
+            error_recovery_state: Optional error recovery metadata
+
+        Returns:
+            checkpoint_id (string) if successful, None if feature disabled or error
+        """
+        # Check if session checkpoints feature is enabled
+        task_meta = self._tasks.get(task_id)
+        if not task_meta:
+            logger.warning(f"Task '{task_id}' not found in _tasks registry")
+            return None
+
+        try:
+            execution_context = self._context_initializer.get_execution_context()
+            if not execution_context:
+                logger.warning(f"No ExecutionContext found for task '{task_id}'")
+                return None
+
+            session_id = getattr(execution_context, "session_id", task_id)
+            checkpoint_id = self._session_continuation_manager.save_checkpoint(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                execution_context=execution_context,
+                session_id=session_id,
+                turn_number=turn_number,
+                tokens_consumed=tokens_consumed,
+                cost_consumed_cents=cost_consumed_cents,
+                error_recovery_state=error_recovery_state,
+            )
+            logger.info(f"Saved checkpoint '{checkpoint_id}' for task '{task_id}'")
+            return checkpoint_id
+
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint for task '{task_id}': {e}")
+            return None
+
+    def get_checkpoint_metadata(self, task_id: str) -> list[Dict[str, Any]]:
+        """Get metadata for all checkpoints of a task (for UI display).
+
+        Args:
+            task_id: Unique task identifier
+
+        Returns:
+            List of checkpoint metadata dicts
+        """
+        try:
+            return self._session_continuation_manager.get_checkpoint_metadata(task_id)
+        except Exception as e:
+            logger.error(f"Failed to get checkpoint metadata for '{task_id}': {e}")
+            return []
 
     async def run_task(
         self,
