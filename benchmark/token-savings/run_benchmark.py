@@ -55,19 +55,17 @@ def load_suite(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     assert "tasks" in data and isinstance(data["tasks"], list), "suite has no tasks[]"
     for tk in data["tasks"]:
-        assert {"id", "type", "prompt", "check"} <= set(tk), f"task missing keys: {tk.get('id')}"
+        assert {"id", "type", "check"} <= set(tk), f"task missing keys: {tk.get('id')}"
+        assert ("prompt" in tk) or (isinstance(tk.get("turns"), list) and tk["turns"]), \
+            f"task {tk.get('id')} needs 'prompt' (single-turn) or non-empty 'turns' (multi-turn)"
     return data
 
 
-async def _run_one(cr, tenant: str, prompt: str) -> tuple[str, dict]:
-    """One real turn → (answer_text, raw_usage_dict). Usage is the WORKER's real usage from
-    the result event (never chars/4, never an estimate). The caller sums it via
-    token_accounting so all four token classes count — not just fresh input_tokens.
-
-    NOTE (review finding 4): this trusts the terminal `usage` to already be cumulative over
-    any internal tool rounds. For suite-v1 (single-call, no-tool tasks) that holds; a
-    tool-using suite must re-verify this before its numbers are trusted."""
-    sess = cr.create_session(tenant, "bench")
+async def _one_turn(cr, sess, prompt: str) -> tuple[str, dict]:
+    """One real turn in an existing session → (answer_text, raw_usage_dict). Usage is the
+    worker's real usage from the result event (never chars/4). NOTE (review finding 4): this
+    trusts the terminal usage to be cumulative over internal tool rounds — true for the
+    no-tool suites; a tool-using suite must re-verify before its numbers are trusted."""
     text_parts, usage = [], None
     async for ev in cr.stream_turn(sess, prompt):
         et = ev.get("type")
@@ -76,6 +74,31 @@ async def _run_one(cr, tenant: str, prompt: str) -> tuple[str, dict]:
         if ev.get("usage"):
             usage = ev["usage"]
     return "".join(text_parts), (usage or {})
+
+
+async def _run_task(cr, tenant: str, task: dict, model: str, prices: dict) -> tuple[str, dict, dict, "float | None"]:
+    """Run a whole TASK. Single-turn tasks have `prompt`; multi-turn tasks have `turns` (a
+    list of prompts) run SEQUENTIALLY in ONE session — the unit of measurement is the task,
+    so tokens are SUMMED across its turns (this is where CEL's cross-turn value, if any, shows:
+    injected context that avoids re-derivation over the conversation). Quality is checked on
+    the FINAL answer. Returns (final_text, summed_components, extra, total_cost_or_None)."""
+    prompts = task.get("turns") or [task["prompt"]]
+    sess = cr.create_session(tenant, "bench")
+    summed = {"fresh_input": 0, "cache_creation": 0, "cache_read": 0, "output": 0}
+    c5_sum = c1_sum = 0
+    cost_sum: "float | None" = 0.0
+    final_text = ""
+    for p in prompts:
+        final_text, usage = await _one_turn(cr, sess, p)
+        comp = token_components(usage)
+        for k in summed:
+            summed[k] += comp[k]
+        c5, c1 = pricing.creation_split(usage)
+        c5_sum += c5
+        c1_sum += c1
+        turn_cost = pricing.cost_usd(usage, model, prices)
+        cost_sum = None if (turn_cost is None or cost_sum is None) else cost_sum + turn_cost
+    return final_text, summed, {"c5": c5_sum, "c1": c1_sum, "n_turns": len(prompts)}, cost_sum
 
 
 def _set_cel(ff, tenant: str, on: bool) -> None:
@@ -105,10 +128,14 @@ async def run(args) -> int:
         _set_cel(ff, args.tenant, True);  on = ff.is_enabled("vibe_engineering", args.tenant)
         _set_cel(ff, args.tenant, False); off = ff.is_enabled("vibe_engineering", args.tenant)
         ok = (on is True and off is False)
-        print(f"dry-run: flag toggles correctly = {ok}; quality-check self-test = "
-              f"{quality_score('the answer is 404 and 401', suite['tasks'][0]['check']) == 1.0}")
+        # suite-independent self-test of the objective check
+        q_ok = (quality_score("value is 129 here", {"kind": "contains_all", "expect": ["129"]}) == 1.0
+                and quality_score("no match", {"kind": "contains_all", "expect": ["129"]}) == 0.0)
+        n_mt = sum(1 for t in suite["tasks"] if t.get("turns"))
+        print(f"dry-run: flag toggles correctly = {ok}; quality-check self-test = {q_ok}; "
+              f"tasks={len(suite['tasks'])} ({n_mt} multi-turn)")
         print("dry-run produced NO benchmark data (by design).")
-        return 0 if ok else 1
+        return 0 if (ok and q_ok) else 1
 
     ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime(0))  # stamped by caller; gmtime(0) placeholder
     raw_path = Path(args.out) / f"raw-{args.run_id}.jsonl"
@@ -119,21 +146,18 @@ async def run(args) -> int:
             for arm, cel_on in (("A", False), ("B", True)):
                 _set_cel(ff, args.tenant, cel_on)
                 for rep in range(args.n):
-                    text, usage = await _run_one(cr, args.tenant, tk["prompt"])
-                    comp = token_components(usage)   # fresh_input/cache_creation/cache_read/output
-                    total = total_tokens(usage)      # full input (all 3 classes) + output
-                    c5, c1 = pricing.creation_split(usage)  # 5m/1h split for cost
-                    cost = pricing.cost_usd(usage, args.model, args.prices)  # None if no real price
+                    text, comp, extra, cost = await _run_task(cr, args.tenant, tk, args.model, args.prices)
+                    total = comp["fresh_input"] + comp["cache_creation"] + comp["cache_read"] + comp["output"]
                     rec = {
                         "task_id": tk["id"], "task_type": tk["type"], "arm": arm,
-                        "cel_on": cel_on, "rep": rep,
-                        **comp, "cache_creation_5m": c5, "cache_creation_1h": c1,
+                        "cel_on": cel_on, "rep": rep, "n_turns": extra["n_turns"],
+                        **comp, "cache_creation_5m": extra["c5"], "cache_creation_1h": extra["c1"],
                         "input_all": total - comp["output"], "tokens_total": total,
                         "cost_usd": cost, "quality": quality_score(text, tk["check"]),
                     }
                     runs.append(rec)
                     fh.write(json.dumps(rec) + "\n")
-                    print(f"  {tk['id']} arm {arm} rep {rep}: total={total} "
+                    print(f"  {tk['id']} arm {arm} rep {rep} ({extra['n_turns']}t): total={total} "
                           f"(fresh={comp['fresh_input']} +create={comp['cache_creation']} "
                           f"+read={comp['cache_read']} +out={comp['output']}) q={rec['quality']:.2f}")
 
