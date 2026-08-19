@@ -447,6 +447,25 @@ class SkillForgeSubsystem(Subsystem):
                 "error_type": error_type,
             })
 
+    async def on_skill_outcome(self, event_name: str, event_data: Dict[str, Any]) -> None:
+        """Grade skill based on outcome (ADR-0372: closed-loop feedback).
+
+        Args:
+            event_name: Event name
+            event_data: Event data with 'skill_name', 'outcome' (success/failure)
+        """
+        skill_name = event_data.get("skill_name", "unknown")
+        outcome = event_data.get("outcome", "unknown")
+
+        score = self.auto_grade_success if outcome == "success" else self.auto_grade_failure
+
+        await self._auto_grade_skill(
+            skill_name,
+            score=score,
+            reason=f"skill_outcome: {outcome}",
+        )
+        await self._maybe_auto_promote(skill_name)
+
     async def on_skill_create_requested(self, event_name: str, event_data: Dict[str, Any]) -> None:
         """Create skill on request from Brain.
 
@@ -709,6 +728,13 @@ class SkillForgeSubsystem(Subsystem):
         if not scores or len(scores) < self.min_uses_for_promotion:
             return  # Need minimum uses
 
+        # Handle migration case: timestamps may be empty for pre-ADR-0372 grades
+        if not timestamps or len(timestamps) != len(scores):
+            # Fallback: use current time for all missing timestamps (conservative)
+            now = time.time()
+            timestamps = [now - (len(scores) - i) * 86400.0 for i in range(len(scores))]
+            logger.debug(f"Reconstructed timestamps for skill '{skill_name}' (migration from pre-ADR-0372)")
+
         # Apply decay weighting to older grades (ADR-0372)
         now = time.time()
         effective_scores = []
@@ -716,6 +742,9 @@ class SkillForgeSubsystem(Subsystem):
             age_days = (now - ts) / 86400.0
             decay = self._decay_factor(age_days)
             effective_scores.append(score * decay)
+
+        if not effective_scores:  # Safety check
+            return
 
         mean_score = sum(effective_scores) / len(effective_scores)
         confidence_lower = self._confidence_interval_lower(effective_scores)
