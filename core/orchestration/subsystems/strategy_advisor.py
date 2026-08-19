@@ -7,6 +7,11 @@ from .base import Subsystem
 from core.learning.adaptive_strategy import (
     AdaptiveStrategyEngine,
     StrategyOption,
+    STRATEGY_BASE_COST_CENTS,
+    STRATEGY_COST_INCREMENT_CENTS,
+    STRATEGY_BASE_LATENCY_MS,
+    STRATEGY_LATENCY_INCREMENT_MS,
+    STRATEGY_DEFAULT_SUCCESS_RATE,
 )
 from core.learning.operator_fingerprint import OperatorFingerprint
 
@@ -89,8 +94,14 @@ class StrategyAdvisor(Subsystem):
         """Build StrategyOption list from empirical data for given strategies.
 
         Constructs StrategyOption objects with real empirical success rates and
-        cost estimates from internal measurements, ensuring adaptive ranking uses
-        observed data, not placeholder formulas.
+        cost/latency estimates calibrated to strategy position. For strategies
+        with no history, uses STRATEGY_DEFAULT_SUCCESS_RATE (0.5) to avoid
+        biasing fresh installs.
+
+        Calibration (per ADR-0370/0371):
+        - Cost: STRATEGY_BASE_COST_CENTS + (i * STRATEGY_COST_INCREMENT_CENTS)
+        - Latency: STRATEGY_BASE_LATENCY_MS + (i * STRATEGY_LATENCY_INCREMENT_MS)
+        - Success rate: Empirical from strategy_scores, or default for fresh installs
 
         Args:
             strategy_names: List of strategy names to build options for.
@@ -98,15 +109,20 @@ class StrategyAdvisor(Subsystem):
         Returns:
             List of StrategyOption objects with empirical metrics.
         """
+        if not strategy_names:
+            logger.warning("build_strategy_options called with empty strategy list")
+            return []
+
         options = []
         for i, strategy_name in enumerate(strategy_names):
+            # Get empirical success rate, or default if no history
             success_rate = self._get_success_rate(strategy_name)
 
-            # Empirical cost estimates: lower strategies cost more (more complex)
-            avg_cost_cents = 15.0 + (i * 5.0)
+            # Calibrated cost estimate: increases with strategy complexity
+            avg_cost_cents = STRATEGY_BASE_COST_CENTS + (i * STRATEGY_COST_INCREMENT_CENTS)
 
-            # Latency estimate: lower strategies take longer
-            avg_latency_ms = 150.0 + (i * 75.0)
+            # Calibrated latency estimate: increases with strategy complexity
+            avg_latency_ms = STRATEGY_BASE_LATENCY_MS + (i * STRATEGY_LATENCY_INCREMENT_MS)
 
             # Required steps: scales with strategy complexity
             required_steps = 2 + i
@@ -117,12 +133,12 @@ class StrategyAdvisor(Subsystem):
                 avg_latency_ms=avg_latency_ms,
                 avg_cost_cents=avg_cost_cents,
                 success_rate=success_rate,  # Real empirical data
-                operator_preference_score=0.7,  # Default; overridden by fingerprint
+                operator_preference_score=0.7,  # Default; can be overridden by fingerprint
             )
             options.append(option)
             logger.debug(
-                f"Built StrategyOption '{strategy_name}': "
-                f"success_rate={success_rate:.2f}, cost={avg_cost_cents:.1f}¢, "
+                f"Built StrategyOption '{strategy_name}' (index {i}): "
+                f"success_rate={success_rate:.2f} (empirical), cost={avg_cost_cents:.1f}¢, "
                 f"latency={avg_latency_ms:.0f}ms"
             )
 

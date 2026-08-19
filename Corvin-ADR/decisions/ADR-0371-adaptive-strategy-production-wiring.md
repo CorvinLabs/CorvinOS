@@ -123,6 +123,18 @@ Measurement (Week 1): Observe adaptive vs. static strategy selection rates, succ
 
 ---
 
+## Amendment (k=4 — Constants & Fresh-Install Handling)
+
+**Date:** 2026-08-19 (k=4, LDD iteration)  
+**Status:** PROPOSED → ACCEPTED (after k=3 empirical wiring + k=4 constant extraction)
+
+Extracted hardcoded cost/latency formulas to module-level constants in adaptive_strategy.py:
+- STRATEGY_BASE_COST_CENTS, STRATEGY_COST_INCREMENT_CENTS
+- STRATEGY_BASE_LATENCY_MS, STRATEGY_LATENCY_INCREMENT_MS
+- STRATEGY_DEFAULT_SUCCESS_RATE = 0.5 (fresh install default)
+
+Enables design validation, prevents silent formula drift, and clarifies default behavior for systems with no empirical history.
+
 ## Amendment (k=3 — Empirical Data Wiring)
 
 **Date:** 2026-08-19 (k=3, LDD iteration)  
