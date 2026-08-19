@@ -4777,7 +4777,7 @@ async def stream_turn(
                 _cel_ran_stage_ids = []
         except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
             _cel_brief_text = ""
-    # ADR-0375 (cache-stable CEL). The volatile CEL brief in the --append-system-prompt
+    # ADR-0395 (cache-stable CEL). The volatile CEL brief in the --append-system-prompt
     # file shares the Claude-Code CLI's SINGLE system-prompt cache block with its ~51k base
     # prompt + tool defs, so a per-turn brief change re-creates that whole prefix instead of
     # reading it (measured: multi-turn +147% cost; A/B review confirmed mechanism 1a). Behind
@@ -6282,7 +6282,7 @@ async def stream_turn(
     # Feed the prompt + close stdin so claude knows we're done.
     assert proc.stdin is not None
     try:
-        # ADR-0375: when cache-stable CEL is on, the volatile context rides here (in the
+        # ADR-0395: when cache-stable CEL is on, the volatile context rides here (in the
         # user message), not in the cached system prompt. Prefix it to the real prompt.
         _worker_prompt = ((_volatile_user_prefix + "\n\n" + prompt)
                           if _volatile_user_prefix else prompt)
