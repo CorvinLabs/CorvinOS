@@ -24,6 +24,10 @@ from .pipeline import (apply_tool_bindings, render_skill_bindings,
 from .license_gate import enforce_ce_quota
 from .trace import persist_trace, read_recent_traces
 from .decision_record import emit as emit_decision_record, build_record as build_decision_record
+# Phase 3: Adaptive Routing & Dynamic Allocation (ADR-0391)
+from .task_classifier import TaskComplexity, classify, classify_simple
+from .adaptive_budget import AdaptiveBudget, TokenBudget, PerformanceMetric
+from .performance_tracker import PerformanceTracker, StageMetrics
 
 __all__ = [
     # Phase 1
