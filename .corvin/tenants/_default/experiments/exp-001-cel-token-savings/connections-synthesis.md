@@ -64,15 +64,35 @@ things must not be swept under the rug:
   CEL-on *worse*). **CEL's keyword-TF-IDF top-5 retrieval is unreliable** — it does not consistently
   surface the right fact, or the model doesn't use it. This is a **CEL weakness the experiment
   found**, and the prime target for LDD training (tune retrieval θ to raise reached_rate).
-- **Anomaly B — CEL-off scores 0.167 on unguessable facts.** e.g. `mem-analytics-port` off=0.33,
-  `mem-mt-port-derive` off=0.33 (answer 8913 = 8813+100 → implies it *knew* 8813). CEL-off has no
-  legitimate path to these facts (Connection 1). This is **either a measurement leak or a
-  check artifact and must be investigated before any headline number is trusted.** Candidate
-  causes to rule out: session/cache carryover across reps, a partial-match false positive in
-  `quality_score`, or a memory path that ignores the flag. **Flagged, not explained.**
+- **Anomaly B — RESOLVED (Entry 15): the agentic tool-leak.** CEL-off scored on unguessable facts
+  because the console OS turn is a **fully tool-enabled agent** (`claude -p
+  --dangerously-skip-permissions`, no `--disallowedTools`, `chat_runtime.py:2150`). Reproduction
+  with CEL off produced `8913` in 2/3 reps, one saying verbatim *"Based on the benchmark test
+  configuration in this project…"* — the model **grepped the fact off disk** (fixture + suite JSON
+  are both grep-able). So the A/B never isolated CEL, and **the memory-grounded numbers (0.167 vs
+  0.375) are CONTAMINATED and are withdrawn.** Fix: run the turn **tool-disabled**
+  (`--disallowedTools "*"`) so CEL injection is the only context channel.
 
-**Bottom line:** the memory-grounded class is the right instrument and shows CEL's correctness
-value directionally, but n=3 is a pilot and Anomaly B blocks a headline claim until resolved.
+**Bottom line:** the memory-grounded class is the right *shape*, but a valid measurement needs the
+agent's own retrieval disabled — otherwise it measures push+pull, not CEL. Re-run tool-disabled.
+
+## Connection 4 — Push (CEL) vs Pull (agentic retrieval): the axis Anomaly B exposed (CONFIRMED)
+
+The tool-leak is not just a bug — it is a real relationship. The console turn can obtain context two
+ways:
+- **Push (CEL):** the system injects relevant memory/graph/skills before the turn.
+- **Pull (agentic):** the tool-enabled model reads/greps the filesystem itself, mid-turn.
+
+They **overlap**: whatever the agent can pull, CEL's push is redundant for. So **CEL's marginal
+value is largest exactly where the agent cannot pull** — the fact is not on any reachable path
+(air-gapped worker, tools disabled, or knowledge that lives only in the injected store). This makes
+push-vs-pull a first-class experimental axis: measure CEL value at (tools-on) vs (tools-off), and
+the *difference* is the part of CEL's value that pure agentic retrieval already covers.
+
+It also ties back to ACS (Connection 2): ACS **workers are deliberately context-isolated** (3 KB,
+no session workspace) — i.e. their *pull* is constrained — which is exactly the regime where a
+pushed brief (to the manager) matters most. CEL, push, isolation, and pull are one connected story:
+**how much context does each actor get, and who supplies it.**
 
 ## What each connection means for the LDD loss (feeds `metrics-as-loss.json`)
 
