@@ -17,8 +17,10 @@ Load-bearing safety (ADR-0282 R1/R2, baked in):
 """
 from __future__ import annotations
 
+import atexit
 import json
 import re
+import shutil
 import subprocess
 from typing import Any
 
@@ -130,6 +132,17 @@ _CLOUD_HOST = "api.anthropic.com"
 _CWD: "str | None" = None
 
 
+def _cleanup_cwd() -> None:
+	"""Cleanup handler registered with atexit to delete the temp directory."""
+	global _CWD
+	if _CWD and _CWD != "":
+		try:
+			shutil.rmtree(_CWD, ignore_errors=True)
+		except Exception:  # noqa: BLE001
+			pass
+		_CWD = None
+
+
 def _l35_egress_permitted(tenant_id: str) -> bool:
     """FAIL-CLOSED L35 residency check for the synthesis cloud call (review R2 C2).
 
@@ -181,7 +194,10 @@ def _neutral_cwd() -> str:
     ride along into a cloud call the operator understands as "synthesis".
 
     Created once per process; a failure falls back to the inherited cwd (None),
-    which is the pre-2026-08-19 behaviour — degraded, never broken."""
+    which is the pre-2026-08-19 behaviour — degraded, never broken.
+
+    Cleaned up at process exit via atexit handler to prevent temp-directory
+    accumulation on long-running services (ADR-0391 fix)."""
     global _CWD
     if _CWD is None:
         try:
@@ -189,6 +205,8 @@ def _neutral_cwd() -> str:
             # Deliberately OUTSIDE the repo: `claude` walks PARENT directories for
             # CLAUDE.md, so a scratch dir under <repo>/.corvin/ would load it again.
             _CWD = tempfile.mkdtemp(prefix="corvin-ce-synthesis-")
+            # Register cleanup handler once at creation time
+            atexit.register(_cleanup_cwd)
         except Exception:  # noqa: BLE001
             _CWD = ""
     return _CWD or None
