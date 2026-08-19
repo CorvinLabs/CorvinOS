@@ -345,8 +345,8 @@ function GlassBoxPrompt({ asm }: { asm: Assembly }) {
 /* ── prompt inspector: bausteine → final prompt + forged tool/skill code ── */
 function PromptInspectorModal({ turn, onClose }: { turn: Turn; onClose: () => void }) {
   const [openCode, setOpenCode] = useState<string | null>(null);
-  const asmQ = useAssembly(turn.turn_id);
-  const forgedQ = useForged(turn.turn_id);
+  const asmQ = useAssembly(turn.turn_id, turn.session_id);
+  const forgedQ = useForged(turn.turn_id, turn.session_id);
   const asm = asmQ.data?.found ? asmQ.data : null;
   const forged = forgedQ.data?.found
     ? { tools: forgedQ.data.tools ?? [], skills: forgedQ.data.skills ?? [] } : null;

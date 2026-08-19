@@ -44,6 +44,9 @@ const zStage = z.object({
 });
 const zTurn = z.object({
   turn_id: z.string(),
+  // The backend has always sent this; it was never modelled, so the inspector had
+  // no way to say WHICH session's `turn-0` it wanted (see sessionQuery below).
+  session_id: z.string().optional(),
   ts: z.number().optional(),
   hash: z.string().optional(),
   degraded: z.string().nullable().optional(),
@@ -155,18 +158,24 @@ export function useBrief(sha: string | null | undefined) {
     queryFn: () => getJSON(`/explain/${sha}`, zExplain),
   });
 }
-export function useAssembly(turnId: string | null | undefined) {
+// `turn-<n>` repeats in every session, so the turn id alone does not identify a
+// turn — pass the session the trace view already knows, or the API falls back to
+// the most recent match and the inspector can show a FOREIGN turn's prompt.
+function sessionQuery(session?: string | null) {
+  return session ? `?session=${encodeURIComponent(session)}` : "";
+}
+export function useAssembly(turnId: string | null | undefined, session?: string | null) {
   return useQuery({
-    queryKey: ["vibe", "prompt", turnId],
+    queryKey: ["vibe", "prompt", turnId, session ?? null],
     enabled: !!turnId,
-    queryFn: () => getJSON(`/prompt/${turnId}`, zAssembly),
+    queryFn: () => getJSON(`/prompt/${turnId}${sessionQuery(session)}`, zAssembly),
   });
 }
-export function useForged(turnId: string | null | undefined) {
+export function useForged(turnId: string | null | undefined, session?: string | null) {
   return useQuery({
-    queryKey: ["vibe", "forged", turnId],
+    queryKey: ["vibe", "forged", turnId, session ?? null],
     enabled: !!turnId,
-    queryFn: () => getJSON(`/forged/${turnId}`, zForged),
+    queryFn: () => getJSON(`/forged/${turnId}${sessionQuery(session)}`, zForged),
   });
 }
 export function usePipeline() {

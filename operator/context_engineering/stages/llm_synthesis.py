@@ -126,6 +126,9 @@ def _json_candidates(text: str):
 
 _CLOUD_HOST = "api.anthropic.com"
 
+# Lazily-created empty cwd for the synthesis subprocess (see _neutral_cwd).
+_CWD: "str | None" = None
+
 
 def _l35_egress_permitted(tenant_id: str) -> bool:
     """FAIL-CLOSED L35 residency check for the synthesis cloud call (review R2 C2).
@@ -162,6 +165,33 @@ def _resolve_bin() -> str:
         return resolve_claude_bin() or "claude"
     except Exception:  # noqa: BLE001
         return "claude"
+
+
+def _neutral_cwd() -> str:
+    """An empty directory to run the synthesis subprocess in.
+
+    Without it the child INHERITS the host's working directory — for the console
+    that is the CorvinOS checkout, so `claude -p` loads the repo's CLAUDE.md and
+    skill tree into a call that needs none of it. Measured 2026-08-19: 18.8k
+    cache-creation tokens from the repo vs. 7.4k from an empty directory, and the
+    slower call pushed real console turns past the timeout (`llm_timeout` in the
+    live trace). Three reasons this belongs here, not in the caller: the stage is
+    the one that knows the call is context-free (it passes the task + digest as
+    TEXT and forbids every tool), the cost is per turn, and repo content should not
+    ride along into a cloud call the operator understands as "synthesis".
+
+    Created once per process; a failure falls back to the inherited cwd (None),
+    which is the pre-2026-08-19 behaviour — degraded, never broken."""
+    global _CWD
+    if _CWD is None:
+        try:
+            import tempfile  # noqa: PLC0415
+            # Deliberately OUTSIDE the repo: `claude` walks PARENT directories for
+            # CLAUDE.md, so a scratch dir under <repo>/.corvin/ would load it again.
+            _CWD = tempfile.mkdtemp(prefix="corvin-ce-synthesis-")
+        except Exception:  # noqa: BLE001
+            _CWD = ""
+    return _CWD or None
 
 
 def _context_digest(bundle: Any) -> str:
@@ -214,8 +244,21 @@ class LLMSynthesisStage:
             timeout_s = float(cfg.get("timeout_s") or _TIMEOUT_S)
         except (TypeError, ValueError):
             timeout_s = _TIMEOUT_S
-        prompt = (f"TASK:\n{bundle.task}\n\nRETRIEVED CONTEXT:\n"
-                  f"{_context_digest(bundle)}")
+        # The task is DATA to brief about, never a question to answer, and the
+        # format instruction has to live in the USER prompt — not only in the
+        # appended system prompt (measured 2026-08-19): `claude -p` is an agent
+        # whose own system prompt says "answer the user", so an imperative task
+        # ("Baue ein Werkzeug…") produced JSON while a question ("Erkläre mir, wie…")
+        # made it answer the question in prose and the stage degraded on a turn that
+        # cost a full cloud call. Framing + a closing format line wins that contest.
+        prompt = (
+            "Below is a task SOMEONE ELSE will carry out. Do NOT carry it out and "
+            "do NOT answer it. Produce only the JSON briefing described in your "
+            "instructions.\n\n"
+            f"TASK:\n{bundle.task}\n\nRETRIEVED CONTEXT:\n"
+            f"{_context_digest(bundle)}\n\n"
+            'Reply with the JSON object only: {"brief": "…", "needs": '
+            '{"tools": [], "skills": []}}')
         try:
             out = subprocess.run(
                 [_resolve_bin(), "-p", prompt, "--append-system-prompt", _SYS,
@@ -226,7 +269,7 @@ class LLMSynthesisStage:
                 # 3s") on every synthesis — and a host holding an open stdin (a
                 # service, a TTY) can stall it until the 45s timeout kills the turn's
                 # enrichment. It never has stdin input to read; say so explicitly.
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL, cwd=_neutral_cwd(),
                 capture_output=True, text=True, timeout=timeout_s, check=True)
         except subprocess.TimeoutExpired as e:
             # DISTINCT from llm_unavailable (found 2026-08-18): collapsing both into

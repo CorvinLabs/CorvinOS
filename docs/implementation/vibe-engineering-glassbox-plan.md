@@ -173,7 +173,7 @@ Fünf eigenständig lieferbare Phasen. Reihenfolge nach Nutzer-Nutzen (G1 zuerst
 
 | Grenze | Kontrakt |
 |---|---|
-| Glass Box → CEL-Daten | `GET /vibe-engineering/prompt/{turn}` (bestehend; v2 optional `?annotated=1`) + Cross-Ref `/traces` für Sektions-Rücklink; **`persist_assembly` neu im Console-Pfad** |
+| Glass Box → CEL-Daten | `GET /vibe-engineering/prompt/{turn}?session={session_id}` (bestehend; v2 optional `?annotated=1`) + Cross-Ref `/traces` für Sektions-Rücklink; **`persist_assembly` neu im Console-Pfad**. `session` ist seit 2026-08-19 nötig: `turn-<n>` ist nur INNERHALB einer Session eindeutig, und der frühere `rglob` ohne Session-Bezug lieferte auf einer Installation mit zehn Sessions praktisch immer einen fremden Turn (leere `forged_skills` für einen Turn, der zwei Skills geforged hatte). Ohne den Parameter greift der Fallback auf den JÜNGSTEN Treffer statt auf einen beliebigen. Gilt identisch für `GET /vibe-engineering/forged/{turn}`. |
 | Ledger → CEL-Grades | `GET/POST /vibe-engineering/grades[/{stage}]` (neu, CSRF) → `grade_stage(tenant_id, stage_id, score, notes, grader="operator")` |
 | Ledger → ToT | `GET/POST /v1/console/learning/{nodes,grade,note}` (bestehend) |
 | Outcome-Wiring | `record_turn_outcome(tenant_id, stage_ids, success)` aus `chat_runtime` (fire-and-forget, advisory/non-promoting) |
