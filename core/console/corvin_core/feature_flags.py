@@ -813,7 +813,7 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         label="Cache-stable CEL context (cost fix)",
         description=(
             "Deliver the per-turn CEL context brief through the user message instead of the "
-            "cached --append-system-prompt file (ADR-0375). Off (default) = today's behaviour, "
+            "cached --append-system-prompt file (ADR-0395). Off (default) = today's behaviour, "
             "where a changed brief re-creates the CLI's ~51k system+tools cache every turn "
             "(measured: multi-turn +147% cost). On = the system prompt stays byte-stable so "
             "base+tools stay cache-READ, and the brief rides the already-cheap user turn. "
