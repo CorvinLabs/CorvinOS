@@ -52,13 +52,22 @@ Outputs:
   is at the **task** level (fewer turns / less rework), which is the unit measured here. The
   benchmark can therefore **legitimately show that CEL does not save** on some/all tasks —
   that is the point of measuring instead of asserting.
-- **Input-token capture must be verified.** A smoke run showed the console worker usage
-  reporting `input_tokens=0` (output only). CEL's *main* cost is a **bigger input prompt**, so
-  an output-only measurement hides that cost and can **overstate** savings. The runner prints a
-  loud `WARNING` and sets `input_captured:false` in the report when this happens — **do not
-  claim a saving from an output-only run.** Fixing worker input-token capture (or counting the
-  assembled prompt's tokens directly) is a prerequisite for a valid headline number. Note this
-  gap affects the *existing* dashboard too (`chat_runtime.py:3727` defaults input to 0).
+- **Token capture is now correct (4 classes).** Early smoke runs showed `input_tokens=2` while
+  `cache_read=24433` + `cache_creation=38060` were ignored — the console reads only `input_tokens`
+  and undercounts real input by ~99.99%. This benchmark now sums all four classes via
+  `core/learning/token_accounting.py` (fresh + cache-creation + cache-read + output). The
+  **existing dashboard is still wrong** and is a *separate, larger* fix: the default native turn
+  path records **nothing** (the recorder is Hermes-only, `chat_runtime.py:3723`), the store API
+  can't receive cache fields, and its "subsystem" split (`50/100/25`) is fabricated.
+- **RAW COUNT ≠ COST — and CEL likely uses MORE raw tokens.** Measured correctly, CEL injects
+  context, so its **raw token count is usually higher**, not lower (a smoke run: A=62896 vs
+  B=63263, −0.6%). Cache-read costs ~0.1×, cache-creation ~1.25×, output ~5× — so CEL's *cost*
+  story lives in the cache economics, not the raw count. The report prints per-arm components;
+  apply your model's real prices to them for a cost figure. **The honest headline is probably
+  not "fewer tokens"** — it is cost-per-task or fewer-turns, if anything.
+- **suite-v1 measures CEL's worst case (single-turn, cold).** Every task pays `cache_creation`
+  and never amortizes it across a session. CEL's best case (warm reuse over a multi-turn task)
+  needs multi-turn tasks — not yet in the suite.
 - **It costs real tokens to run.** Opt-in, scale `--n` and the task suite deliberately.
 - **Quality checks are fact-presence** (safe, no code execution). Coding-task savings with a
   "did the produced tests pass" gate need the isolated verification harness (see the
