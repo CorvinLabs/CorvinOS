@@ -839,6 +839,22 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("context-engineering", "memory", "learning"),
         release_tier="alpha",
     ),
+    FeatureFlag(
+        id="per_stage_token_budgeting",
+        label="Per-stage token budgeting in context pipeline",
+        description=(
+            "Enable per-stage token budgeting (ADR-0388, Phase 2): allocate a fixed "
+            "token budget to each context stage (Memory 30%, ADR 20%, Skills 15%, "
+            "Synthesis 35%), with unused budget cascading downstream. Reduces tail "
+            "waste and improves latency in token-constrained environments. Off "
+            "(default) uses unlimited allocation; on enforces hard limits per stage. "
+            "Expected savings: 200-500 tokens/turn on large datasets."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("context-engineering", "performance", "token-management"),
+        release_tier="alpha",
+    ),
 )
 
 

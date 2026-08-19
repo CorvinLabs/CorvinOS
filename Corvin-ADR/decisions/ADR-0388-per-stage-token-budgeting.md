@@ -4,12 +4,14 @@ status: PROPOSED
 depends_on: [ADR-0314, ADR-0255]
 relates_to: [ADR-0024, ADR-0043, ADR-0119]
 paths:
+  - core/orchestration/subsystems/token_budget.py
+  - core/orchestration/tests/test_token_budget_adr0388.py
+  - operator/context_engineering/tests/test_token_budget_pipeline_adr0388.py
+  - core/console/corvin_core/feature_flags.py
   - operator/context_engineering/pipeline.py
-  - core/orchestration/subsystems/context_bridge.py
   - operator/context_engineering/stages/
 docs:
   - docs/implementation/PERFORMANCE_SLOS.md
-  - docs/claude-ref/layer-NN-*.md
 ---
 
 # ADR-0388: Per-Stage Token Budgeting in Context Pipeline
