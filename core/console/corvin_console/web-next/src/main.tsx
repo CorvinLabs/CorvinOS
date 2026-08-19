@@ -9,6 +9,8 @@ import App from "./App";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/fraunces";
 import "./index.css";
+// Initialize console API routing (adds /console prefix to /api/* requests)
+import "./lib/api-utils";
 import { startTaskCleanupSchedule } from "./lib/task-lifecycle";
 import { ApiError } from "./lib/api";
 import {

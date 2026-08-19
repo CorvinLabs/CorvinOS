@@ -13,6 +13,7 @@
 
 import { useState, useEffect } from 'react'
 import { Github, CheckCircle, AlertCircle, Loader, Trash2 } from 'lucide-react'
+import { fetchConsoleJson, fetchConsoleApi } from '@/lib/api-utils'
 
 interface GitHubStatus {
   connected: boolean
@@ -79,8 +80,7 @@ export default function GitHubIntegrationPanel() {
 
   const fetchStatus = async () => {
     try {
-      const response = await fetch('/api/console/github/status')
-      const data = await response.json()
+      const data = await fetchConsoleJson<GitHubStatus>('/api/console/github/status')
       setStatus(data)
     } catch (error) {
       console.error('Failed to fetch GitHub status:', error)
@@ -116,13 +116,12 @@ export default function GitHubIntegrationPanel() {
     setVerifyResult(null)
 
     try {
-      const response = await fetch('/api/console/github/verify', {
+      const result: VerifyResult = await fetchConsoleJson('/api/console/github/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, token: token || undefined })
       })
 
-      const result: VerifyResult = await response.json()
       setVerifyResult(result)
 
       if (result.connected) {
@@ -146,7 +145,7 @@ export default function GitHubIntegrationPanel() {
     }
 
     try {
-      const response = await fetch('/api/console/github/config', { method: 'DELETE' })
+      const response = await fetchConsoleApi('/api/console/github/config', { method: 'DELETE' })
       if (response.ok) {
         setUrl('')
         setToken('')
