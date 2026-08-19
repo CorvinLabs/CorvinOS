@@ -1,0 +1,72 @@
+python: /home/shumway/projects/CorvinOS/core/console/.venv/bin/python
+CORVIN_HOME: /home/shumway/projects/CorvinOS/.corvin
+2026-08-19T22:19:00 [INFO] [corvin.license] license: loaded — tier=member jti=5400aba3
+2026-08-19T22:19:01 [INFO] [corvin.bridge-adapter] logger online level=INFO file=/home/shumway/projects/CorvinOS/.corvin/logs/corvin.log
+[helper_model] site=house_rules_adjudicator model=claude-haiku-4-5-20251001
+suite v4-memory-grounded · 8 tasks · n=3 · tenant=_default
+  mem-staging-cluster arm A rep 0 (1t): total=42888 (fresh=10 +create=24528 +read=18139 +out=211) q=0.00
+  mem-staging-cluster arm A rep 1 (1t): total=42913 (fresh=10 +create=24531 +read=18139 +out=233) q=0.00
+  mem-staging-cluster arm A rep 2 (1t): total=43004 (fresh=10 +create=24530 +read=18139 +out=325) q=0.00
+  mem-staging-cluster arm B rep 0 (1t): total=43376 (fresh=10 +create=24789 +read=18139 +out=438) q=0.00
+  mem-staging-cluster arm B rep 1 (1t): total=43575 (fresh=10 +create=24786 +read=18139 +out=640) q=0.00
+  mem-staging-cluster arm B rep 2 (1t): total=196036 (fresh=34 +create=36665 +read=158784 +out=553) q=1.00
+  mem-token-rotation arm A rep 0 (1t): total=510049 (fresh=90 +create=30896 +read=477135 +out=1928) q=0.00
+  mem-token-rotation arm A rep 1 (1t): total=43078 (fresh=10 +create=24531 +read=18139 +out=398) q=0.00
+  mem-token-rotation arm A rep 2 (1t): total=178197 (fresh=34 +create=28371 +read=148853 +out=939) q=1.00
+  mem-token-rotation arm B rep 0 (1t): total=43337 (fresh=10 +create=24787 +read=18139 +out=401) q=0.00
+  mem-token-rotation arm B rep 1 (1t): total=97785 (fresh=18 +create=35862 +read=61065 +out=840) q=0.00
+  mem-token-rotation arm B rep 2 (1t): total=153997 (fresh=26 +create=37836 +read=114973 +out=1162) q=1.00
+  mem-retry-limit arm A rep 0 (1t): total=43091 (fresh=10 +create=24531 +read=18139 +out=411) q=0.00
+  mem-retry-limit arm A rep 1 (1t): total=628522 (fresh=106 +create=35568 +read=590244 +out=2604) q=1.00
+  mem-retry-limit arm A rep 2 (1t): total=327162 (fresh=58 +create=33302 +read=292631 +out=1171) q=0.00
+  mem-retry-limit arm B rep 0 (1t): total=43631 (fresh=10 +create=24783 +read=18139 +out=699) q=0.00
+  mem-retry-limit arm B rep 1 (1t): total=418847 (fresh=66 +create=46297 +read=371153 +out=1331) q=1.00
+  mem-retry-limit arm B rep 2 (1t): total=257182 (fresh=42 +create=41095 +read=215181 +out=864) q=1.00
+  mem-mascot arm A rep 0 (1t): total=42899 (fresh=10 +create=24524 +read=18139 +out=226) q=0.00
+  mem-mascot arm A rep 1 (1t): total=42872 (fresh=10 +create=24524 +read=18139 +out=199) q=0.00
+  mem-mascot arm A rep 2 (1t): total=42862 (fresh=10 +create=24525 +read=18139 +out=188) q=0.00
+  mem-mascot arm B rep 0 (1t): total=43117 (fresh=10 +create=24787 +read=18139 +out=181) q=0.00
+  mem-mascot arm B rep 1 (1t): total=43274 (fresh=10 +create=24791 +read=18139 +out=334) q=0.00
+  mem-mascot arm B rep 2 (1t): total=43090 (fresh=10 +create=24789 +read=18139 +out=152) q=0.00
+  mem-analytics-port arm A rep 0 (1t): total=42909 (fresh=10 +create=24530 +read=18139 +out=230) q=0.00
+  mem-analytics-port arm A rep 1 (1t): total=42970 (fresh=10 +create=24529 +read=18139 +out=292) q=0.00
+  mem-analytics-port arm A rep 2 (1t): total=398533 (fresh=74 +create=28648 +read=368444 +out=1367) q=1.00
+  mem-analytics-port arm B rep 0 (1t): total=43598 (fresh=10 +create=24790 +read=18139 +out=659) q=0.00
+  mem-analytics-port arm B rep 1 (1t): total=43359 (fresh=10 +create=24788 +read=18139 +out=422) q=0.00
+  mem-analytics-port arm B rep 2 (1t): total=43183 (fresh=10 +create=24789 +read=18139 +out=245) q=0.00
+  mem-residency-region arm A rep 0 (1t): total=43035 (fresh=10 +create=24533 +read=18139 +out=353) q=0.00
+  mem-residency-region arm A rep 1 (1t): total=43168 (fresh=10 +create=24533 +read=18139 +out=486) q=0.00
+  mem-residency-region arm A rep 2 (1t): total=43289 (fresh=10 +create=24532 +read=18139 +out=608) q=0.00
+  mem-residency-region arm B rep 0 (1t): total=222089 (fresh=42 +create=27006 +read=194059 +out=982) q=1.00
+  mem-residency-region arm B rep 1 (1t): total=87289 (fresh=18 +create=25578 +read=61064 +out=629) q=1.00
+  mem-residency-region arm B rep 2 (1t): total=152987 (fresh=26 +create=36699 +read=115562 +out=700) q=1.00
+  mem-mt-staging-derive arm A rep 0 (2t): total=86762 (fresh=20 +create=25184 +read=60798 +out=760) q=0.00
+  mem-mt-staging-derive arm A rep 1 (2t): total=86651 (fresh=20 +create=25003 +read=60801 +out=827) q=0.00
+  mem-mt-staging-derive arm A rep 2 (2t): total=86371 (fresh=20 +create=24953 +read=60798 +out=600) q=0.00
+  mem-mt-staging-derive arm B rep 0 (2t): total=88036 (fresh=20 +create=25687 +read=61039 +out=1290) q=0.00
+  mem-mt-staging-derive arm B rep 1 (2t): total=86859 (fresh=20 +create=25380 +read=61036 +out=423) q=0.00
+  mem-mt-staging-derive arm B rep 2 (2t): total=86714 (fresh=20 +create=25312 +read=61038 +out=344) q=0.00
+  mem-mt-port-derive arm A rep 0 (2t): total=86854 (fresh=20 +create=25161 +read=60793 +out=880) q=0.00
+  mem-mt-port-derive arm A rep 1 (2t): total=781566 (fresh=132 +create=35303 +read=742872 +out=3259) q=0.00
+  mem-mt-port-derive arm A rep 2 (2t): total=179093 (fresh=36 +create=27779 +read=150493 +out=785) q=1.00
+  mem-mt-port-derive arm B rep 0 (2t): total=87379 (fresh=20 +create=25541 +read=61049 +out=769) q=0.00
+  mem-mt-port-derive arm B rep 1 (2t): total=741907 (fresh=124 +create=69511 +read=669736 +out=2536) q=1.00
+  mem-mt-port-derive arm B rep 2 (2t): total=268621 (fresh=52 +create=27663 +read=239719 +out=1187) q=1.00
+
+============================================================
+TOKEN-SAVINGS BENCHMARK — measured, quality-gated
+============================================================
+OVERALL: no significant saving measured (point -102.2%, 95% CI -255.1%..49.6%, p=0.9848, n=23) — DO NOT claim a saving
+  (1 pair(s) dropped: B answered worse than A)
+  recall      : -102.2%  [-255.1%..49.6%]  p=0.985  n=23  n.s.
+
+mean tokens per run (RAW COUNT — cost differs: read~0.1x, create~1.25x, out~5x):
+  arm               fresh  cache_cr  cache_rd   output     total
+  A_cel_off            31     26627    135403      803    162864
+  B_cel_on             26     30584    109452      741    140803
+
+COST per run (claude-haiku-4-5-20251001, cache-weighted): A_cel_off=$0.07084  B_cel_on=$0.07584  → -7.1% (more expensive)
+
+raw evidence: /home/shumway/projects/CorvinOS/benchmark/token-savings/results/raw-memgrounded-n3.jsonl
+report: /home/shumway/projects/CorvinOS/benchmark/token-savings/results/report-memgrounded-n3.json
+BENCH_EXIT=0

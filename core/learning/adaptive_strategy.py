@@ -28,6 +28,12 @@ STRATEGY_BASE_LATENCY_MS = 150.0  # Starting latency for direct_fix (fastest str
 STRATEGY_LATENCY_INCREMENT_MS = 75.0  # Additional latency per strategy level
 STRATEGY_DEFAULT_SUCCESS_RATE = 0.5  # Default when no empirical history (fresh install)
 
+# Learning Feedback Loop constants (Phase 2 Improvement 5 — ADR-0372)
+# Skill grade confidence decay: old grades gradually become advisory-only
+SKILL_CONFIDENCE_DECAY_PER_WEEK = 0.10  # ~10% decay per week (half-life ≈ 7 weeks)
+SKILL_MIN_GRADE_AGE_DAYS = 14  # Don't apply decay to grades < 2 weeks old (recent enough)
+SKILL_PROMOTION_MIN_EFFECTIVE_SCORE = 0.7  # Threshold after decay applied (same as before decay)
+
 
 @dataclass(frozen=True)
 class StrategyOption:

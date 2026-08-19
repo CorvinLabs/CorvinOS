@@ -24,6 +24,7 @@ class LearningEngine(Subsystem):
         self.learning_window_turns = learning_window_turns
         self.strategies_by_error: Dict[str, List[Dict[str, Any]]] = {}
         self.success_rate: Dict[str, float] = {}
+        self.error_skill_map: Dict[str, List[str]] = {}  # ADR-0372: error_type → [skill_names]
         self._load_db()
 
     @property
@@ -51,6 +52,7 @@ class LearningEngine(Subsystem):
                     data = json.load(f)
                     self.strategies_by_error = data.get("strategies_by_error", {})
                     self.success_rate = data.get("success_rate", {})
+                    self.error_skill_map = data.get("error_skill_map", {})  # ADR-0372
             except Exception as e:
                 logger.error(f"Failed to load DB: {e}")
 
@@ -63,6 +65,7 @@ class LearningEngine(Subsystem):
                     {
                         "strategies_by_error": self.strategies_by_error,
                         "success_rate": self.success_rate,
+                        "error_skill_map": self.error_skill_map,  # ADR-0372
                     },
                     f,
                 )
@@ -163,6 +166,31 @@ class LearningEngine(Subsystem):
             return 0.5
 
         return success_count / total
+
+    def link_error_to_skill(self, error_type: str, skill_name: str) -> None:
+        """Map error type to applicable skill (ADR-0372: Closed-loop learning).
+
+        Args:
+            error_type: Error class name (e.g., 'TypeError', 'TokenLimitExceeded')
+            skill_name: Name of skill that applies to this error
+        """
+        if error_type not in self.error_skill_map:
+            self.error_skill_map[error_type] = []
+        if skill_name not in self.error_skill_map[error_type]:
+            self.error_skill_map[error_type].append(skill_name)
+            logger.debug(f"Linked error '{error_type}' to skill '{skill_name}'")
+            self._save_db()
+
+    def get_skills_for_error(self, error_type: str) -> List[str]:
+        """Get skills applicable to error type (ADR-0372).
+
+        Args:
+            error_type: Error class name
+
+        Returns:
+            List of skill names applicable to this error
+        """
+        return self.error_skill_map.get(error_type, [])
 
     def shutdown(self) -> None:
         """Save state."""

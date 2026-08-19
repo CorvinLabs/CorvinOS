@@ -10,7 +10,9 @@ Features:
 
 import asyncio
 import logging
+import math
 import statistics
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +20,10 @@ from typing import Any, Dict, List, Optional
 
 from core.context_engineering.context_api import ContextAPI
 from core.context_engineering.context_bus import ContextBus
+from core.learning.adaptive_strategy import (
+    SKILL_CONFIDENCE_DECAY_PER_WEEK,
+    SKILL_MIN_GRADE_AGE_DAYS,
+)
 from .base import Subsystem
 from .forge_apis import NamespacePolicy, ForgeQuota
 from .forge_api_impl import ForgedSkillAPIImpl
@@ -260,6 +266,7 @@ class SkillForgeSubsystem(Subsystem):
         # Track skill bindings and scores
         self.strategy_skills: Dict[str, List[str]] = {}  # strategy -> [skills]
         self.skill_scores: Dict[str, List[float]] = {}  # skill_name -> [scores]
+        self.skill_score_timestamps: Dict[str, List[float]] = {}  # ADR-0372: skill_name -> [timestamps for decay]
         self.skill_uses: Dict[str, int] = {}  # skill_name -> use count
         self.auto_promotion_count: int = 0
 
@@ -628,7 +635,7 @@ class SkillForgeSubsystem(Subsystem):
         score: float,
         reason: str,
     ) -> None:
-        """Grade skill and track score in memory.
+        """Grade skill and track score in memory with timestamp (ADR-0372).
 
         Args:
             skill_name: Name of skill to grade
@@ -637,9 +644,11 @@ class SkillForgeSubsystem(Subsystem):
         """
         if skill_name not in self.skill_scores:
             self.skill_scores[skill_name] = []
+            self.skill_score_timestamps[skill_name] = []  # ADR-0372
             self.skill_uses[skill_name] = 0
 
         self.skill_scores[skill_name].append(score)
+        self.skill_score_timestamps[skill_name].append(time.time())  # ADR-0372: timestamp for decay
         self.skill_uses[skill_name] += 1
 
         # Record grade in registry
@@ -674,20 +683,42 @@ class SkillForgeSubsystem(Subsystem):
                 "mean_score": sum(self.skill_scores[skill_name]) / len(self.skill_scores[skill_name]),
             })
 
+    def _decay_factor(self, age_days: float) -> float:
+        """Exponential decay: ~10% per week (ADR-0372).
+
+        Args:
+            age_days: Age of grade in days
+
+        Returns:
+            Decay factor in range [0, 1]
+        """
+        if age_days <= SKILL_MIN_GRADE_AGE_DAYS:
+            return 1.0  # No decay for recent grades
+        return math.exp(-SKILL_CONFIDENCE_DECAY_PER_WEEK * (age_days - SKILL_MIN_GRADE_AGE_DAYS) / 7.0)
+
     async def _maybe_auto_promote(self, skill_name: str) -> None:
-        """Check if skill meets promotion threshold and auto-promote.
+        """Check if skill meets promotion threshold (with decay weighting) and auto-promote (ADR-0372).
 
         Args:
             skill_name: Name of skill to check
         """
         scores = self.skill_scores.get(skill_name, [])
+        timestamps = self.skill_score_timestamps.get(skill_name, [])
         uses = self.skill_uses.get(skill_name, 0)
 
         if not scores or len(scores) < self.min_uses_for_promotion:
             return  # Need minimum uses
 
-        mean_score = sum(scores) / len(scores)
-        confidence_lower = self._confidence_interval_lower(scores)
+        # Apply decay weighting to older grades (ADR-0372)
+        now = time.time()
+        effective_scores = []
+        for score, ts in zip(scores, timestamps):
+            age_days = (now - ts) / 86400.0
+            decay = self._decay_factor(age_days)
+            effective_scores.append(score * decay)
+
+        mean_score = sum(effective_scores) / len(effective_scores)
+        confidence_lower = self._confidence_interval_lower(effective_scores)
 
         if (mean_score > self.min_mean_score_for_promotion and
             confidence_lower > self.min_confidence_for_promotion):
