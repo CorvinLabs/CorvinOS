@@ -5,10 +5,12 @@ Integrates ToolForge (Layer 6) with Brain v0.2 via:
 - ToolForgeSubsystem: Subsystem interface (startup, handle_request, on_event)
 - 4 request handlers: forge_tool, forge_exec, forge_promote, list_tools
 - Event subscriptions: forge_requested, strategy_failed, error_detected
+- Learning integration: Emits TOOL_EXECUTED events to EventEmitter (ADR-0321, Gap 1)
 """
 
 import asyncio
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -19,6 +21,7 @@ from .base import Subsystem
 from .forge_apis import NamespacePolicy, ForgeQuota
 from .forge_api_impl import ForgedToolAPIImpl
 from core.context_engineering.context_api import ContextAPI
+from core.learning.event_schema import LearningEvent, LearningEventType, ToolExecutedPayload
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +374,7 @@ class ToolForgeSubsystem(Subsystem):
         max_workers: int = 4,
         namespace_policy: Optional[NamespacePolicy] = None,
         forge_quota: Optional[ForgeQuota] = None,
+        tenant_id: str = "_default",
     ):
         """Initialize ToolForgeSubsystem.
 
@@ -379,6 +383,7 @@ class ToolForgeSubsystem(Subsystem):
             max_workers: ThreadPoolExecutor worker count
             namespace_policy: NamespacePolicy for validation (created if None)
             forge_quota: ForgeQuota for limits (created if None)
+            tenant_id: Tenant ID for learning event isolation (ADR-0321, Gap 1)
         """
         self.forge_registry = forge_registry
         self.max_workers = max_workers
@@ -391,6 +396,11 @@ class ToolForgeSubsystem(Subsystem):
         # ADR-0361: Policy and quota
         self.namespace_policy = namespace_policy or NamespacePolicy()
         self.forge_quota = forge_quota or ForgeQuota()
+
+        # ADR-0321: Learning event emission (Gap 1)
+        self.tenant_id = tenant_id
+        self.event_emitter: Optional[Any] = None
+        self.instance_id = "tool_forge_subsystem"
 
     @property
     def name(self) -> str:
@@ -422,6 +432,24 @@ class ToolForgeSubsystem(Subsystem):
             logger.warning(f"ToolForgeSubsystem: Failed to inject ContextAPI: {e}")
             self.context_api = None
 
+        # ADR-0321: Initialize EventEmitter for learning event emission (Gap 1)
+        try:
+            # Try to get event_emitter from hub (if available)
+            if hasattr(hub, 'get_service') and callable(hub.get_service):
+                self.event_emitter = hub.get_service('event_emitter')
+                if self.event_emitter:
+                    logger.info("ToolForgeSubsystem: EventEmitter injected from hub")
+
+            # Fallback: Create EventEmitter if not available from hub
+            if not self.event_emitter:
+                from core.learning.event_emitter import EventEmitter
+                corvin_home = Path.home() / ".corvin"
+                self.event_emitter = EventEmitter(corvin_home, self.tenant_id)
+                logger.info("ToolForgeSubsystem: EventEmitter created locally")
+        except Exception as e:
+            logger.warning(f"ToolForgeSubsystem: Failed to initialize EventEmitter: {e}")
+            self.event_emitter = None
+
         # ADR-0361: Register ForgedToolAPI for loose coupling
         try:
             api_impl = ForgedToolAPIImpl(
@@ -438,6 +466,7 @@ class ToolForgeSubsystem(Subsystem):
         hub.subscribe("forge_requested", self.on_forge_requested)
         hub.subscribe("strategy_failed", self.on_strategy_failed)
         hub.subscribe("error_detected", self.on_error_detected)
+        hub.subscribe("operator_rated_tool", self.on_operator_rated_tool)
 
         logger.info(f"ToolForgeSubsystem started (workers={self.max_workers})")
 
@@ -565,6 +594,9 @@ class ToolForgeSubsystem(Subsystem):
         {
             name: str,
             input_data: dict,
+            task_id: str | None,
+            turn_id: str | None,
+            session_id: str | None,
         }
 
         Response:
@@ -572,9 +604,17 @@ class ToolForgeSubsystem(Subsystem):
             output: dict,
             execution_time_ms: float,
         }
+
+        Emits TOOL_EXECUTED learning events to EventEmitter (ADR-0321, Gap 1).
         """
         tool_name = payload["name"]
         start = time.time()
+        start_dt = datetime.utcnow()
+
+        # Extract execution context from payload
+        task_id = payload.get("task_id", "unknown")
+        turn_id = payload.get("turn_id")
+        session_id = payload.get("session_id", "unknown")
 
         try:
             output = await self.async_registry.forge_exec(
@@ -582,6 +622,7 @@ class ToolForgeSubsystem(Subsystem):
                 payload["input_data"],
             )
             elapsed_ms = (time.time() - start) * 1000
+            end_dt = datetime.utcnow()
 
             # Record decision (best effort)
             self._safe_record_decision(
@@ -591,7 +632,7 @@ class ToolForgeSubsystem(Subsystem):
                 confidence=1.0,
             )
 
-            # Publish event
+            # Publish event (backward compatibility)
             self.publish_event(
                 "tool_executed",
                 {
@@ -601,6 +642,20 @@ class ToolForgeSubsystem(Subsystem):
                 },
             )
 
+            # Emit learning event (ADR-0321, Gap 1)
+            await self._emit_tool_executed_event(
+                tool_name=tool_name,
+                task_id=task_id,
+                turn_id=turn_id,
+                session_id=session_id,
+                status="success",
+                latency_ms=int(elapsed_ms),
+                output=output,
+                error=None,
+                start_dt=start_dt,
+                end_dt=end_dt,
+            )
+
             return {
                 "output": output,
                 "execution_time_ms": elapsed_ms,
@@ -608,18 +663,40 @@ class ToolForgeSubsystem(Subsystem):
 
         except Exception as e:
             elapsed_ms = (time.time() - start) * 1000
+            end_dt = datetime.utcnow()
             logger.error(f"Failed to execute tool {tool_name}: {e}")
 
-            # Publish event
+            # Classify error
+            error_type, error_class = self._classify_error(e)
+            sanitized_error = self._sanitize_error_message(str(e))
+
+            # Publish event (backward compatibility)
             self.publish_event(
                 "tool_executed",
                 {
                     "name": tool_name,
                     "success": False,
-                    "error": str(e),
+                    "error": sanitized_error,
                     "execution_time_ms": elapsed_ms,
                 },
             )
+
+            # Emit learning event (ADR-0321, Gap 1)
+            await self._emit_tool_executed_event(
+                tool_name=tool_name,
+                task_id=task_id,
+                turn_id=turn_id,
+                session_id=session_id,
+                status="failure",
+                latency_ms=int(elapsed_ms),
+                output=None,
+                error=sanitized_error,
+                error_type=error_type,
+                error_class=error_class,
+                start_dt=start_dt,
+                end_dt=end_dt,
+            )
+
             raise
 
     async def _forge_promote(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -758,6 +835,193 @@ class ToolForgeSubsystem(Subsystem):
             logger.info(f"Error detected: {error_type}, recording for recovery")
         except Exception as e:
             logger.error(f"on_error_detected failed: {e}")
+
+    async def on_operator_rated_tool(
+        self, event_name: str, event_data: Dict[str, Any]
+    ) -> None:
+        """Handle operator rating of a tool (ADR-0321, Gap 1 future work).
+
+        Usually triggered by rating UI or feedback collection.
+        """
+        try:
+            tool_id = event_data.get("tool_id")
+            rating = event_data.get("rating")
+            feedback = event_data.get("feedback")
+            session_id = event_data.get("session_id", "unknown")
+
+            logger.debug(f"Tool {tool_id} rated {rating}/5: {feedback}")
+
+            # Emit operator rating event (future: populate user_satisfaction field)
+            # This will be used in Gap 7 for feedback loop integration
+        except Exception as e:
+            logger.error(f"on_operator_rated_tool failed: {e}")
+
+    async def _emit_tool_executed_event(
+        self,
+        tool_name: str,
+        task_id: str,
+        turn_id: Optional[str],
+        session_id: str,
+        status: str,  # "success" | "failure" | "timeout" | "error"
+        latency_ms: int,
+        output: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        error_type: Optional[str] = None,
+        error_class: Optional[str] = None,
+        start_dt: Optional[datetime] = None,
+        end_dt: Optional[datetime] = None,
+    ) -> None:
+        """Emit TOOL_EXECUTED learning event to EventEmitter (ADR-0321, Gap 1).
+
+        Wraps telemetry in LearningEvent and queues for async emission.
+        Non-blocking: if queue is full, event is silently dropped.
+
+        Args:
+            tool_name: Name of executed tool
+            task_id: Task ID from ExecutionContext
+            turn_id: Turn ID from execution payload
+            session_id: Session ID for learning context
+            status: Execution status (success, failure, timeout, error)
+            latency_ms: Execution latency in milliseconds
+            output: Tool output (on success)
+            error: Sanitized error message (on failure)
+            error_type: Error classification (ValueError, TimeoutError, etc.)
+            error_class: Error class for aggregation
+            start_dt: Execution start timestamp
+            end_dt: Execution end timestamp
+        """
+        if not self.event_emitter:
+            logger.debug("EventEmitter not available, skipping learning event emission")
+            return
+
+        try:
+            # Calculate estimated cost
+            estimated_cost_cents = self._calculate_execution_cost(latency_ms)
+
+            # Create telemetry payload
+            payload = ToolExecutedPayload(
+                tool_id=tool_name,  # Use tool name as ID (production: use internal ID)
+                tool_name=tool_name,
+                tool_type="generated",  # "generated" | "promoted" | "builtin"
+                status=status,
+                latency_ms=latency_ms,
+                input_tokens=0,  # Future: extract from CostController
+                output_tokens=0,  # Future: extract from CostController
+                subsystem_tokens={},  # Future: token breakdown by subsystem
+                estimated_cost_cents=estimated_cost_cents,
+                error_type=error_type,
+                error_message=error,
+                error_class=error_class,
+                user_satisfaction=-1,  # -1 = not available (Gap 7 will populate)
+                required_followup=False,  # Future: operator feedback loop (Gap 7)
+                error_resolved=None,  # Future: outcome signal
+                model_id="claude-opus-5",
+                task_type=None,  # Future: infer from task_id
+                task_id=task_id,
+                turn_id=turn_id,
+                tags=[],  # Future: add tags like ["high_latency", "cost_overrun"]
+            )
+
+            # Create learning event
+            event = LearningEvent(
+                event_type=LearningEventType.TOOL_EXECUTED,
+                tenant_id=self.tenant_id,
+                instance_id=self.instance_id,
+                skill_name="tool_forge",
+                session_id=session_id,
+                timestamp_utc=datetime.utcnow(),
+                payload=payload.__dict__,  # Convert dataclass to dict
+            )
+
+            # Emit event (async, non-blocking)
+            await self.event_emitter.emit(event)
+            logger.debug(
+                f"TOOL_EXECUTED event emitted: {tool_name} ({status}) in {latency_ms}ms"
+            )
+
+        except Exception as e:
+            # Log but don't fail: learning events are optional
+            logger.warning(f"Failed to emit TOOL_EXECUTED event: {e}")
+
+    def _calculate_execution_cost(self, latency_ms: int) -> int:
+        """Calculate estimated cost of tool execution in cents.
+
+        Heuristic: ~0.01 cents per millisecond (adjustable per SLA).
+
+        Args:
+            latency_ms: Execution latency in milliseconds
+
+        Returns:
+            Estimated cost in cents (integer)
+        """
+        # Simple model: 0.01 cents per millisecond
+        # Future: Use CostController for accurate pricing
+        cost_cents = max(1, int(latency_ms * 0.01))
+        return cost_cents
+
+    def _sanitize_error_message(self, error_msg: str) -> str:
+        """Sanitize error message for PII (paths, schema, credentials).
+
+        Removes:
+        - Absolute paths (/home/user/...)
+        - Database schema names (database.table)
+        - Stack traces and internal service names
+        - Quoted strings that look like secrets
+
+        Args:
+            error_msg: Raw error message
+
+        Returns:
+            Sanitized error message safe for audit trail
+        """
+        sanitized = error_msg
+
+        # Remove absolute paths
+        sanitized = re.sub(r"/[a-zA-Z0-9/_\-\.]+", "[PATH]", sanitized)
+
+        # Remove database identifiers (schema.table)
+        sanitized = re.sub(r"\b[a-z_]+\.[a-z_]+\b", "[DATABASE]", sanitized)
+
+        # Remove quoted strings >20 chars (likely PII/secrets)
+        sanitized = re.sub(r'["\']([\S]{20,})["\']', "[REDACTED]", sanitized)
+
+        # Remove stack trace markers
+        sanitized = re.sub(r"File .*?, line \d+", "[STACKTRACE]", sanitized)
+
+        return sanitized
+
+    def _classify_error(self, exception: Exception) -> tuple[Optional[str], Optional[str]]:
+        """Classify error for learning aggregation.
+
+        Returns:
+            Tuple of (error_type, error_class)
+            error_type: e.g., "ValueError", "TimeoutError"
+            error_class: e.g., "validation_error", "infrastructure_error"
+        """
+        error_type = type(exception).__name__
+
+        # Map exception types to error classes
+        error_class = "unknown_error"
+
+        if isinstance(exception, (ValueError, TypeError, KeyError)):
+            error_class = "validation_error"
+        elif isinstance(exception, TimeoutError):
+            error_class = "timeout_error"
+        elif isinstance(exception, (FileNotFoundError, PermissionError)):
+            error_class = "infrastructure_error"
+        elif isinstance(exception, RuntimeError):
+            error_class = "runtime_error"
+        elif isinstance(exception, Exception):
+            # Generic error classification
+            error_name = error_type.lower()
+            if "permission" in error_name or "access" in error_name:
+                error_class = "infrastructure_error"
+            elif "timeout" in error_name:
+                error_class = "timeout_error"
+            elif "value" in error_name or "type" in error_name:
+                error_class = "validation_error"
+
+        return error_type, error_class
 
     def shutdown(self) -> None:
         """Cleanup resources."""

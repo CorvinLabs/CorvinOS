@@ -123,9 +123,20 @@ def read_skill_body(tenant_id: str, name: str) -> "dict | None":
     """Resolve a forged skill id to its markdown body from the SkillForge registry.
     Returns {skill_id, body} or None. Read-only."""
     try:
-        from skill_forge.multi_registry import MultiRegistry  # noqa: PLC0415
+        # `MultiRegistry` does not exist — the class is `MultiSkillRegistry`, and its
+        # constructor is keyword-only (project_root=/channel_id=), not a forge root.
+        # The import raised into the `except` below on EVERY call, so the console's
+        # forged-artifact drill-down showed zero skills for turns that really did
+        # forge them (measured 2026-08-19). This is the SAME defect ADR-0283 R7 fixed
+        # in stages/skillforge.py, left standing in this second call site — so use
+        # the identical primitive: the tenant-rooted, path-explicit `SkillRegistry`.
+        import sys  # noqa: PLC0415
+        _sf = str(Path(__file__).resolve().parents[1] / "skill-forge")
+        if _sf not in sys.path:      # not on the console/bridge path by default
+            sys.path.insert(0, _sf)
+        from skill_forge.registry import SkillRegistry  # noqa: PLC0415
         from forge.paths import tenant_home  # noqa: PLC0415
-        reg = MultiRegistry(Path(tenant_home(tenant_id)) / "skill-forge")
+        reg = SkillRegistry(Path(tenant_home(tenant_id)) / "skill-forge")
         body = reg.get_body(name)
         if body is None:
             return None

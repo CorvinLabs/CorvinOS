@@ -61,6 +61,9 @@ except Exception:  # noqa: BLE001
     _CEL = None
 
 _TURN_RE = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
+# A session dir is `<channel>:<sid>` (chat_runtime uses Path(workdir).name), so the
+# colon is part of the shape. Bounded + no separators → no traversal via this value.
+_SESSION_RE = re.compile(r"^[A-Za-z0-9_:.-]{1,128}$")
 
 
 def _find_assembly_dir(tenant_id: str) -> "Path | None":
@@ -205,10 +208,40 @@ async def explain_brief(
             "reason": "erased_or_absent"}
 
 
+def _find_assembly_file(root: Path, turn_id: str, session: "str | None") -> "Path | None":
+    """Locate one turn's assembly sidecar under the tenant's sessions root.
+
+    `turn_id` is `turn-<n>` — unique within a session and NOT across them, so a bare
+    rglob returns whichever session the filesystem happens to yield first. On a live
+    install with ten sessions that is essentially always the WRONG turn: the console
+    showed a foreign session's final prompt and an empty forged list for a turn that
+    had really forged two skills (measured 2026-08-19). `session` narrows it to the
+    one the trace view already knows; without it, fall back to the MOST RECENT match
+    rather than an arbitrary one."""
+    if session is not None and not _SESSION_RE.match(session):
+        return None
+    root_resolved = root.resolve()
+    pattern = (f"{session}/cel-briefs/{turn_id}.assembly.json" if session
+               else f"cel-briefs/{turn_id}.assembly.json")
+    hits: list[Path] = []
+    for f in root.rglob(pattern):
+        try:  # traversal guard: stay inside the tenant's sessions root
+            f.resolve().relative_to(root_resolved)
+        except ValueError:
+            continue
+        hits.append(f)
+    if not hits:
+        return None
+    if len(hits) == 1:
+        return hits[0]
+    return max(hits, key=lambda f: f.stat().st_mtime)
+
+
 @router.get("/prompt/{turn_id}")
 async def get_prompt_assembly(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     turn_id: str,
+    session: str | None = None,
 ) -> dict[str, Any]:
     """The full assembly for one turn (Layer B): the structured bausteine, the CEL
     block, and the FINAL prompt that entered the worker engine. `found: false` when
@@ -218,16 +251,11 @@ async def get_prompt_assembly(
     root = _find_assembly_dir(rec.tenant_id)
     if root is None or _CEL is None or not root.is_dir():
         return {"found": False, "turn_id": turn_id, "reason": "unavailable"}
-    root_resolved = root.resolve()
-    for f in root.rglob(f"cel-briefs/{turn_id}.assembly.json"):
-        try:  # traversal guard: stay inside the tenant's sessions root
-            f.resolve().relative_to(root_resolved)
-        except ValueError:
-            continue
+    f = _find_assembly_file(root, turn_id, session)
+    if f is not None:
         rec_asm = _CEL.read_assembly(f.parent.parent, turn_id)
         if rec_asm is not None:
             return {"found": True, **rec_asm}
-        break
     return {"found": False, "turn_id": turn_id, "reason": "erased_or_absent"}
 
 
@@ -235,6 +263,7 @@ async def get_prompt_assembly(
 async def get_forged_artifacts(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     turn_id: str,
+    session: str | None = None,
 ) -> dict[str, Any]:
     """The CODE of the tools + the BODY of the skills a turn forged, resolved from
     the tenant's Forge / SkillForge registries. Read-only; tenant-scoped."""
@@ -243,15 +272,8 @@ async def get_forged_artifacts(
     root = _find_assembly_dir(rec.tenant_id)
     if root is None or _CEL is None or not root.is_dir():
         return {"found": False, "turn_id": turn_id, "tools": [], "skills": []}
-    root_resolved = root.resolve()
-    asm = None
-    for f in root.rglob(f"cel-briefs/{turn_id}.assembly.json"):
-        try:
-            f.resolve().relative_to(root_resolved)
-        except ValueError:
-            continue
-        asm = _CEL.read_assembly(f.parent.parent, turn_id)
-        break
+    f = _find_assembly_file(root, turn_id, session)
+    asm = _CEL.read_assembly(f.parent.parent, turn_id) if f is not None else None
     if asm is None:
         return {"found": False, "turn_id": turn_id, "tools": [], "skills": []}
     # a bound forge tool name is "mcp__forge__<name>"; the registry key is <name>
