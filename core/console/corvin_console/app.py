@@ -73,6 +73,7 @@ from .routes import (
     bridges as bridges_route,
     ldd as ldd_route,
     quality_layers as quality_layers_route,
+    skill_creator_api as skill_creator_route,
     chat as chat_route,
     voice as voice_route,
     workflows as workflows_route,
@@ -207,6 +208,8 @@ router.include_router(bridges_route.router, tags=["console-bridges"])
 router.include_router(ldd_route.router, tags=["console-ldd"])
 # Quality Layers (ADR Gate, docs-as-definition-of-done, etc.) toggles.
 router.include_router(quality_layers_route.router, tags=["console-quality-layers"])
+# Skill-Creator (autonomous 6-phase skill builder) — main quality subsystem.
+router.include_router(skill_creator_route.router, tags=["console-skill-creator"])
 # ADR-0037 (web-next) — web-bridge chat + voice (Iter 3a/b).
 router.include_router(chat_route.router, tags=["console-chat"])
 router.include_router(voice_route.router, tags=["console-voice"])
