@@ -39,7 +39,7 @@ export default function WebhookConfigPanel() {
 
   const fetchWebhookStatus = async () => {
     try {
-      const response = await fetch('/api/console/github/webhook/status')
+      const response = await fetch('/v1/console/github/webhook/status')
       if (response.ok) {
         const data: WebhookStatus = await response.json()
         setStatus(data)
@@ -69,7 +69,7 @@ export default function WebhookConfigPanel() {
     setSuccess(null)
 
     try {
-      const response = await fetch('/api/console/github/webhook/register', {
+      const response = await fetch('/v1/console/github/webhook/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -101,7 +101,7 @@ export default function WebhookConfigPanel() {
     setSuccess(null)
 
     try {
-      const response = await fetch('/api/console/github/webhook/test', {
+      const response = await fetch('/v1/console/github/webhook/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

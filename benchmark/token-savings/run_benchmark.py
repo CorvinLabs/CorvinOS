@@ -116,9 +116,11 @@ _QUIET_TURN = {
 # CEL on/off; the cachestable mode holds CEL ON for BOTH arms and toggles ONLY the ADR-0395
 # cache-stable relocation, so the delta isolates the fix (cache_creation collapse), not CEL.
 ARM_MODES = {
+    # Baseline experiment: no CEL vs the CEL as SHIPPED (cache-stable on). Confounders held OFF
+    # in BOTH arms so the delta is CEL itself, not shadow/active-brain/feedback per-turn work.
     "cel": {
-        "A": {"vibe_engineering": False},
-        "B": {"vibe_engineering": True},
+        "A": {"vibe_engineering": False, **_QUIET_TURN},
+        "B": {"vibe_engineering": True, "cel_cache_stable": True, **_QUIET_TURN},
     },
     "cachestable": {
         "A": {"vibe_engineering": True, "cel_cache_stable": False, **_QUIET_TURN},
@@ -194,8 +196,9 @@ async def run(args) -> int:
         # call, NO numbers — a dry-run must never produce a savings figure. The distinguishing
         # flag is the one whose value differs between arm A and arm B.
         mode = ARM_MODES[args.arms]
-        _distinct = next(k for k in {*mode["A"], *mode["B"]}
-                         if mode["A"].get(k) != mode["B"].get(k))
+        # Primary axis per mode (explicit — a mode may differ on more than one flag, e.g. the
+        # cel mode also pins cel_cache_stable in arm B; auto-detect would be nondeterministic).
+        _distinct = {"cel": "vibe_engineering", "cachestable": "cel_cache_stable"}[args.arms]
         # Save/restore even here: a dry-run must leave the tenant's flags EXACTLY as found
         # (it applies both arms only to prove they resolve — it must not persist that).
         _dov = ff._read_overlay(args.tenant)
@@ -249,11 +252,19 @@ async def run(args) -> int:
                     cel_on = mode[arm].get("vibe_engineering", False)
                     _apply_arm(ff, args.tenant, mode[arm])
                     for rep in range(args.n):
+                        # Measure the ACTUAL resolved flag (not just the arm label) before AND
+                        # after the task-run. If anything (a manual Settings toggle, a parallel
+                        # run) flipped vibe_engineering mid-rep, actual != label → the rep is
+                        # TAINTED and dropped in build_report. "Measure reality, not the label."
+                        _vibe_before = ff.is_enabled("vibe_engineering", args.tenant)
                         text, comp, extra, cost = await _run_task(cr, args.tenant, tk, args.model, args.prices)
+                        _vibe_after = ff.is_enabled("vibe_engineering", args.tenant)
+                        _tainted = (_vibe_before != cel_on) or (_vibe_after != cel_on)
                         total = comp["fresh_input"] + comp["cache_creation"] + comp["cache_read"] + comp["output"]
                         rec = {
                             "task_id": tk["id"], "task_type": tk["type"], "arm": arm,
-                            "cel_on": cel_on, "rep": rep, "n_turns": extra["n_turns"],
+                            "cel_on": cel_on, "cel_on_actual": bool(_vibe_before and _vibe_after),
+                            "tainted": _tainted, "rep": rep, "n_turns": extra["n_turns"],
                             **comp, "cache_creation_5m": extra["c5"], "cache_creation_1h": extra["c1"],
                             "input_all": total - comp["output"], "tokens_total": total,
                             "cost_usd": cost, "quality": quality_score(text, tk["check"]),
@@ -291,6 +302,11 @@ async def run(args) -> int:
 def build_report(runs: list[dict], suite: dict, args) -> dict:
     """Pair A/B runs per (task, rep), apply the quality gate, and summarise per task type
     and overall. All numbers via stats.py — nothing invented."""
+    # Drop tainted reps: any rep whose ACTUAL resolved flag disagreed with its arm label (a
+    # manual Settings toggle or a parallel run flipped it mid-rep). Keeping them would silently
+    # bias the effect. Count and report them so the drop is never invisible.
+    n_tainted = sum(1 for r in runs if r.get("tainted"))
+    runs = [r for r in runs if not r.get("tainted")]
     by = {}
     for r in runs:
         by.setdefault((r["task_id"], r["rep"]), {})[r["arm"]] = r
@@ -325,8 +341,12 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
     return {
         "suite_version": suite.get("suite_version"), "n_per_arm": args.n,
         "tenant": args.tenant, "run_id": args.run_id, "arms": args.arms,
+        # Reps dropped because their ACTUAL resolved flag disagreed with the arm label (mid-run
+        # interference). >0 means someone toggled the flag during the run — the data is thinned,
+        # not silently biased. 0 = clean.
+        "tainted_reps_dropped": n_tainted,
         # Confounders held OFF for BOTH arms so the delta isolates the fix, not extra per-turn work.
-        "measurement_isolation": (sorted(_QUIET_TURN) if args.arms == "cachestable" else []),
+        "measurement_isolation": sorted({k for fm in ARM_MODES[args.arms].values() for k in fm} - {"vibe_engineering", "cel_cache_stable"}),
         "model": args.model, "cost_available": cost_available,
         # Guard now keys on the SUMMED input (all 3 classes), not fresh input_tokens — the old
         # guard false-passed because input_tokens=2>0 while 62k cache tokens were uncounted.
@@ -351,6 +371,10 @@ def print_report(rep: dict) -> None:
     if not rep.get("input_captured", True):
         print("!! WARNING: the worker reported ZERO input across all runs (all 4 classes). "
               "Something is broken — do not trust these numbers.\n")
+    if rep.get("tainted_reps_dropped"):
+        print(f"!! NOTE: {rep['tainted_reps_dropped']} rep(s) DROPPED — the vibe_engineering flag "
+              f"was toggled mid-run (a Settings change or parallel run). Those reps are excluded; "
+              f"if the count is high, re-run without touching Settings during the benchmark.\n")
     if o["n_pairs"] == 0:
         print("No quality-valid pairs — nothing to claim (all B answers were worse than A).")
         return

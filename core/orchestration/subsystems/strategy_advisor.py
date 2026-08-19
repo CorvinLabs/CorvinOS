@@ -154,7 +154,7 @@ class StrategyAdvisor(Subsystem):
         """Get top-ranked strategy using fingerprint-gated adaptive ranking.
 
         Algorithm:
-        1. If fingerprint is provided and confidence > 0.7:
+        1. If fingerprint is provided and confidence >= 0.7:
            Use adaptive ranking combining success rate, operator preference, and cost.
         2. Else:
            Use empirical fallback (success rate only).
