@@ -268,6 +268,41 @@ blocks a headline claim until closed.
 **SSOT.** This tenant folder is now the single source of truth for experiments, tracked on the git
 `experiments` branch.
 
+### 2026-08-19 · Entry 15 — Anomaly B resolved: the agentic tool-leak (invalidates the memgrounded pilot)
+
+**Goal.** Root-cause why CEL-off scored on unguessable facts (Entry 14, Anomaly B).
+
+**Method (LDD root-cause-by-layer, reproducibility-first).** Reproduced the smoking-gun task
+`mem-mt-port-derive` with CEL **off** (+ confounders off, exactly the benchmark arm-A config),
+capturing the REAL model responses.
+
+**Observation (decisive).** With CEL off, the model still produced `8913` (= 8813+100) in 2 of 3
+reps. Rep 2 said it verbatim: *"Based on the **benchmark test configuration in this project**, the
+port reserved…"*. Rep 1 correctly said "unknown" and refused. So the model **found the fact on
+disk**, not from CEL.
+
+**Root cause by layer.**
+- *L1 symptom:* CEL-off answers unguessable facts.
+- *L2 mechanism:* the console OS turn runs `claude -p --dangerously-skip-permissions` with **no
+  `--disallowedTools`** (`chat_runtime.py:2150`) → a **fully tool-enabled agent** (Read/Grep/Bash).
+- *L3 structural:* memory-grounded tasks put the ground-truth fact on disk (the fixture, and the
+  suite JSON's `expect`, both grep-able), so the agent **self-retrieves** it, bypassing CEL. The
+  A/B does not isolate CEL.
+- *L4 conceptual:* **CEL (push context) competes with agentic retrieval (pull context).** In a
+  tool-enabled agent, CEL's marginal value shrinks because the agent can fetch context itself.
+
+**Consequence (honest correction).** The Entry-14 memory-grounded numbers (0.167 vs 0.375) are
+**CONTAMINATED and must NOT be used as CEL's value** — both arms could self-retrieve. It also
+explains Anomaly A (CEL-on only 0.375: the arms differ little because both can pull).
+
+**Fix for a valid measurement.** Run the benchmark turn **tool-disabled** (`--disallowedTools "*"`),
+so CEL injection is the ONLY context channel: then CEL-off truly cannot know (→0), CEL-on injected
+(→correct). This is the next measurement; until then the memory-grounded claim is withdrawn.
+
+**New connection (see `connections-synthesis.md` §4).** Push-vs-pull is itself a measurable axis:
+CEL's value should be largest exactly where the agent CANNOT pull (no tools / air-gapped / the fact
+is not on any reachable path).
+
 ---
 
 ## 3. Metrics registry (the measured quantities)
