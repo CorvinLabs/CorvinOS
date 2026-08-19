@@ -1,3 +1,8 @@
   mem-staging-cluster    q=1.0
   mem-token-rotation     q=1.0
   mem-retry-limit        q=1.0
+  mem-mascot             q=0.0
+  mem-analytics-port     q=1.0
+  mem-residency-region   q=1.0
+OVERALL cel_content (new framing, n=5): 0.833
+DONE_EXIT=0
