@@ -34,6 +34,25 @@ reduces cumulative tokens-to-completion at held quality."* The paper proves that
 holds*; if a dimension shows no saving, the paper reports that too. Reviewer credibility (and
 the product's) depends on this honesty.
 
+> ### ⚠️ Empirical update — EXP-001 pilot (2026-08-19), read before drafting
+> The pilots (tenant SSOT: `~/.corvin/tenants/_default/experiments/exp-001-cel-token-savings/`)
+> force three honest revisions to the thesis above:
+> 1. **Cost:** cache-stable relocation (ADR-0395) is a real, measured **−55.8 % cost/run** win —
+>    keep this as the headline *cost* result.
+> 2. **Raw tokens / generic tasks:** on a diverse suite (n=10) CEL is a **small net cost**, with
+>    huge between-task variance — do NOT claim a raw-token saving.
+> 3. **Correctness value is LATENT, not delivered.** A tool-disabled probe (n=3) that removes the
+>    agent's self-retrieval shows the deterministic CEL brief injects memory/ADR **titles, not
+>    bodies** → `none=0.00, cel=0.00, oracle(content-injected)=0.944`. So CEL's correctness value
+>    is **available (0.944) but unrealized (0.00)** in the current brief; its measured "help" in
+>    tool-enabled turns came from **agentic pull**, not CEL. The paper's correctness section must
+>    either (a) measure the **fixed** brief (content-injecting), or (b) honestly report the
+>    pointer-vs-content gap as the finding. Anomaly to close first: the tool-enabled console turn
+>    cannot measure CEL value (it self-retrieves) — use the tool-disabled protocol.
+> Net: the honest paper is **"CEL's proven win is cache-class cost neutrality; its correctness
+> value is latent, gated by injecting content not pointers"** — a stronger, more defensible story
+> than a raw-token-saving claim the data contradicts.
+
 ---
 
 ## 1. The four load-bearing constraints (must be satisfied or the paper is invalid)

@@ -1,0 +1,399 @@
+{
+  "report": {
+    "experiment": "exp-001",
+    "measurement": "tool-disabled",
+    "model": "claude-haiku-4-5-20251001",
+    "n_per_task": 3,
+    "n_single_tasks": 6,
+    "arm_quality": {
+      "none": 0.0,
+      "cel": 0.0,
+      "oracle": 0.944
+    },
+    "interpretation": {
+      "none": "no context, no tools -> the model cannot know the fact (floor)",
+      "cel": "real deterministic CEL brief (pointers/titles) -> tests if a pointer is answerable without agentic pull",
+      "oracle": "the memory CONTENT injected -> proves the fact IS answerable when actually injected (ceiling)"
+    }
+  },
+  "raw": [
+    {
+      "arm": "none",
+      "task": "mem-staging-cluster",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-staging-cluster",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-staging-cluster",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-token-rotation",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-token-rotation",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-token-rotation",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-retry-limit",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "I need to search the codebase for this information.\n\nLet me look for ingestion pipeline configuration:\n\nI'll search for "
+    },
+    {
+      "arm": "none",
+      "task": "mem-retry-limit",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-retry-limit",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-mascot",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-mascot",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-mascot",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-analytics-port",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-analytics-port",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-analytics-port",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-residency-region",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-residency-region",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "I don't have that information in the provided context or memory. Let me check the project files to find the data-residen"
+    },
+    {
+      "arm": "none",
+      "task": "mem-residency-region",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-staging-cluster",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "CEL"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-staging-cluster",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "I need to read the memory file to get the accurate codename.\n\nbench-cel-staging-cluster"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-staging-cluster",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "bench-cel"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-token-rotation",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-token-rotation",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-token-rotation",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-retry-limit",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "I need to check the project memory for this value.\n\nReading the memory file about the CEL retry limit...\n\nThe specific r"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-retry-limit",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-retry-limit",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-mascot",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-mascot",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-mascot",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-analytics-port",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-analytics-port",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-analytics-port",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-residency-region",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "Ich werde die Memory-Datei lesen, um die Region zu ermitteln.\n\nLese die Datei `/home/shumway/.claude/projects/-home-shum"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-residency-region",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "Ich lese die relevante Memory-Datei, um die Antwort zu finden.\n\nReading the relevant memory file to answer your question"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-residency-region",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "Reading the relevant memory file to answer your question.\n\nIch lese die relevante Memory-Datei, um deine Frage zu beantw"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-staging-cluster",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-staging-cluster",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-staging-cluster",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-token-rotation",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-token-rotation",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-token-rotation",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-retry-limit",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-retry-limit",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "29"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-retry-limit",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "I need to search the codebase for the ingestion pipeline retry limit configuration.\n\n29"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-mascot",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "Quill-7"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-mascot",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "Quill-7"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-mascot",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "Quill-7"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-analytics-port",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-analytics-port",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-analytics-port",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-residency-region",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-residency-region",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-residency-region",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    }
+  ]
+}

@@ -9,6 +9,7 @@
     "note": "Until a metric passes the gate it informs search DIRECTION only, never accept/reject."
   },
   "controllable_parameters_theta": [
+    {"name": "brief_includes_content", "type": "bool", "note": "PRIMARY target (Entry 16): the deterministic brief injects memory/ADR TITLES only, not bodies. Tool-disabled it scores 0.00 while injecting CONTENT (oracle) scores 0.944. Make the brief carry answer-bearing content. Loss = distance from the oracle ceiling."},
     {"name": "cel_cache_stable", "type": "bool", "note": "relocate volatile brief out of cached prefix (already a cost win)"},
     {"name": "selective_injection.threshold", "type": "float", "range": [0.0, 1.0], "note": "min relevance for a memory to be injected (ADR-0394)"},
     {"name": "memory_pruning.min_confidence", "type": "float", "range": [0.0, 1.0]},
@@ -83,5 +84,12 @@
     "runner": "benchmark/token-savings/run_benchmark.sh --arms cel --tasks tasks/suite-v3-diverse.json --n <n> --model claude-haiku-4-5-20251001",
     "seed": 12345,
     "stats": "bootstrap 95% CI + Mann-Whitney-U (stats.py)"
+  },
+  "valid_cel_value_protocol": {
+    "note": "The full agentic console turn CANNOT measure CEL's injection value: it self-retrieves off disk (Anomaly B). Use the tool-disabled probe.",
+    "runner": "benchmark/token-savings/measure_tooldisabled.py --n <n> (needs bench-cel-*.md seeded via seed-memory-fixtures.sh)",
+    "arms": {"none": "floor (no context)", "cel": "real deterministic brief = pointers", "oracle": "content injected = ceiling"},
+    "result_2026_08_19_n3": {"none": 0.0, "cel": 0.0, "oracle": 0.944},
+    "loss_signal": "L_cel_value = oracle_quality - cel_quality (currently 0.944 - 0.0 = 0.944 of latent value unrealized; drive to 0 by making brief_includes_content=true)"
   }
 }

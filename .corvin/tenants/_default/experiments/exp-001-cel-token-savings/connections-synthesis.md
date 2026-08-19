@@ -94,6 +94,14 @@ no session workspace) — i.e. their *pull* is constrained — which is exactly 
 pushed brief (to the manager) matters most. CEL, push, isolation, and pull are one connected story:
 **how much context does each actor get, and who supplies it.**
 
+**Quantified (Entry 16, tool-disabled, n=3).** With pull removed, `none`=0.00, `cel`=**0.00**,
+`oracle`=**0.944**. So in the pure-push regime CEL adds **zero** — because its deterministic brief
+injects memory/ADR **titles, not bodies** (the fact is not in the brief). This finally explains
+Anomaly A: CEL never injected the answer; tool-enabled arms differed only in how often the agent
+pulled. **CEL's correctness value is latent (0.944 available via content injection) and currently
+unrealized (0.00 delivered).** The single most valuable CEL change: make the brief carry
+answer-bearing content, not just pointers (new θ `brief_includes_content`).
+
 ## What each connection means for the LDD loss (feeds `metrics-as-loss.json`)
 
 - Connection 1 → the baseline arm must be defined precisely ("index-only"), and a *true* no-memory
