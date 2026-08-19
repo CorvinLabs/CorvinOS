@@ -16,6 +16,9 @@ class LearningEventType(str, Enum):
     TOOL_EXECUTED = "tool.executed"
     OPERATOR_RATED_TOOL = "operator.rated_tool"
 
+    # Gap 7: Operator Feedback Loop (ADR-0327)
+    OPERATOR_RATED_SKILL = "operator.rated_skill"
+
     # Core learning events (ADR-0314+)
     CONFIDENCE_SCORE = "confidence.score"
     DECISION_RECORD = "decision.record"
@@ -98,6 +101,19 @@ class OperatorRatedToolPayload:
 
     tool_id: str
     tool_name: str
+    rating: int  # 1-5
+    feedback_text: Optional[str] = None
+    task_id: Optional[str] = None
+    session_id: Optional[str] = None
+    timestamp_utc: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class OperatorRatedSkillPayload:
+    """Operator feedback on skill execution (ADR-0327, Gap 7)."""
+
+    skill_id: str
+    skill_name: str
     rating: int  # 1-5
     feedback_text: Optional[str] = None
     task_id: Optional[str] = None

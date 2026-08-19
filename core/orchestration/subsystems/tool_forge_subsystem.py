@@ -22,6 +22,8 @@ from .forge_apis import NamespacePolicy, ForgeQuota
 from .forge_api_impl import ForgedToolAPIImpl
 from core.context_engineering.context_api import ContextAPI
 from core.learning.event_schema import LearningEvent, LearningEventType, ToolExecutedPayload
+from core.learning.tool_ranking import ToolRankingManager, select_tool_for_reuse
+from core.learning.event_store import EventStore
 
 logger = logging.getLogger(__name__)
 
@@ -402,6 +404,10 @@ class ToolForgeSubsystem(Subsystem):
         self.event_emitter: Optional[Any] = None
         self.instance_id = "tool_forge_subsystem"
 
+        # ADR-0322: Tool ranking for reuse (Gap 2)
+        self.event_store: Optional[EventStore] = None
+        self.ranking_manager: Optional[ToolRankingManager] = None
+
     @property
     def name(self) -> str:
         return "tool_forge"
@@ -462,6 +468,28 @@ class ToolForgeSubsystem(Subsystem):
         except Exception as e:
             logger.warning(f"ToolForgeSubsystem: Failed to register API: {e}")
 
+        # ADR-0322: Initialize ToolRankingManager for tool reuse (Gap 2)
+        try:
+            # Get or create EventStore
+            if hasattr(hub, 'get_service') and callable(hub.get_service):
+                self.event_store = hub.get_service('event_store')
+
+            if not self.event_store:
+                corvin_home = Path.home() / ".corvin"
+                db_path = corvin_home / "tenants" / self.tenant_id / "learning.db"
+                self.event_store = EventStore(db_path)
+                logger.info("ToolForgeSubsystem: EventStore created locally")
+
+            # Initialize ToolRankingManager
+            self.ranking_manager = ToolRankingManager(
+                event_store=self.event_store,
+                cache_ttl_seconds=300,
+            )
+            logger.info("ToolForgeSubsystem: ToolRankingManager initialized (Gap 2)")
+        except Exception as e:
+            logger.warning(f"ToolForgeSubsystem: Failed to initialize ToolRankingManager: {e}")
+            self.ranking_manager = None
+
         # Subscribe to events
         hub.subscribe("forge_requested", self.on_forge_requested)
         hub.subscribe("strategy_failed", self.on_strategy_failed)
@@ -492,6 +520,8 @@ class ToolForgeSubsystem(Subsystem):
                 return await self._forge_promote(kwargs)
             case "list_tools":
                 return await self._list_tools(kwargs)
+            case "select_tool":
+                return await self._select_tool(kwargs)
             case _:
                 raise ValueError(f"Unknown request type: {request_type}")
 
@@ -777,6 +807,84 @@ class ToolForgeSubsystem(Subsystem):
             "tools": [t.to_dict() for t in limited],
             "count": len(tools),
         }
+
+    async def _select_tool(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle select_tool request (ADR-0322, Gap 2).
+
+        Uses tool ranking to decide whether to reuse or generate a new tool.
+
+        Request schema:
+        {
+            task_type: str | None,
+            error_class: str | None,
+            reuse_threshold: float = 0.7,
+            limit: int = 5,
+        }
+
+        Response:
+        {
+            action: "reuse" | "generate",
+            tool_id: str | None (if action="reuse"),
+            ranked_tools: list[RankedTool],
+            reason: str,
+        }
+        """
+        if not self.ranking_manager:
+            # ToolRankingManager not initialized; fall back to generate
+            logger.warning("ToolForgeSubsystem: ToolRankingManager not available; falling back to generate")
+            return {
+                "action": "generate",
+                "tool_id": None,
+                "ranked_tools": [],
+                "reason": "Tool ranking unavailable; generating new tool",
+            }
+
+        try:
+            # Use ranking manager to make selection decision
+            selection = await select_tool_for_reuse(
+                ranking_manager=self.ranking_manager,
+                tenant_id=self.tenant_id,
+                task_type=payload.get("task_type"),
+                error_class=payload.get("error_class"),
+                reuse_threshold=payload.get("reuse_threshold", 0.7),
+            )
+
+            # Convert RankedTool objects to dictionaries for serialization
+            ranked_tools_dict = []
+            if selection.get("ranked_tools"):
+                for rt in selection["ranked_tools"]:
+                    ranked_tools_dict.append({
+                        "tool_id": rt.tool_id,
+                        "tool_name": rt.tool_name,
+                        "score": rt.score,
+                        "reason": rt.reason,
+                        "success_rate": rt.success_rate,
+                        "success_count": rt.success_count,
+                        "total_count": rt.total_count,
+                        "avg_latency_ms": rt.avg_latency_ms,
+                        "p95_latency_ms": rt.p95_latency_ms,
+                        "avg_cost_cents": rt.avg_cost_cents,
+                        "confidence": rt.confidence,
+                        "trend": rt.trend,
+                        "is_cold_start": rt.is_cold_start,
+                        "rank": rt.rank,
+                    })
+
+            return {
+                "action": selection["action"],
+                "tool_id": selection.get("tool_id"),
+                "ranked_tools": ranked_tools_dict[:payload.get("limit", 5)],
+                "reason": selection["reason"],
+            }
+
+        except Exception as e:
+            logger.error(f"Tool selection failed: {e}", exc_info=True)
+            return {
+                "action": "generate",
+                "tool_id": None,
+                "ranked_tools": [],
+                "reason": f"Tool selection error: {e}; generating new tool",
+            }
 
     async def on_event(self, event_name: str, event_data: Dict[str, Any]) -> None:
         """React to published events (fire-and-forget).

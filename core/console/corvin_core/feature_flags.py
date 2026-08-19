@@ -50,6 +50,7 @@ __all__ = [
     "tier_of",
     "can_promote_to",
     "migrate_flags_to_alpha",
+    "canary_percentage_routing",
 ]
 
 _FLAG_ID_RE = re.compile(r"^[a-z][a-z0-9_]{2,47}$")
@@ -808,6 +809,23 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         release_tier="alpha",
     ),
     FeatureFlag(
+        id="cel_cache_stable",
+        label="Cache-stable CEL context (cost fix)",
+        description=(
+            "Deliver the per-turn CEL context brief through the user message instead of the "
+            "cached --append-system-prompt file (ADR-0375). Off (default) = today's behaviour, "
+            "where a changed brief re-creates the CLI's ~51k system+tools cache every turn "
+            "(measured: multi-turn +147% cost). On = the system prompt stays byte-stable so "
+            "base+tools stay cache-READ, and the brief rides the already-cheap user turn. "
+            "Verify with the token-savings benchmark before flipping on: quality must hold "
+            "(system- vs user-framing) and cache-creation must drop."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("vibe-engineering", "cost"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
         id="cross_device_sync",
         label="Cross-device tenant sync",
         description=(
@@ -890,6 +908,43 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         owner="maintainer",
         target_release="0.13.x",
         tags=("learning", "skills", "attribution", "phase-3"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="learning_gap_6_cost_learning",
+        label="Cost Learning & Budget Refinement (EMA multiplier updates)",
+        description=(
+            "Enable Gap 6 cost learning (ADR-0326): learn actual tool cost multipliers "
+            "over time via exponential moving average (EMA). Observes (estimated, actual) "
+            "cost pairs from TOOL_EXECUTED events, computes deltas, and refines cost "
+            "estimates using EMA with alpha=0.1. Converges to true overhead multipliers "
+            "after 10+ samples per tool/model pair. Enables accurate budget forecasting and "
+            "cost-aware tool selection (Gap 2). Flags outliers (>2x estimated) and tracks "
+            "cost trends (increasing/stable/decreasing). Off (default) uses static pricing "
+            "model with no learning."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("learning", "cost", "budget", "phase-4"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="learning_gap_7_operator_feedback",
+        label="Operator Feedback Loop (tool/skill ratings → auto-promotion)",
+        description=(
+            "Enable Gap 7 operator feedback integration (ADR-0327): collect operator ratings "
+            "(1-5) on tools and skills via API endpoints, aggregate feedback statistics "
+            "(average, median, confidence), and feed back to auto-promotion thresholds. "
+            "Operators rate tools/skills with optional feedback text; the system detects "
+            "outliers (Z-score > 2.5), computes sentiment (negative/neutral/positive/"
+            "very_positive), and adjusts SkillForgeSubsystem promotion thresholds based on "
+            "aggregated user sentiment. Very positive feedback lowers threshold (easier to "
+            "promote); negative feedback raises it (harder to promote). Off (default) "
+            "disables operator feedback collection and threshold adjustments."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("learning", "feedback", "auto-promotion", "phase-4"),
         release_tier="alpha",
     ),
 )
@@ -1221,3 +1276,53 @@ def migrate_flags_to_alpha() -> dict[str, str]:
     for entry in REGISTRY:
         result[entry.id] = entry.release_tier
     return result
+
+
+def canary_percentage_routing(
+    tenant_id: str, flag_id: str, canary_pct: int = 10
+) -> bool:
+    """Deterministic canary routing for Phase 1-3 measurement (ADR-0392).
+
+    Routes a tenant to either control (flag OFF) or canary (flag ON) group
+    based on a stable hash of tenant_id. The same tenant always gets the same
+    assignment.
+
+    Used during measurement phase:
+      - Control group (90%): Phase 1-3 flags OFF (baseline)
+      - Canary group (10%): Phase 1-3 flags ON (new behavior)
+
+    Args:
+        tenant_id: Unique tenant identifier.
+        flag_id: Feature flag to check (must be registered).
+        canary_pct: Percentage of tenants in canary group (0-100, default 10).
+
+    Returns:
+        True if tenant is in canary group and flag is normally enabled, False
+        if in control group (always OFF) or flag is not enabled.
+
+    Raises:
+        UnknownFlagError: if flag_id is not registered.
+        ValueError: if canary_pct is out of range.
+    """
+    # Validate flag is registered
+    flag(flag_id)
+
+    if not 0 <= canary_pct <= 100:
+        raise ValueError(f"canary_pct must be in [0, 100], got {canary_pct}")
+
+    # Import here to avoid circular dependency at module level
+    try:
+        from operator.measurement.canary_router import CanaryRouter  # noqa: PLC0415
+    except ImportError:
+        # Gracefully degrade if measurement infrastructure not available
+        return False
+
+    router = CanaryRouter()
+    is_canary = router.is_canary_tenant(tenant_id, canary_pct)
+
+    # If not canary, always return False (control group)
+    if not is_canary:
+        return False
+
+    # If canary, return the normal flag state
+    return is_enabled(flag_id, tenant_id)

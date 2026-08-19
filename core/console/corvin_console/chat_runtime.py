@@ -4777,9 +4777,26 @@ async def stream_turn(
                 _cel_ran_stage_ids = []
         except Exception:  # noqa: BLE001 — fail-safe: turn runs without the brief
             _cel_brief_text = ""
-    args = _build_args(sess, resume=resume, model=_os_model,
-                       browser_token=_browser_token, task_text=prompt,
-                       cel_brief=_cel_brief_text)
+    # ADR-0375 (cache-stable CEL). The volatile CEL brief in the --append-system-prompt
+    # file shares the Claude-Code CLI's SINGLE system-prompt cache block with its ~51k base
+    # prompt + tool defs, so a per-turn brief change re-creates that whole prefix instead of
+    # reading it (measured: multi-turn +147% cost; A/B review confirmed mechanism 1a). Behind
+    # this flag, move the two volatile blocks — the ACS directive AND the CEL brief — OUT of
+    # the cached system prompt and INTO the per-turn user message (fed via stdin, which lands
+    # AFTER the system cache breakpoint), so the appended system file stays byte-stable and
+    # base+tools stay cache-READ. The gate still inspects `_task_text` (the raw user prompt),
+    # never this prefix — Invariant I1 holds.
+    _cel_cache_stable = _feature_flags.is_enabled("cel_cache_stable", sess.tenant_id)
+    _volatile_user_prefix = ""
+    if _cel_cache_stable:
+        _volatile_user_prefix = (
+            _acs_directive_block(prompt) + _cel_brief_block(_cel_brief_text)).strip()
+        args = _build_args(sess, resume=resume, model=_os_model,
+                           browser_token=_browser_token, task_text="", cel_brief="")
+    else:
+        args = _build_args(sess, resume=resume, model=_os_model,
+                           browser_token=_browser_token, task_text=prompt,
+                           cel_brief=_cel_brief_text)
 
     # First-turn auto-title: derive a readable label from the prompt so the
     # sidebar shows "Wie groß ist die Wahrscheinlichkeit, dass …" instead of
@@ -6265,7 +6282,11 @@ async def stream_turn(
     # Feed the prompt + close stdin so claude knows we're done.
     assert proc.stdin is not None
     try:
-        proc.stdin.write(prompt.encode("utf-8"))
+        # ADR-0375: when cache-stable CEL is on, the volatile context rides here (in the
+        # user message), not in the cached system prompt. Prefix it to the real prompt.
+        _worker_prompt = ((_volatile_user_prefix + "\n\n" + prompt)
+                          if _volatile_user_prefix else prompt)
+        proc.stdin.write(_worker_prompt.encode("utf-8"))
         await proc.stdin.drain()
         proc.stdin.close()
     except (OSError, BrokenPipeError):
