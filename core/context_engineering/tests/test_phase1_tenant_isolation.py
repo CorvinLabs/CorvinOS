@@ -15,15 +15,15 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any
 
-from corvin_console.core.context_engineering.memory_coordinator import (
+from core.context_engineering.memory_coordinator import (
     MemoryCoordinator,
     EventPersistenceError,
 )
-from corvin_console.core.context_engineering.session_checkpoint import (
+from core.context_engineering.session_checkpoint import (
     SessionContinuationManager,
     SessionCheckpoint,
 )
-from corvin_console.core.context_engineering.context_bus import (
+from core.context_engineering.context_bus import (
     get_current_tenant_id,
     set_current_tenant_id,
     get_execution_context,
