@@ -874,6 +874,24 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("context-engineering", "performance", "optimization"),
         release_tier="alpha",
     ),
+    FeatureFlag(
+        id="learning_gap_3_attribution",
+        label="Skill Attribution Model (Fair multi-skill grading)",
+        description=(
+            "Enable Gap 3 learning infrastructure (ADR-0323): fair skill grading for "
+            "multi-skill strategies. When multiple skills run in a composition/pipeline, "
+            "this engine distributes credit/debit fairly using configurable attribution "
+            "models (EQUAL model MVP splits credit equally; WEIGHTED/FIRST/LAST are "
+            "deferred). Enables closed-loop learning from composite skill executions and "
+            "prevents single high-performing skill from capturing all credit. Off (default) "
+            "disables attribution; all skills are graded independently without composition "
+            "awareness."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("learning", "skills", "attribution", "phase-3"),
+        release_tier="alpha",
+    ),
 )
 
 

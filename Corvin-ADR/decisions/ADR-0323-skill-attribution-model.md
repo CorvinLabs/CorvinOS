@@ -1,6 +1,6 @@
 ---
 id: ADR-0323
-status: proposed
+status: accepted
 depends_on: [ADR-0314, ADR-0321]
 related: [ADR-0322, ADR-0324]
 supersedes: []
@@ -10,7 +10,8 @@ paths:
 docs:
   - docs/implementation/DETAILED_DESIGN_ALL_INTEGRATIONS.md
   - docs/CODE_REVIEW_INTEGRATION_GAPS.md
-commits: []
+commits:
+  - "feat(learning): Implement Gap 3 Skill Attribution Model (ADR-0323)"
 ---
 
 # ADR-0323 — Skill Attribution Model
