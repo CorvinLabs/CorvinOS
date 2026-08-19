@@ -2,17 +2,74 @@
 
 Enables atomic, ordered propagation of context changes across all Brain subsystems.
 Uses asyncio.Queue for FIFO ordering and ContextVar for task isolation.
+Includes per-tenant validation to prevent cross-tenant ContextVar leaks.
 """
 
 import asyncio
+import logging
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Optional
 
+
+logger = logging.getLogger(__name__)
 
 _EXECUTION_CONTEXT: ContextVar[Optional["ExecutionContext"]] = ContextVar(
     "_execution_context",
     default=None,
 )
+
+_CURRENT_TENANT_ID: ContextVar[str] = ContextVar(
+    "_current_tenant_id",
+    default="_default",
+)
+
+
+def get_current_tenant_id() -> str:
+    """Get current tenant ID from ContextVar (or default)."""
+    return _CURRENT_TENANT_ID.get()
+
+
+def set_current_tenant_id(tenant_id: str) -> None:
+    """Set current tenant ID in ContextVar (with validation)."""
+    if not isinstance(tenant_id, str) or len(tenant_id.strip()) == 0:
+        raise ValueError(f"Invalid tenant_id: {tenant_id}")
+    _CURRENT_TENANT_ID.set(tenant_id)
+
+
+def get_execution_context() -> Optional["ExecutionContext"]:
+    """Get ExecutionContext from ContextVar with tenant validation (fail-closed).
+
+    Validates that the stored ExecutionContext's tenant_id matches the current
+    tenant. If mismatch detected (cross-tenant leak), returns None and logs alert.
+    """
+    ctx = _EXECUTION_CONTEXT.get()
+    if ctx is None:
+        return None
+
+    current_tenant = get_current_tenant_id()
+    if hasattr(ctx, 'tenant_id') and ctx.tenant_id != current_tenant:
+        # ALERT: Cross-tenant leak detected
+        logger.critical(
+            f"ContextVar leak detected: ExecutionContext tenant_id={ctx.tenant_id} "
+            f"does not match current tenant_id={current_tenant}. Returning None (fail-closed)."
+        )
+        return None
+
+    return ctx
+
+
+def set_execution_context(ctx: Optional["ExecutionContext"]) -> None:
+    """Set ExecutionContext in ContextVar with tenant validation (fail-closed)."""
+    if ctx is not None:
+        if not hasattr(ctx, 'tenant_id'):
+            raise ValueError("ExecutionContext must have tenant_id attribute")
+        current_tenant = get_current_tenant_id()
+        if ctx.tenant_id != current_tenant:
+            raise ValueError(
+                f"Cannot set ExecutionContext: tenant_id mismatch (got {ctx.tenant_id}, "
+                f"expected {current_tenant})"
+            )
+    _EXECUTION_CONTEXT.set(ctx)
 
 
 class ContextBus:

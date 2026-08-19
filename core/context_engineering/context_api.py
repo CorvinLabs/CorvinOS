@@ -2,14 +2,18 @@
 
 Provides query, update, decision recording, scope management, and event subscription
 capabilities for all 13 Brain subsystems.
+Includes tenant_id capture in async tasks to prevent cross-tenant ContextVar inheritance.
 """
 
 import asyncio
+import logging
 from typing import Any, Callable, Dict, Optional
 
-from .context_bus import ContextBus
+from .context_bus import ContextBus, get_current_tenant_id
 from .execution_context import ExecutionContext
 from .decision_record import DecisionRecord
+
+logger = logging.getLogger(__name__)
 
 
 class ContextAPI:
@@ -108,9 +112,12 @@ class ContextAPI:
             updates[key] = (old_value, value)
 
         # Broadcast via ContextBus (tracked to prevent resource leaks)
+        # IMPORTANT: Capture tenant_id at task creation time to prevent
+        # asyncio.create_task() from inheriting stale ContextVar on delayed execution
         task = asyncio.create_task(
             self.bus.publish("context_updated", {
                 "subsystem": self.name,
+                "tenant_id": ctx.tenant_id,  # Captured at creation time (CE-005 fix)
                 "updates": {k: {"old": v[0], "new": v[1]} for k, v in updates.items()},
                 "context_stack": str(ctx.context_stack),
                 "timestamp": DecisionRecord.now_iso(),
@@ -156,9 +163,11 @@ class ContextAPI:
         )
 
         # Broadcast decision recorded (tracked to prevent resource leaks)
+        # Capture tenant_id at task creation time (CE-005 fix)
         task = asyncio.create_task(
             self.bus.publish("decision_recorded", {
                 "subsystem": self.name,
+                "tenant_id": self.current_context.tenant_id,  # Captured at creation time
                 "decision_type": decision_type,
                 "value": value,
                 "confidence": confidence,
@@ -189,9 +198,11 @@ class ContextAPI:
         ctx.context_stack.push(level, id, **metadata)
 
         # Broadcast scope change (tracked to prevent resource leaks)
+        # Capture tenant_id at task creation time (CE-005 fix)
         task = asyncio.create_task(
             self.bus.publish("scope_entered", {
                 "subsystem": self.name,
+                "tenant_id": ctx.tenant_id,  # Captured at creation time
                 "level": level,
                 "id": id,
                 "metadata": metadata if metadata else {},
@@ -215,9 +226,11 @@ class ContextAPI:
 
         if popped:
             # Broadcast scope exit (tracked to prevent resource leaks)
+            # Capture tenant_id at task creation time (CE-005 fix)
             task = asyncio.create_task(
                 self.bus.publish("scope_exited", {
                     "subsystem": self.name,
+                    "tenant_id": ctx.tenant_id,  # Captured at creation time
                     "level": popped.level,
                     "id": popped.id,
                     "context_stack": str(ctx.context_stack),
