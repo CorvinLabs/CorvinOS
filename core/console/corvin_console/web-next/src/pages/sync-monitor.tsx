@@ -15,7 +15,7 @@ import { Zap, CheckCircle, AlertCircle, Loader, RotateCw, Pause, Play } from 'lu
 interface SyncEvent {
   event: string
   timestamp: string
-  details: Record<string, any>
+  details: Record<string, unknown>
 }
 
 interface WorkerStatus {
@@ -55,6 +55,7 @@ export default function SyncMonitorPanel() {
         clearTimeout(reconnectTimeoutRef.current)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const connectToEventStream = () => {

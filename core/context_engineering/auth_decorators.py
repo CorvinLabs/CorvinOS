@@ -9,11 +9,11 @@ Fail-closed: unauthorized requests return 403.
 import functools
 from typing import Any, Callable
 
-from core.context_engineering.persona_model import (
+from .persona_model import (
     set_current_persona,
     set_current_role,
 )
-from core.context_engineering.transport_resolvers import (
+from .transport_resolvers import (
     AuthError,
     TransportResolver,
 )
@@ -140,7 +140,7 @@ def requires_auth_capability(capability_id: str) -> Callable:
             set_current_role(role)
 
             # Step 2: Capability check (via CapabilityRegistry)
-            from core.context_engineering.persona_model import has_capability
+            from .persona_model import has_capability
 
             if not has_capability(capability_id):
                 _audit_auth_event(

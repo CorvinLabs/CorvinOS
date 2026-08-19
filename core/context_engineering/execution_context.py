@@ -7,7 +7,7 @@ Enables subsystems to query/update state and track execution traces.
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from core.context_engineering.decision_record import DecisionRecord
+from .decision_record import DecisionRecord
 
 
 @dataclass(frozen=False)

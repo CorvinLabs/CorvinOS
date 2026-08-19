@@ -101,11 +101,31 @@ async def _run_task(cr, tenant: str, task: dict, model: str, prices: dict) -> tu
     return final_text, summed, {"c5": c5_sum, "c1": c1_sum, "n_turns": len(prompts)}, cost_sum
 
 
-def _set_cel(ff, tenant: str, on: bool) -> None:
+# Arm definitions. Each arm is a flag-map applied before its runs. The classic mode measures
+# CEL on/off; the cachestable mode holds CEL ON for BOTH arms and toggles ONLY the ADR-0395
+# cache-stable relocation, so the delta isolates the fix (cache_creation collapse), not CEL.
+ARM_MODES = {
+    "cel": {
+        "A": {"vibe_engineering": False},
+        "B": {"vibe_engineering": True},
+    },
+    "cachestable": {
+        "A": {"vibe_engineering": True, "cel_cache_stable": False},
+        "B": {"vibe_engineering": True, "cel_cache_stable": True},
+    },
+}
+
+
+def _apply_arm(ff, tenant: str, flagmap: dict) -> None:
     ov = ff._read_overlay(tenant)
     flags = dict(ov.get("flags") or {})
-    flags["vibe_engineering"] = bool(on)
+    for k, v in flagmap.items():
+        flags[k] = bool(v)
     ff._write_overlay(tenant, {**ov, "flags": flags})
+
+
+def _set_cel(ff, tenant: str, on: bool) -> None:
+    _apply_arm(ff, tenant, {"vibe_engineering": bool(on)})
 
 
 def _cleanup_bench_sessions(cr, tenant: str) -> None:
@@ -133,11 +153,16 @@ async def run(args) -> int:
         return 2
 
     if args.dry_run:
-        # Validate wiring only: can we toggle the flag and see it resolve? NO LLM call,
-        # NO numbers — a dry-run must never produce a savings figure.
-        _set_cel(ff, args.tenant, True);  on = ff.is_enabled("vibe_engineering", args.tenant)
-        _set_cel(ff, args.tenant, False); off = ff.is_enabled("vibe_engineering", args.tenant)
+        # Validate wiring only: do BOTH arms of the selected mode apply and resolve? NO LLM
+        # call, NO numbers — a dry-run must never produce a savings figure. The distinguishing
+        # flag is the one whose value differs between arm A and arm B.
+        mode = ARM_MODES[args.arms]
+        _distinct = next(k for k in {*mode["A"], *mode["B"]}
+                         if mode["A"].get(k) != mode["B"].get(k))
+        _apply_arm(ff, args.tenant, mode["A"]); off = ff.is_enabled(_distinct, args.tenant)
+        _apply_arm(ff, args.tenant, mode["B"]); on = ff.is_enabled(_distinct, args.tenant)
         ok = (on is True and off is False)
+        print(f"arms mode '{args.arms}': distinguishing flag = {_distinct}")
         # suite-independent self-test of the objective check
         q_ok = (quality_score("value is 129 here", {"kind": "contains_all", "expect": ["129"]}) == 1.0
                 and quality_score("no match", {"kind": "contains_all", "expect": ["129"]}) == 0.0)
@@ -150,16 +175,18 @@ async def run(args) -> int:
     raw_path = Path(args.out) / f"raw-{args.run_id}.jsonl"
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     runs: list[dict] = []
-    # Save the tenant's real vibe_engineering flag so a run on _default leaves it untouched.
+    mode = ARM_MODES[args.arms]
+    _touched = sorted({k for fm in mode.values() for k in fm})  # every flag this run may change
+    # Save every touched flag's real value so a run on _default leaves the tenant untouched.
     _orig_overlay = ff._read_overlay(args.tenant)
     _orig_flags = dict(_orig_overlay.get("flags") or {})
-    _had_flag = "vibe_engineering" in _orig_flags
-    _orig_val = _orig_flags.get("vibe_engineering")
+    _saved = {k: (k in _orig_flags, _orig_flags.get(k)) for k in _touched}
     try:
         with raw_path.open("w", encoding="utf-8") as fh:
             for tk in suite["tasks"]:
-                for arm, cel_on in (("A", False), ("B", True)):
-                    _set_cel(ff, args.tenant, cel_on)
+                for arm in ("A", "B"):
+                    cel_on = mode[arm].get("vibe_engineering", False)
+                    _apply_arm(ff, args.tenant, mode[arm])
                     for rep in range(args.n):
                         text, comp, extra, cost = await _run_task(cr, args.tenant, tk, args.model, args.prices)
                         total = comp["fresh_input"] + comp["cache_creation"] + comp["cache_read"] + comp["output"]
@@ -176,14 +203,15 @@ async def run(args) -> int:
                               f"(fresh={comp['fresh_input']} +create={comp['cache_creation']} "
                               f"+read={comp['cache_read']} +out={comp['output']}) q={rec['quality']:.2f}")
     finally:
-        # Leave the tenant's real vibe_engineering flag exactly as it was, and delete the
-        # throwaway bench sessions — a run on _default must have no lasting side effect.
+        # Leave every touched flag exactly as it was, and delete the throwaway bench sessions —
+        # a run on _default must have no lasting side effect.
         cur = ff._read_overlay(args.tenant)
         flags = dict(cur.get("flags") or {})
-        if _had_flag:
-            flags["vibe_engineering"] = _orig_val
-        else:
-            flags.pop("vibe_engineering", None)
+        for k, (had, val) in _saved.items():
+            if had:
+                flags[k] = val
+            else:
+                flags.pop(k, None)
         ff._write_overlay(args.tenant, {**cur, "flags": flags})
         _cleanup_bench_sessions(cr, args.tenant)
 
@@ -226,14 +254,17 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
         return out
     total_input_all = sum(r["input_all"] for r in runs)
     cost_available = pricing.prices_available(args.model, args.prices)
+    # Arm labels reflect what actually differs between A and B in this run's mode.
+    a_label, b_label = (("A_fix_off", "B_fix_on") if args.arms == "cachestable"
+                        else ("A_cel_off", "B_cel_on"))
     return {
         "suite_version": suite.get("suite_version"), "n_per_arm": args.n,
-        "tenant": args.tenant, "run_id": args.run_id,
+        "tenant": args.tenant, "run_id": args.run_id, "arms": args.arms,
         "model": args.model, "cost_available": cost_available,
         # Guard now keys on the SUMMED input (all 3 classes), not fresh input_tokens — the old
         # guard false-passed because input_tokens=2>0 while 62k cache tokens were uncounted.
         "input_captured": total_input_all > 0,
-        "components_per_arm": {"A_cel_off": _arm_components("A"), "B_cel_on": _arm_components("B")},
+        "components_per_arm": {a_label: _arm_components("A"), b_label: _arm_components("B")},
         "note": "tokens_total = fresh_input + cache_creation + cache_read + output (all 4 classes). "
                 "Savings (raw count) = (median A − median B)/median A, quality-gated, bootstrap 95% CI, "
                 "Mann-Whitney-U (B<A). RAW COUNT ≠ COST: cache-read ~0.1x, cache-creation ~1.25x, "
@@ -279,12 +310,14 @@ def print_report(rep: dict) -> None:
             print(f"  {arm:14s} {c['fresh_input']:8.0f} {c['cache_creation']:9.0f} "
                   f"{c['cache_read']:9.0f} {c['output']:8.0f} {c['tokens_total']:9.0f}")
         # Cost view — the honest headline (cache-weighted). Blank until real prices are filled.
-        a, b = cp.get("A_cel_off", {}), cp.get("B_cel_on", {})
+        # Arms are ordered A then B by insertion; label-agnostic so both modes print correctly.
+        _arm_items = list(cp.items())
+        (a_lbl, a), (b_lbl, b) = _arm_items[0], _arm_items[1]
         if rep.get("cost_available") and a.get("cost_usd") and b.get("cost_usd"):
             ac, bc = a["cost_usd"], b["cost_usd"]
             saved = (ac - bc) / ac * 100 if ac else 0.0
             print(f"\nCOST per run ({rep.get('model')}, cache-weighted): "
-                  f"A=${ac:.5f}  B=${bc:.5f}  → {saved:+.1f}% "
+                  f"{a_lbl}=${ac:.5f}  {b_lbl}=${bc:.5f}  → {saved:+.1f}% "
                   f"({'CHEAPER' if saved>0 else 'more expensive'})")
         else:
             print(f"\nCOST: not shown — fill real prices for '{rep.get('model')}' in prices.json "
@@ -294,6 +327,8 @@ def print_report(rep: dict) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Token-savings A/B benchmark (real data).")
     ap.add_argument("--n", type=int, default=20, help="runs per arm per task")
+    ap.add_argument("--arms", choices=sorted(ARM_MODES), default="cel",
+                    help="cel: CEL off(A) vs on(B). cachestable: CEL on both, ADR-0395 fix off(A) vs on(B).")
     ap.add_argument("--tasks", default=str(HERE / "tasks" / "suite-v1.json"))
     ap.add_argument("--tenant", default="_bench_tokensave", help="throwaway benchmark tenant")
     ap.add_argument("--seed", type=int, default=12345, help="bootstrap seed (reproducible CI)")

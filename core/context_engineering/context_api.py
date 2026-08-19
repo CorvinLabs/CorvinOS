@@ -7,9 +7,9 @@ capabilities for all 13 Brain subsystems.
 import asyncio
 from typing import Any, Callable, Dict, Optional
 
-from core.context_engineering.context_bus import ContextBus
-from core.context_engineering.execution_context import ExecutionContext
-from core.context_engineering.decision_record import DecisionRecord
+from .context_bus import ContextBus
+from .execution_context import ExecutionContext
+from .decision_record import DecisionRecord
 
 
 class ContextAPI:

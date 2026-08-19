@@ -1,30 +1,17 @@
 /**
- * API utilities for handling console routing under /console subpath
+ * API utilities for handling console routing.
+ * The app is served from /console/ base path.
+ * API requests go to /api/console/* which Vite proxies to the gateway.
  */
-
-export function getConsoleApiUrl(path: string): string {
-  const pathname = new URL(window.location.href).pathname
-  const baseUrl = pathname.includes('/console') ? '/console' : ''
-  return `${baseUrl}${path}`
-}
-
-/**
- * Global fetch override that automatically adds /console prefix if needed
- */
-const originalFetch = window.fetch
-window.fetch = function(resource: any, init?: RequestInit) {
-  if (typeof resource === 'string' && resource.startsWith('/api/')) {
-    const correctedUrl = getConsoleApiUrl(resource)
-    return originalFetch.call(window, correctedUrl, init)
-  }
-  return originalFetch.call(window, resource, init)
-} as any
 
 export async function fetchConsoleApi(
   path: string,
   options?: RequestInit
 ): Promise<Response> {
-  const url = getConsoleApiUrl(path)
+  // Always use absolute URLs to avoid base path issues
+  // In dev: http://127.0.0.1:5173/api/console/* → proxied to gateway via Vite
+  // In prod: /api/console/* is served from gateway's /v1/console/* via rewrite
+  const url = window.location.origin + path
   return fetch(url, options)
 }
 

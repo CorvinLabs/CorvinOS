@@ -3263,12 +3263,19 @@ def _resolve_spawn_inputs(
     # both compose their system prompt through _resolve_spawn_inputs. Mirrors the
     # web-chat wiring: build_brief → render → persist_trace → Decision Record.
     _cel_forged_tools: list = []   # ADR-0283 — tools the active brain forged+bound
+    # ADR-0395 cache-stable CEL (mirror of chat_runtime): when the flag is on, the volatile
+    # CEL brief is carried OUT to the caller (prepended to the per-turn user message) instead
+    # of appended to the byte-stable --append-system-prompt file. Empty string = ride in system
+    # prompt (default, flag off).
+    _volatile_user_prefix = ""
+    _cel_cache_stable = False
     if _CEL_AVAILABLE:
         _cel_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
         _cel_on = False
         try:
             from corvin_core import feature_flags as _cel_ff  # noqa: PLC0415
             _cel_on = _cel_ff.is_enabled("vibe_engineering", _cel_tid)
+            _cel_cache_stable = _cel_ff.is_enabled("cel_cache_stable", _cel_tid)
         except Exception:  # noqa: BLE001 — no flag subsystem → feature off
             _cel_on = False
         if _cel_on:
@@ -3365,7 +3372,15 @@ def _resolve_spawn_inputs(
                     _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid, None)
                     _cel_text = (_cel_render(_cbrief) or "").strip()
                 if _cel_text:
-                    sys_prompt = sys_prompt + "\n\n" + _cel_text + "\n"
+                    if _cel_cache_stable:
+                        # Relocate: keep the appended system file byte-stable so claude's
+                        # ~large base prompt + tool defs stay cache-READ; the brief rides in
+                        # the user message (after the system cache breakpoint). The caller
+                        # prepends `_volatile_user_prefix` to the prompt AT SPAWN — after the
+                        # pre-spawn compliance gates, which keep inspecting the RAW task only.
+                        _volatile_user_prefix = _cel_text
+                    else:
+                        sys_prompt = sys_prompt + "\n\n" + _cel_text + "\n"
                 try:  # inspector (Layer B): persist bausteine → the FINAL prompt
                     _pa_b = locals().get("_bundle")
                     _pa_src = (_pa_b if (_cel_active and _pa_b is not None)
@@ -3417,6 +3432,10 @@ def _resolve_spawn_inputs(
         # ADR-0165: pass plan through so M5 (delegation) and M7 (compute) can
         # be acted on by callers that own the engine spawn decision.
         "_ato_plan": _ato_plan,
+        # ADR-0395: the volatile CEL brief to prepend to the USER prompt at spawn (empty
+        # unless cel_cache_stable is on). Like _ato_plan, callers MUST pop it before splatting
+        # `resolved` into an engine — it is not an engine arg.
+        "_volatile_user_prefix": _volatile_user_prefix,
     }
 
 
@@ -3464,6 +3483,11 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
     )
     # ADR-0165: pop _ato_plan before splatting into _build_args (not an engine arg).
     resolved.pop("_ato_plan", None)
+    # ADR-0395: cache-stable CEL brief (empty unless the flag is on) rides in the USER prompt,
+    # not the system file. Prepend it to the spawn prompt only; the raw `prompt` stays intact
+    # for the caller's gates / budget accounting / logging.
+    _vprefix = resolved.pop("_volatile_user_prefix", "") or ""
+    _spawn_prompt = (_vprefix + "\n\n" + prompt) if _vprefix else prompt
 
     # Windows fresh-install fix (same bug class ClaudeCodeEngine.spawn()
     # fixes for the engine-driven path — see its docstring): `resolved
@@ -3493,7 +3517,7 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
             pass  # best-effort — falls back to the historical inline arg
 
     return _ClaudeCodeEngine._build_args(
-        prompt,
+        _spawn_prompt,
         binary="claude",
         prompt_via_stdin=prompt_via_stdin,
         streaming=False,  # callers append --output-format / --verbose
@@ -4735,6 +4759,13 @@ def _call_claude_streaming_via_engine(
     # The plan was consumed (audit events emitted) in _resolve_spawn_inputs.
     # Not assigned — no dead variable that implies M5 dispatch is already wired.
     resolved.pop("_ato_plan", None)
+    # ADR-0395: cache-stable CEL brief (empty unless the flag is on) must NOT ride in the
+    # byte-stable system-prompt file. Pop it here so `**resolved` stays a clean engine-arg
+    # splat, and prepend it to a SPAWN-ONLY prompt below. The raw `prompt` is left untouched
+    # so the pre-spawn compliance gates (L34 flow-guard, egress, house-rules) keep inspecting
+    # the real user task, and budget accounting / logging keep recording it.
+    _vprefix = resolved.pop("_volatile_user_prefix", "") or ""
+    _spawn_prompt = (_vprefix + "\n\n" + prompt) if _vprefix else prompt
     engine = _ClaudeCodeEngine()
     persona = (profile or {}).get("persona", "assistant")
     # EU AI Act Art. 12/13: unique ID for this OS-turn; emitted once proc
@@ -4909,7 +4940,7 @@ def _call_claude_streaming_via_engine(
             # sole watchdog. Without this, every claude run got SIGTERM'd
             # at exactly 120 s even with events still flowing.
             for ev in engine.spawn(
-                prompt,
+                _spawn_prompt,  # ADR-0395: CEL brief prepended here (post-gate), not in system
                 working_dir=workdir,
                 env=env,
                 channel=channel,
