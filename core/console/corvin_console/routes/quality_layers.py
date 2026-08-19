@@ -59,12 +59,14 @@ def _snapshot() -> dict[str, Any]:
     config = _ql.load_config()
     layers: list[dict[str, Any]] = []
 
-    # Standard layer names
+    # Standard layer names (Quality subsystem tools)
     layer_names = [
         "adr_gate",
         "docs_as_definition_of_done",
         "e2e_driven_iteration",
         "usability_first",
+        "skill_creator",           # Autonomous 6-phase skill builder
+        "concept_gate",            # Concept archiving for patterns
     ]
 
     for layer_name in layer_names:
@@ -72,7 +74,9 @@ def _snapshot() -> dict[str, Any]:
             "id": layer_name,
             "name": layer_name.replace("_", "-"),
             "configured": config.get("layers", {}).get(layer_name, True),
-            "category": "quality"
+            "category": "quality",
+            "icon": "🧠" if layer_name == "skill_creator" else "📋",  # Skill-Creator icon
+            "description": "Autonomous skill builder (6-phase orchestration)" if layer_name == "skill_creator" else None,
         })
 
     return {
