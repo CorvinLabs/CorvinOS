@@ -29,6 +29,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import stats  # noqa: E402  (local module)
+# Canonical 4-class token summation (fresh + cache-creation + cache-read + output) — the ONE
+# place that sums usage correctly, shared with the dashboard fix. Reading only input_tokens
+# (as the first draft did) undercounts real input by ~99.99% on a cached turn.
+from core.learning.token_accounting import token_components, total_tokens  # noqa: E402
 
 
 def quality_score(text: str, check: dict) -> float:
@@ -54,9 +58,14 @@ def load_suite(path: Path) -> dict:
     return data
 
 
-async def _run_one(cr, tenant: str, prompt: str) -> tuple[str, int, int]:
-    """One real turn → (answer_text, input_tokens, output_tokens). Tokens are the WORKER's
-    real usage from the result event (never chars/4, never an estimate)."""
+async def _run_one(cr, tenant: str, prompt: str) -> tuple[str, dict]:
+    """One real turn → (answer_text, raw_usage_dict). Usage is the WORKER's real usage from
+    the result event (never chars/4, never an estimate). The caller sums it via
+    token_accounting so all four token classes count — not just fresh input_tokens.
+
+    NOTE (review finding 4): this trusts the terminal `usage` to already be cumulative over
+    any internal tool rounds. For suite-v1 (single-call, no-tool tasks) that holds; a
+    tool-using suite must re-verify this before its numbers are trusted."""
     sess = cr.create_session(tenant, "bench")
     text_parts, usage = [], None
     async for ev in cr.stream_turn(sess, prompt):
@@ -65,10 +74,7 @@ async def _run_one(cr, tenant: str, prompt: str) -> tuple[str, int, int]:
             text_parts.append(ev["text"])
         if ev.get("usage"):
             usage = ev["usage"]
-    text = "".join(text_parts)
-    ti = int((usage or {}).get("input_tokens", 0) or 0)
-    to = int((usage or {}).get("output_tokens", 0) or 0)
-    return text, ti, to
+    return "".join(text_parts), (usage or {})
 
 
 def _set_cel(ff, tenant: str, on: bool) -> None:
@@ -112,16 +118,20 @@ async def run(args) -> int:
             for arm, cel_on in (("A", False), ("B", True)):
                 _set_cel(ff, args.tenant, cel_on)
                 for rep in range(args.n):
-                    text, ti, to = await _run_one(cr, args.tenant, tk["prompt"])
+                    text, usage = await _run_one(cr, args.tenant, tk["prompt"])
+                    comp = token_components(usage)   # fresh_input/cache_creation/cache_read/output
+                    total = total_tokens(usage)      # full input (all 3 classes) + output
                     rec = {
                         "task_id": tk["id"], "task_type": tk["type"], "arm": arm,
-                        "cel_on": cel_on, "rep": rep, "cold": rep == 0,
-                        "tokens_in": ti, "tokens_out": to, "tokens_total": ti + to,
+                        "cel_on": cel_on, "rep": rep,
+                        **comp, "input_all": total - comp["output"], "tokens_total": total,
                         "quality": quality_score(text, tk["check"]),
                     }
                     runs.append(rec)
                     fh.write(json.dumps(rec) + "\n")
-                    print(f"  {tk['id']} arm {arm} rep {rep}: {ti+to} tok, q={rec['quality']:.2f}")
+                    print(f"  {tk['id']} arm {arm} rep {rep}: total={total} "
+                          f"(fresh={comp['fresh_input']} +create={comp['cache_creation']} "
+                          f"+read={comp['cache_read']} +out={comp['output']}) q={rec['quality']:.2f}")
 
     report = build_report(runs, suite, args)
     rep_path = Path(args.out) / f"report-{args.run_id}.json"
@@ -150,19 +160,28 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
         s = stats.summarise([p for p in pairs if p["task_type"] == tt], tt, seed=args.seed)
         per_type[tt] = s.__dict__
     overall = stats.summarise(pairs, "overall", seed=args.seed).__dict__
-    total_in = sum(r["tokens_in"] for r in runs)
-    total_out = sum(r["tokens_out"] for r in runs)
+    # Per-arm component means — the raw-vs-cost story lives here (cache classes priced
+    # differently). Reported alongside the raw-token savings, never collapsed into one number.
+    def _arm_components(arm: str) -> dict:
+        rs = [r for r in runs if r["arm"] == arm]
+        n = max(1, len(rs))
+        return {k: round(sum(r[k] for r in rs) / n, 1)
+                for k in ("fresh_input", "cache_creation", "cache_read", "output", "tokens_total")}
+    total_input_all = sum(r["input_all"] for r in runs)
     return {
         "suite_version": suite.get("suite_version"), "n_per_arm": args.n,
         "tenant": args.tenant, "run_id": args.run_id,
-        "total_input_tokens": total_in, "total_output_tokens": total_out,
-        # Validity guard: CEL's main cost is a BIGGER input prompt. If the worker usage did
-        # not report input_tokens (total_input==0), we measured OUTPUT ONLY — which hides
-        # CEL's input cost and can OVERSTATE savings. Flag it loudly; don't silently ship it.
-        "input_captured": total_in > 0,
-        "note": "Savings = (median A tokens − median B tokens) / median A, quality-gated. "
-                "CI = bootstrap 95%. p = Mann-Whitney-U one-sided (B<A). "
-                "significant = p<0.05 AND ci_low>0. Model id + suite version make it reproducible.",
+        # Guard now keys on the SUMMED input (all 3 classes), not fresh input_tokens — the old
+        # guard false-passed because input_tokens=2>0 while 62k cache tokens were uncounted.
+        "input_captured": total_input_all > 0,
+        "components_per_arm": {"A_cel_off": _arm_components("A"), "B_cel_on": _arm_components("B")},
+        "note": "tokens_total = fresh_input + cache_creation + cache_read + output (all 4 classes). "
+                "Savings (raw count) = (median A − median B)/median A, quality-gated, bootstrap 95% CI, "
+                "Mann-Whitney-U (B<A). RAW COUNT ≠ COST: cache-read ~0.1x, cache-creation ~1.25x, "
+                "output ~5x — apply your model's prices to components_per_arm for a cost figure. "
+                "suite-v1 is single-turn: it measures CEL's per-task COLD cost (always pays "
+                "cache_creation, never amortized) — CEL's best case (warm reuse over a session) needs "
+                "multi-turn tasks, not yet in the suite.",
         "overall": overall, "per_type": per_type,
     }
 
@@ -173,9 +192,8 @@ def print_report(rep: dict) -> None:
     print("TOKEN-SAVINGS BENCHMARK — measured, quality-gated")
     print("=" * 60)
     if not rep.get("input_captured", True):
-        print("!! WARNING: input_tokens were NOT captured (worker reported 0). CEL's main")
-        print("!! cost is a BIGGER INPUT prompt — measuring output only can OVERSTATE savings.")
-        print("!! Fix input-token capture before claiming any saving from this run.\n")
+        print("!! WARNING: the worker reported ZERO input across all runs (all 4 classes). "
+              "Something is broken — do not trust these numbers.\n")
     if o["n_pairs"] == 0:
         print("No quality-valid pairs — nothing to claim (all B answers were worse than A).")
         return
@@ -193,6 +211,15 @@ def print_report(rep: dict) -> None:
         tag = "sig" if s["significant"] else "n.s."
         print(f"  {tt:12s}: {s['savings_point']*100:6.1f}%  "
               f"[{s['ci_low']*100:.1f}%..{s['ci_high']*100:.1f}%]  p={s['p_value']:.3f}  n={s['n_pairs']}  {tag}")
+    # Component breakdown — this is where 'raw count' and 'cost' diverge.
+    cp = rep.get("components_per_arm", {})
+    if cp:
+        print("\nmean tokens per run (RAW COUNT — cost differs: read~0.1x, create~1.25x, out~5x):")
+        print(f"  {'arm':14s} {'fresh':>8s} {'cache_cr':>9s} {'cache_rd':>9s} {'output':>8s} {'total':>9s}")
+        for arm, c in cp.items():
+            print(f"  {arm:14s} {c['fresh_input']:8.0f} {c['cache_creation']:9.0f} "
+                  f"{c['cache_read']:9.0f} {c['output']:8.0f} {c['tokens_total']:9.0f}")
+        print("  → 'saved' on RAW COUNT is above; for COST apply your model's prices to these.")
 
 
 def main() -> int:
