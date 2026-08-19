@@ -178,6 +178,8 @@ spec:
     - cross_device_sync             # Sync learning state across instances
     # Context Engineering Optimization (ADR-0387/0389):
     # - memory_confidence_gate_enabled  # Filter low-confidence memory matches (Phase 1)
+    # Phase 3 Context Optimization (ADR-0391):
+    # - adaptive_context_routing     # Route simple tasks fast, rebalance budgets
     # Phase 8-12 features (proactive learning):
     # - learning_anomaly_detection   # Detect confidence drops
     # - learning_pattern_discovery   # Auto-discover patterns from failures
@@ -190,6 +192,7 @@ spec:
   #   # ccc_command_routing: true    # entity extraction on every turn
   #   # acs_context_sync: true       # ADR-0213 transcript replay after delegation
   #   # browser_automation: true     # /browser — launches a real Chrome
+  #   # adaptive_context_routing: true # Phase 3 adaptive routing (ADR-0391)
 
   # ── User-Defined Learning Objectives (ADR-0163) ────────────────────────────────
   # Deny-by-default: ULO is inactive unless a tenant explicitly opts in.

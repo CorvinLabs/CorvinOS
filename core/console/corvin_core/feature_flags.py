@@ -855,6 +855,25 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("context-engineering", "performance", "token-management"),
         release_tier="alpha",
     ),
+    FeatureFlag(
+        id="adaptive_context_routing",
+        label="Adaptive Context Routing & Dynamic Budgeting",
+        description=(
+            "Enable Phase 3 context optimization (ADR-0391): route simple tasks "
+            "through a fast path (skip expensive graph/skills stages) and dynamically "
+            "rebalance stage budgets based on real performance metrics (utilization, "
+            "confidence, quality). Task complexity classification uses keyword heuristics "
+            "(simple: rename/delete/format/typo; complex: refactor/design/implement). "
+            "Budget rebalancing fires when any stage's utilization drifts >15% from "
+            "baseline, with per-stage adjustments capped at ±10%. Expected savings: "
+            "40-50% context reduction combined with Phase 1+2 (total Phase 1+2+3). "
+            "Off (default) disables classification and uses uniform Phase 2 allocations."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("context-engineering", "performance", "optimization"),
+        release_tier="alpha",
+    ),
 )
 
 
