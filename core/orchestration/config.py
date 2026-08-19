@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 class BrainConfigLoader:
     """Load Brain configuration from YAML and instantiate subsystems."""
 
+    # Feature flags (Phase 2 improvements)
+    FEATURE_ADAPTIVE_STRATEGIES = True  # Fingerprint-gated strategy ranking (ADR-0370)
+    FEATURE_ADAPTIVE_STRATEGIES_CONFIDENCE_THRESHOLD = 0.7
+
     # Builtin subsystems registry (Phase 1 + Phase 2)
     BUILTIN_SUBSYSTEMS = {
         # Phase 1: Core subsystems
