@@ -108,6 +108,16 @@ def _set_cel(ff, tenant: str, on: bool) -> None:
     ff._write_overlay(tenant, {**ov, "flags": flags})
 
 
+def _cleanup_bench_sessions(cr, tenant: str) -> None:
+    """Delete the throwaway 'bench'-titled sessions this run created — no residue on _default."""
+    try:
+        for s in cr.list_sessions(tenant):
+            if getattr(s, "title", "") == "bench":
+                cr.delete_session(tenant, s.sid)
+    except Exception:  # noqa: BLE001 — cleanup is best-effort
+        pass
+
+
 async def run(args) -> int:
     suite = load_suite(Path(args.tasks))
     print(f"suite {suite.get('suite_version')} · {len(suite['tasks'])} tasks · n={args.n} · tenant={args.tenant}")
@@ -137,29 +147,45 @@ async def run(args) -> int:
         print("dry-run produced NO benchmark data (by design).")
         return 0 if (ok and q_ok) else 1
 
-    ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime(0))  # stamped by caller; gmtime(0) placeholder
     raw_path = Path(args.out) / f"raw-{args.run_id}.jsonl"
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     runs: list[dict] = []
-    with raw_path.open("w", encoding="utf-8") as fh:
-        for tk in suite["tasks"]:
-            for arm, cel_on in (("A", False), ("B", True)):
-                _set_cel(ff, args.tenant, cel_on)
-                for rep in range(args.n):
-                    text, comp, extra, cost = await _run_task(cr, args.tenant, tk, args.model, args.prices)
-                    total = comp["fresh_input"] + comp["cache_creation"] + comp["cache_read"] + comp["output"]
-                    rec = {
-                        "task_id": tk["id"], "task_type": tk["type"], "arm": arm,
-                        "cel_on": cel_on, "rep": rep, "n_turns": extra["n_turns"],
-                        **comp, "cache_creation_5m": extra["c5"], "cache_creation_1h": extra["c1"],
-                        "input_all": total - comp["output"], "tokens_total": total,
-                        "cost_usd": cost, "quality": quality_score(text, tk["check"]),
-                    }
-                    runs.append(rec)
-                    fh.write(json.dumps(rec) + "\n")
-                    print(f"  {tk['id']} arm {arm} rep {rep} ({extra['n_turns']}t): total={total} "
-                          f"(fresh={comp['fresh_input']} +create={comp['cache_creation']} "
-                          f"+read={comp['cache_read']} +out={comp['output']}) q={rec['quality']:.2f}")
+    # Save the tenant's real vibe_engineering flag so a run on _default leaves it untouched.
+    _orig_overlay = ff._read_overlay(args.tenant)
+    _orig_flags = dict(_orig_overlay.get("flags") or {})
+    _had_flag = "vibe_engineering" in _orig_flags
+    _orig_val = _orig_flags.get("vibe_engineering")
+    try:
+        with raw_path.open("w", encoding="utf-8") as fh:
+            for tk in suite["tasks"]:
+                for arm, cel_on in (("A", False), ("B", True)):
+                    _set_cel(ff, args.tenant, cel_on)
+                    for rep in range(args.n):
+                        text, comp, extra, cost = await _run_task(cr, args.tenant, tk, args.model, args.prices)
+                        total = comp["fresh_input"] + comp["cache_creation"] + comp["cache_read"] + comp["output"]
+                        rec = {
+                            "task_id": tk["id"], "task_type": tk["type"], "arm": arm,
+                            "cel_on": cel_on, "rep": rep, "n_turns": extra["n_turns"],
+                            **comp, "cache_creation_5m": extra["c5"], "cache_creation_1h": extra["c1"],
+                            "input_all": total - comp["output"], "tokens_total": total,
+                            "cost_usd": cost, "quality": quality_score(text, tk["check"]),
+                        }
+                        runs.append(rec)
+                        fh.write(json.dumps(rec) + "\n")
+                        print(f"  {tk['id']} arm {arm} rep {rep} ({extra['n_turns']}t): total={total} "
+                              f"(fresh={comp['fresh_input']} +create={comp['cache_creation']} "
+                              f"+read={comp['cache_read']} +out={comp['output']}) q={rec['quality']:.2f}")
+    finally:
+        # Leave the tenant's real vibe_engineering flag exactly as it was, and delete the
+        # throwaway bench sessions — a run on _default must have no lasting side effect.
+        cur = ff._read_overlay(args.tenant)
+        flags = dict(cur.get("flags") or {})
+        if _had_flag:
+            flags["vibe_engineering"] = _orig_val
+        else:
+            flags.pop("vibe_engineering", None)
+        ff._write_overlay(args.tenant, {**cur, "flags": flags})
+        _cleanup_bench_sessions(cr, args.tenant)
 
     report = build_report(runs, suite, args)
     rep_path = Path(args.out) / f"report-{args.run_id}.json"
