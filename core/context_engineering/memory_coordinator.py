@@ -39,14 +39,16 @@ class MemoryCoordinator:
     3. Handle memory layer fallback and errors gracefully
     """
 
-    def __init__(self, corvin_home: Optional[str] = None):
+    def __init__(self, corvin_home: Optional[str] = None, tenant_id: str = "_default"):
         """Initialize MemoryCoordinator.
 
         Args:
             corvin_home: Path to CORVIN_HOME. If None, uses environment variable.
+            tenant_id: Tenant identifier for multi-tenant isolation (default: "_default").
 
         Raises:
             ValueError: If corvin_home not provided and CORVIN_HOME env var not set.
+            ValueError: If tenant_id is invalid.
         """
         if corvin_home is None:
             corvin_home = os.environ.get("CORVIN_HOME")
@@ -55,11 +57,16 @@ class MemoryCoordinator:
                     "corvin_home not provided and CORVIN_HOME environment variable not set"
                 )
 
+        # Validate tenant_id (fail-closed)
+        if not isinstance(tenant_id, str) or len(tenant_id.strip()) == 0:
+            raise ValueError(f"Invalid tenant_id: {tenant_id}")
+
         self.corvin_home = Path(corvin_home)
-        self._project_memory_path = self.corvin_home / "tenants" / "_default" / "project_memory"
-        self._global_memory_path = self.corvin_home / "tenants" / "_default" / "global_memory"
+        self.tenant_id = tenant_id
+        self._project_memory_path = self.corvin_home / "tenants" / tenant_id / "project_memory"
+        self._global_memory_path = self.corvin_home / "tenants" / tenant_id / "global_memory"
         self._learning_events_path = (
-            self.corvin_home / "tenants" / "_default" / "learning" / "events.jsonl"
+            self.corvin_home / "tenants" / tenant_id / "learning" / "events.jsonl"
         )
 
     def load_task_template(self, task_type: str) -> Dict[str, Any]:
@@ -160,13 +167,21 @@ class MemoryCoordinator:
 
         Args:
             task_id: Task identifier
-            tenant_id: Tenant identifier
+            tenant_id: Tenant identifier (must match coordinator's tenant_id)
             event_type: Type of learning event (e.g., 'strategy_success', 'error_pattern')
             payload: Event data (dict)
 
         Raises:
+            ValueError: If tenant_id doesn't match coordinator's tenant_id (fail-closed).
             EventPersistenceError: If persistence fails.
         """
+        # Validate tenant_id matches (fail-closed on mismatch)
+        if tenant_id != self.tenant_id:
+            raise ValueError(
+                f"tenant_id mismatch: got {tenant_id}, expected {self.tenant_id}. "
+                f"Create a new MemoryCoordinator for tenant {tenant_id}."
+            )
+
         # Create directory structure if needed
         self._learning_events_path.parent.mkdir(parents=True, exist_ok=True)
 

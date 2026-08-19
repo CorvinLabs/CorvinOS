@@ -31,6 +31,12 @@ skill_creator_bp = Blueprint("skill_creator", __name__, url_prefix="/api/quality
 
 # In-memory store for generation runs (in production: use DB)
 _generation_runs: Dict[str, Dict[str, Any]] = {}
+_skill_stats = {
+    "total_generated": 0,
+    "avg_quality": 0.0,
+    "total_iterations": 0,
+    "last_generated_at": None,
+}
 
 
 @skill_creator_bp.route("/generate", methods=["POST"])
@@ -191,6 +197,23 @@ def list_generated_skills():
 # ============================================================================
 # BACKGROUND TASK HELPERS
 # ============================================================================
+
+@skill_creator_bp.route("/stats", methods=["GET"])
+def get_stats():
+    """GET /api/quality/skill-creator/stats
+
+    Returns aggregated statistics about skill generation.
+
+    Response:
+    {
+      "total_generated": 5,
+      "avg_quality": 0.87,
+      "total_iterations": 12,
+      "last_generated_at": "2026-08-20T14:32:00"
+    }
+    """
+    return jsonify(_skill_stats), 200
+
 
 def _spawn_generation_task(orchestrator, user_request: str) -> str:
     """Spawn async generation task; return run_id."""

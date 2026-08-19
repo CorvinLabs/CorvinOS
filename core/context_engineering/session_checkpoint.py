@@ -97,14 +97,16 @@ class SessionContinuationManager:
     - Clean up stale checkpoints (>90 days)
     """
 
-    def __init__(self, corvin_home: Optional[str] = None):
+    def __init__(self, corvin_home: Optional[str] = None, tenant_id: str = "_default"):
         """Initialize SessionContinuationManager.
 
         Args:
             corvin_home: Path to CORVIN_HOME. If None, uses environment variable.
+            tenant_id: Tenant identifier for multi-tenant isolation (default: "_default").
 
         Raises:
             ValueError: If corvin_home not provided and env var not set.
+            ValueError: If tenant_id is invalid.
         """
         import os
 
@@ -115,8 +117,13 @@ class SessionContinuationManager:
                     "corvin_home not provided and CORVIN_HOME environment variable not set"
                 )
 
+        # Validate tenant_id (fail-closed)
+        if not isinstance(tenant_id, str) or len(tenant_id.strip()) == 0:
+            raise ValueError(f"Invalid tenant_id: {tenant_id}")
+
         self.corvin_home = Path(corvin_home)
-        self._checkpoint_base = self.corvin_home / "tenants" / "_default" / "checkpoints"
+        self.tenant_id = tenant_id
+        self._checkpoint_base = self.corvin_home / "tenants" / tenant_id / "checkpoints"
         self._checkpoint_base.mkdir(parents=True, exist_ok=True)
 
     def save_checkpoint(
@@ -151,8 +158,16 @@ class SessionContinuationManager:
             checkpoint_id (UUID string)
 
         Raises:
+            ValueError: If tenant_id doesn't match manager's tenant_id (fail-closed).
             CheckpointPersistenceError: If persistence fails
         """
+        # Validate tenant_id matches (fail-closed on mismatch)
+        if tenant_id != self.tenant_id:
+            raise ValueError(
+                f"tenant_id mismatch: got {tenant_id}, expected {self.tenant_id}. "
+                f"Create a new SessionContinuationManager for tenant {tenant_id}."
+            )
+
         try:
             checkpoint_id = str(uuid4())
             task_checkpoint_dir = self._checkpoint_base / task_id

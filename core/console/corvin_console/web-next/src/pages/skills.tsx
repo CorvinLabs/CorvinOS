@@ -40,6 +40,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDate } from "@/lib/utils";
+import { SkillCreatorPanel } from "@/components/SkillCreatorPanel";
 
 // SkillForge promotion gates per CLAUDE.md § Layer 7:
 //   task → session : ≥ 1 positive grade
@@ -152,6 +153,10 @@ export function SkillsPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
+      <SkillCreatorPanel />
+
+      <hr className="my-2" />
+
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-light tracking-tight">Skills</h1>
