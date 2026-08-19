@@ -160,7 +160,7 @@ export default function GitHubIntegrationPanel() {
   const getStatusIcon = () => {
     if (status.connected) {
       return <CheckCircle className="text-green-500" size={24} />
-    } else if (error || verifyResult?.details.status === 'error') {
+    } else if (error || verifyResult?.details?.status === 'error') {
       return <AlertCircle className="text-red-500" size={24} />
     } else if (isVerifying) {
       return <Loader className="text-blue-500 animate-spin" size={24} />
@@ -292,7 +292,7 @@ export default function GitHubIntegrationPanel() {
           </div>
 
           {/* Verification Result */}
-          {verifyResult && (
+          {verifyResult && verifyResult.details && (
             <div className={`p-4 rounded-lg border ${
               verifyResult.connected
                 ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
@@ -302,21 +302,21 @@ export default function GitHubIntegrationPanel() {
                 <p className={`font-semibold ${verifyResult.connected ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
                   {verifyResult.connected ? '✓ Connected Successfully' : '✗ Connection Failed'}
                 </p>
-                {verifyResult.details.repo_name && (
+                {verifyResult.details?.repo_name && (
                   <p className="text-sm text-slate-600 dark:text-slate-400">
                     Repository: <strong>{verifyResult.details.repo_name}</strong>
                   </p>
                 )}
-                {verifyResult.details.repo_description && (
+                {verifyResult.details?.repo_description && (
                   <p className="text-sm text-slate-600 dark:text-slate-400">
                     {verifyResult.details.repo_description}
                   </p>
                 )}
-                {verifyResult.details.repo_private && (
+                {verifyResult.details?.repo_private && (
                   <p className="text-xs text-slate-500">🔒 Private repository</p>
                 )}
                 <p className="text-xs text-slate-500">
-                  API Rate Limit: {verifyResult.details.rate_limit} remaining
+                  API Rate Limit: {verifyResult.details?.rate_limit} remaining
                 </p>
               </div>
             </div>
