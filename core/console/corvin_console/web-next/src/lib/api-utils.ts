@@ -1,17 +1,32 @@
 /**
  * API utilities for handling console routing.
  * The app is served from /console/ base path.
- * API requests go to /api/console/* which Vite proxies to the gateway.
+ * In dev: Vite proxies /api/console/* to gateway :8765
+ * In prod: Direct /v1/console/* routing on gateway
  */
 
 export async function fetchConsoleApi(
   path: string,
   options?: RequestInit
 ): Promise<Response> {
-  // Always use absolute URLs to avoid base path issues
-  // In dev: http://127.0.0.1:5173/api/console/* → proxied to gateway via Vite
-  // In prod: /api/console/* is served from gateway's /v1/console/* via rewrite
-  const url = window.location.origin + path
+  // Detect if running in dev mode (Vite dev server)
+  const isDev = window.location.port === '5173' || window.location.port === '5174' || window.location.port === '5175'
+
+  let url: string
+  if (isDev) {
+    // Dev mode: use /api/console/* (Vite proxy will rewrite to /v1/console/*)
+    url = window.location.origin + path
+  } else {
+    // Production: direct /v1/console/* routing
+    // Replace /api/console/ with /v1/console/
+    const actualPath = path.replace(/^\/api\/console\//, '/v1/console/')
+    url = window.location.origin + actualPath
+  }
+
+  // Debug logging
+  const method = options?.method || 'GET'
+  console.log(`[API] ${method} ${url}`, { isDev, options })
+
   return fetch(url, options)
 }
 

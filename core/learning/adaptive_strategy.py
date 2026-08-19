@@ -5,7 +5,7 @@ Ranks strategies based on operator fingerprint confidence, combining:
 - Operator preference scores (from fingerprint expertise profile + risk/speed alignment)
 - Cost efficiency metrics
 
-Delivers confidence-gated adaptive ranking: when fingerprint.confidence > 0.7,
+Delivers confidence-gated adaptive ranking: when fingerprint.confidence >= 0.7,
 uses fingerprint-informed ranking; otherwise falls back to empirical-only.
 """
 
@@ -73,7 +73,7 @@ class AdaptiveStrategyEngine:
     """Fingerprint-gated adaptive strategy ranking engine.
 
     Combines empirical strategy metrics with operator fingerprint to produce
-    ranked strategy recommendations. Confidence gate: if fingerprint.confidence > 0.7,
+    ranked strategy recommendations. Confidence gate: if fingerprint.confidence >= 0.7,
     uses fingerprint-informed ranking; otherwise returns strategies unranked or
     in empirical order only.
     """

@@ -6,10 +6,11 @@ Subscribes to context updates to react to budget/model changes.
 
 import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .base import Subsystem
 from core.context_engineering.context_api import ContextAPI
+from core.learning.operator_fingerprint import OperatorFingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class LoopEngineer(Subsystem):
         self.retry_count: Dict[str, int] = {}
         self.strategy_history: Dict[str, List[Dict[str, Any]]] = {}
         self.context_api: ContextAPI = None
+        self.strategy_advisor = None  # Injected from hub during startup
 
     @property
     def name(self) -> str:
@@ -42,11 +44,21 @@ class LoopEngineer(Subsystem):
         return "1.0.0"
 
     def startup(self, hub) -> None:
-        """Inject ContextAPI and subscribe to events."""
+        """Inject ContextAPI and StrategyAdvisor, subscribe to events."""
         self.hub = hub
 
         # Inject ContextAPI for context access
         self.context_api = ContextAPI(self.name, hub.context_bus)
+
+        # Inject StrategyAdvisor for adaptive strategy selection (E2E wiring)
+        try:
+            self.strategy_advisor = hub.subsystems.get("strategy_advisor")
+            if self.strategy_advisor:
+                logger.info("StrategyAdvisor wired for adaptive strategy selection")
+            else:
+                logger.debug("StrategyAdvisor not found in hub; using static ladder fallback")
+        except Exception as e:
+            logger.warning(f"Failed to wire StrategyAdvisor: {e}; using static ladder fallback")
 
         # Subscribe to hub events
         hub.subscribe("error_detected", self.on_error_detected)
@@ -58,7 +70,7 @@ class LoopEngineer(Subsystem):
             self.context_api.subscribe_context_updates(self.on_context_updated)
         )
 
-        logger.info("LoopEngineer started with ContextAPI")
+        logger.info("LoopEngineer started with ContextAPI and adaptive strategy selection")
 
     async def on_context_updated(self, payload: Dict[str, Any]) -> None:
         """React when context changes (e.g., budget, model updates).
@@ -111,7 +123,7 @@ class LoopEngineer(Subsystem):
         await self._escalate_if_needed(event_data)
 
     async def _apply_strategy(self, event_data: Dict[str, Any]) -> None:
-        """Apply next strategy from ladder via ContextAPI."""
+        """Apply next strategy from adaptive ranking or ladder via ContextAPI."""
         task_id = event_data.get("task_id", "unknown")
         error = event_data.get("error")
 
@@ -141,10 +153,61 @@ class LoopEngineer(Subsystem):
                 logger.debug("Context not initialized; decision not recorded")
             return
 
-        strategy_idx = min(
-            self.retry_count[task_id], len(self.strategy_ladder) - 1
-        )
-        strategy = self.strategy_ladder[strategy_idx]
+        # Try adaptive strategy selection via StrategyAdvisor.get_strategy() (E2E wiring)
+        strategy = None
+        used_adaptive = False
+
+        if self.strategy_advisor:
+            try:
+                # Build available strategies from ladder as StrategyOption objects
+                from core.learning.adaptive_strategy import StrategyOption
+
+                available_strategies = [
+                    StrategyOption(
+                        name=s,
+                        required_steps=2 + i,
+                        avg_latency_ms=100 + (i * 50),
+                        avg_cost_cents=10 + (i * 5),
+                        success_rate=0.8 - (i * 0.15),  # Empirical rates decrease down ladder
+                        operator_preference_score=0.7,
+                    )
+                    for i, s in enumerate(self.strategy_ladder)
+                ]
+
+                # Get fingerprint from context if available
+                fingerprint: Optional[OperatorFingerprint] = None
+                try:
+                    ctx_state = self.context_api.get_context_state()
+                    if ctx_state and hasattr(ctx_state, "operator_fingerprint"):
+                        fingerprint = ctx_state.operator_fingerprint
+                except Exception:
+                    pass
+
+                # Call adaptive strategy selection (E2E wiring point)
+                selected = self.strategy_advisor.get_strategy(
+                    available_strategies=available_strategies,
+                    fingerprint=fingerprint,
+                    task_type="error_recovery",
+                )
+
+                if selected:
+                    strategy = selected.name
+                    used_adaptive = True
+                    logger.info(
+                        f"Selected strategy '{strategy}' via adaptive ranking "
+                        f"(fingerprint_confidence={fingerprint.confidence if fingerprint else 'N/A'})"
+                    )
+            except Exception as e:
+                logger.debug(f"Adaptive strategy selection failed; falling back to ladder: {e}")
+                used_adaptive = False
+
+        # Fallback to static ladder if adaptive selection failed
+        if not strategy:
+            strategy_idx = min(
+                self.retry_count[task_id], len(self.strategy_ladder) - 1
+            )
+            strategy = self.strategy_ladder[strategy_idx]
+            logger.debug(f"Using static strategy ladder: '{strategy}' (index {strategy_idx})")
 
         # Update strategy in context via ContextAPI
         try:
@@ -154,10 +217,11 @@ class LoopEngineer(Subsystem):
             )
 
             # Record strategy decision in audit trail
+            selection_mode = "adaptive" if used_adaptive else "static_ladder"
             self.context_api.record_decision(
                 decision_type="strategy_selection",
                 value=strategy,
-                reasoning=f"Error: {type(error).__name__ if error else 'unknown'} → {strategy} (attempt {self.retry_count[task_id] + 1}/{self.max_retries})",
+                reasoning=f"Error: {type(error).__name__ if error else 'unknown'} → {strategy} (attempt {self.retry_count[task_id] + 1}/{self.max_retries}, mode={selection_mode})",
                 confidence=0.85,
             )
         except RuntimeError as e:

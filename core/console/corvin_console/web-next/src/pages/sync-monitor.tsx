@@ -60,7 +60,7 @@ export default function SyncMonitorPanel() {
 
   const connectToEventStream = () => {
     try {
-      const eventSource = new EventSource('/api/console/github/events')
+      const eventSource = new EventSource('/v1/console/github/events')
 
       eventSource.onopen = () => {
         setConnected(true)
@@ -90,7 +90,7 @@ export default function SyncMonitorPanel() {
           } else if (data.event === 'sync_failed') {
             setIsSyncing(false)
             setLastSyncResult(syncEvent)
-            setError(syncEvent.details?.error || 'Sync failed')
+            setError(String(syncEvent.details?.error) || 'Sync failed')
           }
         } catch (error) {
           console.error('Error parsing event:', error)
@@ -112,7 +112,7 @@ export default function SyncMonitorPanel() {
 
   const fetchWorkerStatus = async () => {
     try {
-      const response = await fetch('/api/console/github/worker/status')
+      const response = await fetch('/v1/console/github/worker/status')
       const status: WorkerStatus = await response.json()
       setWorkerStatus(status)
     } catch (error) {
@@ -122,7 +122,7 @@ export default function SyncMonitorPanel() {
 
   const handleStartWorker = async () => {
     try {
-      const response = await fetch('/api/console/github/worker/start', { method: 'POST' })
+      const response = await fetch('/v1/console/github/worker/start', { method: 'POST' })
       const result = await response.json()
       if (result.success) {
         setWorkerStatus(result.status)
@@ -137,7 +137,7 @@ export default function SyncMonitorPanel() {
 
   const handleStopWorker = async () => {
     try {
-      const response = await fetch('/api/console/github/worker/stop', { method: 'POST' })
+      const response = await fetch('/v1/console/github/worker/stop', { method: 'POST' })
       const result = await response.json()
       if (result.success) {
         setWorkerStatus((prev) => prev ? { ...prev, running: false } : null)

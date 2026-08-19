@@ -80,7 +80,7 @@ export default function GitHubIntegrationPanel() {
 
   const fetchStatus = async () => {
     try {
-      const data = await fetchConsoleJson<GitHubStatus>('/api/console/github/status')
+      const data = await fetchConsoleJson<GitHubStatus>('/v1/console/github/status')
       setStatus(data)
     } catch (error) {
       console.error('Failed to fetch GitHub status:', error)
@@ -116,7 +116,7 @@ export default function GitHubIntegrationPanel() {
     setVerifyResult(null)
 
     try {
-      const result: VerifyResult = await fetchConsoleJson('/api/console/github/verify', {
+      const result: VerifyResult = await fetchConsoleJson('/v1/console/github/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, token: token || undefined })
@@ -145,7 +145,7 @@ export default function GitHubIntegrationPanel() {
     }
 
     try {
-      const response = await fetchConsoleApi('/api/console/github/config', { method: 'DELETE' })
+      const response = await fetchConsoleApi('/v1/console/github/config', { method: 'DELETE' })
       if (response.ok) {
         setUrl('')
         setToken('')
@@ -276,9 +276,12 @@ export default function GitHubIntegrationPanel() {
                 onChange={(e) => {
                   setToken(e.target.value)
                   setIsDirty(true)
+                  setError(null)
                 }}
                 placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500"
+                autoComplete="off"
+                spellCheck="false"
               />
               <button
                 onClick={() => setShowToken(!showToken)}
