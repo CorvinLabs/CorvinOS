@@ -21,6 +21,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, ActivityFeedPage,
   LearningObjectivesPage, MultiInstancePage, VibeOverviewPage,
+  GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage,
 } from "@/lazy-pages";
 import TokenMetricsPage from "@/pages/token-metrics";
 import type { ComponentType } from "react";
@@ -85,6 +86,17 @@ export const PANELS: ConsolePanel[] = [
   rc("activity", "Activity", ActivityFeedPage),
   rc("learning-objectives", "Learning Objectives", LearningObjectivesPage),
   rc("multi-instance", "Multi-Instance", MultiInstancePage),
+  // Cross-Device-Learning GitHub Integration (Iteration 1-5)
+  rc("settings/github", "GitHub", GitHubPage,
+     { nav: { label: "GitHub", icon: "Github", group: "settings" } }),
+  rc("sync-monitor", "Sync Monitor", SyncMonitorPage,
+     { nav: { label: "Sync Monitor", icon: "Activity" } }),
+  rc("webhooks", "Webhooks", WebhooksPage,
+     { nav: { label: "Webhooks", icon: "Zap" } }),
+  rc("audit", "Audit", AuditPage,
+     { nav: { label: "Audit", icon: "Shield" } }),
+  rc("releases", "Releases", ReleasesPage,
+     { nav: { label: "Releases", icon: "Package" } }),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {

@@ -198,3 +198,24 @@ export const MultiInstancePage = React.lazy(() =>
 export const LearningPage = React.lazy(() =>
   import("@/pages/learning").then((m) => ({ default: m.default }))
 );
+
+// Cross-Device-Learning GitHub Integration
+export const GitHubPage = React.lazy(() =>
+  import("@/pages/github").then((m) => ({ default: m.default }))
+);
+
+export const SyncMonitorPage = React.lazy(() =>
+  import("@/pages/sync-monitor").then((m) => ({ default: m.default }))
+);
+
+export const WebhooksPage = React.lazy(() =>
+  import("@/pages/webhooks").then((m) => ({ default: m.default }))
+);
+
+export const AuditPage = React.lazy(() =>
+  import("@/pages/audit").then((m) => ({ default: m.default }))
+);
+
+export const ReleasesPage = React.lazy(() =>
+  import("@/pages/releases").then((m) => ({ default: m.default }))
+);
