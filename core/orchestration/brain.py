@@ -77,7 +77,7 @@ class TaskBrain:
         Returns:
             checkpoint_id (string) if successful, None if feature disabled or error
         """
-        # Check if session checkpoints feature is enabled
+        # Check if task is registered
         task_meta = self._tasks.get(task_id)
         if not task_meta:
             logger.warning(f"Task '{task_id}' not found in _tasks registry")
@@ -85,8 +85,9 @@ class TaskBrain:
 
         try:
             execution_context = self._context_initializer.get_execution_context()
-            if not execution_context:
-                logger.warning(f"No ExecutionContext found for task '{task_id}'")
+            # CRITICAL: Check for None before accessing attributes
+            if execution_context is None:
+                logger.warning(f"ExecutionContext is None for task '{task_id}'; checkpoint save skipped")
                 return None
 
             session_id = getattr(execution_context, "session_id", task_id)

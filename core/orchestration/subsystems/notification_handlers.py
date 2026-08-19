@@ -82,15 +82,17 @@ class DiscordNotificationHandler:
             return False
 
     @staticmethod
-    def _severity_color(severity: str) -> int:
+    def _severity_color(severity) -> int:
         """Map severity to Discord embed color."""
+        # Convert enum to string if needed
+        severity_str = severity.value if hasattr(severity, "value") else str(severity)
         colors = {
             "info": 0x0099FF,      # Blue
             "warning": 0xFFA500,   # Orange
             "error": 0xFF0000,     # Red
             "critical": 0x8B0000,  # Dark Red
         }
-        return colors.get(severity, 0x808080)
+        return colors.get(severity_str, 0x808080)
 
 
 class SlackNotificationHandler:
