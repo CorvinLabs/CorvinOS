@@ -108,18 +108,33 @@ class GitHubSyncWorker:
         """Execute the sync operation."""
         url = config.get('url')
         token = config.get('token')
-        
+
         if not url:
             return
-        
-        # TODO: Actual GitHub sync logic
-        # - Parse owner/repo from URL
-        # - Fetch repo metadata
-        # - Get latest releases
-        # - Sync to local storage
-        # - Emit events
-        
-        logger.info(f"Syncing {url}")
+
+        try:
+            # Import here to avoid circular dependency
+            from .github_repo_sync import get_sync
+
+            # Get sync instance and run sync
+            sync = get_sync(self.tenant_id)
+            result = sync.sync_skills_to_github()
+
+            if result.get('success'):
+                logger.info(f"Sync successful: {url}, {len(result.get('files_synced', []))} files")
+                self._log_audit("sync_skills_success", {
+                    "repo": url,
+                    "files_synced": len(result.get('files_synced', [])),
+                    "branch": result.get('branch')
+                })
+            else:
+                error = result.get('error', 'Unknown error')
+                logger.error(f"Sync failed: {error}")
+                self._log_audit("sync_skills_failed", {"error": error})
+
+        except Exception as e:
+            logger.error(f"Sync operation error: {e}")
+            self._log_audit("sync_operation_error", {"error": str(e)})
     
     def _load_config(self) -> Dict[str, Any]:
         """Load GitHub configuration."""
