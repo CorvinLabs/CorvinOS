@@ -34,11 +34,19 @@ from core.context_engineering.context_bus import (
 
 class MockExecutionContext:
     """Mock ExecutionContext for testing."""
-    def __init__(self, tenant_id: str, decision_history=None):
+    def __init__(self, tenant_id: str, decision_history=None, task_id: str = "mock_task"):
         self.tenant_id = tenant_id
         self.decision_history = decision_history or []
         self.checkpoints = []
         self.context_stack = []
+        self.task_id = task_id
+        self.task_template = {"name": "mock_template"}
+        self.budget_remaining = 1000
+        self.time_remaining = 3600
+        self.model = "claude-haiku"
+        self.strategy = "default"
+        self.strategy_confidence = 0.8
+        self.guidance_overrides = {}
 
 
 class TestCE001MemoryCoordinator:
@@ -214,12 +222,20 @@ class TestCE004ContextVarValidation:
         assert retrieved is ctx_a
 
     def test_execution_context_mismatch_returns_none(self):
-        """Test get_execution_context returns None on tenant_id mismatch (fail-closed)."""
+        """Test get_execution_context returns None on tenant_id mismatch (fail-closed).
+
+        Simulates scenario where somehow a mismatched context is in ContextVar
+        (e.g., due to a bug or race condition) to verify the getter detects it.
+        """
+        from core.context_engineering.context_bus import _EXECUTION_CONTEXT
+
         set_current_tenant_id("tenant_a")
         ctx_b = MockExecutionContext(tenant_id="tenant_b")
-        set_execution_context(ctx_b)
 
-        # Should return None when tenant_id doesn't match (fail-closed)
+        # Bypass set_execution_context validation to simulate a leaked context
+        _EXECUTION_CONTEXT.set(ctx_b)
+
+        # get_execution_context should detect mismatch and return None (fail-closed)
         retrieved = get_execution_context()
         assert retrieved is None
 
