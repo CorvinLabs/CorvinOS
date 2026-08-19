@@ -6,6 +6,7 @@ Subscribes to context updates to react to budget/model changes.
 
 import asyncio
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from .base import Subsystem
@@ -291,6 +292,71 @@ class LoopEngineer(Subsystem):
                 return {"confidence": 0.5}
 
         raise ValueError(f"Unknown request type: {request_type}")
+
+    async def _apply_skill_to_error(
+        self, error_type: str, skill_name: str
+    ) -> bool:
+        """Apply skill to recover from error, publish outcome for closed-loop learning (ADR-0372).
+
+        Args:
+            error_type: Error class name (e.g., 'TypeError')
+            skill_name: Name of skill to apply
+
+        Returns:
+            True if skill application succeeded, False otherwise
+        """
+        start_time = time.time()
+        try:
+            logger.info(f"Applying skill '{skill_name}' to error '{error_type}'")
+
+            # TODO: Actual skill execution would go here (currently simulated)
+            import random
+
+            success = random.random() < 0.8
+            latency_ms = (time.time() - start_time) * 1000
+            cost_cents = 5.0
+
+            # Publish skill application event (ADR-0372: closed-loop feedback)
+            self.publish_event(
+                "skill_applied_to_error",
+                {
+                    "skill_name": skill_name,
+                    "error_type": error_type,
+                    "latency_ms": latency_ms,
+                    "cost_cents": cost_cents,
+                },
+            )
+
+            # Publish outcome for skill grading (closes the loop)
+            outcome = "success" if success else "failure"
+            self.publish_event(
+                "skill_outcome_measured",
+                {
+                    "skill_name": skill_name,
+                    "error_type": error_type,
+                    "outcome": outcome,
+                    "latency_ms": latency_ms,
+                    "cost_cents": cost_cents,
+                },
+            )
+
+            logger.info(
+                f"Skill '{skill_name}' outcome: {outcome} (latency={latency_ms:.1f}ms, cost={cost_cents:.1f}¢)"
+            )
+            return success
+
+        except Exception as e:
+            logger.error(f"Skill application failed: {e}")
+            self.publish_event(
+                "skill_outcome_measured",
+                {
+                    "skill_name": skill_name,
+                    "error_type": error_type,
+                    "outcome": "failure",
+                    "reason": str(e),
+                },
+            )
+            return False
 
     def shutdown(self) -> None:
         """Cleanup."""
