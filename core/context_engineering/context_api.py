@@ -68,7 +68,8 @@ class ContextAPI:
         ctx = self.bus.get_context()
         if ctx is None:
             raise RuntimeError(
-                f"ExecutionContext not initialized. {self.name} cannot operate without a task context."
+                f"ExecutionContext not initialized. {self.name} cannot operate "
+                f"without a task context."
             )
         return ctx
 

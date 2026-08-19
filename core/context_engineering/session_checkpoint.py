@@ -409,7 +409,9 @@ class SessionContinuationManager:
                     elif isinstance(dh, DecisionRecord):
                         dr = dh
                     else:
-                        logger.warning(f"Skipping decision history entry of unknown type: {type(dh)}")
+                        logger.warning(
+                            f"Skipping decision history entry of unknown type: {type(dh)}"
+                        )
                         continue
                     ctx.decision_history.append(dr)
                 except Exception as e:
