@@ -188,6 +188,10 @@ spec:
     - memory_confidence_gate_enabled  # Filter low-confidence memory matches (Phase 1)
     - per_stage_token_budgeting       # Cascade-based allocation (Phase 2)
     - adaptive_context_routing        # Route simple tasks fast, rebalance budgets (Phase 3)
+    # Console Quality Subsystem (Skill-Creator & ADR-Gate):
+    - skill_creator_enabled         # Autonomous 6-phase skill builder (default ON)
+    - adr_gate_enabled              # Architectural Decision Record enforcement
+    - concept_gate_enabled          # Concept archiving for reusable patterns
     # Phase 8-12 features (proactive learning):
     # - learning_anomaly_detection   # Detect confidence drops
     # - learning_pattern_discovery   # Auto-discover patterns from failures
