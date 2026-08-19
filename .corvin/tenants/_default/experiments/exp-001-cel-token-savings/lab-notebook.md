@@ -303,6 +303,55 @@ so CEL injection is the ONLY context channel: then CEL-off truly cannot know (�
 CEL's value should be largest exactly where the agent CANNOT pull (no tools / air-gapped / the fact
 is not on any reachable path).
 
+### 2026-08-19 · Entry 16 — Valid measurement (tool-disabled): CEL injects POINTERS, not content
+
+**Goal.** Measure CEL's injection value cleanly, with the agentic pull (Anomaly B) removed.
+
+**Method.** A dedicated 3-arm probe (`measure_tooldisabled.py`), each arm a `claude -p`
+`--disallowedTools "*"` turn (no filesystem access → the only context is what we inject), Haiku,
+n=3 over the 6 single-turn memory tasks:
+- **none** — bare question (floor);
+- **cel** — the REAL deterministic CEL brief prepended (`build_brief → render_brief_to_text`);
+- **oracle** — the memory-file CONTENT prepended (ceiling: what CEL *would* inject if it injected
+  content).
+
+**Result (clean, decisive):**
+
+| arm | quality |
+|---|---|
+| none | **0.00** |
+| **cel** | **0.00** |
+| oracle | **0.944** |
+
+Per task: none=0, cel=0, oracle=1.0 on 5/6 (retry-limit oracle 0.67). The `none` arm answering
+"unknown" also **confirms the tool-disable works** — no leak.
+
+**The finding (this is the real result of EXP-001's value question).** Inspecting the brief:
+`build_brief` retrieves the right fixture (`- bench-cel-analytics-port` is the top "Relevant past
+memory" line) but renders **only the file NAME/title — never the body**. The fact `8813` is **not
+in the brief** (`contains 8813? False`). So:
+
+> **CEL's deterministic brief is a POINTER INDEX, not a content injection.** Tool-disabled it adds
+> **zero** answerable value (0.00). Its entire measured "value" in tool-enabled turns (Entry 14)
+> came from the **agent pulling the pointed-to files** — not from CEL. The oracle arm proves the
+> facts ARE answerable (0.944) **if** the content were injected. The gap 0.00 → 0.944 is exactly
+> what CEL is missing.
+
+**Consequences.**
+- Anomaly A (Entry 14, "CEL-on only 0.375") is now fully explained: CEL never injected the answer;
+  the arms differed only in how often the agent happened to pull.
+- **Concrete, actionable improvement target for CEL:** the brief must carry answer-bearing
+  **content**, not just titles. This is a clean LDD training signal (new θ `brief_includes_content`;
+  loss = distance from the oracle ceiling).
+- The **valid measurement protocol** for CEL memory value is tool-disabled (this probe), not the
+  full agentic console turn.
+
+**Honest status of the whole "CEL value" question.** As built, CEL's deterministic brief does not
+demonstrably improve correctness on context-dependent questions in a tool-disabled setting (0.00),
+and is redundant with agentic pull in a tool-enabled one. Its proven, non-null win remains the
+cache-stable **cost** neutrality (Entry 2). The correctness value is **latent** — realizable only
+by injecting content (oracle 0.944), which the current brief does not do.
+
 ---
 
 ## 3. Metrics registry (the measured quantities)
