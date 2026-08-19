@@ -7,7 +7,7 @@ Fail-closed: if persona cannot be resolved, raise AuthError.
 
 from typing import Tuple
 
-from core.context_engineering.capabilities import Persona, Role
+from .capabilities import Persona, Role
 
 
 class AuthError(Exception):
@@ -102,7 +102,7 @@ class TransportResolver:
         Extract from ContextVar (parent task must have set it).
         Fail-closed: if not set, raise error.
         """
-        from core.context_engineering.persona_model import (
+        from .persona_model import (
             get_current_persona,
             get_current_role,
         )

@@ -187,7 +187,7 @@ router.include_router(compute.router,       tags=["console-compute"])
 router.include_router(engine_route.router, tags=["console-engine"])
 router.include_router(engine_pref_route.router, tags=["console-engine-pref"])
 # GitHub Cross-Device-Learning integration
-router.include_router(github_route.router, prefix="/api/console", tags=["console-github"])
+router.include_router(github_route.router, tags=["console-github"])
 # MUST precede settings_route: its `PUT /settings/{label}` (config-file writer)
 # would otherwise swallow `PUT /settings/worker-engine` as a file label.
 router.include_router(features_route.router, tags=["console-settings"])

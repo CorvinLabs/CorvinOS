@@ -1,7 +1,7 @@
 """Context Engineering — Persona, Role, Capability Model, and ExecutionContext v2."""
 
-from core.context_engineering.capabilities import Capability, Persona, Role, Tier
-from core.context_engineering.persona_model import (
+from .capabilities import Capability, Persona, Role, Tier
+from .persona_model import (
     CapabilityDenied,
     CapabilityLockError,
     CapabilityRegistry,
@@ -15,26 +15,26 @@ from core.context_engineering.persona_model import (
     set_current_role,
     set_current_tenant_id,
 )
-from core.context_engineering.transport_resolvers import (
+from .transport_resolvers import (
     AuthError,
     InvalidPersona,
     TransportResolver,
     UnresolvablePersona,
 )
-from core.context_engineering.auth_decorators import (
+from .auth_decorators import (
     auth_required_cli,
     auth_required_flask,
     requires_auth_capability,
 )
-from core.context_engineering.execution_context import (
+from .execution_context import (
     ContextStack,
     ContextStackFrame,
     ExecutionContext,
 )
-from core.context_engineering.decision_record import DecisionRecord
-from core.context_engineering.context_bus import ContextBus
-from core.context_engineering.context_api import ContextAPI
-from core.context_engineering.memory_coordinator import (
+from .decision_record import DecisionRecord
+from .context_bus import ContextBus
+from .context_api import ContextAPI
+from .memory_coordinator import (
     MemoryCoordinator,
     MemoryCoordinatorError,
     MemoryLayerNotFound,

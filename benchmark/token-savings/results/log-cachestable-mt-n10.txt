@@ -1,0 +1,12 @@
+python: /home/shumway/projects/CorvinOS/core/console/.venv/bin/python
+CORVIN_HOME: /home/shumway/projects/CorvinOS/.corvin
+2026-08-19T17:14:38 [INFO] [corvin.license] license: loaded — tier=member jti=5400aba3
+[helper_model] site=house_rules_adjudicator model=claude-haiku-4-5-20251001
+2026-08-19T17:15:09 [INFO] [corvin.bridge-adapter] logger online level=INFO file=/home/shumway/projects/CorvinOS/.corvin/logs/corvin.log
+[helper_model] site=initial_analysis model=claude-haiku-4-5-20251001
+[helper_model] site=tde_worker model=claude-haiku-4-5-20251001
+[WARN] resolve_model_for_workload: unknown workload type 'code_generation', falling back to user_choice
+[helper_model] site=delegate_output_judge model=claude-haiku-4-5-20251001
+[WARN] resolve_model_for_workload: unknown workload type 'reasoning', falling back to user_choice
+[WARN] resolve_model_for_workload: unknown workload type 'reasoning', falling back to user_choice
+[WARN] resolve_model_for_workload: unknown workload type 'reasoning', falling back to user_choice

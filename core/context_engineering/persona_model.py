@@ -9,7 +9,7 @@ import contextvars
 import functools
 from typing import Any, Callable, Dict, Set, Tuple
 
-from core.context_engineering.capabilities import Persona, Role, Tier
+from .capabilities import Persona, Role, Tier
 
 # ContextVars: set by transport layer, used by logic layer
 _current_persona: contextvars.ContextVar[Persona] = contextvars.ContextVar(
