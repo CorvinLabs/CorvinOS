@@ -17,7 +17,6 @@ import {
   type QualityLayer,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { SkillCreatorPanel } from "@/components/SkillCreatorPanel";
 
 type PendingAction =
   | { kind: "master"; enabled: boolean }
@@ -235,8 +234,6 @@ export function LddPage() {
           </CardContent>
         </Card>
       ) : null}
-
-      <SkillCreatorPanel />
 
       {toast && (
         <div
