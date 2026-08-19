@@ -105,8 +105,8 @@ class SkillAttributionEngine:
 
         Guarantees:
         - All skills recorded in audit trail
-        - Credit shares are normalized and sum to 1.0
-        - Failures receive no credit (all shares = 0)
+        - Credit shares sum to 0.0 (failure), 0.5 (partial), or 1.0 (success)
+        - Credits are normalized by outcome type and validated within tolerance
         """
         if not skills:
             raise ValueError("Strategy must include at least one skill")
