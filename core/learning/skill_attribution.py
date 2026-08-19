@@ -65,7 +65,7 @@ class SkillAttributionEngine:
     - Fail-safe validation
 
     Invariants:
-    - Credit shares sum to 1.0 (within floating-point tolerance)
+    - Credit shares sum to 0.0 (failure), 0.5 (partial), or 1.0 (success)
     - Only positive skills receive credit (failure case gets no credit)
     - All skills in strategy are recorded in audit trail
     """
@@ -108,7 +108,7 @@ class SkillAttributionEngine:
         - Credit shares are normalized and sum to 1.0
         - Failures receive no credit (all shares = 0)
         """
-        if not skills or len(skills) == 0:
+        if not skills:
             raise ValueError("Strategy must include at least one skill")
 
         if outcome not in ("success", "partial", "failure"):
@@ -117,11 +117,14 @@ class SkillAttributionEngine:
         # Compute credit distribution based on model
         credits = self._compute_credits(skills, outcome)
 
-        # Validate credits sum to ~1.0 (allow small floating-point error)
+        # Validate credits sum to expected value for outcome type
+        # success: 1.0, partial: 0.5, failure: 0.0 (allow small floating-point error)
         total_credit = sum(credits.values())
-        if not (0.99 <= total_credit <= 1.01):
+        expected_sum = {"success": 1.0, "partial": 0.5, "failure": 0.0}[outcome]
+        tolerance = 0.01
+        if not (expected_sum - tolerance <= total_credit <= expected_sum + tolerance):
             raise RuntimeError(
-                f"Attribution failed: credits sum to {total_credit}, expected ~1.0"
+                f"Attribution failed: credits sum to {total_credit}, expected {expected_sum}"
             )
 
         # Create attribution record
