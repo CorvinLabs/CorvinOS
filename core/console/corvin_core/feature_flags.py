@@ -824,6 +824,21 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("cross-device", "learning"),
         release_tier="alpha",
     ),
+    FeatureFlag(
+        id="memory_confidence_gate_enabled",
+        label="Memory confidence gating",
+        description=(
+            "Enable confidence-gated memory retrieval (ADR-0387): filter memory matches "
+            "where relevance_score < 0.5 before returning them to the context pipeline. "
+            "Improves context quality by excluding low-confidence/outdated memories. "
+            "Off (default) returns all matches above the base threshold (0.3); on applies "
+            "a stricter gate (0.5). Bounds memory preview to 50 chars (ADR-0389)."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("context-engineering", "memory", "learning"),
+        release_tier="alpha",
+    ),
 )
 
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 from .models import TreeNode, LearningEvent, ConfidenceEvent, CompositionType
 from datetime import datetime
 
+# ADR-0387: Confidence-Gated Memory threshold
+MEMORY_CONFIDENCE_THRESHOLD = 0.5
+
 
 def update_confidence(node: TreeNode, event: LearningEvent) -> float:
     """

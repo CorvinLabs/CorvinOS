@@ -133,6 +133,41 @@ class MemoryLookup:
 
         return ranked[:max_results]
 
+    def recall(
+        self, keywords: List[str], max_results: int = 5,
+        confidence_gate_enabled: bool = False,
+        confidence_threshold: float = 0.5
+    ) -> List[MemoryMatch]:
+        """Search memory with optional confidence gating (ADR-0387).
+
+        When confidence_gate_enabled is True, filters matches where relevance_score
+        is below the confidence_threshold before returning.
+
+        Args:
+            keywords: List of search keywords (case-insensitive).
+            max_results: Maximum results to return (default: 5).
+            confidence_gate_enabled: Whether to apply confidence gating (default: False).
+            confidence_threshold: Minimum confidence score required (default: 0.5).
+
+        Returns:
+            List of MemoryMatch, filtered by confidence if enabled.
+        """
+        # Search normally
+        matches = self.search(keywords, max_results)
+
+        # Apply confidence gate if enabled
+        if confidence_gate_enabled:
+            matches = [
+                m for m in matches
+                if m.relevance_score >= confidence_threshold
+            ]
+            logger.debug(
+                f"Confidence gating applied: {len(matches)} matches "
+                f"passed threshold {confidence_threshold}"
+            )
+
+        return matches
+
     def _score_file(self, filepath: Path, keywords: List[str]) -> Optional[MemoryMatch]:
         """Score a single memory file against keywords.
 
@@ -175,8 +210,8 @@ class MemoryLookup:
             if score < 0.3:
                 return None
 
-            # Extract content preview
-            preview = content[:200].replace("\n", " ").strip()
+            # Extract content preview (ADR-0389: bounded to 50 chars)
+            preview = content[:50].replace("\n", " ").strip()
 
             return MemoryMatch(
                 filename=filepath.name,

@@ -25,7 +25,7 @@ class MemoryMatch:
     """File creation/modification timestamp."""
 
     content_preview: str = ""
-    """First 200 chars of memory file content."""
+    """First 50 chars of memory file content (ADR-0389)."""
 
     def __post_init__(self):
         """Validate score is in [0.0, 1.0]."""

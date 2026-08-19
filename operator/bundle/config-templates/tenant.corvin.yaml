@@ -176,6 +176,8 @@ spec:
     - token_metrics                 # Token usage + cost visualization
     - outcome_feedback_loop         # Auto-grade CEL stages post-turn
     - cross_device_sync             # Sync learning state across instances
+    # Context Engineering Optimization (ADR-0387/0389):
+    # - memory_confidence_gate_enabled  # Filter low-confidence memory matches (Phase 1)
     # Phase 8-12 features (proactive learning):
     # - learning_anomaly_detection   # Detect confidence drops
     # - learning_pattern_discovery   # Auto-discover patterns from failures
