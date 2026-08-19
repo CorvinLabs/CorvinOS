@@ -248,3 +248,144 @@ suite v3-diverse · 18 tasks · n=10 · tenant=_default
   plan-boil-egg arm A rep 1 (1t): total=43109 (fresh=10 +create=24713 +read=18139 +out=247) q=0.00
   plan-boil-egg arm A rep 2 (1t): total=43166 (fresh=10 +create=24745 +read=18139 +out=272) q=0.00
   plan-boil-egg arm A rep 3 (1t): total=42912 (fresh=10 +create=24386 +read=18139 +out=377) q=0.00
+  plan-boil-egg arm A rep 4 (1t): total=42901 (fresh=10 +create=24407 +read=18139 +out=345) q=0.00
+  plan-boil-egg arm A rep 5 (1t): total=42866 (fresh=10 +create=24407 +read=18139 +out=310) q=0.00
+  plan-boil-egg arm A rep 6 (1t): total=43125 (fresh=10 +create=24410 +read=18139 +out=566) q=0.00
+  plan-boil-egg arm A rep 7 (1t): total=42834 (fresh=10 +create=24408 +read=18139 +out=277) q=0.00
+  plan-boil-egg arm A rep 8 (1t): total=43612 (fresh=10 +create=24407 +read=18139 +out=1056) q=0.00
+  plan-boil-egg arm A rep 9 (1t): total=42844 (fresh=10 +create=24408 +read=18139 +out=287) q=0.00
+  plan-boil-egg arm B rep 0 (1t): total=43333 (fresh=10 +create=24658 +read=18139 +out=526) q=0.00
+  plan-boil-egg arm B rep 1 (1t): total=43067 (fresh=10 +create=24656 +read=18139 +out=262) q=0.00
+  plan-boil-egg arm B rep 2 (1t): total=43219 (fresh=10 +create=24659 +read=18139 +out=411) q=0.00
+  plan-boil-egg arm B rep 3 (1t): total=43190 (fresh=10 +create=24684 +read=18139 +out=357) q=0.00
+  plan-boil-egg arm B rep 4 (1t): total=43595 (fresh=10 +create=24685 +read=18139 +out=761) q=0.00
+  plan-boil-egg arm B rep 5 (1t): total=43305 (fresh=10 +create=24681 +read=18139 +out=475) q=0.00
+  plan-boil-egg arm B rep 6 (1t): total=43334 (fresh=10 +create=24683 +read=18139 +out=502) q=0.00
+  plan-boil-egg arm B rep 7 (1t): total=43429 (fresh=10 +create=24681 +read=18139 +out=599) q=0.00
+  plan-boil-egg arm B rep 8 (1t): total=43168 (fresh=10 +create=24685 +read=18139 +out=334) q=0.00
+  plan-boil-egg arm B rep 9 (1t): total=43412 (fresh=10 +create=24685 +read=18139 +out=578) q=0.00
+  long-context-extract arm A rep 0 (1t): total=42756 (fresh=10 +create=24482 +read=18139 +out=125) q=1.00
+  long-context-extract arm A rep 1 (1t): total=42864 (fresh=10 +create=24482 +read=18139 +out=233) q=1.00
+  long-context-extract arm A rep 2 (1t): total=42788 (fresh=10 +create=24481 +read=18139 +out=158) q=1.00
+  long-context-extract arm A rep 3 (1t): total=42780 (fresh=10 +create=24482 +read=18139 +out=149) q=1.00
+  long-context-extract arm A rep 4 (1t): total=43046 (fresh=10 +create=24484 +read=18139 +out=413) q=1.00
+  long-context-extract arm A rep 5 (1t): total=42758 (fresh=10 +create=24483 +read=18139 +out=126) q=1.00
+  long-context-extract arm A rep 6 (1t): total=42878 (fresh=10 +create=24481 +read=18139 +out=248) q=1.00
+  long-context-extract arm A rep 7 (1t): total=42748 (fresh=10 +create=24484 +read=18139 +out=115) q=1.00
+  long-context-extract arm A rep 8 (1t): total=42732 (fresh=10 +create=24485 +read=18139 +out=98) q=1.00
+  long-context-extract arm A rep 9 (1t): total=42780 (fresh=10 +create=24485 +read=18139 +out=146) q=1.00
+  long-context-extract arm B rep 0 (1t): total=43267 (fresh=10 +create=24668 +read=18139 +out=450) q=1.00
+  long-context-extract arm B rep 1 (1t): total=42945 (fresh=10 +create=24667 +read=18139 +out=129) q=1.00
+  long-context-extract arm B rep 2 (1t): total=42950 (fresh=10 +create=24669 +read=18139 +out=132) q=1.00
+  long-context-extract arm B rep 3 (1t): total=42945 (fresh=10 +create=24667 +read=18139 +out=129) q=1.00
+  long-context-extract arm B rep 4 (1t): total=42926 (fresh=10 +create=24670 +read=18139 +out=107) q=1.00
+  long-context-extract arm B rep 5 (1t): total=42934 (fresh=10 +create=24667 +read=18139 +out=118) q=1.00
+  long-context-extract arm B rep 6 (1t): total=42935 (fresh=10 +create=24670 +read=18139 +out=116) q=1.00
+  long-context-extract arm B rep 7 (1t): total=42897 (fresh=10 +create=24666 +read=18139 +out=82) q=1.00
+  long-context-extract arm B rep 8 (1t): total=43055 (fresh=10 +create=24669 +read=18139 +out=237) q=1.00
+  long-context-extract arm B rep 9 (1t): total=42944 (fresh=10 +create=24668 +read=18139 +out=127) q=1.00
+  mt-fib-build-use-extend arm A rep 0 (3t): total=129883 (fresh=30 +create=25257 +read=103669 +out=927) q=1.00
+  mt-fib-build-use-extend arm A rep 1 (3t): total=129974 (fresh=30 +create=25226 +read=103637 +out=1081) q=1.00
+  mt-fib-build-use-extend arm A rep 2 (3t): total=130149 (fresh=30 +create=25298 +read=103744 +out=1077) q=1.00
+  mt-fib-build-use-extend arm A rep 3 (3t): total=129455 (fresh=30 +create=25054 +read=103658 +out=713) q=1.00
+  mt-fib-build-use-extend arm A rep 4 (3t): total=129689 (fresh=30 +create=25157 +read=103715 +out=787) q=1.00
+  mt-fib-build-use-extend arm A rep 5 (3t): total=129780 (fresh=30 +create=25214 +read=103647 +out=889) q=1.00
+  mt-fib-build-use-extend arm A rep 6 (3t): total=130457 (fresh=30 +create=25409 +read=103825 +out=1193) q=1.00
+  mt-fib-build-use-extend arm A rep 7 (3t): total=129696 (fresh=30 +create=25143 +read=103522 +out=1001) q=1.00
+  mt-fib-build-use-extend arm A rep 8 (3t): total=130148 (fresh=30 +create=25309 +read=103646 +out=1163) q=1.00
+  mt-fib-build-use-extend arm A rep 9 (3t): total=129684 (fresh=30 +create=25116 +read=103566 +out=972) q=1.00
+  mt-fib-build-use-extend arm B rep 0 (3t): total=133855 (fresh=30 +create=26860 +read=105082 +out=1883) q=1.00
+  mt-fib-build-use-extend arm B rep 1 (3t): total=131788 (fresh=30 +create=26072 +read=104491 +out=1195) q=1.00
+  mt-fib-build-use-extend arm B rep 2 (3t): total=131991 (fresh=30 +create=26229 +read=104625 +out=1107) q=1.00
+  mt-fib-build-use-extend arm B rep 3 (3t): total=131909 (fresh=30 +create=26192 +read=104588 +out=1099) q=1.00
+  mt-fib-build-use-extend arm B rep 4 (3t): total=131576 (fresh=30 +create=51500 +read=79125 +out=921) q=1.00
+  mt-fib-build-use-extend arm B rep 5 (3t): total=131686 (fresh=30 +create=26091 +read=104610 +out=955) q=1.00
+  mt-fib-build-use-extend arm B rep 6 (3t): total=132275 (fresh=30 +create=26248 +read=104650 +out=1347) q=1.00
+  mt-fib-build-use-extend arm B rep 7 (3t): total=130889 (fresh=30 +create=25789 +read=104418 +out=652) q=1.00
+  mt-fib-build-use-extend arm B rep 8 (3t): total=132324 (fresh=30 +create=51019 +read=80007 +out=1268) q=1.00
+  mt-fib-build-use-extend arm B rep 9 (3t): total=132145 (fresh=30 +create=26256 +read=104531 +out=1328) q=1.00
+  mt-budget-chain arm A rep 0 (3t): total=128778 (fresh=30 +create=24840 +read=103557 +out=351) q=1.00
+  mt-budget-chain arm A rep 1 (3t): total=128728 (fresh=30 +create=24822 +read=103549 +out=327) q=1.00
+  mt-budget-chain arm A rep 2 (3t): total=128843 (fresh=30 +create=24865 +read=103573 +out=375) q=1.00
+  mt-budget-chain arm A rep 3 (3t): total=128853 (fresh=30 +create=24874 +read=103577 +out=372) q=1.00
+  mt-budget-chain arm A rep 4 (3t): total=128958 (fresh=30 +create=24902 +read=103598 +out=428) q=1.00
+  mt-budget-chain arm A rep 5 (3t): total=129378 (fresh=30 +create=25024 +read=103744 +out=580) q=1.00
+  mt-budget-chain arm A rep 6 (3t): total=128893 (fresh=30 +create=24881 +read=103600 +out=382) q=1.00
+  mt-budget-chain arm A rep 7 (3t): total=128677 (fresh=30 +create=24801 +read=103541 +out=305) q=1.00
+  mt-budget-chain arm A rep 8 (3t): total=129056 (fresh=30 +create=74160 +read=54417 +out=449) q=1.00
+  mt-budget-chain arm A rep 9 (3t): total=129403 (fresh=30 +create=74451 +read=54417 +out=505) q=1.00
+  mt-budget-chain arm B rep 0 (3t): total=130623 (fresh=30 +create=25701 +read=104318 +out=574) q=1.00
+  mt-budget-chain arm B rep 1 (3t): total=130422 (fresh=30 +create=25661 +read=104236 +out=495) q=1.00
+  mt-budget-chain arm B rep 2 (3t): total=130497 (fresh=30 +create=25664 +read=104260 +out=543) q=1.00
+  mt-budget-chain arm B rep 3 (3t): total=130412 (fresh=30 +create=25629 +read=104256 +out=497) q=1.00
+  mt-budget-chain arm B rep 4 (3t): total=130540 (fresh=30 +create=25612 +read=104229 +out=669) q=1.00
+  mt-budget-chain arm B rep 5 (3t): total=130688 (fresh=30 +create=25681 +read=104293 +out=684) q=1.00
+  mt-budget-chain arm B rep 6 (3t): total=130260 (fresh=30 +create=25585 +read=104199 +out=446) q=1.00
+  mt-budget-chain arm B rep 7 (3t): total=130409 (fresh=30 +create=25646 +read=104242 +out=491) q=1.00
+  mt-budget-chain arm B rep 8 (3t): total=130606 (fresh=30 +create=25715 +read=104270 +out=591) q=1.00
+  mt-budget-chain arm B rep 9 (3t): total=131381 (fresh=30 +create=25936 +read=104569 +out=846) q=1.00
+  mt-state-reuse arm A rep 0 (3t): total=129884 (fresh=30 +create=25205 +read=103893 +out=756) q=1.00
+  mt-state-reuse arm A rep 1 (3t): total=128730 (fresh=30 +create=24819 +read=103486 +out=395) q=1.00
+  mt-state-reuse arm A rep 2 (3t): total=265962 (fresh=54 +create=46420 +read=218680 +out=808) q=1.00
+  mt-state-reuse arm A rep 3 (3t): total=128976 (fresh=30 +create=24898 +read=103653 +out=395) q=1.00
+  mt-state-reuse arm A rep 4 (3t): total=217733 (fresh=46 +create=25658 +read=191163 +out=866) q=1.00
+  mt-state-reuse arm A rep 5 (3t): total=217435 (fresh=46 +create=25617 +read=190935 +out=837) q=1.00
+  mt-state-reuse arm A rep 6 (3t): total=129668 (fresh=30 +create=25125 +read=103859 +out=654) q=1.00
+  mt-state-reuse arm A rep 7 (3t): total=221990 (fresh=46 +create=27099 +read=193828 +out=1017) q=1.00
+  mt-state-reuse arm A rep 8 (3t): total=266317 (fresh=54 +create=27453 +read=237566 +out=1244) q=1.00
+  mt-state-reuse arm A rep 9 (3t): total=129585 (fresh=30 +create=25098 +read=103858 +out=599) q=1.00
+  mt-state-reuse arm B rep 0 (3t): total=131647 (fresh=30 +create=26055 +read=104742 +out=820) q=1.00
+  mt-state-reuse arm B rep 1 (3t): total=130069 (fresh=30 +create=25524 +read=104229 +out=286) q=1.00
+  mt-state-reuse arm B rep 2 (3t): total=130891 (fresh=30 +create=25796 +read=104498 +out=567) q=1.00
+  mt-state-reuse arm B rep 3 (3t): total=130068 (fresh=30 +create=25525 +read=104235 +out=278) q=1.00
+  mt-state-reuse arm B rep 4 (3t): total=219264 (fresh=46 +create=26348 +read=192053 +out=817) q=1.00
+  mt-state-reuse arm B rep 5 (3t): total=174901 (fresh=38 +create=26073 +read=148138 +out=652) q=1.00
+  mt-state-reuse arm B rep 6 (3t): total=130494 (fresh=30 +create=25664 +read=104346 +out=454) q=1.00
+  mt-state-reuse arm B rep 7 (3t): total=131016 (fresh=30 +create=25847 +read=104526 +out=613) q=1.00
+  mt-state-reuse arm B rep 8 (3t): total=130905 (fresh=30 +create=25809 +read=104485 +out=581) q=1.00
+  mt-state-reuse arm B rep 9 (3t): total=130402 (fresh=30 +create=25640 +read=104348 +out=384) q=1.00
+  mt-list-recall arm A rep 0 (3t): total=128654 (fresh=30 +create=24778 +read=103527 +out=319) q=1.00
+  mt-list-recall arm A rep 1 (3t): total=128672 (fresh=30 +create=24798 +read=103530 +out=314) q=1.00
+  mt-list-recall arm A rep 2 (3t): total=128719 (fresh=30 +create=24805 +read=103541 +out=343) q=1.00
+  mt-list-recall arm A rep 3 (3t): total=128598 (fresh=30 +create=24766 +read=103519 +out=283) q=1.00
+  mt-list-recall arm A rep 4 (3t): total=128730 (fresh=30 +create=24799 +read=103538 +out=363) q=1.00
+  mt-list-recall arm A rep 5 (3t): total=128706 (fresh=30 +create=24807 +read=103558 +out=311) q=1.00
+  mt-list-recall arm A rep 6 (3t): total=128738 (fresh=30 +create=24826 +read=103534 +out=348) q=1.00
+  mt-list-recall arm A rep 7 (3t): total=128601 (fresh=30 +create=24770 +read=103517 +out=284) q=1.00
+  mt-list-recall arm A rep 8 (3t): total=128683 (fresh=30 +create=24794 +read=103536 +out=323) q=1.00
+  mt-list-recall arm A rep 9 (3t): total=128650 (fresh=30 +create=24794 +read=103517 +out=309) q=1.00
+  mt-list-recall arm B rep 0 (3t): total=130346 (fresh=30 +create=25609 +read=104321 +out=386) q=1.00
+  mt-list-recall arm B rep 1 (3t): total=130306 (fresh=30 +create=25588 +read=104329 +out=359) q=1.00
+  mt-list-recall arm B rep 2 (3t): total=130185 (fresh=30 +create=25540 +read=104267 +out=348) q=1.00
+  mt-list-recall arm B rep 3 (3t): total=131411 (fresh=30 +create=25948 +read=104651 +out=782) q=1.00
+  mt-list-recall arm B rep 4 (3t): total=130460 (fresh=30 +create=25612 +read=104324 +out=494) q=1.00
+  mt-list-recall arm B rep 5 (3t): total=130301 (fresh=30 +create=25581 +read=104311 +out=379) q=1.00
+  mt-list-recall arm B rep 6 (3t): total=130564 (fresh=30 +create=25673 +read=104392 +out=469) q=1.00
+  mt-list-recall arm B rep 7 (3t): total=130455 (fresh=30 +create=25628 +read=104362 +out=435) q=1.00
+  mt-list-recall arm B rep 8 (3t): total=130134 (fresh=30 +create=25540 +read=104254 +out=310) q=1.00
+  mt-list-recall arm B rep 9 (3t): total=130142 (fresh=30 +create=25534 +read=104275 +out=303) q=1.00
+
+============================================================
+TOKEN-SAVINGS BENCHMARK — measured, quality-gated
+============================================================
+OVERALL: no significant saving measured (point -0.6%, 95% CI -0.9%..-0.4%, p=1.0000, n=176) — DO NOT claim a saving
+  (4 pair(s) dropped: B answered worse than A)
+  coding      :   -0.9%  [-1.2%..-0.6%]  p=1.000  n=50  n.s.
+  data        :   -1.1%  [-203.4%..66.4%]  p=0.997  n=20  n.s.
+  extraction  :   -0.6%  [-0.9%..-0.0%]  p=1.000  n=20  n.s.
+  format      :   -0.6%  [-0.7%..-0.6%]  p=1.000  n=10  n.s.
+  planning    :   -0.7%  [-1.1%..-0.2%]  p=0.994  n=10  n.s.
+  qa          :   -0.5%  [-0.8%..-0.3%]  p=1.000  n=10  n.s.
+  reasoning   :   -0.9%  [-202.4%..66.3%]  p=1.000  n=46  n.s.
+  string      :   -0.5%  [-0.7%..-0.2%]  p=1.000  n=10  n.s.
+
+mean tokens per run (RAW COUNT — cost differs: read~0.1x, create~1.25x, out~5x):
+  arm               fresh  cache_cr  cache_rd   output     total
+  A_cel_off            15     25420     39444      336     65214
+  B_cel_on             15     25382     37764      425     63587
+
+COST per run (claude-haiku-4-5-20251001, cache-weighted): A_cel_off=$0.05648  B_cel_on=$0.05668  → -0.4% (more expensive)
+
+raw evidence: /home/shumway/projects/CorvinOS/benchmark/token-savings/results/raw-pilot-diverse-cel-n10.jsonl
+report: /home/shumway/projects/CorvinOS/benchmark/token-savings/results/report-pilot-diverse-cel-n10.json
+BENCH_EXIT=0

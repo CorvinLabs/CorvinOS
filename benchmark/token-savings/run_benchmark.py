@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -333,6 +334,39 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
         costs = [r["cost_usd"] for r in rs if r.get("cost_usd") is not None]
         out["cost_usd"] = round(sum(costs) / len(costs), 6) if costs else None
         return out
+
+    # NEW ADVISORY DIMENSIONS (LDD define-metric). These are exploratory instruments to probe
+    # CEL's value BEYOND raw cost — since the pilot shows CEL does not cut raw tokens, the
+    # question becomes "does it deliver more/steadier correctness per token?". Each is derived
+    # DETERMINISTICALLY from already-measured raw fields (quality, tokens, cost, output) — no new
+    # LLM call, no curation. Per the skill they are advisory_only: reported, NEVER used as a
+    # pass/reject gate until calibrated (n>=5, MAE<=0.15). Cost<->quality is a real trade-off, so
+    # these are kept as a VECTOR (each dim visible), never collapsed into one gamed scalar.
+    def _arm_dimensions(arm: str) -> dict:
+        rs = [r for r in runs if r["arm"] == arm]
+        if not rs:
+            return {}
+        q = [r["quality"] for r in rs]
+        tot = [r["tokens_total"] for r in rs]
+        outp = [r["output"] for r in rs]
+        costs = [r["cost_usd"] for r in rs if r.get("cost_usd") is not None]
+        q_mean = statistics.mean(q)
+        tot_mean = statistics.mean(tot)
+        cost_mean = statistics.mean(costs) if costs else None
+        return {
+            # correctness of the objective fact-presence check, averaged over reps (0..1)
+            "quality_mean": round(q_mean, 4),
+            # rep-to-rep spread of correctness — RELIABILITY (lower = steadier answers)
+            "quality_stdev": round(statistics.pstdev(q), 4),
+            # correctness delivered per 1000 tokens spent — VALUE DENSITY (higher = better)
+            "quality_per_1k_tokens": round(q_mean / (tot_mean / 1000.0), 4) if tot_mean else None,
+            # dollars spent to obtain one unit of correctness (lower = better); None if q==0
+            "cost_per_correct_usd": (round(cost_mean / q_mean, 6)
+                                     if (cost_mean is not None and q_mean > 0) else None),
+            # mean generated tokens — DIRECTNESS proxy (fewer at equal quality = more direct)
+            "output_tokens_mean": round(statistics.mean(outp), 1),
+        }
+
     total_input_all = sum(r["input_all"] for r in runs)
     cost_available = pricing.prices_available(args.model, args.prices)
     # Arm labels reflect what actually differs between A and B in this run's mode.
@@ -352,6 +386,16 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
         # guard false-passed because input_tokens=2>0 while 62k cache tokens were uncounted.
         "input_captured": total_input_all > 0,
         "components_per_arm": {a_label: _arm_components("A"), b_label: _arm_components("B")},
+        # ADVISORY new dimensions (LDD define-metric) — a VECTOR probing CEL's value beyond cost.
+        # NOT a decision gate until calibrated. `better_for` says which direction favours CEL.
+        "dimensions": {
+            "_status": "ADVISORY / exploratory — deterministic from raw fields; NOT a calibrated "
+                       "decision gate (define-metric: advisory_only until n>=5 and MAE<=0.15).",
+            "better_for": {"quality_mean": "higher", "quality_stdev": "lower",
+                           "quality_per_1k_tokens": "higher", "cost_per_correct_usd": "lower",
+                           "output_tokens_mean": "lower"},
+            a_label: _arm_dimensions("A"), b_label: _arm_dimensions("B"),
+        },
         "note": "tokens_total = fresh_input + cache_creation + cache_read + output (all 4 classes). "
                 "Savings (raw count) = (median A − median B)/median A, quality-gated, bootstrap 95% CI, "
                 "Mann-Whitney-U (B<A). RAW COUNT ≠ COST: cache-read ~0.1x, cache-creation ~1.25x, "

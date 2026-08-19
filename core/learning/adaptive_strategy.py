@@ -19,6 +19,15 @@ from core.learning.operator_fingerprint import OperatorFingerprint
 
 logger = logging.getLogger(__name__)
 
+# Strategy metric calibration constants (Phase 2 Improvement 4 — ADR-0370/0371)
+# Used by StrategyAdvisor.build_strategy_options() to construct StrategyOption objects
+# with cost and latency estimates calibrated to strategy position in the ladder.
+STRATEGY_BASE_COST_CENTS = 15.0  # Starting cost for direct_fix (lowest-cost strategy)
+STRATEGY_COST_INCREMENT_CENTS = 5.0  # Additional cost per strategy level down the ladder
+STRATEGY_BASE_LATENCY_MS = 150.0  # Starting latency for direct_fix (fastest strategy)
+STRATEGY_LATENCY_INCREMENT_MS = 75.0  # Additional latency per strategy level
+STRATEGY_DEFAULT_SUCCESS_RATE = 0.5  # Default when no empirical history (fresh install)
+
 
 @dataclass(frozen=True)
 class StrategyOption:
