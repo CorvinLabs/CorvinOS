@@ -46,7 +46,7 @@ export default defineConfig({
     // 3000, which no server here ever listens on — specs that rely on the
     // managed webServer could not run at all, and the ones that do run point at
     // a live console via their own BASE_URL/GATEWAY env instead.
-    baseURL: process.env.CONSOLE_BASE_URL || 'http://localhost:5173',
+    baseURL: process.env.CONSOLE_BASE_URL || 'http://127.0.0.1:8765/console',
     trace: 'on-first-retry',
   },
 
