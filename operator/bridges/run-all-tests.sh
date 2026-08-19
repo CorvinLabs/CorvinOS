@@ -68,6 +68,7 @@ run "Python: path-gate supply-chain (L31)" python3 ../voice/hooks/test_path_gate
 run "Python: forge live (skip)"  python3 shared/test_persona_uses_forge_live.py >/dev/null || fails=$((fails+1))
 run "Python: cap warn silence"   python3 shared/test_capability_warning.py >/dev/null     || fails=$((fails+1))
 run "Python: bridge big-data delegation" python3 shared/test_adapter_big_data_delegation.py >/dev/null || fails=$((fails+1))
+run "Python: cache-stable CEL relocation (ADR-0395)" python3 shared/test_adapter_cache_stable_cel.py >/dev/null || fails=$((fails+1))
 run "Python: bridge worker-engine parity (ADR-0255)" python3 shared/test_bridge_worker_engine_parity.py >/dev/null || fails=$((fails+1))
 run "Python: OS-model single source of truth" python3 shared/test_os_model_single_source_of_truth.py >/dev/null || fails=$((fails+1))
 run "Python: channel list SSOT (one list, seven channels)" python3 shared/test_channel_list_ssot.py >/dev/null || fails=$((fails+1))

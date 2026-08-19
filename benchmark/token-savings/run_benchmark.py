@@ -101,6 +101,17 @@ async def _run_task(cr, tenant: str, task: dict, model: str, prices: dict) -> tu
     return final_text, summed, {"c5": c5_sum, "c1": c1_sum, "n_turns": len(prompts)}, cost_sum
 
 
+# Quiet-turn confounders: features that fire EXTRA per-turn work (a discarded TDE shadow turn,
+# a per-turn cloud synthesis, an outcome-grading write) and so add latency + token noise that is
+# ORTHOGONAL to the cache-stable relocation under test. The cachestable A/B forces them OFF for
+# BOTH arms so the delta isolates the fix (the deterministic CEL brief's cache class), not these.
+# They are in every cachestable arm's flag-map, so the runner's save/restore restores them too.
+_QUIET_TURN = {
+    "tde_shadow_measurement": False,   # ADR-0392: else each native turn spawns a discarded TDE turn
+    "vibe_engineering_active": False,  # ADR-0282/0283: else a per-turn cloud LLM synthesis runs
+    "outcome_feedback_loop": False,    # per-turn grade/record write — off during measurement
+}
+
 # Arm definitions. Each arm is a flag-map applied before its runs. The classic mode measures
 # CEL on/off; the cachestable mode holds CEL ON for BOTH arms and toggles ONLY the ADR-0395
 # cache-stable relocation, so the delta isolates the fix (cache_creation collapse), not CEL.
@@ -110,8 +121,8 @@ ARM_MODES = {
         "B": {"vibe_engineering": True},
     },
     "cachestable": {
-        "A": {"vibe_engineering": True, "cel_cache_stable": False},
-        "B": {"vibe_engineering": True, "cel_cache_stable": True},
+        "A": {"vibe_engineering": True, "cel_cache_stable": False, **_QUIET_TURN},
+        "B": {"vibe_engineering": True, "cel_cache_stable": True, **_QUIET_TURN},
     },
 }
 
@@ -138,6 +149,32 @@ def _cleanup_bench_sessions(cr, tenant: str) -> None:
         pass
 
 
+def _acquire_lock(out_dir: Path, tenant: str) -> "Path | None":
+    """Per-tenant lock so two concurrent runs can't clobber each other's A/B flag toggles on
+    the SHARED overlay (the exact corruption that ruined the first attempt). Returns the lock
+    path on success, None if another LIVE run holds it. A stale lock (dead PID) is stolen."""
+    import os as _os
+    lock = out_dir / f".bench-lock-{tenant}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = _os.open(str(lock), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY, 0o644)
+        _os.write(fd, str(_os.getpid()).encode()); _os.close(fd)
+        return lock
+    except FileExistsError:
+        try:
+            holder = int(lock.read_text().strip() or "0")
+        except Exception:  # noqa: BLE001
+            holder = 0
+        if holder and holder != _os.getpid():
+            try:
+                _os.kill(holder, 0)
+                return None  # a live run holds it
+            except OSError:
+                pass  # stale — steal it
+        lock.write_text(str(_os.getpid()))
+        return lock
+
+
 async def run(args) -> int:
     suite = load_suite(Path(args.tasks))
     print(f"suite {suite.get('suite_version')} · {len(suite['tasks'])} tasks · n={args.n} · tenant={args.tenant}")
@@ -159,8 +196,22 @@ async def run(args) -> int:
         mode = ARM_MODES[args.arms]
         _distinct = next(k for k in {*mode["A"], *mode["B"]}
                          if mode["A"].get(k) != mode["B"].get(k))
-        _apply_arm(ff, args.tenant, mode["A"]); off = ff.is_enabled(_distinct, args.tenant)
-        _apply_arm(ff, args.tenant, mode["B"]); on = ff.is_enabled(_distinct, args.tenant)
+        # Save/restore even here: a dry-run must leave the tenant's flags EXACTLY as found
+        # (it applies both arms only to prove they resolve — it must not persist that).
+        _dov = ff._read_overlay(args.tenant)
+        _dsaved = dict(_dov.get("flags") or {})
+        _dtouched = sorted({k for fm in mode.values() for k in fm})
+        try:
+            _apply_arm(ff, args.tenant, mode["A"]); off = ff.is_enabled(_distinct, args.tenant)
+            _apply_arm(ff, args.tenant, mode["B"]); on = ff.is_enabled(_distinct, args.tenant)
+        finally:
+            _cur = ff._read_overlay(args.tenant); _cf = dict(_cur.get("flags") or {})
+            for k in _dtouched:
+                if k in _dsaved:
+                    _cf[k] = _dsaved[k]
+                else:
+                    _cf.pop(k, None)
+            ff._write_overlay(args.tenant, {**_cur, "flags": _cf})
         ok = (on is True and off is False)
         print(f"arms mode '{args.arms}': distinguishing flag = {_distinct}")
         # suite-independent self-test of the objective check
@@ -171,6 +222,16 @@ async def run(args) -> int:
               f"tasks={len(suite['tasks'])} ({n_mt} multi-turn)")
         print("dry-run produced NO benchmark data (by design).")
         return 0 if (ok and q_ok) else 1
+
+    # Concurrency guard: a second run on the same tenant would clobber this run's per-arm flag
+    # toggles on the SHARED overlay (the corruption that ruined the first attempt). Refuse rather
+    # than silently produce mixed-arm garbage.
+    _lock = _acquire_lock(Path(args.out), args.tenant)
+    if _lock is None:
+        print(f"ERROR: another benchmark run holds the lock for tenant '{args.tenant}'. "
+              f"Wait for it or remove {Path(args.out) / ('.bench-lock-' + args.tenant)} if stale.",
+              file=sys.stderr)
+        return 3
 
     raw_path = Path(args.out) / f"raw-{args.run_id}.jsonl"
     raw_path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +275,10 @@ async def run(args) -> int:
                 flags.pop(k, None)
         ff._write_overlay(args.tenant, {**cur, "flags": flags})
         _cleanup_bench_sessions(cr, args.tenant)
+        try:
+            _lock.unlink()
+        except Exception:  # noqa: BLE001 — lock release is best-effort
+            pass
 
     report = build_report(runs, suite, args)
     rep_path = Path(args.out) / f"report-{args.run_id}.json"
@@ -260,6 +325,8 @@ def build_report(runs: list[dict], suite: dict, args) -> dict:
     return {
         "suite_version": suite.get("suite_version"), "n_per_arm": args.n,
         "tenant": args.tenant, "run_id": args.run_id, "arms": args.arms,
+        # Confounders held OFF for BOTH arms so the delta isolates the fix, not extra per-turn work.
+        "measurement_isolation": (sorted(_QUIET_TURN) if args.arms == "cachestable" else []),
         "model": args.model, "cost_available": cost_available,
         # Guard now keys on the SUMMED input (all 3 classes), not fresh input_tokens — the old
         # guard false-passed because input_tokens=2>0 while 62k cache tokens were uncounted.
