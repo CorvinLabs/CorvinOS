@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Loader2, Brain, CheckCircle, AlertCircle, Trash2, Cpu } from "lucide-react";
+import { Loader2, Brain, CheckCircle, AlertCircle, Cpu } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,12 @@ interface GenerationRun {
   skill?: SkillInfo;
 }
 
+interface ReviewFinding {
+  dimension: string;
+  summary: string;
+  verdict: string;
+}
+
 interface SkillInfo {
   name: string;
   purpose: string;
@@ -35,12 +41,26 @@ interface SkillInfo {
   quality: number;
   iterations: number;
   dependencies: string[];
+  /** What the adversarial reviewers objected to — the reason behind the score. */
+  findings?: ReviewFinding[];
+  /** Registered AND bootstrap-graded, i.e. past skill_inject's gate. */
+  injectable?: boolean;
+  registry_path?: string;
 }
 
 interface GeneratedSkill {
   name: string;
-  file: string;
-  created_at: string;
+  description?: string;
+  type?: string;
+  scope?: string;
+  n_grades?: number;
+  mean_score?: number;
+  injectable?: boolean;
+}
+
+interface SkillDetail extends GeneratedSkill {
+  body: string;
+  grades?: Array<{ score: number; notes?: string; run_id?: string }>;
 }
 
 /**
@@ -71,6 +91,8 @@ export const SkillCreatorPanel: React.FC = () => {
   const [currentRun, setCurrentRun] = useState<GenerationRun | null>(null);
   const [generatedSkills, setGeneratedSkills] = useState<GeneratedSkill[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<SkillDetail | null>(null);
+  const [viewError, setViewError] = useState<string | null>(null);
 
   // Load existing skills on mount
   useEffect(() => {
@@ -155,6 +177,22 @@ export const SkillCreatorPanel: React.FC = () => {
       setGeneratedSkills(data.skills || []);
     } catch (err) {
       console.error("Error loading skills:", err);
+    }
+  };
+
+  const viewSkill = async (name: string) => {
+    setViewError(null);
+    try {
+      const response = await fetch(
+        `/v1/console/skill-creator/skills/${encodeURIComponent(name)}`,
+      );
+      if (!response.ok) {
+        setViewError(`Could not load ${name} (HTTP ${response.status})`);
+        return;
+      }
+      setViewing(await response.json());
+    } catch (err) {
+      setViewError(`Could not load ${name}: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -313,9 +351,47 @@ export const SkillCreatorPanel: React.FC = () => {
                   </div>
                   <div className="flex justify-between">
                     <span className="font-mono text-muted-foreground">Iterations:</span>
-                    <span className="text-foreground">{currentRun.skill.iterations}</span>
+                    <span className="text-foreground" data-testid="skill-iterations">
+                      {currentRun.skill.iterations ?? "—"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-mono text-muted-foreground">Usable:</span>
+                    <Badge
+                      variant={currentRun.skill.injectable ? "default" : "outline"}
+                      className="h-5 text-[10px]"
+                      data-testid="skill-injectable"
+                    >
+                      {currentRun.skill.injectable
+                        ? "registered + graded"
+                        : "not injectable"}
+                    </Badge>
                   </div>
                 </div>
+
+                {/*
+                  Why the quality score is what it is. Without this the panel
+                  showed a bare "Quality: 0%" and the reviewers' objections
+                  were only ever written to the server log.
+                */}
+                {currentRun.skill.findings && currentRun.skill.findings.length > 0 && (
+                  <details className="mt-2" data-testid="review-findings">
+                    <summary className="cursor-pointer text-xs text-muted-foreground">
+                      {currentRun.skill.findings.length} review finding(s) — why this score
+                    </summary>
+                    <ul className="mt-1 space-y-1">
+                      {currentRun.skill.findings.map((f, i) => (
+                        <li key={i} className="text-[11px] leading-snug">
+                          <Badge variant="outline" className="mr-1 h-4 text-[9px]">
+                            {f.verdict}
+                          </Badge>
+                          <span className="font-mono text-muted-foreground">{f.dimension}:</span>{" "}
+                          <span className="text-foreground">{f.summary}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
               </div>
             )}
 
@@ -358,23 +434,39 @@ export const SkillCreatorPanel: React.FC = () => {
                 <div
                   key={skill.name}
                   className="flex items-center justify-between rounded-md border border-border/60 bg-card/40 p-2.5"
+                  data-testid="skill-row"
+                  data-skill={skill.name}
                 >
                   <div className="min-w-0 flex-1">
                     <div className="font-mono text-xs font-medium">{skill.name}</div>
-                    <div className="text-[10px] text-muted-foreground">
-                      {new Date(skill.created_at).toLocaleDateString()}
+                    <div className="truncate text-[10px] text-muted-foreground">
+                      {skill.description}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <Button size="sm" variant="outline" className="h-6 px-2 text-xs">
-                      View
-                    </Button>
+                    {/*
+                      Reachability at a glance: a registered skill with no
+                      grade sits below skill_inject's eligibility gate and is
+                      never injected into a turn.
+                    */}
+                    <Badge
+                      variant={skill.injectable ? "secondary" : "outline"}
+                      className="h-5 text-[9px]"
+                      title={
+                        skill.injectable
+                          ? `graded ${skill.n_grades}× (mean ${skill.mean_score})`
+                          : "not graded — will not be injected"
+                      }
+                    >
+                      {skill.injectable ? "usable" : "inert"}
+                    </Badge>
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => viewSkill(skill.name)}
                     >
-                      <Trash2 className="h-3 w-3" />
+                      View
                     </Button>
                   </div>
                 </div>
@@ -382,6 +474,38 @@ export const SkillCreatorPanel: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Skill viewer — what the previously inert "View" button now opens */}
+        {viewError && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
+            {viewError}
+          </div>
+        )}
+        {viewing && (
+          <div
+            className="space-y-2 rounded-md border border-border/60 bg-card/40 p-3"
+            data-testid="skill-viewer"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-mono text-xs font-medium">{viewing.name}</div>
+                <div className="text-[10px] text-muted-foreground">
+                  {viewing.type} · {viewing.scope} ·{" "}
+                  {viewing.injectable
+                    ? `graded ${viewing.n_grades}×`
+                    : "not graded — will not be injected"}
+                </div>
+              </div>
+              <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0"
+                      onClick={() => setViewing(null)}>
+                Close
+              </Button>
+            </div>
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-border/60 bg-muted/30 p-2 font-mono text-[11px] leading-snug">
+              {viewing.body}
+            </pre>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
