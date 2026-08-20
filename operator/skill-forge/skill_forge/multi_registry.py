@@ -41,7 +41,7 @@ _PROMOTE_GATES: dict[tuple[str, str], str] = {
 
 
 class MultiSkillRegistry:
-    """Composes per-scope SkillRegistries with shadowing semantics."""
+    """Composes per-scope SkillRegistries with shadowing semantics (TENANT-NATIVE)."""
 
     # SkillForge workspaces are nested ONE LEVEL DEEP under each scope_root,
     # so the audit lives at the scope_root (sibling to forge/ and shared
@@ -51,12 +51,19 @@ class MultiSkillRegistry:
     def __init__(
         self,
         *,
+        tenant_id: str | None = None,  # NEW: tenant-aware (Phase B)
         channel_id: str | None = None,
         task_id: str | None = None,
         project_root: Path | None = None,
         hash_chain: bool = True,
     ):
+        # Resolve tenant_id: explicit > env > _default (ADR-0362)
+        # Import here to avoid circular dependency
+        import os as _os
+        resolved_tenant = tenant_id or _os.environ.get("CORVIN_TENANT_ID") or "_default"
+        self.tenant_id = resolved_tenant
         self._kwargs = dict(
+            tenant_id=self.tenant_id,
             channel_id=channel_id,
             task_id=task_id,
             project_root=project_root,

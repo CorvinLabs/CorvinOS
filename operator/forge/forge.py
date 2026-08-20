@@ -35,13 +35,16 @@ def _default_root() -> Path:
       2. Workspace-scope detection via ``forge.scope.detect_scope()``
          which honours CORVIN_CHANNEL_ID (-> session),
          git-repo (-> project), or fallback (-> user).
+      3. Tenant resolution: CORVIN_TENANT_ID env or _default
     """
     import os
     env = os.environ.get("FORGE_ROOT")
     if env:
         return Path(env).expanduser()
     from forge.scope import detect_scope, scope_root
-    return scope_root(detect_scope())
+    from forge.paths import _resolve_tenant_id
+    tenant_id = _resolve_tenant_id(os.environ.get("CORVIN_TENANT_ID"))
+    return scope_root(detect_scope(), tenant_id=tenant_id)
 
 
 DEFAULT_ROOT = _default_root()

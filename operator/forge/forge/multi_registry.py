@@ -22,17 +22,22 @@ from .scope import VALID_SCOPES, detect_scope, scope_root
 
 
 class MultiRegistry:
-    """Composes per-scope Registries with shadowing semantics."""
+    """Composes per-scope Registries with shadowing semantics (TENANT-NATIVE)."""
 
     def __init__(
         self,
         *,
+        tenant_id: str | None = None,  # NEW: tenant-aware (Phase B)
         channel_id: str | None = None,
         task_id: str | None = None,
         project_root: Path | None = None,
         hash_chain: bool = True,
     ):
+        from .paths import _resolve_tenant_id
+        # Resolve tenant_id: explicit > env > _default (ADR-0362)
+        self.tenant_id = _resolve_tenant_id(tenant_id)
         self._kwargs = dict(
+            tenant_id=self.tenant_id,
             channel_id=channel_id,
             task_id=task_id,
             project_root=project_root,

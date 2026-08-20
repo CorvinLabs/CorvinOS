@@ -1,11 +1,11 @@
-"""Workspace-scope detection for forge artifacts.
+"""Workspace-scope detection for forge artifacts — TENANT-NATIVE (ADR-0362).
 
 Four scopes determine where a forged tool lives:
 
   task     <tmpdir>/.corvin/tasks/<task-id>/forge/    (one Q&A turn; platform temp)
-  session  ~/.corvin/sessions/<channel-id>/forge/      (one bridge channel)
+  session  ~/.corvin/tenants/<tenant_id>/sessions/<channel-id>/forge/      (one bridge channel)
   project  <repo-root>/.corvin/forge/                  (one git repo)
-  user     ~/.corvin/global/forge/                     (permanent)
+  user     ~/.corvin/tenants/<tenant_id>/forge/       (permanent, tenant-scoped)
 
 Detection precedence (when caller does not pass an explicit scope):
 
@@ -14,6 +14,12 @@ Detection precedence (when caller does not pass an explicit scope):
   3. CORVIN_CHANNEL_ID    env var → session
   4. cwd is inside a git repo        → project
   5. fallback                        → user
+
+TENANT-NATIVE CHANGE (Phase B):
+- scope_root() now requires mandatory tenant_id parameter
+- All session/user scopes return tenant-scoped paths
+- Task scope ignores tenant_id (uses temp dir; v0.3 will fix)
+- Project scope ignores tenant_id (uses repo root; tenant-per-repo later)
 
 Migration note (Phase 7): CORVIN_* env-var aliases are no longer read.
 On-disk, <repo>/.corvin/ is the project root (no legacy .corvinOS fallback — hard cut).
@@ -25,7 +31,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from .paths import corvin_home, fs_safe_component
+from .paths import corvin_home, fs_safe_component, tenant_home, _validate_tenant_id
 
 VALID_SCOPES = ("task", "session", "project", "user")
 
@@ -67,18 +73,41 @@ def detect_scope() -> str:
     return "user"
 
 
-def scope_root(scope: str, *, channel_id: str | None = None,
+def scope_root(scope: str, *,
+               tenant_id: str,  # NEW: mandatory, tenant-aware (Phase B)
+               channel_id: str | None = None,
                task_id: str | None = None,
                project_root: Path | None = None) -> Path:
-    """Resolve the workspace directory for a given scope."""
+    """Resolve the workspace directory for a given scope (TENANT-NATIVE).
+
+    Args:
+        scope: "task", "session", "project", or "user"
+        tenant_id: Required. Tenant context for session/user scopes. Validated fail-closed.
+        channel_id: For scope="session" (optional; defaults to env CORVIN_CHANNEL_ID)
+        task_id: For scope="task" (optional; defaults to env CORVIN_TASK_ID)
+        project_root: For scope="project" (optional; auto-detects via git)
+
+    Returns:
+        Path to the workspace root for the given scope and tenant.
+
+    Raises:
+        ValueError: If tenant_id is invalid or required args missing.
+    """
+    # Validate tenant_id fail-closed (ADR-0362 compliance)
+    _validate_tenant_id(tenant_id)
+
     if scope == "task":
+        # Task scope ignores tenant_id (uses platform temp dir)
+        # TODO: v0.3 will make task scope tenant-scoped too
         tid = (
             task_id
             or os.environ.get("CORVIN_TASK_ID")
             or "default"
         )
         return _resolve_tmp_tasks_root() / tid / "forge"
+
     if scope == "session":
+        # Session scope: ~/.corvin/tenants/<tenant_id>/sessions/<channel_id>/forge
         cid = (
             channel_id
             or os.environ.get("CORVIN_CHANNEL_ID")
@@ -91,8 +120,11 @@ def scope_root(scope: str, *, channel_id: str | None = None,
         # class). fs_safe_component neutralises ':' → '_' on Windows and is a
         # byte-for-byte no-op on POSIX (only '/' and NUL), so existing Linux/macOS
         # session workdirs stay identical — mirrors _workdir / session_artifacts_dir.
-        return corvin_home() / "sessions" / fs_safe_component(cid) / "forge"
+        return tenant_home(tenant_id) / "sessions" / fs_safe_component(cid) / "forge"
+
     if scope == "project":
+        # Project scope: <repo>/.corvin/forge (ignores tenant_id today; v0.3 fix)
+        # TODO: v0.3 will gate project scope per-tenant once repo multi-tenancy is designed
         if project_root is not None:
             return _resolve_repo_workspace(project_root) / "forge"
         # Allow tests to suppress git-based project-root discovery by setting
@@ -101,7 +133,7 @@ def scope_root(scope: str, *, channel_id: str | None = None,
         if _pr_env is not None:
             if _pr_env.strip():
                 return _resolve_repo_workspace(Path(_pr_env.strip())) / "forge"
-            return corvin_home() / "forge"
+            return tenant_home(tenant_id) / "forge"
         try:
             r = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
@@ -111,7 +143,10 @@ def scope_root(scope: str, *, channel_id: str | None = None,
                 return _resolve_repo_workspace(Path(r.stdout.strip())) / "forge"
         except (FileNotFoundError, subprocess.SubprocessError):
             pass
-        return corvin_home() / "forge"
+        return tenant_home(tenant_id) / "forge"
+
     if scope == "user":
-        return corvin_home() / "global" / "forge"
+        # User scope: ~/.corvin/tenants/<tenant_id>/forge (tenant-native)
+        return tenant_home(tenant_id) / "forge"
+
     raise ValueError(f"unknown scope: {scope!r} (valid: {VALID_SCOPES})")
