@@ -20,13 +20,30 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 try:  # package-relative (normal import path)
     from .llm_client import resolve_llm_client, engine_id_of
+    from .registry_bridge import promote_to_registry
 except ImportError:  # pragma: no cover — flat sys.path insert (console route)
     from skill_forge.llm_client import resolve_llm_client, engine_id_of
+    from skill_forge.registry_bridge import promote_to_registry
+
+
+def _default_registry_root(tenant_id: str | None = None) -> Path:
+    """`<tenant-global>/skill-forge` for `tenant_id`.
+
+    Console callers pass the tenant from the authenticated session; this
+    fallback exists for CLI and test use, where there is no session.
+    """
+    try:
+        from forge.paths import tenant_global_dir  # noqa: PLC0415
+        return Path(tenant_global_dir(tenant_id)) / "skill-forge"
+    except Exception:  # noqa: BLE001 — degrade to the documented tenant tree
+        home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
+        return home / "tenants" / (tenant_id or "_default") / "global" / "skill-forge"
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +97,11 @@ class SkillArtifact:
     review_findings: List[ReviewFinding]
     ldd_iterations: int
     created_at: datetime = field(default_factory=datetime.utcnow)
+    # SkillForge registration result (path, scope, bootstrap_graded,
+    # injectable). `injectable` is the honest answer to "will this skill
+    # ever be used?" — a registered but ungraded skill is invisible to
+    # skill_inject's eligibility gate.
+    registration: Dict[str, Any] = field(default_factory=dict)
 
 
 class SkillCreatorError(Exception):
@@ -1072,17 +1094,45 @@ If no findings, output: VERDICT: REFUTED"""
 # ============================================================================
 
 class SkillPromoter:
-    """Phase 5: Promote skill to disk + SkillForge registry."""
+    """Phase 5: Register the skill in SkillForge so it can actually be USED.
 
-    def __init__(self, skills_dir: str = None):
+    Writing a markdown file into a directory is not promotion. Skill
+    availability in CorvinOS runs through the SkillForge REGISTRY — a manifest
+    (`SkillRegistry.list()` reads the manifest, never the directory), a
+    plugin-slot mirror for `user`/`project` scope that makes the skill visible
+    to the next `claude` subprocess, and `skill_inject`'s eligibility gate,
+    which drops anything with `n_grades < 1 or mean_score <= 0`.
+
+    Until this change the promoter wrote a flat `~/.claude/skills/<name>.md`.
+    Nothing in this system reads that path (Claude Code itself expects
+    `<name>/SKILL.md`), so every generated skill existed and was unreachable —
+    the exact "looks wired, isn't" failure class `e2e-wiring-proof` exists to
+    catch.
+
+    `registry_root` is `<tenant-global>/skill-forge`, resolved by the caller
+    from the authenticated session's tenant — never from an env var
+    (CLAUDE.md, console tenant routing).
+    """
+
+    def __init__(self, registry_root: str = None, *, tenant_id: str = None,
+                 scope: str = "user"):
         """Initialize promoter.
 
         Args:
-            skills_dir: Directory to write skills (default: ~/.claude/skills/)
+            registry_root: `<tenant-global>/skill-forge`; derived from
+                `tenant_id` when omitted.
+            tenant_id: tenant whose registry receives the skill.
+            scope: SkillForge scope. Only `user` and `project` reach the
+                engine plugin slot (Layer-16 scope gate), so promoting below
+                them would leave the skill un-injectable by construction.
         """
         from pathlib import Path
-        self.skills_dir = Path(skills_dir or Path.home() / ".claude" / "skills")
-        self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self.scope = scope
+        self.tenant_id = tenant_id
+        self.registry_root = (
+            Path(registry_root) if registry_root else _default_registry_root(tenant_id)
+        )
+        self.registry_root.mkdir(parents=True, exist_ok=True)
 
     def promote(self, spec: SkillSpec, quality_score: float) -> SkillArtifact:
         """Promote skill to disk + registry.
@@ -1098,61 +1148,47 @@ class SkillPromoter:
             PromotionError: If promotion fails at any step
         """
         try:
-            # Step 1: Write to disk
-            skill_file = self._write_skill_file(spec)
-            logger.info(f"Written to disk: {skill_file}")
+            registration = promote_to_registry(
+                self.registry_root,
+                name=spec.name,
+                body_md=self._render_body(spec),
+                description=spec.purpose,
+                scope=self.scope,
+                run_id=spec.spec_id,
+            )
 
-            # Step 2: Register in SkillForge (simulated)
-            self._register_in_skillforge(spec, quality_score)
-            logger.info(f"Registered in SkillForge: {spec.name}")
-
-            # Step 3: Create artifact
             artifact = SkillArtifact(
                 artifact_id=str(uuid4()),
                 spec=spec,
                 quality_score=quality_score,
                 review_findings=[],
                 ldd_iterations=spec.iteration_count,
+                registration=registration,
             )
 
-            logger.info(f"Skill promoted: {spec.name} (quality={quality_score:.2f})")
+            logger.info("Skill promoted: %s (quality=%.2f, injectable=%s)",
+                        spec.name, quality_score, registration.get("injectable"))
             return artifact
 
         except Exception as e:
             raise PromotionError(f"Promotion failed: {e}") from e
 
-    def _write_skill_file(self, spec: SkillSpec) -> str:
-        """Write skill to markdown file."""
-        filename = f"{spec.name.replace('.', '_')}.md"
-        filepath = self.skills_dir / filename
+    def _render_body(self, spec: SkillSpec) -> str:
+        """Body handed to the registry.
 
-        # Format: YAML frontmatter + Markdown body
-        content = f"""---
-name: {spec.name}
-scope: {spec.scope.value}
-purpose: {spec.purpose}
-dependencies: {json.dumps(spec.dependencies)}
-keywords: {json.dumps(spec.keywords)}
-generated_by: skill-creator
-created_at: {spec.created_at.isoformat()}
----
-
-{spec.method}
-"""
-
-        filepath.write_text(content)
-        return str(filepath)
-
-    def _register_in_skillforge(self, spec: SkillSpec, quality_score: float) -> None:
-        """Register skill in SkillForge registry (simulated).
-
-        In production, this would:
-          - Add to ~/.claude/skills/registry.json
-          - Auto-grade with +0.3 (bootstrap seed)
-          - Emit concept-gate signal if generalizable
+        The registry renders its OWN YAML front-matter around this, so the
+        body must not carry a second one — two front-matter blocks make the
+        skill unparseable for the engine that loads it.
         """
-        # Simulated: just log
-        logger.info(f"Would register {spec.name} with quality {quality_score:.2f}")
+        body = spec.method.strip()
+        trailer = []
+        if spec.keywords:
+            trailer.append(f"**Keywords:** {', '.join(spec.keywords)}")
+        if spec.dependencies:
+            trailer.append(f"**Dependencies:** {', '.join(spec.dependencies)}")
+        if trailer:
+            body = body + "\n\n---\n\n" + "\n\n".join(trailer) + "\n"
+        return body
 
 
 # ============================================================================
