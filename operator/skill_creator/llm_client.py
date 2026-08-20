@@ -302,7 +302,13 @@ def _api_client():
 
 
 def engine_id_of(client) -> str:
-    """Human-readable engine id for status/audit surfaces."""
+    """Human-readable engine id for status/audit surfaces.
+
+    Always a str: the value is serialised into the run status, and a client
+    object that exposes a non-string `engine_id` (a bare Mock, a proxy) made
+    the whole status endpoint 500 on a run that had actually succeeded.
+    """
     if client is None:
         return "local"
-    return getattr(client, "engine_id", "api")
+    engine = getattr(client, "engine_id", None)
+    return engine if isinstance(engine, str) and engine else "api"

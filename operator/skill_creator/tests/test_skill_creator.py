@@ -15,7 +15,13 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from skill_creator.registry_bridge import list_skills, read_skill
+from skill_creator.registry_bridge import (
+    delete_skill,
+    list_skills,
+    read_skill,
+    skill_body,
+    strip_front_matter,
+)
 from skill_creator.skill_creator import (
     METHOD_LEN,
     PURPOSE_LEN,
@@ -682,3 +688,119 @@ class TestQualityScore:
         assert artifact.review_findings
         assert any(f.verdict == ReviewVerdict.CONFIRMED for f in artifact.review_findings)
         assert artifact.quality_score < 1.0
+
+
+# ============================================================================
+# REFINE + DELETE (managing a generated skill)
+# ============================================================================
+
+REFINED_JSON = (
+    '{"name": "assistant.test_skill", "scope": "assistant", '
+    '"purpose": "Validates JSON files and now also reports duplicate keys as warnings.", '
+    '"method": "# Validate JSON\\n\\n1. Read the file\\n2. Parse strictly\\n'
+    '3. Report duplicate keys as warnings\\n4. Exit non-zero on a syntax error\\n'
+    '5. Summarise the run", '
+    '"dependencies": ["python3"], "keywords": ["json", "duplicates"]}'
+)
+
+
+def refine_engine(reply: str = REFINED_JSON):
+    client = MagicMock()
+
+    def _create(**kwargs):
+        prompt = kwargs["messages"][0]["content"]
+        if "Reply with JSON ONLY" in prompt:
+            text = CLEAN_RUBRIC
+        elif "refining an EXISTING skill" in prompt:
+            text = reply
+        elif "FINDING:" in prompt:
+            text = "VERDICT: REFUTED"
+        elif "Generate a realistic test scenario" in prompt:
+            text = "User validates a file with duplicate keys"
+        else:
+            text = "- point"
+        return MagicMock(content=[MagicMock(text=text)])
+
+    client.messages.create.side_effect = _create
+    return client
+
+
+class TestRefine:
+    @pytest.mark.asyncio
+    async def test_refine_keeps_the_name_and_applies_the_change(self, tmp_path):
+        """A refine must UPDATE the skill, not register a near-duplicate.
+
+        The model is asked to keep the name, but it is not trusted to: the
+        operator's name wins, otherwise the original stays in place and a
+        second skill appears beside it under whatever name the model picked.
+        """
+        base = {"name": "assistant.test_skill", "body": "# Validate JSON\n\nOld body."}
+        planner = SkillPlanner(refine_engine())
+
+        spec = await planner.plan("also report duplicate keys", base=base)
+
+        assert spec.name == "assistant.test_skill"
+        assert "duplicate keys" in spec.method
+        assert spec.generated_by == "skill-creator-refine"
+
+    @pytest.mark.asyncio
+    async def test_model_renaming_the_skill_is_overridden(self, tmp_path):
+        renamed = REFINED_JSON.replace("assistant.test_skill", "assistant.something_else")
+        base = {"name": "assistant.test_skill", "body": "# Validate JSON\n\nOld."}
+        planner = SkillPlanner(refine_engine(renamed))
+
+        spec = await planner.plan("tweak it", base=base)
+
+        assert spec.name == "assistant.test_skill"
+
+    @pytest.mark.asyncio
+    async def test_refine_replaces_the_registered_skill_in_place(self, tmp_path):
+        """End state: ONE skill, with the new body."""
+        orch = SkillCreatorOrchestrator(fake_engine(), str(tmp_path))
+        first = await orch.create_skill("erzeuge einen Skill der JSON validiert")
+
+        body = strip_front_matter(skill_body(tmp_path, first.spec.name))
+        orch2 = SkillCreatorOrchestrator(refine_engine(), str(tmp_path))
+        second = await orch2.create_skill(
+            "also report duplicate keys",
+            base={"name": first.spec.name, "body": body},
+        )
+
+        assert second.spec.name == first.spec.name
+        assert [s["name"] for s in list_skills(tmp_path)] == [first.spec.name]
+        assert "duplicate keys" in read_skill(tmp_path, first.spec.name)["body"]
+
+    @pytest.mark.asyncio
+    async def test_refine_without_an_engine_falls_back_to_a_fresh_plan(self, tmp_path):
+        """Local mode has no way to rewrite a body; it must not crash."""
+        planner = SkillPlanner(None)
+        planner.client = None
+        planner.use_local = True
+
+        spec = await planner.plan("validate json files carefully",
+                                  base={"name": "assistant.x", "body": "# X"})
+        assert spec.name.startswith("assistant.")
+
+
+class TestDeleteAndBody:
+    def test_delete_removes_it_from_the_manifest(self, tmp_path):
+        promoter = SkillPromoter(str(tmp_path))
+        promoter.promote(_spec(name="assistant.doomed"), quality_score=1.0)
+        assert [s["name"] for s in list_skills(tmp_path)] == ["assistant.doomed"]
+
+        assert delete_skill(tmp_path, "assistant.doomed", reason="test") is True
+
+        assert list_skills(tmp_path) == []
+        assert read_skill(tmp_path, "assistant.doomed") is None
+        assert not (tmp_path / "skills" / "assistant.doomed").exists()
+
+    def test_deleting_an_unknown_skill_reports_false(self, tmp_path):
+        SkillPromoter(str(tmp_path))
+        assert delete_skill(tmp_path, "assistant.never_existed") is False
+
+    def test_strip_front_matter_leaves_the_body(self):
+        body = "---\nname: assistant.x\ntype: learned-experience\n---\n\n# Title\n\nStep one."
+        assert strip_front_matter(body) == "# Title\n\nStep one."
+
+    def test_strip_front_matter_is_a_noop_without_one(self):
+        assert strip_front_matter("# Title\n\nStep one.") == "# Title\n\nStep one."
