@@ -829,6 +829,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from . import tenant_cmd as _tenant_cmd
     _tenant_cmd.add_parser(sub)
 
+    # migrate — tenant-native migration helper (Phase D, ADR-0007)
+    from . import migrate_cmd as _migrate_cmd
+    _migrate_cmd.add_parser(sub)
+
     # tde (ADR-0222) — the live consumer of the TDE decision gate: evaluate the
     # measurement-week verdict, and with --arm safely flip worker_engine to tde.
     from . import tde_cmd as _tde_cmd
@@ -912,6 +916,12 @@ def main() -> None:
             parser.parse_args(["tenant", "--help"])
         from . import tenant_cmd as _tenant_cmd
         sys.exit(_tenant_cmd.dispatch(args))
+
+    elif args.command == "migrate":
+        if not getattr(args, "migrate_cmd", None):
+            parser.parse_args(["migrate", "--help"])
+        from . import migrate_cmd as _migrate_cmd
+        sys.exit(_migrate_cmd.dispatch(args))
 
     elif args.command == "tde":
         if not getattr(args, "tde_cmd", None):
