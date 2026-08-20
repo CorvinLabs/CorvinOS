@@ -1244,7 +1244,7 @@ class SkillPromoter:
 class SkillCreatorOrchestrator:
     """Main orchestrator for 5-phase skill generation."""
 
-    def __init__(self, claude_client=None, skills_dir: str = None,
+    def __init__(self, claude_client=None, registry_root: str = None,
                  progress_cb: Optional[Callable[[str, int, str], None]] = None,
                  escalate_on_k_max: bool = False):
         """Initialize orchestrator.
@@ -1252,7 +1252,9 @@ class SkillCreatorOrchestrator:
         Args:
             claude_client: injected LLM client; None resolves the configured
                 engine (Claude Code CLI / Max subscription by default).
-            skills_dir: where promoted skills are written.
+            registry_root: `<tenant-global>/skill-forge` receiving the
+                promoted skill. Console callers derive it from the
+                authenticated session's tenant.
             progress_cb: ``(phase, progress_pct, message)`` called as each of
                 the five phases starts and finishes. The console polls the
                 run status, which would otherwise sit at "planning 20%" for
@@ -1265,13 +1267,13 @@ class SkillCreatorOrchestrator:
         # same engine and a run cannot half-succeed on two backends.
         self.client = resolve_llm_client(claude_client)
         self.engine_id = engine_id_of(self.client)
-        self.skills_dir = skills_dir
+        self.registry_root = registry_root
         self.progress_cb = progress_cb
         self.planner = SkillPlanner(self.client)
         self.validator = SkillValidator()
         self.tester = SkillTester(self.client, escalate_on_k_max=escalate_on_k_max)
         self.reviewer = AdversarialReviewer(self.client)
-        self.promoter = SkillPromoter(skills_dir)
+        self.promoter = SkillPromoter(registry_root)
 
     async def _validate_with_repair(self, spec: SkillSpec) -> SkillSpec:
         """Normalise, then validate, then repair once, then validate again.

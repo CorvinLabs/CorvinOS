@@ -74,11 +74,26 @@ def fake_engine(*, fail_with: Exception | None = None, spec_json: str = SPEC_JSO
 
 
 @contextmanager
-def console_client(tmp_path: Path, engine=None, *, live: bool = False):
-    """Mount the console router and yield a TestClient over real HTTP."""
+def console_client(tmp_path: Path, engine=None, *, live: bool = False,
+                   tenant: str = "_default"):
+    """Mount the console router and yield an AUTHENTICATED TestClient.
+
+    The route derives its tenant from the session record, so the test has to
+    carry a real session cookie — the same contract the console SPA has.
+    """
+    home = tmp_path / "corvin_home"
+    (home / "tenants" / tenant / "global" / "auth").mkdir(parents=True, exist_ok=True)
+
+    prev = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID",
+                                           "VOICE_AUDIT_PATH")}
+    os.environ["CORVIN_HOME"] = str(home)
+    os.environ["CORVIN_TENANT_ID"] = tenant
+    os.environ["VOICE_AUDIT_PATH"] = str(home / "audit.jsonl")
+
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
+    from corvin_console import auth as _auth
     from corvin_console.routes import skill_creator_api as route
     from skill_forge import skill_creator as sc
 
@@ -88,29 +103,34 @@ def console_client(tmp_path: Path, engine=None, *, live: bool = False):
     orig_resolve = sc.resolve_llm_client
     orig_runs = dict(route._generation_runs)
     orig_stats = dict(route._skill_stats)
-    orig_orch = route.SkillCreatorOrchestrator
 
     if not live:
         sc.resolve_llm_client = lambda explicit=None: engine
 
-    # Keep generated skills out of the operator's real ~/.claude/skills.
-    def _orchestrator(**kwargs):
-        kwargs.setdefault("skills_dir", str(tmp_path / "skills"))
-        return orig_orch(**kwargs)
-
-    route.SkillCreatorOrchestrator = _orchestrator
     route._generation_runs.clear()
     route._skill_stats.update({"total_generated": 0, "avg_quality": 0.0,
                                "total_iterations": 0, "last_generated_at": None})
+
+    rec = _auth.create_session(tenant_id=tenant, token_fingerprint="test-fp")
+    client = TestClient(app, raise_server_exceptions=False)
+    client.cookies.set("corvin_console_sid", rec.sid)
     try:
-        yield TestClient(app, raise_server_exceptions=False), route
+        yield client, route
     finally:
         sc.resolve_llm_client = orig_resolve
-        route.SkillCreatorOrchestrator = orig_orch
         route._generation_runs.clear()
         route._generation_runs.update(orig_runs)
         route._skill_stats.clear()
         route._skill_stats.update(orig_stats)
+        for k, v in prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def registry_root(tmp_path: Path, tenant: str = "_default") -> Path:
+    return (tmp_path / "corvin_home" / "tenants" / tenant / "global" / "skill-forge")
 
 
 def poll_until_done(client, run_id: str, timeout_s: float = 30.0) -> dict:
@@ -151,15 +171,32 @@ def test_generate_runs_on_claude_code_engine_and_promotes(tmp_path):
         # The hyphenated name the model produced is normalised, not rejected.
         assert final["skill"]["name"] == "assistant.check_json_syntax"
 
-        # Promoted to disk, into the sandboxed skills dir (never ~/.claude).
-        promoted = tmp_path / "skills" / "assistant_check_json_syntax.md"
+        # Registered in the tenant's SkillForge registry — the manifest every
+        # consumer resolves against — and bootstrap-graded, so it is past
+        # skill_inject's eligibility gate.
+        assert final["skill"]["injectable"] is True
+        promoted = (registry_root(tmp_path) / "skills" /
+                    "assistant.check_json_syntax" / "SKILL.md")
         assert promoted.exists()
-        assert "name: assistant.check_json_syntax" in promoted.read_text()
 
-        # The listing endpoint answers over the same HTTP boundary.
-        listed = client.get("/v1/console/skill-creator/skills")
-        assert listed.status_code == 200
-        assert "skills" in listed.json()
+        listed = client.get("/v1/console/skill-creator/skills").json()
+        assert listed["tenant_id"] == "_default"
+        assert listed["injectable_count"] == 1
+        entry = next(s for s in listed["skills"] if s["name"] == "assistant.check_json_syntax")
+        assert entry["n_grades"] == 1
+        assert entry["injectable"] is True
+
+        # The View action has an endpoint behind it now.
+        detail = client.get("/v1/console/skill-creator/skills/assistant.check_json_syntax")
+        assert detail.status_code == 200
+        body = detail.json()["body"]
+        # The registry renders its own front-matter around the generated
+        # body; exactly ONE such block must be present (the promoter must not
+        # add a second, which would make the skill unparseable for the engine).
+        assert body.count("\n---\n") >= 1
+        assert "name: assistant.check_json_syntax" in body
+        assert "# Validate JSON" in body
+        assert detail.json()["injectable"] is True
 
         stats = client.get("/v1/console/skill-creator/stats").json()
         assert stats["total_generated"] == 1
@@ -228,6 +265,28 @@ def test_engine_failure_surfaces_actionable_message(tmp_path):
     assert final["status"] == "failed"
     assert "CORVIN_CLAUDE_BIN" in final["message"]
     assert "claude binary not found" in final["error"]
+
+
+def test_view_rejects_a_traversal_name(tmp_path):
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        resp = client.get("/v1/console/skill-creator/skills/..%2F..%2Fetc%2Fpasswd")
+        assert resp.status_code in (400, 404)
+
+
+def test_view_of_unknown_skill_is_404(tmp_path):
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        assert client.get("/v1/console/skill-creator/skills/assistant.nope").status_code == 404
+
+
+def test_generation_requires_a_session(tmp_path):
+    """Generation spends real engine time; it must not be callable
+    unauthenticated (it was)."""
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        client.cookies.clear()
+        resp = client.post("/v1/console/skill-creator/generate",
+                           json={"user_request": "erzeuge einen JSON Skill",
+                                 "async": True})
+        assert resp.status_code in (401, 403)
 
 
 def test_unknown_run_is_404(tmp_path):

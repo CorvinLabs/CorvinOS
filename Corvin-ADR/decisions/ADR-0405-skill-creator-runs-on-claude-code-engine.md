@@ -6,6 +6,7 @@ relates_to:
   - ADR-0323
 paths:
   - operator/skill_forge/llm_client.py
+  - operator/skill_forge/registry_bridge.py
   - operator/skill_forge/skill_creator.py
   - operator/skill_forge/six_phase_orchestrator.py
   - core/console/corvin_console/routes/skill_creator_api.py
@@ -112,6 +113,62 @@ Supporting decisions:
   `planning · validation · ldd_iteration · review · promotion` starts; the
   status payload carries `engine`, `phases` and `error`.
 
+## Amendment 2026-08-20 — promotion, reachability, and the quality scale
+
+Three defects surfaced once operators started generating skills for real.
+
+### A generated skill was never reachable
+
+`SkillPromoter` wrote a flat `~/.claude/skills/<name>.md`. **Nothing in this
+system reads that path.** Skill availability runs through the SkillForge
+REGISTRY: `SkillRegistry.list()` reads a manifest (not a directory), the
+engine plugin slot expects `<name>/SKILL.md`, and `skill_inject`'s gate drops
+anything with `n_grades < 1 or mean_score <= 0`. Claude Code's own loader
+also wants `<name>/SKILL.md`, so the flat file was inert there too. Every
+generated skill existed and could never be injected into a turn — the
+"looks wired, isn't" class `e2e-wiring-proof` exists to catch, reached by
+skipping that gate on a promotion path.
+
+Promotion now goes through `registry.create()` (manifest entry, fail-closed
+linter, plugin-slot mirror for `user`/`project` scope, hash-chained skill
+audit) and immediately seeds the bootstrap grade the injection gate requires
+— capped at 0.3 and disclosed in its notes as a seed rather than earned
+usage, per CLAUDE.md. A freshly created skill has no organic path to its own
+first grade, because auto-grading only scores skills that were already
+injected.
+
+`registry_bridge.py` loads the registry by explicit file location under a
+private module name. TWO packages in this repo are named `skill_forge`
+(`operator/skill_forge/` = the Skill-Creator, `operator/skill-forge/skill_forge/`
+= the registry) and the console route puts the former first on `sys.path`, so
+neither a plain import nor a `sys.path` insert is dependable.
+
+### The quality score carried no information
+
+`1.0 - (confirmed * 0.3 + plausible * 0.1)` saturates at four confirmed
+findings. The adversarial reviewers are instructed to FIND problems and
+routinely return five to ten (measured live: 5, 6, 10, 5), so every run
+reported 0%. Scoring is now per review DIMENSION — clean 1.0, plausible-only
+0.5, any confirmed 0.0, averaged over the panel, minus 0.2 for a
+non-converged LDD loop. The findings themselves were counted into that number
+and discarded; they now travel with the artifact and reach the console, so
+"Quality: 0%" comes with its reasons.
+
+A CONFIRMED verdict is the reviewer's own claim — there is no independent
+verification pass — and the code now says so instead of promising an
+"LDD re-entry in production" that never happened.
+
+### The route had no tenant and no session
+
+Generation spends the operator's subscription and was callable
+unauthenticated. The route now depends on `require_session`, derives the
+registry root from `rec.tenant_id` (never an env var — the console
+tenant-routing rule), and passes that tenant explicitly into the worker
+thread, which has no session of its own. `GET /skill-creator/skills/{name}`
+backs the console's previously inert "View" button, and `/skills` reads the
+registry manifest with an `injectable` flag per skill instead of globbing a
+directory.
+
 ## Consequences
 
 * Skill generation works on a stock CorvinOS install with no API key. A live
@@ -125,8 +182,15 @@ Supporting decisions:
   setting. It is deliberately NOT the `spec.web_chat.worker_engine` mechanism,
   which governs chat-turn execution and must stay single-source. Surfacing the
   Skill-Creator engine in Console → Settings is left open.
-* Skills still land in `~/.claude/skills/`, not in the tenant-native skill
-  tree (ADR-0007). Unchanged by this ADR and still owed.
+* Skills land in the tenant-native SkillForge registry at
+  `<tenant-global>/skill-forge/` (ADR-0007), reached through the
+  authenticated session's tenant.
+* Skills generated BEFORE this change sit in `~/.claude/skills/*.md` and are
+  inert. They are not migrated automatically — the operator can regenerate or
+  move them; nothing reads them where they are.
+* `skills_manual.py` writes skill directories WITHOUT a manifest entry, so
+  manually authored skills have the same reachability gap. Out of scope here,
+  but it is the same defect.
 
 ## Alternatives considered
 
