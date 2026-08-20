@@ -379,6 +379,31 @@ spec:
     skill_creator_adversarial_reviewers: 3  # Parallel review agents
 ```
 
+### Reachability — where a promoted skill goes, and why it matters
+
+Promotion writes into the tenant's SkillForge **registry** at
+`<corvin_home>/tenants/<tid>/skill-forge/` — a sibling of `global/`, not a
+child of it, because that sibling path is what
+`MultiSkillRegistry._root_for("user")` resolves and therefore the only root
+`skill_inject` ever reads.
+
+Three things must ALL hold before a skill is ever injected into a turn:
+
+| Requirement | Provided by | Failure mode when missing |
+|---|---|---|
+| Manifest entry | `registry.create()` | `SkillRegistry.list()` reads the manifest, not the directory — a bare directory is invisible |
+| `user`/`project` scope | promoter default `user` | Layer-16 scope gate: task/session scope never reaches the engine plugin slot |
+| `n_grades >= 1`, `mean_score > 0` | bootstrap grade (0.3, disclosed as a seed) | `skill_inject` drops it; auto-grading only scores skills that were already injected, so there is no organic path to a first grade |
+
+The console reports the combined answer as `injectable` per skill, and the
+E2E asserts it against the real consumer — generate through HTTP, then look
+for the skill in `skill_inject.collect_active_skills()`. Weaker checks (file
+written, manifest entry, `injectable: true`) all passed at one point while
+the skill was still unreachable.
+
+**Known gap (2026-08-20):** 139 pre-existing `cel_*` skills in the registry
+carry zero grades and are therefore inert. Same mechanism, unrelated origin.
+
 ### Artifact Output
 
 When skill generation succeeds, the console displays:
@@ -426,6 +451,7 @@ File: ~/.claude/skills/assistant.analyze_local_files.md
 - ✅ Dependencies can be resolved (or auto-installed if safe)
 - ✅ Name matches `SKILL_NAME_RE` = `^(assistant|project)\.[a-z_]+$`
 - ✅ Purpose within `PURPOSE_LEN` (20–200), method within `METHOD_LEN` (100–5000)
+- ✅ SkillForge's own linter (fail-closed) at registration time
 
 **Normalise → validate → repair once → validate (ADR-0405).** Phase 1
 generates freely and this gate is fail-closed, so without a step in between a
@@ -581,6 +607,15 @@ Watch for skills that:
   default (the LDD contract). The console orchestrator passes
   `escalate_on_k_max=False`, keeps the best iterate and subtracts 0.2 from
   `quality_score` instead of discarding the run.
+
+**Quality score:** scored per review DIMENSION — clean 1.0, plausible-only
+0.5, any confirmed 0.0 — averaged over the panel, minus 0.2 for a
+non-converged LDD loop. The earlier per-finding penalty
+(`1.0 - confirmed*0.3`) saturated at four findings, and the reviewers
+routinely return five to ten, so every run read 0%. The findings travel with
+the artifact and are shown in the console, so a low score comes with its
+reasons. A CONFIRMED verdict is the reviewer's own claim — there is no
+independent verification pass behind it.
 
 **Reviewer harshness:** How critical are adversarial reviewers?
 - Default: ALL reviewers must REFUTE (strict)
