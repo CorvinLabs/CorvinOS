@@ -343,66 +343,50 @@ async def adversarial_review_skill(skill_spec: SkillSpec) -> ReviewResult:
 
 ### Location: `/console/app/skills` → Skill Creator panel
 
-**Shipped today** (`SkillCreatorPanel.tsx`, `routes/skill_creator_api.py`):
+**Shipped today** (`SkillCreatorPanel.tsx`, `routes/skill_creator_api.py`).
+Every route is session-scoped: the tenant comes from the authenticated
+`SessionRecord`, never an env var.
 
-| Endpoint | Behaviour |
-|---|---|
-| `POST /v1/console/skill-creator/generate` | 202 + `{run_id, engine}`; the run executes on a worker thread |
-| `GET /v1/console/skill-creator/status/{run_id}` | `{status, phase, progress, message, engine, phases, error, skill}` |
-| `GET /v1/console/skill-creator/skills` | promoted skills on disk |
-| `GET /v1/console/skill-creator/stats` | `{total_generated, avg_quality, total_iterations, last_generated_at}` |
+| Endpoint | Auth | Behaviour |
+|---|---|---|
+| `POST /v1/console/skill-creator/generate` | session | 202 + `{run_id, engine, base_skill}`; runs on a worker thread. With `base_skill` it REFINES that skill in place instead of creating a new one |
+| `GET /v1/console/skill-creator/status/{run_id}` | session | `{status, phase, progress, message, engine, phases, error, base_skill, skill}` — `skill` carries `findings`, `injectable` and `registry_path` |
+| `GET /v1/console/skill-creator/skills` | session | registry manifest + `injectable` per skill + `injectable_count` |
+| `GET /v1/console/skill-creator/skills/{name}` | session | body, metadata and grades of one skill |
+| `DELETE /v1/console/skill-creator/skills/{name}` | session + **CSRF** | removes it from registry, disk and plugin slot; audited as `skill.generated_deleted` |
+| `GET /v1/console/skill-creator/stats` | session | `{total_generated, avg_quality, total_iterations, last_generated_at}` |
 
-The panel polls `/status` once a second and renders a five-step phase stepper
-(`planning · validation · ldd_iteration · review · promotion`) plus the engine
-that is running the work. `phases` is served by the backend so the stepper and
-the orchestrator cannot drift apart. A failed run shows an operator-facing
-message with the raw engine error behind a disclosure.
+A shared `_require_valid_name` guard runs on every name-taking route, so a
+new endpoint cannot forget it.
 
-**Not yet built** (was described here as if shipped): an enable/disable toggle,
-an approve/reject checkpoint after Phase 1, and the View/Delete actions in the
-generated-skills list — those buttons are inert.
+### The operator's loop in the panel
 
-### Feature Flag
-
-**Not implemented.** The keys below are the intended shape; nothing reads them
-today. Engine selection is currently an environment escape hatch
-(`CORVIN_SKILL_CREATOR_ENGINE`, see the Engine section) and deliberately NOT
-the `spec.web_chat.worker_engine` mechanism, which governs chat-turn execution
-and must stay single-source.
-
-```yaml
-# core/bundle/config-templates/tenant.corvin.yaml
-spec:
-  features:
-    skill_creator_enabled: true  # Default ON
-    skill_creator_max_iterations: 5  # ADR-0321 / LDD budget
-    skill_creator_adversarial_reviewers: 3  # Parallel review agents
+```
+describe ─► watch phases ─► read the body ─► change it ─► keep or delete
+   │                                            │
+   └──────────────── Refine (base_skill) ◄──────┘
 ```
 
-### Reachability — where a promoted skill goes, and why it matters
+* **Library** — search, and per skill a `usable` / `inert` badge. The badge is
+  load-bearing, not decoration: an ungraded skill sits below `skill_inject`'s
+  eligibility gate and is never injected, so the panel must not present it as
+  if it were in use.
+* **Viewer** — the real `SKILL.md` body, the grades behind it (including the
+  disclosed bootstrap seed), Copy, and Refine.
+* **Refine** — sets the composer to modify that skill: a banner names the
+  target, the button and placeholder change, and `base_skill` goes on the
+  wire. The run replaces the skill in place. The model is asked to keep the
+  name and is **not trusted to** — the operator's name wins, or a rename
+  would leave the original registered with a near-duplicate beside it. An
+  unknown `base_skill` is a 404, never a silent fresh generation.
+* **Delete** — confirms first (registry + disk + plugin slot, not undoable),
+  then reports the outcome through a toast.
+* Polling stops at a terminal state; the library refreshes itself after a run
+  finishes or a skill is deleted.
 
-Promotion writes into the tenant's SkillForge **registry** at
-`<corvin_home>/tenants/<tid>/skill-forge/` — a sibling of `global/`, not a
-child of it, because that sibling path is what
-`MultiSkillRegistry._root_for("user")` resolves and therefore the only root
-`skill_inject` ever reads.
-
-Three things must ALL hold before a skill is ever injected into a turn:
-
-| Requirement | Provided by | Failure mode when missing |
-|---|---|---|
-| Manifest entry | `registry.create()` | `SkillRegistry.list()` reads the manifest, not the directory — a bare directory is invisible |
-| `user`/`project` scope | promoter default `user` | Layer-16 scope gate: task/session scope never reaches the engine plugin slot |
-| `n_grades >= 1`, `mean_score > 0` | bootstrap grade (0.3, disclosed as a seed) | `skill_inject` drops it; auto-grading only scores skills that were already injected, so there is no organic path to a first grade |
-
-The console reports the combined answer as `injectable` per skill, and the
-E2E asserts it against the real consumer — generate through HTTP, then look
-for the skill in `skill_inject.collect_active_skills()`. Weaker checks (file
-written, manifest entry, `injectable: true`) all passed at one point while
-the skill was still unreachable.
-
-**Known gap (2026-08-20):** 139 pre-existing `cel_*` skills in the registry
-carry zero grades and are therefore inert. Same mechanism, unrelated origin.
+**Still not built:** an enable/disable toggle, an approve/reject checkpoint
+after Phase 1, and grading a skill from the console (the only grade a
+generated skill has is its bootstrap seed).
 
 ### Artifact Output
 
