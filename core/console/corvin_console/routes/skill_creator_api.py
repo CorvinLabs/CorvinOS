@@ -1,19 +1,20 @@
-"""Flask API routes for Skill-Creator (console integration).
+"""FastAPI routes for Skill-Creator (console integration).
 
 Endpoints:
-  POST /api/quality/skill-creator/generate — Generate new skill
-  GET /api/quality/skill-creator/status/<run_id> — Poll generation status
-  GET /api/quality/skill-creator/skills — List generated skills
+  POST /skill-creator/generate — Generate new skill
+  GET /skill-creator/status/<run_id> — Poll generation status
+  GET /skill-creator/skills — List generated skills
+  GET /skill-creator/stats — Get aggregated stats
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from uuid import uuid4
 
-from flask import Blueprint, request, jsonify
-from werkzeug.exceptions import BadRequest
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 # Import Skill-Creator orchestrator
 try:
@@ -27,7 +28,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-skill_creator_bp = Blueprint("skill_creator", __name__, url_prefix="/api/quality/skill-creator")
+router = APIRouter(prefix="/skill-creator", tags=["skill-creator"])
 
 # In-memory store for generation runs (in production: use DB)
 _generation_runs: Dict[str, Dict[str, Any]] = {}
@@ -39,22 +40,53 @@ _skill_stats = {
 }
 
 
-@skill_creator_bp.route("/generate", methods=["POST"])
-def generate_skill():
-    """POST /api/quality/skill-creator/generate
+# ============================================================================
+# REQUEST/RESPONSE MODELS
+# ============================================================================
 
-    Request body:
+class SkillGenerationRequest(BaseModel):
+    user_request: str = Field(..., min_length=10, description="Description of skill to create")
+    async_: bool = Field(default=True, alias="async", description="Run async and return run_id")
+
+
+class SkillArtifact(BaseModel):
+    name: str
+    purpose: str
+    scope: str
+    quality: float
+    iterations: int
+    dependencies: list = Field(default_factory=list)
+
+
+class GenerationStatusResponse(BaseModel):
+    run_id: str
+    status: str  # running | success | failed
+    phase: str
+    progress: int
+    message: str
+    skill: Optional[SkillArtifact] = None
+
+
+class GeneratedSkill(BaseModel):
+    name: str
+    file: str
+    created_at: str
+
+
+# ============================================================================
+# ENDPOINTS
+# ============================================================================
+
+@router.post("/generate", status_code=202)
+async def generate_skill(req: SkillGenerationRequest) -> Dict[str, Any]:
+    """POST /skill-creator/generate
+
+    Generate a new skill using async 6-phase LDD orchestration.
+
+    Request:
     {
       "user_request": "erzeuge einen Skill der JSON validiert",
-      "async": true  // Optional: run async, return run_id; default false
-    }
-
-    Response (sync):
-    {
-      "status": "success",
-      "skill": {...},
-      "quality": 0.9,
-      "iterations": 2
+      "async": true
     }
 
     Response (async):
@@ -65,41 +97,33 @@ def generate_skill():
     }
     """
     if SkillCreatorOrchestrator is None:
-        return jsonify({"error": "Skill-Creator not available"}), 500
+        raise HTTPException(status_code=500, detail="Skill-Creator not available")
 
     try:
-        data = request.get_json() or {}
-        user_request = data.get("user_request", "").strip()
-        async_mode = data.get("async", False)
+        user_request = req.user_request.strip()
 
-        if not user_request:
-            raise BadRequest("Missing 'user_request' field")
-
-        if len(user_request) < 10:
-            raise BadRequest("Request must be at least 10 characters")
+        if not user_request or len(user_request) < 10:
+            raise HTTPException(status_code=400, detail="Request must be at least 10 characters")
 
         # Create orchestrator
         orchestrator = SkillCreatorOrchestrator()
 
-        if async_mode:
+        if req.async_:
             # Async mode: spawn background task, return run_id
             run_id = _spawn_generation_task(orchestrator, user_request)
-            return jsonify({
+            return {
                 "status": "accepted",
                 "run_id": run_id,
                 "message": f"Skill generation started. Poll /status/{run_id} for progress."
-            }), 202
-
+            }
         else:
             # Sync mode: block until complete (not recommended for long tasks)
-            # In production, this would timeout
-            import asyncio
             loop = asyncio.new_event_loop()
             try:
                 artifact = loop.run_until_complete(
                     orchestrator.create_skill(user_request)
                 )
-                return jsonify({
+                return {
                     "status": "success",
                     "skill": {
                         "name": artifact.spec.name,
@@ -110,38 +134,28 @@ def generate_skill():
                         "iterations": artifact.ldd_iterations,
                     },
                     "message": f"Skill '{artifact.spec.name}' generated successfully."
-                }), 200
+                }
             finally:
                 loop.close()
 
-    except BadRequest:
+    except HTTPException:
         raise
     except SkillCreatorError as e:
         logger.error(f"Skill generation failed: {e}")
-        return jsonify({"error": str(e), "status": "failed"}), 400
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in skill generation: {e}")
-        return jsonify({"error": str(e), "status": "error"}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@skill_creator_bp.route("/status/<run_id>", methods=["GET"])
-def check_status(run_id: str):
-    """GET /api/quality/skill-creator/status/<run_id>
+@router.get("/status/{run_id}", response_model=GenerationStatusResponse)
+async def check_status(run_id: str) -> GenerationStatusResponse:
+    """GET /skill-creator/status/<run_id>
 
     Poll the status of an async skill generation run.
-
-    Response:
-    {
-      "run_id": "run-abc123",
-      "status": "running" | "success" | "failed",
-      "phase": "planning" | "validation" | "ldd_iteration" | "review" | "promotion",
-      "progress": 40,
-      "message": "...",
-      "skill": {...}  // Only if status == "success"
-    }
     """
     if run_id not in _generation_runs:
-        return jsonify({"error": f"Run not found: {run_id}"}), 404
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
     run = _generation_runs[run_id]
 
@@ -156,22 +170,14 @@ def check_status(run_id: str):
     if run["status"] == "success":
         response["skill"] = run.get("skill")
 
-    return jsonify(response), 200
+    return GenerationStatusResponse(**response)
 
 
-@skill_creator_bp.route("/skills", methods=["GET"])
-def list_generated_skills():
-    """GET /api/quality/skill-creator/skills
+@router.get("/skills")
+async def list_generated_skills() -> Dict[str, Any]:
+    """GET /skill-creator/skills
 
     List all generated skills (from disk).
-
-    Response:
-    {
-      "skills": [
-        {"name": "assistant.validate_json", "quality": 0.9, "created_at": "..."},
-        ...
-      ]
-    }
     """
     from pathlib import Path
 
@@ -180,10 +186,6 @@ def list_generated_skills():
 
     if skills_dir.exists():
         for skill_file in skills_dir.glob("assistant_*.md"):
-            # Parse YAML frontmatter
-            content = skill_file.read_text()
-            lines = content.split("\n")
-
             skill_name = skill_file.stem.replace("_", ".")
             skills.append({
                 "name": skill_name,
@@ -191,34 +193,25 @@ def list_generated_skills():
                 "created_at": datetime.fromtimestamp(skill_file.stat().st_ctime).isoformat(),
             })
 
-    return jsonify({"skills": skills}), 200
+    return {"skills": skills}
+
+
+@router.get("/stats")
+async def get_stats() -> Dict[str, Any]:
+    """GET /skill-creator/stats
+
+    Returns aggregated statistics about skill generation.
+    """
+    return _skill_stats
 
 
 # ============================================================================
 # BACKGROUND TASK HELPERS
 # ============================================================================
 
-@skill_creator_bp.route("/stats", methods=["GET"])
-def get_stats():
-    """GET /api/quality/skill-creator/stats
-
-    Returns aggregated statistics about skill generation.
-
-    Response:
-    {
-      "total_generated": 5,
-      "avg_quality": 0.87,
-      "total_iterations": 12,
-      "last_generated_at": "2026-08-20T14:32:00"
-    }
-    """
-    return jsonify(_skill_stats), 200
-
-
 def _spawn_generation_task(orchestrator, user_request: str) -> str:
     """Spawn async generation task; return run_id."""
     import threading
-    from uuid import uuid4
 
     run_id = f"run-{uuid4().hex[:12]}"
 
@@ -233,7 +226,6 @@ def _spawn_generation_task(orchestrator, user_request: str) -> str:
     def run_task():
         """Background worker for skill generation."""
         try:
-            import asyncio
             loop = asyncio.new_event_loop()
 
             # Update progress as phases complete
