@@ -11,10 +11,15 @@ import re
 from typing import Optional
 
 
-# Tenant ID: alphanumeric, underscore, hyphen. Max 64 chars. No path traversal.
-# [PSEUDOCODE] Reserved names: ".", "..", "_default", "global", "bridges"
-TENANT_ID_REGEX = r"^[a-z0-9_-]{1,64}$"
-RESERVED_TENANT_NAMES = frozenset({".", "..", "_default", "global", "bridges"})
+# Tenant ID: alphanumeric, underscore only. Max 64 chars. No path traversal.
+# [PSEUDOCODE] Reserved names: ".", "..", "global", "bridges" + admin names
+TENANT_ID_REGEX = r"^[a-z0-9_]{1,64}$"
+RESERVED_TENANT_NAMES = frozenset({
+    ".", "..", "global", "bridges",
+    # Admin/system names
+    "root", "admin", "system", "service", "operator",
+    "localhost", "local", "test", "internal", "reserved",
+})
 
 # Session ID: max 128 chars. Must pass length and format checks.
 # [PSEUDOCODE] Allows: UUIDs, channel-specific IDs (discord/123, slack/456)
@@ -55,11 +60,11 @@ def validate_tenant_id(tenant_id: str) -> str:
             f"tenant_id contains path traversal characters: {tenant_id!r}"
         )
 
-    # Format check: lowercase alphanumeric + underscore/hyphen, 1-64 chars
+    # Format check: lowercase alphanumeric + underscore, 1-64 chars
     if not re.match(TENANT_ID_REGEX, tenant_id):
         raise ValueError(
             f"tenant_id contains invalid characters: {tenant_id!r}. "
-            f"Only lowercase alphanumeric, underscore, and hyphen allowed (1-64 chars)."
+            f"Only lowercase alphanumeric and underscore allowed (1-64 chars)."
         )
 
     # Reserved names check (fail-closed)

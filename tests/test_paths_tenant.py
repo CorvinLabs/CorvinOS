@@ -55,10 +55,12 @@ class TestValidateTenantId:
         assert validate_tenant_id("tenant_123") == "tenant_123"
         assert validate_tenant_id("t1") == "t1"
 
-    def test_valid_tenant_id_with_hyphen(self):
-        """Valid: with hyphens."""
-        assert validate_tenant_id("my-tenant") == "my-tenant"
-        assert validate_tenant_id("acme-corp-2024") == "acme-corp-2024"
+    def test_invalid_tenant_id_with_hyphen(self):
+        """Invalid: hyphens not allowed."""
+        with pytest.raises(ValueError, match="invalid characters"):
+            validate_tenant_id("my-tenant")
+        with pytest.raises(ValueError, match="invalid characters"):
+            validate_tenant_id("acme-corp-2024")
 
     def test_valid_tenant_id_underscore(self):
         """Valid: with underscores."""
@@ -119,19 +121,18 @@ class TestValidateTenantId:
             validate_tenant_id("a" * 65)
 
     def test_invalid_tenant_id_reserved_dot(self):
-        """Invalid: reserved name '.'."""
-        with pytest.raises(ValueError, match="reserved"):
+        """Invalid: '.' fails regex (not alphanumeric/underscore)."""
+        with pytest.raises(ValueError, match="invalid characters"):
             validate_tenant_id(".")
 
     def test_invalid_tenant_id_reserved_dotdot(self):
-        """Invalid: reserved name '..'."""
-        with pytest.raises(ValueError, match="reserved"):
+        """Invalid: '..' fails path traversal check."""
+        with pytest.raises(ValueError, match="path traversal"):
             validate_tenant_id("..")
 
-    def test_invalid_tenant_id_reserved_default(self):
-        """Invalid: reserved name '_default'."""
-        with pytest.raises(ValueError, match="reserved"):
-            validate_tenant_id("_default")
+    def test_valid_tenant_id_default(self):
+        """Valid: '_default' is now allowed (not reserved)."""
+        assert validate_tenant_id("_default") == "_default"
 
     def test_invalid_tenant_id_reserved_global(self):
         """Invalid: reserved name 'global'."""
@@ -143,21 +144,48 @@ class TestValidateTenantId:
         with pytest.raises(ValueError, match="reserved"):
             validate_tenant_id("bridges")
 
+    def test_invalid_tenant_id_reserved_admin_names(self):
+        """Invalid: reserved admin names (root, admin, system, etc.)."""
+        reserved_admin_names = [
+            "root", "admin", "system", "service", "operator",
+            "localhost", "local", "test", "internal", "reserved",
+        ]
+        for name in reserved_admin_names:
+            with pytest.raises(ValueError, match="reserved"):
+                validate_tenant_id(name)
+
     def test_tenant_id_regex_valid_pattern(self):
         """Regex validates correct pattern."""
         assert re.match(TENANT_ID_REGEX, "tenant_a")
-        assert re.match(TENANT_ID_REGEX, "my-tenant")
+        assert re.match(TENANT_ID_REGEX, "my_tenant")
         assert re.match(TENANT_ID_REGEX, "t1")
 
     def test_tenant_id_regex_rejects_uppercase(self):
         """Regex rejects uppercase."""
         assert not re.match(TENANT_ID_REGEX, "MyTenant")
 
+    def test_tenant_id_regex_rejects_hyphens(self):
+        """Regex rejects hyphens."""
+        assert not re.match(TENANT_ID_REGEX, "my-tenant")
+        assert not re.match(TENANT_ID_REGEX, "acme-corp-2024")
+
     def test_reserved_tenant_names_constant(self):
         """RESERVED_TENANT_NAMES includes all expected names."""
-        assert "_default" in RESERVED_TENANT_NAMES
+        # _default is NO LONGER reserved (now allowed as a user tenant)
+        assert "_default" not in RESERVED_TENANT_NAMES
         assert "global" in RESERVED_TENANT_NAMES
         assert "bridges" in RESERVED_TENANT_NAMES
+        # New admin names
+        assert "root" in RESERVED_TENANT_NAMES
+        assert "admin" in RESERVED_TENANT_NAMES
+        assert "system" in RESERVED_TENANT_NAMES
+        assert "service" in RESERVED_TENANT_NAMES
+        assert "operator" in RESERVED_TENANT_NAMES
+        assert "localhost" in RESERVED_TENANT_NAMES
+        assert "local" in RESERVED_TENANT_NAMES
+        assert "test" in RESERVED_TENANT_NAMES
+        assert "internal" in RESERVED_TENANT_NAMES
+        assert "reserved" in RESERVED_TENANT_NAMES
 
 
 # ============================================================================
@@ -179,9 +207,11 @@ class TestValidateSessionId:
         assert validate_session_id(snowflake) == snowflake
 
     def test_valid_session_id_channel_format(self):
-        """Valid: channel-specific format."""
-        assert validate_session_id("discord/123456") == "discord/123456"
-        assert validate_session_id("slack/U123456") == "slack/U123456"
+        """Valid: channel-specific format (without slashes, which are path-traversal)."""
+        # Note: session_id cannot contain "/" (path-traversal check)
+        # Use underscores to separate channel and ID instead
+        assert validate_session_id("discord_123456") == "discord_123456"
+        assert validate_session_id("slack_U123456") == "slack_U123456"
 
     def test_valid_session_id_max_length(self):
         """Valid: maximum length (128 chars)."""
@@ -413,8 +443,8 @@ class TestTenantSessionDir:
 
     def test_tenant_session_dir_validates_tenant_id(self):
         """session_dir() validates tenant_id."""
-        with pytest.raises(ValueError):
-            tenant_session_dir("_default", "sess_1")
+        with pytest.raises(ValueError, match="reserved"):
+            tenant_session_dir("admin", "sess_1")
 
     def test_tenant_session_dir_validates_session_id(self):
         """session_dir() validates session_id."""
@@ -545,17 +575,17 @@ class TestTenantPathsIntegration:
 
     def test_all_tenant_dirs_validate_tenant_id(self):
         """All tenant_*_dir() functions validate tenant_id."""
-        invalid_id = "_default"
+        invalid_id = "system"  # Changed from "_default" which is now allowed
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="reserved"):
             tenant_skill_dir(invalid_id)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="reserved"):
             tenant_tool_dir(invalid_id)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="reserved"):
             tenant_learning_dir(invalid_id)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="reserved"):
             tenant_memory_dir(invalid_id)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="reserved"):
             tenant_audit_file(invalid_id)
 
     def test_parametrized_functions_consistency(self):
@@ -607,7 +637,7 @@ class TestTenantPathsIntegration:
         # This is a static test — verify by reading the code
         # core/paths/tenant.py should only import:
         #   - pathlib.Path
-        #   - corvin_core.tenants (validation)
+        #   - core.tenants (validation)
         # NOT: skill_management, gateway, orchestration, etc.
-        from corvin_core.paths.tenant import __doc__
-        assert __doc__ is not None  # Module has docstring
+        from core.paths import tenant
+        assert tenant.__doc__ is not None  # Module has docstring
