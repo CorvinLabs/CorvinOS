@@ -1,25 +1,50 @@
-"""Learning Engine subsystem: Learn from errors and strategies."""
+"""Learning Engine subsystem: Learn from errors and strategies.
+
+Phase C: Tenant-native persistence via ExecutionContext.tenant_id
+"""
 
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .base import Subsystem
+from core.paths.tenant import tenant_learning_dir
 
 logger = logging.getLogger(__name__)
 
 
 class LearningEngine(Subsystem):
-    """Learn from error/strategy patterns."""
+    """Learn from error/strategy patterns.
+
+    Phase C: All learning data stored in tenant-scoped directory.
+    """
 
     def __init__(
         self,
-        db_path: str = "~/.corvin/learning/engine.db",
+        context: Optional[Any] = None,
+        db_path: Optional[str] = None,
         min_confidence: float = 0.5,
         learning_window_turns: int = 100,
     ):
-        self.db_path = Path(db_path).expanduser()
+        """Initialize LearningEngine.
+
+        Args:
+            context: ExecutionContext (Phase C) with tenant_id for tenant-scoped operations
+            db_path: Tenant-specific database path (auto-computed from context if not provided)
+            min_confidence: Minimum confidence threshold
+            learning_window_turns: Learning window size
+        """
+        # Phase C: Store ExecutionContext for tenant-native operations
+        self.context = context
+        self.tenant_id = context.tenant_id if context else "_default"
+
+        # Use tenant-scoped database path
+        if db_path:
+            self.db_path = Path(db_path).expanduser()
+        else:
+            self.db_path = tenant_learning_dir(self.tenant_id) / "engine.db"
+
         self.min_confidence = min_confidence
         self.learning_window_turns = learning_window_turns
         self.strategies_by_error: Dict[str, List[Dict[str, Any]]] = {}

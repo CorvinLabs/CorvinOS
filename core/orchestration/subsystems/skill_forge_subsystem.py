@@ -230,10 +230,13 @@ class SkillForgeSubsystem(Subsystem):
     - Auto-grade skills based on strategy success/failure
     - Auto-promote when confidence threshold met
     - Record decisions in ContextAPI
+
+    Phase C: Tenant-native persistence via ExecutionContext.tenant_id
     """
 
     def __init__(
         self,
+        context: Optional[Any] = None,
         registry: Optional[Any] = None,
         auto_grade_success: float = 1.0,
         auto_grade_failure: float = -0.5,
@@ -246,6 +249,7 @@ class SkillForgeSubsystem(Subsystem):
         """Initialize Skill Forge subsystem.
 
         Args:
+            context: ExecutionContext (Phase C) with tenant_id for tenant-scoped operations
             registry: SkillRegistry instance
             auto_grade_success: Score for successful strategy
             auto_grade_failure: Score for failed strategy
@@ -255,6 +259,10 @@ class SkillForgeSubsystem(Subsystem):
             namespace_policy: NamespacePolicy for validation (created if None)
             forge_quota: ForgeQuota for limits (created if None)
         """
+        # Phase C: Store ExecutionContext for tenant-native operations
+        self.context = context
+        self.tenant_id = context.tenant_id if context else "_default"
+
         self.registry = registry
         self.async_registry = AsyncSkillRegistry(registry)
         self.auto_grade_success = auto_grade_success
@@ -263,7 +271,7 @@ class SkillForgeSubsystem(Subsystem):
         self.min_mean_score_for_promotion = min_mean_score_for_promotion
         self.min_confidence_for_promotion = min_confidence_for_promotion
 
-        # Track skill bindings and scores
+        # Track skill bindings and scores (per-tenant)
         self.strategy_skills: Dict[str, List[str]] = {}  # strategy -> [skills]
         self.skill_scores: Dict[str, List[float]] = {}  # skill_name -> [scores]
         self.skill_score_timestamps: Dict[str, List[float]] = {}  # ADR-0372: skill_name -> [timestamps for decay]
@@ -273,7 +281,7 @@ class SkillForgeSubsystem(Subsystem):
         self.hub: Optional[Any] = None
         self.context_api: Optional[ContextAPI] = None
 
-        # ADR-0361: Policy and quota
+        # ADR-0361: Policy and quota (per-tenant)
         self.namespace_policy = namespace_policy or NamespacePolicy()
         self.forge_quota = forge_quota or ForgeQuota()
 

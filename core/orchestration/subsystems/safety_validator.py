@@ -1,22 +1,45 @@
-"""Safety Validator subsystem: Prevent unsafe actions."""
+"""Safety Validator subsystem: Prevent unsafe actions with audit trail.
+
+Phase C: Tenant-native audit trail via AuditChainWriter.
+"""
 
 import logging
 import re
-from typing import Any, Dict, List
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from .base import Subsystem
+from core.paths.tenant import tenant_audit_file
+from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
 
 logger = logging.getLogger(__name__)
 
 
 class SafetyValidator(Subsystem):
-    """Validate safety of proposed actions."""
+    """Validate safety of proposed actions with audit trail.
+
+    Phase C: All audit events written to tenant-scoped audit.jsonl via AuditChainWriter.
+    """
 
     def __init__(
         self,
+        context: Optional[Any] = None,
         forbidden_actions: List[str] = None,
         max_retry_attempts: int = 3,
     ):
+        """Initialize SafetyValidator.
+
+        Args:
+            context: ExecutionContext (Phase C) with tenant_id for tenant-scoped operations
+            forbidden_actions: List of forbidden actions
+            max_retry_attempts: Max retry attempts before escalation
+        """
+        # Phase C: Store ExecutionContext for tenant-native operations
+        self.context = context
+        self.tenant_id = context.tenant_id if context else "_default"
+        self.user_id = getattr(context, 'user_id', None) if context else None
+
         self.forbidden_actions = forbidden_actions or [
             "rm -rf",
             "sudo",
@@ -28,6 +51,10 @@ class SafetyValidator(Subsystem):
         self.violation_count: Dict[str, int] = {}
         self.consecutive_failures: Dict[str, int] = {}  # ADR-0374: circuit breaker
         self.disabled_strategies: Dict[str, float] = {}  # strategy → cooldown timestamp
+
+        # Phase C: Initialize tenant-scoped audit chain writer
+        audit_file = tenant_audit_file(self.tenant_id)
+        self.audit_writer = AuditChainWriter(audit_file)
 
     @property
     def name(self) -> str:
@@ -73,11 +100,27 @@ class SafetyValidator(Subsystem):
             await self.on_strategy(event_name, event_data)
 
     async def on_strategy(self, event_name: str, event_data: Dict[str, Any]) -> None:
-        """Validate strategy safety."""
+        """Validate strategy safety and log to audit trail."""
         strategy = event_data.get("strategy", "")
         task_id = event_data.get("task_id", "unknown")
 
         if not self._is_safe(strategy):
+            # Phase C: Log safety violation to tenant-scoped audit trail
+            try:
+                self.audit_writer.write_event_dict(
+                    event_type="safety_violation",
+                    tenant_id=self.tenant_id,
+                    user_id=self.user_id,
+                    details={
+                        "task_id": task_id,
+                        "strategy": strategy,
+                        "reason": "forbidden action detected",
+                    },
+                    severity="warning",
+                )
+            except Exception as e:
+                logger.error(f"Failed to write audit event: {e}")
+
             self.publish_event(
                 "safety_check_failed",
                 {
