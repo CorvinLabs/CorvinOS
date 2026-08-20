@@ -12,6 +12,7 @@ paths:
   - operator/skill_creator/six_phase_orchestrator.py
   - core/console/corvin_console/routes/skill_creator_api.py
   - core/console/corvin_console/web-next/src/components/SkillCreatorPanel.tsx
+  - core/console/corvin_console/web-next/tests/e2e/skill-creator-live.spec.ts
   - core/console/tests/test_skill_creator_e2e.py
   - operator/skill_creator/tests/test_llm_client.py
 docs:
@@ -226,6 +227,23 @@ new endpoint cannot forget it.
 `engine_id_of` now coerces to `str`: a client exposing a non-string
 `engine_id` made the status endpoint 500 on a run that had actually
 succeeded.
+
+### Two Playwright layers, deliberately
+
+`skill-creator.spec.ts` stubs every backend call: it pins panel behaviour
+cheaply and deterministically, and a real run would spend minutes of engine
+time on the operator's subscription on every pass.
+
+`skill-creator-live.spec.ts` stubs nothing. It seeds FICTIONAL skills into
+the real tenant registry through the same `registry_bridge` the generator
+promotes with, then drives the real panel against the real endpoints. A
+stubbed suite alone passes happily against a button with no backend — which
+is exactly how View and Delete shipped inert.
+
+Fixtures are seeded by `tests/e2e/fixtures/seed_skills.py`, not by an HTTP
+fixture endpoint: the Skill-Creator has no create-without-generating route by
+design, and adding one to the production API to make a test convenient is how
+test-only surface ends up shipped.
 
 ## Consequences
 
