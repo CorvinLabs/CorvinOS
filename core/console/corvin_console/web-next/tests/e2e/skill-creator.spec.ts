@@ -9,8 +9,10 @@ test.describe('Skill Creator Panel', () => {
   });
 
   test('should display Skill Creator Panel', async ({ page }) => {
-    // Check if SkillCreatorPanel is visible
-    const skillCreatorPanel = page.locator('text=Skill Creator');
+    // Target the panel HEADING, not any text node containing the words:
+    // a substring locator also matches skill-list entries whose description
+    // happens to mention "Skill Creator", which is a strict-mode violation.
+    const skillCreatorPanel = page.getByRole('heading', { name: 'Skill Creator', exact: true });
     await expect(skillCreatorPanel).toBeVisible();
   });
 
@@ -21,6 +23,17 @@ test.describe('Skill Creator Panel', () => {
   });
 
   test('should submit skill generation request with correct API endpoint', async ({ page }) => {
+    // Stub the endpoint: unstubbed, this test kicked off a REAL multi-minute
+    // generation run against the operator's Claude subscription on every
+    // E2E pass. The assertion is about wiring, not about the engine.
+    await page.route('**/skill-creator/generate', (route) =>
+      route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'accepted', run_id: 'run-stub000000', engine: 'claude_code' }),
+      }),
+    );
+
     // Intercept the API call
     let apiCallMade = false;
     let apiUrl = '';
@@ -94,5 +107,83 @@ test.describe('Skill Creator Panel', () => {
     if (isEmptyOK) {
       console.log('Skills list is empty (expected on first run)');
     }
+  });
+  test('should render the five real phases and the engine label', async ({ page }) => {
+    // The panel used to label a six-phase pipeline (API-Design, Dialectical,
+    // Ideation, …) that no backend ever emitted, and it never showed which
+    // engine ran the work. Both are asserted here against stubbed status.
+    await page.route('**/skill-creator/generate', (route) =>
+      route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'accepted', run_id: 'run-stub111111', engine: 'claude_code' }),
+      }),
+    );
+    await page.route('**/skill-creator/status/**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          run_id: 'run-stub111111',
+          status: 'running',
+          phase: 'ldd_iteration',
+          progress: 50,
+          message: 'Running LDD test loop…',
+          engine: 'claude_code',
+          phases: ['planning', 'validation', 'ldd_iteration', 'review', 'promotion'],
+          error: null,
+        }),
+      }),
+    );
+
+    await page.locator('textarea[placeholder*="Create a skill"]')
+      .fill('Create a skill that validates JSON files');
+    await page.locator('button:has-text("Generate Skill")').click();
+
+    const stepper = page.getByTestId('phase-stepper');
+    await expect(stepper).toBeVisible();
+    await expect(stepper.locator('li')).toHaveCount(5);
+    await expect(stepper.locator('li[data-phase="ldd_iteration"]'))
+      .toHaveAttribute('data-state', 'active');
+    await expect(stepper.locator('li[data-phase="planning"]'))
+      .toHaveAttribute('data-state', 'done');
+
+    await expect(page.getByTestId('engine-label'))
+      .toContainText('Claude subscription');
+  });
+
+  test('should surface an engine failure with its detail', async ({ page }) => {
+    await page.route('**/skill-creator/generate', (route) =>
+      route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'accepted', run_id: 'run-stub222222', engine: 'claude_code' }),
+      }),
+    );
+    await page.route('**/skill-creator/status/**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          run_id: 'run-stub222222',
+          status: 'failed',
+          phase: 'planning',
+          progress: 10,
+          message: 'Claude Code CLI not found. Install it or set CORVIN_CLAUDE_BIN to its path — skill generation runs on your Claude subscription.',
+          engine: 'claude_code',
+          phases: ['planning', 'validation', 'ldd_iteration', 'review', 'promotion'],
+          error: "claude binary not found: 'claude'",
+        }),
+      }),
+    );
+
+    await page.locator('textarea[placeholder*="Create a skill"]')
+      .fill('Create a skill that validates JSON files');
+    await page.locator('button:has-text("Generate Skill")').click();
+
+    const err = page.getByTestId('generation-error');
+    await expect(err).toBeVisible();
+    await expect(err).toContainText('CORVIN_CLAUDE_BIN');
+    await expect(err.locator('pre')).toContainText('claude binary not found');
   });
 });

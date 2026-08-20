@@ -25,6 +25,11 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 from uuid import uuid4
 
+try:  # package-relative (normal import path)
+    from .llm_client import resolve_llm_client
+except ImportError:  # pragma: no cover — flat sys.path insert (console route)
+    from skill_forge.llm_client import resolve_llm_client
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,7 +110,7 @@ class SixPhaseOrchestrator:
             claude_client: Claude API client (mocked in tests)
             max_iterations: Max LDD iterations per phase
         """
-        self.client = claude_client or self._default_client()
+        self.client = resolve_llm_client(claude_client)
         self.max_iterations = max_iterations
         self.phases_registry: Dict[Phase, Callable] = {
             Phase.API_DESIGN: self._phase1_api_design,
@@ -116,9 +121,6 @@ class SixPhaseOrchestrator:
             Phase.E2E_TEST: self._phase6_e2e_test,
         }
 
-    def _default_client(self):
-        import anthropic
-        return anthropic.Anthropic()
 
     async def orchestrate(self, skill_request: str) -> OrchestrationRun:
         """Orchestrate complete skill development (Phases 1-6).

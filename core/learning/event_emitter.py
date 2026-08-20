@@ -18,14 +18,14 @@ class EventEmitter:
         """Initialize emitter.
 
         Args:
-            tenant_home: Tenant root directory
+            tenant_home: Tenant root directory (deprecated, kept for compatibility)
             tenant_id: Tenant ID (for isolation)
             max_queue_size: Max events in queue before dropping (fire-and-forget)
         """
         self.tenant_home = tenant_home
         self.tenant_id = tenant_id
         self.max_queue_size = max_queue_size
-        self.store = EventStore(tenant_home)
+        self.store = EventStore(tenant_id)
         self.event_queue: asyncio.Queue[LearningEvent] = asyncio.Queue(maxsize=max_queue_size)
         self._worker_task: Optional[asyncio.Task] = None
 

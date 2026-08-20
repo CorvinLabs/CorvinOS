@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Loader2, Brain, CheckCircle, AlertCircle, Trash2 } from "lucide-react";
+import { Loader2, Brain, CheckCircle, AlertCircle, Trash2, Cpu } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,12 @@ interface GenerationRun {
   phase: string;
   progress: number;
   message: string;
+  /** Engine that ran the phases: claude_code (Max subscription) | api | local */
+  engine?: string;
+  /** Canonical phase order, served by the backend so the two cannot drift. */
+  phases?: string[];
+  /** Raw engine error, shown under the operator-facing message. */
+  error?: string | null;
   skill?: SkillInfo;
 }
 
@@ -37,15 +43,26 @@ interface GeneratedSkill {
   created_at: string;
 }
 
+/**
+ * The five phases SkillCreatorOrchestrator.create_skill actually reports.
+ * The panel used to label a six-phase pipeline (API-Design, Dialectical,
+ * Ideation, …) that no backend emitted, so the header never changed from
+ * its hardcoded "API-Design" and a run looked stuck.
+ */
 const PHASE_LABELS: Record<string, string> = {
-  "API-Design": "🏗️ API Design",
-  "Dialectical": "⚖️ Dialectical Review",
-  "Ideation": "💡 Ideation & Concept",
-  "Adversarial": "🎯 Adversarial Review",
-  "Implementation": "⚙️ Implementation",
-  "E2E-Test": "✅ E2E Testing",
-  "planning": "📋 Planning",
-  "promotion": "🚀 Promotion",
+  planning: "📋 Planning",
+  validation: "🔍 Validation",
+  ldd_iteration: "🔁 LDD Iteration",
+  review: "🎯 Adversarial Review",
+  promotion: "🚀 Promotion",
+};
+
+const DEFAULT_PHASES = ["planning", "validation", "ldd_iteration", "review", "promotion"];
+
+const ENGINE_LABELS: Record<string, string> = {
+  claude_code: "Claude subscription (Claude Code CLI)",
+  api: "Anthropic API key",
+  local: "Local templates (no engine)",
 };
 
 export const SkillCreatorPanel: React.FC = () => {
@@ -98,9 +115,10 @@ export const SkillCreatorPanel: React.FC = () => {
       setCurrentRun({
         run_id: data.run_id,
         status: "running",
-        phase: "API-Design",
-        progress: 10,
-        message: "Starting skill generation (Phase 1/6)...",
+        phase: "planning",
+        progress: 5,
+        engine: data.engine,
+        message: "Starting skill generation (Phase 1/5)...",
       });
 
       setUserRequest("");
@@ -148,7 +166,7 @@ export const SkillCreatorPanel: React.FC = () => {
           <CardTitle className="text-base">Skill Creator</CardTitle>
         </div>
         <CardDescription>
-          Generate reusable skills using 6-phase LDD orchestration (API-Design, Dialectical, Ideation, Adversarial, Implementation, E2E-Test)
+          Generate reusable skills using 5-phase LDD orchestration (Planning, Validation, LDD Iteration, Adversarial Review, Promotion) — runs on your Claude subscription via the Claude Code engine, no API key required.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -209,13 +227,50 @@ export const SkillCreatorPanel: React.FC = () => {
             </div>
 
             <div className="space-y-2 text-xs text-muted-foreground">
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center gap-2">
                 <span className="font-mono text-[10px]">Run: {currentRun.run_id.slice(0, 12)}...</span>
                 <span className="text-sm font-medium">
                   {PHASE_LABELS[currentRun.phase] || currentRun.phase}
                 </span>
               </div>
+              {currentRun.engine && (
+                <div className="flex items-center gap-2">
+                  <Cpu className="h-3 w-3 shrink-0" />
+                  <span data-testid="engine-label">
+                    Engine: {ENGINE_LABELS[currentRun.engine] || currentRun.engine}
+                  </span>
+                </div>
+              )}
             </div>
+
+            {/* Phase stepper — which of the five phases the run reached */}
+            <ol className="flex flex-wrap gap-1" data-testid="phase-stepper">
+              {(currentRun.phases || DEFAULT_PHASES).map((phase, idx) => {
+                const activeIdx = (currentRun.phases || DEFAULT_PHASES).indexOf(currentRun.phase);
+                const done = currentRun.status === "success" || (activeIdx > -1 && idx < activeIdx);
+                const active = idx === activeIdx && currentRun.status === "running";
+                const failed = idx === activeIdx && currentRun.status === "failed";
+                return (
+                  <li
+                    key={phase}
+                    data-phase={phase}
+                    data-state={failed ? "failed" : active ? "active" : done ? "done" : "pending"}
+                    className={
+                      "rounded-sm border px-1.5 py-0.5 text-[10px] " +
+                      (failed
+                        ? "border-destructive/50 bg-destructive/10 text-destructive"
+                        : active
+                        ? "border-accent bg-accent/15 text-foreground"
+                        : done
+                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                        : "border-border/60 text-muted-foreground")
+                    }
+                  >
+                    {PHASE_LABELS[phase] || phase}
+                  </li>
+                );
+              })}
+            </ol>
 
             {/* Progress Bar */}
             <div className="h-2 w-full overflow-hidden rounded-full border border-border/60 bg-muted/30">
@@ -266,8 +321,19 @@ export const SkillCreatorPanel: React.FC = () => {
 
             {/* Failed Status */}
             {currentRun.status === "failed" && (
-              <div className="rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
-                ❌ {currentRun.message}
+              <div
+                className="space-y-1 rounded-sm border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+                data-testid="generation-error"
+              >
+                <div>❌ {currentRun.message}</div>
+                {currentRun.error && currentRun.error !== currentRun.message && (
+                  <details>
+                    <summary className="cursor-pointer opacity-80">Engine detail</summary>
+                    <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-[10px] opacity-90">
+                      {currentRun.error}
+                    </pre>
+                  </details>
+                )}
               </div>
             )}
           </div>

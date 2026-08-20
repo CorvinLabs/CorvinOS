@@ -23,38 +23,61 @@ from pathlib import Path
 from typing import Any
 
 
-def _audit_path() -> Path:
+def _audit_path(tenant_id: str = "_default") -> Path:
+    """Get tenant-scoped audit trail file path.
+
+    Args:
+        tenant_id: Tenant identifier (default: "_default")
+
+    Returns:
+        Path to tenant audit.jsonl file
+
+    Raises:
+        ValueError: If tenant_id is invalid
+    """
+    # Explicit env override (for migration/testing)
     env = os.environ.get("VOICE_AUDIT_PATH") or os.environ.get("FORGE_AUDIT_PATH")
     if env:
         return Path(env)
+
+    # Use tenant-native path: ~/.corvin/tenants/<tenant_id>/audit.jsonl
+    try:
+        from core.paths import tenant_audit_file
+        return tenant_audit_file(tenant_id)
+    except (ImportError, ValueError):
+        # Fallback for bootstrap or core.paths unavailable
+        pass
+
+    # Fallback: construct path manually (same as tenant_audit_file)
+    # This is for compatibility during bootstrap before core.paths can be imported
     corvin_home = os.environ.get("CORVIN_HOME")
     if corvin_home:
-        return Path(corvin_home) / "global" / "forge" / "audit.jsonl"
+        return Path(corvin_home) / "tenants" / tenant_id / "audit.jsonl"
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():  # legacy fallback during migration
             for sub in (".corvin",):
                 candidate = parent / sub
                 if candidate.is_dir():
-                    return candidate / "global" / "forge" / "audit.jsonl"
-            return parent / ".corvin" / "global" / "forge" / "audit.jsonl"
-    return Path.home() / ".corvin" / "global" / "forge" / "audit.jsonl"
+                    return candidate / "tenants" / tenant_id / "audit.jsonl"
+            return parent / ".corvin" / "tenants" / tenant_id / "audit.jsonl"
+    return Path.home() / ".corvin" / "tenants" / tenant_id / "audit.jsonl"
 
 
-def _try_forge_write(event_type: str, details: dict[str, Any]) -> bool:
+def _try_forge_write(event_type: str, *, tenant_id: str = "_default", **details: Any) -> bool:
     try:
         forge_root = Path(__file__).resolve().parents[3] / "forge" / "forge"
         if forge_root not in [Path(p) for p in sys.path]:
             sys.path.insert(0, str(forge_root.parent))
         from forge.security_events import write_event  # type: ignore[import]
-        write_event(_audit_path(), event_type, details=details)
+        write_event(_audit_path(tenant_id), event_type, details=details)
         return True
     except Exception:
         return False
 
 
-def _standalone_write(event_type: str, details: dict[str, Any]) -> None:
-    path = _audit_path()
+def _standalone_write(event_type: str, *, tenant_id: str = "_default", **details: Any) -> None:
+    path = _audit_path(tenant_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     _SEVERITIES = {
         "package.installed": "INFO",
@@ -119,7 +142,16 @@ def _standalone_write(event_type: str, details: dict[str, Any]) -> None:
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def emit(event_type: str, **details: Any) -> None:
-    """Emit an audit event into the unified hash chain."""
-    if not _try_forge_write(event_type, details):
-        _standalone_write(event_type, details)
+def emit(event_type: str, *, tenant_id: str = "_default", **details: Any) -> None:
+    """Emit an audit event into the tenant-scoped audit hash chain.
+
+    Args:
+        event_type: Type of audit event (e.g., "package.installed")
+        tenant_id: Tenant identifier (default: "_default", keyword-only)
+        **details: Additional event details (arbitrary key-value pairs)
+
+    Raises:
+        ValueError: If tenant_id is invalid
+    """
+    if not _try_forge_write(event_type, tenant_id=tenant_id, **details):
+        _standalone_write(event_type, tenant_id=tenant_id, **details)

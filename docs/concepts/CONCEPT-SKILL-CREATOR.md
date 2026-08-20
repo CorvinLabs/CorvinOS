@@ -10,7 +10,7 @@
 
 ## Overview
 
-**Skill-Creator** is a meta-skill that generates, validates, and iteratively refines new skills through a deterministic three-phase workflow driven by Loss-Driven Development (LDD). When invoked with a natural-language request ("erzeuge mir einen Skill der X macht"), it:
+**Skill-Creator** is a meta-skill that generates, validates, and iteratively refines new skills through a deterministic five-phase workflow driven by Loss-Driven Development (LDD). When invoked with a natural-language request ("erzeuge mir einen Skill der X macht"), it:
 
 1. **Plans** the skill architecture via dialectical reasoning
 2. **Validates** the spec against quality gates (schema, syntax, edge cases)
@@ -19,6 +19,41 @@
 5. **Promotes** the skill to `project` scope if quality thresholds pass
 
 **Key principle:** A skill is "done" when the skill-creator's adversarial reviewers *cannot refute it*, not when the LLM *claims* it's done.
+
+---
+
+## Engine — the Claude subscription, not an API key (ADR-0405)
+
+Every phase that needs a model goes through `resolve_llm_client()` in
+`operator/skill_forge/llm_client.py`. The default engine is the **Claude Code
+CLI**, driven as `claude -p --output-format json --max-turns 1
+--disallowedTools "*"` in a throwaway cwd — the same engine the console
+web-chat, ACS runtime and TDE workers use, authenticated by the operator's
+Claude subscription.
+
+| Order | Engine id | Selected when |
+|---|---|---|
+| 1 | `claude_code` | default — nothing to configure |
+| 2 | `api` | `ANTHROPIC_API_KEY` set **and** `CORVIN_SKILL_CREATOR_ENGINE=api` |
+| 3 | `local` (client `None`) | no engine reachable, or `CORVIN_SKILL_CREATOR_ENGINE=local` — template generation, no LDD loop, no review |
+
+A stray `ANTHROPIC_API_KEY` in the environment does **not** switch the engine
+on its own: redirecting billing must be a deliberate act.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `CORVIN_SKILL_CREATOR_ENGINE` | `claude_code` | `claude_code` · `api` · `local` |
+| `CORVIN_SKILL_CREATOR_MODEL` | `claude-opus-5` | model passed to `--model` |
+| `CORVIN_SKILL_CREATOR_TIMEOUT_S` | `180` | per-call CLI timeout |
+| `CORVIN_CLAUDE_BIN` | resolved from PATH | absolute path to the `claude` binary |
+
+The orchestrator resolves the client **once** and injects it into all four
+phases, so a run cannot half-execute across two backends. The engine id is
+reported in every `/skill-creator/generate` and `/status/<run_id>` payload and
+rendered in the console panel.
+
+Cost note: a live run is roughly 6–7 minutes and one CLI call per phase step,
+charged to the subscription.
 
 ---
 
@@ -40,7 +75,7 @@ Console Settings → Quality → [ADR Gate] [Skill Creator] [Concept Gate]
 
 **Default:** ON (enabled by default; can be toggled via `spec.features.skill_creator_enabled`)
 
-### Layer 2: Three-Phase Workflow
+### Layer 2: Five-Phase Workflow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -217,11 +252,18 @@ async def ldd_iteration(skill_spec: SkillSpec, iteration_k: int) -> LossSignal:
         scenario=generate_test_scenario(skill_spec.purpose)
     )
     
-    # 2. Measure loss
+    # 2. Measure loss from the SCORED RUBRIC the tester requested
+    #    (JSON: clarity / executability / scope / coupling / notes),
+    #    weighted 0.35 / 0.35 / 0.20 / 0.10.
+    #
+    #    NOT substring matching on prose: the original implementation
+    #    scored `"scope" in evaluation_text` against a prompt that ASKED
+    #    about scope, so every well-formed review floored the loss above
+    #    the threshold and the loop could never converge (ADR-0405).
+    #
+    #    An unparseable reply scores 1.0 — fail-high, so an unverified
+    #    skill can never pass as converged.
     loss = measure_skill_loss(test_result, skill_spec)
-    #      → clarity_loss (comprehension)
-    #      → scope_loss (does it do only what's stated?)
-    #      → coupling_loss (dependencies, side effects)
     
     # 3. Diagnose via root-cause-by-layer
     if loss > LOSS_THRESHOLD:
@@ -299,21 +341,34 @@ async def adversarial_review_skill(skill_spec: SkillSpec) -> ReviewResult:
 
 ## Console Integration
 
-### Location: Console Settings → Quality → Skill Creator
+### Location: `/console/app/skills` → Skill Creator panel
 
-**UI:**
-- Toggle: "Skill Creator Enabled" (default: ON)
-- Status indicator: "Ready" / "Running" / "Review phase"
-- Last 5 generated skills (with quality scores)
+**Shipped today** (`SkillCreatorPanel.tsx`, `routes/skill_creator_api.py`):
 
-**Invocation:**
-1. User types in console: "erzeuge mir einen Skill der..."
-2. Skill-Creator intercepts (regex pattern match)
-3. Opens side panel: "New Skill Generation"
-4. Shows real-time progress through Phases 1–5
-5. User can approve/reject at Phase 1 (before expensive LDD iterations)
+| Endpoint | Behaviour |
+|---|---|
+| `POST /v1/console/skill-creator/generate` | 202 + `{run_id, engine}`; the run executes on a worker thread |
+| `GET /v1/console/skill-creator/status/{run_id}` | `{status, phase, progress, message, engine, phases, error, skill}` |
+| `GET /v1/console/skill-creator/skills` | promoted skills on disk |
+| `GET /v1/console/skill-creator/stats` | `{total_generated, avg_quality, total_iterations, last_generated_at}` |
+
+The panel polls `/status` once a second and renders a five-step phase stepper
+(`planning · validation · ldd_iteration · review · promotion`) plus the engine
+that is running the work. `phases` is served by the backend so the stepper and
+the orchestrator cannot drift apart. A failed run shows an operator-facing
+message with the raw engine error behind a disclosure.
+
+**Not yet built** (was described here as if shipped): an enable/disable toggle,
+an approve/reject checkpoint after Phase 1, and the View/Delete actions in the
+generated-skills list — those buttons are inert.
 
 ### Feature Flag
+
+**Not implemented.** The keys below are the intended shape; nothing reads them
+today. Engine selection is currently an environment escape hatch
+(`CORVIN_SKILL_CREATOR_ENGINE`, see the Engine section) and deliberately NOT
+the `spec.web_chat.worker_engine` mechanism, which governs chat-turn execution
+and must stay single-source.
 
 ```yaml
 # core/bundle/config-templates/tenant.corvin.yaml
@@ -361,11 +416,31 @@ File: ~/.claude/skills/assistant.analyze_local_files.md
 
 ### Phase 2: Linting (fail-closed)
 
-- ✅ Valid Markdown (no syntax errors)
-- ✅ No prompt-injection patterns (regex linter)
+- ✅ Valid Markdown (method must open with a `#` heading)
+- ✅ No prompt-injection patterns: `<|im_start|>` / `<|im_end|>` as ESCAPED
+  literals, plus line-anchored role markers (`^\s*system\s*:`,
+  `^\s*instructions\s*:`). Storing them unescaped made `<|im_start|>` the
+  regex alternation `<` | `im_start` | `>`, which rejected any skill body
+  containing a single angle bracket (ADR-0405).
 - ✅ No embedded secrets (scan for API keys, passwords)
 - ✅ Dependencies can be resolved (or auto-installed if safe)
-- ✅ Scope prefix matches SkillForge namespace rules
+- ✅ Name matches `SKILL_NAME_RE` = `^(assistant|project)\.[a-z_]+$`
+- ✅ Purpose within `PURPOSE_LEN` (20–200), method within `METHOD_LEN` (100–5000)
+
+**Normalise → validate → repair once → validate (ADR-0405).** Phase 1
+generates freely and this gate is fail-closed, so without a step in between a
+formatting slip destroys a run that already cost minutes of engine time. Both
+live failures were exactly that: `assistant.json-syntax-check` and
+`Purpose length 201 outside range [20, 200]`.
+
+1. `normalize_spec` — meaning-preserving only: name separators → `_`,
+   whitespace collapse, ```` ``` ````-fence and leading-blank-line stripping,
+   over-long purpose trimmed at a sentence boundary (or a word boundary with
+   `…`). Costs no engine call. Too-short is never padded.
+2. `SkillValidator.collect_violations` — ALL violations, not just the first.
+3. One `SkillPlanner.repair` call with that list, for what normalisation
+   cannot fix (method length, forbidden patterns).
+4. `validate` — raises exactly as before if anything survives.
 
 **Fail:** Skill-Creator returns errors; user cannot override.
 
@@ -498,8 +573,14 @@ Watch for skills that:
 ### Tuning
 
 **Loss threshold:** In Phase 3, what counts as "loss"?
-- Default: clarity_loss + scope_loss + coupling_loss > 0.5
-- Tune via `spec.features.skill_creator_loss_threshold`
+- Loss is the weighted mean of the scored rubric (clarity 0.35,
+  executability 0.35, scope 0.20, coupling 0.10), each dimension in [0, 1].
+- Converged at `loss <= SkillTester.convergence_threshold` (0.15) — one minor
+  remark is tolerated, a perfect score is not required.
+- At `k_max` without convergence: `SkillTester` raises `LDDIterationError` by
+  default (the LDD contract). The console orchestrator passes
+  `escalate_on_k_max=False`, keeps the best iterate and subtracts 0.2 from
+  `quality_score` instead of discarding the run.
 
 **Reviewer harshness:** How critical are adversarial reviewers?
 - Default: ALL reviewers must REFUTE (strict)
@@ -521,6 +602,7 @@ Watch for skills that:
 
 ## Related
 
+- [[ADR-0405]] — Skill-Creator runs on the Claude Code engine (this document's implementation)
 - [[ADR-0313]] — Skill Persistence & Architecture
 - [[ADR-0318]] — Style Preferences & User Model
 - [[CONCEPT-0001]] — Self-Learning Project Concept Archive (parent pattern)
@@ -531,5 +613,7 @@ Watch for skills that:
 ---
 
 **Last Updated:** 2026-08-20  
-**Status:** PROPOSED → Ready for implementation  
+**Status:** IMPLEMENTED — 5 phases live behind `POST /v1/console/skill-creator/generate`
+(ADR-0405). Known gap: promoted skills land in `~/.claude/skills/`, not in the
+tenant-native skill tree (ADR-0007).  
 **Effort:** ~800 LoC (core phases), ~400 LoC (UI), ~600 LoC (tests)

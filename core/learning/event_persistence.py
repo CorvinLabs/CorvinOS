@@ -13,17 +13,22 @@ from .event_schema import LearningEvent, LearningEventType
 class EventStore:
     """Persist learning events to disk with audit trail."""
 
-    def __init__(self, tenant_home: Path):
+    def __init__(self, tenant_id: str):
         """Initialize store.
 
         Args:
-            tenant_home: Tenant root directory (~/.corvin/tenants/_default/)
+            tenant_id: Tenant identifier (e.g., "_default")
+
+        Raises:
+            ValueError: If tenant_id is invalid
         """
-        self.tenant_home = tenant_home
-        self.events_dir = tenant_home / "global" / "learning" / "events"
+        from core.paths import tenant_learning_dir, tenant_audit_file
+
+        self.tenant_id = tenant_id
+        self.events_dir = tenant_learning_dir(tenant_id) / "events"
         self.events_dir.mkdir(parents=True, exist_ok=True)
 
-        self.audit_path = tenant_home / "global" / "forge" / "audit.jsonl"
+        self.audit_path = tenant_audit_file(tenant_id)
 
     async def write_event(self, event: LearningEvent, tenant_id: str) -> str:
         """Write event to disk and audit chain.
