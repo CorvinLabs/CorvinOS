@@ -15,8 +15,8 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from skill_forge.registry_bridge import list_skills, read_skill
-from skill_forge.skill_creator import (
+from skill_creator.registry_bridge import list_skills, read_skill
+from skill_creator.skill_creator import (
     METHOD_LEN,
     PURPOSE_LEN,
     SkillScope,

@@ -24,20 +24,28 @@ from ..deps import require_session
 
 logger = logging.getLogger(__name__)
 
-# Import Skill-Creator orchestrator
-# NOTE: operator/ has no __init__.py (to avoid shadowing stdlib operator module),
-# so we must add it to sys.path manually before importing. See ADR-0233.
+# Import the Skill-Creator.
+#
+# operator/ has no __init__.py (it would shadow the stdlib `operator`), so the
+# package is reached by putting operator/ on sys.path — but APPENDED, never
+# inserted at the front. Inserting it first used to shadow the SkillForge
+# REGISTRY package, which was also called `skill_forge` at the time: every
+# later `from skill_forge.multi_registry import ...` in the process resolved
+# into the Skill-Creator instead and raised ModuleNotFoundError, breaking
+# skill injection, promote.py and the bridge adapter. The package has since
+# been renamed to `skill_creator`, and appending keeps a future name clash
+# from silently winning against an installed package. (ADR-0405)
 try:
     _operator_dir = Path(__file__).resolve().parents[4] / "operator"
     if _operator_dir.is_dir() and str(_operator_dir) not in sys.path:
-        sys.path.insert(0, str(_operator_dir))
+        sys.path.append(str(_operator_dir))
 
-    from skill_forge.skill_creator import (
+    from skill_creator.skill_creator import (
         SkillCreatorOrchestrator,
         SkillCreatorError,
     )
-    from skill_forge.llm_client import resolve_llm_client, engine_id_of
-    from skill_forge.registry_bridge import list_skills, read_skill
+    from skill_creator.llm_client import resolve_llm_client, engine_id_of
+    from skill_creator.registry_bridge import list_skills, read_skill
 except ImportError as e:
     logger.warning(f"SkillCreatorOrchestrator import failed: {e}")
     SkillCreatorOrchestrator = None
@@ -52,12 +60,20 @@ _forge_paths = _bootstrap.forge_paths
 
 
 def _registry_root(tenant_id: str) -> Path:
-    """`<tenant-global>/skill-forge` for the caller's tenant.
+    """`<tenant_home>/skill-forge` for the caller's tenant.
+
+    `tenant_home()`, NOT `tenant_global_dir()`. The on-disk contract is
+    `<corvin_home>/tenants/<tid>/{global,sessions,forge,skill-forge,...}` —
+    `skill-forge` is a sibling of `global`, not a child of it — and this is
+    the path `MultiSkillRegistry._root_for("user")` resolves, so it is the
+    only place `skill_inject` will ever look. Writing to
+    `<tenant>/global/skill-forge` produces a registry that is real, valid,
+    and read by nothing (which is what `skills_manual.py` does today).
 
     Derived from the authenticated session, never from an env var — the
     console tenant-routing rule (CLAUDE.md, ADR-0007).
     """
-    return _forge_paths.tenant_global_dir(tenant_id) / "skill-forge"
+    return _forge_paths.tenant_home(tenant_id) / "skill-forge"
 
 router = APIRouter(prefix="/skill-creator", tags=["skill-creator"])
 

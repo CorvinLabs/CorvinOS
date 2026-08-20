@@ -16,7 +16,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
 
-from skill_forge.six_phase_orchestrator import (
+from skill_creator.six_phase_orchestrator import (
     Phase,
     Verdict,
     PhaseOutput,
@@ -298,7 +298,7 @@ class TestBootstrapping:
             MagicMock(content=[MagicMock(text='{"skill_name": "skill_orchestrator", "purpose": "Orchestrate skills", "inputs": [], "outputs": [], "edge_cases": [], "dependencies": [], "estimated_loc": 500}')])
         ] + [MagicMock(content=[MagicMock(text="Generated response")]) for _ in range(29)]
 
-        with patch('skill_forge.six_phase_orchestrator.SixPhaseOrchestrator.__init__',
+        with patch('skill_creator.six_phase_orchestrator.SixPhaseOrchestrator.__init__',
                   return_value=None):
             with patch.object(SixPhaseOrchestrator, '__init__', lambda self, *args, **kwargs: None):
                 orch = SixPhaseOrchestrator(mock_client)

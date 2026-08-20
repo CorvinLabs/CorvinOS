@@ -15,7 +15,7 @@ _OPERATOR_DIR = Path(__file__).resolve().parents[2]
 if str(_OPERATOR_DIR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR_DIR))
 
-from skill_forge.llm_client import (  # noqa: E402
+from skill_creator.llm_client import (  # noqa: E402
     ClaudeCodeClient,
     ClaudeCodeUnavailable,
     engine_id_of,
@@ -31,7 +31,7 @@ SUCCESS_ENVELOPE = (
 
 
 def _client() -> ClaudeCodeClient:
-    with patch("skill_forge.llm_client.resolve_claude_bin", return_value="/bin/true"):
+    with patch("skill_creator.llm_client.resolve_claude_bin", return_value="/bin/true"):
         return ClaudeCodeClient()
 
 
@@ -69,7 +69,7 @@ class TestMessagesCreate:
         client = _client()
 
         completed = MagicMock(returncode=0, stdout=SUCCESS_ENVELOPE, stderr="")
-        with patch("skill_forge.llm_client.subprocess.run", return_value=completed) as run:
+        with patch("skill_creator.llm_client.subprocess.run", return_value=completed) as run:
             resp = client.messages.create(
                 model="claude-opus-5", max_tokens=50,
                 messages=[{"role": "user", "content": "ping"}],
@@ -86,7 +86,7 @@ class TestMessagesCreate:
     def test_nonzero_exit_raises_with_stderr_tail(self):
         client = _client()
         completed = MagicMock(returncode=1, stdout="", stderr="boom")
-        with patch("skill_forge.llm_client.subprocess.run", return_value=completed):
+        with patch("skill_creator.llm_client.subprocess.run", return_value=completed):
             with pytest.raises(ClaudeCodeUnavailable, match="boom"):
                 client.messages.create(messages=[{"role": "user", "content": "x"}])
 
@@ -98,7 +98,7 @@ class TestMessagesCreate:
     def test_content_blocks_are_flattened(self):
         client = _client()
         completed = MagicMock(returncode=0, stdout=SUCCESS_ENVELOPE, stderr="")
-        with patch("skill_forge.llm_client.subprocess.run", return_value=completed) as run:
+        with patch("skill_creator.llm_client.subprocess.run", return_value=completed) as run:
             client.messages.create(messages=[{
                 "role": "user",
                 "content": [{"type": "text", "text": "block one"},
@@ -116,7 +116,7 @@ class TestResolution:
         """A Max-subscription install must NOT be pushed onto an API key."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-be-used")
         monkeypatch.delenv("CORVIN_SKILL_CREATOR_ENGINE", raising=False)
-        with patch("skill_forge.llm_client.resolve_claude_bin", return_value="/bin/true"):
+        with patch("skill_creator.llm_client.resolve_claude_bin", return_value="/bin/true"):
             client = resolve_llm_client()
         assert engine_id_of(client) == "claude_code"
 
@@ -127,7 +127,7 @@ class TestResolution:
     def test_degrades_to_none_when_cli_missing_and_no_key(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("CORVIN_SKILL_CREATOR_ENGINE", raising=False)
-        with patch("skill_forge.llm_client.resolve_claude_bin",
+        with patch("skill_creator.llm_client.resolve_claude_bin",
                    side_effect=ClaudeCodeUnavailable("not found")):
             assert resolve_llm_client() is None
 
@@ -137,7 +137,7 @@ class TestResolution:
 
     def test_missing_binary_raises_actionable_error(self, monkeypatch):
         monkeypatch.setenv("CORVIN_CLAUDE_BIN", "/nonexistent/claude-xyz")
-        with patch("skill_forge.llm_client.shutil.which", return_value=None), \
-             patch("skill_forge.llm_client.os.access", return_value=False):
+        with patch("skill_creator.llm_client.shutil.which", return_value=None), \
+             patch("skill_creator.llm_client.os.access", return_value=False):
             with pytest.raises(ClaudeCodeUnavailable, match="CORVIN_CLAUDE_BIN"):
                 resolve_claude_bin()
