@@ -90,7 +90,8 @@ def validate_session_id(session_id: str) -> str:
         The validated session_id (pass-through if valid)
 
     Raises:
-        ValueError: If session_id is invalid (empty, exceeds max length)
+        ValueError: If session_id is invalid (empty, exceeds max length,
+                    contains null bytes or path traversal)
     """
     # Type check
     if not isinstance(session_id, str):
@@ -112,6 +113,12 @@ def validate_session_id(session_id: str) -> str:
     if ".." in session_id or "/" in session_id or "\\" in session_id:
         raise ValueError(
             f"session_id contains path traversal characters: {session_id!r}"
+        )
+
+    # No null bytes (fail-closed)
+    if "\x00" in session_id:
+        raise ValueError(
+            f"session_id contains null byte: {session_id!r}"
         )
 
     return session_id
