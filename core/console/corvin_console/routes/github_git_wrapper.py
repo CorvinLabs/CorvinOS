@@ -297,9 +297,12 @@ def sync_skills_to_github_real(
     skills_dir: Path,
     tenant_id: str = "_default"
 ) -> Dict[str, Any]:
-    """Execute real GitHub sync: clone → commit → push → tag."""
+    """Execute real GitHub sync: clone → commit → push → tag.
 
-    branch_name = f"tenant-sync-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+    Pushes all changes directly to 'main' branch to avoid branch accumulation.
+    """
+
+    branch_name = "main"  # Always push to main, no branch accumulation
 
     try:
         with GitHubGitWrapper(repo_url, tenant_id) as git:
@@ -308,10 +311,13 @@ def sync_skills_to_github_real(
             if not clone_result["success"]:
                 return clone_result
 
-            # Step 2: Create branch
-            branch_result = git.create_branch(branch_name)
-            if not branch_result["success"]:
-                return branch_result
+            # Step 2: Checkout main branch (already exists after clone)
+            checkout_result = git._run_git("checkout", branch_name)
+            if checkout_result[0] != 0:
+                return {
+                    "success": False,
+                    "error": f"Failed to checkout {branch_name}: {checkout_result[2]}"
+                }
 
             # Step 3: Prepare skills
             if not skills_dir.exists():
