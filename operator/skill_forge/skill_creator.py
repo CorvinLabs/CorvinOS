@@ -1089,6 +1089,52 @@ If no findings, output: VERDICT: REFUTED"""
         return findings
 
 
+def score_quality(findings: List[ReviewFinding], *, converged: bool = True,
+                  dimensions: int = 3) -> float:
+    """Quality in [0, 1] — a PER-DIMENSION score, not a per-finding penalty.
+
+    The original formula was `1.0 - (confirmed*0.3 + plausible*0.1)`, which
+    saturates at four confirmed findings. Adversarial reviewers are instructed
+    to *find* problems and routinely return five to ten, so in practice every
+    run reported 0% and the number carried no information at all (measured
+    across four live runs: 5, 6, 10 and 5 confirmed findings).
+
+    Scoring per review DIMENSION bounds the penalty by how many independent
+    angles found something, which is what the reviewer panel actually
+    measures:
+
+        clean dimension              → 1.0
+        only PLAUSIBLE findings      → 0.5
+        at least one CONFIRMED       → 0.0
+
+    Non-convergence of the LDD loop costs a further 0.2 — a real signal, not
+    a free pass.
+
+    NOTE: a CONFIRMED verdict here is the reviewer's own claim; there is no
+    independent verification pass, so treat the score as a review summary,
+    not a proof. Findings travel with the artifact so an operator can judge
+    them.
+    """
+    dimensions = max(1, dimensions)
+    per_dimension: Dict[str, float] = {}
+    for finding in findings:
+        current = per_dimension.get(finding.dimension, 1.0)
+        if finding.verdict == ReviewVerdict.CONFIRMED:
+            per_dimension[finding.dimension] = 0.0
+        elif finding.verdict == ReviewVerdict.PLAUSIBLE:
+            per_dimension[finding.dimension] = min(current, 0.5)
+        else:
+            per_dimension.setdefault(finding.dimension, 1.0)
+
+    # Dimensions that reported nothing are clean.
+    total = sum(per_dimension.values()) + (dimensions - len(per_dimension)) * 1.0
+    score = total / dimensions
+
+    if not converged:
+        score -= 0.2
+    return round(max(0.0, min(1.0, score)), 3)
+
+
 # ============================================================================
 # PHASE 5: PROMOTION (SkillForge Registration)
 # ============================================================================
@@ -1300,24 +1346,21 @@ class SkillCreatorOrchestrator:
         confirmed_count = sum(1 for f in findings if f.verdict == ReviewVerdict.CONFIRMED)
         plausible_count = sum(1 for f in findings if f.verdict == ReviewVerdict.PLAUSIBLE)
 
-        if confirmed_count > 0:
-            logger.warning(f"  {confirmed_count} CONFIRMED findings → LDD re-entry")
-            # In production, would re-enter Phase 3 with findings as loss signals
-            # For now, just log and continue (simplified path)
-
-        quality_score = 1.0 - (confirmed_count * 0.3 + plausible_count * 0.1)
-        if not getattr(self.tester, "converged", True):
-            # Non-convergence is a real quality signal, not a free pass: the
-            # LDD loop hit k_max. Price it in rather than silently shipping
-            # the best iterate at full quality.
-            quality_score -= 0.2
-        quality_score = max(0.0, min(1.0, quality_score))
-        logger.info(f"  Review complete: quality={quality_score:.2f}")
+        converged = bool(getattr(self.tester, "converged", True))
+        quality_score = score_quality(findings, converged=converged,
+                                      dimensions=len(self.reviewer.reviewers))
+        logger.info("  Review complete: quality=%.2f (%d confirmed, %d plausible, "
+                    "converged=%s)", quality_score, confirmed_count,
+                    plausible_count, converged)
 
         # Phase 5: Promotion
         logger.info("PHASE 5: PROMOTION...")
         self._progress("promotion", 90, f"Promoting '{spec.name}'…")
         artifact = self.promoter.promote(spec, quality_score)
+        # Carry the findings out with the artifact. They used to be counted
+        # into a number and then dropped, so an operator saw "Quality: 0%"
+        # with no way to learn what the reviewers actually objected to.
+        artifact.review_findings = findings
         logger.info(f"  Skill promoted: {artifact.spec.name}")
 
         logger.info(f"=== SKILL CREATION COMPLETE ===\n")
