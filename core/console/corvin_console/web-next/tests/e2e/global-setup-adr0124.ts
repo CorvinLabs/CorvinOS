@@ -16,11 +16,24 @@ const _dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const AUTH_STATE_PATH = path.join(_dirname, "auth-state.json");
 
+/**
+ * Origin the session is minted against.
+ *
+ * This was hardcoded to http://localhost:5173 while playwright.config.ts
+ * points the specs at CONSOLE_BASE_URL (default http://127.0.0.1:8765/console).
+ * Cookies are scoped per HOST, and `localhost` is not `127.0.0.1`, so the
+ * saved storageState never applied to the pages under test: every spec ran
+ * anonymous and the console answered 401. Derive both from one value.
+ */
+const CONSOLE_ORIGIN = new URL(
+  process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console",
+).origin;
+
 /** Check if the existing auth-state is still valid (whoami returns 200). */
 async function isSessionValid(): Promise<boolean> {
   if (!fs.existsSync(AUTH_STATE_PATH)) return false;
   try {
-    const ctx = await request.newContext({ baseURL: "http://localhost:5173" });
+    const ctx = await request.newContext({ baseURL: CONSOLE_ORIGIN });
     // Replay cookies from the stored state
     const raw = JSON.parse(fs.readFileSync(AUTH_STATE_PATH, "utf-8"));
     const cookies: Array<{
@@ -29,7 +42,7 @@ async function isSessionValid(): Promise<boolean> {
     }> = raw.cookies ?? [];
     // Build a cookie header manually and check whoami
     const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-    const r = await ctx.get("http://localhost:5173/v1/console/auth/whoami", {
+    const r = await ctx.get(`${CONSOLE_ORIGIN}/v1/console/auth/whoami`, {
       headers: { Cookie: cookieHeader },
     });
     await ctx.dispose();
@@ -47,10 +60,10 @@ export default async function globalSetup() {
   }
 
   const browser = await chromium.launch();
-  const context = await browser.newContext({ baseURL: "http://localhost:5173" });
+  const context = await browser.newContext({ baseURL: CONSOLE_ORIGIN });
   const page = await context.newPage();
 
-  await page.goto("http://localhost:5173/v1/console/auth/local-login", {
+  await page.goto(`${CONSOLE_ORIGIN}/v1/console/auth/local-login`, {
     waitUntil: "load",
     timeout: 20_000,
   }).catch(() => null);
@@ -69,7 +82,7 @@ export default async function globalSetup() {
   let ok = false;
   for (let attempt = 1; attempt <= 3 && !ok; attempt += 1) {
     const r = await context.request
-      .get("http://localhost:5173/v1/console/auth/whoami")
+      .get(`${CONSOLE_ORIGIN}/v1/console/auth/whoami`)
       .catch(() => null);
     ok = !!r && r.ok();
     if (!ok) await page.waitForTimeout(500 * attempt);
@@ -79,7 +92,7 @@ export default async function globalSetup() {
     await browser.close();
     throw new Error(
       "Global setup: login failed — GET /v1/console/auth/whoami never returned ok. " +
-      "Is the console running on :8765 and the vite dev server on :5173?",
+      `Console origin tried: ${CONSOLE_ORIGIN}`,
     );
   }
 

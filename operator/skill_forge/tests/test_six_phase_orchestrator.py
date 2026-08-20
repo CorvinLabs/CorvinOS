@@ -1,11 +1,22 @@
 """Tests for Six-Phase Orchestrator (k=2-5: Testing, Review, Validation, Integration)."""
 
+import sys
+from pathlib import Path
+
+# `operator/` deliberately has no __init__.py (it would shadow the stdlib
+# `operator` module), so `import operator.skill_forge` can never work. Put
+# `operator/` on sys.path and import the package flat — the same shim the
+# console route uses (routes/skill_creator_api.py).
+_OPERATOR_DIR = Path(__file__).resolve().parents[2]
+if str(_OPERATOR_DIR) not in sys.path:
+    sys.path.insert(0, str(_OPERATOR_DIR))
+
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
 
-from operator.skill_forge.six_phase_orchestrator import (
+from skill_forge.six_phase_orchestrator import (
     Phase,
     Verdict,
     PhaseOutput,
@@ -202,42 +213,54 @@ class TestSixPhaseOrchestrator:
 # k=3: E2E VALIDATION (Tier-4)
 # ============================================================================
 
+def phase_engine(spec_json: str):
+    """MagicMock client answering every phase prompt.
+
+    The original tests handed `side_effect` a fixed 6-item list, but the six
+    phases issue more than six calls (phase 2 and 4 each make three, phase 6
+    one per idea), so the mock raised StopIteration and every E2E run came
+    back "failed". Dispatch on the prompt instead of counting calls.
+    """
+    client = MagicMock()
+
+    def _create(**kwargs):
+        prompt = kwargs["messages"][0]["content"]
+        text = spec_json if "API specification" in prompt else "Response: looks correct, in scope, yes"
+        return MagicMock(content=[MagicMock(text=text)])
+
+    client.messages.create.side_effect = _create
+    return client
+
+
 class TestE2EValidation:
     """E2E tests on fictional skill ideas."""
 
     @pytest.mark.asyncio
     async def test_orchestrate_json_validator_skill(self):
         """E2E: Orchestrate JSON Validator skill (fictional idea 1)."""
-        mock_client = MagicMock()
-
-        # Mock responses for 6 phases
-        mock_responses = [
-            '{"skill_name": "json_validator", "purpose": "Validate JSON", "inputs": [], "outputs": [], "edge_cases": [], "dependencies": [], "estimated_loc": 200}',
-            "Thesis: Validate JSON syntax. Antithesis: Complex edge cases. Synthesis: Simple but thorough.",
-            "1. IDEA: Validate JSON\n2. CONCEPT: Use Python json module\n3. ADR: Simple approach\n4. PLAN: Step-by-step",
-            "Review: Correct, simple, in scope.",
-            "# JSON Validator\n\nInstructions for validating JSON files.",
-            "yes, validates JSON files correctly",
-        ]
-
-        mock_client.messages.create.side_effect = [
-            MagicMock(content=[MagicMock(text=resp)]) for resp in mock_responses
-        ]
+        mock_client = phase_engine(
+            '{"skill_name": "json_validator", "purpose": "Validate JSON", "inputs": [], '
+            '"outputs": [], "edge_cases": [], "dependencies": [], "estimated_loc": 200}'
+        )
 
         orch = SixPhaseOrchestrator(mock_client)
         run = await orch.orchestrate("Create a skill that validates JSON files")
 
         assert run.status == "success"
-        assert len(run.phases_completed) == 6
+        # One entry per LDD ITERATION, not per phase — a phase that needs a
+        # second pass appends a second PhaseOutput. What must hold is that
+        # all six phases are represented.
+        assert {o.phase for o in run.phases_completed} == set(Phase)
+        assert len(run.phases_completed) >= 6
         assert run.quality_score >= 0.0
 
     @pytest.mark.asyncio
     async def test_orchestrate_code_analyzer_skill(self):
         """E2E: Orchestrate Code Analyzer skill (fictional idea 2)."""
-        mock_client = MagicMock()
-        mock_client.messages.create.side_effect = [
-            MagicMock(content=[MagicMock(text='{"skill_name": "code_analyzer", "purpose": "Analyze code", "inputs": [], "outputs": [], "edge_cases": [], "dependencies": [], "estimated_loc": 300}')])
-        ] + [MagicMock(content=[MagicMock(text="Response")]) for _ in range(5)]
+        mock_client = phase_engine(
+            '{"skill_name": "code_analyzer", "purpose": "Analyze code", "inputs": [], '
+            '"outputs": [], "edge_cases": [], "dependencies": [], "estimated_loc": 300}'
+        )
 
         orch = SixPhaseOrchestrator(mock_client)
         run = await orch.orchestrate("Create a skill that analyzes code for complexity")
@@ -247,10 +270,10 @@ class TestE2EValidation:
     @pytest.mark.asyncio
     async def test_orchestrate_log_parser_skill(self):
         """E2E: Orchestrate Log Parser skill (fictional idea 3)."""
-        mock_client = MagicMock()
-        mock_client.messages.create.side_effect = [
-            MagicMock(content=[MagicMock(text='{"skill_name": "log_parser", "purpose": "Parse logs", "inputs": [], "outputs": [], "edge_cases": [], "dependencies": [], "estimated_loc": 250}')])
-        ] + [MagicMock(content=[MagicMock(text="Response")]) for _ in range(5)]
+        mock_client = phase_engine(
+            '{"skill_name": "log_parser", "purpose": "Parse logs", "inputs": [], '
+            '"outputs": [], "edge_cases": [], "dependencies": [], "estimated_loc": 250}'
+        )
 
         orch = SixPhaseOrchestrator(mock_client)
         run = await orch.orchestrate("Create a skill that parses log files")
@@ -275,7 +298,7 @@ class TestBootstrapping:
             MagicMock(content=[MagicMock(text='{"skill_name": "skill_orchestrator", "purpose": "Orchestrate skills", "inputs": [], "outputs": [], "edge_cases": [], "dependencies": [], "estimated_loc": 500}')])
         ] + [MagicMock(content=[MagicMock(text="Generated response")]) for _ in range(29)]
 
-        with patch('operator.skill_forge.six_phase_orchestrator.SixPhaseOrchestrator.__init__',
+        with patch('skill_forge.six_phase_orchestrator.SixPhaseOrchestrator.__init__',
                   return_value=None):
             with patch.object(SixPhaseOrchestrator, '__init__', lambda self, *args, **kwargs: None):
                 orch = SixPhaseOrchestrator(mock_client)
