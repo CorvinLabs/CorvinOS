@@ -368,10 +368,13 @@ class ToolForgeSubsystem(Subsystem):
     - handle_request(): Route forge_tool, forge_exec, forge_promote, list_tools
     - on_event(): React to forge_requested, strategy_failed, error_detected
     - shutdown(): Clean up resources
+
+    Phase C: Tenant-native persistence via ExecutionContext.tenant_id
     """
 
     def __init__(
         self,
+        context: Optional[Any] = None,
         forge_registry: Optional[Any] = None,
         max_workers: int = 4,
         namespace_policy: Optional[NamespacePolicy] = None,
@@ -381,12 +384,17 @@ class ToolForgeSubsystem(Subsystem):
         """Initialize ToolForgeSubsystem.
 
         Args:
+            context: ExecutionContext (Phase C) with tenant_id for tenant-scoped operations
             forge_registry: Existing ToolForge Registry instance
             max_workers: ThreadPoolExecutor worker count
             namespace_policy: NamespacePolicy for validation (created if None)
             forge_quota: ForgeQuota for limits (created if None)
-            tenant_id: Tenant ID for learning event isolation (ADR-0321, Gap 1)
+            tenant_id: Tenant ID for learning event isolation (fallback if context is None)
         """
+        # Phase C: Store ExecutionContext for tenant-native operations
+        self.context = context
+        self.tenant_id = context.tenant_id if context else tenant_id
+
         self.forge_registry = forge_registry
         self.max_workers = max_workers
         self.async_registry: Optional[AsyncForgeRegistry] = None
@@ -395,16 +403,15 @@ class ToolForgeSubsystem(Subsystem):
         self.forged_tools: Dict[str, ToolSpec] = {}
         self.last_forge_timestamp: Optional[str] = None
 
-        # ADR-0361: Policy and quota
+        # ADR-0361: Policy and quota (per-tenant)
         self.namespace_policy = namespace_policy or NamespacePolicy()
         self.forge_quota = forge_quota or ForgeQuota()
 
-        # ADR-0321: Learning event emission (Gap 1)
-        self.tenant_id = tenant_id
+        # ADR-0321: Learning event emission (Gap 1) — per-tenant
         self.event_emitter: Optional[Any] = None
         self.instance_id = "tool_forge_subsystem"
 
-        # ADR-0322: Tool ranking for reuse (Gap 2)
+        # ADR-0322: Tool ranking for reuse (Gap 2) — per-tenant
         self.event_store: Optional[EventStore] = None
         self.ranking_manager: Optional[ToolRankingManager] = None
 
