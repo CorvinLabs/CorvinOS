@@ -6122,3 +6122,125 @@ export async function listScaffoldedPlugins(
 ): Promise<PluginScaffoldListResponse> {
   return api<PluginScaffoldListResponse>("/plugins/scaffolded", { signal });
 }
+
+// ── Skill-Creator (ADR-0405) ──────────────────────────────────────────────────
+//
+// Generated skills live in the tenant SkillForge registry. `injectable` is the
+// load-bearing field: a registered skill with no grade sits below
+// skill_inject's eligibility gate and is never injected into a turn.
+
+export interface GeneratedSkillSummary {
+  name: string;
+  type: string;
+  description: string;
+  scope: string;
+  created_by: string;
+  n_grades: number;
+  mean_score: number;
+  injectable: boolean;
+}
+
+export interface GeneratedSkillDetail extends GeneratedSkillSummary {
+  sha256: string;
+  grades: Array<{ run_id?: string; score: number; ts?: number; notes?: string }>;
+  body: string;
+}
+
+export interface GeneratedSkillList {
+  tenant_id: string;
+  count: number;
+  injectable_count: number;
+  skills: GeneratedSkillSummary[];
+}
+
+export async function listGeneratedSkills(
+  signal?: AbortSignal,
+): Promise<GeneratedSkillList> {
+  return api<GeneratedSkillList>("/skill-creator/skills", { signal });
+}
+
+export async function getGeneratedSkill(
+  name: string,
+  signal?: AbortSignal,
+): Promise<GeneratedSkillDetail> {
+  return api<GeneratedSkillDetail>(
+    `/skill-creator/skills/${encodeURIComponent(name)}`,
+    { signal },
+  );
+}
+
+export async function deleteGeneratedSkill(
+  name: string,
+  csrf: string,
+): Promise<{ ok: boolean; name: string }> {
+  return api(`/skill-creator/skills/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+    csrf,
+  });
+}
+
+export interface SkillGenerationAccepted {
+  status: string;
+  run_id: string;
+  engine: string;
+  base_skill: string | null;
+  message: string;
+}
+
+/** Start a run. Passing `baseSkill` refines that skill in place. */
+export async function startSkillGeneration(
+  userRequest: string,
+  baseSkill?: string | null,
+): Promise<SkillGenerationAccepted> {
+  return api<SkillGenerationAccepted>("/skill-creator/generate", {
+    method: "POST",
+    body: {
+      user_request: userRequest,
+      async: true,
+      ...(baseSkill ? { base_skill: baseSkill } : {}),
+    },
+    // A generation run takes minutes on the engine, but this call only
+    // ACCEPTS the run and returns a run_id — the default timeout is fine.
+  });
+}
+
+export interface SkillReviewFinding {
+  dimension: string;
+  summary: string;
+  verdict: string;
+}
+
+export interface SkillRunSkill {
+  name: string;
+  purpose: string;
+  scope: string;
+  quality: number;
+  iterations: number;
+  dependencies: string[];
+  findings?: SkillReviewFinding[];
+  injectable?: boolean;
+  registry_path?: string;
+}
+
+export interface SkillRunStatus {
+  run_id: string;
+  status: "pending" | "running" | "success" | "failed";
+  phase: string;
+  progress: number;
+  message: string;
+  engine: string;
+  phases: string[];
+  error: string | null;
+  base_skill: string | null;
+  skill?: SkillRunSkill | null;
+}
+
+export async function getSkillRunStatus(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<SkillRunStatus> {
+  return api<SkillRunStatus>(
+    `/skill-creator/status/${encodeURIComponent(runId)}`,
+    { signal },
+  );
+}
