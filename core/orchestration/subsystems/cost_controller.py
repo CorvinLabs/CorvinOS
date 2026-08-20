@@ -36,6 +36,8 @@ class CostController(Subsystem):
         self.spent_today: float = 0.0
         self.token_count: Dict[str, int] = {"input": 0, "output": 0}
         self.context_api: ContextAPI = None
+        self.cost_per_strategy: Dict[str, list] = {}  # ADR-0373: [cost, success] pairs
+        self.strategy_efficiency: Dict[str, float] = {}  # cost per success
 
     @property
     def name(self) -> str:
@@ -93,6 +95,27 @@ class CostController(Subsystem):
     ) -> None:
         """Task started."""
         pass
+
+    def track_cost_per_strategy(self, strategy: str, cost_cents: float, success: bool) -> None:
+        """Track cost/success for strategy (ADR-0373: cost optimization)."""
+        if strategy not in self.cost_per_strategy:
+            self.cost_per_strategy[strategy] = []
+        self.cost_per_strategy[strategy].append((cost_cents, success))
+        self._update_efficiency(strategy)
+
+    def _update_efficiency(self, strategy: str) -> None:
+        """Update cost-per-success efficiency metric."""
+        data = self.cost_per_strategy.get(strategy, [])
+        if not data:
+            return
+        successes = sum(1 for _, s in data if s)
+        if successes > 0:
+            total_cost = sum(c for c, _ in data)
+            self.strategy_efficiency[strategy] = total_cost / successes
+
+    def get_cost_efficiency(self, strategy: str) -> float:
+        """Get cost-per-success for strategy (lower is better)."""
+        return self.strategy_efficiency.get(strategy, 1.0)
 
     def _estimate_cost(
         self, input_tokens: int, output_tokens: int, model: str = None

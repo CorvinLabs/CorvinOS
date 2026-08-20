@@ -26,6 +26,8 @@ class SafetyValidator(Subsystem):
         ]
         self.max_retry_attempts = max_retry_attempts
         self.violation_count: Dict[str, int] = {}
+        self.consecutive_failures: Dict[str, int] = {}  # ADR-0374: circuit breaker
+        self.disabled_strategies: Dict[str, float] = {}  # strategy → cooldown timestamp
 
     @property
     def name(self) -> str:
@@ -39,7 +41,31 @@ class SafetyValidator(Subsystem):
         """Subscribe to action events."""
         self.hub = hub
         hub.subscribe("strategy_applied", self.on_strategy)
+        hub.subscribe("strategy_failed", self.on_strategy_failed)  # ADR-0374
         logger.info("SafetyValidator started")
+
+    async def on_strategy_failed(self, event_name: str, event_data: Dict[str, Any]) -> None:
+        """Track strategy failures for circuit breaker (ADR-0374)."""
+        strategy = event_data.get("strategy", "unknown")
+        if strategy not in self.consecutive_failures:
+            self.consecutive_failures[strategy] = 0
+        self.consecutive_failures[strategy] += 1
+        if self.consecutive_failures[strategy] >= 5:
+            # Disable strategy for 48h (48*3600 seconds)
+            import time
+            self.disabled_strategies[strategy] = time.time() + 48*3600
+            logger.warning(f"Strategy '{strategy}' disabled after 5 failures (48h cooldown)")
+
+    def is_strategy_available(self, strategy: str) -> bool:
+        """Check if strategy is available (not in cooldown) (ADR-0374)."""
+        import time
+        if strategy in self.disabled_strategies:
+            if time.time() < self.disabled_strategies[strategy]:
+                return False
+            else:
+                del self.disabled_strategies[strategy]
+                self.consecutive_failures[strategy] = 0
+        return True
 
     async def on_event(self, event_name: str, event_data: Dict[str, Any]) -> None:
         """React to events."""
