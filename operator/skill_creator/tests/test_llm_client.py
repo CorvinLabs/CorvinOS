@@ -108,6 +108,14 @@ class TestMessagesCreate:
 
 
 class TestResolution:
+    def test_engine_id_is_always_a_string(self):
+        """A non-string engine_id used to 500 the whole status endpoint on a
+        run that had succeeded."""
+        assert engine_id_of(None) == "local"
+        assert engine_id_of(MagicMock()) == "api"          # bare Mock
+        assert engine_id_of(MagicMock(engine_id="")) == "api"
+        assert engine_id_of(MagicMock(engine_id="claude_code")) == "claude_code"
+
     def test_explicit_client_wins(self):
         sentinel = object()
         assert resolve_llm_client(sentinel) is sentinel

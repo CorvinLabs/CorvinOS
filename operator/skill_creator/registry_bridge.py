@@ -230,3 +230,45 @@ def list_skills(root: Path) -> list[dict[str, Any]]:
             "injectable": spec.n_grades >= 1 and spec.mean_score > 0,
         })
     return out
+
+
+def delete_skill(root: Path, name: str, *, reason: str = "") -> bool:
+    """Remove a skill from the manifest, disk and plugin slot.
+
+    Returns False when the skill was not registered. Deletion goes through
+    the registry (never a bare `rmtree`) so the manifest, the engine plugin
+    slot and the hash-chained skill audit all stay consistent — a directory
+    removed behind the registry's back leaves a manifest entry pointing at
+    nothing, and `SkillRegistry.list()` would keep reporting it.
+    """
+    try:
+        registry = registry_for(root)
+    except RegistryUnavailable:
+        return False
+    return bool(registry.delete(name, reason=reason or "deleted from console"))
+
+
+def skill_body(root: Path, name: str) -> Optional[str]:
+    """Raw SKILL.md of a registered skill, or None."""
+    try:
+        registry = registry_for(root)
+    except RegistryUnavailable:
+        return None
+    return registry.get_body(name)
+
+
+def strip_front_matter(body: str) -> str:
+    """Return the markdown body without the registry's YAML front-matter.
+
+    A refine round feeds the previous body back to the model as the starting
+    point. Handing it the front-matter too invites the model to reproduce it,
+    and `registry.create()` renders its own — two blocks make the skill
+    unparseable for the engine that loads it.
+    """
+    text = (body or "").lstrip()
+    if not text.startswith("---"):
+        return text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return text
+    return text[end + 4:].lstrip("\n")

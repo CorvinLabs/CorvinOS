@@ -20,7 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import auth as session_auth
-from ..deps import require_session
+from .. import audit as console_audit
+from ..deps import require_csrf, require_session
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,13 @@ try:
         SkillCreatorError,
     )
     from skill_creator.llm_client import resolve_llm_client, engine_id_of
-    from skill_creator.registry_bridge import list_skills, read_skill
+    from skill_creator.registry_bridge import (
+        delete_skill,
+        list_skills,
+        read_skill,
+        skill_body,
+        strip_front_matter,
+    )
 except ImportError as e:
     logger.warning(f"SkillCreatorOrchestrator import failed: {e}")
     SkillCreatorOrchestrator = None
@@ -54,9 +61,24 @@ except ImportError as e:
     engine_id_of = None
     list_skills = None
     read_skill = None
+    delete_skill = None
+    skill_body = None
+    strip_front_matter = None
 
 from .. import _bootstrap
 _forge_paths = _bootstrap.forge_paths
+
+
+def _require_valid_name(name: str) -> str:
+    """Reject anything the registry would not accept, before a path join.
+
+    Registry names are alphanumeric plus `.` and `_`. One guard, used by
+    every route that takes a name, so a new endpoint cannot forget it.
+    """
+    if (not name or len(name) > 128 or ".." in name
+            or not all(c.isalnum() or c in "._" for c in name)):
+        raise HTTPException(status_code=400, detail="invalid skill name")
+    return name
 
 
 def _registry_root(tenant_id: str) -> Path:
@@ -100,6 +122,13 @@ _skill_stats = {
 class SkillGenerationRequest(BaseModel):
     user_request: str = Field(..., min_length=10, description="Description of skill to create")
     async_: bool = Field(default=True, alias="async", description="Run async and return run_id")
+    # Refine an existing skill instead of creating a new one: the current
+    # body becomes the starting point and the name is preserved, so
+    # iterating updates the skill in place.
+    base_skill: Optional[str] = Field(
+        default=None, max_length=128,
+        description="Name of an existing skill to refine",
+    )
 
 
 class ReviewFindingOut(BaseModel):
@@ -133,6 +162,8 @@ class GenerationStatusResponse(BaseModel):
     engine: str = "unknown"      # claude_code (Max subscription) | api | local
     phases: list = Field(default_factory=lambda: list(PHASES))
     error: Optional[str] = None
+    # Set when this run refines an existing skill in place.
+    base_skill: Optional[str] = None
     skill: Optional[SkillArtifact] = None
 
 
@@ -177,14 +208,18 @@ async def generate_skill(
         if not user_request or len(user_request) < 10:
             raise HTTPException(status_code=400, detail="Request must be at least 10 characters")
 
+        base = _resolve_base_skill(rec.tenant_id, req.base_skill)
+
         if req.async_:
             # Async mode: spawn background task, return run_id
-            run_id = _spawn_generation_task(user_request, rec.tenant_id)
+            run_id = _spawn_generation_task(user_request, rec.tenant_id, base=base)
+            verb = "refinement" if base else "generation"
             return {
                 "status": "accepted",
                 "run_id": run_id,
                 "engine": _engine_id(),
-                "message": f"Skill generation started. Poll /status/{run_id} for progress."
+                "base_skill": base["name"] if base else None,
+                "message": f"Skill {verb} started. Poll /status/{run_id} for progress."
             }
 
         # Sync mode: block until complete (not recommended for long tasks).
@@ -194,7 +229,7 @@ async def generate_skill(
             registry_root=str(_registry_root(rec.tenant_id))
         )
         artifact = await asyncio.to_thread(
-            lambda: asyncio.run(orchestrator.create_skill(user_request))
+            lambda: asyncio.run(orchestrator.create_skill(user_request, base=base))
         )
         return {
             "status": "success",
@@ -241,6 +276,7 @@ async def check_status(run_id: str) -> GenerationStatusResponse:
         "engine": run.get("engine", "unknown"),
         "phases": list(PHASES),
         "error": run.get("error"),
+        "base_skill": run.get("base_skill"),
     }
 
     if run["status"] == "success":
@@ -288,15 +324,42 @@ async def get_generated_skill(
     if read_skill is None:
         raise HTTPException(status_code=500, detail="Skill-Creator not available")
 
-    # Registry names are alphanumeric + '.' + '_'; reject anything else
-    # before it reaches a path join.
-    if not name or not all(c.isalnum() or c in "._" for c in name) or ".." in name:
-        raise HTTPException(status_code=400, detail="invalid skill name")
-
+    _require_valid_name(name)
     detail = read_skill(_registry_root(rec.tenant_id), name)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"skill not found: {name}")
     return detail
+
+
+@router.delete("/skills/{name}")
+async def delete_generated_skill(
+    name: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> Dict[str, Any]:
+    """DELETE /skill-creator/skills/<name>
+
+    Remove a generated skill from the tenant registry, its directory and the
+    engine plugin slot. Goes through the registry rather than removing the
+    directory, so the manifest, the slot and the hash-chained skill audit
+    stay consistent.
+    """
+    if delete_skill is None:
+        raise HTTPException(status_code=500, detail="Skill-Creator not available")
+
+    _require_valid_name(name)
+    removed = delete_skill(_registry_root(rec.tenant_id), name,
+                           reason="deleted from console Skill Creator")
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"skill not found: {name}")
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="skill.generated_deleted",
+        target_kind="generated_skill",
+        target_id=name,
+    )
+    return {"ok": True, "name": name}
 
 
 @router.get("/stats")
@@ -324,6 +387,25 @@ def _engine_id() -> str:
         return "unknown"
 
 
+def _resolve_base_skill(tenant_id: str, name: Optional[str]) -> Optional[Dict[str, str]]:
+    """Load the skill a refine round starts from, or None for a fresh skill.
+
+    Fails loudly on an unknown name: silently generating a NEW skill when the
+    operator asked to modify an existing one would leave the original
+    untouched and register a near-duplicate beside it.
+    """
+    if not name:
+        return None
+    if skill_body is None or strip_front_matter is None:
+        raise HTTPException(status_code=500, detail="Skill-Creator not available")
+
+    _require_valid_name(name)
+    body = skill_body(_registry_root(tenant_id), name)
+    if body is None:
+        raise HTTPException(status_code=404, detail=f"skill not found: {name}")
+    return {"name": name, "body": strip_front_matter(body)}
+
+
 def _update_run(run_id: str, **fields: Any) -> None:
     """Thread-safe partial update of a run record."""
     with _runs_lock:
@@ -332,7 +414,8 @@ def _update_run(run_id: str, **fields: Any) -> None:
             run.update(fields)
 
 
-def _spawn_generation_task(user_request: str, tenant_id: str) -> str:
+def _spawn_generation_task(user_request: str, tenant_id: str,
+                           base: Optional[Dict[str, str]] = None) -> str:
     """Spawn the generation worker thread; return its run_id.
 
     The orchestrator drives a `claude -p` subprocess per phase (Max
@@ -348,6 +431,7 @@ def _spawn_generation_task(user_request: str, tenant_id: str) -> str:
             "progress": 5,
             "message": "Initializing…",
             "engine": "unknown",
+            "base_skill": base["name"] if base else None,
             "created_at": datetime.utcnow().isoformat(),
         }
 
@@ -370,7 +454,7 @@ def _spawn_generation_task(user_request: str, tenant_id: str) -> str:
             _update_run(run_id, engine=orchestrator.engine_id,
                         message=f"Generating via {orchestrator.engine_id}…")
 
-            artifact = asyncio.run(orchestrator.create_skill(user_request))
+            artifact = asyncio.run(orchestrator.create_skill(user_request, base=base))
 
             _update_run(
                 run_id,

@@ -48,6 +48,38 @@ OVERLONG_SPEC_JSON = SPEC_JSON.replace(
 )
 
 
+REFINED_METHOD = ("# Validate JSON\\n\\n1. Read the file\\n2. Parse strictly\\n"
+                  "3. Melde doppelte Schluessel als Warnung\\n"
+                  "4. Exit non-zero on a syntax error\\n5. Summarise the run")
+
+
+def refine_engine_for(name: str):
+    """Engine whose refine reply changes the body and keeps the name."""
+    refined = (
+        '{"name": "%s", "scope": "assistant", '
+        '"purpose": "Validates JSON files and reports duplicate keys as warnings too.", '
+        '"method": "%s", "dependencies": ["python3"], "keywords": ["json"]}'
+    ) % (name, REFINED_METHOD)
+
+    client = MagicMock()
+    client.engine_id = "claude_code"
+
+    def _create(**kwargs):
+        prompt = kwargs["messages"][0]["content"]
+        if "Reply with JSON ONLY" in prompt:
+            text = CLEAN_RUBRIC
+        elif "refining an EXISTING skill" in prompt:
+            text = refined
+        elif "FINDING:" in prompt:
+            text = "VERDICT: REFUTED"
+        else:
+            text = "User validates a file with duplicate keys"
+        return MagicMock(content=[MagicMock(text=text)])
+
+    client.messages.create.side_effect = _create
+    return client
+
+
 def fake_engine(*, fail_with: Exception | None = None, spec_json: str = SPEC_JSON):
     """Engine stand-in answering each phase prompt in its own shape."""
     client = MagicMock()
@@ -114,6 +146,7 @@ def console_client(tmp_path: Path, engine=None, *, live: bool = False,
     rec = _auth.create_session(tenant_id=tenant, token_fingerprint="test-fp")
     client = TestClient(app, raise_server_exceptions=False)
     client.cookies.set("corvin_console_sid", rec.sid)
+    client.session_record = rec  # type: ignore[attr-defined]
     try:
         yield client, route
     finally:
@@ -132,6 +165,11 @@ def console_client(tmp_path: Path, engine=None, *, live: bool = False,
 def registry_root(tmp_path: Path, tenant: str = "_default") -> Path:
     # Sibling of `global`, not a child — see _registry_root in the route.
     return tmp_path / "corvin_home" / "tenants" / tenant / "skill-forge"
+
+
+def csrf_headers(rec) -> dict:
+    from corvin_console import auth as _auth
+    return {"x-csrf-token": _auth.derive_csrf_token(rec.csrf_secret, rec.sid)}
 
 
 def poll_until_done(client, run_id: str, timeout_s: float = 30.0) -> dict:
@@ -346,3 +384,94 @@ def test_live_generation(tmp_path):
     assert final["status"] == "success", final
     assert final["engine"] == "claude_code"
     assert final["skill"]["name"].startswith(("assistant.", "project."))
+
+
+# ── managing a generated skill: view · refine · delete ────────────────────
+
+def _generate(client, request: str = "erzeuge einen Skill der JSON validiert",
+              base: str | None = None) -> dict:
+    payload = {"user_request": request, "async": True}
+    if base:
+        payload["base_skill"] = base
+    resp = client.post("/v1/console/skill-creator/generate", json=payload)
+    assert resp.status_code == 202, resp.text
+    return poll_until_done(client, resp.json()["run_id"])
+
+
+def test_delete_removes_the_skill_everywhere(tmp_path):
+    """Delete must clear the manifest, the directory AND the listing —
+    a directory removed behind the registry's back leaves a manifest entry
+    pointing at nothing."""
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        final = _generate(client)
+        name = final["skill"]["name"]
+
+        resp = client.delete(f"/v1/console/skill-creator/skills/{name}",
+                             headers=csrf_headers(client.session_record))
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"ok": True, "name": name}
+
+        assert client.get(f"/v1/console/skill-creator/skills/{name}").status_code == 404
+        assert client.get("/v1/console/skill-creator/skills").json()["count"] == 0
+        assert not (registry_root(tmp_path) / "skills" / name).exists()
+
+
+def test_delete_requires_csrf(tmp_path):
+    """A destructive route without CSRF is a cross-site delete."""
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        name = _generate(client)["skill"]["name"]
+        resp = client.delete(f"/v1/console/skill-creator/skills/{name}")
+        assert resp.status_code == 403
+        assert client.get(f"/v1/console/skill-creator/skills/{name}").status_code == 200
+
+
+def test_delete_of_unknown_skill_is_404(tmp_path):
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        resp = client.delete("/v1/console/skill-creator/skills/assistant.nope",
+                             headers=csrf_headers(client.session_record))
+        assert resp.status_code == 404
+
+
+def test_refine_updates_the_skill_in_place(tmp_path):
+    """Iterating on a skill must replace it, not add a near-duplicate."""
+    with console_client(tmp_path, fake_engine()) as (client, route):
+        first = _generate(client)
+        name = first["skill"]["name"]
+
+        # Second run answers the refine prompt with a changed body.
+        from skill_creator import skill_creator as sc
+        sc.resolve_llm_client = lambda explicit=None: refine_engine_for(name)
+
+        second = _generate(client, "ergaenze eine Pruefung auf doppelte Schluessel",
+                           base=name)
+
+        assert second["status"] == "success", second
+        assert second["skill"]["name"] == name
+        assert second["base_skill"] == name
+
+        listing = client.get("/v1/console/skill-creator/skills").json()
+        assert listing["count"] == 1, "refine registered a second skill"
+
+        body = client.get(f"/v1/console/skill-creator/skills/{name}").json()["body"]
+        assert "doppelte" in body or "duplicate" in body
+
+
+def test_refine_of_unknown_skill_is_404_not_a_new_skill(tmp_path):
+    """Silently creating a NEW skill would leave the operator's target
+    untouched and a duplicate beside it."""
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        resp = client.post("/v1/console/skill-creator/generate",
+                           json={"user_request": "aendere diesen Skill bitte",
+                                 "async": True, "base_skill": "assistant.nope"})
+        assert resp.status_code == 404
+        assert client.get("/v1/console/skill-creator/skills").json()["count"] == 0
+
+
+def test_name_guard_rejects_traversal_on_every_route(tmp_path):
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        bad = "..%2F..%2Fetc%2Fpasswd"
+        assert client.get(f"/v1/console/skill-creator/skills/{bad}").status_code in (400, 404)
+        assert client.delete(
+            f"/v1/console/skill-creator/skills/{bad}",
+            headers=csrf_headers(client.session_record),
+        ).status_code in (400, 404)

@@ -200,6 +200,33 @@ backs the console's previously inert "View" button, and `/skills` reads the
 registry manifest with an `injectable` flag per skill instead of globbing a
 directory.
 
+## Amendment 2026-08-20 (2) — managing a generated skill
+
+Generation alone is not a workflow: an operator needs to read what was
+produced, iterate on it, and throw it away. The console had a View button
+with no endpoint and a Delete button with no endpoint.
+
+* `GET /skill-creator/skills/{name}` — body + metadata.
+* `DELETE /skill-creator/skills/{name}` — CSRF-gated, audited as
+  `skill.generated_deleted`, routed through `registry.delete()` so the
+  manifest, the plugin slot and the skill audit chain stay consistent. A
+  directory removed behind the registry's back leaves a manifest entry
+  pointing at nothing, and `list()` would keep reporting it.
+* `POST /skill-creator/generate` accepts `base_skill`, turning the run into
+  a REFINE round: the current body is the starting point and the name is
+  preserved, so iterating updates the skill in place. The model is asked to
+  keep the name and is **not trusted to** — the operator's name wins,
+  because a rename would leave the original registered and add a
+  near-duplicate beside it. An unknown `base_skill` is a 404, never a
+  silent fresh generation for the same reason.
+
+One `_require_valid_name` guard is shared by every name-taking route, so a
+new endpoint cannot forget it.
+
+`engine_id_of` now coerces to `str`: a client exposing a non-string
+`engine_id` made the status endpoint 500 on a run that had actually
+succeeded.
+
 ## Consequences
 
 * Skill generation works on a stock CorvinOS install with no API key. A live

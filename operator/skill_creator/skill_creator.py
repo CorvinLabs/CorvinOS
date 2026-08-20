@@ -282,11 +282,18 @@ class SkillPlanner:
             engine_id_of(self.client), self.use_local,
         )
 
-    async def plan(self, user_request: str) -> SkillSpec:
-        """Generate SkillSpec from user request via dialectical reasoning or local generation.
+    async def plan(self, user_request: str,
+                   base: Optional[Dict[str, str]] = None) -> SkillSpec:
+        """Generate SkillSpec from user request, or refine an existing skill.
 
         Args:
-            user_request: Natural language request (e.g., "erzeuge einen Skill der JSON validiert")
+            user_request: Natural language request, or — with `base` — the
+                change the operator wants made.
+            base: `{"name": ..., "body": ...}` of an existing skill. Turns
+                planning into a REFINE round: the current body is the
+                starting point and its name is preserved, so iterating on a
+                skill updates it in place instead of spawning a near-duplicate
+                under a name the model happened to pick this time.
 
         Returns:
             SkillSpec (unvalidated, for Phase 2)
@@ -295,6 +302,11 @@ class SkillPlanner:
             PlanningError: If planning fails at any stage
         """
         try:
+            if base and self.client is not None:
+                spec = await self._refine_spec(user_request, base)
+                logger.info("Phase 1 Refine complete: %s", spec.name)
+                return spec
+
             if self.use_local or self.client is None:
                 # Local generation mode (no Claude API needed)
                 logger.info("Using local skill generation (no API key required)")
@@ -389,6 +401,59 @@ result = use_skill("{skill_name}", input_data)
             )
 
         return spec
+
+    async def _refine_spec(self, instruction: str, base: Dict[str, str]) -> SkillSpec:
+        """Rewrite an existing skill according to the operator's instruction."""
+        base_name = base.get("name") or ""
+        base_body = base.get("body") or ""
+
+        prompt = f"""You are refining an EXISTING skill. Apply the operator's
+change and keep everything else intact — this replaces the skill in place, so
+anything you drop is lost.
+
+CURRENT SKILL ({base_name}):
+{base_body}
+
+OPERATOR'S REQUESTED CHANGE:
+{instruction}
+
+Reply with the updated spec as JSON ONLY, no prose outside the object:
+{{
+  "name": "{base_name}",     // keep this name EXACTLY
+  "scope": "assistant",
+  "purpose": "<one sentence, {PURPOSE_LEN[0]}-{PURPOSE_LEN[1]} characters>",
+  "method": "<Markdown body starting with '# Title', {METHOD_LEN[0]}-{METHOD_LEN[1]} characters>",
+  "dependencies": ["<tool1>"],
+  "keywords": ["<keyword1>"]
+}}"""
+
+        response = self.client.messages.create(
+            model="claude-opus-5",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = response.content[0].text
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise PlanningError("Refine returned no JSON")
+        try:
+            data = json.loads(match.group())
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise PlanningError(f"Refine returned unparseable JSON: {exc}") from exc
+
+        # The name is the operator's, not the model's: a refine that renames
+        # the skill would leave the original in place and register a second
+        # one, which is the opposite of "modify this skill".
+        return SkillSpec(
+            spec_id=str(uuid4()),
+            name=normalize_skill_name(base_name or data.get("name"), data.get("scope")),
+            scope=_coerce_scope(data.get("scope")),
+            purpose=data.get("purpose", ""),
+            method=normalize_method(data.get("method", "")),
+            dependencies=data.get("dependencies", []),
+            keywords=data.get("keywords", []),
+            generated_by="skill-creator-refine",
+        )
 
     async def repair(self, spec: SkillSpec, problems: List[str]) -> SkillSpec:
         """Re-emit a spec that fixes the listed validator violations.
@@ -1312,7 +1377,8 @@ class SkillCreatorOrchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.warning("progress callback failed: %s", exc)
 
-    async def create_skill(self, user_request: str) -> SkillArtifact:
+    async def create_skill(self, user_request: str,
+                           base: Optional[Dict[str, str]] = None) -> SkillArtifact:
         """Orchestrate full skill creation: Phases 1-5.
 
         Args:
@@ -1329,8 +1395,11 @@ class SkillCreatorOrchestrator:
 
         # Phase 1: Planning
         logger.info("PHASE 1: PLANNING...")
-        self._progress("planning", 10, f"Planning skill via {self.engine_id}…")
-        spec = await self.planner.plan(user_request)
+        self._progress(
+            "planning", 10,
+            f"{'Refining' if base else 'Planning'} skill via {self.engine_id}…",
+        )
+        spec = await self.planner.plan(user_request, base=base)
         logger.info(f"  Spec generated: {spec.name}")
 
         # Phase 2: Validation
