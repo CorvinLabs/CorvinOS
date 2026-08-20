@@ -224,12 +224,13 @@ def _purge_skills(*, forge_chan_id: str, repo_root: Path | None,
     return removed
 
 
-def _purge_forge_tools(*, forge_chan_id: str, failures: list[str]) -> int:
+def _purge_forge_tools(*, forge_chan_id: str, failures: list[str],
+                       tenant_id: str = "_default") -> int:
     """Delete every session-scope forge tool. Returns count."""
     if _ForgeRegistry is None or _scope_root is None:
         return 0
     try:
-        root = _scope_root("session", channel_id=forge_chan_id)
+        root = _scope_root("session", tenant_id=tenant_id, channel_id=forge_chan_id)
     except Exception as e:  # noqa: BLE001
         failures.append(f"forge scope_root: {e!s}")
         return 0
@@ -431,6 +432,7 @@ def reset_session(
     )
     forge_tools_removed = _purge_forge_tools(
         forge_chan_id=forge_chan_id, failures=failures,
+        tenant_id=tenant_id,
     )
     # ADR-0049 — purge worker session files BEFORE the rmtree below
     # so per-file audit events land while the directory is still intact.

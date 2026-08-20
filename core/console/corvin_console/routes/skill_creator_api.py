@@ -9,24 +9,33 @@ Endpoints:
 
 import asyncio
 import logging
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+logger = logging.getLogger(__name__)
+
 # Import Skill-Creator orchestrator
+# NOTE: operator/ has no __init__.py (to avoid shadowing stdlib operator module),
+# so we must add it to sys.path manually before importing. See ADR-0233.
 try:
-    from operator.skill_forge.skill_creator import (
+    _operator_dir = Path(__file__).resolve().parents[4] / "operator"
+    if _operator_dir.is_dir() and str(_operator_dir) not in sys.path:
+        sys.path.insert(0, str(_operator_dir))
+
+    from skill_forge.skill_creator import (
         SkillCreatorOrchestrator,
         SkillCreatorError,
     )
-except ImportError:
+except ImportError as e:
+    logger.warning(f"SkillCreatorOrchestrator import failed: {e}")
     SkillCreatorOrchestrator = None
     SkillCreatorError = Exception
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/skill-creator", tags=["skill-creator"])
 
