@@ -28,22 +28,26 @@ try:  # package-relative (normal import path)
     from .llm_client import resolve_llm_client, engine_id_of
     from .registry_bridge import promote_to_registry
 except ImportError:  # pragma: no cover — flat sys.path insert (console route)
-    from skill_forge.llm_client import resolve_llm_client, engine_id_of
-    from skill_forge.registry_bridge import promote_to_registry
+    from skill_creator.llm_client import resolve_llm_client, engine_id_of
+    from skill_creator.registry_bridge import promote_to_registry
 
 
 def _default_registry_root(tenant_id: str | None = None) -> Path:
-    """`<tenant-global>/skill-forge` for `tenant_id`.
+    """`<tenant_home>/skill-forge` for `tenant_id`.
+
+    `skill-forge` is a SIBLING of `global` in the tenant tree, not a child —
+    and the sibling path is what `MultiSkillRegistry._root_for("user")`
+    resolves, hence the only root `skill_inject` reads.
 
     Console callers pass the tenant from the authenticated session; this
     fallback exists for CLI and test use, where there is no session.
     """
     try:
-        from forge.paths import tenant_global_dir  # noqa: PLC0415
-        return Path(tenant_global_dir(tenant_id)) / "skill-forge"
+        from forge.paths import tenant_home  # noqa: PLC0415
+        return Path(tenant_home(tenant_id)) / "skill-forge"
     except Exception:  # noqa: BLE001 — degrade to the documented tenant tree
         home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
-        return home / "tenants" / (tenant_id or "_default") / "global" / "skill-forge"
+        return home / "tenants" / (tenant_id or "_default") / "skill-forge"
 
 logger = logging.getLogger(__name__)
 

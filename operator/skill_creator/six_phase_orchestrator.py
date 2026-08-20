@@ -28,7 +28,7 @@ from uuid import uuid4
 try:  # package-relative (normal import path)
     from .llm_client import resolve_llm_client
 except ImportError:  # pragma: no cover — flat sys.path insert (console route)
-    from skill_forge.llm_client import resolve_llm_client
+    from skill_creator.llm_client import resolve_llm_client
 
 logger = logging.getLogger(__name__)
 

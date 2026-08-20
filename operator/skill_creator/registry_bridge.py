@@ -1,17 +1,19 @@
 """Bridge from the Skill-Creator to the SkillForge registry (ADR-0405).
 
-Why a bridge and not an import
-------------------------------
-TWO distinct Python packages in this repo are both named ``skill_forge``:
+Why a bridge and not a bare import
+----------------------------------
+``operator/skill-forge/`` is not guaranteed to be on ``sys.path``: it is
+there for the console service (PYTHONPATH) but not for a plain ``pytest``
+run or a CLI invocation of this package. A normal import is tried first and
+a load from the explicit file location is the fallback, so the Skill-Creator
+works in both.
 
-  * ``operator/skill_forge/``            — the Skill-Creator (this package)
-  * ``operator/skill-forge/skill_forge/`` — the SkillForge REGISTRY
-
-The console route puts ``operator/`` at the front of ``sys.path`` so
-``skill_forge.skill_creator`` resolves, which means a plain
-``from skill_forge.registry import SkillRegistry`` resolves into THIS package
-and fails. The registry is therefore loaded from its own path explicitly,
-under a private module name that cannot collide.
+Historical note: this package used to be named ``skill_forge`` too, which
+collided with the registry package of the same name — whichever ``sys.path``
+entry came first won, and the console route put THIS one first, so
+``from skill_forge.multi_registry import ...`` failed process-wide for every
+other consumer (skill_inject, promote.py, adapter.py). The package was
+renamed to ``skill_creator``; do not name anything ``skill_forge`` here again.
 
 What this buys
 --------------
@@ -64,24 +66,30 @@ class RegistryUnavailable(RuntimeError):
 
 
 def _repo_root() -> Path:
-    # operator/skill_forge/registry_bridge.py → <repo>
+    # operator/skill_creator/registry_bridge.py → <repo>
     return Path(__file__).resolve().parents[2]
 
 
 def _load_registry_module():
-    """Load ``skill-forge/skill_forge/registry.py`` under a private package.
+    """Return the SkillForge registry module.
 
-    Deliberately does NOT touch ``sys.path``: with both packages named
-    ``skill_forge``, whichever entry sits earlier wins, and the console route
-    has already put the Skill-Creator's parent first. Ordering is not
-    something this module can rely on, so the registry package is loaded from
-    an explicit file location under a private name instead, with
-    ``submodule_search_locations`` set so the registry's own relative imports
-    (``from .linter import lint``) resolve inside it.
+    Tries a normal import first; when ``operator/skill-forge`` is not on
+    ``sys.path`` the package is loaded from its explicit file location under
+    a private name, with ``submodule_search_locations`` set so the registry's
+    own relative imports (``from .linter import lint``) resolve inside it.
+    Deliberately does NOT mutate ``sys.path`` — a global side effect from an
+    import helper is what caused the collision described above.
     """
     cached = sys.modules.get(_REGISTRY_MODULE)
     if cached is not None:
         return cached
+
+    # Normal import when skill-forge is on sys.path (console service).
+    try:
+        import skill_forge.registry as _registry  # type: ignore  # noqa: PLC0415
+        return _registry
+    except ImportError:
+        pass
 
     pkg_dir = _repo_root() / "operator" / "skill-forge" / "skill_forge"
     reg_path = pkg_dir / "registry.py"

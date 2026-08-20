@@ -25,7 +25,7 @@
 ## Engine — the Claude subscription, not an API key (ADR-0405)
 
 Every phase that needs a model goes through `resolve_llm_client()` in
-`operator/skill_forge/llm_client.py`. The default engine is the **Claude Code
+`operator/skill_creator/llm_client.py`. The default engine is the **Claude Code
 CLI**, driven as `claude -p --output-format json --max-turns 1
 --disallowedTools "*"` in a throwaway cwd — the same engine the console
 web-chat, ACS runtime and TDE workers use, authenticated by the operator's

@@ -5,14 +5,15 @@ depends_on: []
 relates_to:
   - ADR-0323
 paths:
-  - operator/skill_forge/llm_client.py
-  - operator/skill_forge/registry_bridge.py
-  - operator/skill_forge/skill_creator.py
-  - operator/skill_forge/six_phase_orchestrator.py
+  - operator/skill_creator/llm_client.py
+  - operator/skill_creator/registry_bridge.py
+  - operator/skill_creator/skill_creator.py
+  - operator/skill_creator/skill_creator.py
+  - operator/skill_creator/six_phase_orchestrator.py
   - core/console/corvin_console/routes/skill_creator_api.py
   - core/console/corvin_console/web-next/src/components/SkillCreatorPanel.tsx
   - core/console/tests/test_skill_creator_e2e.py
-  - operator/skill_forge/tests/test_llm_client.py
+  - operator/skill_creator/tests/test_llm_client.py
 docs:
   - docs/concepts/CONCEPT-SKILL-CREATOR.md
 ---
@@ -52,7 +53,7 @@ run that got past it:
    `<` | `im_start` | `>`, so a single angle bracket anywhere in a skill body
    was read as prompt injection.
 3. **The unit tests could not run at all.** They imported
-   `operator.skill_forge.skill_creator`, and `operator/` deliberately has no
+   `operator.skill_creator.skill_creator`, and `operator/` deliberately has no
    `__init__.py`, so collection died with `ModuleNotFoundError`. Defects 1 and
    2 had therefore never been observed.
 
@@ -60,7 +61,7 @@ run that got past it:
 
 **The Skill-Creator's default LLM engine is the Claude Code CLI.**
 
-`operator/skill_forge/llm_client.py` provides `ClaudeCodeClient`, duck-typed
+`operator/skill_creator/llm_client.py` provides `ClaudeCodeClient`, duck-typed
 against the slice of the Anthropic SDK the phases use —
 `client.messages.create(model=…, max_tokens=…, messages=[…])` returning an
 object with `.content[0].text`. Each call is a single-turn, tool-free
@@ -139,7 +140,7 @@ injected.
 
 `registry_bridge.py` loads the registry by explicit file location under a
 private module name. TWO packages in this repo are named `skill_forge`
-(`operator/skill_forge/` = the Skill-Creator, `operator/skill-forge/skill_forge/`
+(`operator/skill_creator/` = the Skill-Creator, `operator/skill-forge/skill_forge/`
 = the registry) and the console route puts the former first on `sys.path`, so
 neither a plain import nor a `sys.path` insert is dependable.
 
@@ -157,6 +158,36 @@ and discarded; they now travel with the artifact and reach the console, so
 A CONFIRMED verdict is the reviewer's own claim — there is no independent
 verification pass — and the code now says so instead of promising an
 "LDD re-entry in production" that never happened.
+
+### The registry root was the wrong directory
+
+The first attempt wrote to `<tenant>/global/skill-forge`, copied from
+`skills_manual.py`. The tenant contract is
+`<corvin_home>/tenants/<tid>/{global,sessions,forge,skill-forge,...}` —
+`skill-forge` is a SIBLING of `global`, and `<tenant>/skill-forge` is what
+`MultiSkillRegistry._root_for("user")` resolves, hence the only root
+`skill_inject` ever reads. The skill was written, registered, listed and
+reported `injectable` into a registry nothing consumes. Every cheap check
+passed while the answer to "will this be used?" was still no. `skills_manual.py`
+has the same defect and is out of scope here.
+
+### Two packages were named `skill_forge`, and this one shadowed the other
+
+`operator/skill_forge/` (the Skill-Creator) and
+`operator/skill-forge/skill_forge/` (the registry) both imported as
+`skill_forge`. `skill_creator_api.py` did `sys.path.insert(0, operator/)` at
+import time, so from the moment the console loaded that route, every
+`from skill_forge.multi_registry import ...` in the process resolved into the
+Skill-Creator and raised `ModuleNotFoundError` — breaking `skill_inject`,
+`promote.py` and `adapter.py`'s session cleanup, none of which have anything
+to do with skill generation.
+
+The Skill-Creator package is therefore renamed to **`skill_creator`**; the
+registry keeps the name it has had all along and that ~20 modules import. The
+route now APPENDS to `sys.path` instead of inserting, so a future name clash
+cannot silently win against an installed package.
+
+**Do not name anything under `operator/skill_creator/` `skill_forge` again.**
 
 ### The route had no tenant and no session
 
@@ -188,9 +219,14 @@ directory.
 * Skills generated BEFORE this change sit in `~/.claude/skills/*.md` and are
   inert. They are not migrated automatically — the operator can regenerate or
   move them; nothing reads them where they are.
-* `skills_manual.py` writes skill directories WITHOUT a manifest entry, so
-  manually authored skills have the same reachability gap. Out of scope here,
-  but it is the same defect.
+* `skills_manual.py` writes skill directories WITHOUT a manifest entry AND
+  under `<tenant>/global/skill-forge`, so manually authored skills have the
+  same reachability gap, twice over. Out of scope here, same defect.
+* The reachability claim is now tested against the real consumer:
+  `test_promoted_skill_reaches_the_injection_block` generates a skill through
+  the HTTP route and asserts it appears in `skill_inject.collect_active_skills()`.
+  Every weaker check (file written, manifest entry, `injectable: true`) passed
+  while the skill was unreachable, twice, for two different reasons.
 
 ## Alternatives considered
 
@@ -207,9 +243,9 @@ directory.
 
 ## Verification
 
-* `operator/skill_forge/tests/` — 50 tests (import shim added; the suite had
+* `operator/skill_creator/tests/` — 50 tests (import shim added; the suite had
   never executed).
-* `operator/skill_forge/tests/test_llm_client.py` — 14 tests: envelope
+* `operator/skill_creator/tests/test_llm_client.py` — 14 tests: envelope
   parsing, `is_error` envelopes raising rather than returning error text as
   output, binary resolution, engine precedence.
 * `core/console/tests/test_skill_creator_e2e.py` — 5 tests over the real HTTP

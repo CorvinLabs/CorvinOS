@@ -95,7 +95,7 @@ def console_client(tmp_path: Path, engine=None, *, live: bool = False,
 
     from corvin_console import auth as _auth
     from corvin_console.routes import skill_creator_api as route
-    from skill_forge import skill_creator as sc
+    from skill_creator import skill_creator as sc
 
     app = FastAPI()
     app.include_router(route.router, prefix="/v1/console")
@@ -130,7 +130,8 @@ def console_client(tmp_path: Path, engine=None, *, live: bool = False,
 
 
 def registry_root(tmp_path: Path, tenant: str = "_default") -> Path:
-    return (tmp_path / "corvin_home" / "tenants" / tenant / "global" / "skill-forge")
+    # Sibling of `global`, not a child — see _registry_root in the route.
+    return tmp_path / "corvin_home" / "tenants" / tenant / "skill-forge"
 
 
 def poll_until_done(client, run_id: str, timeout_s: float = 30.0) -> dict:
@@ -224,6 +225,33 @@ def test_overlong_purpose_no_longer_kills_the_run(tmp_path):
     assert final["skill"]["purpose"].endswith(".")
 
 
+def test_promoted_skill_reaches_the_injection_block(tmp_path):
+    """The end of the wire: does a generated skill actually get INJECTED?
+
+    Every cheaper check passed while the answer was no — the skill was
+    written, registered, listed and reported `injectable`, into a registry
+    root that `skill_inject` never reads (`<tenant>/global/skill-forge`
+    instead of `<tenant>/skill-forge`). Only asking the real consumer for
+    its markdown block catches that.
+    """
+    skill_inject = pytest.importorskip(
+        "skill_inject", reason="bridge shared tree not importable")
+
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        run_id = client.post("/v1/console/skill-creator/generate",
+                             json={"user_request": "erzeuge einen JSON Skill",
+                                   "async": True}).json()["run_id"]
+        final = poll_until_done(client, run_id)
+        assert final["status"] == "success", final
+
+        block = skill_inject.collect_active_skills(
+            channel_id="web:e2e", profile={}, max_skills=50,
+        )
+
+    assert block, "skill_inject produced no block at all"
+    assert "assistant.check_json_syntax" in block
+
+
 def test_status_reports_every_phase_in_order(tmp_path):
     """The panel renders a stepper; the run must actually walk the phases.
 
@@ -253,7 +281,7 @@ def test_status_reports_every_phase_in_order(tmp_path):
 
 def test_engine_failure_surfaces_actionable_message(tmp_path):
     """A missing CLI must not resurface as an opaque SDK auth string."""
-    from skill_forge.llm_client import ClaudeCodeUnavailable
+    from skill_creator.llm_client import ClaudeCodeUnavailable
 
     engine = fake_engine(fail_with=ClaudeCodeUnavailable("claude binary not found: 'claude'"))
     with console_client(tmp_path, engine) as (client, _route):
