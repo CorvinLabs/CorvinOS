@@ -81,7 +81,7 @@ export const SkillCreatorPanel: React.FC = () => {
     setIsGenerating(true);
 
     try {
-      const response = await fetch("/api/quality/skill-creator/generate", {
+      const response = await fetch("/v1/console/skill-creator/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -113,7 +113,7 @@ export const SkillCreatorPanel: React.FC = () => {
 
   const checkGenerationStatus = async (runId: string) => {
     try {
-      const response = await fetch(`/api/quality/skill-creator/status/${runId}`);
+      const response = await fetch(`/v1/console/skill-creator/status/${runId}`);
 
       if (!response.ok) throw new Error("Status check failed");
 
@@ -131,7 +131,7 @@ export const SkillCreatorPanel: React.FC = () => {
 
   const loadGeneratedSkills = async () => {
     try {
-      const response = await fetch("/api/quality/skill-creator/skills");
+      const response = await fetch("/v1/console/skill-creator/skills");
       if (!response.ok) return;
       const data = await response.json();
       setGeneratedSkills(data.skills || []);
