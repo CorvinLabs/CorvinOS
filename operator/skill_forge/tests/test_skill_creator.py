@@ -35,6 +35,7 @@ from skill_forge.skill_creator import (
     SkillPromoter,
     SkillCreatorOrchestrator,
     normalize_method,
+    score_quality,
     normalize_skill_name,
     normalize_spec,
     shorten_purpose,
@@ -60,7 +61,8 @@ BAD_RUBRIC = ('{"clarity": 0.9, "executability": 0.9, "scope": 0.8, '
               '"coupling": 0.7, "notes": "instructions are ambiguous"}')
 
 
-def fake_engine(*, rubric: str = CLEAN_RUBRIC, spec_json: str = SPEC_JSON):
+def fake_engine(*, rubric: str = CLEAN_RUBRIC, spec_json: str = SPEC_JSON,
+                review: str = "VERDICT: REFUTED"):
     """MagicMock client that answers each phase's prompt in its own shape.
 
     A single canned reply cannot serve both Planning (spec JSON) and the LDD
@@ -78,7 +80,7 @@ def fake_engine(*, rubric: str = CLEAN_RUBRIC, spec_json: str = SPEC_JSON):
         elif "Generate a realistic test scenario" in prompt:
             text = "User validates a 500-line JSON file with nested objects"
         elif "FINDING:" in prompt:
-            text = "VERDICT: REFUTED"
+            text = review
         else:
             text = "- point one\n- point two\n- point three"
         return MagicMock(content=[MagicMock(text=text)])
@@ -619,3 +621,64 @@ class TestValidateWithRepair:
         assert out.name == "assistant.json_syntax_check"
         assert len(out.purpose) <= PURPOSE_LEN[1]
         assert client.messages.create.call_count == 0
+
+
+# ============================================================================
+# QUALITY SCORING
+# ============================================================================
+
+def _finding(dimension: str, verdict: ReviewVerdict) -> ReviewFinding:
+    return ReviewFinding(finding_id="f", dimension=dimension, summary="s",
+                         verdict=verdict, reasoning="r")
+
+
+class TestQualityScore:
+    def test_clean_review_scores_full_marks(self):
+        assert score_quality([], converged=True) == 1.0
+
+    def test_non_convergence_costs_a_fixed_amount(self):
+        assert score_quality([], converged=False) == 0.8
+
+    def test_extra_findings_in_one_dimension_do_not_saturate_the_score(self):
+        """The measured defect: `1.0 - confirmed*0.3` bottomed out at four
+        findings, and the adversarial reviewers routinely returned five to
+        ten — so every live run reported 0% and the number said nothing."""
+        one = score_quality([_finding("correctness", ReviewVerdict.CONFIRMED)])
+        many = score_quality([_finding("correctness", ReviewVerdict.CONFIRMED)] * 8)
+        assert one == many > 0.0
+
+    def test_each_failing_dimension_costs_its_share(self):
+        two_dims = score_quality([
+            _finding("correctness", ReviewVerdict.CONFIRMED),
+            _finding("scope_creep", ReviewVerdict.CONFIRMED),
+        ])
+        one_dim = score_quality([_finding("correctness", ReviewVerdict.CONFIRMED)])
+        assert two_dims < one_dim
+
+    def test_plausible_costs_less_than_confirmed(self):
+        plausible = score_quality([_finding("correctness", ReviewVerdict.PLAUSIBLE)])
+        confirmed = score_quality([_finding("correctness", ReviewVerdict.CONFIRMED)])
+        assert confirmed < plausible < 1.0
+
+    def test_refuted_findings_are_not_penalised(self):
+        assert score_quality([_finding("correctness", ReviewVerdict.REFUTED)]) == 1.0
+
+    def test_score_stays_in_range(self):
+        worst = score_quality(
+            [_finding(d, ReviewVerdict.CONFIRMED)
+             for d in ("correctness", "simplification", "scope_creep")],
+            converged=False,
+        )
+        assert worst == 0.0
+
+    @pytest.mark.asyncio
+    async def test_findings_travel_with_the_artifact(self, tmp_path):
+        """"Quality: 0%" with no visible reason was the operator-facing
+        symptom; the findings were counted and then dropped."""
+        client = fake_engine(review="FINDING: unclear step\nVERDICT: CONFIRMED")
+        orch = SkillCreatorOrchestrator(client, str(tmp_path))
+        artifact = await orch.create_skill("erzeuge einen Skill der JSON validiert")
+
+        assert artifact.review_findings
+        assert any(f.verdict == ReviewVerdict.CONFIRMED for f in artifact.review_findings)
+        assert artifact.quality_score < 1.0
