@@ -55,7 +55,8 @@ BOOTSTRAP_NOTES = (
 # "learned-experience" (VALID_TYPES in skill_forge/registry.py).
 SKILL_TYPE = "learned-experience"
 
-_MODULE_PREFIX = "_corvin_skillforge_registry"
+_PKG_MODULE = "_corvin_skillforge_pkg"
+_REGISTRY_MODULE = _PKG_MODULE + ".registry"
 
 
 class RegistryUnavailable(RuntimeError):
@@ -68,46 +69,51 @@ def _repo_root() -> Path:
 
 
 def _load_registry_module():
-    """Import ``skill-forge/skill_forge/registry.py`` under a private name."""
-    cached = sys.modules.get(_MODULE_PREFIX)
+    """Load ``skill-forge/skill_forge/registry.py`` under a private package.
+
+    Deliberately does NOT touch ``sys.path``: with both packages named
+    ``skill_forge``, whichever entry sits earlier wins, and the console route
+    has already put the Skill-Creator's parent first. Ordering is not
+    something this module can rely on, so the registry package is loaded from
+    an explicit file location under a private name instead, with
+    ``submodule_search_locations`` set so the registry's own relative imports
+    (``from .linter import lint``) resolve inside it.
+    """
+    cached = sys.modules.get(_REGISTRY_MODULE)
     if cached is not None:
         return cached
 
-    pkg_dir = _repo_root() / "operator" / "skill-forge"
-    reg_path = pkg_dir / "skill_forge" / "registry.py"
+    pkg_dir = _repo_root() / "operator" / "skill-forge" / "skill_forge"
+    reg_path = pkg_dir / "registry.py"
     if not reg_path.is_file():
         raise RegistryUnavailable(f"SkillForge registry not found at {reg_path}")
 
-    # The registry imports its siblings (`from .linter import lint`), so the
-    # real package has to be importable — but only while we load it, and only
-    # if the name is not already taken by the Skill-Creator package.
-    had_conflict = "skill_forge" in sys.modules
-    saved = sys.modules.get("skill_forge")
-    inserted = False
     try:
-        if str(pkg_dir) not in sys.path:
-            sys.path.insert(0, str(pkg_dir))
-            inserted = True
-        if had_conflict:
-            del sys.modules["skill_forge"]
-        import skill_forge.registry as _registry  # type: ignore  # noqa: PLC0415
-        sys.modules[_MODULE_PREFIX] = _registry
-        return _registry
+        if _PKG_MODULE not in sys.modules:
+            pkg_spec = importlib.util.spec_from_file_location(
+                _PKG_MODULE, pkg_dir / "__init__.py",
+                submodule_search_locations=[str(pkg_dir)],
+            )
+            if pkg_spec is None or pkg_spec.loader is None:
+                raise RegistryUnavailable(f"cannot load package spec at {pkg_dir}")
+            pkg = importlib.util.module_from_spec(pkg_spec)
+            sys.modules[_PKG_MODULE] = pkg
+            pkg_spec.loader.exec_module(pkg)
+
+        reg_spec = importlib.util.spec_from_file_location(
+            _REGISTRY_MODULE, reg_path,
+        )
+        if reg_spec is None or reg_spec.loader is None:
+            raise RegistryUnavailable(f"cannot load module spec at {reg_path}")
+        registry = importlib.util.module_from_spec(reg_spec)
+        sys.modules[_REGISTRY_MODULE] = registry
+        reg_spec.loader.exec_module(registry)
+        return registry
+    except RegistryUnavailable:
+        raise
     except Exception as exc:  # noqa: BLE001
+        sys.modules.pop(_REGISTRY_MODULE, None)
         raise RegistryUnavailable(f"could not load SkillForge registry: {exc}") from exc
-    finally:
-        # Restore the Skill-Creator's claim on the `skill_forge` name; leaving
-        # the registry package bound there would break every later
-        # `skill_forge.skill_creator` import in this process.
-        if had_conflict and saved is not None:
-            sys.modules["skill_forge"] = saved
-        elif had_conflict:
-            sys.modules.pop("skill_forge", None)
-        if inserted:
-            try:
-                sys.path.remove(str(pkg_dir))
-            except ValueError:
-                pass
 
 
 def registry_for(root: Path):
