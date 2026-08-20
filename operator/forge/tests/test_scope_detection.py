@@ -21,7 +21,8 @@ def t(label, ok, *, detail=""):
 
 def _clean_env():
     for k in ("CORVIN_FORCE_SCOPE", "CORVIN_DEFAULT_SCOPE",
-              "CORVIN_CHANNEL_ID", "CORVIN_TASK_ID", "CORVIN_HOME"):
+              "CORVIN_CHANNEL_ID", "CORVIN_TASK_ID", "CORVIN_HOME",
+              "CORVIN_TENANT_ID"):
         os.environ.pop(k, None)
 
 
@@ -74,7 +75,7 @@ def test_detect_default_scope():
 def test_scope_root_task():
     print("\n[scope_root task]")
     _clean_env()
-    p = scope_mod.scope_root("task", task_id="abc123")
+    p = scope_mod.scope_root("task", tenant_id="_default", task_id="abc123")
     # /tmp/.corvin/tasks is the default; /tmp/.corvinOS/tasks only when
     # the legacy directory exists on disk.
     s = str(p)
@@ -90,8 +91,10 @@ def test_scope_root_session():
     with tempfile.TemporaryDirectory() as td:
         # Phase 7: CORVIN_HOME is not read; use CORVIN_HOME instead.
         os.environ["CORVIN_HOME"] = td
-        p = scope_mod.scope_root("session", channel_id="discord:99")
-        t("under CORVIN_HOME/sessions", str(p).startswith(td + "/sessions/discord:99"),
+        p = scope_mod.scope_root("session", tenant_id="_default", channel_id="discord:99")
+        # Phase B: tenant-aware — expects tenants/<tenant_id>/sessions/...
+        expected_path = td + "/tenants/_default/sessions/discord:99"
+        t("under CORVIN_HOME/tenants/_default/sessions", str(p).startswith(expected_path),
           detail=f"got {p}")
         t("ends with /forge", p.name == "forge")
     _clean_env()
@@ -109,10 +112,12 @@ def test_scope_root_session_windows_no_colon(monkeypatch):
     )
     with tempfile.TemporaryDirectory() as td:
         monkeypatch.setenv("CORVIN_HOME", td)
-        p = scope_mod.scope_root("session", channel_id="discord:12345")
+        p = scope_mod.scope_root("session", tenant_id="_default", channel_id="discord:12345")
         # The channel-id path component must contain NO ':' (illegal on Windows).
+        # Phase B: path is now tenants/<tenant_id>/sessions/<component>/forge
         rel = p.relative_to(Path(td))
-        component = rel.parts[1]  # sessions/<component>/forge
+        # rel.parts: ('tenants', '_default', 'sessions', <component>, 'forge')
+        component = rel.parts[3]  # sessions/<component>/forge
         t("channel-id component has no ':'", ":" not in component,
           detail=f"component={component!r}")
         t("':' replaced with '_'", component == "discord_12345",
@@ -133,22 +138,26 @@ def test_scope_root_session_posix_noop(monkeypatch):
     )
     with tempfile.TemporaryDirectory() as td:
         monkeypatch.setenv("CORVIN_HOME", td)
-        p = scope_mod.scope_root("session", channel_id="discord:99")
+        p = scope_mod.scope_root("session", tenant_id="_default", channel_id="discord:99")
         # POSIX no-op: the original ':' name is preserved (no migration/drift).
+        # Phase B: path is now tenants/<tenant_id>/sessions/...
+        expected_path = str(Path(td) / "tenants" / "_default" / "sessions" / "discord:99")
         t("POSIX keeps 'discord:99' unchanged",
-          str(p).startswith(str(Path(td) / "sessions" / "discord:99")),
+          str(p).startswith(expected_path),
           detail=f"got {p}")
     _clean_env()
 
 
 def test_scope_root_user():
-    print("\n[scope_root user — CORVIN_HOME ignored, use CORVIN_HOME]")
+    print("\n[scope_root user — tenant-native (Phase B)]")
     _clean_env()
     with tempfile.TemporaryDirectory() as td:
         # Phase 7: CORVIN_HOME is not read; use CORVIN_HOME instead.
         os.environ["CORVIN_HOME"] = td
-        p = scope_mod.scope_root("user")
-        t("under CORVIN_HOME/global/forge", str(p) == td + "/global/forge",
+        p = scope_mod.scope_root("user", tenant_id="_default")
+        # Phase B: user scope is now tenant-aware
+        expected_path = td + "/tenants/_default/forge"
+        t("under CORVIN_HOME/tenants/_default/forge", str(p) == expected_path,
           detail=f"got {p}")
     _clean_env()
 
@@ -157,10 +166,32 @@ def test_scope_root_invalid():
     print("\n[scope_root rejects unknown scope]")
     _clean_env()
     try:
-        scope_mod.scope_root("bogus")
+        scope_mod.scope_root("bogus", tenant_id="_default")
         t("ValueError raised", False, detail="no exception")
     except ValueError as e:
         t("ValueError raised", "bogus" in str(e))
+    _clean_env()
+
+
+def test_scope_root_requires_tenant_id():
+    print("\n[scope_root requires tenant_id parameter]")
+    _clean_env()
+    try:
+        scope_mod.scope_root("user")  # Missing tenant_id
+        t("TypeError raised", False, detail="no exception")
+    except TypeError as e:
+        t("TypeError raised for missing tenant_id", "tenant_id" in str(e))
+    _clean_env()
+
+
+def test_scope_root_rejects_invalid_tenant_id():
+    print("\n[scope_root rejects invalid tenant_id]")
+    _clean_env()
+    try:
+        scope_mod.scope_root("user", tenant_id="INVALID")  # Uppercase not allowed
+        t("ValueError raised", False, detail="no exception")
+    except ValueError as e:
+        t("ValueError raised for invalid tenant_id", "tenant_id" in str(e))
     _clean_env()
 
 
@@ -172,6 +203,8 @@ def main() -> int:
     test_scope_root_session()
     test_scope_root_user()
     test_scope_root_invalid()
+    test_scope_root_requires_tenant_id()
+    test_scope_root_rejects_invalid_tenant_id()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

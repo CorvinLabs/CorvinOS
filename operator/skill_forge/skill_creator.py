@@ -114,16 +114,23 @@ class SkillPlanner:
     """Phase 1: Generate skill spec via thesis → antithesis → synthesis."""
 
     def __init__(self, claude_client=None):
-        """Initialize planner with LLM client."""
-        self.client = claude_client or self._default_client()
+        """Initialize planner with LLM client (or fall back to local generation)."""
+        self.client = claude_client
+        self.use_local = claude_client is None
+        if not self.use_local:
+            self.client = self.client or self._default_client()
 
     def _default_client(self):
         """Return default Claude client (injected by caller in tests)."""
-        import anthropic
-        return anthropic.Anthropic()
+        try:
+            import anthropic
+            return anthropic.Anthropic()
+        except (ImportError, Exception):
+            # No API key available, fall back to local
+            return None
 
     async def plan(self, user_request: str) -> SkillSpec:
-        """Generate SkillSpec from user request via dialectical reasoning.
+        """Generate SkillSpec from user request via dialectical reasoning or local generation.
 
         Args:
             user_request: Natural language request (e.g., "erzeuge einen Skill der JSON validiert")
@@ -135,20 +142,87 @@ class SkillPlanner:
             PlanningError: If planning fails at any stage
         """
         try:
-            # Step 1: Generate thesis (optimistic interpretation)
-            thesis = await self._generate_thesis(user_request)
+            if self.use_local or self.client is None:
+                # Local generation mode (no Claude API needed)
+                logger.info("Using local skill generation (no API key required)")
+                spec = self._generate_skill_spec_locally(user_request)
+            else:
+                # Claude-based generation (requires API key)
+                # Step 1: Generate thesis (optimistic interpretation)
+                thesis = await self._generate_thesis(user_request)
 
-            # Step 2: Generate antithesis (critical interpretation)
-            antithesis = await self._generate_antithesis(thesis, user_request)
+                # Step 2: Generate antithesis (critical interpretation)
+                antithesis = await self._generate_antithesis(thesis, user_request)
 
-            # Step 3: Synthesize into SkillSpec
-            spec = await self._synthesize_spec(thesis, antithesis, user_request)
+                # Step 3: Synthesize into SkillSpec
+                spec = await self._synthesize_spec(thesis, antithesis, user_request)
 
             logger.info(f"Phase 1 Planning complete: {spec.name}")
             return spec
 
         except Exception as e:
             raise PlanningError(f"Planning failed: {e}") from e
+
+    def _generate_skill_spec_locally(self, user_request: str) -> SkillSpec:
+        """Generate SkillSpec locally without Claude API (template-based).
+
+        This mode allows skill creation without ANTHROPIC_API_KEY.
+        Uses heuristics and templates to infer skill structure.
+        """
+        import re
+        from datetime import datetime
+
+        # Parse user request to extract key terms
+        words = user_request.lower().split()
+
+        # Generate skill name from first meaningful words
+        name_parts = [w for w in words[:3] if len(w) > 3]
+        skill_name = "_".join(name_parts[:2]) if name_parts else "generated_skill"
+        skill_name = re.sub(r'[^a-z0-9_]', '', skill_name)
+
+        # Infer purpose from request
+        purpose = user_request[:80] if user_request else "Generated skill"
+
+        # Generate basic skill method (template-based)
+        method = f"""# {skill_name.replace('_', ' ').title()} Skill
+
+{purpose}
+
+## Usage
+
+This skill was generated locally without Claude API.
+
+## Implementation
+
+This is a template skill. Customize as needed:
+
+- Input handling
+- Processing logic
+- Output formatting
+
+## Example
+
+```python
+# Example usage in code
+result = use_skill("{skill_name}", input_data)
+```
+"""
+
+        spec = SkillSpec(
+            spec_id=str(uuid4()),
+            name=skill_name,
+            scope=SkillScope.ASSISTANT,
+            purpose=purpose,
+            method=method,
+            dependencies=[],
+            keywords=name_parts,
+            created_at=datetime.utcnow(),
+            iteration_count=0,
+            generated_by="skill-creator-local",
+        )
+
+        logger.info(f"Generated local SkillSpec: {spec.name}")
+        return spec
 
     async def _generate_thesis(self, user_request: str) -> str:
         """Optimistic interpretation: literal reading of user request."""

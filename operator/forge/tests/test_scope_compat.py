@@ -181,7 +181,7 @@ def test_scope_root_task_uses_corvin_task_id() -> None:
     buf = io.StringIO()
     with redirect_stderr(buf):
         s = _fresh_scope()
-        p = s.scope_root("task")
+        p = s.scope_root("task", tenant_id="_default")
     out = buf.getvalue()
     t("path contains corvin-task-1", "corvin-task-1" in str(p))
     t("ends with /forge", p.name == "forge")
@@ -196,7 +196,7 @@ def test_scope_root_task_no_env() -> None:
     buf = io.StringIO()
     with redirect_stderr(buf):
         s = _fresh_scope()
-        p = s.scope_root("task")
+        p = s.scope_root("task", tenant_id="_default")
     out = buf.getvalue()
     # No env-var set, falls back to "default".
     t("path contains 'default'",
@@ -215,7 +215,7 @@ def test_scope_root_session_uses_corvin_channel_id() -> None:
     buf = io.StringIO()
     with redirect_stderr(buf):
         s = _fresh_scope()
-        p = s.scope_root("session")
+        p = s.scope_root("session", tenant_id="_default")
     t("path contains corvin-chan-1",
       "corvin-chan-1" in str(p), detail=f"got {p}")
     t("ends with /forge", p.name == "forge")
@@ -232,7 +232,7 @@ def test_repo_workspace_corvin_wins() -> None:
         buf = io.StringIO()
         with redirect_stderr(buf):
             s = _fresh_scope()
-            p = s.scope_root("project", project_root=repo)
+            p = s.scope_root("project", tenant_id="_default", project_root=repo)
         t("path == repo/.corvin/forge", p == repo / ".corvin" / "forge",
           detail=f"got {p}")
         t("no warning", "deprecation" not in buf.getvalue().lower())
@@ -253,8 +253,8 @@ def test_repo_workspace_legacy_corvinos_is_not_honoured() -> None:
         buf = io.StringIO()
         with redirect_stderr(buf):
             s = _fresh_scope()
-            p1 = s.scope_root("project", project_root=repo)
-            p2 = s.scope_root("project", project_root=repo)
+            p1 = s.scope_root("project", tenant_id="_default", project_root=repo)
+            p2 = s.scope_root("project", tenant_id="_default", project_root=repo)
         out = buf.getvalue()
         t("path == repo/.corvin/forge (hard cut, .corvinOS ignored)",
           p1 == repo / ".corvin" / "forge", detail=f"got {p1}")
@@ -274,7 +274,7 @@ def test_repo_workspace_both_corvin_wins() -> None:
         buf = io.StringIO()
         with redirect_stderr(buf):
             s = _fresh_scope()
-            p = s.scope_root("project", project_root=repo)
+            p = s.scope_root("project", tenant_id="_default", project_root=repo)
         t("path == repo/.corvin/forge", p == repo / ".corvin" / "forge")
         t("no warning", "deprecation" not in buf.getvalue().lower())
     _clear_env()
@@ -289,7 +289,7 @@ def test_repo_workspace_neither_defaults_to_corvin() -> None:
         buf = io.StringIO()
         with redirect_stderr(buf):
             s = _fresh_scope()
-            p = s.scope_root("project", project_root=repo)
+            p = s.scope_root("project", tenant_id="_default", project_root=repo)
         t("path == repo/.corvin/forge (default)",
           p == repo / ".corvin" / "forge", detail=f"got {p}")
         t("no warning", "deprecation" not in buf.getvalue().lower())

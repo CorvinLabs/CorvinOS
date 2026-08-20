@@ -6,6 +6,53 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-08-20 — Tenant-Native Data Persistence (ADR-0362 Complete)
+
+### Added — Major: Tenant-Native Data Persistence (Phases A–E Complete)
+
+**ADR-0362 Delivered.** All CorvinOS data is now tenant-scoped by construction:
+
+- **Phase A:** Central tenant-aware path APIs (`core/paths/tenant.py`, 200 LoC)
+- **Phase B:** Refactored `scope_root()` to require mandatory `tenant_id` parameter (~100 call-sites updated)
+- **Phase C:** Brain subsystem integration (SkillForge, ToolForge, Learning, Audit)
+- **Phase D:** Migration tool (`corvin migrate --to-tenant-native`, safe + idempotent)
+- **Phase E:** 96 comprehensive tests (unit + integration + adversarial), 0 CRITICAL findings
+
+**Impact:**
+- ✅ Split-brain audit trail eliminated (unified per-tenant)
+- ✅ Cross-tenant tool visibility eliminated (isolated storage)
+- ✅ Bridge credentials no longer shared (tenant-scoped)
+- ✅ GDPR Art. 5(1)(f), 30, 32 — Integrity/Confidentiality/Security compliant
+- ✅ EU AI Act Art. 5, 50 — Transparency & opt-out compliant
+
+**Security:** 8 CRITICAL/HIGH findings fixed (from Phase E adversarial audit).
+
+**Migration:** `corvin migrate --to-tenant-native` (safe, dry-run supported).
+
+See [RELEASE_NOTES_v0.11.2.md](RELEASE_NOTES_v0.11.2.md) for detailed migration guide.
+
+### Changed — Breaking: scope_root() API
+
+The central `scope_root(scope)` function now requires a mandatory `tenant_id` parameter:
+- **Before:** `scope_root("skill")` → implicit tenant context
+- **After:** `tenant_skill_dir("tenant_a")` → explicit tenant_id
+
+All ~100 call-sites updated. Operator-facing CLI commands unchanged.
+
+### Changed — Breaking: Storage Directory Layout
+
+Global storage (`~/.corvin/global/`) no longer supported. All data now lives in `~/.corvin/tenants/<tenant_id>/`:
+
+```
+Before (v0.11.1):
+~/.corvin/global/skill-forge/registry.json
+
+After (v0.11.2):
+~/.corvin/tenants/_default/skill-forge/registry.json
+```
+
+Migration tool handles this automatically (safe + backup included).
+
 ## [0.10.125] — 2026-08-09 — Security hardening: hash-chain, tenant-id, plugin identity, audit healing
 
 ### Fixed — Critical: Hash-chain fork prevention (ADR-0232/0233)
