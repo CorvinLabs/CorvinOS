@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from core.skill_management.github_sync import GitClient, GitPushResult
 from core.skill_management.resolver import SkillDependencyResolver
+from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002: Fixed import
 
 
 @dataclass
@@ -29,11 +30,15 @@ class GitHubExporter:
     """Export skills to GitHub."""
 
     def __init__(self, repo_url: str, branch: str = "main", tenant_id: str = "_default"):
+        # TENANT-002 FIX: Validate tenant_id before using in path construction
+        validate_tenant_id(tenant_id)
+
         self.repo_url = repo_url
         self.branch = branch
         self.tenant_id = tenant_id
         self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
-        self.git_client = GitClient(repo_url, branch)
+        # CVE-TENANT-001 FIX: Pass tenant_id to GitClient for path scoping
+        self.git_client = GitClient(repo_url, branch, tenant_id=tenant_id)
 
     def export_shared_skills(self, dry_run: bool = False) -> ExportResult:
         """Export all _shared/ skills to GitHub."""

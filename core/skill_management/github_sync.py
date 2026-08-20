@@ -7,6 +7,8 @@ from typing import Optional, Dict, List
 from dataclasses import dataclass
 from datetime import datetime
 
+from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002
+
 
 @dataclass
 class GitPushResult:
@@ -35,10 +37,28 @@ class GitPullResult:
 class GitClient:
     """Wrapper around git CLI for GitHub operations."""
 
-    def __init__(self, repo_url: str, branch: str = "main", local_repo_path: Optional[Path] = None):
+    def __init__(self, repo_url: str, branch: str = "main", tenant_id: str = "_default"):
+        """Initialize GitClient with tenant isolation (CVE-TENANT-001 fix).
+
+        Args:
+            repo_url: GitHub repository URL
+            branch: Git branch (default: "main")
+            tenant_id: Tenant identifier for path scoping (REQUIRED, no bypass allowed)
+
+        Note: local_repo_path parameter REMOVED (CVE-TENANT-001 fix).
+              Tenant-scoped path is now MANDATORY, no override allowed for security.
+        """
+        # TENANT-002 FIX: Validate tenant_id before using in path construction
+        validate_tenant_id(tenant_id)
+
         self.repo_url = repo_url
         self.branch = branch
-        self.local_repo_path = local_repo_path or Path.home() / ".corvin" / "skill_sync_repo"
+        self.tenant_id = tenant_id
+
+        # CVE-TENANT-001 FIX: Tenant-scope is MANDATORY, no bypass via local_repo_path parameter
+        self.local_repo_path = (
+            Path.home() / ".corvin" / "tenants" / tenant_id / "git_sync_repo"
+        )
 
     def clone_or_pull(self) -> bool:
         """Clone repo if needed, or pull latest."""

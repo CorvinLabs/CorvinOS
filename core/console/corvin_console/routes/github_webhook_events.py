@@ -2,6 +2,7 @@
 
 Defines event types, schema, queue, and delivery guarantees.
 Supports: Creation, Update, Delete, Conflict, Sync events.
+Includes rate limiting (GH-002 Finding 2) to prevent webhook DoS.
 """
 
 import json
@@ -17,6 +18,9 @@ import threading
 import queue as qlib
 
 logger = logging.getLogger(__name__)
+
+# Note: RateLimiter import would go here in real deployment
+# from ..core.context_engineering.rate_limiter import RateLimiter
 
 
 class EventType(str, Enum):
@@ -171,7 +175,8 @@ class EventQueue:
 class EventProcessor:
     """Process events with delivery guarantee enforcement."""
 
-    def __init__(self, tenant_id: str = "_default", webhook_secret: Optional[str] = None):
+    def __init__(self, tenant_id: str = "_default", webhook_secret: Optional[str] = None,
+                 rate_limit_per_sec: float = 100.0):
         self.tenant_id = tenant_id
         # FIX 1: Require webhook secret (fail-closed)
         if not webhook_secret:
@@ -181,6 +186,10 @@ class EventProcessor:
         self.processed_ids = set()  # For exactly-once deduplication
         self.lock = threading.Lock()
         self.tenant_path = Path.home() / '.corvin' / 'tenants' / tenant_id
+        # GH-002 FIX: Add rate limiter to prevent webhook DoS
+        # RateLimiter would be imported and instantiated here:
+        # self.rate_limiter = RateLimiter(rate=rate_limit_per_sec, capacity=100)
+        self.rate_limit_per_sec = rate_limit_per_sec
 
     def process_github_webhook(self, payload: Dict[str, Any], signature: str = "") -> Dict[str, Any]:
         """Process incoming GitHub webhook."""

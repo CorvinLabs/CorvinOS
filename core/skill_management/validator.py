@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import jsonschema
 
 from core.skill_management.schema import SKILL_METADATA_SCHEMA, TOOL_METADATA_SCHEMA
+from core.skill_management.tenant_validator import validate_tenant_id
 
 
 @dataclass
@@ -30,6 +31,7 @@ class MetadataValidator:
     """Validate skill/tool metadata against schemas."""
 
     def __init__(self, tenant_id: str = "_default"):
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
 
@@ -166,6 +168,7 @@ class DependencyValidator:
     """Validate dependency consistency and versions."""
 
     def __init__(self, tenant_id: str = "_default"):
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
 

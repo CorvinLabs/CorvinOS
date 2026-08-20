@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import List, Dict, Set, Tuple
 from dataclasses import dataclass
 
+from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002
+
 
 @dataclass
 class SkillInfo:
@@ -36,6 +38,7 @@ class SkillDependencyResolver:
     """Resolve skill dependencies transitively."""
 
     def __init__(self, tenant_id: str = "_default"):
+        validate_tenant_id(tenant_id)  # TENANT-002
         self.tenant_id = tenant_id
         self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
         self._skill_cache = {}  # Cache loaded manifests
