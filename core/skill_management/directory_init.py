@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, List
 from dataclasses import dataclass, asdict
 
+from core.skill_management.tenant_validator import validate_tenant_id
+
 @dataclass
 class SkillDirectoryInfo:
     """Info about initialized tenant skill structure."""
@@ -27,6 +29,7 @@ class SkillDirectoryInitializer:
     REQUIRED_DIRS = ["_platform", "_shared", "_local", "config", "exports"]
 
     def __init__(self, tenant_id: str = "_default"):
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
 

@@ -8,6 +8,8 @@ from typing import List, Optional, Dict
 from dataclasses import dataclass
 from enum import Enum
 
+from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002
+
 
 class ConflictResolution(Enum):
     """How to resolve skill conflicts during import."""
@@ -41,6 +43,9 @@ class GitHubImporter:
     """Import skills from GitHub tarball."""
 
     def __init__(self, tenant_id: str = "_default"):
+        # TENANT-002 FIX: Validate tenant_id before using in path construction
+        validate_tenant_id(tenant_id)
+
         self.tenant_id = tenant_id
         self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
 

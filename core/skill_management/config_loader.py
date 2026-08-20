@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
+from core.skill_management.tenant_validator import validate_tenant_id
+
 
 @dataclass
 class SkillPreferences:
@@ -31,6 +33,7 @@ class ConfigLoader:
     """Load and manage tenant skill configuration."""
 
     def __init__(self, tenant_id: str = "_default"):
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
         self.config_dir = self.base_path / "config"

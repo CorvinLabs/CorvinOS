@@ -7,6 +7,8 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import List
 
+from core.skill_management.tenant_validator import validate_tenant_id
+
 @dataclass
 class MigrationReport:
     migrated_skills: List[str]
@@ -19,6 +21,7 @@ class SkillMigrator:
     """Migrate skills from ~/.claude/skills/ to tenant-scoped structure."""
 
     def __init__(self, tenant_id: str = "_default"):
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.source_base = Path.home() / ".claude" / "skills"
         self.dest_base = Path.home() / ".corvin" / "tenants" / tenant_id / "_shared" / "skills"
