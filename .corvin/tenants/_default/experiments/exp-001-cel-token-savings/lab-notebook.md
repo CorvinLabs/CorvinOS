@@ -411,6 +411,35 @@ a *number*. Follow-up lever: assertive brief framing / selective injection (ADR-
 operator can flip per workload after re-running the benchmark. Lever 2 is redirected from "retrieval"
 to "brief framing".
 
+### 2026-08-19 · Entry 19 — Framing lever: LDD caught an overfit; change reverted, honest 0.833 stands
+
+**Goal.** Close the last gap (`mem-mascot` 0.00) — hypothesised as a brief-*framing* effect.
+
+**Method (LDD inner loop + loss-backprop-lens + reproducibility-first).**
+- *Iteration 1:* reframed the content brief assertively ("Established facts from this project
+  (authoritative)…", fact presented directly, no title prefix). **No regression** (other 5 tasks
+  1.0, title-only mode byte-identical) but `mem-mascot` **still 0.00**.
+- *Iteration 2 (root-cause):* tested the mascot fact in isolation across formats —
+  multiline=0.67, oneline+bold=1.00, plain=1.00. The quality **flips format-independently**: the
+  fact "a raven named Quill-7" is inherently ambiguous for a *name* question (the name of what —
+  the raven, the mascot? is "Quill-7" a name or a model number?), and in the *full* cluttered brief
+  the model discounts it. **This is sampling noise + task ambiguity + brief clutter — not a
+  systematic framing bug.** The earlier single 0.00 was partly n=3 bad luck.
+
+**Decision (loss-backprop-lens).** The reframe produced **no measured improvement** (stable n=5
+overall = **0.833**, same as Entry 17) and was motivated by a noisy single task. Per LDD "don't
+ship a change without loss evidence," the framing change was **reverted** (`git checkout` — working
+tree back to the committed Entry-17 render). Chasing `mem-mascot` further would be overfitting to
+noise; I stopped.
+
+**Result that stands (stable, n=5).** cel_content = **0.833** (5/6 tasks 1.0). The residual is
+**task-inherent** (ambiguous fact phrasing + brief clutter), not a fixable systematic. The honest
+lever ranking: (1) `brief_includes_content` — done, +0.833; (2) *selective injection* to cut brief
+clutter (ADR-0394) — the real remaining direction, not "retrieval" and not "framing".
+
+**Meta (outer loop).** This entry is itself the value of LDD: the discipline turned a tempting
+"fix the failing task" into a correct "that failure is noise; don't ship an unmeasured change."
+
 ---
 
 ## 3. Metrics registry (the measured quantities)
