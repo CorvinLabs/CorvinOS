@@ -15,6 +15,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from skill_forge.registry_bridge import list_skills, read_skill
 from skill_forge.skill_creator import (
     METHOD_LEN,
     PURPOSE_LEN,
@@ -323,8 +324,13 @@ class TestAdversarialReviewer:
 class TestSkillPromoter:
     """Test Phase 5: Promotion (disk write + SkillForge registration)."""
 
-    def test_promotion_writes_to_disk(self, tmp_path):
-        """Promotion writes skill file to disk."""
+    def test_promotion_registers_and_bootstrap_grades(self, tmp_path):
+        """Promotion must make the skill REACHABLE, not just present on disk.
+
+        Writing a file is not promotion: `SkillRegistry.list()` reads the
+        manifest, and `skill_inject` drops any skill with `n_grades < 1`.
+        A skill that misses either is invisible to every turn.
+        """
         promoter = SkillPromoter(str(tmp_path))
         spec = SkillSpec(
             spec_id="test-1",
@@ -337,14 +343,31 @@ class TestSkillPromoter:
 
         artifact = promoter.promote(spec, quality_score=1.0)
 
-        # Check file exists
-        skill_files = list(tmp_path.glob("*.md"))
-        assert len(skill_files) > 0
+        # Registered in the manifest — the only listing anything reads.
+        listed = list_skills(tmp_path)
+        assert [s["name"] for s in listed] == ["assistant.test_skill"]
 
-        # Check file contains expected content
-        content = skill_files[0].read_text()
-        assert "assistant.test_skill" in content
-        assert spec.method in content
+        # Bootstrap-graded, therefore past skill_inject's eligibility gate.
+        assert listed[0]["n_grades"] == 1
+        assert listed[0]["injectable"] is True
+        assert artifact.registration["injectable"] is True
+
+        # Body on disk, under the canonical <name>/SKILL.md layout.
+        skill_md = tmp_path / "skills" / "assistant.test_skill" / "SKILL.md"
+        assert skill_md.exists()
+        assert spec.method.strip() in skill_md.read_text()
+
+    def test_bootstrap_grade_is_capped_and_disclosed(self, tmp_path):
+        """A self-awarded seed must never look like earned usage."""
+        promoter = SkillPromoter(str(tmp_path))
+        promoter.promote(_spec(name="assistant.seeded"), quality_score=1.0)
+
+        detail = read_skill(tmp_path, "assistant.seeded")
+        assert detail["n_grades"] == 1
+        grade = detail["grades"][0]
+        assert grade["score"] <= 0.3
+        assert "bootstrap" in grade["notes"].lower()
+        assert "not earned" in grade["notes"].lower()
 
     def test_promotion_returns_artifact(self, tmp_path):
         """Promotion returns SkillArtifact."""
@@ -362,6 +385,7 @@ class TestSkillPromoter:
 
         assert artifact.spec.name == spec.name
         assert artifact.quality_score == 0.9
+        assert artifact.registration["scope"] == "user"
 
 
 # ============================================================================
@@ -384,9 +408,9 @@ class TestSkillCreatorOrchestrator:
         assert len(artifact.spec.purpose) >= 20
         assert artifact.quality_score >= 0.0 and artifact.quality_score <= 1.0
 
-        # Verify skill file was written
-        skill_files = list(tmp_path.glob("*.md"))
-        assert len(skill_files) > 0
+        # Verify the skill is registered AND injectable, not merely on disk.
+        assert artifact.registration["injectable"] is True
+        assert [s["name"] for s in list_skills(tmp_path)] == [artifact.spec.name]
 
     @pytest.mark.asyncio
     async def test_orchestration_error_propagates(self, tmp_path):
