@@ -372,6 +372,16 @@ def reset_session(
         channel=channel, chat_id=chat_id, reason=reason,
         forge_chan_id=forge_chan_id,
     )
+
+    # Emit Brain graph event for session reset (ADR-0296, ADR-0298)
+    _emit_session_reset_event(
+        session_id=forge_chan_id,
+        tenant_id=tenant_id,
+        reason=reason,
+        channel=channel,
+        chat_id=chat_id,
+    )
+
     if audit_event_id is None:
         if _write_event is None:
             failures.append(
@@ -599,6 +609,40 @@ def _cli(argv: list[str] | None = None) -> int:
     )
     print(json.dumps(result, ensure_ascii=False))
     return 0
+
+
+def _emit_session_reset_event(
+    *,
+    session_id: str,
+    tenant_id: str,
+    reason: str,
+    channel: str,
+    chat_id: str,
+) -> None:
+    """Emit session_reset event to Brain graph (best-effort).
+
+    Allows Brain subsystems to track session lifecycle and update
+    session state in the graph. Non-fatal: event emission failure
+    does NOT block session reset.
+
+    ADR-0296/0298: Session design in Brain.
+    """
+    try:
+        # Try to access ContextBus (if available in this process)
+        from core.context_engineering.context_bus import ContextBus  # type: ignore
+        bus = ContextBus.get_instance()
+        if bus:
+            bus.publish("session_reset", {
+                "session_id": session_id,
+                "tenant_id": tenant_id,
+                "reason": reason,
+                "channel": channel,
+                "chat_id": str(chat_id),
+                "timestamp": datetime.now().isoformat(),
+            })
+    except Exception:  # noqa: BLE001
+        # Best-effort: session reset proceeds even if event emission fails
+        pass
 
 
 if __name__ == "__main__":
