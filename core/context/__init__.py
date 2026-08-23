@@ -1,29 +1,35 @@
-"""
-Context Propagation (Async) — ADR-0305
+"""Context Pipeline v2 — Two-layer architecture for context preservation.
 
-Explicit ContextVar propagation through async/threading boundaries.
+ADR-0399: Preservation+Additive Model
+Prevents context drift by separating original (immutable) from pipeline (additive) context.
+
+Module exports:
+  - OriginalContext: Immutable user goal + constraints
+  - PipelineContext: Additive skill/memory/ADR injections
+  - ContextLayerComposer: Combines both into system prompt
 """
 
-from core.context.helpers import (
-    get_current_context,
-    set_context,
-    ContextError,
+from .original_context import (
+    OriginalContext,
+    ContextScope,
+    capture_original_context,
 )
-from core.context.async_context import (
-    async_run_with_context,
-    async_task_with_context,
-)
-from core.context.thread_context import (
-    thread_with_context,
-    executor_submit_with_context,
+
+from .pipeline_context import (
+    PipelineContext,
+    PipelineAddition,
+    QualityTier,
+    create_pipeline_context,
+    add_memory_context,
 )
 
 __all__ = [
-    "get_current_context",
-    "set_context",
-    "ContextError",
-    "async_run_with_context",
-    "async_task_with_context",
-    "thread_with_context",
-    "executor_submit_with_context",
+    "OriginalContext",
+    "ContextScope",
+    "capture_original_context",
+    "PipelineContext",
+    "PipelineAddition",
+    "QualityTier",
+    "create_pipeline_context",
+    "add_memory_context",
 ]
