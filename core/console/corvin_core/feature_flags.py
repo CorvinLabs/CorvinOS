@@ -1344,3 +1344,6 @@ def canary_percentage_routing(
 
     # If canary, return the normal flag state
     return is_enabled(flag_id, tenant_id)
+
+# ADR-0324: Performance Aggregation Pipeline
+LEARNING_GAP_4_AGGREGATION = "learning_gap_4_aggregation"  # Default: OFF
