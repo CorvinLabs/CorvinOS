@@ -12,7 +12,6 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
-import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +46,6 @@ class RoutingFeedback:
 
     notes: str = ""
     """Optional notes from operator."""
-
-    def to_dict(self) -> Dict:
-        """Serialize to dict."""
-        return asdict(self)
 
     def __post_init__(self):
         """Validate feedback."""
@@ -87,7 +82,7 @@ class FeedbackStore:
         """
         try:
             with open(self.path, "a") as f:
-                line = json.dumps(feedback.to_dict())
+                line = json.dumps(asdict(feedback))
                 f.write(line + "\n")
                 logger.info(f"Recorded feedback: {feedback.task_id} → {feedback.operator_feedback}")
                 return True
@@ -151,8 +146,8 @@ class FeedbackStore:
             (correct_count, total_count, accuracy_pct)
 
         Logic:
-            - If confidence ≥ threshold: system routed (check against operator)
-            - If confidence < threshold: system deferred to native (assume safe)
+            - If confidence ≥ threshold: system made routing decision (count if correct)
+            - If confidence < threshold: system deferred to native (assume safe = correct)
         """
         all_feedback = self.load_all()
         if not all_feedback:
@@ -161,9 +156,12 @@ class FeedbackStore:
         correct = 0
         for fb in all_feedback:
             if fb.predicted_confidence >= threshold:
-                # System made a routing decision
+                # System made routing decision; check if operator agreed
                 if fb.operator_feedback == "correct":
                     correct += 1
+            else:
+                # System deferred to native (conservative); always safe
+                correct += 1
 
         return correct, len(all_feedback), (correct / len(all_feedback) * 100) if all_feedback else 0.0
 
@@ -219,6 +217,8 @@ class ConfidenceGateLearner:
             return self.current_threshold
 
         # Grid search: find threshold with best F1-score
+        # TODO(optimization): Replace brute-force grid search with bisection or gradient-based search
+        # for large feedback datasets (current O(n*21), could be O(n*log(n)))
         best_f1 = 0.0
         best_threshold = 0.70
 
