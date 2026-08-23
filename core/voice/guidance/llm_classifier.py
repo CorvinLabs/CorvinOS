@@ -92,7 +92,7 @@ Be concise. Focus on classification accuracy."""
 
             # Parse response
             response_text = response.content[0].text
-            response_json = json._loads(response_text)
+            response_json = json.loads(response_text)
 
             latency_ms = (time.time() - start_time) * 1000
             self.stats["latencies"].append(latency_ms)
