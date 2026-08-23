@@ -79,6 +79,36 @@ fi
 
 printf '\n%s — self-hosted, local-first AI voice agent\n\n' "$(_bold 'CorvinOS installer')"
 
+# ── 0. ensure curl or wget (required for downloads) ───────────────────────────
+# On Ubuntu, curl may not be installed. Install it via apt if needed.
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    echo "  Installing curl (required for downloads) ..."
+    if command -v apt-get >/dev/null 2>&1; then
+        # Debian/Ubuntu
+        if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+            # Already root
+            apt-get update >/dev/null 2>&1 && apt-get install -y curl >/dev/null 2>&1
+        else
+            # Need sudo
+            if command -v sudo >/dev/null 2>&1; then
+                sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y curl >/dev/null 2>&1
+            else
+                die "curl not found. Please install it manually: apt-get install curl"
+            fi
+        fi
+    elif command -v brew >/dev/null 2>&1; then
+        # macOS
+        brew install curl >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+        # RHEL/CentOS
+        sudo yum install -y curl >/dev/null 2>&1
+    else
+        die "curl or wget not found, and no package manager detected. Please install curl manually."
+    fi
+fi
+command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
+    || die "curl or wget still not available after install attempt"
+
 # ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
 if ! command -v uv >/dev/null 2>&1; then
     echo "  Bootstrapping the uv runtime (brings its own Python) ..."
