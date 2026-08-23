@@ -113,6 +113,7 @@ from .routes import (
     compute_jobs as compute_jobs_route,
     datasources_http as datasources_http_route,
     skills_manual as skills_manual_route,
+    skills_monitoring as skills_monitoring_route,
     tools_manual as tools_manual_route,
     audit_layers as audit_layers_route,
     webhooks as webhooks_route,
@@ -168,6 +169,7 @@ router.include_router(skills_manual_route.router, tags=["console-skills-manual"]
 router.include_router(tools_manual_route.router, tags=["console-tools-manual"])
 router.include_router(tools.router, tags=["console-tools"])
 router.include_router(skills.router, tags=["console-skills"])
+router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(memory.router, tags=["console-memory"])
 # Phase D — realtime SSE streams
