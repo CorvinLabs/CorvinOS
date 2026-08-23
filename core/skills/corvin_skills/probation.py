@@ -53,7 +53,10 @@ def is_in_probation(
 
     try:
         created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
+        # Ensure timezone-aware for comparison with now (which is timezone-aware)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+    except (ValueError, AttributeError, TypeError):
         return False
 
     probation_expiry = created_at + timedelta(hours=24)
@@ -61,16 +64,16 @@ def is_in_probation(
 
 
 def apply_bootstrap_grade(score: float) -> float:
-    """Cap score to 0.3 for bootstrap seeding.
+    """Clamp score to [0.0, 0.3] for bootstrap seeding.
 
-    Returns the minimum of score and 0.3. Ensures bootstrap grades
-    don't accidentally trigger auto-promotion on their own.
+    Ensures bootstrap grades are capped at 0.3 (can't trigger auto-promotion alone)
+    and never negative (clamps to 0.0).
 
     Args:
         score: Desired score (0.0–1.0)
 
     Returns:
-        min(score, 0.3)
+        Clamped score in range [0.0, 0.3]
     """
     return min(max(score, 0.0), 0.3)
 
@@ -120,6 +123,9 @@ def exit_probation(manifest_entry: dict) -> dict:
         Updated manifest_entry with probation markers cleared
     """
     metadata = manifest_entry.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return manifest_entry  # Metadata malformed; skip cleanup
+
     if "bootstrap_score" in metadata:
         del metadata["bootstrap_score"]
     if "bootstrap_grade_at" in metadata:
