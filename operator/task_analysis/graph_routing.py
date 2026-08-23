@@ -18,16 +18,94 @@ Output:
 
 ADR:
     ADR-0267 — Task Engine: Router Layer Architecture
+    ADR-0268 — Security validation (path traversal, input length)
 """
 
 import re
 import subprocess
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Security constants
+MAX_TASK_DESCRIPTION_LENGTH = 10000  # 10K chars max
+
+
+def validate_path(file_path: str, repo_root: Path) -> bool:
+    """Validate path to prevent traversal attacks.
+
+    Args:
+        file_path: Path to validate (from task components)
+        repo_root: Repo root (anchor point)
+
+    Returns:
+        True if path is safe (within repo_root), False otherwise
+
+    Security checks:
+        - No absolute paths (must be relative)
+        - No .. traversal sequences
+        - Must resolve to within repo_root
+    """
+    if not file_path or not isinstance(file_path, str):
+        return False
+
+    # Reject absolute paths
+    if file_path.startswith("/"):
+        logger.warning(f"Absolute path rejected: {file_path}")
+        return False
+
+    # Reject explicit traversal
+    if ".." in file_path or file_path.startswith("./"):
+        logger.warning(f"Path traversal attempt: {file_path}")
+        return False
+
+    # Resolve and check within repo_root
+    try:
+        full_path = (repo_root / file_path).resolve()
+        repo_resolved = repo_root.resolve()
+
+        # Ensure full_path is within repo_resolved
+        if not str(full_path).startswith(str(repo_resolved)):
+            logger.warning(f"Path escapes repo: {file_path}")
+            return False
+
+        return True
+    except (ValueError, OSError) as e:
+        logger.warning(f"Path validation error: {e}")
+        return False
+
+
+def validate_task_input(task_description: str) -> bool:
+    """Validate task input to prevent DoS.
+
+    Args:
+        task_description: Task description string
+
+    Returns:
+        True if input is safe, False otherwise
+
+    Security checks:
+        - Max length 10K chars
+        - No control characters
+    """
+    if not task_description or not isinstance(task_description, str):
+        return False
+
+    if len(task_description) > MAX_TASK_DESCRIPTION_LENGTH:
+        logger.warning(f"Task description too long: {len(task_description)} > {MAX_TASK_DESCRIPTION_LENGTH}")
+        return False
+
+    # Check for control characters (except newlines/tabs)
+    for char in task_description:
+        if ord(char) < 32 and char not in "\n\t\r":
+            logger.warning(f"Control character in task: {repr(char)}")
+            return False
+
+    return True
 
 
 @dataclass
@@ -87,7 +165,16 @@ class CallGraphRouter:
             return GraphMatch("call_graph", 0.0, {"files": [], "depth": 0})
 
         try:
-            files = self._collect_imports(task.components)
+            # Security: validate all components before processing
+            valid_components = [
+                c for c in task.components
+                if validate_path(c, self.repo_root)
+            ]
+            if not valid_components:
+                logger.warning(f"No valid components from task: {task.components[:3]}")
+                return GraphMatch("call_graph", 0.0, {"error": "no_valid_paths"})
+
+            files = self._collect_imports(valid_components)
             depth = self._estimate_depth(files)
             score = min(1.0, depth / 3.0)  # max depth = 3
 
@@ -139,9 +226,15 @@ class CallGraphRouter:
         if depth < 3:
             new_components = []
             for f in list(files)[:10]:  # limit to avoid explosion
+                # Security: validate path before passing to subprocess
+                if not validate_path(f, self.repo_root):
+                    logger.warning(f"Skipping invalid path: {f}")
+                    continue
+
                 try:
+                    file_path = str((self.repo_root / f).resolve())
                     result = subprocess.run(
-                        ["grep", "-h", "^from\\|^import", str(self.repo_root / f)],
+                        ["grep", "-h", "^from\\|^import", file_path],
                         capture_output=True,
                         text=True,
                         timeout=2,
@@ -153,7 +246,8 @@ class CallGraphRouter:
                             module = match.group(1).split(".")[0]
                             if module in ("core", "operator", "forge", "voice", "bridge"):
                                 new_components.append(module)
-                except (subprocess.TimeoutExpired, Exception):
+                except (subprocess.TimeoutExpired, Exception) as e:
+                    logger.debug(f"grep failed for {f}: {e}")
                     pass
 
             if new_components:
