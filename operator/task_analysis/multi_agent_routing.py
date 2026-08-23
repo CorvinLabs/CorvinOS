@@ -195,6 +195,9 @@ class MultiAgentRouter:
         cost_acs = self.cost_estimator.estimate_acs_cost()
         cost_tde = self.cost_estimator.estimate_tde_cost()
 
+        # Calculate savings relative to opus baseline
+        savings = cost_native_opus - decision.estimated_cost_usd
+
         return {
             "recommended_target": decision.target.value,
             "recommended_cost": decision.estimated_cost_usd,
@@ -204,7 +207,7 @@ class MultiAgentRouter:
                 "acs": cost_acs,
                 "tde": cost_tde,
             },
-            "savings_vs_opus": cost_native_opus - cost_native,
+            "savings_vs_opus": max(0.0, savings),  # Savings if recommendation is cheaper than opus
             "reasoning": decision.reasoning,
             "carve_out_rule": decision.carve_out_rule,
         }

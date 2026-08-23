@@ -13,6 +13,7 @@ ADR: ADR-0270 (Memory Context Injection)
 import re
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 import json
@@ -139,9 +140,23 @@ class MemoryLinker:
                     relevance = max(relevance, min(0.5 + keywords_found * 0.1, 0.9))
 
                 if relevance > 0.0:
-                    # Extract title (first # line)
-                    title_match = re.search(r"^# (.+)$", content, re.MULTILINE)
-                    title = title_match.group(1) if title_match else adr_file.stem
+                    # Extract title: try YAML frontmatter first, then markdown heading, fallback to filename
+                    title = None
+
+                    # Try YAML frontmatter (id: ADR-XXXX)
+                    yaml_match = re.search(r"^id:\s*ADR-(\d+)", content, re.MULTILINE)
+                    if yaml_match:
+                        title = f"ADR-{yaml_match.group(1)}"
+
+                    # Try markdown heading
+                    if not title:
+                        heading_match = re.search(r"^#+ (.+)$", content, re.MULTILINE)
+                        if heading_match:
+                            title = heading_match.group(1).strip()
+
+                    # Fallback to filename
+                    if not title:
+                        title = adr_file.stem
 
                     # Preview
                     preview = content[:200].replace("\n", " ")
@@ -265,7 +280,7 @@ class MemoryLinker:
             "total_links_found": len(all_links),
             "unsafe_links_skipped": unsafe_count,
             "injection_metadata": {
-                "timestamp": str(Path.ctime(Path.cwd())),
+                "timestamp": str(datetime.now().isoformat()),
                 "links_injected": len(injected_links),
                 "max_relevance": max([l.relevance for l in injected_links]) if injected_links else 0.0,
             },
