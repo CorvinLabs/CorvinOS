@@ -13,7 +13,7 @@ Public API:
 from pathlib import Path
 from typing import Optional, Dict, Any
 from core.skills.corvin_skills.cache import SkillCache
-from core.tenants import current_tenant, validate_tenant_id
+from core.tenants import validate_tenant_id
 
 
 class SkillDependencyResolver:
@@ -38,11 +38,7 @@ class SkillDependencyResolver:
         self.tenant_id = tenant_id
 
         # Resolve tenant home directory
-        try:
-            self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
-        except (OSError, RuntimeError):
-            # Fallback to current_tenant() if available
-            self.base_path = current_tenant().corvin_home / "tenants" / tenant_id
+        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
 
         # Ensure skill-forge directory exists
         skill_forge_dir = self.base_path / "skill-forge"
