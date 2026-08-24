@@ -19,13 +19,14 @@ from .state_contract import (
 )
 from .hermes_bridge import HermesBridge
 from .event_broadcaster import EventBroadcaster, StatusLevel
+from .status_snapshot import StatusSnapshot, StatusPublisher, TaskState, get_publisher
 
 logger = logging.getLogger(__name__)
 
 class VibeEngine:
     """Autonomous task executor (Phase 3: checkpoint/resume/Hermes/Event Bus)."""
 
-    def __init__(self, state_store=None, hermes_client=None, event_bus=None):
+    def __init__(self, state_store=None, hermes_client=None, event_bus=None, publisher: Optional[StatusPublisher] = None):
         self.memory = MemoryPalace()
         self.skills = SkillsEngine()
         self.brain = Brain(self.memory, self.skills)
@@ -33,6 +34,7 @@ class VibeEngine:
         self.state_store = state_store or InMemoryStateStore()
         self.hermes = HermesBridge(hermes_client)
         self.broadcaster = EventBroadcaster(event_bus)
+        self.publisher = publisher or get_publisher()
         self.status_listeners: List[Callable] = []  # Legacy support
 
     def add_status_listener(self, listener: Callable):
@@ -59,6 +61,23 @@ class VibeEngine:
                 await listener(level, message, metadata or {})
             except Exception as e:
                 logger.warn(f"Status listener failed: {e}")
+
+    async def _publish_status_snapshot(self, task_id: str, state: TaskState, iteration: int, max_iterations: int, context: TaskContext, current_action: str, checkpoint_id: Optional[str] = None):
+        """Publish StatusSnapshot to all bridges (Phase 3.1)."""
+        snapshot = StatusSnapshot(
+            task_id=task_id,
+            session_id="current",  # TODO: inject session_id from context
+            state=state,
+            progress_percent=context.progress_percent(),
+            iteration_num=iteration,
+            total_iterations=max_iterations,
+            current_action=current_action,
+            latest_message=f"Iteration {iteration} of {max_iterations}",
+            can_resume=checkpoint_id is not None,
+            last_checkpoint_id=checkpoint_id,
+            expected_next_step=f"Executing skill {iteration + 1}" if iteration < max_iterations else "Task complete"
+        )
+        await self.publisher.publish(snapshot)
 
     async def execute_task(self, task: Dict, persona_id: str = "default", resume_from_checkpoint: Optional[str] = None) -> Dict:
         """
@@ -190,6 +209,17 @@ class VibeEngine:
                         }
                     )
 
+                    # Phase 3.1: Publish status snapshot to all bridges
+                    await self._publish_status_snapshot(
+                        task_id=task_id,
+                        state=TaskState.RUNNING,
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        context=context,
+                        current_action=f"✅ Skill '{decision.skill_id}' succeeded",
+                        checkpoint_id=checkpoint.checkpoint_id
+                    )
+
                 else:
                     # Step 4b: Error recovery (Phase 3d: Hermes-Healing)
                     error = Exception(skill_result.error_trace or "Unknown error")
@@ -208,6 +238,17 @@ class VibeEngine:
                         "warning",
                         f"⚠️ Error: {recovery.reason}. Recovery: {recovery.strategy}",
                         {"recovery_strategy": recovery.strategy}
+                    )
+
+                    # Phase 3.1: Publish error snapshot
+                    await self._publish_status_snapshot(
+                        task_id=task_id,
+                        state=TaskState.RUNNING,
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        context=context,
+                        current_action=f"⚠️ Error (recovery: {recovery.strategy})",
+                        checkpoint_id=None
                     )
 
                     # Memory learns (failure)
