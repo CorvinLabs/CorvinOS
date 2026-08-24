@@ -199,6 +199,11 @@ export const LearningPage = React.lazy(() =>
   import("@/pages/learning").then((m) => ({ default: m.default }))
 );
 
+// ADR-0400 — Task Graph visualization
+export const TaskGraphPage = React.lazy(() =>
+  import("@/pages/task-graph").then((m) => ({ default: m.default }))
+);
+
 // Cross-Device-Learning GitHub Integration
 export const GitHubPage = React.lazy(() =>
   import("@/pages/github").then((m) => ({ default: m.default }))

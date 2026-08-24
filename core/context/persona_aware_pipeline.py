@@ -10,14 +10,31 @@ ADR-0302: Persona Capability Axis (Deny-by-default, role/tier isolation)
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 from core.context import PipelineContext, PipelineAddition, QualityTier
-from core.security.persona_model import (
-    Persona,
-    Role,
-    Tier,
-    CapabilityRegistry,
-)
+
+# Fallback if persona_model not available (optional dependency)
+try:
+    from core.security.persona_model import (
+        Persona,
+        Role,
+        Tier,
+        CapabilityRegistry,
+    )
+except ImportError:
+    # Stub implementations for optional persona module
+    class Persona:
+        """Stub persona model."""
+        pass
+    class Role:
+        """Stub role model."""
+        pass
+    class Tier:
+        """Stub tier model."""
+        pass
+    class CapabilityRegistry:
+        """Stub capability registry."""
+        pass
 
 logger = logging.getLogger(__name__)
 

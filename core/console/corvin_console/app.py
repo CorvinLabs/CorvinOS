@@ -145,6 +145,8 @@ from .routes import (
     panels as panels_route,
     # ADR-0275/0277 — Multi-Instance Cross-Device Learning
     multi_instance as multi_instance_route,
+    # ADR-0400 — Task Graph Visualization (Phase 1-2)
+    task_graph_api as task_graph_api_route,
 )
 
 
@@ -290,6 +292,8 @@ router.include_router(models_route.router, tags=["console-models"])
 router.include_router(stats_features_route.router, tags=["console-stats"])
 router.include_router(talent_route.router, tags=["console-talent"])
 router.include_router(vibe_engineering_route.router, tags=["console-vibe-engineering"])
+# ADR-0400 — Task Graph Visualization (Phase 1-2 MVP)
+router.include_router(task_graph_api_route.router, tags=["console-task-graph"])
 router.include_router(capabilities_route.router, tags=["console-capabilities"])
 router.include_router(panels_route.router, tags=["console-panels"])
 # ADR-0275/0277 — Multi-Instance Cross-Device Learning Dashboard

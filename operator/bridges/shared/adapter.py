@@ -2773,9 +2773,18 @@ def _resolve_spawn_inputs(
     if _skill_inject is not None:
         # safe_chat / cid already computed above in the M3 block; reuse them.
         cid = _cl_cid
+        # Persona for the explicit-request namespace gate (same precedence as
+        # the output-sentinel block).
+        _sk_persona = (
+            profile.get("_auto_routed")
+            or profile.get("persona")
+            or profile.get("name")
+            or ""
+        ) if isinstance(profile, dict) else ""
         try:
             skill_block = _skill_inject.collect_active_skills(
                 channel_id=cid, profile=profile,
+                task_text=prompt, persona=_sk_persona or None,
             )
         except Exception as e:  # noqa: BLE001
             log(f"skill_inject failed: {e}")

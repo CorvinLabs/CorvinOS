@@ -22,6 +22,7 @@ import {
   LogOut,
   MessagesSquare,
   Network,
+  GitBranch,
   Package,
   Plug,
   Blocks,
@@ -139,6 +140,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/token-metrics",    label: "Token Metrics", icon: Zap },
       { to: "/app/learning",         label: "TreeOfThoughts", icon: Brain },
       { to: "/app/multi-instance",   label: "Cross-Device Learning", icon: Network },
+      { to: "/app/task-graph",       label: "Task Graph", icon: GitBranch },
     ],
   },
   {

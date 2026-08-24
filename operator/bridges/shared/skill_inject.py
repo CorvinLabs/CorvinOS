@@ -19,10 +19,14 @@ Design rules:
 """
 from __future__ import annotations
 
+import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger("corvin.skill_inject")
 
 
 # ── Optional skill-forge import ─────────────────────────────────────────────
@@ -258,20 +262,197 @@ def _cap_body(body: str, cap: int = _BODY_CAP_BYTES) -> str:
             f"see canonical SKILL.md for full content]")
 
 
+# ── Explicit user skill request (bypasses the AUTO grade gate) ──────────────
+#
+# The grade gate (`n_grades < 1 or mean_score <= 0`) exists to filter AUTOMATIC,
+# relevance-based injection — a fresh ungraded skill has not yet earned a slot in
+# an ordinary turn. An EXPLICIT user request ("nutze den skill X" / "use skill X")
+# is the strongest possible relevance signal, so it must be honored even when the
+# skill is still ungraded. This is the concrete defect proven in session
+# web:9gCJXQnmhy: the user named `assistant.corvinos_panel_design`, the skill
+# existed on disk, but it was silently excluded because it was ungraded.
+#
+# Parsing is conservative: only skill-id-SHAPED tokens (a namespaced identifier,
+# `<ns>.<name>`) are candidates, and a candidate becomes a "request" only if it
+# resolves to a real on-disk skill OR the message carries explicit skill-request
+# vocabulary. Arbitrary prose words never match (they carry no interior dot), and
+# common dotted non-skill tokens (file names, `e.g.`) are filtered out.
+
+# A namespaced skill-id token: <segment>.<segment...>. Case-insensitive scan; the
+# token is lower-cased for comparison (skill ids compare case-insensitively here).
+_SKILL_ID_RE = re.compile(r"[a-z][a-z0-9_]*\.[a-z0-9_.]+", re.IGNORECASE)
+# File-name suffixes that look like a namespaced id but are not skills.
+_NON_SKILL_SUFFIXES = (
+    ".py", ".md", ".json", ".txt", ".js", ".ts", ".tsx", ".jsx", ".yaml",
+    ".yml", ".sh", ".png", ".jpg", ".jpeg", ".svg", ".csv", ".html", ".htm",
+    ".css", ".toml", ".ini", ".cfg", ".log", ".xml", ".pdf",
+)
+_NON_SKILL_TOKENS = {"e.g", "i.e", "etc", "vs"}
+# Vocabulary that signals an explicit skill request (EN + DE). Presence lets a
+# not-found request be diagnosed loudly instead of silently ignored as prose.
+_SKILL_REQUEST_VOCAB = ("skill", "skills")
+
+# Loud-diagnostic bookkeeping (content-free: skill_id + reason enum only, no
+# prompt/PII). Deduped WARNINGs, but every occurrence still increments a counter.
+_request_diag_seen: set[tuple[str, str]] = set()
+_request_diag_counts: dict[str, int] = {}
+
+
+def _diag_excluded_request(skill_id: str, reason: str) -> None:
+    """Emit a content-free WARNING + counter when a skill the user EXPLICITLY
+    requested was not injected. Deduped per (skill_id, reason) so a repeated
+    request doesn't spam the log, while the counter still reflects every hit."""
+    try:
+        _request_diag_counts[reason] = _request_diag_counts.get(reason, 0) + 1
+        key = (skill_id, reason)
+        if key in _request_diag_seen:
+            return
+        _request_diag_seen.add(key)
+        _log.warning(
+            "explicitly-requested skill not injected: skill_id=%s reason=%s",
+            skill_id, reason,
+        )
+    except Exception:  # noqa: BLE001 — diagnostics must never break the turn
+        pass
+
+
+def _parse_requested_skills(task_text: str | None) -> list[str]:
+    """Return the lower-cased skill-id-shaped tokens named in ``task_text``.
+
+    Conservative: only namespaced identifiers (with an interior dot) match, and
+    file-name / abbreviation shapes are filtered. Existence + namespace-gate are
+    decided later by the caller — this only extracts candidates."""
+    if not task_text:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    try:
+        for m in _SKILL_ID_RE.finditer(task_text):
+            tok = m.group(0).lower().strip(".")
+            if not tok or tok in seen:
+                continue
+            if tok in _NON_SKILL_TOKENS or tok.endswith(_NON_SKILL_SUFFIXES):
+                continue
+            seen.add(tok)
+            out.append(tok)
+    except Exception:  # noqa: BLE001 — parse errors must never break the turn
+        return []
+    return out
+
+
+_PERSONA_NS_CACHE: dict | None = None
+
+
+def _persona_namespace(persona: str | None) -> str | None:
+    """Resolve the namespace prefix an explicit request must live under for the
+    given persona. Returns None = no gate (wildcard) when ``persona`` is falsy
+    or not present in the bundle policy (mirrors the skill-forge namespace-gate
+    semantics: unmapped persona ⇒ wildcard). Fails safe to the persona name as
+    the prefix if the policy file can't be read."""
+    if not persona:
+        return None
+    global _PERSONA_NS_CACHE
+    if _PERSONA_NS_CACHE is None:
+        ns_map: dict = {}
+        try:
+            import json  # noqa: PLC0415
+            policy = _HERE.parent.parent / "forge" / "forge" / "policy.json"
+            if not policy.is_file():
+                policy = (_HERE.parent.parent.parent / "operator" / "forge"
+                          / "forge" / "policy.json")
+            data = json.loads(policy.read_text(encoding="utf-8"))
+            ns_map = (data.get("persona_namespaces") or {}) if isinstance(data, dict) else {}
+        except Exception:  # noqa: BLE001
+            ns_map = {}
+        _PERSONA_NS_CACHE = ns_map
+    persona = persona.lower()
+    if persona in _PERSONA_NS_CACHE:
+        return str(_PERSONA_NS_CACHE[persona]).lower()
+    # Unmapped persona: wildcard (no gate) — but if the policy failed to load at
+    # all, fall back to identity so the gate still binds the common case.
+    if not _PERSONA_NS_CACHE:
+        return persona
+    return None
+
+
+def _honor_explicit_requests(
+    *,
+    requested: list[str],
+    scoped: list[tuple[str, Any]],
+    eligible: list[tuple[str, Any]],
+    ns_prefix: str | None,
+    has_vocab: bool,
+    profile: dict | None,
+) -> None:
+    """Add EXPLICITLY-requested on-disk skills to ``eligible`` in place, bypassing
+    the AUTO grade gate. Namespace-gate is enforced (a request outside the active
+    persona's namespace is refused + diagnosed, never injected across the gate).
+    Every non-injected explicit request is diagnosed loudly. Fail-safe."""
+    try:
+        by_name_ci = {spec.name.lower(): (scope, spec) for scope, spec in scoped}
+        already = {spec.name.lower() for _s, spec in eligible}
+        for req in requested:
+            pair = by_name_ci.get(req)
+            exists = pair is not None
+            # Only prose that carries an on-disk skill id or explicit skill
+            # vocabulary counts as a request — avoids diagnosing dotted prose.
+            if not exists and not has_vocab:
+                continue
+            # Namespace gate FIRST — never inject across the gate, regardless of
+            # whether the skill exists on disk.
+            if ns_prefix is not None:
+                req_ns = req.split(".", 1)[0] if "." in req else ""
+                if req_ns != ns_prefix:
+                    _diag_excluded_request(req, "wrong_namespace")
+                    continue
+            if not exists:
+                _diag_excluded_request(req, "not_found")
+                continue
+            scope, spec = pair
+            if spec.name.lower() in already:
+                continue  # already being injected (graded, normal path)
+            # LDD / quality-layer toggles still apply — an explicitly requested
+            # skill for a DISABLED discipline layer stays off (operator intent),
+            # but say so loudly rather than silently.
+            filtered = _apply_ldd_filter([(scope, spec)], profile)
+            filtered = _apply_quality_layer_filter(filtered)
+            if not filtered:
+                _diag_excluded_request(req, "layer_disabled")
+                continue
+            eligible.append((scope, spec))
+            already.add(spec.name.lower())
+    except Exception:  # noqa: BLE001 — explicit-honor must never break the turn
+        pass
+
+
 def collect_active_skills(
     *,
     channel_id: str | None,
     profile: dict | None,
     project_root: Path | None = None,
     max_skills: int | None = None,
+    task_text: str | None = None,
+    persona: str | None = None,
 ) -> str | None:
     """Return a markdown block of currently active skills, or None.
 
     Filtering rules:
       - profile.inject_skills (default True) — set False to opt out.
       - profile.inject_ungraded (default False) — when False, only skills
-        with at least one grade and mean_score > 0 are eligible.
+        with at least one grade and mean_score > 0 are eligible for AUTO
+        (relevance-based) injection.
       - profile.max_injected_skills overrides max_skills (default 5).
+
+    Explicit request override:
+      - ``task_text`` is the user's message. When it explicitly names a skill
+        that EXISTS on disk in the active persona's namespace, that skill is
+        injected EVEN IF it is ungraded / below the AUTO grade gate — an
+        explicit request is the strongest relevance signal and outranks the
+        gate (which only governs automatic injection). ``persona`` scopes the
+        namespace gate: an ``assistant`` persona may honor ``assistant.*`` only.
+      - A requested skill that exists but is excluded (wrong namespace, disabled
+        discipline layer) or is not found is diagnosed LOUDLY (content-free
+        WARNING + counter via ``_diag_excluded_request``), never silently.
 
     Returns None when skill-forge is not importable AND no core quality
     skill is eligible, when injection is disabled, or when the cap-limited
@@ -362,6 +543,31 @@ def collect_active_skills(
         # "usually, unless enough other skills outrank it." Only the
         # registry-sourced remainder is capped.
         eligible.extend(registry_eligible[:cap])
+
+        # Explicit user skill request — the strongest relevance signal, so it
+        # bypasses the AUTO grade gate above. Honored regardless of grade, still
+        # subject to the namespace gate and the discipline-layer toggles. Every
+        # non-injection is diagnosed loudly (silent→loud discipline).
+        requested = _parse_requested_skills(task_text)
+        if requested:
+            low = (task_text or "").lower()
+            has_vocab = any(v in low for v in _SKILL_REQUEST_VOCAB)
+            _honor_explicit_requests(
+                requested=requested,
+                scoped=scoped,
+                eligible=eligible,
+                ns_prefix=_persona_namespace(persona),
+                has_vocab=has_vocab,
+                profile=profile,
+            )
+    elif task_text:
+        # Registry unavailable (skill-forge not importable) but the user still
+        # named a skill — can't inject, but don't stay silent about it.
+        requested = _parse_requested_skills(task_text)
+        low = (task_text or "").lower()
+        if requested and any(v in low for v in _SKILL_REQUEST_VOCAB):
+            for req in requested:
+                _diag_excluded_request(req, "registry_unavailable")
 
     if not eligible:
         return None
