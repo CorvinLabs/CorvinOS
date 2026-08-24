@@ -33,3 +33,17 @@ __all__ = [
     "create_pipeline_context",
     "add_memory_context",
 ]
+
+from .persona_aware_pipeline import (
+    PersonaAwarePipeline,
+    PersonaContextPolicy,
+    ContextVisibility,
+    create_persona_aware_pipeline,
+)
+
+__all__.extend([
+    "PersonaAwarePipeline",
+    "PersonaContextPolicy",
+    "ContextVisibility",
+    "create_persona_aware_pipeline",
+])
