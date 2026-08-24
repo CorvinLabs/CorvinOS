@@ -13,8 +13,10 @@ paths:
   - core/vibe_engineering/background_monitor.py
   - core/vibe_engineering/task_cli.py
   - core/vibe_engineering/vibe_engine.py
+  - core/vibe_engineering/DEPLOYMENT.md
 docs:
   - docs/claude-ref/layer-44-autonomous-task-orchestration.md
+  - core/vibe_engineering/DEPLOYMENT.md
 supersedes: []
 superseded_by: []
 ---
