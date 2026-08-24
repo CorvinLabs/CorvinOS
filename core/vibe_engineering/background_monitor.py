@@ -9,6 +9,8 @@ import asyncio
 import logging
 from typing import Dict, Optional, List, Set
 from datetime import datetime, timedelta
+import aiohttp
+import json
 from .status_snapshot import get_publisher, TaskState, StatusSnapshot
 
 logger = logging.getLogger(__name__)
@@ -126,19 +128,47 @@ class BackgroundMonitor:
             logger.debug(f"BackgroundMonitor cleaned up tracking for {task_id}")
 
     async def _send_notification(self, snapshot: StatusSnapshot, reason: str):
-        """Send notification to Discord (via webhook or publisher)."""
+        """Send notification to Discord (via webhook with retry, or publisher fallback)."""
         if self.discord_webhook:
-            # Direct Discord webhook POST
-            try:
-                embed = snapshot.to_discord_embed()
-                embed["footer"] = {"text": f"{reason} | {snapshot.updated_at}"}
-                # TODO: POST to webhook URL with aiohttp (https://github.com/aio-libs/aiohttp)
-                logger.info(f"Discord notification queued: {reason} (webhook POST not yet implemented)")
-            except Exception as e:
-                logger.error(f"Discord notification failed: {e}")
+            await self._send_discord_webhook(snapshot, reason)
         else:
-            # Use publisher (routed through Discord notifier)
             await self.publisher.publish(snapshot)
+
+    async def _send_discord_webhook(self, snapshot: StatusSnapshot, reason: str, max_retries: int = 3):
+        """Send to Discord webhook with exponential backoff retry (fire-and-forget)."""
+        embed = snapshot.to_discord_embed()
+        embed["footer"] = {"text": f"{reason} | {snapshot.updated_at}"}
+        payload = {"embeds": [embed]}
+
+        for attempt in range(max_retries):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        self.discord_webhook,
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as resp:
+                        if resp.status == 204:
+                            logger.debug(f"Discord webhook posted: {snapshot.task_id} — {reason}")
+                            return
+                        elif resp.status >= 400:
+                            text = await resp.text()
+                            logger.warning(f"Discord webhook failed (status {resp.status}): {text}")
+                            if resp.status >= 500 and attempt < max_retries - 1:
+                                await asyncio.sleep(2 ** attempt)
+                                continue
+                            return
+            except asyncio.TimeoutError:
+                logger.warning(f"Discord webhook timeout (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+            except aiohttp.ClientError as e:
+                logger.warning(f"Discord webhook client error: {e} (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+            except Exception as e:
+                logger.error(f"Discord webhook unexpected error: {e}")
+                return
 
 # Global monitor instance
 _monitor: Optional[BackgroundMonitor] = None
