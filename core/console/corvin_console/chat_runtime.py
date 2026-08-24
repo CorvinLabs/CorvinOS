@@ -4692,7 +4692,8 @@ async def stream_turn(
                 }
                 _bundle, _cel_trace = await _cel_run_full_async(
                     prompt, sess.tenant_id, sess, gate_fn=_cel_gate,
-                    persona_patterns=_cel_globs, persona_caps=_cel_caps)
+                    persona_patterns=_cel_globs, persona_caps=_cel_caps,
+                    persona=_WEB_CHAT_PERSONA)
                 if _bundle is not None and getattr(_bundle, "synthesised_prompt", None):
                     _cel_brief_text = _bundle.synthesised_prompt.strip()
                 elif _cel_trace.get("gate2_denied") or _cel_trace.get("gate1_denied"):

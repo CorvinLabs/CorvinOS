@@ -29,6 +29,10 @@ ACTIVE_PIPELINE = [
     {"stage": "llm_synthesis", "config": {"egress_ok": True}},
     {"stage": "toolforge"},
     {"stage": "skillforge"},
+    # Honor a user-explicitly-named EXISTING on-disk skill (session web:9gCJXQnmhy):
+    # a post-gate forge stage so skills_to_bind is never populated pre-Gate-1, and
+    # Gate-2 still inspects the body it adds. Namespace-gated + capped + fail-closed.
+    {"stage": "explicit_skill"},
     {"stage": "blocker_id"},
 ]
 

@@ -29,6 +29,24 @@ MAX_BINDINGS = 8
 # …and one injected skill body may not exceed this (bounded prompt growth).
 MAX_SKILL_BODY_CHARS = 4000
 MAX_SKILL_ID_CHARS = 64
+# Rendered in place of a skill body the PII gate rejected (drop-whole, never raw).
+SKILL_BODY_REDACTED = "[skill body redacted: sensitive content]"
+
+
+def _skill_body_is_sensitive(body: str) -> bool:
+    """Fail-CLOSED gate over an injected skill body (ADR-0297).
+
+    ``core.pii.has_sensitive`` is a bool GATE, not a scrubber: a hit means DROP
+    the WHOLE body (a partially-scrubbed secret still leaks). Returns True when
+    the body must be dropped. Fail-CLOSED on every failure mode — a sensitive
+    body, a ``PIIDetectionFailedClosed`` raised by the scan, OR any other error
+    all resolve to True (drop). The gate itself must never break rendering, so
+    every exception is absorbed here into a drop, never propagated."""
+    try:
+        from core.pii import has_sensitive  # noqa: PLC0415
+        return bool(has_sensitive(body))
+    except Exception:  # noqa: BLE001 — fail closed: any gate error ⇒ drop the body
+        return True
 
 
 @dataclass
@@ -160,6 +178,15 @@ def render_skill_bindings(bundle: Any) -> str:
         # turn's system prompt (cost + context pressure) through this new channel.
         if len(body) > MAX_SKILL_BODY_CHARS:
             body = body[:MAX_SKILL_BODY_CHARS] + "\n…[truncated]"
+        # Fail-closed PII gate (ADR-0297): a skill body is LLM/on-disk-authored
+        # and reaches the worker prompt verbatim. Both producers of skills_to_bind
+        # (SkillForgeStage's forged bodies and the explicit-skill stage's on-disk
+        # bodies) render through here, and truncation alone is NOT redaction. If
+        # the body carries sensitive content — or the gate cannot decide — DROP the
+        # whole body (drop-whole discipline) and render only the heading with a
+        # placeholder, never the raw body.
+        if _skill_body_is_sensitive(body):
+            body = SKILL_BODY_REDACTED
         parts.append(f"### {sid[:MAX_SKILL_ID_CHARS]}\n{body}")
     if not parts:
         return ""
