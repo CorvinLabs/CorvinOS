@@ -40,6 +40,15 @@ from core.pii.redactor import (
     redact_pii,
     redact_dict_for_audit,
 )
+# Fail-CLOSED free-text + secret gate (ADR-0297). `has_sensitive` is a bool GATE,
+# not a scrubber: callers use it to DROP a whole field before injection (a
+# partially-scrubbed secret still leaks). It RAISES PIIDetectionFailedClosed on a
+# scan error, which the caller MUST treat as "sensitive" (drop), never as clean.
+from core.pii.sensitive import (
+    PIIDetectionFailedClosed,
+    detect_sensitive_types,
+    has_sensitive,
+)
 
 
 # Utility functions for convenience
@@ -70,9 +79,6 @@ def is_value_suspicious(value: str, *, tenant_id: str = "_default") -> bool:
     detector = PIIDetector()
     return detector.has_pii(value, tenant_id=tenant_id)
 
-
-# Backward compatibility
-PIIDetectionFailedClosed = type("PIIDetectionFailedClosed", (Exception,), {})
 
 __all__ = [
     # Classes
@@ -106,6 +112,9 @@ __all__ = [
     "redact_dict_for_audit",
     "detect_pii_in_value",
     "is_value_suspicious",
+    # Fail-closed sensitive-content gate (ADR-0297)
+    "has_sensitive",
+    "detect_sensitive_types",
     # Exceptions
     "PIIDetectionFailedClosed",
 ]
