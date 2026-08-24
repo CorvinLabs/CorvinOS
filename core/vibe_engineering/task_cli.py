@@ -25,36 +25,67 @@ class TaskCLI:
         self.publisher = get_publisher()
 
     async def list_tasks(self) -> List[str]:
-        """List all pending tasks (not completed).
-
-        TODO: Implement by scanning state_store or publisher for tasks in non-terminal states.
-        For now, returns empty list (stub).
-        """
+        """List all pending tasks (not completed) from publisher history."""
         logger.info("Listing tasks...")
-        # STUB: Would scan state_store.list_tasks() or filter publisher.history
-        # for tasks not in (COMPLETED, FAILED) state
-        return []
+        seen_tasks = set()
+        pending = []
+
+        # Scan publisher history for non-terminal tasks
+        for snapshot in self.publisher.history:
+            if snapshot.task_id not in seen_tasks:
+                if snapshot.state not in [TaskState.COMPLETED, TaskState.FAILED]:
+                    pending.append(snapshot.task_id)
+                    seen_tasks.add(snapshot.task_id)
+
+        logger.info(f"Found {len(pending)} pending tasks")
+        return pending
 
     async def resume(self, task_id: str) -> dict:
-        """Resume task from last checkpoint."""
+        """Resume task from last checkpoint (load JSON, validate, prepare to run)."""
         logger.info(f"Resuming task {task_id}...")
 
-        # Find latest checkpoint
         try:
-            # Scan checkpoints (would need task context)
-            # For now: stub that scans filesystem
             checkpoints_dir = Path("~/.corvin/vibe/checkpoints").expanduser()
-            if checkpoints_dir.exists():
-                checkpoints = sorted(checkpoints_dir.glob(f"{task_id}*.json"), reverse=True)
-                if checkpoints:
-                    latest = checkpoints[0]
-                    logger.info(f"Found checkpoint: {latest}")
-                    return {"status": "resumed", "checkpoint_id": latest.stem}
+            checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
+            if not checkpoints_dir.exists():
+                return {"status": "error", "reason": "Checkpoints directory not found"}
+
+            # Find latest checkpoint for this task
+            checkpoints = sorted(checkpoints_dir.glob(f"{task_id}*.json"), reverse=True)
+            if not checkpoints:
+                return {"status": "error", "reason": f"No checkpoint found for {task_id}"}
+
+            latest_checkpoint_path = checkpoints[0]
+            logger.info(f"Found checkpoint: {latest_checkpoint_path}")
+
+            # Load and validate checkpoint JSON
+            with open(latest_checkpoint_path, 'r') as f:
+                checkpoint_data = json.load(f)
+
+            checkpoint_id = checkpoint_data.get("checkpoint_id", latest_checkpoint_path.stem)
+            iteration_num = checkpoint_data.get("iteration_num", 0)
+            context_state = checkpoint_data.get("context_state", {})
+
+            logger.info(f"Checkpoint loaded: iteration {iteration_num}, context keys: {list(context_state.keys())}")
+
+            return {
+                "status": "loaded",
+                "checkpoint_id": checkpoint_id,
+                "task_id": task_id,
+                "iteration": iteration_num,
+                "context_summary": {
+                    "goal": context_state.get("goal", ""),
+                    "progress": context_state.get("progress", {})
+                }
+            }
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Checkpoint JSON parse error: {e}")
+            return {"status": "error", "reason": f"Invalid checkpoint JSON: {e}"}
         except Exception as e:
             logger.error(f"Resume failed: {e}")
             return {"status": "error", "reason": str(e)}
-
-        return {"status": "error", "reason": f"No checkpoint found for {task_id}"}
 
     async def status(self, task_id: str) -> dict:
         """Show current task status."""
