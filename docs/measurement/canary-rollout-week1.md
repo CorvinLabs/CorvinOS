@@ -15,31 +15,53 @@ A 10% canary deployment will measure real token/context savings vs. a control ba
 
 ---
 
-## Canary Deployment Strategy
+## Deployment Strategy
 
-### Group Assignment (Deterministic, Stable)
+### ✅ CHANGED: Direct 100% Deployment (Single-User Environment)
 
-- **Control (90%):** Phase 1-3 flags OFF — measures baseline performance
-- **Canary (10%):** Phase 1-3 flags ON — measures optimized performance
+**Previous:** Canary rollout (10% → 50% → 100% over 3 weeks)
+**Current:** Direct 100% deployment (immediate rollout)
 
-Assignment is based on a stable hash of `tenant_id`:
+Reason: Single user (operator only), no need for gradual rollout.
+
+### Configuration
+
+```yaml
+# OLD (Canary Strategy)
+canary_pct: 10  # 10% get new features
+# 90% control, 10% canary
+
+# NEW (Direct Deployment)
+canary_pct: 100  # 100% get new features
+# All tenants in "active" group
 ```
-is_canary = (sha256(tenant_id) % 100) < 10
-```
 
-**Key property:** The same tenant always gets the same assignment across the measurement week (no reassignment).
+### Group Assignment
 
-### Feature Flags Under Test
+- **100% Active:** All tenants (and the single user) get Phase 1-3 flags ON
+- Deterministic assignment logic still works (compatible with future multi-user deployment)
+- No A/B testing needed (focus on monitoring, not measurement)
+
+### Feature Flags (100% Deployment)
 
 ```python
+# ALL flags enabled by default (direct deployment)
+# No measurement/control group needed (single user)
+
 # Phase 1: Memory confidence gating
-memory_confidence_gate_enabled = True  # default OFF, canary-only
+memory_confidence_gate_enabled = True  # ✅ default ON
 
 # Phase 2: Per-stage token budgeting  
-per_stage_token_budgeting = True  # default OFF, canary-only
+per_stage_token_budgeting = True  # ✅ default ON
 
 # Phase 3: Adaptive context routing
-adaptive_context_routing = True  # default OFF, canary-only
+adaptive_context_routing = True  # ✅ default ON
+
+# Vibe Engineering v0.2
+vibe_engineering_v0_2 = True  # ✅ default ON
+
+# Dashboard (Phase 3.1)
+monitoring_dashboard = True  # ✅ default ON
 ```
 
 ---

@@ -31,9 +31,6 @@ class PipelineAddition:
     Scoped (session/project/user) and conflict-aware.
     """
 
-    id: str = field(default_factory=lambda: str(uuid4())[:8])
-    """Unique identifier for this addition."""
-
     scope: str
     """Where this applies: 'session', 'project', or 'user'."""
 
@@ -43,11 +40,14 @@ class PipelineAddition:
     relevance: str
     """Why this applies NOW (to original context). Max 1-2 sentences."""
 
-    tier: QualityTier = QualityTier.TIER_2_FLAG
-    """Quality classification: Tier 1/2/3."""
-
     content: str
     """The actual content/fact being added."""
+
+    id: str = field(default_factory=lambda: str(uuid4())[:8])
+    """Unique identifier for this addition."""
+
+    tier: QualityTier = QualityTier.TIER_2_FLAG
+    """Quality classification: Tier 1/2/3."""
 
     conflict_resolution: str = "original_wins"
     """What happens if this conflicts with original goal."""

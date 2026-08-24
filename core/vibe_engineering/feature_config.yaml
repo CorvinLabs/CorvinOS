@@ -1,0 +1,90 @@
+# Vibe Engineering v0.2-rc1 Feature Flags
+#
+# Usage in code:
+#   if spec.features.get("vibe_engineering_v0_2"):
+#       # Use new subsystems
+#
+# To enable for canary:
+#   spec.features.vibe_engineering_v0_2 = true  (in tenant.corvin.yaml)
+#
+
+flags:
+  vibe_engineering_v0_2:
+    name: "Vibe Engineering v0.2 (Autonomous Task Splitting)"
+    description: "Enable autonomous session lifecycle management, context reduction, and recovery"
+    default: true  # ✅ CHANGED: Direct 100% deployment (single-user environment)
+    rollout_strategy: direct  # direct = 100% immediate, canary = gradual
+    targets:
+      - production: 100%  # 100% direct deployment
+    rollback_procedure: |
+      If issues detected:
+      1. Set feature flag to false (immediate effect)
+      2. Sessions in progress gracefully degrade to in-memory checkpoints
+      3. Manual recovery available via checkpoint_fallback.get_status()
+    dependencies:
+      - "Python 3.9+"
+      - "scikit-learn>=1.0.0 (for ML classifiers in Phase 2)"
+      - "structlog>=23.0.0 (optional, for JSON logging in Phase 2)"
+    monitoring:
+      metrics:
+        - vibe_checkpoint_created (count)
+        - vibe_recovery_success (count)
+        - vibe_context_reduction_pct (histogram)
+        - vibe_persistence_failures (counter)
+      alerts:
+        - recovery_failure_rate > 1%
+        - checkpoint_corrupted_detected
+        - persistence_unhealthy (degradation mode active)
+
+  vibe_engineering_encryption:
+    name: "Checkpoint Encryption at Rest"
+    description: "Encrypt checkpoints on disk (Phase 2)"
+    default: false
+    targets:
+      - production: 100%  # Target: Week 10
+    dependencies:
+      - "cryptography>=40.0.0"
+    status: "planned"
+
+  vibe_engineering_ml_classifiers:
+    name: "ML-Based Context Tier Classification"
+    description: "Use trained TF-IDF + LogReg instead of heuristics (Phase 2)"
+    default: false
+    targets:
+      - staging: 50%  # Target: Week 8
+      - production: 100%  # Target: Week 9
+    dependencies:
+      - "vibe_engineering_v0_2"  # Requires base system
+      - "scikit-learn>=1.0.0"
+    status: "implemented but dark by default"
+
+  vibe_engineering_monitoring_dashboard:
+    name: "Status Reporting Dashboard"
+    description: "Enable StatusSnapshot + real-time task monitoring (Phase 3.1)"
+    default: false
+    targets:
+      - staging: 100%  # Target: Week 11
+      - production: 100%  # Target: Week 12
+    dependencies:
+      - "vibe_engineering_v0_2"
+    status: "complete"
+
+# Rollout schedule
+rollout_schedule:
+  week_5: "Canary 10% (enable v0_2 for select users)"
+  week_6: "Staging 50% (full testing)"
+  week_7: "Production 100% (full rollout)"
+  week_8: "ML classifiers (staging 50%)"
+  week_9: "ML classifiers (production 100%)"
+  week_10: "Checkpoint encryption (production 100%)"
+  week_11: "Dashboard (staging 100%)"
+  week_12: "Dashboard (production 100%)"
+
+# Safeguards
+safeguards:
+  - "Feature flag disabled by default (safe default)"
+  - "Gradual rollout (10% → 50% → 100%)"
+  - "Per-flag dependencies declared"
+  - "Graceful degradation if flag crashes"
+  - "Rollback is immediate (no special process needed)"
+  - "Monitoring alerts for each milestone"

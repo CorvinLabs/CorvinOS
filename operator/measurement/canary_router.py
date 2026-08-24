@@ -68,22 +68,22 @@ class CanaryRouter:
         self,
         tenant_id: str,
         feature_flags: dict[str, bool],
-        canary_pct: int = 10,
+        canary_pct: int = 100,
     ) -> dict[str, bool]:
-        """Route a tenant's feature flags based on canary percentage.
+        """Route a tenant's feature flags based on deployment strategy.
 
         For each flag in feature_flags, if the flag is enabled AND the tenant
-        is in the canary group, the flag stays enabled. Otherwise, it's
-        disabled (control group gets the baseline with flags OFF).
+        is in the deployment group, the flag stays enabled. Otherwise, it's
+        disabled.
 
-        This implements the "Phase 1-3 OFF for control, ON for canary" pattern:
-        - Control (90%): all Phase 1-3 flags OFF, measure baseline
-        - Canary (10%): Phase 1-3 flags ON, measure new behavior
+        Default strategy (canary_pct=100): All tenants get ALL flags (Direct Rollout).
+        Canary strategy (canary_pct=10): 10% get flags (Gradual Rollout).
 
         Args:
             tenant_id: Unique identifier for the tenant.
             feature_flags: Dict of {flag_id: currently_enabled}.
-            canary_pct: Percentage of tenants in canary group (default 10).
+            canary_pct: Percentage of tenants in active group (default 100 = direct rollout).
+                       Set to 10 for canary deployment, 50 for staged, etc.
 
         Returns:
             Dict of {flag_id: enabled_for_this_tenant}.
