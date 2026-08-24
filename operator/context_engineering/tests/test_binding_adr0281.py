@@ -21,7 +21,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[3]
-for p in (_REPO / "operator" / "forge", _REPO / "core" / "console"):
+# _REPO itself must be importable so `core.pii` (the fail-closed skill-body PII
+# gate) resolves exactly as it does in the console runtime; without it the gate
+# would fail-closed on ImportError and silently redact every body.
+for p in (_REPO, _REPO / "operator" / "forge", _REPO / "core" / "console"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
@@ -130,6 +133,54 @@ class BindingGuardTests(unittest.TestCase):
         self.assertIn("# aggregate", block)
         self.assertNotIn("cel_empty", block, "a body-less ref renders nothing")
         self.assertNotIn("allowed_tools", block, "skills never enter the tool channel")
+
+    # -- Fail-closed PII gate on injected skill bodies (ADR-0297) -------------
+    # Both producers of skills_to_bind (SkillForgeStage's forged bodies and the
+    # explicit-skill stage's on-disk bodies) render through render_skill_bindings,
+    # which now drops a body whole if it carries sensitive content.
+    def test_render_drops_pii_skill_body_whole(self):
+        """A skill body with PII (email + SSN) must NOT reach the prompt; the
+        heading still renders (redaction placeholder ok) — drop-whole, not scrub."""
+        Bundle = sys.modules["context_engineering.stages.base"].ContextBundle
+        bundle = Bundle(task="x")
+        bundle.skills_to_bind = [self.b.SkillRef(
+            "leaky_skill",
+            body="Contact john.victim@example.com or SSN 123-45-6789 for help.")]
+        block = self.b.render_skill_bindings(bundle)
+        self.assertNotIn("john.victim@example.com", block, "email must be dropped")
+        self.assertNotIn("123-45-6789", block, "SSN must be dropped")
+        self.assertIn("leaky_skill", block, "heading still renders")
+        self.assertIn(self.b.SKILL_BODY_REDACTED, block, "placeholder replaces body")
+
+    def test_render_keeps_clean_skill_body_unchanged(self):
+        """No over-drop: a legitimate technical skill body renders verbatim."""
+        Bundle = sys.modules["context_engineering.stages.base"].ContextBundle
+        bundle = Bundle(task="x")
+        clean = ("# retry policy\nuse exponential backoff with a budget of three "
+                 "attempts and log the final outcome to the audit trail")
+        bundle.skills_to_bind = [self.b.SkillRef("retry_skill", body=clean)]
+        block = self.b.render_skill_bindings(bundle)
+        self.assertIn("retry_skill", block)
+        self.assertIn(clean, block, "clean body is rendered unchanged, not dropped")
+        self.assertNotIn(self.b.SKILL_BODY_REDACTED, block)
+
+    def test_render_fails_closed_when_gate_raises(self):
+        """A gate error (PIIDetectionFailedClosed or any exception) drops the body
+        and must NOT propagate — rendering never breaks."""
+        import core.pii as _pii
+        Bundle = sys.modules["context_engineering.stages.base"].ContextBundle
+        bundle = Bundle(task="x")
+        bundle.skills_to_bind = [self.b.SkillRef(
+            "boom_skill", body="ordinary looking body that would otherwise render")]
+
+        def _raiser(_text):
+            raise _pii.PIIDetectionFailedClosed("scan blew up")
+
+        with patch.object(_pii, "has_sensitive", _raiser):
+            block = self.b.render_skill_bindings(bundle)  # must not raise
+        self.assertIn("boom_skill", block, "heading still renders on gate failure")
+        self.assertNotIn("ordinary looking body", block, "body dropped fail-closed")
+        self.assertIn(self.b.SKILL_BODY_REDACTED, block)
 
     def test_apply_merges_kept_only(self):
         Bundle = sys.modules["context_engineering.stages.base"].ContextBundle

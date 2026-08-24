@@ -36,7 +36,8 @@ def build_brief(task: str, tenant: str = "_default", session: Any = None,
 
 
 def build_context(task: str, tenant: str = "_default", session: Any = None,
-                  meter: bool = True, active: bool = False) -> "tuple[Any, dict]":
+                  meter: bool = True, active: bool = False,
+                  persona: str = "") -> "tuple[Any, dict]":
     """Run the config-resolved stage pipeline; return ``(bundle, trace)``.
 
     ``bundle`` is a ContextBundle (or None if the license gate degrades this turn,
@@ -44,6 +45,8 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
     telemetry + ``degraded`` when the turn ran on plain context. ``meter=False``
     bypasses the license gate (tests / internal reuse). ``active=True`` falls back
     to ACTIVE_PIPELINE (egress/forge) when the operator authored no pipeline.
+    ``persona`` scopes the namespace gate for explicit on-disk skill requests
+    (ExplicitSkillStage); empty ⇒ fail-closed (no cross-namespace injection).
     """
     # Coerce a non-str task before task_adapter().split() (review R3 finding C4):
     # this runs BEFORE the per-stage try, so a bad input would otherwise raise out
@@ -68,7 +71,8 @@ def build_context(task: str, tenant: str = "_default", session: Any = None,
 
     bundle = ContextBundle(task=task)
     ctx = StageCtx(tenant_id=tenant, task_obj=task_adapter(task),
-                   session_id=getattr(session, "sid", "") or "")
+                   session_id=getattr(session, "sid", "") or "",
+                   persona=persona or "")
 
     specs, dropped = resolve_pipeline(tenant, active=active)
     for d in dropped:  # unknown/unregistered stage ids — audited, never a crash
@@ -266,7 +270,8 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns,
 
 def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
                       meter: bool = True, *, gate_fn=None,
-                      persona_patterns=None, persona_caps=None) -> "tuple[Any, dict]":
+                      persona_patterns=None, persona_caps=None,
+                      persona: str = "") -> "tuple[Any, dict]":
     """The FULL two-gate pipeline (ADR-0280 R2 / CONCEPT-0006 §9), SYNC, with EVERY
     enforcer in ONE place (the review's key demand — not delegated to a caller):
 
@@ -285,7 +290,8 @@ def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
     console chat_runtime is NOT yet wired to the active brain — it still calls the
     deterministic ``build_brief``; the active brain is bridge-adapter-only today).
     """
-    bundle, trace = build_context(task, tenant, session, meter, active=True)
+    bundle, trace = build_context(task, tenant, session, meter, active=True,
+                                  persona=persona)
     if bundle is None:
         return None, trace
     gate = gate_fn or (lambda _text: (True, ""))
@@ -298,11 +304,14 @@ def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
 async def run_full_pipeline_async(task: str, tenant: str = "_default",
                                   session: Any = None, meter: bool = True, *,
                                   gate_fn=None, persona_patterns=None,
-                                  persona_caps=None) -> "tuple[Any, dict]":
+                                  persona_caps=None,
+                                  persona: str = "") -> "tuple[Any, dict]":
     """Async twin of :func:`run_full_pipeline` for the event-loop callers (console
     chat_runtime): the deferred stages run via ``asyncio.to_thread`` so a
-    ``claude -p`` subprocess never blocks the loop. Same two-gate enforcer path."""
-    bundle, trace = build_context(task, tenant, session, meter, active=True)
+    ``claude -p`` subprocess never blocks the loop. Same two-gate enforcer path.
+    ``persona`` scopes the namespace gate for explicit skill requests."""
+    bundle, trace = build_context(task, tenant, session, meter, active=True,
+                                  persona=persona)
     if bundle is None:
         return None, trace
     gate = gate_fn or (lambda _text: (True, ""))

@@ -296,6 +296,18 @@ _SKILL_REQUEST_VOCAB = ("skill", "skills")
 # prompt/PII). Deduped WARNINGs, but every occurrence still increments a counter.
 _request_diag_seen: set[tuple[str, str]] = set()
 _request_diag_counts: dict[str, int] = {}
+# The dedup set is keyed on the ATTACKER-CONTROLLED skill_id (a request can name
+# any dotted token), so an unbounded set is a memory-growth vector on a long-lived
+# host (LOW finding). Clear it wholesale once it crosses this bound — a re-warn
+# after a reset is harmless, and the per-reason COUNTER (the load-bearing signal)
+# is never reset by this.
+_DIAG_SEEN_CAP = 1000
+
+# A single turn may honor at most this many explicitly-named skills — matches
+# render_skill_bindings' MAX_BINDINGS so a task naming 20 skills cannot balloon
+# the system prompt (MODERATE finding). Overflow past the cap is diagnosed
+# (reason=capped), never silently dropped.
+_MAX_EXPLICIT_HONORED = 8
 
 
 def _diag_excluded_request(skill_id: str, reason: str) -> None:
@@ -307,6 +319,11 @@ def _diag_excluded_request(skill_id: str, reason: str) -> None:
         key = (skill_id, reason)
         if key in _request_diag_seen:
             return
+        # Bound the dedup set before it grows without limit (attacker-controlled
+        # keys). The counter above already recorded this hit, so clearing here
+        # only costs a possible duplicate WARNING line later — never a lost count.
+        if len(_request_diag_seen) >= _DIAG_SEEN_CAP:
+            _request_diag_seen.clear()
         _request_diag_seen.add(key)
         _log.warning(
             "explicitly-requested skill not injected: skill_id=%s reason=%s",
@@ -345,10 +362,13 @@ _PERSONA_NS_CACHE: dict | None = None
 
 def _persona_namespace(persona: str | None) -> str | None:
     """Resolve the namespace prefix an explicit request must live under for the
-    given persona. Returns None = no gate (wildcard) when ``persona`` is falsy
-    or not present in the bundle policy (mirrors the skill-forge namespace-gate
-    semantics: unmapped persona ⇒ wildcard). Fails safe to the persona name as
-    the prefix if the policy file can't be read."""
+    given persona. Returns None when the namespace CANNOT be resolved — ``persona``
+    is falsy, or the policy loaded but does not map it. The callers
+    (:func:`_honor_explicit_requests` and the console ExplicitSkillStage) treat a
+    None result as FAIL-CLOSED (refuse the cross-namespace request + diagnose),
+    NOT as a wildcard — an unresolved persona must never open the gate to every
+    namespace (LOW-MOD finding). Fails safe to the persona name as the prefix if
+    the policy file can't be read at all (so the common case still binds)."""
     if not persona:
         return None
     global _PERSONA_NS_CACHE
@@ -391,6 +411,7 @@ def _honor_explicit_requests(
     try:
         by_name_ci = {spec.name.lower(): (scope, spec) for scope, spec in scoped}
         already = {spec.name.lower() for _s, spec in eligible}
+        honored = 0
         for req in requested:
             pair = by_name_ci.get(req)
             exists = pair is not None
@@ -399,12 +420,16 @@ def _honor_explicit_requests(
             if not exists and not has_vocab:
                 continue
             # Namespace gate FIRST — never inject across the gate, regardless of
-            # whether the skill exists on disk.
-            if ns_prefix is not None:
-                req_ns = req.split(".", 1)[0] if "." in req else ""
-                if req_ns != ns_prefix:
-                    _diag_excluded_request(req, "wrong_namespace")
-                    continue
+            # whether the skill exists on disk. FAIL-CLOSED (LOW-MOD finding): an
+            # UNRESOLVED persona namespace (ns_prefix is None) must NOT open the
+            # gate to every namespace — refuse + diagnose, never inject blind.
+            if ns_prefix is None:
+                _diag_excluded_request(req, "persona_unresolved")
+                continue
+            req_ns = req.split(".", 1)[0] if "." in req else ""
+            if req_ns != ns_prefix:
+                _diag_excluded_request(req, "wrong_namespace")
+                continue
             if not exists:
                 _diag_excluded_request(req, "not_found")
                 continue
@@ -419,8 +444,14 @@ def _honor_explicit_requests(
             if not filtered:
                 _diag_excluded_request(req, "layer_disabled")
                 continue
+            # Cap the count (MODERATE finding): a task naming 20 valid skills must
+            # not balloon the prompt. Overflow is diagnosed, not silently dropped.
+            if honored >= _MAX_EXPLICIT_HONORED:
+                _diag_excluded_request(req, "capped")
+                continue
             eligible.append((scope, spec))
             already.add(spec.name.lower())
+            honored += 1
     except Exception:  # noqa: BLE001 — explicit-honor must never break the turn
         pass
 

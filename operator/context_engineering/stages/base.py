@@ -49,6 +49,8 @@ class StageCtx:
     workdir: Any = None
     config: dict = field(default_factory=dict)     # this stage's per-stage config
     task_obj: Any = None                           # the _task_adapter view
+    persona: str = ""                              # active persona id (namespace gate for
+                                                   # explicit skill requests, ADR-0281/0283)
 
 
 @dataclass
