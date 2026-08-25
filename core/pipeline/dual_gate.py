@@ -17,10 +17,12 @@ ADR-0299: Audit Durability
 """
 
 import asyncio
+import logging
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Dict, List
 
+logger = logging.getLogger(__name__)
 
 # ContextVars for pipeline state
 _current_actor: ContextVar[Optional[str]] = ContextVar(
@@ -160,6 +162,21 @@ class DualGatePipeline:
             "dual_gate_queue_integrity_enabled", False
         )
 
+    def _list_available_validators(self) -> List[str]:
+        """
+        List all available validator methods (for error messages).
+
+        Returns:
+            List of callable methods in validator_factory
+        """
+        if not self.validator_factory:
+            return []
+        return [
+            name
+            for name in dir(self.validator_factory)
+            if not name.startswith("_") and callable(getattr(self.validator_factory, name))
+        ]
+
     def set_context(self, context: PipelineContext) -> None:
         """Set execution context via ContextVars."""
         _current_actor.set(context.actor)
@@ -223,13 +240,23 @@ class DualGatePipeline:
                     continue  # No rules for this field, skip
 
                 rule_spec = rules[field_name]
-                validator_func = getattr(
-                    self.validator_factory, rule_spec.get("type"), None
-                )
+                validator_type = rule_spec.get("type")
 
-                if not validator_func:
-                    errors.append(f"Unknown validator type: {rule_spec.get('type')}")
-                    continue
+                # Verify validator method exists (fail-closed)
+                if not hasattr(self.validator_factory, validator_type):
+                    # Fail-closed: if validator is misconfigured, reject
+                    raise ValidationGateError(
+                        f"Validator not found: {validator_type}. "
+                        f"Possible validator types: {self._list_available_validators()}"
+                    )
+
+                validator_func = getattr(self.validator_factory, validator_type)
+
+                # Verify it's callable
+                if not callable(validator_func):
+                    raise ValidationGateError(
+                        f"Validator {validator_type} is not callable"
+                    )
 
                 try:
                     # Call validator with tenant context
@@ -345,9 +372,36 @@ class DualGatePipeline:
                 # No queue monitor configured, skip
                 return True, "queue_monitor_not_configured"
 
-            # Check queue integrity (implementation-specific)
-            is_ok = True
-            status_message = "queue_integrity_ok"
+            # Check queue integrity by calling the monitor
+            # Verify queue monitor has check_integrity method
+            if not hasattr(self.queue_monitor, "check_integrity"):
+                # Fallback: try is_healthy method if check_integrity not available
+                if hasattr(self.queue_monitor, "is_healthy"):
+                    is_ok = self.queue_monitor.is_healthy()
+                    status_message = "queue_integrity_ok" if is_ok else "queue_integrity_failed"
+                else:
+                    # Fail-closed: queue monitor is misconfigured (no check methods)
+                    raise QueueIntegrityError(
+                        "Queue monitor misconfigured: neither check_integrity() nor is_healthy() method found"
+                    )
+            else:
+                # Call monitor's check_integrity method (implementation-specific)
+                try:
+                    result = self.queue_monitor.check_integrity(
+                        tenant_id=context.tenant_id
+                    )
+                    # Result can be: bool, or object with .is_ok attribute
+                    if hasattr(result, "is_ok"):
+                        is_ok = result.is_ok
+                        status_message = getattr(result, "message", "queue_integrity_ok")
+                    else:
+                        is_ok = bool(result)
+                        status_message = "queue_integrity_ok" if is_ok else "queue_integrity_failed"
+                except Exception as check_err:
+                    # If the check itself fails (network error, etc.), fail-closed
+                    raise QueueIntegrityError(
+                        f"Queue integrity check failed: {check_err}"
+                    ) from check_err
 
             if context.validation_state:
                 context.validation_state.queue_integrity_ok = is_ok

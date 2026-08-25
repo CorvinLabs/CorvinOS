@@ -39,7 +39,12 @@ def get_global_pipeline() -> Any:
 
 
 def get_pipeline_from_app(app_state: Any) -> Any:
-    """Get pipeline from FastAPI app.state (fallback if global not set)."""
+    """
+    Get pipeline from FastAPI app.state (fallback if global not set).
+
+    DEPRECATED: Use get_global_pipeline() instead. This function is kept for
+    backward compatibility but all current code paths use the global pipeline.
+    """
     if app_state is None:
         return get_global_pipeline()
     if not hasattr(app_state, "pipeline"):
@@ -85,7 +90,9 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
 
             actor = request.headers.get("X-User-ID", "")
             if not actor:
-                actor = request.cookies.get("sid", "unknown")[:8]
+                # Extract session ID (first 8 chars, with bounds checking)
+                sid = request.cookies.get("sid", "unknown")
+                actor = sid[:8] if len(sid) >= 8 else sid
             actor = actor or "unknown"
 
             tenant_id = request.headers.get("X-Tenant-ID", "_default")
@@ -164,33 +171,50 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
 
 
 def _infer_capability_from_request(request) -> str:
-    """Infer capability from HTTP method + path."""
+    """
+    Infer capability from HTTP method + path.
+
+    Uses prefix-based matching (not substring) to avoid over-granting capabilities.
+    Falls back to generic read/write only for unclassified endpoints.
+
+    Fail-closed: if path is ambiguous, request generic capability instead of
+    guessing a specialized one.
+    """
     method = request.method
-    path = request.url.path
+    path = request.url.path.lower()
+
+    # Path segment matching (prefix-based, not substring)
+    path_segments = path.strip("/").split("/")
+    first_segment = path_segments[0] if path_segments else ""
 
     if method == "GET":
-        if "audit" in path:
+        # Read operations - check path prefix (first segment) for specificity
+        if first_segment == "audit":
             return "read_audit_log"
-        elif "chat" in path:
+        elif first_segment == "chat":
             return "read_chat_sessions"
-        elif "tasks" in path:
+        elif first_segment == "tasks":
             return "read_tasks"
-        elif "plugins" in path:
+        elif first_segment == "plugins":
             return "read_plugins"
         else:
+            # Generic read - fail-closed fallback
             return "read"
     elif method in ("POST", "PUT"):
-        if "chat" in path:
+        # Write operations - check path prefix
+        if first_segment == "chat":
             return "write_chat_sessions"
-        elif "tasks" in path:
+        elif first_segment == "tasks":
             return "write_tasks"
-        elif "plugins" in path:
+        elif first_segment == "plugins":
             return "write_plugins"
         else:
+            # Generic write - fail-closed fallback
             return "write"
     elif method == "DELETE":
         return "delete"
     else:
+        # Unknown method - fail-closed (deny by default)
         return "unknown"
 
 
@@ -215,6 +239,39 @@ def _infer_resource_from_request(request) -> str:
         return "plugin"
     else:
         return "resource"
+
+
+def _normalize_cli_actor(actor: str) -> str:
+    """
+    Normalize CLI actor name for consistency with capability checker.
+
+    CLI actors come from os.getenv("USER"), which may be in different formats:
+    - Local: "admin"
+    - Domain: "admin@company.com"
+    - LDAP: "cn=admin,o=company"
+
+    Attempts to detect and preserve the format, with fallback to bare username.
+    Note: Capability checker may need to implement its own format normalization
+    if multiple formats are expected (e.g., LDAP directory lookup).
+
+    Args:
+        actor: Raw CLI user name (from getenv("USER"))
+
+    Returns:
+        Normalized actor name safe for capability checking
+    """
+    if not actor:
+        return "unknown"
+
+    # Already in domain format or LDAP format - return as-is
+    if "@" in actor or "=" in actor or "," in actor:
+        return actor
+
+    # Bare username (most common from getenv("USER"))
+    # Leave as-is and let capability checker handle domain resolution
+    # This allows the checker to implement site-specific normalization
+    # (e.g., add company domain, query LDAP, etc.)
+    return actor
 
 
 # ============================================================================
@@ -287,6 +344,71 @@ def flask_route_guarded(
 
 
 # ============================================================================
+# Utility Functions
+# ============================================================================
+
+
+def _extract_context_from_starlette_request(
+    args: Any,
+    kwargs: Any,
+    capability: str,
+    action: str,
+    resource: str,
+    resource_extractor: Optional[Callable] = None,
+) -> "PipelineContext":
+    """
+    Extract pipeline context from Starlette/FastAPI request (shared by async/sync wrappers).
+
+    Args:
+        args: Positional arguments from wrapper function
+        kwargs: Keyword arguments from wrapper function
+        capability: Required capability
+        action: Action name for audit
+        resource: Default resource type
+        resource_extractor: Optional function to override resource
+
+    Returns:
+        PipelineContext ready for pipeline execution
+    """
+    from starlette.requests import Request
+    from core.pipeline.dual_gate import PipelineContext
+
+    # Extract context from Starlette request (FastAPI compatible)
+    request = None
+    for arg in args:
+        if isinstance(arg, Request):
+            request = arg
+            break
+
+    if request is None:
+        # Fallback: check kwargs
+        request = kwargs.get("request")
+
+    actor = "unknown"
+    tenant_id = "_default"
+
+    if request:
+        # Extract user from request headers or session
+        actor = request.headers.get("X-User-ID", "unknown")
+        tenant_id = request.headers.get("X-Tenant-ID", "_default")
+
+    resource = resource_extractor() if resource_extractor else resource
+
+    ctx = PipelineContext(
+        actor=actor,
+        capability=capability,
+        action=action,
+        resource=resource,
+        tenant_id=tenant_id,
+        details={
+            "method": request.method if request else "unknown",
+            "path": request.url.path if request else "unknown",
+        },
+    )
+    return ctx
+
+
+# ============================================================================
 # CLI Command Wiring
 # ============================================================================
 
@@ -319,60 +441,45 @@ def fastapi_route_guarded(
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
-                from starlette.requests import Request
-                from starlette.datastructures import MutableHeaders
-
                 pipeline = get_global_pipeline()
 
-                # Extract context from Starlette request (FastAPI compatible)
-                request = None
-                for arg in args:
-                    if isinstance(arg, Request):
-                        request = arg
-                        break
-
-                if request is None:
-                    # Fallback: check kwargs
-                    request = kwargs.get("request")
-
-                actor = "unknown"
-                tenant_id = "_default"
-
-                if request:
-                    # Extract user from request headers or session
-                    actor = request.headers.get("X-User-ID", "unknown")
-                    tenant_id = request.headers.get("X-Tenant-ID", "_default")
-
-                resource = resource_extractor() if resource_extractor else "unknown"
-
-                from core.pipeline.dual_gate import PipelineContext
-
-                ctx = PipelineContext(
-                    actor=actor,
-                    capability=capability,
-                    action=action,
-                    resource=resource,
-                    tenant_id=tenant_id,
-                    details={
-                        "method": request.method if request else "unknown",
-                        "path": request.url.path if request else "unknown",
-                    },
+                # Extract context from Starlette request using shared helper
+                ctx = _extract_context_from_starlette_request(
+                    args, kwargs, capability, action, "unknown", resource_extractor
                 )
 
-                return await pipeline.execute_guarded_async(ctx, func, *args, **kwargs) \
-                    if asyncio.iscoroutinefunction(func) \
-                    else pipeline.execute_guarded(ctx, func, *args, **kwargs)
+                return await pipeline.execute_guarded_async(ctx, func, *args, **kwargs)
 
             except Exception as e:
                 logger.exception(
-                    f"FastAPI route guard failed: {capability} on {action}. Error: {e}"
+                    f"FastAPI async route guard failed: {capability} on {action}. Error: {e}"
                 )
                 raise
 
-        # Return async wrapper for async functions
+        # For async functions, use the async wrapper
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
-        return async_wrapper
+
+        # For sync functions, create and return a sync wrapper
+        @functools.wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                pipeline = get_global_pipeline()
+
+                # Extract context from Starlette request using shared helper
+                ctx = _extract_context_from_starlette_request(
+                    args, kwargs, capability, action, "unknown", resource_extractor
+                )
+
+                return pipeline.execute_guarded(ctx, func, *args, **kwargs)
+
+            except Exception as e:
+                logger.exception(
+                    f"FastAPI sync route guard failed: {capability} on {action}. Error: {e}"
+                )
+                raise
+
+        return sync_wrapper
 
     return decorator
 
@@ -415,7 +522,10 @@ def cli_command_guarded(
                 pipeline = get_global_pipeline()
 
                 # Extract context from environment (CLI is local)
+                # Note: actor format may differ from web auth (local vs LDAP)
+                # Capability checker should handle both formats
                 actor = os.getenv("USER", "cli_user")
+                actor = _normalize_cli_actor(actor)  # Normalize for consistency
                 tenant_id = "_default"
 
                 from core.pipeline.dual_gate import PipelineContext
