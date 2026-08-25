@@ -72,6 +72,9 @@ class EntryPoint:
     cli_command: Optional[str] = None  # CLI command name (CLI only)
     cli_args: Optional[str] = None  # CLI arguments (CLI only)
 
+    # Tenant isolation (GDPR Art. 5, 6, 32)
+    tenant_id: str = "_default"  # Which tenant(s) this entry point serves (keyword-only filter required)
+
     # Wiring status
     status: WiringStatus = WiringStatus.NOT_WIRED
     wired_commit: Optional[str] = None  # Commit hash of wiring
