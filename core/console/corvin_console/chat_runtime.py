@@ -3988,6 +3988,96 @@ def _spawn_shadow_measurement(ctx: dict[str, Any]) -> None:
     task.add_done_callback(_done)
 
 
+# ---------------------------------------------------------------------------
+# ADR-0222 k=3 — native-arm-only DECISION collection (ship-dark, zero-cost)
+# ---------------------------------------------------------------------------
+#
+# Separate from the expensive shadow sampler above: this runs NO LLM calls. It
+# only records what the delegation heuristic decided (would-delegate y/n) and
+# the outcome of the arm that ACTUALLY ran — native (rc, latency) — as an honest
+# native-only counterfactual (ADR-0222's "wrong counterfactual" caveat: we can
+# only measure the arm that ran, never fabricate the delegated one). The samples
+# are content-free (no prompt/PII) and NEVER feed the 3-arm decision gate, so
+# collecting them can never authorise defaulting TDE on. Gated ONLY by the
+# ship-dark `tde_measurement_collection` flag (default off = no sample, turn
+# byte-identical); no maintainer-only env guard, because a tiny JSONL append is
+# not the metered-compute risk the shadow sampler is.
+
+#: Strong refs to in-flight decision-collection tasks — a bare create_task()
+#: result is only weakly held, so without this set a detached append can be GC'd
+#: mid-flight. Kept separate from _MEASUREMENT_TASKS: a cheap append must not be
+#: blocked by (nor block) an expensive in-flight shadow/TDE measurement.
+_DECISION_TASKS: "set[asyncio.Task[Any]]" = set()
+
+
+async def _run_decision_measurement(ctx: dict[str, Any]) -> None:
+    """Body of one detached decision-collection append. Never raises."""
+    try:
+        from tde.tde_measurement import (  # noqa: PLC0415
+            DecisionMeasurementRecorder,
+            DecisionMeasurementSample,
+            size_band_of,
+        )
+    except ImportError:
+        _log.warning("decision measurement skipped: tde.tde_measurement unavailable",
+                     exc_info=True)
+        return
+
+    try:
+        prompt_chars = int(ctx["prompt_chars"])
+        sample = DecisionMeasurementSample(
+            task_id=ctx["task_id"],
+            timestamp=time.time(),
+            would_delegate=bool(ctx["would_delegate"]),
+            observed_arm="native",
+            native_rc=int(ctx["native_rc"]),
+            native_latency_ms=int(ctx["native_latency_ms"]),
+            prompt_chars=prompt_chars,
+            size_band=size_band_of(prompt_chars),
+            worker_engine_mode=str(ctx.get("worker_engine_mode", "native")),
+        )
+    except (KeyError, TypeError, ValueError):
+        # A malformed ctx must never book a fabricated sample (fail-closed).
+        _log.warning("decision measurement dropped: invalid sample fields",
+                     exc_info=True)
+        return
+
+    await DecisionMeasurementRecorder(ctx["decision_log_path"]).record(sample)
+    _log.info("ADR-0222 decision sample recorded for %s "
+              "(would_delegate=%s, rc=%s, size_band=%s)",
+              sample.task_id, sample.would_delegate, sample.native_rc,
+              sample.size_band)
+
+
+def _spawn_decision_measurement(ctx: dict[str, Any]) -> None:
+    """Fire the decision append OFF the turn's critical path (best-effort).
+
+    The user's native answer is already streamed + persisted by the time this
+    runs; a process shutdown mid-append just loses the sample. Detached so a
+    slow disk never delays the turn, and fully fail-closed so a recording fault
+    can never break it.
+    """
+    coro = _run_decision_measurement(ctx)
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:
+        coro.close()
+        _log.warning("decision measurement not started: no running event loop")
+        return
+    _DECISION_TASKS.add(task)
+
+    def _done(t: "asyncio.Task[Any]") -> None:
+        _DECISION_TASKS.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            _log.warning("decision measurement failed for %s: %r",
+                         ctx.get("task_id"), exc)
+
+    task.add_done_callback(_done)
+
+
 async def _stream_tde_turn(
     sess: "WebChatSession",
     task_text: str,
@@ -6585,5 +6675,31 @@ async def stream_turn(
             "tenant_id": sess.tenant_id,
             "user_model": _os_model_used,
         })
+
+    # ADR-0222 k=3: native-arm-only DECISION collection (ship-dark, zero-cost).
+    # We reached this native completion, so the arm that ACTUALLY ran is native.
+    # Record what the delegation heuristic decided (_del_heuristic) plus this
+    # turn's real outcome (rc, latency) as an honest native-only counterfactual —
+    # NO baseline turns, NO judge, no LLM. Off (default) = no sample, turn
+    # byte-identical. Gated ONLY by the flag, wrapped so a recording fault can
+    # never break the turn. The delegated arm is NEVER fabricated, so this can
+    # never open the 3-arm decision gate (ADR-0222 honesty invariant).
+    if _feature_flags.is_enabled("tde_measurement_collection", sess.tenant_id):
+        try:
+            from core.paths.tenant import tenant_home  # noqa: PLC0415
+            _decision_log = str(
+                tenant_home(sess.tenant_id) / "measurement-week"
+                / "decision_samples.jsonl")
+            _spawn_decision_measurement({
+                "task_id": f"decision-{int(time.time())}-{secrets.token_hex(4)}",
+                "decision_log_path": _decision_log,
+                "would_delegate": bool(_del_heuristic),
+                "native_rc": rc,
+                "native_latency_ms": int((time.monotonic() - _dbg_t0) * 1000),
+                "prompt_chars": len(prompt or ""),
+                "worker_engine_mode": _worker_mode,
+            })
+        except Exception:  # noqa: BLE001 — collection never breaks a turn
+            _log.warning("decision measurement not scheduled", exc_info=True)
 
     yield {"type": "done"}

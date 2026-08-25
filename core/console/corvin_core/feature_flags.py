@@ -200,6 +200,26 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("delegation", "measurement"),
     ),
     FeatureFlag(
+        id="tde_measurement_collection",
+        label="TDE decision measurement collection (native-arm only, zero-cost)",
+        description=(
+            "ADR-0222 k=3: at a console turn's completion, RECORD (off the "
+            "critical path) what the delegation heuristic decided (would-delegate "
+            "y/n) plus the outcome of the arm that ACTUALLY ran — native (rc, "
+            "latency) — as an honest native-only counterfactual. Zero extra cost: "
+            "NO baseline turns, NO judge calls, no LLM at all — just a tiny "
+            "content-free JSONL append (no prompt/PII). Delegation behaviour is "
+            "UNCHANGED: the turn runs byte-identical, this only OBSERVES it. These "
+            "native-only samples never feed the 3-arm decision gate (that needs "
+            "the delegated arm this cannot honestly supply), so collecting them "
+            "can never authorize defaulting TDE on. Off means no sample is "
+            "recorded and the turn is byte-identical."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("delegation", "measurement"),
+    ),
+    FeatureFlag(
         id="bridge_big_data_delegation",
         label="Big-data delegation on messenger bridges",
         description=(
