@@ -1,4 +1,15 @@
-"""ExecutionContext v2 — Live task state shared across Brain subsystems.
+"""ExecutionContext v2 — Live task state shared across Brain subsystems (CANONICAL).
+
+CANONICAL VERSION: This is the primary ExecutionContext used by Brain subsystems
+(LoopEngineer, Orchestrator, etc.) for:
+- Tracking live task execution state (mutable)
+- Recording decisions via audit trail
+- Nested scope hierarchy (ContextStack)
+- Query/update API for subsystems
+
+Do NOT confuse with:
+- core.engines.execution_context.ExecutionContext — immutable Phase 0 task state for replay
+- core.console.corvin_core.execution_context.ExecutionContext — turn metadata (engine/model/delegation)
 
 Manages nested scope hierarchy, decision history, and context field access.
 Enables subsystems to query/update state and track execution traces.

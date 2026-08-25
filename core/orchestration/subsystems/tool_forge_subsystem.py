@@ -17,6 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Type alias for tool IDs
+ToolID = str
+
 from .base import Subsystem
 from .forge_apis import NamespacePolicy, ForgeQuota
 from .forge_api_impl import ForgedToolAPIImpl
@@ -342,6 +345,51 @@ class AsyncForgeRegistry:
             ]
         except Exception as e:
             logger.error(f"Failed to list tools: {e}")
+            raise
+
+    async def register(
+        self,
+        tool_id: str,
+        tool_spec: ToolSpec,
+    ) -> ToolID:
+        """Register a tool spec in the registry (public API for Brain).
+
+        Args:
+            tool_id: Unique tool ID for registration
+            tool_spec: ToolSpec object to register
+
+        Returns:
+            ToolID string (same as tool_id on success)
+
+        Raises:
+            ValueError: If registration fails
+        """
+        if self.registry is None:
+            # For testing: register in memory cache
+            self._tools_cache[tool_spec.name] = tool_spec
+            logger.info(f"Tool registered (in-memory): {tool_spec.name}")
+            return tool_id
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            lambda: self._sync_register(tool_id, tool_spec),
+        )
+
+    def _sync_register(
+        self,
+        tool_id: str,
+        tool_spec: ToolSpec,
+    ) -> str:
+        """Synchronous register for executor."""
+        try:
+            # Write tool spec to registry manifest
+            # For now: store in cache (production: write to filesystem)
+            self._tools_cache[tool_spec.name] = tool_spec
+            logger.info(f"Tool registered: {tool_spec.name} (id={tool_id})")
+            return tool_id
+        except Exception as e:
+            logger.error(f"Failed to register tool {tool_spec.name}: {e}")
             raise
 
     @staticmethod

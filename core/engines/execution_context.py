@@ -1,10 +1,18 @@
-"""ExecutionContext — serializable task execution state (Phase 0).
+"""ExecutionContext (Phase 0) — Immutable serializable task execution state (LEGACY).
+
+IMMUTABLE VERSION: For task reproducibility and replay.
 
 Captures all context needed to:
 1. Resume interrupted tasks
 2. Replay tasks deterministically
 3. Merge state across systems (CRDT operations)
 4. Audit task execution history
+
+Do NOT confuse with:
+- core.context_engineering.execution_context.ExecutionContext — mutable v2 (CANONICAL)
+- core.console.corvin_core.execution_context.ExecutionContext — turn metadata
+
+Use this for: frozen serialization, not for live Brain subsystem state.
 """
 
 from __future__ import annotations

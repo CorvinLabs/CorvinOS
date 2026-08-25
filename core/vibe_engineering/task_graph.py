@@ -186,3 +186,141 @@ class TaskGraph:
             "leaf_nodes": len(self.get_leaf_nodes()),
             "iterations": len(self.iterations)
         }
+
+
+class TaskGraphBuilder:
+    """Mutable builder for TaskGraph with cycle detection (DAG enforcement).
+
+    Prevents adding edges that would create cycles, fail-closed.
+    Maintains invariant: graph is always a DAG.
+    """
+
+    def __init__(self, task_id: str):
+        """Initialize builder.
+
+        Args:
+            task_id: Task identifier for the graph
+        """
+        self.task_id = task_id
+        self.created_at = datetime.utcnow().isoformat()
+        self.nodes: Dict[str, Node] = {}
+        self.edges: List[Edge] = []
+        self.nodes_by_type: Dict[str, List[str]] = {}
+        self.iterations: Dict[int, str] = {}
+
+    def add_node(self, node: Node) -> None:
+        """Add node to graph.
+
+        Args:
+            node: Node to add
+        """
+        self.nodes[node.id] = node
+        if node.type not in self.nodes_by_type:
+            self.nodes_by_type[node.type] = []
+        self.nodes_by_type[node.type].append(node.id)
+        logger.debug(f"Node added: {node.id} ({node.type})")
+
+    def add_edge(self, edge: Edge) -> bool:
+        """Add edge to graph, rejecting if it would create a cycle (fail-closed).
+
+        Args:
+            edge: Edge to add
+            from_id and to_id must reference existing nodes
+
+        Returns:
+            True if edge was added, False if rejected due to cycle
+
+        Raises:
+            ValueError: If from_id or to_id does not exist
+        """
+        # Validate nodes exist
+        if edge.from_id not in self.nodes:
+            raise ValueError(f"Node {edge.from_id} not found")
+        if edge.to_id not in self.nodes:
+            raise ValueError(f"Node {edge.to_id} not found")
+
+        # Check if adding this edge would create a cycle
+        if self._would_create_cycle(edge.from_id, edge.to_id):
+            logger.warning(
+                f"Edge {edge.from_id} → {edge.to_id} rejected: would create cycle"
+            )
+            return False
+
+        # Safe to add
+        self.edges.append(edge)
+        logger.debug(f"Edge added: {edge.from_id} → {edge.to_id} ({edge.edge_type})")
+        return True
+
+    def _would_create_cycle(self, from_id: str, to_id: str) -> bool:
+        """Check if adding edge from_id → to_id would create a cycle.
+
+        Uses DFS to detect if to_id is already reachable from from_id.
+        If so, adding the edge would create a cycle.
+
+        Args:
+            from_id: Source node ID
+            to_id: Target node ID
+
+        Returns:
+            True if edge would create cycle, False otherwise
+        """
+        # Build current adjacency list
+        adj: Dict[str, List[str]] = {node_id: [] for node_id in self.nodes}
+        for edge in self.edges:
+            adj[edge.from_id].append(edge.to_id)
+
+        # DFS from to_id to see if we can reach from_id (would create cycle)
+        visited = set()
+
+        def can_reach_from_node(current: str, target: str) -> bool:
+            """Check if we can reach target from current via existing edges."""
+            if current == target:
+                return True
+            if current in visited:
+                return False
+            visited.add(current)
+
+            for neighbor in adj.get(current, []):
+                if can_reach_from_node(neighbor, target):
+                    return True
+
+            return False
+
+        # If to_id can reach from_id, adding from_id → to_id creates cycle
+        return can_reach_from_node(to_id, from_id)
+
+    def add_iteration_checkpoint(self, iteration_num: int, checkpoint_id: str) -> None:
+        """Record checkpoint for a given iteration.
+
+        Args:
+            iteration_num: Iteration number
+            checkpoint_id: Node ID of checkpoint
+        """
+        if checkpoint_id not in self.nodes:
+            raise ValueError(f"Node {checkpoint_id} not found")
+        self.iterations[iteration_num] = checkpoint_id
+
+    def build(self) -> TaskGraph:
+        """Build immutable TaskGraph from accumulated state.
+
+        Returns:
+            Frozen TaskGraph
+
+        Raises:
+            RuntimeError: If graph is not a valid DAG
+        """
+        graph = TaskGraph(
+            task_id=self.task_id,
+            created_at=self.created_at,
+            nodes=self.nodes,
+            edges=self.edges,
+            nodes_by_type=self.nodes_by_type,
+            iterations=self.iterations,
+        )
+
+        # Final validation
+        if not graph.validate_dag():
+            raise RuntimeError("Graph is not a valid DAG")
+
+        logger.info(f"TaskGraph built: {len(self.nodes)} nodes, {len(self.edges)} edges")
+        return graph

@@ -24,6 +24,7 @@ from core.learning.adaptive_strategy import (
     SKILL_CONFIDENCE_DECAY_PER_WEEK,
     SKILL_MIN_GRADE_AGE_DAYS,
 )
+from core.learning.auto_grading import auto_grade, ConfidenceGrade
 from .base import Subsystem
 from .forge_apis import NamespacePolicy, ForgeQuota
 from .forge_api_impl import ForgedSkillAPIImpl
@@ -362,6 +363,8 @@ class SkillForgeSubsystem(Subsystem):
                 return await self._skill_create(kwargs)
             case "skill_grade":
                 return await self._skill_grade(kwargs)
+            case "skill_auto_grade":
+                return await self._skill_auto_grade(kwargs)
             case "skill_promote":
                 return await self._skill_promote(kwargs)
             case "list_skills":
@@ -578,6 +581,56 @@ class SkillForgeSubsystem(Subsystem):
             return {"success": True, "name": skill_name}
         except Exception as e:
             logger.error(f"_skill_grade failed: {e}")
+            return {"error": str(e), "success": False}
+
+    async def _skill_auto_grade(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle skill_auto_grade request (Bayesian auto-grading from task result).
+
+        Args:
+            payload: Request payload with:
+                - skill_name: str
+                - task_result: dict (with success, latency_ms, output_quality, etc.)
+                - prior_confidence: float (default 0.5)
+                - feedback: Optional[str]
+
+        Returns:
+            Result dict with grade score and explanation
+        """
+        skill_name = payload.get("skill_name")
+        task_result = payload.get("task_result", {})
+        prior_confidence = payload.get("prior_confidence", 0.5)
+        feedback = payload.get("feedback")
+
+        if not skill_name:
+            return {"error": "skill_name required", "success": False}
+
+        try:
+            # Use Bayesian auto_grade from learning module
+            grade: ConfidenceGrade = auto_grade(
+                task_result=task_result,
+                prior_confidence=prior_confidence,
+                feedback=feedback,
+            )
+
+            # Grade the skill with the computed score
+            await self._auto_grade_skill(
+                skill_name=skill_name,
+                score=grade.score,
+                reason=f"auto_grade: {grade.explanation}",
+            )
+
+            # Check for auto-promotion
+            await self._maybe_auto_promote(skill_name)
+
+            return {
+                "success": True,
+                "skill_name": skill_name,
+                "score": grade.score,
+                "explanation": grade.explanation,
+                "features": grade.features,
+            }
+        except Exception as e:
+            logger.error(f"_skill_auto_grade failed: {e}", exc_info=True)
             return {"error": str(e), "success": False}
 
     async def _skill_promote(self, payload: Dict[str, Any]) -> Dict[str, Any]:
