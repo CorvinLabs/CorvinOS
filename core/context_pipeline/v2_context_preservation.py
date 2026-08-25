@@ -29,24 +29,25 @@ class ContextTier(Enum):
 class ContextAddition:
     """Single piece of Pipeline Context (argumentative addition)."""
     text: str
-    tier: ContextTier
     source: str  # Where this came from (memory, graph, skill, user feedback)
     confidence: float  # 0.0-1.0, used for tier classification
+    tier: Optional[ContextTier] = None  # Optional override; if not set, auto-classify by confidence
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     reasoning: Optional[str] = None  # Why this addition is relevant (audit trail)
 
     def __post_init__(self):
-        """Validate confidence and assign tier."""
+        """Validate confidence and auto-assign tier if not explicitly set."""
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {self.confidence}")
 
-        # Auto-assign tier based on confidence if not explicitly set
-        if self.confidence >= 0.85:
-            self.tier = ContextTier.TIER_1
-        elif self.confidence >= 0.65:
-            self.tier = ContextTier.TIER_2
-        else:
-            self.tier = ContextTier.TIER_3
+        # Only auto-assign tier if not explicitly provided
+        if self.tier is None:
+            if self.confidence >= 0.85:
+                self.tier = ContextTier.TIER_1
+            elif self.confidence >= 0.65:
+                self.tier = ContextTier.TIER_2
+            else:
+                self.tier = ContextTier.TIER_3
 
 
 @dataclass
@@ -98,34 +99,30 @@ class PipelineContext:
         return True
 
     def _would_contradict(self, addition: ContextAddition) -> bool:
-        """Check if addition contradicts Original or prior additions (heuristic)."""
-        # Heuristic: explicit negations or opposite keywords
+        """Check if addition contradicts Original or prior additions (heuristic).
+
+        Deterministic: uses sorted keywords (no set ordering randomness).
+        """
         negation_patterns = ["not ", "don't ", "no ", "never ", "avoid ", "disable ", "contra"]
-        original_keywords = set(self.original.task_description.lower().split())
+        original_keywords = sorted(set(self.original.task_description.lower().split()))  # Sorted for determinism
         original_combined = self.original.task_description.lower()
 
         addition_text = addition.text.lower()
 
-        # Check for direct negation of original task
-        for negation in ["disable", "don't"]:
-            if negation in addition_text:
-                # Extract key words from original (feature, action verbs)
-                for keyword in original_keywords:
-                    if len(keyword) > 3 and keyword in addition_text:
-                        logger.debug(f"Detected contradiction: '{negation}' + '{keyword}' in '{addition.text}'")
-                        return True
-
-        # Check for "never" + original action
-        if "never " in addition_text:
-            for keyword in list(original_keywords)[:5]:
-                if len(keyword) > 3 and keyword in addition_text:
-                    return True
-
-        # Check for explicit contradiction of primary verb
+        # Check for explicit contradiction of primary verb (strongest signal)
         if "enable" in original_combined and "disable" in addition_text:
             return True
         if "disable" in original_combined and "enable" in addition_text:
             return True
+
+        # Check for direct negation of original task (check top keywords only to avoid false positives)
+        for negation in ["disable"]:  # Stronger signal than generic "don't"
+            if negation in addition_text:
+                # Check only the top 5 most-common keywords (sorted for determinism)
+                for keyword in original_keywords[:5]:
+                    if len(keyword) > 3 and keyword in addition_text:
+                        logger.debug(f"Detected contradiction: '{negation}' + '{keyword}' in '{addition.text}'")
+                        return True
 
         return False
 
@@ -207,13 +204,18 @@ class ContextQualityGate:
         tier_order = [ContextTier.TIER_1, ContextTier.TIER_2, ContextTier.TIER_3]
         include = tier_order.index(addition.tier) <= tier_order.index(self.tier_policy)
 
-        # Record for metrics
-        if addition.tier == ContextTier.TIER_1:
-            self.stats["tier_1_accepted"] += 1
-        elif addition.tier == ContextTier.TIER_2 and include:
-            self.stats["tier_2_accepted"] += 1
-        elif addition.tier == ContextTier.TIER_3:
-            self.stats["tier_3_filtered"] += 1
+        # Record for metrics — consistent counting (accept vs. filter)
+        if include:
+            if addition.tier == ContextTier.TIER_1:
+                self.stats["tier_1_accepted"] += 1
+            elif addition.tier == ContextTier.TIER_2:
+                self.stats["tier_2_accepted"] += 1
+            elif addition.tier == ContextTier.TIER_3:
+                self.stats["tier_3_filtered"] += 1  # "Filtered" = accepted at policy level
+        else:
+            # Rejected by tier policy
+            self.stats[f"tier_{tier_order.index(addition.tier) + 1}_rejected"] = \
+                self.stats.get(f"tier_{tier_order.index(addition.tier) + 1}_rejected", 0) + 1
 
         return include
 
@@ -292,8 +294,15 @@ def validate_context_fidelity(original: OriginalContext, pipeline: PipelineConte
     """Validate that Original Context hash is still intact (no corruption).
 
     Fail-closed: returns False if integrity check fails.
+    Computes current hash from fields and compares to stored hash.
     """
-    if original.hash_sha256 != original.hash_sha256:  # Redundant but explicit
-        logger.error("Original Context integrity check failed!")
+    content = f"{original.task_description}|{original.user_intent}|{original.session_id}|{original.tenant_id}"
+    current_hash = hashlib.sha256(content.encode()).hexdigest()
+
+    if current_hash != original.hash_sha256:
+        logger.error(
+            f"Original Context integrity check FAILED: "
+            f"stored={original.hash_sha256[:16]}... current={current_hash[:16]}..."
+        )
         return False
     return True

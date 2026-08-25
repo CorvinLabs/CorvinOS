@@ -39,7 +39,17 @@ class TestCheckpointB1_TwoLayerSeparation:
 
         # Hash should be computed
         assert len(original.hash_sha256) == 64  # SHA256 hex
-        assert original.hash_sha256 == original.hash_sha256  # Idempotent
+
+        # Hash should be stable (compute twice, should be identical)
+        hash_first = original.hash_sha256
+        original_copy = OriginalContext(
+            task_description="Audit database for PII",
+            user_intent="Find and report all sensitive data",
+            session_id="sess-123",
+            tenant_id="_default",
+        )
+        hash_second = original_copy.hash_sha256
+        assert hash_first == hash_second, "Hash should be deterministic for same inputs"
 
     def test_original_context_to_prompt(self):
         """Original Context must render as a distinct prompt section."""
@@ -271,17 +281,16 @@ class TestCheckpointB3_EntropyDetectionLatency:
 
         pipeline = PipelineContext(original=original)
 
-        # Heuristic test: "never deploy" contradicts "deploy"
+        # Heuristic test: "disable deployment" should contradict "deploy"
         addition = ContextAddition(
-            text="Never deploy to production without approval",
-            tier=ContextTier.TIER_1,
+            text="Disable deployment until further notice",
             source="safety",
             confidence=0.80,
         )
 
-        # This should be flagged as contradictory (or require special handling)
+        # Should be flagged as contradictory (explicit disable + deploy in original)
         would_contradict = pipeline._would_contradict(addition)
-        # Depending on heuristic, may or may not be caught, but should be detectable
+        assert would_contradict is True, "Should detect 'disable' contradicting 'deploy'"
 
     def test_b3_checkpoint_entropy_latency(self):
         """B3 Checkpoint: Contradictions detected within 2 iterations.
