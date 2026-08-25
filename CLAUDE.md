@@ -411,6 +411,63 @@ bash operator/bridges/run-all-tests.sh
 
 ---
 
+## Console Frontend — Prove the NEW Build Is What Loads (load-bearing)
+
+Any change under `core/console/corvin_console/web-next/` is **not done when the source is
+correct** — it is done when the browser demonstrably runs the NEW bundle. Source-correct +
+stale-bundle has burned this repo repeatedly: the API answers 200, the UI still shows the old
+placeholder, and debugging goes into the backend instead of into the three caches in front of it.
+"Build succeeded" means *new code was added*, never *old code was removed*.
+
+**Three caches sit between an edit and the screen:**
+
+| Layer | Where | Cleared by |
+|---|---|---|
+| 1. esbuild pre-bundle | `web-next/node_modules/.vite/` | `rm -rf node_modules/.vite/` |
+| 2. build artifact | `web-next/dist/` | `rm -rf dist/` then `npm run build` |
+| 3. browser tab | the operator's machine | `Ctrl+Shift+R` / `Cmd+Shift+R` — **Claude cannot do this** |
+
+**Mandatory sequence after every frontend change — no step is skippable:**
+
+```bash
+cd core/console/corvin_console/web-next
+rm -rf dist/ node_modules/.vite/     # a plain rebuild is NOT sufficient
+npm run build
+grep -rl '<marker string from the new code>' dist/assets/   # must hit ≥1 file
+grep -o 'assets/[^"]*\.js' dist/index.html                  # note the NEW hashes
+```
+Then prove it over the wire against the running host — not against the file system:
+```bash
+curl -s http://127.0.0.1:8765/console/ | grep -o 'assets/[^"]*\.js'   # must be the SAME new hashes
+```
+
+**Restart rule.** `mount_static()` (`core/console/corvin_console/app.py:444`) decides ONCE at
+boot. If the console booted while `dist/` was absent, it registered the 503 "build failed"
+fallback route instead of the SPA mount and keeps serving it — a rebuild alone will NOT recover
+it, only a restart will. When `dist/` existed at boot, `_SPAStaticFiles` resolves per request and
+a rebuild is picked up live.
+
+**Always tell the operator to hard-refresh**, explicitly, in the same message that reports the
+change. Layer 3 is the only cache Claude cannot clear, and it is by far the most frequent cause
+of "the feature isn't showing". On any invisible-frontend report, confirm the hard refresh
+FIRST — never open a backend investigation before that.
+
+**Cache-header invariant (`_SPAStaticFiles`, `core/console/corvin_console/app.py:23`) — do not
+weaken:** content-hashed files under `assets/` get `public, max-age=31536000, immutable`; every
+`text/html` response AND every `304` gets `no-cache` — including the bare `/console/` directory
+index, which is not named `index.html` and once slipped through a path-based check. Inverting
+either half is exactly how a browser keeps requesting deleted hashed bundles and the app hangs on
+a perpetual "Loading…".
+
+**Must NOT do:** declare a frontend change "done"/"live" on a correct source diff alone ·
+run `npm run build` without clearing `dist/` + `node_modules/.vite/` first · skip the
+`grep` + `curl` proof that the served hashes are the new ones · report the change without
+telling the operator to hard-refresh · cache the SPA shell as anything but `no-cache` ·
+drop the `immutable` header from `assets/` · assume a rebuild alone revives a console that
+booted without `dist/`.
+
+---
+
 ## ADR Gate — Architectural Decision Records
 
 **adr-gate is a standard quality discipline.** After every non-trivial task, follow the rubric
