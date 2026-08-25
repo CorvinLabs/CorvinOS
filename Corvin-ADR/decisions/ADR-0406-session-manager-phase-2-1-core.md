@@ -2,7 +2,7 @@
 id: ADR-0406
 status: ACCEPTED
 depends_on: [ADR-0347, ADR-0348, ADR-0349, ADR-0350, ADR-0302, ADR-0399]
-relates_to: []
+related: [ADR-0407, ADR-0408]
 paths:
   - core/session_manager/
   - core/session_manager/tests/
