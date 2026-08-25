@@ -960,6 +960,55 @@ class OrchestrationServer:
             ))
             return
 
+        # ADR-0152 LIC-MCP-WF-RUN-01: the MCP workflow_run spawns a billable
+        # engine (agent nodes, fan_out, delegation_loop manager/workers, etc.)
+        # but was missing compute_units_per_day + chat_turns_per_day gates —
+        # a second EXECUTE path bypassing the meter the console routes enforce.
+        # Charge fail-CLOSED here, before engine construction. License-module-
+        # absent is fail-open (boot self_test covers genuine absence).
+        # Derive sid_fingerprint from caller identity (MCP caller_channel_id).
+        _sid_fp = (self.caller_channel_id or tenant_id)[:32] or tenant_id
+        try:
+            from corvin_console.routes._compute_license_gate import (  # type: ignore[import]
+                enforce_compute_quota as _mcp_enforce_compute,  # noqa: E501, PLC0415
+                enforce_chat_turns as _mcp_enforce_chat,  # noqa: PLC0415
+            )
+        except ImportError:
+            _mcp_enforce_compute = None  # type: ignore[assignment]
+            _mcp_enforce_chat = None  # type: ignore[assignment]
+
+        if _mcp_enforce_compute is not None:
+            try:
+                _mcp_enforce_compute(
+                    tenant_id, _sid_fp,
+                    audit_action="workflow.run_started",
+                    channel="mcp-workflows",
+                )
+            except Exception as exc:  # noqa: BLE001
+                # HTTPException (402) or any other error → JSON-RPC error.
+                detail = getattr(exc, "detail", None)
+                msg = str(detail.get("msg", str(exc))) if isinstance(detail, dict) else str(exc)
+                self._respond(msgid, self._text_result(
+                    {"status": "license_limit", "error": msg}, is_error=True,
+                ))
+                return
+
+        if _mcp_enforce_chat is not None:
+            try:
+                _mcp_enforce_chat(
+                    tenant_id, _sid_fp,
+                    audit_action="workflow.run_started",
+                    channel="mcp-workflows",
+                )
+            except Exception as exc:  # noqa: BLE001
+                # HTTPException (402) or any other error → JSON-RPC error.
+                detail = getattr(exc, "detail", None)
+                msg = str(detail.get("msg", str(exc))) if isinstance(detail, dict) else str(exc)
+                self._respond(msgid, self._text_result(
+                    {"status": "license_limit", "error": msg}, is_error=True,
+                ))
+                return
+
         # Construct the LLM engine ONLY when a node actually needs it. A pure
         # code/compute/merge workflow must run without the `claude` CLI on PATH
         # (Hermes-only / no-Claude fresh install, and CI). An engine-requiring
@@ -1023,6 +1072,53 @@ class OrchestrationServer:
         tenant_id = _current_tenant(args.get("tenant_id"))
         budget_s = _clamp(args.get("budget_s"), lo=10, hi=600, default=120)
         sink = _audit_sink_for(tenant_id, "workflow")
+
+        # ADR-0152 LIC-MCP-WF-RESUME-01: the MCP workflow_resume continues a
+        # paused run, spawning remaining agent nodes without compute_units_per_day
+        # + chat_turns_per_day gates — a second RESUME path bypassing the meter
+        # the console enforces. Charge fail-CLOSED here, before resumption.
+        # Derive sid_fingerprint from caller identity (MCP caller_channel_id).
+        _sid_fp = (self.caller_channel_id or tenant_id)[:32] or tenant_id
+        try:
+            from corvin_console.routes._compute_license_gate import (  # type: ignore[import]
+                enforce_compute_quota as _mcp_enforce_compute,  # noqa: E501, PLC0415
+                enforce_chat_turns as _mcp_enforce_chat,  # noqa: PLC0415
+            )
+        except ImportError:
+            _mcp_enforce_compute = None  # type: ignore[assignment]
+            _mcp_enforce_chat = None  # type: ignore[assignment]
+
+        if _mcp_enforce_compute is not None:
+            try:
+                _mcp_enforce_compute(
+                    tenant_id, _sid_fp,
+                    audit_action="workflow.resume_started",
+                    channel="mcp-workflows",
+                )
+            except Exception as exc:  # noqa: BLE001
+                # HTTPException (402) or any other error → JSON-RPC error.
+                detail = getattr(exc, "detail", None)
+                msg = str(detail.get("msg", str(exc))) if isinstance(detail, dict) else str(exc)
+                self._respond(msgid, self._text_result(
+                    {"status": "license_limit", "error": msg}, is_error=True,
+                ))
+                return
+
+        if _mcp_enforce_chat is not None:
+            try:
+                _mcp_enforce_chat(
+                    tenant_id, _sid_fp,
+                    audit_action="workflow.resume_started",
+                    channel="mcp-workflows",
+                )
+            except Exception as exc:  # noqa: BLE001
+                # HTTPException (402) or any other error → JSON-RPC error.
+                detail = getattr(exc, "detail", None)
+                msg = str(detail.get("msg", str(exc))) if isinstance(detail, dict) else str(exc)
+                self._respond(msgid, self._text_result(
+                    {"status": "license_limit", "error": msg}, is_error=True,
+                ))
+                return
 
         # Unlike workflow_run, the run_id already exists (it's the caller's
         # own argument) — reuse it as-is for the completion-notify hooks, so
