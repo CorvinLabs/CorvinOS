@@ -2,7 +2,7 @@
 id: ADR-0408
 status: ACCEPTED
 depends_on: [ADR-0146, ADR-0147, ADR-0148, ADR-0149, ADR-0150, ADR-0151]
-relates_to: []
+related: [ADR-0406, ADR-0407]
 paths:
   - core/orchestration/corvin_orchestration/mcp_server.py
 docs: []
