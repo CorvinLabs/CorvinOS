@@ -224,6 +224,149 @@ def aggregate_measured_evidence(
     return evidence_list
 
 
+# ============================================================================
+# ADR-0222 k=3 — native-arm-only DECISION collection (ship-dark, zero-cost)
+# ============================================================================
+#
+# A SEPARATE, ZERO-COST measurement stream from the {direct, tier, TDE}
+# ``MeasurementSample`` above. It records ONLY (a) what a console turn's
+# delegation heuristic DECIDED (would-delegate y/n) and (b) the outcome of the
+# arm that ACTUALLY ran — native (rc, latency). No extra LLM calls, no judge, no
+# delegated-arm numbers.
+#
+# HONEST COUNTERFACTUAL (ADR-0222, "wrong counterfactual" caveat) — the whole
+# reason this is a distinct type. When ``_should_delegate`` fires, TDE would
+# REPLACE the turn; but the turn ran NATIVE (TDE is not the selected engine, or
+# degraded, or the install is in ``native`` mode). We can observe the native
+# arm's real outcome, yet we have NO honest measurement of what TDE would have
+# produced on that same task. So this sample carries the native arm ONLY and
+# NEVER fabricates the delegated arm. That is precisely why these samples do NOT
+# feed ``aggregate_measured_evidence`` (which needs the full 3-arm comparison to
+# emit a ``BandEvidence``): collecting them can NEVER open the decision gate. The
+# gate still sees zero measured 3-arm samples and stays at INSUFFICIENT_DATA.
+#
+# CONTENT-FREE: the prompt text is never stored — only its length (a coarse size
+# proxy) plus the decision bool, rc, latency and engine mode (GDPR Art. 5(1)(c)).
+
+
+def size_band_of(prompt_chars: int) -> Literal["trivial", "moderate", "complex"]:
+    """Coarse, content-free SIZE bucket from a prompt's char count.
+
+    This is a transparent function of length, NOT a complexity/quality judgment:
+    the native path never runs the TDE analyzer, so there is no measured
+    complexity band here. Named ``size_band`` (not ``task_band``) deliberately,
+    so it is never mistaken for the gate's quality-measured band.
+    """
+    n = prompt_chars if prompt_chars > 0 else 0
+    if n < 400:
+        return "trivial"
+    if n < 2000:
+        return "moderate"
+    return "complex"
+
+
+@dataclass
+class DecisionMeasurementSample:
+    """One native-arm-only observation of a console turn's delegation decision.
+
+    Records what the delegation heuristic decided and the outcome of the arm
+    that ACTUALLY ran (native). Deliberately NOT a ``MeasurementSample``: it has
+    no honest delegated-arm numbers, so it must never reach the 3-arm gate.
+    """
+
+    task_id: str
+    timestamp: float
+    would_delegate: bool           # what _should_delegate/_should_delegate_bundled decided
+    observed_arm: str              # the arm actually measured — always "native" here
+    native_rc: int                 # real turn exit code (0 == success)
+    native_latency_ms: int         # real wall-clock latency of the native turn
+    prompt_chars: int              # content-free size proxy — NEVER the text
+    size_band: str                 # coarse size bucket (see size_band_of); not a quality band
+    worker_engine_mode: str = "native"  # operator's engine setting (native|acs|tde)
+    data_source: str = "observed_native"  # never "measured" — cannot reach the 3-arm gate
+
+    def __post_init__(self) -> None:
+        """Fail-closed validation (ADR-0222 honesty invariant).
+
+        A native-arm observation cannot fabricate the delegated arm, so the only
+        integrity risk is a malformed native reading. Reject rather than default.
+        """
+        if not isinstance(self.would_delegate, bool):
+            raise ValueError(f"would_delegate must be bool, got {self.would_delegate!r}")
+        if self.observed_arm != "native":
+            raise ValueError(
+                f"observed_arm must be 'native' (the only honestly measurable arm "
+                f"at a native turn completion), got {self.observed_arm!r}"
+            )
+        if not isinstance(self.native_rc, int) or isinstance(self.native_rc, bool):
+            raise ValueError(f"native_rc must be an int, got {self.native_rc!r}")
+        if self.native_latency_ms < 0:
+            raise ValueError(
+                f"native_latency_ms must be >= 0, got {self.native_latency_ms}")
+        if self.prompt_chars < 0:
+            raise ValueError(f"prompt_chars must be >= 0, got {self.prompt_chars}")
+        if self.size_band not in VALID_BANDS:
+            raise ValueError(
+                f"size_band must be one of {VALID_BANDS}, got {self.size_band!r}")
+
+    def to_persistable_dict(self) -> dict[str, Any]:
+        """Serialise for the decision log. Already content-free (no text field)."""
+        return asdict(self)
+
+
+class DecisionMeasurementRecorder:
+    """Tenant-scoped recorder for native-arm-only decision samples (k=3).
+
+    Unlike ``MeasurementRecorder`` (a global singleton for the expensive 3-arm
+    samples), this is instantiated per-tenant with an explicit log path, so a
+    sample never crosses a tenant boundary (ADR-0007 multi-tenant axis, GDPR
+    Art. 5 integrity). The append is a tiny JSONL write — no LLM calls — so it
+    carries no concurrency cap and no maintainer-only env guard: the ship-dark
+    feature flag alone gates it.
+    """
+
+    def __init__(self, decision_log_path: str):
+        self.log_path = decision_log_path
+        self._write_lock = threading.Lock()
+
+    async def record(self, sample: "DecisionMeasurementSample") -> None:
+        """Append one sample off the event loop; never raises into the caller."""
+        try:
+            await asyncio.to_thread(self._write_sync, sample)
+        except (IOError, OSError) as e:
+            _log.warning("Failed to write decision sample to %s: %s",
+                         self.log_path, e)
+
+    def _write_sync(self, sample: "DecisionMeasurementSample") -> None:
+        with self._write_lock:
+            log_dir = os.path.dirname(self.log_path)
+            if log_dir:
+                Path(log_dir).mkdir(parents=True, exist_ok=True)
+            with open(self.log_path, "a") as f:
+                f.write(json.dumps(sample.to_persistable_dict(), default=str) + "\n")
+
+    def load(self) -> list["DecisionMeasurementSample"]:
+        """Read persisted decision samples back (analysis / test assertion)."""
+        if not os.path.exists(self.log_path):
+            return []
+        out: list[DecisionMeasurementSample] = []
+        with self._write_lock:
+            try:
+                with open(self.log_path, "r") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            out.append(DecisionMeasurementSample(**json.loads(line)))
+                        except (json.JSONDecodeError, TypeError, ValueError) as e:
+                            _log.warning("Failed to parse decision sample line: %s", e)
+            except (IOError, OSError) as e:
+                _log.warning("Failed to load decision samples from %s: %s",
+                             self.log_path, e)
+                return []
+        return out
+
+
 class MeasurementRecorder:
     """Singleton that records {direct, tier, TDE} samples during measurement week.
 
