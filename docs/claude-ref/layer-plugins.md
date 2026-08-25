@@ -762,6 +762,51 @@ file. The call is best-effort (silent fallback if mcp_manager is absent).
 
 ---
 
+## Console Web Surface Plugin (ADR-0356)
+
+**Status:** Declared (P2.5). Dynamically loaded by plugin loader (P7, unbuilt).
+**Module:** `core/plugins/corvin_plugins/console/plugin.py`
+**Feature flag:** `console_web_surface_plugin` (ships dark, default OFF)
+
+The CorvinOS Console is declared as a `web_surface` plugin—an explicit, loadable
+component rather than hard-wired into the ASGI app. This prepares the Console to
+be replaceable: a FrontendForge-built custom panel set or a third-party surface
+can eventually take its place through the plugin loader (P7, unbuilt).
+
+**What it does and does NOT do:**
+
+- **Declares:** The Console SPA: `plugin_type='web_surface'`, `boot_layer='bundled'`
+  (disableable, not a compliance mechanism), `origin='builtin'`, `mount_path='/console/'`.
+- **Reports:** WHERE it mounts (`/console/`) and WHAT it serves (the built SPA in
+  `web-next/dist/`, or None if unbuilt).
+- **Does NOT:** start a server or mount anything itself. The ASGI app (in
+  `standalone.py`) still performs the actual mount today. Wiring the mount
+  *through* this plugin is the loader's job (P7, future).
+
+**Integration:**
+
+- **Ship-dark flag:** `FLAG_ID = "console_web_surface_plugin"` (default OFF).
+  Mirrors `bridges/supervisor.py`'s own ship-dark approach — declaring the
+  Console as a plugin must not change a default install, which still mounts
+  the SPA the old hard-wired way until the loader (P7) mounts it through here.
+- **on_load():** Records the `PluginContext` so `health_check()` can report
+  against the Console. Deliberately side-effect-free — declaring the plugin
+  never changes how the already-running Console is served.
+- **Capabilities:** The Console publishes its mount path and SPA dist location
+  through `capabilities.py::_loaded_web_surfaces()` so the registry knows what
+  surfaces are active (ADR-0365 P7).
+
+**When editing:**
+
+- **Declare a new web_surface plugin:** Copy `core/plugins/corvin_plugins/console/`
+  and change `plugin_id`, `display_name`, `mount_path`, and `spa_dist_dir()`.
+- **Register a feature flag:** Add an entry to `core/console/corvin_core/feature_flags.py`
+  with `id="<plugin_id>_web_surface_plugin"` (e.g., `"custom_panel_web_surface_plugin"`).
+- **Don't:** hard-wire a new surface into `standalone.py` — declare it as a plugin
+  and let the loader (P7) mount it.
+
+---
+
 ## Plugin registry — `corvin_plugins` (ADR-0030 + ADR-0033 + ADR-0233)
 
 **Status:** Implemented. This is the ONE lifecycle contract for extensions.
