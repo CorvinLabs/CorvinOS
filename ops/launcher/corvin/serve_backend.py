@@ -899,6 +899,30 @@ def start(
         except Exception:  # noqa: BLE001 — best-effort; falls back to paths.py auto-detect
             pass
 
+    # A2A Pairing (Layer 38, ADR-0258): Initialize REMOTE_ORIGINS_DIR and
+    # REMOTE_ENDPOINTS_DIR env vars to point to the tenant's cowork directory.
+    # This ensures the uvicorn subprocess can resolve A2A friendship tokens
+    # and pairing invites on fresh installs. The directories are auto-created
+    # if they don't exist (fail-open: if cowork dir is unavailable, the A2A
+    # routes will gracefully degrade to their hardcoded repo-relative defaults).
+    if "REMOTE_ORIGINS_DIR" not in env or "REMOTE_ENDPOINTS_DIR" not in env:
+        try:
+            from forge import paths as _forge_paths  # noqa: PLC0415
+            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+            cowork_dir = Path(_forge_paths.tenant_cowork_dir(tenant_id))
+            cowork_dir.mkdir(parents=True, exist_ok=True)
+            origins_dir = cowork_dir / "remote_origins"
+            endpoints_dir = cowork_dir / "remote_endpoints"
+            pending_dir = cowork_dir / "pending_invites"
+            origins_dir.mkdir(parents=True, exist_ok=True)
+            endpoints_dir.mkdir(parents=True, exist_ok=True)
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            env.setdefault("REMOTE_ORIGINS_DIR", str(origins_dir))
+            env.setdefault("REMOTE_ENDPOINTS_DIR", str(endpoints_dir))
+            env.setdefault("REMOTE_PENDING_DIR", str(pending_dir))
+        except Exception:  # noqa: BLE001 — best-effort; fall back to hardcoded defaults
+            pass
+
     # Headless launch (ADR-0352 P2.3b) picks the create_app_headless factory so the
     # serving process forces headless mode itself — no browser UI, boot+bridges+API
     # as usual. The factory choice travels as the uvicorn --factory arg, not an env.
