@@ -1,4 +1,6 @@
-"""Execution Context Badge — tracking engine, model, and performance metadata.
+"""Execution Context Badge — Turn-level engine/model/delegation metadata (TURN SCOPE).
+
+TURN METADATA VERSION: Tracks turn-specific execution context for audit and rendering.
 
 Phase 1 foundation: capture execution context for every turn across all
 engines (Claude Code, ACS, TDE, Hermes) and model sources (Anthropic, Ollama,
@@ -11,7 +13,12 @@ This module provides:
   - Delegation mode detection: native, acs, tde, fallback
   - Token counting and timing utilities
 
+Do NOT confuse with:
+- core.context_engineering.execution_context.ExecutionContext — mutable v2 task state (CANONICAL)
+- core.engines.execution_context.ExecutionContext — immutable Phase 0 task state
+
 Spans: os_turn.start → os_turn.completed (ADR-0171 engine_span)
+Persisted in: message.metadata.execution_context
 """
 
 from __future__ import annotations

@@ -223,6 +223,53 @@ class GraphQueries:
         return blocking
 
     @staticmethod
+    def has_cycle(graph: TaskGraph) -> bool:
+        """
+        Check if graph contains any cycles (fast boolean check).
+
+        Uses DFS with recursion stack to detect cycles.
+        Fails-closed: returns True if any cycle is found.
+
+        Args:
+            graph: TaskGraph to query
+
+        Returns:
+            True if graph contains cycles, False if DAG
+
+        Time complexity: O(V + E)
+        """
+        visited = set()
+        rec_stack = set()
+
+        def dfs(node_id: str) -> bool:
+            """DFS helper: returns True if cycle found from this node."""
+            visited.add(node_id)
+            rec_stack.add(node_id)
+
+            for edge in graph.get_edges_from(node_id):
+                to_id = edge.to_id
+                if to_id not in visited:
+                    if dfs(to_id):
+                        return True
+                elif to_id in rec_stack:
+                    # Back edge: cycle detected
+                    logger.warning(f"Cycle detected: {node_id} → {to_id}")
+                    return True
+
+            rec_stack.remove(node_id)
+            return False
+
+        # Check all nodes
+        for node_id in graph.nodes:
+            if node_id not in visited:
+                if dfs(node_id):
+                    logger.debug("Graph contains cycles")
+                    return True
+
+        logger.debug("Graph is acyclic (DAG)")
+        return False
+
+    @staticmethod
     def find_cycles(graph: TaskGraph) -> List[List[str]]:
         """
         Find all cycles in graph (if any).

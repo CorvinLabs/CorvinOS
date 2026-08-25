@@ -5,6 +5,14 @@ ADR-0399: Dual-layer architecture (Original Context immutable + Pipeline Context
 - Pipeline Context: Argumentative additions only, never contradicts Original
 
 Fail-closed: On error, degrade to Original Context only (never fail-open into corruption).
+
+RESEARCH PROTOTYPE (2026-08-25): This module was designed for ADR-0399 and is fully
+implemented, but is NOT currently integrated into any live subsystem. It exists for
+experimental validation and future integration planning. The dual_gate.py in core/pipeline/
+provides an alternative PipelineContext implementation that is actively used.
+
+Status: ORPHANED — ready for integration or archival per ADR maintenance.
+Tests: core/context_pipeline/tests/test_context_pipeline_v2_ldd_k1_k3.py
 """
 
 from dataclasses import dataclass, field
