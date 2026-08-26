@@ -1,4 +1,4 @@
-"""ADR-0305: Context Propagation Helpers — Utilities for decorator + pipeline integration."""
+"""ADR-0424: Context Propagation Helpers — Utilities for decorator + pipeline integration."""
 
 from contextvars import ContextVar
 from typing import Dict, Any, Optional
