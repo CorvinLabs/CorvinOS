@@ -61,6 +61,26 @@ handle_request("skill_grade",
 
 ---
 
+### 2b. `skill_auto_grade` (Internal)
+
+Automatically grade a skill based on strategy outcome (internal use only).
+
+Triggered by Brain's `on_strategy_succeeded`/`on_strategy_failed` event handlers.
+
+```python
+handle_request("skill_auto_grade",
+    name="classifier-v2",
+    score=1.0,  # or -0.5 on strategy failure
+    reason="strategy_succeeded"
+)
+```
+
+**Response:** `{"success": true, "confidence": 0.92}`
+
+**Note:** End-users typically use `skill_grade` instead. This is called internally during event processing.
+
+---
+
 ### 3. `skill_promote`
 
 Promote a skill to a higher scope (session → project → user).
@@ -115,6 +135,28 @@ handle_request("get_metrics")
 
 ---
 
+### 6. `get_health` (Internal)
+
+Check subsystem health status.
+
+```python
+handle_request("get_health")
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "subsystem": "skill_forge",
+  "event_queue_size": 42,
+  "last_event_time": 1692874523.45
+}
+```
+
+**Note:** For internal monitoring. Used by Brain to verify subsystem liveness.
+
+---
+
 ## Event Types (Published)
 
 - `skill_created` — A skill was created
@@ -154,12 +196,15 @@ confidence = t_distribution_cdf(score, sem)
 
 ## Deployment Checklist
 
-- [ ] SkillForgeSubsystem wired in Brain (ADR-0360, commit b9f82d81)
-- [ ] Dependencies installed (numpy, scipy, pandas, scikit-learn)
-- [ ] Tests validating (96%+ success on `validate_skill_forge_subsystem.py`)
-- [ ] Metrics endpoint exposed (`get_metrics`)
-- [ ] Feature flag enabled in settings (or default-OFF for canary)
-- [ ] Rollback plan documented (disable feature flag, restart Brain)
+- [x] SkillForgeSubsystem wired in Brain (ADR-0360, commit b9f82d81)
+- [x] Dependencies installed (numpy, scipy, pandas, scikit-learn)
+- [x] Tests validating (96%+ success on `validate_skill_forge_subsystem.py`)
+- [x] Metrics endpoint exposed (`get_metrics`)
+- [x] Feature flag enabled in tenant config (`spec.features_whitelist`) — 2026-08-26
+- [x] API Reference documentation complete (including internal APIs)
+- [x] Rollback plan documented (disable feature flag, restart Brain)
+- [x] Console Cache Freshness Skill deployed (verifies frontend staleness issues)
+- [x] Deployment Guide created (SKILL_FORGE_2_0_DEPLOYMENT.md)
 
 ---
 
