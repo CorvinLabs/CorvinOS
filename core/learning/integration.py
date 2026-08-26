@@ -6,7 +6,7 @@ Phase 9: Pattern discovery from production failures.
 from __future__ import annotations
 from .active_loop import ActiveLearningLoop
 from .storage import LearningEventStore
-from .metrics import ExecutionMetrics, MetricsCollector
+from .metrics import MetricsCollector
 from .anomaly_detector import AnomalyDetector, AnomalyAlert
 from .pattern_discovery import FailureClusterer, DiscoveredPattern
 from pathlib import Path
@@ -21,11 +21,11 @@ class LearningIntegration:
     Includes Phase 9 pattern discovery from production failures.
     """
 
-    def __init__(self, store_path: Path = None):
+    def __init__(self, store_path: Path = None, tenant_id: str = "_default"):
         if store_path is None:
             store_path = Path.home() / ".corvin" / "learning"
         self.store = LearningEventStore(store_path)
-        self.metrics = MetricsCollector(self.store)
+        self.metrics = MetricsCollector(tenant_id)  # ADR-0320: tenant-scoped metrics
         self.loop = ActiveLearningLoop(self.store)
         self.anomaly_detector = AnomalyDetector(self.store)
         self.pattern_clusterer = FailureClusterer(self.store)

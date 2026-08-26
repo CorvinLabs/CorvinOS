@@ -19,7 +19,8 @@ from .storage import LearningEventStore
 from .confidence import update_confidence, apply_decay
 from .decorators import e2e_for
 from .reachability import ReachabilityMonitor
-from .metrics import ExecutionMetrics, MetricsCollector
+from .metrics import MetricsCollector, MetricRecord, MetricType, AggregatedMetrics
+from .attention_budget import AttentionBudget, AttentionTracker, AttentionUsage, BudgetStatus, BudgetStats
 from .active_loop import ActiveLearningLoop
 from .integration import LearningIntegration
 from .audit import AuditTrail
@@ -42,8 +43,17 @@ __all__ = [
     "apply_decay",
     "e2e_for",
     "ReachabilityMonitor",
-    "ExecutionMetrics",
+    # ADR-0319: Attention Budget
+    "AttentionBudget",
+    "AttentionTracker",
+    "AttentionUsage",
+    "BudgetStatus",
+    "BudgetStats",
+    # ADR-0320: Metrics Collection
     "MetricsCollector",
+    "MetricRecord",
+    "MetricType",
+    "AggregatedMetrics",
     "ActiveLearningLoop",
     "LearningIntegration",
     "AuditTrail",
