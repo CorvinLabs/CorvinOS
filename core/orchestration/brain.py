@@ -261,9 +261,10 @@ class TaskBrain:
                     execution_context = self._context_initializer.get_execution_context()
                     if execution_context:
                         # Check feature flag (default: OFF)
+                        # Note: console uses "skill_forge_enabled", not "skill_forge_v2_enabled"
                         skill_forge_enabled = getattr(
                             execution_context, "_feature_flags", {}
-                        ).get("skill_forge_v2_enabled", False)
+                        ).get("skill_forge_enabled", False)
 
                         if skill_forge_enabled:
                             await self._register_skill_forge_subsystem(execution_context)
