@@ -498,6 +498,76 @@ def _resolve_session_id(db: Any, tenant_id: str, requested: str) -> str | None:
         return None
 
 
+@router.get("/state")
+async def get_vibe_dashboard_state(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    limit: int = 1,
+) -> dict[str, Any]:
+    """Live Vibe Engineering Dashboard state: active task, workers, decisions, context layers, talent metrics."""
+    # MOCK DATA for Phase 1 — TODO: connect to real data sources
+    # In production: read from context_pipeline.v2_context_preservation + decision log
+    return {
+        "active_task": {
+            "title": "Implement Vibe Engineering Dashboard",
+            "phase": "implementation",
+            "elapsed_seconds": 3245,
+        },
+        "workers": [
+            {"name": "CostController", "status": "running", "latency_ms": 42, "error_count": 0},
+            {"name": "SafetyValidator", "status": "running", "latency_ms": 38, "error_count": 0},
+            {"name": "LoopEngineer", "status": "thinking", "latency_ms": 156, "error_count": 0},
+            {"name": "Orchestrator", "status": "idle", "latency_ms": 0, "error_count": 0},
+        ],
+        "decision_queue": [
+            {"id": "d1", "type": "refactor_check", "confidence": 0.92, "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+        ],
+        "recent_decisions": [
+            {"id": "r1", "type": "code_review", "confidence": 0.87, "outcome": "success", "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+            {"id": "r2", "type": "test_gate", "confidence": 0.95, "outcome": "success", "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+            {"id": "r3", "type": "perf_check", "confidence": 0.78, "outcome": "success", "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+            {"id": "r4", "type": "docs_sync", "confidence": 0.91, "outcome": "success", "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+            {"id": "r5", "type": "lint_check", "confidence": 0.99, "outcome": "success", "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+        ],
+        "original_context": {
+            "task_description": "Build production-ready Vibe Engineering Console",
+            "user_intent": "Real-time brain monitoring for personal use",
+            "hash_sha256": "abc123def456" * 5 + "abcdef",
+            "is_valid": True,
+            "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        },
+        "pipeline_context": {
+            "entropy_score": 0.23,
+            "tier_1_count": 5,
+            "tier_2_count": 3,
+            "tier_3_count": 2,
+            "recent_additions": [
+                {"id": "a1", "text": "Context Pipeline v2 Option B", "tier": "tier_1", "source": "design", "confidence": 0.98, "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+                {"id": "a2", "text": "Responsive 3-column layout", "tier": "tier_1", "source": "ui", "confidence": 0.95, "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+                {"id": "a3", "text": "Live polling from backend", "tier": "tier_2", "source": "api", "confidence": 0.87, "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+            ],
+        },
+        "talent": {
+            "score": 78.5,
+            "context_relevance": 0.92,
+            "decision_quality": 0.85,
+            "outcome_accuracy": 0.79,
+            "sparkline": [65, 68, 72, 75, 78, 79, 78, 77, 80, 82, 81, 80, 79, 78, 81, 82, 81, 80],
+        },
+        "quality_gate_policy": "tier_1",
+    }
+
+
+@router.get("/config")
+async def get_vibe_config(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Vibe Engineering Dashboard configuration."""
+    return {
+        "quality_gate_policy": "tier_1",
+        "enable_advanced_metrics": False,
+    }
+
+
 @router.get("/token-metrics/{session_id}")
 async def get_token_metrics(
     session_id: str,
