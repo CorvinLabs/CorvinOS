@@ -14,7 +14,7 @@ import math
 import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +30,55 @@ from .forge_apis import NamespacePolicy, ForgeQuota
 from .forge_api_impl import ForgedSkillAPIImpl
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SkillForgeMetrics:
+    """Track metrics for observability (ADR-0360, observability extension)."""
+    skill_create_count: int = 0
+    skill_create_latency_ms: List[float] = field(default_factory=list)
+    skill_grade_count: int = 0
+    skill_grade_latency_ms: List[float] = field(default_factory=list)
+    skill_promote_count: int = 0
+    skill_promote_latency_ms: List[float] = field(default_factory=list)
+    auto_grade_count: int = 0
+    auto_grade_failures: int = 0
+
+    def record_create(self, latency_ms: float) -> None:
+        self.skill_create_count += 1
+        self.skill_create_latency_ms.append(latency_ms)
+        if self.skill_create_latency_ms and len(self.skill_create_latency_ms) > 1000:
+            self.skill_create_latency_ms = self.skill_create_latency_ms[-1000:]
+
+    def record_grade(self, latency_ms: float) -> None:
+        self.skill_grade_count += 1
+        self.skill_grade_latency_ms.append(latency_ms)
+        if self.skill_grade_latency_ms and len(self.skill_grade_latency_ms) > 1000:
+            self.skill_grade_latency_ms = self.skill_grade_latency_ms[-1000:]
+
+    def record_promote(self, latency_ms: float) -> None:
+        self.skill_promote_count += 1
+        self.skill_promote_latency_ms.append(latency_ms)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return current metrics summary."""
+        return {
+            "skill_create_count": self.skill_create_count,
+            "skill_create_latency_p95_ms": self._percentile(self.skill_create_latency_ms, 0.95),
+            "skill_grade_count": self.skill_grade_count,
+            "skill_grade_latency_p95_ms": self._percentile(self.skill_grade_latency_ms, 0.95),
+            "skill_promote_count": self.skill_promote_count,
+            "auto_grade_count": self.auto_grade_count,
+            "auto_grade_failures": self.auto_grade_failures,
+        }
+
+    @staticmethod
+    def _percentile(data: List[float], p: float) -> float:
+        if not data:
+            return 0.0
+        sorted_data = sorted(data)
+        idx = int(len(sorted_data) * p)
+        return sorted_data[min(idx, len(sorted_data) - 1)]
 
 
 @dataclass
@@ -286,6 +335,9 @@ class SkillForgeSubsystem(Subsystem):
         self.namespace_policy = namespace_policy or NamespacePolicy()
         self.forge_quota = forge_quota or ForgeQuota()
 
+        # Observability: metrics tracking
+        self.metrics = SkillForgeMetrics()
+
     @property
     def name(self) -> str:
         return "skill_forge"
@@ -371,6 +423,8 @@ class SkillForgeSubsystem(Subsystem):
                 return await self._list_skills(kwargs)
             case "get_health":
                 return self.get_health()
+            case "get_metrics":
+                return self.metrics.get_stats()
             case _:
                 raise ValueError(f"Unknown request type: {request_type}")
 
@@ -510,6 +564,7 @@ class SkillForgeSubsystem(Subsystem):
         Raises:
             LicenseLimitError: If daily skill_forge quota exceeded.
         """
+        start_time = time.time()
         try:
             # ADR-0365: Enforce skill_forge_per_day quota
             from pathlib import Path
@@ -545,6 +600,11 @@ class SkillForgeSubsystem(Subsystem):
                     "type": payload.get("skill_type"),
                     "scope": payload.get("scope", "session"),
                 })
+
+            # Record latency metric
+            latency_ms = (time.time() - start_time) * 1000
+            self.metrics.record_create(latency_ms)
+            logger.info(f"skill_create '{payload['name']}' completed in {latency_ms:.1f}ms")
 
             return {"skill_record": skill_record, "success": True}
         except Exception as e:
