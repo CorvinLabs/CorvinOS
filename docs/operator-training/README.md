@@ -279,9 +279,9 @@ A: ops-training@corvin.ai for training questions, ops-team@corvin.ai for environ
 ### Internal Wikis & Docs
 - [Release Notes v0.2-rc1](../RELEASE_NOTES_v0.2-rc1.md)
 - [Deployment Safety Checklist](../deployment/BRAIN_V0.2_DEPLOYMENT_SAFETY_CHECKLIST.md)
-- [ADR-0347: Brain Hub Architecture](https://github.com/corvinOS/Corvin-ADR/decisions/ADR-0347-brain-subsystem-hub-architecture.md)
-- [ADR-0373: Cost Optimization](https://github.com/corvinOS/Corvin-ADR/decisions/ADR-0373-cost-optimization-tuning.md)
-- [ADR-0374: Safety Gate Hardening](https://github.com/corvinOS/Corvin-ADR/decisions/ADR-0374-safety-gate-hardening.md)
+- ADR-0347: Brain Hub Architecture (see Corvin-ADR repo)
+- ADR-0373: Cost Optimization (see Corvin-ADR repo)
+- ADR-0374: Safety Gate Hardening (see Corvin-ADR repo)
 
 ### Tools & Dashboards
 - [Prometheus Dashboard](http://localhost:9090/graph)

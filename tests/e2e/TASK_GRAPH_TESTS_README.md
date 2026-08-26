@@ -339,7 +339,7 @@ Update benchmark thresholds if:
 
 ## References
 
-- [TaskGraph ADR-0400](../Corvin-ADR/decisions/ADR-0400-graph-native-task-execution-model.md)
+- TaskGraph ADR-0400 (see Corvin-ADR repo for graph-native-task-execution-model)
 - [Playwright Documentation](https://playwright.dev)
 - [WCAG 2.1 Accessibility Guidelines](https://www.w3.org/WAI/WCAG21/quickref/)
 

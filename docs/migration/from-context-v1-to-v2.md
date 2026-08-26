@@ -386,9 +386,9 @@ A: Not recommended; will break in v1.0. ContextAPI is safer (atomic, audited, sh
 
 ## Resources
 
-- **ADR-0358:** [Context Engineering Layer v2](../../Corvin-ADR/decisions/ADR-0358-context-engineering-layer-v2.md)
-- **ADR-0349:** [Subsystem Interface Contract](../../Corvin-ADR/decisions/ADR-0349-plugin-interface-contract.md)
-- **ADR-0361:** [Extensibility APIs](../../Corvin-ADR/decisions/ADR-0361-forged-tool-skill-extensibility-contract.md)
+- **ADR-0358:** Context Engineering Layer v2 (see Corvin-ADR repo)
+- **ADR-0349:** Subsystem Interface Contract (see Corvin-ADR repo)
+- **ADR-0361:** Extensibility APIs (see Corvin-ADR repo)
 - **Operator Guide:** [Context Engineering v2 Quick Start](../operator-quickstart/context-engineering-v2.md)
 - **Examples:** `core/orchestration/subsystems/` (see LoopEngineer, CostController, HealthMonitor)
 - **Tests:** `tests/test_context_engineering_v2/` (11 test files, 182+ tests)

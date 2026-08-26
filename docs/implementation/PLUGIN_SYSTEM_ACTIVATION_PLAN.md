@@ -4,9 +4,9 @@
 **Status:** Proposed
 **Author:** Claude Code
 **Audience:** maintainer (solo) + Claude Code sessions
-**Decisions of record:** [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md),
-[ADR-0242](../../../Corvin-ADR/decisions/0242-implementation-plan-phase-1.md),
-[ADR-0243](../../../Corvin-ADR/decisions/0243-core-vs-plugins-architecture.md),
+**Decisions of record:** ADR-0233 (see Corvin-ADR repo),
+ADR-0242 (see Corvin-ADR repo),
+ADR-0243 (see Corvin-ADR repo),
 plus the two this plan calls for: ADR-0250 (tenant-scoped provider registries) and
 ADR-0251 (extension-point call sites).
 

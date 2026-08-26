@@ -1,6 +1,6 @@
 # Plugin System Phase 3 Roadmap — SUPERSEDED
 
-**Status:** **Superseded** by [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md)
+**Status:** **Superseded** by ADR-0233 (see Corvin-ADR repo)
 and [`PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md).
 The package this roadmap builds on (`core/orchestration/plugin_system/`) has been retired.
 **Retained for:** the E2E test list and the JSON-Schema form design, both of which carried

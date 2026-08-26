@@ -1,7 +1,7 @@
 # Phase 1 Implementation Plan: Audit + Auth Pluginification — SUPERSEDED
 
 **Status:** **Superseded** by [`../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md)
-and [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md) —
+and ADR-0233 (see Corvin-ADR repo) —
 same objections as the sprint variant: a 3–4 engineer staffing model, and a Phase-1
 objective ("Extract Audit logging from L16", "Extract User Management from L18-21") that
 conflicts with ADR-0232's mandatory core. Backends are **additive**: core keeps writing

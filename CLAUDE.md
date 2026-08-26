@@ -122,7 +122,7 @@ without operator review · add in-process MCP server without operator review.
 **Execution:**
 
 1. **Draft ADR FIRST** (or sync with code):
-   - File: `Corvin-ADR/decisions/ADR-XXXX-<slug>.md`
+   - File: `/home/shumway/projects/Corvin-ADR/decisions/ADR-XXXX-<slug>.md` (external repo)
    - Minimum template (ADR-0264 frontmatter):
      ```yaml
      id: ADR-0XXX
@@ -139,17 +139,17 @@ without operator review · add in-process MCP server without operator review.
 2. **Commit code + ADR together:**
    ```bash
    git add core/...
-   git add Corvin-ADR/decisions/ADR-XXXX-*.md
+   cd /home/shumway/projects/Corvin-ADR && git add decisions/ADR-XXXX-*.md
    git commit -m "feat(module): description
 
-   ADR-XXXX documents the design.
+   ADR-XXXX documents the design (see Corvin-ADR repo).
 
    Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
    ```
 
 3. **Pre-commit hook validates** (layer 1):
    - Detects `core/` changes
-   - Checks for `Corvin-ADR/decisions/ADR-*` in same commit
+   - Checks for ADR file in `/home/shumway/projects/Corvin-ADR/decisions/`
    - Rejects if missing (unless exception flag set)
 
 4. **CI/CD gate validates** (layer 2):
@@ -499,7 +499,7 @@ auto-skip security/compliance mechanisms without justification · declare "done"
 change without running this gate · leave a skip implicit · hand-fill `superseded_by`.
 
 → Full reference: [adr-gate.md](docs/claude-ref/adr-gate.md)
-→ ADR: `Corvin-ADR: decisions/0264-adr-decision-graph-hermeneutic-traversal.md`
+→ ADR: See Corvin-ADR repo for ADR-0264 (adr-decision-graph)
 
 ---
 
@@ -524,7 +524,7 @@ already fully captured by an existing concept (amend it, never create a near-dup
 Skill (if a ≤8KB behavioral snippet is genuinely sufficient, a full concept adds nothing). When
 skipping, name the reason in one sentence — never skip silently, exactly like ADR Gate.
 
-**Destination:** `Corvin-ADR/concepts/CONCEPT-NNNN-slug.md` (sibling repo, own numbering,
+**Destination:** `/home/shumway/projects/Corvin-ADR/concepts/CONCEPT-NNNN-slug.md` (sibling repo, own numbering,
 never `ADR-NNNN`). Fallback if Corvin-ADR is unreachable: `CorvinOS/docs/concepts/`. Commit
 message: `concept: add/amend CONCEPT-NNNN — [title]`.
 
@@ -561,10 +561,8 @@ persona's namespace-gate prefix (skills created under the `assistant` persona mu
 skip implicit.
 
 → Full reference: [concept-gate.md](docs/claude-ref/concept-gate.md)
-→ Concept: `Corvin-ADR: concepts/0001-self-learning-project-concept-archive.md`
-→ Concept: `Corvin-ADR: concepts/0002-live-report-driven-root-cause-method.md`
+→ Concept: See Corvin-ADR repo for concepts (0001, 0002, 0008, etc.)
 → Skill: `assistant.corvinOS_live_report_root_cause` (project scope, `learned-experience`)
-→ Concept: `Corvin-ADR: concepts/CONCEPT-0008-reachability-review-axis.md`
 → Skill: `assistant.corvinOS_reachability_review` (project scope, `learned-experience`)
 
 ---
@@ -658,5 +656,5 @@ Phase 3 builds the learning layer on top of Phase 2 (Skill System). It enables c
 - Don't weaken schema immutability (LearningEvent is frozen)
 - Don't bypass audit chain (write_event always attempts audit logging)
 
-→ Full spec: [decisions/0314-learning-infrastructure-event-schema.md](../Corvin-ADR/decisions/0314-learning-infrastructure-event-schema.md)
+→ Full spec: See Corvin-ADR repo for ADR-0314 (learning-infrastructure-event-schema)
 

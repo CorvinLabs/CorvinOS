@@ -245,6 +245,6 @@ Route alerts to on-call team. E-mail template:
 
 ## See Also
 
-- [ADR-0422: Lazy-Load Cache (1000 skills)](../../Corvin-ADR/decisions/ADR-0422-lazy-load-cache-1000-skills.md)
+- ADR-0422: Lazy-Load Cache (1000 skills) (see Corvin-ADR repo)
 - [ADR-0425: Skills Monitoring API](../../docs/adr/ADR-0425-skills-monitoring-api.md)
 - Phase 8 integration tests: `core/skills/tests/test_integration_resolver_hardening.py`

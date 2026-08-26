@@ -157,7 +157,7 @@ docs: ["docs/claude-ref/learning-infrastructure.md"]
 
 ```
 CorvinOS/
-├── Corvin-ADR/
+├── /home/shumway/projects/Corvin-ADR/  (sibling repo)
 │   └── decisions/
 │       ├── ADR-0314-learning-infrastructure.md
 │       ├── ADR-0315-confidence-intervals.md
@@ -236,7 +236,7 @@ git commit -m "feat(module): description"
 
 # Hook logic:
 if [[ $modified_files =~ core/ ]]; then
-  if ! git diff --cached | grep -q "Corvin-ADR/decisions/ADR-"; then
+  if ! git diff --cached | grep -q "ADR-"; then
     echo "❌ Code changed in core/ but no ADR found"
     exit 1
   fi
@@ -382,7 +382,7 @@ This enables:
 CIES Metrics (updated hourly)
 ├── Ideas in flight: 12 (3 accepted, 9 under review)
 ├── Concepts active: 45 (38 accepted, 7 needs_review)
-├── ADRs shipped: 50 (all in Corvin-ADR/decisions/)
+├── ADRs shipped: 50 (all in see Corvin-ADR repo - decisions/)
 ├── Skills minted: 8 (6 with positive grades, 2 learning)
 └── Avg lineage depth: 2.4 (IDEA → CONCEPT → ADR)
 ```
@@ -417,8 +417,8 @@ CIES Metrics (updated hourly)
 
 ## Related Documentation
 
-- [ADR-0264: ADR Decision Graph](../Corvin-ADR/decisions/0264-adr-decision-graph.md) — frontmatter schema
-- [CONCEPT-0001: Self-Learning Archive](../Corvin-ADR/concepts/0001-self-learning-project-concept-archive.md) — foundation for CIES
+- ADR-0264: ADR Decision Graph (see Corvin-ADR repo) — frontmatter schema
+- CONCEPT-0001: Self-Learning Archive (see Corvin-ADR repo) — foundation for CIES
 - [ADR Gate & Concept Gate](../docs/claude-ref/adr-gate.md) — when to write, validation criteria
 - [MemPlace Architecture](../docs/idea-pipeline/README.md) — storage, immutability, persistence
 
