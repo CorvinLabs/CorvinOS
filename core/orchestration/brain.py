@@ -45,10 +45,64 @@ class TaskBrain:
         self._context_initializer = ContextInitializer(corvin_home)
         self._session_continuation_manager = SessionContinuationManager(corvin_home)
         self._corvin_home = corvin_home
+        self._subsystems_initialized = False
 
     def register_subsystem(self, subsystem):
         """Register a subsystem with the brain."""
         self.hub.register_subsystem(subsystem)
+
+    async def _register_skill_forge_subsystem(self, execution_context: Any) -> None:
+        """Register SkillForgeSubsystem after ExecutionContext initialization.
+
+        Called once per task during run_task() after ExecutionContext is available.
+
+        Args:
+            execution_context: ExecutionContext with tenant_id for subsystem
+
+        Raises:
+            Exception: Logged as warning; non-critical for task execution
+        """
+        try:
+            from core.orchestration.subsystems.skill_forge_subsystem import SkillForgeSubsystem
+
+            skill_forge = SkillForgeSubsystem(context=execution_context)
+            self.register_subsystem(skill_forge)
+            logger.info(f"✓ SkillForgeSubsystem registered for task (tenant={execution_context.tenant_id})")
+
+        except Exception as e:
+            logger.error(f"Failed to register SkillForgeSubsystem: {e}")
+            raise
+
+    async def initialize_subsystems(self) -> None:
+        """Initialize and register all Brain subsystems (ADR-0360, ADR-0359, etc.).
+
+        Called once during Brain startup to wire all standard subsystems:
+        - SkillForgeSubsystem (ADR-0360) — NOW initialized in run_task() after ExecutionContext
+        - ToolForgeSubsystem (ADR-0359)
+        - LoopEngineer, LearningEngine, etc.
+
+        Raises:
+            RuntimeError: If subsystem initialization fails
+        """
+        if self._subsystems_initialized:
+            logger.warning("Subsystems already initialized; skipping re-initialization")
+            return
+
+        try:
+            logger.info("Initializing Brain subsystems...")
+
+            # Note: SkillForgeSubsystem is now registered in run_task() after ExecutionContext
+            # This method can be used for subsystems that don't need ExecutionContext
+
+            # 2. TODO: ToolForgeSubsystem (ADR-0359) — add when available
+            # TODO: Add other subsystems (LoopEngineer, LearningEngine, etc.)
+
+            self._subsystems_initialized = True
+            logger.info("✓ Brain subsystems initialization complete")
+
+        except Exception as e:
+            logger.error(f"Subsystem initialization failed: {e}")
+            raise RuntimeError(f"Brain subsystem initialization failed: {e}") from e
 
     def save_task_checkpoint(
         self,
@@ -199,6 +253,17 @@ class TaskBrain:
                 time_remaining=time_remaining,
                 model=effective_model,
             )
+
+            # ADR-0360: Register SkillForgeSubsystem once ExecutionContext is available
+            if not self._subsystems_initialized:
+                try:
+                    execution_context = self._context_initializer.get_execution_context()
+                    if execution_context:
+                        await self._register_skill_forge_subsystem(execution_context)
+                        self._subsystems_initialized = True
+                except Exception as e:
+                    logger.warning(f"Failed to register SkillForgeSubsystem: {e}")
+                    # Non-critical; continue without subsystems
 
             # Store both v1 (if provided) and v2 in task metadata
             self._tasks[task_id] = {
