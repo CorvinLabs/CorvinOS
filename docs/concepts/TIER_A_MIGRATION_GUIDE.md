@@ -1,6 +1,6 @@
 # Tier A Migration Guide — SUPERSEDED
 
-**Status:** **Superseded** by [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md).
+**Status:** **Superseded** by ADR-0233 (see Corvin-ADR repo).
 Every path in this guide points at code that no longer exists
 (`core/orchestration/plugin_system/plugins/`, a `corvin_plugin` SDK, an
 `operator/orchestration/plugin_system/models.py`). Do not follow it.

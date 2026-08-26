@@ -119,6 +119,109 @@ class PIIDetector:
         """
         return self.detect(text, tenant_id=tenant_id) is not None
 
+    def is_suspicious(
+        self, text: str, *, tenant_id: str = "_default", min_confidence: float = 0.75
+    ) -> bool:
+        """Check if text is suspicious (matches high-confidence PII).
+
+        Args:
+            text: Text to check
+            tenant_id: Tenant identifier (keyword-only)
+            min_confidence: Confidence threshold (default 0.75)
+
+        Returns:
+            True if PII detected with confidence >= threshold
+        """
+        finding = self.detect(text, tenant_id=tenant_id)
+        if finding is None:
+            return False
+        return finding.confidence >= min_confidence
+
+    def detect_multiple(
+        self, values: list[str], *, tenant_id: str = "_default"
+    ) -> list[PIIFinding]:
+        """Detect all PII in a list of values.
+
+        Args:
+            values: List of values to scan
+            tenant_id: Tenant identifier (keyword-only)
+
+        Returns:
+            List of PIIFindings (may be empty)
+        """
+        findings = []
+        for value in values:
+            result = self.detect(value, tenant_id=tenant_id)
+            if result is not None:
+                findings.append(result)
+        return findings
+
+    def detect_in_dict(
+        self,
+        data: dict[str, Any],
+        *,
+        tenant_id: str = "_default",
+        exclude_keys: Optional[set[str]] = None,
+    ) -> dict[str, list[PIIFinding]]:
+        """Detect PII in all string values of a dictionary.
+
+        Args:
+            data: Dictionary to scan
+            tenant_id: Tenant identifier (keyword-only)
+            exclude_keys: Set of keys to skip (optional)
+
+        Returns:
+            Dictionary mapping keys to lists of PIIFindings (empty lists omitted)
+        """
+        exclude_keys = exclude_keys or set()
+        findings = {}
+
+        for key, value in data.items():
+            if key in exclude_keys:
+                continue
+
+            if isinstance(value, str):
+                result = self.detect(value, tenant_id=tenant_id)
+                if result is not None:
+                    findings[key] = [result]
+            elif isinstance(value, dict):
+                # Recursively scan nested dicts
+                nested = self.detect_in_dict(value, tenant_id=tenant_id, exclude_keys=exclude_keys)
+                if nested:
+                    findings[key] = []
+                    for nested_findings in nested.values():
+                        findings[key].extend(nested_findings)
+            elif isinstance(value, list):
+                # Scan list items
+                list_findings = []
+                for item in value:
+                    if isinstance(item, str):
+                        result = self.detect(item, tenant_id=tenant_id)
+                        if result is not None:
+                            list_findings.append(result)
+                if list_findings:
+                    findings[key] = list_findings
+
+        return findings
+
+    def get_all_patterns(self) -> list[PIIFinding]:
+        """Get all registered PII patterns.
+
+        Returns:
+            List of available PII patterns (as PIIFinding-like objects with metadata)
+        """
+        # Return metadata about all patterns
+        patterns = []
+        for name, pattern_info in PII_PATTERNS.items():
+            patterns.append(
+                PIIFinding(
+                    pii_class=name,
+                    confidence=pattern_info.confidence,
+                    text=None,
+                )
+            )
+        return patterns
+
 
 class PIIScrubber:
     """Scrub PII from text/data.

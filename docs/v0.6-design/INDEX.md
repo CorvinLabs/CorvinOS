@@ -20,18 +20,18 @@
 
 | ADR | Title | Focus | Status |
 |---|---|---|---|
-| **[ADR-0383](../../../Corvin-ADR/decisions/ADR-0383-operator-fingerprint-data-model.md)** | Operator Fingerprint Data Model | 4D style model (risk, speed, communication, task affinity) | ✓ Complete |
-| **[ADR-0384](../../../Corvin-ADR/decisions/ADR-0384-task-affinity-measurement.md)** | Task Affinity Measurement | Per-task-type success rate + Bayesian update | ✓ Complete |
-| **[ADR-0385](../../../Corvin-ADR/decisions/ADR-0385-predictive-guidance-engine.md)** | Predictive Guidance Engine | ARIMA task predictor + suggestions | ✓ Complete |
-| **[ADR-0386](../../../Corvin-ADR/decisions/ADR-0386-what-if-replay-architecture.md)** | What-If Replay Architecture | Deterministic snapshots + counterfactual replay | ✓ Complete |
+| **ADR-0383** | Operator Fingerprint Data Model | 4D style model (risk, speed, communication, task affinity) | ✓ Complete |
+| **ADR-0384** | Task Affinity Measurement | Per-task-type success rate + Bayesian update | ✓ Complete |
+| **ADR-0385** | Predictive Guidance Engine | ARIMA task predictor + suggestions | ✓ Complete |
+| **ADR-0386** | What-If Replay Architecture | Deterministic snapshots + counterfactual replay | ✓ Complete |
 
 ### Concepts (Reusable Methodologies)
 
 | Concept | Title | Methodology | Status |
 |---|---|---|---|
-| **[CONCEPT-0020](../../../Corvin-ADR/concepts/CONCEPT-0020-operator-style-fingerprinting.md)** | Operator Style Fingerprinting | Measurement algorithms, stability testing, privacy | ✓ Complete |
-| **[CONCEPT-0021](../../../Corvin-ADR/concepts/CONCEPT-0021-task-affinity-learning.md)** | Task Affinity Learning | Per-task success measurement, strength tiers | ✓ Complete |
-| **[CONCEPT-0022](../../../Corvin-ADR/concepts/CONCEPT-0022-predictive-task-suggestion.md)** | Predictive Task Suggestion | ARIMA modeling, triggering rules, acceptance tracking | ✓ Complete |
+| **CONCEPT-0020** | Operator Style Fingerprinting | Measurement algorithms, stability testing, privacy | ✓ Complete |
+| **CONCEPT-0021** | Task Affinity Learning | Per-task success measurement, strength tiers | ✓ Complete |
+| **CONCEPT-0022** | Predictive Task Suggestion | ARIMA modeling, triggering rules, acceptance tracking | ✓ Complete |
 
 ---
 

@@ -1,7 +1,7 @@
 # Phase 1 Sprint Execution Plan: Audit + Auth Plugins — SUPERSEDED
 
 **Status:** **Superseded** by [`PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md)
-and [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md).
+and ADR-0233 (see Corvin-ADR repo).
 
 Two reasons:
 

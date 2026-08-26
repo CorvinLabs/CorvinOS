@@ -11,13 +11,7 @@ For the four *declarative* extension surfaces (personas, Forge tools, SkillForge
 skills, bridge config) see [Plugin System](plugin-system.md). Those need no code.
 This document is about the code path.
 
-**Decisions of record:** [ADR-0030](../../Corvin-ADR/decisions/0030-plugin-system.md)
-(lifecycle contract) · [ADR-0033](../../Corvin-ADR/decisions/0033-provider-abstractions.md)
-(provider abstractions) · [ADR-0233](../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md)
-(consolidation) · [ADR-0231](../../Corvin-ADR/decisions/0231-compartmentalization-system.md)
-(compartmentalization, health, healing) · [ADR-0232](../../Corvin-ADR/decisions/0232-compliance-hardening.md)
-(mandatory core) · [ADR-0124](../../Corvin-ADR/decisions/0124-open-platform-extensibility.md)
-(runtime-extensibility invariants).
+**Decisions of record:** ADR-0030 (lifecycle contract), ADR-0033 (provider abstractions), ADR-0233 (consolidation), ADR-0231 (compartmentalization, health, healing), ADR-0232 (mandatory core), ADR-0124 (runtime-extensibility invariants). See Corvin-ADR repo for details.
 
 ---
 
@@ -237,7 +231,7 @@ boolean, which is always truthy, and being fail-closed it would have blocked *ev
 boot. **A fail-closed check with inverted logic is a denial of service, not a safety
 net.**
 
-**Why the chain check is split** ([ADR-0234](../../Corvin-ADR/decisions/0234-audit-chain-boot-gate-semantics.md)).
+**Why the chain check is split** (see ADR-0234 in Corvin-ADR repo).
 `audit_chain_intact` started as a full-file verify, and on the maintainer's own
 machine it made CorvinOS unbootable: the live chain carries a historical HMAC
 key-mismatch window (380 records, ~77 000 records before the tail), so the gate fired
@@ -380,13 +374,10 @@ shadows the standard library the moment its parent lands on `sys.path`.
 There is no new downloader, by decision (ADR-0233 D3). Artifacts arrive through
 paths that already verify them:
 
-- **tool-shaped** extensions through [ADR-0096](../../Corvin-ADR/decisions/0096-mcp-plugin-manager.md)'s
-  `mcp_manager`: npm/pip/GitHub/Docker/local with SHA256 and digest pinning verified
+- **tool-shaped** extensions through ADR-0096's `mcp_manager`: npm/pip/GitHub/Docker/local with SHA256 and digest pinning verified
   **on every spawn**, L34 locality, L35 egress, vault secret injection, and a
   fail-closed `mcp_plugin.spawn_blocked`;
-- **layer-shaped** extensions through [ADR-0142](../../Corvin-ADR/decisions/0142-layer-extension-api.md)
-  / [ADR-0156](../../Corvin-ADR/decisions/0156-custom-layer-system.md): the
-  `ext.<vendor>.*` namespace with a capability tier and a license gate.
+- **layer-shaped** extensions through ADR-0142 / ADR-0156: the `ext.<vendor>.*` namespace with a capability tier and a license gate. (See Corvin-ADR repo for details.)
 
 An installer that downloads and executes third-party code is the highest-blast-radius
 feature class in this repo; the failure mode is remote code execution. A marketplace

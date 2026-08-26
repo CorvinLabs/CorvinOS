@@ -538,3 +538,15 @@ def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
             ),
             status_code=503,
         )
+
+
+# ✅ PRODUCTION APP FACTORY — exported for uvicorn (all routers built above)
+def create_app() -> FastAPI:
+    """Create the Console FastAPI app with all routers mounted."""
+    _app = FastAPI(title="CorvinOS Console", version="0.1.0")
+    _app.include_router(router)  # All API routes (includes /vibe-engineering/*)
+    mount_static(_app, url_prefix="/console")  # SPA at /console/
+    return _app
+
+# Uvicorn entry point
+app = create_app()

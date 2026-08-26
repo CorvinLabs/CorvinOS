@@ -200,7 +200,7 @@ If you have multiple tenants (e.g., `tenant_prod`, `tenant_staging`):
 
 ## 📝 Documentation Updates
 
-- ✅ [ADR-0362](../Corvin-ADR/decisions/ADR-0362-tenant-native-data-persistence.md) — Complete specification
+- ✅ ADR-0362 — Complete specification (see Corvin-ADR repository)
 - ✅ [Layer 7 SkillForge](docs/claude-ref/layer-7-skillforge.md) — Updated for tenant-scoped storage
 - ✅ [Layer 6 Forge](docs/claude-ref/layer-6-forge.md) — Updated for tenant-scoped tools
 - ✅ [Multi-Tenant](docs/claude-ref/multi-tenant.md) — Tenant isolation guarantees documented
@@ -246,7 +246,7 @@ After migration, old paths at `~/.corvin/global/` and `~/.corvin/<old_paths>/` r
 - Tenant-native storage is now the **only supported path strategy**
 - Use `core.paths.tenant_*` functions for all new storage paths
 - Legacy `scope_root()` behavior is removed; code must provide `tenant_id`
-- See [ADR-0362](../Corvin-ADR/decisions/ADR-0362-tenant-native-data-persistence.md) for architecture
+- See ADR-0362 (in Corvin-ADR repository) for architecture
 
 ---
 

@@ -543,7 +543,7 @@ window.sim.tick(); // Manually tick
 
 For issues, questions, or suggestions:
 
-1. Check [ADR-0400](../Corvin-ADR/decisions/ADR-0400-graph-native-task-execution-model.md)
+1. Check ADR-0400 (see Corvin-ADR repo for graph-native-task-execution-model)
 2. Read [TaskGraphViewer README](./TASK_GRAPH_VIEWER_README.md)
 3. File an issue with:
    - Browser & version

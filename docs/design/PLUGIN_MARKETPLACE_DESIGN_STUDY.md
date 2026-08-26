@@ -1,7 +1,6 @@
 # Plugin Marketplace — Design Study (NOT an ADR)
 
-**Status:** **Design study.** Superseded in part by
-[ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md);
+**Status:** **Design study.** Superseded in part by ADR-0233 (see Corvin-ADR repo);
 NOT promoted to an ADR and NOT an implementation plan.
 **Date:** 2026-07-26
 **Author:** Claude Code

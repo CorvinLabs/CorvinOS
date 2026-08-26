@@ -621,13 +621,13 @@ print(f'Confidence: {multiplier.confidence}')
 
 ## Related Documents
 
-- [ADR-0321](../Corvin-ADR/decisions/ADR-0321-*.md): Tool Execution Learning Events
-- [ADR-0322](../Corvin-ADR/decisions/ADR-0322-*.md): Tool Performance Ranking
-- [ADR-0323](../Corvin-ADR/decisions/ADR-0323-*.md): Skill Attribution Model
-- [ADR-0324](../Corvin-ADR/decisions/ADR-0324-*.md): Performance Aggregation
-- [ADR-0325](../Corvin-ADR/decisions/ADR-0325-*.md): Context Coherence
-- [ADR-0326](../Corvin-ADR/decisions/ADR-0326-*.md): Cost Learning
-- [ADR-0327](../Corvin-ADR/decisions/ADR-0327-*.md): Operator Feedback
+- ADR-0321: Tool Execution Learning Events (see Corvin-ADR repo)
+- ADR-0322: Tool Performance Ranking (see Corvin-ADR repo)
+- ADR-0323: Skill Attribution Model (see Corvin-ADR repo)
+- ADR-0324: Performance Aggregation (see Corvin-ADR repo)
+- ADR-0325: Context Coherence (see Corvin-ADR repo)
+- ADR-0326: Cost Learning (see Corvin-ADR repo)
+- ADR-0327: Operator Feedback (see Corvin-ADR repo)
 - [LEARNING_GAPS_LDD_VERIFICATION_COMPLETE.md](./LEARNING_GAPS_LDD_VERIFICATION_COMPLETE.md): Test coverage & verification
 
 ---
