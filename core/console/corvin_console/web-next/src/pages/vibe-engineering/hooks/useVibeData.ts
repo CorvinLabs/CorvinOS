@@ -103,7 +103,7 @@ export function useVibeData(pollIntervalMs = 5000): VibeData {
     const fetchData = async () => {
       try {
         const [stateRes, configRes] = await Promise.all([
-          fetch('/vibe-engineering/state'),
+          fetch('/vibe-engineering/state?debug=true&limit=50'),  // Real data + debug info
           fetch('/vibe-engineering/config'),
         ]);
 
