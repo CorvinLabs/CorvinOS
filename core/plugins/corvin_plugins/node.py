@@ -183,6 +183,26 @@ class ChildStatus:
     depth: int = 1  # How many levels deep (parent=1, grandchild=2)
     audit_failures_10min: int = 0  # Recent audit failures
     status: str = "healthy"  # healthy | degraded | quarantined
+    last_failure_reason: Optional[str] = None
+    last_health_check_utc: Optional[str] = None
+
+    def mark_healthy(self) -> None:
+        """Mark child as healthy, reset failure counter."""
+        self.status = "healthy"
+        self.audit_failures_10min = 0
+        self.last_failure_reason = None
+
+    def mark_degraded(self, reason: str) -> None:
+        """Mark child as degraded (soft isolation, try fallback)."""
+        self.status = "degraded"
+        self.audit_failures_10min += 1
+        self.last_failure_reason = reason
+
+    def mark_quarantined(self, reason: str) -> None:
+        """Mark child as quarantined (hard isolation)."""
+        self.status = "quarantined"
+        self.audit_failures_10min = 999  # Very high counter
+        self.last_failure_reason = reason
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict."""
@@ -259,6 +279,28 @@ class PluginNode:
         # This node has a parent, so it's at least depth 1.
         # For actual depth via recursion, use graph._compute_depth()
         return 1
+
+    def add_sub_plugin(self, child_id: str) -> None:
+        """Add a child plugin (validated by caller)."""
+        if child_id not in self.sub_plugins:
+            self.sub_plugins.append(child_id)
+            self.child_status[child_id] = ChildStatus(child_id=child_id, depth=1)
+
+    def remove_sub_plugin(self, child_id: str) -> None:
+        """Remove a child plugin."""
+        if child_id in self.sub_plugins:
+            self.sub_plugins.remove(child_id)
+        if child_id in self.child_status:
+            del self.child_status[child_id]
+
+    def reset_budget_cycle(self) -> None:
+        """Reset budget counters for new health-check cycle."""
+        self.current_budget_used = {
+            "compliance": 0,
+            "high": 0,
+            "standard": 0,
+            "low": 0,
+        }
 
     def can_handle_capability(self, capability: str) -> bool:
         """Can this plugin handle the given capability?"""
@@ -375,4 +417,27 @@ class DelegationTransaction:
             "final_status": self.final_status,
             "total_latency_ms": self.total_latency_ms,
             "tree_hash": self.tree_hash,
+        }
+
+    def to_audit_record(self) -> Dict[str, Any]:
+        """Convert to audit log record format."""
+        return {
+            "event": "delegation_transaction_complete",
+            "work_id": self.work_id,
+            "hops": len(self.breadcrumbs),
+            "breadcrumbs": [
+                {
+                    "hop": b.event_type,
+                    "plugin": b.plugin_id,
+                    "delegated_to": b.target_child,
+                    "latency_ms": b.latency_ms,
+                    "reason": b.reason,
+                    "timestamp_utc": b.timestamp_utc,
+                }
+                for b in self.breadcrumbs
+            ],
+            "final_status": self.final_status,
+            "total_latency_ms": self.total_latency_ms,
+            "tree_hash": self.tree_hash,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         }
