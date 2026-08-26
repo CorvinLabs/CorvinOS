@@ -10,7 +10,7 @@ class FeatureFlagResolver:
     TIER_1_FLAGS = {
         "task_orchestrator_multiphase": True,  # TaskOrchestrator + Registry (ENABLED)
         "auto_session_renewal": True,           # SessionRenewerEngine (ENABLED)
-        "notification_system_v1": False,        # Discord notifications (OFF by default, operator opt-in)
+        "notification_system_v1": True,         # Discord notifications (ENABLED for 100% rollout)
     }
 
     TIER_2_FLAGS = {
