@@ -985,6 +985,23 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("learning", "feedback", "auto-promotion", "phase-4"),
         release_tier="alpha",
     ),
+    FeatureFlag(
+        id="skill_forge_enabled",
+        label="Skill Forge 2.0 — Autonomous Skill Creation & Auto-Grading",
+        description=(
+            "Enable Skill Forge 2.0 (ADR-0360): autonomous skill creation, auto-grading from "
+            "strategy outcomes, and auto-promotion. When enabled, the SkillForgeSubsystem "
+            "registers with Brain v0.2 to manage the full skill lifecycle: create skills, "
+            "grade them based on success/failure, and auto-promote when confidence > 0.6 "
+            "and mean_score > 0.7. Includes metrics tracking (skill_create_latency, "
+            "skill_grade_latency, promotion_rate). Off (default) disables skill autonomy; "
+            "skills created manually remain static."
+        ),
+        owner="maintainer",
+        target_release="0.10.63",
+        tags=("skills", "autonomy", "auto-grading", "observability", "production"),
+        release_tier="beta",
+    ),
 )
 
 

@@ -144,9 +144,11 @@ confidence = t_distribution_cdf(score, sem)
 
 **Default:** OFF (ship-dark)
 
-**Location:** `spec.features.skill_forge_v2_enabled` in `tenant.corvin.yaml`
+**Name:** `skill_forge_enabled` (matches Console feature registry)
 
-**Toggle:** Console → Settings → Features → "Skill Forge v2"
+**Location:** `spec.features.skill_forge_enabled` in `tenant.corvin.yaml`
+
+**Toggle:** Console → Settings → Features → "Skill Forge" (visible when enabled in settings)
 
 ---
 
