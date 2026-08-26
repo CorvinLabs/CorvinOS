@@ -255,11 +255,22 @@ class TaskBrain:
             )
 
             # ADR-0360: Register SkillForgeSubsystem once ExecutionContext is available
+            # Feature flag: skill_forge_v2_enabled (default OFF, ship-dark per CLAUDE.md)
             if not self._subsystems_initialized:
                 try:
                     execution_context = self._context_initializer.get_execution_context()
                     if execution_context:
-                        await self._register_skill_forge_subsystem(execution_context)
+                        # Check feature flag (default: OFF)
+                        skill_forge_enabled = getattr(
+                            execution_context, "_feature_flags", {}
+                        ).get("skill_forge_v2_enabled", False)
+
+                        if skill_forge_enabled:
+                            await self._register_skill_forge_subsystem(execution_context)
+                            logger.info("SkillForgeSubsystem enabled (feature flag: skill_forge_v2_enabled)")
+                        else:
+                            logger.debug("SkillForgeSubsystem disabled (feature flag not set; default OFF)")
+
                         self._subsystems_initialized = True
                 except Exception as e:
                     logger.warning(f"Failed to register SkillForgeSubsystem: {e}")
