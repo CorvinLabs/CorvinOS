@@ -11,6 +11,13 @@ from .task_registry import (
     TaskRegistryPersistence, get_default_registry
 )
 
+# Import notification router (optional, fail-gracefully if not available)
+try:
+    from .notification_router import NotificationRouter
+    _notification_router = NotificationRouter()
+except ImportError:
+    _notification_router = None
+
 
 @dataclass(frozen=True)
 class Phase:
@@ -102,6 +109,16 @@ class TaskOrchestrator:
                     break
                 else:
                     # Stalled: some phase failed, no ready phases
+                    # Notify user of stall condition
+                    if _notification_router:
+                        failed_phases = [p.phase_id for p in task.phases.values()
+                                        if p.status == PhaseStatus.FAILED]
+                        await _notification_router.on_phase_failed({
+                            "task_id": spec.task_id,
+                            "phase_id": "TASK_STALLED",
+                            "error": f"Task stalled: phases {failed_phases} failed, no recovery path",
+                        })
+
                     await self._emit_event("task.failed", {
                         "task_id": spec.task_id,
                         "reason": "phase_failed_no_ready"
@@ -134,6 +151,14 @@ class TaskOrchestrator:
             parent_task_id=task.parent_task_id,
         )
         await self.registry.append_task(final_task)
+
+        # Notify user
+        if _notification_router:
+            await _notification_router.on_task_completed({
+                "task_id": spec.task_id,
+                "phases": len(task.phases)
+            })
+
         await self._emit_event("task.completed", {
             "task_id": spec.task_id,
             "phases": len(task.phases)
@@ -190,6 +215,15 @@ class TaskOrchestrator:
             parent_task_id=task.parent_task_id,
         )
         await self.registry.append_task(task)
+
+        # Notify user
+        if _notification_router:
+            await _notification_router.on_phase_completed({
+                "task_id": task_id,
+                "phase_id": phase.phase_id,
+                "result": result,
+            })
+
         await self._emit_event("phase.completed", {
             "task_id": task_id,
             "phase_id": phase.phase_id,
@@ -244,6 +278,15 @@ class TaskOrchestrator:
                 parent_task_id=task.parent_task_id,
             )
             await self.registry.append_task(task)
+
+            # Notify user
+            if _notification_router:
+                await _notification_router.on_phase_failed({
+                    "task_id": task_id,
+                    "phase_id": phase.phase_id,
+                    "error": str(error),
+                })
+
             await self._emit_event("phase.failed", {
                 "task_id": task_id,
                 "phase_id": phase.phase_id,
