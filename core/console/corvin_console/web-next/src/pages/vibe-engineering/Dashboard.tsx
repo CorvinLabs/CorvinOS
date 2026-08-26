@@ -4,6 +4,7 @@ import { useVibeData } from './hooks/useVibeData';
 import { BrainStatus } from './components/BrainStatus';
 import { ContextIntelligence } from './components/ContextIntelligence';
 import { LearningHub } from './components/LearningHub';
+import { DebugPanel } from './components/DebugPanel';
 
 export function Dashboard() {
   const data = useVibeData(5000); // Poll every 5s
@@ -92,6 +93,11 @@ export function Dashboard() {
           <p>Session Explorer view coming soon...</p>
         </div>
       )}
+
+      {/* Debug Panel — Real Data Inspector (always visible) */}
+      <div className="mt-8 border-t pt-6">
+        <DebugPanel data={data} />
+      </div>
     </div>
   );
 }
