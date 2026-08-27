@@ -1,183 +1,120 @@
 /**
- * Vibe Engineering Panel E2E (ADR-0370 Observability).
+ * Vibe Engineering group E2E — the five-panel navigation
+ * (CONSOLE_REDESIGN_UNIFIED_CONCEPT, replaces the eleven-entry legacy group).
  *
- * Smoke test for the Vibe Engineering panel and its child panels:
- * - Vibe Overview (replaces removed Vibe Inspector)
- * - Token Metrics Dashboard
+ * Runs against the LIVE console (playwright.config baseURL =
+ * http://127.0.0.1:8765/console) with the shared session from global-setup, so
+ * every assertion crosses the real HTTP + router + bundle boundary. That is the
+ * point: the panels these tests cover were source-correct and unreachable for
+ * weeks because pages/vibe-engineering.tsx shadowed pages/vibe-engineering/ and
+ * nothing exercised the mounted route.
  *
- * These panels provide observability into context pipeline, token usage,
- * and engineering metrics. The Overview aggregates context traces; Token Metrics
- * shows real-time token cost/savings and ROI.
- *
- * Flag: requiredFlag: "vibe_engineering" — gate both panels behind this flag.
+ * Group: Dashboard · Brain Monitor · Context Intelligence · Learning Hub ·
+ *        Session Explorer.
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const WHOAMI = {
-  tier: 'owner',
-  tenant_id: '_default',
-  fingerprint: 'e2e-fingerprint',
-  csrf_token: 'e2e-csrf-token',
-  expires_at: Math.floor(Date.now() / 1000) + 3600,
-};
+const RETIRED = [
+  'vibe-overview', 'talent', 'learning', 'learning-objectives',
+  'multi-instance', 'task-graph', 'brain-status', 'debug-panel',
+];
 
-async function mockAuth(page: Page) {
-  await page.route('**/v1/console/auth/whoami', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(WHOAMI),
-    }),
-  );
-
-  // SetupGate: report finished setup to bypass overlay
-  await page.route('**/v1/console/setup/status', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ setup_complete: true }),
-    }),
-  );
-
-  // Capability manifest: vibe_engineering flag enabled
-  await page.route('**/v1/console/capabilities/manifest', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        version: '1.0',
-        features: {
-          vibe_engineering: true,  // Enable vibe-engineering panels
-        },
-      }),
-    }),
-  );
+async function goto(page: Page, route: string) {
+  // baseURL already ends in /console, and an ABSOLUTE path would discard that
+  // prefix and hit the gateway's own 404 instead of the SPA.
+  await page.goto(`/console/app/${route}`);
+  // NOT networkidle: these panels poll (/state every 5s, the vibe adapter every
+  // 15s), so the network never goes idle and every wait would burn the timeout.
+  await page.waitForLoadState('domcontentloaded');
 }
 
-test.describe('Vibe Engineering Panel', () => {
-  test('panel loads and displays overview', async ({ page }) => {
-    await mockAuth(page);
+/** A React render crash leaves the route error boundary, not the panel. */
+async function expectNoCrash(page: Page) {
+  await expect(
+    page.locator('text=/something went wrong|application error/i'),
+  ).toHaveCount(0);
+}
 
-    // Navigate to vibe-engineering panel
-    await page.goto('/console/app/vibe-engineering');
+test.describe('Vibe Engineering group', () => {
+  test('sidebar lists exactly the five current panels', async ({ page }) => {
+    await goto(page, 'vibe-engineering');
 
-    // Wait for page to stabilize (loading state complete)
-    await page.waitForLoadState('networkidle');
-
-    // The panel should render without errors
-    const container = page.locator('[data-testid="vibe-engineering-container"]');
-    // Fallback: check for common panel elements
-    const heading = page.locator('h1, h2').filter({ hasText: /vibe|engineering|overview/i });
-
-    // At least one of the selectors should exist (loose assertion to avoid brittle tests)
-    const hasContent = await container.isVisible().catch(() => false) ||
-      await heading.isVisible().catch(() => false) ||
-      await page.locator('main').isVisible();
-
-    expect(hasContent).toBeTruthy();
+    const nav = page.locator('aside, nav').first();
+    for (const [route, label] of [
+      ['vibe-engineering', 'Dashboard'],
+      ['brain-monitor', 'Brain Monitor'],
+      ['context-intelligence', 'Context Intelligence'],
+      ['learning-hub', 'Learning Hub'],
+      ['session-explorer', 'Session Explorer'],
+    ] as const) {
+      await expect(
+        nav.locator(`a[href$="/app/${route}"]`),
+        `sidebar entry for ${label}`,
+      ).toHaveCount(1);
+    }
   });
 
-  test('vibe overview child panel is accessible', async ({ page }) => {
-    await mockAuth(page);
-
-    // Navigate to vibe-overview sub-panel
-    await page.goto('/console/app/vibe-overview');
-    await page.waitForLoadState('networkidle');
-
-    // Page should render without crashing (no error overlay)
-    const errorOverlay = page.locator('[role="alert"]').filter({ hasText: /error|failed/i });
-    const errorCount = await errorOverlay.count();
-    expect(errorCount).toBe(0);
-
-    // Should have some content
-    const body = page.locator('body');
-    const text = await body.textContent();
-    expect(text).toBeTruthy();
+  test('no retired panel is still linked from the sidebar', async ({ page }) => {
+    await goto(page, 'vibe-engineering');
+    for (const route of RETIRED) {
+      await expect(
+        page.locator(`a[href$="/app/${route}"]`),
+        `retired route ${route} must not be linked`,
+      ).toHaveCount(0);
+    }
   });
 
-  test('token metrics panel is accessible', async ({ page }) => {
-    await mockAuth(page);
-
-    // Navigate to token-metrics sub-panel
-    await page.goto('/console/app/token-metrics');
-    await page.waitForLoadState('networkidle');
-
-    // Page should render without crashing
-    const errorOverlay = page.locator('[role="alert"]').filter({ hasText: /error|failed/i });
-    const errorCount = await errorOverlay.count();
-    expect(errorCount).toBe(0);
-
-    // Should have token-related content
-    const body = page.locator('body');
-    const text = await body.textContent() || '';
-    // Either "token" or "metric" should appear
-    const hasTokensOrMetrics = /token|metric|usage|cost/i.test(text);
-    expect(hasTokensOrMetrics || text.length > 100).toBeTruthy();  // Fallback: non-empty page
+  test('Dashboard route renders the unified 3-column dashboard', async ({ page }) => {
+    await goto(page, 'vibe-engineering');
+    // The directory index (Dashboard.tsx), not the retired Context Pipeline page.
+    await expect(page.getByTestId('vibe-dashboard')).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /vibe engineering dashboard/i }),
+    ).toBeVisible();
+    await expectNoCrash(page);
   });
 
-  test('vibe panel navigation works', async ({ page }) => {
-    await mockAuth(page);
-
-    // Start at vibe-engineering
-    await page.goto('/console/app/vibe-engineering');
-    await page.waitForLoadState('networkidle');
-
-    // Look for navigation links to sub-panels
-    // (Note: actual implementation may vary; this is a smoke test)
-    const nav = page.locator('nav, [role="navigation"]');
-    const navExists = await nav.isVisible().catch(() => false);
-
-    // Panel should at least be accessible; navigation may be in sidebar or panel header
-    const hasNavOrLink = navExists || await page.locator('a').count() > 0;
-    expect(hasNavOrLink).toBeTruthy();
+  test('Brain Monitor renders real pipeline telemetry', async ({ page }) => {
+    await goto(page, 'brain-monitor');
+    await expect(page.getByTestId('brain-monitor')).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /brain monitor/i }),
+    ).toBeVisible();
+    // The configured-pipeline card is rendered from GET /pipeline, always.
+    await expect(page.locator('text=/configured pipeline/i')).toBeVisible();
+    await expectNoCrash(page);
   });
 
-  test('vibe panel handles flag-off gracefully', async ({ page }) => {
-    // Mock auth WITHOUT vibe_engineering flag
-    await page.route('**/v1/console/auth/whoami', (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(WHOAMI),
-      }),
-    );
+  test('Session Explorer renders the turn history', async ({ page }) => {
+    await goto(page, 'session-explorer');
+    await expect(page.getByTestId('session-explorer')).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /session explorer/i }),
+    ).toBeVisible();
+    // Either sessions or the honest empty state — never a crash.
+    await expectNoCrash(page);
+  });
 
-    await page.route('**/v1/console/setup/status', (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ setup_complete: true }),
-      }),
-    );
+  test('Context Intelligence and Learning Hub still render', async ({ page }) => {
+    // Assert a card these panels always render once /state resolves — an empty
+    // `main` is just the loading spinner, which would pass a truthiness check
+    // and prove nothing.
+    await goto(page, 'context-intelligence');
+    await expect(page.locator('text=Original Context').first()).toBeVisible();
+    await expectNoCrash(page);
 
-    // Capability manifest: vibe_engineering flag DISABLED
-    await page.route('**/v1/console/capabilities/manifest', (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          version: '1.0',
-          features: {
-            vibe_engineering: false,  // Flag OFF
-          },
-        }),
-      }),
-    );
+    await goto(page, 'learning-hub');
+    await expect(page.locator('text=Talent Score').first()).toBeVisible();
+    await expectNoCrash(page);
+  });
 
-    // Navigate to vibe-engineering
-    await page.goto('/console/app/vibe-engineering');
-    await page.waitForLoadState('networkidle');
-
-    // Should show a feature-gated message or redirect
-    const body = page.locator('body');
-    const text = await body.textContent() || '';
-
-    // Either: redirect to 404/not-found, or show "feature not available" message
-    // This is flag-dependent, so we accept either
-    const isGated = /not available|feature|disabled|not found|404/i.test(text) ||
-      page.url().includes('not-found') ||
-      page.url().includes('404');
-
-    expect(isGated || text.length < 100).toBeTruthy();  // Either gated or minimal content
+  test('retired routes resolve to the 404 page, not a stale panel', async ({ page }) => {
+    for (const route of RETIRED) {
+      await goto(page, route);
+      await expect(
+        page.getByRole('heading', { name: /page not found/i }),
+        `${route} should 404`,
+      ).toBeVisible();
+    }
   });
 });

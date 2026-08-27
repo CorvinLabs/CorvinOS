@@ -1,5 +1,19 @@
 # Vibe Engineering Console Redesign — Unified UX Concept
 
+**Status: IMPLEMENTED (2026-08-27, ADR-0431).** The five-entry NavGroup below is
+live. Deltas from this document, deliberate:
+
+| This document | Shipped |
+|---|---|
+| "Brain Monitor" = 10 Brain v0.2 subsystems | CEL pipeline stages — the units that actually execute per turn. The 10 Brain subsystems have no mounted introspection endpoint, so a page over them could only have shown invented numbers. |
+| Dashboard hosts the secondary views as tabs | Secondary views are their own routes (`/app/brain-monitor`, `/app/context-intelligence`, `/app/learning-hub`, `/app/session-explorer`); the Dashboard links to them. This document's own "NOT tabs" rule, applied one level deeper. |
+| "Session Explorer (Task history)" | Turn history from the durable Decision Record (`/traces`), with brief / assembly / forged drill-down — the surface the retired Context Pipeline page owned. |
+
+Known gap, NOT fixed by ADR-0431: the Dashboard's Learning Hub column and
+`GET /vibe-engineering/state` still emit hardcoded placeholders (literal
+"decision X" / "Skill Y", 42/0.87/18/94%, `talent.score = 50 + events*2`).
+Brain Monitor and Session Explorer read only real endpoints.
+
 **Objective:** Single coherent dashboard showing Brain, Context, Memory, Graph, Learning  
 **Principle:** Operator perspective — "What is the agent doing RIGHT NOW and WHY?"  
 **Structure:** One unified NavGroup, four interconnected view layers

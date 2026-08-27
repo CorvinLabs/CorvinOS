@@ -14,15 +14,14 @@ import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
 import {
-  DashboardPage, YourTalentPage, SettingsPage, EnginesPage, BrowserPage,
+  DashboardPage, SettingsPage, EnginesPage, BrowserPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
   CoworkPage, LddPage, CompliancePage, FilesPage, SpacePage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, ActivityFeedPage,
-  LearningObjectivesPage, MultiInstancePage, VibeOverviewPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage,
-  BrainStatusPage, ContextIntelligencePage, LearningHubPage, DebugPanelPage,
+  BrainMonitorPage, ContextIntelligencePage, LearningHubPage, SessionExplorerPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 
@@ -33,23 +32,19 @@ const rc = (route: string, label: string, component: ComponentType,
 });
 
 export const PANELS: ConsolePanel[] = [
-  // reference panel (react load kind)
+  // The Vibe Engineering group's primary view (ADR-0400): the unified 3-column
+  // Dashboard in src/pages/vibe-engineering/. Until 2026-08-27 a sibling FILE,
+  // pages/vibe-engineering.tsx (the retired Context Pipeline page), shadowed the
+  // directory — file beats directory in module resolution — so this import
+  // silently loaded the old page and the Dashboard was unreachable.
   {
     id: "vibe-engineering", route: "vibe-engineering",
-    nav: { label: "Vibe Engineering", icon: "Layers", group: "observability" },
+    nav: { label: "Dashboard", icon: "Layers", group: "vibe" },
     requiredFlag: "vibe_engineering",
     element: { kind: "react", load: () => import("@/pages/vibe-engineering") },
     contractVersion: "1",
   },
-  // G2 (ADR-0370): Vibe Overview — replaces the removed Vibe Inspector, which was a
-  // read-only subset of the Context Pipeline page (same /traces data) adding only
-  // aggregate counters. Those counters + a CEL-flow explainer live here now, as a
-  // first-party React page (no more sandboxed-iframe external panel to maintain).
-  rc("vibe-overview", "Overview", VibeOverviewPage,
-     { nav: { label: "Overview", icon: "" }, requiredFlag: "vibe_engineering" }),
-  // simple top-level feature panels (reuse proven lazy components)
   rc("dashboard", "Dashboard", DashboardPage),
-  rc("talent", "Your Talent", YourTalentPage),
   rc("settings", "Settings", SettingsPage),
   rc("engines", "AI Engines", EnginesPage),
   rc("browser", "Browser", BrowserPage),
@@ -81,8 +76,6 @@ export const PANELS: ConsolePanel[] = [
   rc("mcp-plugins", "MCP Plugins", McpPluginsPage),
   rc("plugins", "Plugins", PluginsPage),
   rc("activity", "Activity", ActivityFeedPage),
-  rc("learning-objectives", "Learning Objectives", LearningObjectivesPage),
-  rc("multi-instance", "Multi-Instance", MultiInstancePage),
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,
      { nav: { label: "GitHub", icon: "Github", group: "settings" } }),
@@ -94,15 +87,18 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Audit", icon: "Shield" } }),
   rc("releases", "Releases", ReleasesPage,
      { nav: { label: "Releases", icon: "Package" } }),
-  // Brain Engineering Panels (ADR-0353) — independent dashboard views
-  rc("brain-status", "Brain Status", BrainStatusPage,
-     { nav: { label: "Brain Status", icon: "Brain", group: "observability" }, requiredFlag: "vibe_engineering" }),
+  // Vibe Engineering secondary views (CONSOLE_REDESIGN_UNIFIED_CONCEPT):
+  // Dashboard (above) · Brain Monitor · Context Intelligence · Learning Hub ·
+  // Session Explorer. Brain Status and Debug Panel were folded into these two
+  // and the Dashboard respectively; they are no longer standalone panels.
+  rc("brain-monitor", "Brain Monitor", BrainMonitorPage,
+     { nav: { label: "Brain Monitor", icon: "Cpu", group: "vibe" }, requiredFlag: "vibe_engineering" }),
   rc("context-intelligence", "Context Intelligence", ContextIntelligencePage,
-     { nav: { label: "Context Intelligence", icon: "GitBranch", group: "observability" }, requiredFlag: "vibe_engineering" }),
+     { nav: { label: "Context Intelligence", icon: "GitBranch", group: "vibe" }, requiredFlag: "vibe_engineering" }),
   rc("learning-hub", "Learning Hub", LearningHubPage,
-     { nav: { label: "Learning Hub", icon: "Lightbulb", group: "observability" }, requiredFlag: "vibe_engineering" }),
-  rc("debug-panel", "Debug Panel", DebugPanelPage,
-     { nav: { label: "Debug Panel", icon: "Bug", group: "observability" }, requiredFlag: "vibe_engineering" }),
+     { nav: { label: "Learning Hub", icon: "Lightbulb", group: "vibe" }, requiredFlag: "vibe_engineering" }),
+  rc("session-explorer", "Session Explorer", SessionExplorerPage,
+     { nav: { label: "Session Explorer", icon: "History", group: "vibe" }, requiredFlag: "vibe_engineering" }),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {

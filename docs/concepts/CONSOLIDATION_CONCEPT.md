@@ -1,6 +1,15 @@
 # Vibe Engineering Console Panel Consolidation Strategy
 
-**Status:** PROPOSED (LDD k=1-3 audit + dialectical design)  
+**Status:** SUPERSEDED (2026-08-27) — see ADR-0431. The shipped shape is NOT the
+hybrid plan below: the operator chose full replacement. The Vibe Engineering nav
+group is now exactly five entries (Dashboard · Brain Monitor · Context Intelligence ·
+Learning Hub · Session Explorer) per
+`core/vibe_engineering/CONSOLE_REDESIGN_UNIFIED_CONCEPT.md`, and the eleven panels
+this document analyses were REMOVED — routes, `PANELS` entries, `NAV_GROUPS` entries
+and page files. Keep the analysis below for its per-panel audit; ignore its
+recommendations.
+
+**Original status:** PROPOSED (LDD k=1-3 audit + dialectical design)  
 **Date:** 2026-08-27  
 **Related ADRs:** ADR-0353 (Panel Registry), ADR-0370 (Vibe Overview), ADR-0365 (Token Metrics)  
 **Concept Goal:** Design a strategic consolidation of 12 vibe-engineering panels to reduce cognitive load while preserving user value and discoverability.
