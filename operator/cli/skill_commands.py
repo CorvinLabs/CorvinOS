@@ -9,6 +9,33 @@ from core.skill_management.directory_init import init_tenant_skills
 from core.skill_management.migrator import migrate_skills
 from core.skill_management.validator import MetadataValidator, DependencyValidator
 from core.skill_management.resolver import SkillDependencyResolver
+from core.skill_management.tenant_validator import validate_tenant_id
+
+
+def _ck_tenant(tenant: str) -> str:
+    """Validate --tenant through the canonical validator (TENANT-002, ADR-0007).
+
+    Prevents path traversal / cross-tenant access via a crafted --tenant value
+    before it is ever interpolated into a filesystem path. Surfaces a clean
+    usage error (rc 2) instead of a raw traceback.
+    """
+    try:
+        return validate_tenant_id(tenant)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--tenant")
+
+
+def _ck_segment(value: str, hint: str) -> str:
+    """Reject path-separator / traversal characters in a free-form path segment.
+
+    Skill ids are dot-namespaced (e.g. ``assistant.foo``), so single dots are
+    allowed; ``..``, ``/`` and ``\\`` are not.
+    """
+    if ".." in value or "/" in value or "\\" in value:
+        raise click.BadParameter(
+            f"{hint} contains path traversal characters: {value}", param_hint=hint
+        )
+    return value
 
 
 @click.group("skill", help="Skill management commands")
@@ -25,6 +52,7 @@ def list_skills(tenant: str, scope: str, format: str):
     """List all skills in a tenant."""
     from core.skill_management.resolver import SkillDependencyResolver
 
+    tenant = _ck_tenant(tenant)
     resolver = SkillDependencyResolver(tenant)
 
     scopes = ["_platform", "_shared", "_local"] if scope == "all" else [scope]
@@ -71,6 +99,9 @@ def list_skills(tenant: str, scope: str, format: str):
 @click.option("--scope", default="_shared", help="Skill scope")
 def skill_info(skill_id: str, tenant: str, scope: str):
     """Show skill metadata and dependencies."""
+    tenant = _ck_tenant(tenant)
+    _ck_segment(skill_id, "skill-id")
+    _ck_segment(scope, "--scope")
     meta_path = Path.home() / ".corvin" / "tenants" / tenant / scope / "skills" / skill_id / "meta.json"
 
     if not meta_path.exists():
@@ -103,6 +134,7 @@ def skill_info(skill_id: str, tenant: str, scope: str):
 @click.option("--fix", is_flag=True, help="Auto-fix issues if possible")
 def validate_skills(tenant: str, scope: str, fix: bool):
     """Validate skill metadata and dependencies."""
+    tenant = _ck_tenant(tenant)
     validator = MetadataValidator(tenant)
     dep_validator = DependencyValidator(tenant)
 
@@ -155,6 +187,8 @@ def validate_skills(tenant: str, scope: str, fix: bool):
 @click.option("--graph", is_flag=True, help="Output as JSON graph")
 def show_dependencies(skill_id: str, tenant: str, scope: str, graph: bool):
     """Show dependency tree for a skill."""
+    tenant = _ck_tenant(tenant)
+    _ck_segment(skill_id, "skill-id")
     resolver = SkillDependencyResolver(tenant)
 
     if graph:
@@ -182,6 +216,7 @@ def show_dependencies(skill_id: str, tenant: str, scope: str, graph: bool):
 @click.option("--rollback", is_flag=True, help="Rollback to backup")
 def migrate(tenant: str, dry_run: bool, confirm: bool, rollback: bool):
     """Migrate skills from ~/.claude/ to tenant structure."""
+    tenant = _ck_tenant(tenant)
     if dry_run:
         click.echo("🔍 Pre-migration validation (dry-run)...\n")
 
@@ -242,6 +277,7 @@ def migrate(tenant: str, dry_run: bool, confirm: bool, rollback: bool):
 @click.option("--tenant", default="_default", help="Tenant ID")
 def init_structure(tenant: str):
     """Initialize tenant skill directory structure."""
+    tenant = _ck_tenant(tenant)
     click.echo(f"📁 Initializing skill structure for tenant '{tenant}'...\n")
 
     result = init_tenant_skills(tenant)
