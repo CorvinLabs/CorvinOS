@@ -224,3 +224,20 @@ export const AuditPage = React.lazy(() =>
 export const ReleasesPage = React.lazy(() =>
   import("@/pages/releases").then((m) => ({ default: m.default }))
 );
+
+// Brain Engineering Panels (ADR-0353)
+export const BrainStatusPage = React.lazy(() =>
+  import("@/pages/brain-status").then((m) => ({ default: m.default }))
+);
+
+export const ContextIntelligencePage = React.lazy(() =>
+  import("@/pages/context-intelligence").then((m) => ({ default: m.default }))
+);
+
+export const LearningHubPage = React.lazy(() =>
+  import("@/pages/learning-hub").then((m) => ({ default: m.default }))
+);
+
+export const DebugPanelPage = React.lazy(() =>
+  import("@/pages/debug-panel").then((m) => ({ default: m.default }))
+);

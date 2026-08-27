@@ -59,6 +59,9 @@ GATED_FLAGS: tuple[str, ...] = (
     "console_web_surface_plugin",
     "dual_gate_pipeline_enabled",
     "frontend_forge",  # ADR-0364 P6 — operator-only in-browser panel authoring
+    # Read by useBuildFreshness in the SPA shell; without it here the flag
+    # resolves to False in the manifest and auto-reload can never turn on.
+    "console_auto_reload",
 )
 
 

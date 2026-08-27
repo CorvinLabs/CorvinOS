@@ -6,6 +6,7 @@ import {
   BookOpen,
   Boxes,
   Brain,
+  Bug,
   Building2,
   ChevronDown,
   Cloud,
@@ -18,6 +19,7 @@ import {
   Hammer,
   KeyRound,
   LayoutDashboard,
+  Lightbulb,
   Lock,
   LogOut,
   MessagesSquare,
@@ -34,6 +36,9 @@ import {
   Users,
   UsersRound,
   Menu,
+  RefreshCw,
+  Target,
+  Webhook,
   Workflow,
   X,
   Zap,
@@ -46,6 +51,7 @@ import { RouteErrorBoundary } from "@/components/error-boundary";
 import { ConsoleAssistant } from "@/components/assistant/ConsoleAssistant";
 import { useAuth } from "@/lib/auth";
 import { useSettingsStream } from "@/hooks/use-settings-stream";
+import { useBuildFreshness } from "@/hooks/use-build-freshness";
 import { getOsEngineSetting, getLicenseInfo } from "@/lib/api";
 import { LicenseBadge } from "@/components/license-gate";
 import { cn } from "@/lib/utils";
@@ -137,10 +143,16 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/vibe-overview",    label: "Overview", icon: Boxes },
       { to: "/app/talent",           label: "Your Talent", icon: Sparkles },
       { to: "/app/vibe-engineering", label: "Context Pipeline", icon: Workflow },
-      { to: "/app/token-metrics",    label: "Token Metrics", icon: Zap },
       { to: "/app/learning",         label: "TreeOfThoughts", icon: Brain },
+      { to: "/app/learning-objectives", label: "Learning Objectives", icon: Target },
       { to: "/app/multi-instance",   label: "Cross-Device Learning", icon: Network },
       { to: "/app/task-graph",       label: "Task Graph", icon: GitBranch },
+      // Brain Engineering Panels (ADR-0353) — registry route + nav entry must
+      // both exist: panelRoutes() mounts the route, NAV_GROUPS makes it reachable.
+      { to: "/app/brain-status",         label: "Brain Status",         icon: Brain,     requiredFlag: "vibe_engineering" },
+      { to: "/app/context-intelligence", label: "Context Intelligence", icon: GitBranch, requiredFlag: "vibe_engineering" },
+      { to: "/app/learning-hub",         label: "Learning Hub",         icon: Lightbulb, requiredFlag: "vibe_engineering" },
+      { to: "/app/debug-panel",          label: "Debug Panel",          icon: Bug,       requiredFlag: "vibe_engineering" },
     ],
   },
   {
@@ -191,6 +203,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/space",      label: "CorvinSpace",   icon: Globe },
       { to: "/app/orgs",       label: "Organisations", icon: Building2 },
       { to: "/app/connectors", label: "Connectors",    icon: Plug },
+      { to: "/app/sync-monitor", label: "Sync Monitor", icon: RefreshCw },
+      { to: "/app/webhooks",     label: "Webhooks",     icon: Webhook },
     ],
   },
   {
@@ -386,6 +400,11 @@ export function AppLayout() {
   const [assistantOpen, setAssistantOpen] = React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   useSettingsStream();
+  // Closes the third cache layer: an open tab keeps running the bundle it booted
+  // with until someone hard-refreshes. Off unless the operator opts in.
+  const build = useBuildFreshness(
+    Boolean(capabilityManifest?.flags?.console_auto_reload),
+  );
 
   // Close mobile nav on route change
   React.useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
@@ -431,6 +450,20 @@ export function AppLayout() {
 
   return (
     <>
+    {/* A new bundle is deployed but the operator is mid-input — never reload out
+        from under their typing; offer it instead. */}
+    {build.stale && (
+      <div className="fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-3 bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg">
+        <span>A new console build is live.</span>
+        <button
+          type="button"
+          onClick={build.reload}
+          className="rounded-md bg-primary-foreground/15 px-3 py-1 font-medium underline-offset-2 hover:bg-primary-foreground/25"
+        >
+          Reload now
+        </button>
+      </div>
+    )}
     {/* Mobile nav overlay */}
     {mobileNavOpen && (
       <div
