@@ -2,6 +2,7 @@
 
 import asyncio
 import httpx
+import os
 from typing import Dict, List, Optional
 from datetime import datetime
 from dataclasses import dataclass
@@ -23,6 +24,14 @@ class NotificationRouter:
     def __init__(self, prefs_store: Optional[Dict] = None):
         self.prefs = prefs_store or {}
         self.http_client = httpx.AsyncClient(timeout=10.0)
+
+        # Auto-discover Discord webhook from environment
+        discord_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+        if discord_webhook and "default" not in self.prefs:
+            self.prefs["default"] = {
+                "discord_webhook": discord_webhook,
+                "enabled": True,
+            }
 
     async def on_phase_completed(self, data: Dict):
         """Handle phase completion event → Discord."""
@@ -78,7 +87,13 @@ class NotificationRouter:
     async def _send_discord(self, message: str, color: int = 0x808080):
         """Send message to Discord webhook (fire-and-forget)."""
         webhook_url = self.prefs.get("default", {}).get("discord_webhook")
+
+        # Fallback to env var if not in prefs
         if not webhook_url:
+            webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+
+        if not webhook_url:
+            # Silent fail if no webhook configured (development mode)
             return
 
         payload = {
@@ -94,7 +109,9 @@ class NotificationRouter:
 
         try:
             async with self.http_client as client:
-                await client.post(webhook_url, json=payload)
+                response = await client.post(webhook_url, json=payload)
+                if response.status_code not in (200, 204):
+                    print(f"Discord webhook error: {response.status_code} - {response.text}")
         except Exception as e:
             print(f"Discord send error: {e}")
 
