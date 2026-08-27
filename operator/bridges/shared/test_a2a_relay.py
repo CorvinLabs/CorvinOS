@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -485,6 +486,122 @@ class TestRelayListenerPingAckDispatch(unittest.TestCase):
         asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
         receiver.receive.assert_called_once()
         self.assertEqual(len(ws.sent), 1)
+
+
+# ── 5. First-bootstrap reciprocal-ack over the relay (adesso #3) ─────────────
+
+class TestFirstBootstrapAckOverRelay(unittest.TestCase):
+    """Reciprocal-ack bootstrap over the relay, ADR-0257 + ADR-0258 Stage 3.
+
+    On a BRAND-NEW pairing the token ISSUER (A) writes its ``_friendship``
+    origin record only AFTER process_friendship_ack_request runs. Until then A
+    holds ONLY a PENDING record (save_pending_friendship). The relay listener
+    used to register a slot for existing origin records exclusively, so at
+    first-bootstrap A had nothing to register — the redeemer's first reciprocal
+    ack routed to a kid no slot claimed and RelayState.deliver returned
+    "dropped", never reaching A. Established reconnects already worked; only
+    first-bootstrap-over-relay was broken (dodged in practice by a LAN
+    direct-connect). Fix: also register the pending OUTBOUND token's kid up
+    front, so the first ack can be received over the relay.
+    """
+
+    def _issuer_pending(self, tmp: str):
+        pending_dir = Path(tmp) / "pending"
+        origins_dir = Path(tmp) / "origins"      # deliberately EMPTY — first bootstrap
+        endpoints_dir = Path(tmp) / "endpoints"
+        for d in (pending_dir, origins_dir, endpoints_dir):
+            d.mkdir(parents=True, exist_ok=True)
+        # A issues a token and persists the pending record (create_friendship_token
+        # call site does exactly this — save_pending_friendship). No origin yet.
+        token, _tok = ft.create_friendship_token(url="http://issuer.example")
+        ft.save_pending_friendship(token, pending_dir=pending_dir)
+        return token, pending_dir, origins_dir, endpoints_dir
+
+    def test_pre_fix_gap_no_registrable_kid_without_pending_dir(self):
+        # The pre-fix behavior, still the back-compat path for an older caller:
+        # with only an (empty) origins_dir and NO pending_dir, there is nothing
+        # to register — precisely why the first ack was dropped.
+        with tempfile.TemporaryDirectory() as tmp:
+            token, _pending, origins_dir, _endpoints = self._issuer_pending(tmp)
+            lst = relay.RelayListener(
+                relay_url="ws://x", receiver=None,
+                origins_dir=str(origins_dir), pending_dir=None,
+            )
+            self.assertEqual(lst._registrable_kids(), [])
+
+    def test_pending_kid_is_registrable_before_ack_arrives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            token, pending_dir, origins_dir, endpoints_dir = self._issuer_pending(tmp)
+            lst = relay.RelayListener(
+                relay_url="ws://x", receiver=None,
+                origins_dir=str(origins_dir),
+                pending_dir=str(pending_dir), endpoints_dir=str(endpoints_dir),
+            )
+            kids = dict(lst._registrable_kids())
+            # The pending token's kid is now registrable — the whole fix.
+            self.assertIn(token.kid, kids)
+            # …with the hmac_key BOTH peers derive from the shared token key,
+            # so the slot A claims here decrypts exactly what B signs+encrypts.
+            expected_hmac, _recv = ft._derive_channel_keys(token.key)
+            self.assertEqual(kids[token.kid], expected_hmac)
+
+    def test_first_ack_now_routes_over_relay_and_dispatches(self):
+        """End-to-end through the relay boundary: the redeemer's first ack
+        REACHES the issuer's slot (was "dropped" pre-fix) and is dispatched to
+        process_friendship_ack_request, which is where A finally writes its own
+        origin record. No crypto/signature check is weakened — the derived
+        hmac_key lines up on both sides and the ack's signature is still
+        verified inside the (mocked-here) shared core."""
+        import unittest.mock as mock
+        with tempfile.TemporaryDirectory() as tmp:
+            token, pending_dir, origins_dir, endpoints_dir = self._issuer_pending(tmp)
+            lst = relay.RelayListener(
+                relay_url="ws://x", receiver=mock.Mock(),
+                origins_dir=str(origins_dir),
+                pending_dir=str(pending_dir), endpoints_dir=str(endpoints_dir),
+            )
+            hmac_key = dict(lst._registrable_kids())[token.kid]
+
+            # Relay-server side: A claims its slot exactly as run_forever would.
+            state = relay.RelayState()
+            a_ws = _FakeWS()
+            a_cid = state.open_connection(a_ws)
+            auth = ft.derive_relay_auth_key(hmac_key)
+            self.assertIsNone(state.register(a_cid, token.kid, auth))
+            state.note_registered_kid(a_cid, token.kid)
+
+            # Redeemer B builds the reciprocal ack and delivers it to A's kid.
+            b_hmac, _recv = ft._derive_channel_keys(token.key)   # SAME key both sides
+            ack_req = {"kid": token.kid, "issued_at": 123,
+                       "peer_url": "http://redeemer.example", "signature": "sig"}
+            nonce, ct = ft.encrypt_for_relay(b_hmac, json.dumps(ack_req).encode("utf-8"))
+            delivery = {"type": "deliver", "to_kid": token.kid,
+                        "from_kid": f"{token.kid}:reply:corr1", "nonce": nonce,
+                        "ciphertext": ct, "task_id": "corr1"}
+
+            outcome = asyncio.run(state.deliver(token.kid, delivery))
+            self.assertEqual(outcome, "delivered")   # pre-fix: "dropped"
+            self.assertEqual(len(a_ws.sent), 1)
+
+            # A's listener dispatches the delivered ack to the shared ack core.
+            forwarded = json.loads(a_ws.sent[0])
+            with mock.patch(
+                "a2a_friendship.process_friendship_ack_request",
+                return_value=(200, {"ok": True, "kid": token.kid, "signature": "s"}),
+            ) as pfar:
+                asyncio.run(lst._handle_deliver(
+                    a_ws, forwarded, dict(lst._registrable_kids())))
+            pfar.assert_called_once()
+            _args, kwargs = pfar.call_args
+            self.assertEqual(kwargs["pending_dir"], pending_dir)
+            self.assertEqual(kwargs["origins_dir"], origins_dir)
+            self.assertEqual(kwargs["endpoints_dir"], endpoints_dir)
+            # A signs+encrypts a reply back to B over the same relay path.
+            self.assertEqual(len(a_ws.sent), 2)
+            reply = json.loads(a_ws.sent[1])
+            self.assertEqual(reply["to_kid"], forwarded["from_kid"])
+            pt = ft.decrypt_from_relay(hmac_key, reply["nonce"], reply["ciphertext"])
+            self.assertEqual(json.loads(pt)["ok"], True)
 
 
 if __name__ == "__main__":
