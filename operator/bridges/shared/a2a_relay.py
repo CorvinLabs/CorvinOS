@@ -457,6 +457,11 @@ class RelayListener:
     """Receiver-side persistent connection to a configured relay.
 
     Registers every ``kid`` this instance has an ACTIVE origin record for,
+    plus every ``kid`` it has a live PENDING outbound-token record for when a
+    ``pending_dir`` is configured (ADR-0257 first-bootstrap-over-relay: the
+    issuer must claim a slot for a freshly-issued token's kid BEFORE the
+    reciprocal ack arrives, since its own origin record is written only after
+    that ack is processed — see :meth:`_registrable_kids`). It then
     listens for inbound "deliver" messages, decrypts+dispatches each to the
     right handler for its shape, and relays the signed response back.
     Reconnects with backoff on any drop — this is a best-effort liveness
@@ -505,26 +510,73 @@ class RelayListener:
         self._stop = True
 
     def _registrable_kids(self) -> list[tuple[str, str]]:
-        """(kid, hmac_key) for every ``_friendship`` origin record — the
-        hmac_key is what enc_key/relay_auth_key are derived from (see
-        a2a_friendship._derive_enc_key)."""
+        """(kid, hmac_key) for every kid this instance should claim a relay
+        listener slot for. hmac_key is what enc_key/relay_auth_key are derived
+        from (see a2a_friendship._derive_enc_key).
+
+        Two sources are unioned, deduped by kid (an ACTIVE origin always wins):
+
+        1. Every enabled ``_friendship`` origin record in ``origins_dir`` — an
+           established pairing whose hmac_key is stored directly. Covers every
+           reconnect (already worked before this fix).
+
+        2. Every live PENDING friendship record in ``pending_dir`` — an
+           OUTBOUND token this instance ISSUED (save_pending_friendship) whose
+           reciprocal ack has not yet arrived (ADR-0257). This closes the
+           first-bootstrap-over-relay gap: on a BRAND-NEW pairing the issuer
+           writes its ``_friendship`` origin record only AFTER
+           process_friendship_ack_request runs, so before the ack it had NO
+           origin record to register — the relay had no slot for the kid, and
+           the redeemer's first reciprocal ack was ``dropped`` (unknown kid),
+           never delivered. The pairing then hung unless a LAN direct-connect
+           dodged the relay. Registering a slot for the pending kid up front
+           lets the issuer receive that first ack over the relay path.
+
+           The pending record persists only the raw shared token ``key``; the
+           hmac_key is derived from it exactly as BOTH peers derive it
+           (_derive_channel_keys), so the slot registered here decrypts the
+           redeemer's ack under the same key the redeemer signed+encrypted it
+           with — no trust or signature check is weakened (the ack's own
+           signature is still verified inside process_friendship_ack_request).
+           Only honoured when ``pending_dir`` is configured; an older listener
+           without one keeps the origin-only behavior (inert, not broken).
+        """
         import json as _json
         from pathlib import Path as _Path
 
         out: list[tuple[str, str]] = []
+        seen: set[str] = set()
         d = _Path(self._origins_dir)
-        if not d.exists():
-            return out
-        for p in sorted(d.glob("*.json")):
-            try:
-                cfg = _json.loads(p.read_text("utf-8"))
-            except (OSError, ValueError):
-                continue
-            if not cfg.get("_friendship") or not cfg.get("enabled"):
-                continue
-            hmac_key = cfg.get("hmac_key")
-            if isinstance(hmac_key, str) and len(hmac_key) == 64:
-                out.append((p.stem, hmac_key))
+        if d.exists():
+            for p in sorted(d.glob("*.json")):
+                try:
+                    cfg = _json.loads(p.read_text("utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not cfg.get("_friendship") or not cfg.get("enabled"):
+                    continue
+                hmac_key = cfg.get("hmac_key")
+                if isinstance(hmac_key, str) and len(hmac_key) == 64 and p.stem not in seen:
+                    seen.add(p.stem)
+                    out.append((p.stem, hmac_key))
+
+        if self._pending_dir is not None:
+            import a2a_friendship as _ft  # noqa: PLC0415
+            pd = _Path(self._pending_dir)
+            if pd.exists():
+                for p in sorted(pd.glob("*.json")):
+                    kid = p.stem
+                    if kid in seen:
+                        continue  # an ACTIVE origin already covers this kid
+                    rec = _ft.load_pending_friendship(kid, pending_dir=pd)
+                    if rec is None:
+                        continue  # absent or expired
+                    key = rec.get("key")
+                    if not (isinstance(key, str) and len(key) == 64):
+                        continue
+                    hmac_key, _recv_key = _ft._derive_channel_keys(key)
+                    seen.add(kid)
+                    out.append((kid, hmac_key))
         return out
 
     async def run_forever(self, *, reconnect_backoff_s: float = 10.0) -> None:
