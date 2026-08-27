@@ -492,6 +492,18 @@ reason. A `requiredFlag` must ALSO be listed in `GATED_FLAGS`
 (`core/console/corvin_console/routes/capabilities.py`) or it resolves to false and the entry
 stays hidden forever.
 
+**A sibling FILE silently shadows a page DIRECTORY.** `import("@/pages/foo")` resolves
+`src/pages/foo.tsx` BEFORE `src/pages/foo/index.tsx` — file beats directory, with no
+warning from vite, tsc or eslint. A new panel built as `pages/foo/` while the old
+`pages/foo.tsx` still exists therefore compiles, bundles, mounts its route and renders
+**the old page**, which presents exactly like a stale bundle and sends debugging into the
+three caches or the backend. It happened to the ADR-0400 Vibe Dashboard: the directory
+shipped 2026-08-26, `pages/vibe-engineering.tsx` kept winning, and the panel was
+unreachable until the file was deleted on 2026-08-27 (ADR-0431). When a rewrite lands as
+a directory, DELETE the same-named file in the same commit — never keep both — and prove
+which one loads with a marker string only the new code contains
+(`scripts/console-deploy.sh --marker '<string>'`), not by reading the diff.
+
 **Must NOT do:** declare a frontend change "done"/"live" on a correct source diff alone ·
 run `npm run build` without clearing `dist/` + `node_modules/.vite/` first · skip the
 `grep` + `curl` proof that the served hashes are the new ones · report the change without
@@ -499,7 +511,8 @@ telling the operator to hard-refresh WHEN `console_auto_reload` is off · cache 
 shell as anything but `no-cache` · drop the `immutable` header from `assets/` · assume a
 rebuild alone revives a console that booted without `dist/` · add a panel to `PANELS`
 without a matching `NAV_GROUPS` entry (or a justified `NAV_EXEMPT` line) · build straight
-into `dist/` and take the live console down for the length of the build.
+into `dist/` and take the live console down for the length of the build · leave a
+`pages/<name>.tsx` in place after moving that page to `pages/<name>/`.
 
 ---
 

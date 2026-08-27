@@ -15,17 +15,11 @@ export const DashboardPage = React.lazy(() =>
   import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage }))
 );
 
-export const YourTalentPage = React.lazy(() =>
-  import("@/pages/talent").then((m) => ({ default: m.default }))
-);
 
 export const SettingsPage = React.lazy(() =>
   import("@/pages/settings").then((m) => ({ default: m.SettingsPage }))
 );
 
-export const VibeOverviewPage = React.lazy(() =>
-  import("@/pages/vibe-overview").then((m) => ({ default: m.default }))
-);
 
 export const EnginesPage = React.lazy(() =>
   import("@/pages/engines").then((m) => ({ default: m.EnginesPage }))
@@ -183,26 +177,21 @@ export const PluginsPage = React.lazy(() =>
   import("@/pages/plugins").then((m) => ({ default: m.PluginsPage }))
 );
 
-export const LearningObjectivesPage = React.lazy(() =>
-  import("@/pages/learning-objectives").then((m) => ({ default: m.LearningObjectivesPage }))
-);
 
 export const VibeEngineeringPage = React.lazy(() =>
   import("@/pages/vibe-engineering").then((m) => ({ default: m.default }))
 );
 
-export const MultiInstancePage = React.lazy(() =>
-  import("@/pages/multi-instance").then((m) => ({ default: m.MultiInstanceDashboard }))
+export const BrainMonitorPage = React.lazy(() =>
+  import("@/pages/brain-monitor").then((m) => ({ default: m.default }))
 );
 
-export const LearningPage = React.lazy(() =>
-  import("@/pages/learning").then((m) => ({ default: m.default }))
+export const SessionExplorerPage = React.lazy(() =>
+  import("@/pages/session-explorer").then((m) => ({ default: m.default }))
 );
 
-// ADR-0400 — Task Graph visualization
-export const TaskGraphPage = React.lazy(() =>
-  import("@/pages/task-graph").then((m) => ({ default: m.default }))
-);
+
+
 
 // Cross-Device-Learning GitHub Integration
 export const GitHubPage = React.lazy(() =>
@@ -225,10 +214,7 @@ export const ReleasesPage = React.lazy(() =>
   import("@/pages/releases").then((m) => ({ default: m.default }))
 );
 
-// Brain Engineering Panels (ADR-0353)
-export const BrainStatusPage = React.lazy(() =>
-  import("@/pages/brain-status").then((m) => ({ default: m.default }))
-);
+// Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 
 export const ContextIntelligencePage = React.lazy(() =>
   import("@/pages/context-intelligence").then((m) => ({ default: m.default }))
@@ -238,6 +224,3 @@ export const LearningHubPage = React.lazy(() =>
   import("@/pages/learning-hub").then((m) => ({ default: m.default }))
 );
 
-export const DebugPanelPage = React.lazy(() =>
-  import("@/pages/debug-panel").then((m) => ({ default: m.default }))
-);

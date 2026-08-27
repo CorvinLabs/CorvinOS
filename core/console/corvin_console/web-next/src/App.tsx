@@ -18,8 +18,6 @@ import {
   WorkflowRunsPage,
   WorkflowRunDetailPage,
   NotFoundPage,
-  LearningPage,
-  TaskGraphPage,
 } from "@/lazy-pages";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -148,12 +146,8 @@ export default function App() {
             <Route path="workflows/:wid" element={<WorkflowEditorPage />} />
             <Route path="workflows/:wid/runs" element={<WorkflowRunsPage />} />
             <Route path="workflows/:wid/runs/:rid" element={<WorkflowRunDetailPage />} />
-            <Route path="learning" element={<LearningPage />} />
-            {/* ADR-0400 — Task Graph DAG viewer */}
-            <Route path="task-graph" element={<TaskGraphPage />} />
             {/* Engine Control merged into the AI Engine page (Control tab). */}
             <Route path="engine-control" element={<Navigate to="/app/engines" replace />} />
-            {/* ADR-0275/0277 — Multi-Instance Cross-Device Learning */}
           </Route>
           <Route path="*" element={<NotFoundPage />} />
           </Routes>

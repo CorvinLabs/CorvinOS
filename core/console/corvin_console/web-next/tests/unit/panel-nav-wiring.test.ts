@@ -59,7 +59,7 @@ describe("panel wiring: registry route <-> sidebar nav", () => {
     // Core routes live directly in App.tsx, not in the panel registry.
     const CORE_ROUTES = new Set([
       "chat", "dashboard", "settings", "license", "audit-log",
-      "learning", "task-graph", "personas", "workflows",
+      "personas", "workflows",
     ]);
     const routes = new Set(PANELS.map((p) => p.route));
     const linked = [

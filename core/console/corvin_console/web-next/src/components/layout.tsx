@@ -5,8 +5,6 @@ import {
   AudioLines,
   BookOpen,
   Boxes,
-  Brain,
-  Bug,
   Building2,
   ChevronDown,
   Cloud,
@@ -17,6 +15,7 @@ import {
   Globe,
   Globe2,
   Hammer,
+  History,
   KeyRound,
   LayoutDashboard,
   Lightbulb,
@@ -37,11 +36,9 @@ import {
   UsersRound,
   Menu,
   RefreshCw,
-  Target,
   Webhook,
   Workflow,
   X,
-  Zap,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -139,20 +136,16 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Vibe Engineering",
     collapsible: true,
     defaultOpen: true,
+    // CONSOLE_REDESIGN_UNIFIED_CONCEPT: one coherent group of five views.
+    // A panel needs BOTH registrations — panelRoutes() mounts /app/<route> from
+    // PANELS, this list makes it reachable. tests/unit/panel-nav-wiring.test.ts
+    // fails if the two drift apart.
     items: [
-      { to: "/app/vibe-overview",    label: "Overview", icon: Boxes },
-      { to: "/app/talent",           label: "Your Talent", icon: Sparkles },
-      { to: "/app/vibe-engineering", label: "Context Pipeline", icon: Workflow },
-      { to: "/app/learning",         label: "TreeOfThoughts", icon: Brain },
-      { to: "/app/learning-objectives", label: "Learning Objectives", icon: Target },
-      { to: "/app/multi-instance",   label: "Cross-Device Learning", icon: Network },
-      { to: "/app/task-graph",       label: "Task Graph", icon: GitBranch },
-      // Brain Engineering Panels (ADR-0353) — registry route + nav entry must
-      // both exist: panelRoutes() mounts the route, NAV_GROUPS makes it reachable.
-      { to: "/app/brain-status",         label: "Brain Status",         icon: Brain,     requiredFlag: "vibe_engineering" },
+      { to: "/app/vibe-engineering",     label: "Dashboard",            icon: Boxes,     requiredFlag: "vibe_engineering" },
+      { to: "/app/brain-monitor",        label: "Brain Monitor",        icon: Cpu,       requiredFlag: "vibe_engineering" },
       { to: "/app/context-intelligence", label: "Context Intelligence", icon: GitBranch, requiredFlag: "vibe_engineering" },
       { to: "/app/learning-hub",         label: "Learning Hub",         icon: Lightbulb, requiredFlag: "vibe_engineering" },
-      { to: "/app/debug-panel",          label: "Debug Panel",          icon: Bug,       requiredFlag: "vibe_engineering" },
+      { to: "/app/session-explorer",     label: "Session Explorer",     icon: History,   requiredFlag: "vibe_engineering" },
     ],
   },
   {
