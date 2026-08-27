@@ -22,8 +22,8 @@ import {
   ExtensionsPage, McpPluginsPage, PluginsPage, ActivityFeedPage,
   LearningObjectivesPage, MultiInstancePage, VibeOverviewPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage,
+  BrainStatusPage, ContextIntelligencePage, LearningHubPage, DebugPanelPage,
 } from "@/lazy-pages";
-import TokenMetricsPage from "@/pages/token-metrics";
 import type { ComponentType } from "react";
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -47,9 +47,6 @@ export const PANELS: ConsolePanel[] = [
   // first-party React page (no more sandboxed-iframe external panel to maintain).
   rc("vibe-overview", "Overview", VibeOverviewPage,
      { nav: { label: "Overview", icon: "" }, requiredFlag: "vibe_engineering" }),
-  // Token Metrics Dashboard — Real-time token usage, cost savings, Vibe Engineering ROI
-  rc("token-metrics", "Token Metrics", TokenMetricsPage,
-     { nav: { label: "Token Metrics", icon: "Zap", group: "observability" }, requiredFlag: "vibe_engineering" }),
   // simple top-level feature panels (reuse proven lazy components)
   rc("dashboard", "Dashboard", DashboardPage),
   rc("talent", "Your Talent", YourTalentPage),
@@ -97,6 +94,15 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Audit", icon: "Shield" } }),
   rc("releases", "Releases", ReleasesPage,
      { nav: { label: "Releases", icon: "Package" } }),
+  // Brain Engineering Panels (ADR-0353) — independent dashboard views
+  rc("brain-status", "Brain Status", BrainStatusPage,
+     { nav: { label: "Brain Status", icon: "Brain", group: "observability" }, requiredFlag: "vibe_engineering" }),
+  rc("context-intelligence", "Context Intelligence", ContextIntelligencePage,
+     { nav: { label: "Context Intelligence", icon: "GitBranch", group: "observability" }, requiredFlag: "vibe_engineering" }),
+  rc("learning-hub", "Learning Hub", LearningHubPage,
+     { nav: { label: "Learning Hub", icon: "Lightbulb", group: "observability" }, requiredFlag: "vibe_engineering" }),
+  rc("debug-panel", "Debug Panel", DebugPanelPage,
+     { nav: { label: "Debug Panel", icon: "Bug", group: "observability" }, requiredFlag: "vibe_engineering" }),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {

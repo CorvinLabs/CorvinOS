@@ -784,6 +784,25 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         release_tier="alpha",
     ),
     FeatureFlag(
+        id="console_auto_reload",
+        label="Console auto-reload on new build",
+        description=(
+            "Bring an open Console tab onto a freshly deployed frontend bundle "
+            "without a manual hard-refresh. The tab re-fetches the no-cache SPA "
+            "shell every few seconds and compares its content-hashed entry "
+            "bundle against the one the tab booted with; a mismatch means a new "
+            "build is live. Reloads immediately when the operator is idle, and "
+            "shows a dismissible banner instead when they are mid-input, so "
+            "typing is never discarded. Off by default: on an install nobody is "
+            "actively rebuilding, the poll is pure overhead and an unattended "
+            "reload is a surprise. Turn it on while developing the Console."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("console", "ui", "devex"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
         id="frontend_forge",
         label="FrontendForge (in-browser panel authoring)",
         description=(

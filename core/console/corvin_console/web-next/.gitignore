@@ -20,3 +20,7 @@ playwright-report
 blob-report
 playwright/.cache
 tests/e2e/auth-state.json
+
+# console-deploy.sh staging + rollback copies (see scripts/console-deploy.sh)
+dist.next/
+dist.prev/

@@ -424,21 +424,37 @@ placeholder, and debugging goes into the backend instead of into the three cache
 | Layer | Where | Cleared by |
 |---|---|---|
 | 1. esbuild pre-bundle | `web-next/node_modules/.vite/` | `rm -rf node_modules/.vite/` |
-| 2. build artifact | `web-next/dist/` | `rm -rf dist/` then `npm run build` |
-| 3. browser tab | the operator's machine | `Ctrl+Shift+R` / `Cmd+Shift+R` — **Claude cannot do this** |
+| 2. build artifact | `web-next/dist/` | rebuild — `scripts/console-deploy.sh` |
+| 3. browser tab | the operator's machine | `console_auto_reload` flag, else `Ctrl+Shift+R` — **Claude cannot press it** |
 
-**Mandatory sequence after every frontend change — no step is skippable:**
+**Use `scripts/console-deploy.sh` — it performs the sequence AND the proof:**
 
+```bash
+scripts/console-deploy.sh                      # clean rebuild + verify over the wire
+scripts/console-deploy.sh --marker 'NewThing'  # additionally assert a string is bundled
+scripts/console-deploy.sh --fast               # incremental (esbuild minify, ~24s)
+```
+
+It prints `LIVE assets/index-<hash>.js` only when the host actually serves the bundle
+it just built, and exits 2 with the mismatch otherwise. It builds into `dist.next/`
+and swaps, so `/console/` never stops answering mid-deploy (vite empties its outDir
+first, which took the console down for ~13s per rebuild when building into `dist/`).
+The previous build is kept at `dist.prev/` for rollback.
+
+Two mechanisms keep this running without anyone remembering to:
+
+| Mechanism | Covers | Notes |
+|---|---|---|
+| `corvin-console-watch.service` (systemd --user) | ANY source change, from any editor | polls an mtime fingerprint, debounces, then runs `console-deploy.sh --fast` |
+| `.claude/hooks/console_autodeploy.sh` (PostToolUse) | Claude's own edits | starts the redeploy at the edit; skips when the watcher is running, so no double build |
+
+The equivalent by hand, if you need to see each step:
 ```bash
 cd core/console/corvin_console/web-next
 rm -rf dist/ node_modules/.vite/     # a plain rebuild is NOT sufficient
 npm run build
 grep -rl '<marker string from the new code>' dist/assets/   # must hit ≥1 file
-grep -o 'assets/[^"]*\.js' dist/index.html                  # note the NEW hashes
-```
-Then prove it over the wire against the running host — not against the file system:
-```bash
-curl -s http://127.0.0.1:8765/console/ | grep -o 'assets/[^"]*\.js'   # must be the SAME new hashes
+curl -s http://127.0.0.1:8765/console/ | grep -o 'assets/[^"]*\.js'  # must be the NEW hashes
 ```
 
 **Restart rule.** `mount_static()` (`core/console/corvin_console/app.py:444`) decides ONCE at
@@ -447,10 +463,17 @@ fallback route instead of the SPA mount and keeps serving it — a rebuild alone
 it, only a restart will. When `dist/` existed at boot, `_SPAStaticFiles` resolves per request and
 a rebuild is picked up live.
 
-**Always tell the operator to hard-refresh**, explicitly, in the same message that reports the
-change. Layer 3 is the only cache Claude cannot clear, and it is by far the most frequent cause
-of "the feature isn't showing". On any invisible-frontend report, confirm the hard refresh
-FIRST — never open a backend investigation before that.
+**Layer 3 — the browser tab.** With the `console_auto_reload` flag ON, an open tab
+re-fetches the no-cache SPA shell every 3s, compares its entry-bundle hash against the
+one it booted with, and reloads itself onto a new build (banner instead of reload while
+the operator is mid-input, so typing is never discarded). See
+`web-next/src/hooks/use-build-freshness.ts`.
+
+**With the flag OFF — the default — tell the operator to hard-refresh**, explicitly, in
+the same message that reports the change. Layer 3 is then the only cache Claude cannot
+clear, and it is by far the most frequent cause of "the feature isn't showing". On any
+invisible-frontend report, confirm the hard refresh FIRST — never open a backend
+investigation before that.
 
 **Cache-header invariant (`_SPAStaticFiles`, `core/console/corvin_console/app.py:23`) — do not
 weaken:** content-hashed files under `assets/` get `public, max-age=31536000, immutable`; every
@@ -459,12 +482,24 @@ index, which is not named `index.html` and once slipped through a path-based che
 either half is exactly how a browser keeps requesting deleted hashed bundles and the app hangs on
 a perpetual "Loading…".
 
+**A panel needs TWO registrations.** `PANELS` (`src/panels/registry.tsx`) mounts the
+route; `NAV_GROUPS` (`src/components/layout.tsx`) draws the sidebar entry. `ConsolePanel.nav`
+looks like it drives the sidebar and does not. Registering only the first mounts a route
+nothing links to — which presents as "the console still shows the old build", and did, for
+seven finished panels at once. `tests/unit/panel-nav-wiring.test.ts` fails on the next one;
+a panel that is deliberately not in the sidebar goes in that test's `NAV_EXEMPT` set WITH a
+reason. A `requiredFlag` must ALSO be listed in `GATED_FLAGS`
+(`core/console/corvin_console/routes/capabilities.py`) or it resolves to false and the entry
+stays hidden forever.
+
 **Must NOT do:** declare a frontend change "done"/"live" on a correct source diff alone ·
 run `npm run build` without clearing `dist/` + `node_modules/.vite/` first · skip the
 `grep` + `curl` proof that the served hashes are the new ones · report the change without
-telling the operator to hard-refresh · cache the SPA shell as anything but `no-cache` ·
-drop the `immutable` header from `assets/` · assume a rebuild alone revives a console that
-booted without `dist/`.
+telling the operator to hard-refresh WHEN `console_auto_reload` is off · cache the SPA
+shell as anything but `no-cache` · drop the `immutable` header from `assets/` · assume a
+rebuild alone revives a console that booted without `dist/` · add a panel to `PANELS`
+without a matching `NAV_GROUPS` entry (or a justified `NAV_EXEMPT` line) · build straight
+into `dist/` and take the live console down for the length of the build.
 
 ---
 

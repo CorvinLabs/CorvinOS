@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 
+const API_BASE = '/v1/console';
+
 export interface WorkerStatus {
   name: string;
   status: 'running' | 'thinking' | 'blocked' | 'idle';
@@ -61,13 +63,20 @@ export interface VibeData {
   pipeline_context: PipelineContextData;
   talent: TalentData;
   quality_gate_policy: 'tier_1' | 'tier_2' | 'tier_3';
+  /** Present only when the state call is made with ?debug=true. DebugPanel
+   *  renders null without it, which is why it must be carried through here. */
+  debug?: {
+    events_count: number;
+    latest_event?: unknown;
+    all_events?: unknown[];
+  };
   loading: boolean;
   error?: string;
 }
 
 /**
  * Fetch live Vibe Engineering data from backend.
- * Polls /vibe-engineering/traces + /vibe-engineering/config every 5s.
+ * Polls /v1/console/vibe-engineering/state + /v1/console/vibe-engineering/config every 5s.
  */
 export function useVibeData(pollIntervalMs = 5000): VibeData {
   const [data, setData] = useState<VibeData>({
@@ -102,9 +111,12 @@ export function useVibeData(pollIntervalMs = 5000): VibeData {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // The console API is mounted under /v1/console (see src/lib/api.ts); a bare
+        // '/vibe-engineering/...' hits the SPA mount and 404s. Session auth rides on
+        // the corvin_console_sid cookie, so credentials must be included.
         const [stateRes, configRes] = await Promise.all([
-          fetch('/vibe-engineering/state?debug=true&limit=50'),  // Real data + debug info
-          fetch('/vibe-engineering/config'),
+          fetch(`${API_BASE}/vibe-engineering/state?debug=true&limit=50`, { credentials: 'include' }),
+          fetch(`${API_BASE}/vibe-engineering/config`, { credentials: 'include' }),
         ]);
 
         if (!stateRes.ok || !configRes.ok) {
@@ -145,6 +157,7 @@ export function useVibeData(pollIntervalMs = 5000): VibeData {
             sparkline: [],
           },
           quality_gate_policy: config.quality_gate_policy || 'tier_1',
+          debug: state.debug,
           loading: false,
         });
       } catch (err) {

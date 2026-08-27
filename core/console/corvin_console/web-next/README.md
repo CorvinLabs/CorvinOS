@@ -112,3 +112,60 @@ The FastAPI side serves `dist/` automatically when
   `chat_profiles` JSON in the Bridges tab as a workaround).
 - Tenant-switcher in the topbar (single-tenant owner only; cross-tenant
   remains an corvin-admin concern per ADR-0014).
+
+## Adding a panel — TWO registrations, not one
+
+A panel is only reachable when **both** of these exist. Registering only the
+first mounts the route but leaves it invisible: the operator sees the old
+console and concludes the build is stale, which it is not.
+
+| # | File | What it does | Symptom when missing |
+|---|---|---|---|
+| 1 | `src/panels/registry.tsx` (`PANELS`) | `panelRoutes()` mounts `/app/<route>` | route 404s inside the SPA |
+| 2 | `src/components/layout.tsx` (`NAV_GROUPS`) | renders the sidebar entry | route works, but nothing links to it |
+
+`ConsolePanel.nav` in the registry is **not** what draws the sidebar —
+`NAV_GROUPS` is a separate hand-maintained list. Add the entry there too, with
+the same `requiredFlag` the panel declares.
+
+A `requiredFlag` is gated against the backend capability manifest
+(`GET /v1/console/capabilities`), so the flag must ALSO be listed in
+`GATED_FLAGS` in `core/console/corvin_console/routes/capabilities.py` — a flag
+absent there resolves to `false` and the nav entry stays hidden.
+
+### Fetching from a panel
+
+Use `/v1/console/...` (the `BASE` in `src/lib/api.ts`) with
+`credentials: 'include'`. A bare path like `/vibe-engineering/state` hits the
+SPA mount and returns the `index.html` shell as a 404, which surfaces in the
+panel as `API error: 404 404`.
+
+## Deploying a change
+
+`scripts/console-deploy.sh` (repo root) rebuilds and then proves the running host
+serves what was just built — it prints `LIVE assets/index-<hash>.js` or exits 2 with
+the mismatch. It never builds over `dist/` directly: vite empties its outDir first,
+which would take `/console/` down for the length of the build, so it stages into
+`dist.next/` and swaps (`dist.prev/` is the rollback copy).
+
+```bash
+scripts/console-deploy.sh                      # clean rebuild + verify
+scripts/console-deploy.sh --fast               # incremental, esbuild minify (~24s)
+scripts/console-deploy.sh --marker 'NewThing'  # also assert a string is bundled
+```
+
+Two things run it so nobody has to remember:
+
+- **`corvin-console-watch.service`** (systemd --user) watches `src/` and redeploys on
+  any change, from any editor. `systemctl --user status corvin-console-watch` ·
+  `journalctl --user -u corvin-console-watch -f`.
+- **`.claude/hooks/console_autodeploy.sh`** fires on Claude's own edits, and stands
+  down when the watcher is active so nothing builds twice.
+
+The open browser tab is the third cache. Turn on the **`console_auto_reload`** feature
+flag (Settings → Features) and a tab brings itself onto each new build; while the
+operator is typing it shows a "Reload now" banner instead, so input is never lost.
+Off by default — see `src/hooks/use-build-freshness.ts`.
+
+For live-reload while iterating, `npm run dev` still serves the SPA on :5173 with HMR,
+proxying the API to the console on :8765.
