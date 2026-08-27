@@ -847,11 +847,27 @@ def _build_parser() -> argparse.ArgumentParser:
     from . import compliance_cmd as _compliance_cmd
     _compliance_cmd.add_parser(sub)
 
+    # skill + skill-sync (ADR-0446) — tenant-native skill management CLI,
+    # bridged from the click-based operator/cli groups. Purely additive: the
+    # verbs are inert until explicitly typed, so a default install is unchanged.
+    from . import skill_cmd as _skill_cmd
+    _skill_cmd.add_parser(sub)
+
     return p
 
 
 def main() -> None:
     parser = _build_parser()
+
+    # skill / skill-sync (ADR-0446) — hand the whole argv tail to the click-based
+    # tenant-native skill CLI BEFORE argparse parses it. argparse.REMAINDER does
+    # not capture a leading `--help`/option as the first positional, so routing
+    # these through the launcher parser would reject `corvin skill --help`.
+    argv = sys.argv[1:]
+    if argv and argv[0] in ("skill", "skill-sync"):
+        from . import skill_cmd as _skill_cmd
+        sys.exit(_skill_cmd.dispatch_argv(argv))
+
     args = parser.parse_args()
 
     if args.command == "detect":

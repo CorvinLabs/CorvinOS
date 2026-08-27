@@ -450,6 +450,35 @@ The discipline is **per-subtask fictional E2E**: real subprocess for
 MCP, real filesystem for workspaces, real `bwrap` where the test
 depends on namespace isolation.
 
+## Tenant-native skill CLI — `corvin skill` / `corvin skill-sync`
+
+The tenant-native 3-layer skill model (`_platform` / `_shared` / `_local`)
+is managed from the `corvin` launcher. These are **singular** `skill`
+verbs — distinct from the **plural** `corvin skills` monitoring group
+(health / cache-stats / circuit-breaker, ADR-0425). Wired via
+`ops/launcher/corvin/skill_cmd.py` (ADR-0446); the underlying logic lives
+in `core/skill_management/` and is exposed through the package's own
+`register_skill_commands` / `register_sync_commands` entry points.
+
+```
+corvin skill list [--format {text,json}]   # list tenant skills across layers
+corvin skill info <name>                    # show one skill's metadata
+corvin skill validate <path>                # lint/validate a skill body
+corvin skill deps <name>                    # show declared dependencies
+corvin skill migrate --confirm              # migrate legacy skills into the layer model
+corvin skill init                           # initialise the tenant skill directory
+
+corvin skill-sync configure --repo <url>    # set the GitHub sync remote
+corvin skill-sync push                      # export `_shared` skills to the remote
+corvin skill-sync pull                      # import skills from the remote
+corvin skill-sync status                    # show sync state
+```
+
+Additive and inert until invoked: a fresh or upgraded install that never
+runs `corvin skill …` is byte-for-byte unchanged, so the surface ships
+without a feature flag (like every other launcher verb group). The only
+mutating verb, `skill migrate`, requires an explicit `--confirm`.
+
 ## Next
 
 - [forge.md](forge.md) — the runtime *tool* factory; same scope
