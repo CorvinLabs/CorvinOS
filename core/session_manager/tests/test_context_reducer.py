@@ -252,6 +252,10 @@ class TestContextTierEnum:
 class TestContextReductionEdgeCases:
     """Test edge cases in context reduction."""
 
+    def setup_method(self):
+        """Setup test fixtures."""
+        self.reducer = ContextReducer()
+
     def test_reduction_with_zero_original(self):
         """Test reduction when original context is empty."""
         result = self.reducer.reduce_context(

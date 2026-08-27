@@ -169,6 +169,9 @@ class ContextReducer:
         tier_3 = []
 
         for line in lines:
+            # Skip empty lines
+            if not line.strip():
+                continue
             line_lower = line.lower()
 
             # Tier 0: Essential keywords
