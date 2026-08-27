@@ -39,8 +39,11 @@ class PluginInstallTask:
         self.version = version
         self.min_disk_mb = min_disk_mb
         self.status = "pending"
-        # Finding #3 Fix: Async event queue
-        self.event_queue: Queue = Queue(maxsize=1000)
+        # Finding #3, #10 Fix: Async event queue (robustified)
+        # Increased from 1000 to 5000 for better throughput
+        self.event_queue: Queue = Queue(maxsize=5000)
+        # Critical events that MUST NOT be dropped
+        self.critical_events = {"manifest_validated", "plugin_installed", "registry_updated"}
 
     async def execute(self) -> Dict[str, Any]:
         """Execute installation with full error handling."""
@@ -176,14 +179,41 @@ class PluginInstallTask:
             raise
 
     def _validate_manifest(self, manifest: Dict[str, Any]):
-        """Validate manifest structure."""
+        """
+        Finding #6 Fix: Strengthen manifest validation.
+        - Reject paths with ../
+        - Validate required schema
+        - Prevent path traversal attacks
+        """
         plugin = manifest.get("plugin", {})
 
         if not plugin.get("id"):
             raise ValueError("Manifest missing plugin.id")
 
+        # Reject path traversal attempts
+        for key, value in self._deep_items(manifest):
+            if isinstance(value, str) and (".." in value or value.startswith("/")):
+                raise ValueError(f"Manifest key '{key}' contains dangerous path: {value}")
+
+        # Validate core structure
+        required_keys = ["id", "name", "version", "source"]
+        for key in required_keys:
+            if key not in plugin:
+                raise ValueError(f"Manifest missing plugin.{key}")
+
         if not plugin.get("console", {}).get("settings_panel"):
             logger.warning("Manifest has no settings_panel (optional)")
+
+    def _deep_items(self, d: Dict, parent_key: str = "") -> list:
+        """Recursively extract all key-value pairs from nested dict."""
+        items = []
+        for k, v in d.items():
+            key = f"{parent_key}.{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(self._deep_items(v, key))
+            else:
+                items.append((key, v))
+        return items
 
     async def _register_panel(self, manifest: Dict[str, Any]):
         """Register Settings Panel in Console."""
@@ -219,19 +249,26 @@ class PluginInstallTask:
 
     async def _emit_event(self, event_type: str, data: Dict[str, Any]):
         """
-        Finding #3 Fix: Emit event to async queue (non-blocking).
+        Finding #3, #10 Fix: Emit event to async queue (non-blocking, critical-safe).
 
         Prevents audit logging from blocking installation.
+        Critical events MUST NOT be dropped (Finding #10 fix).
         """
         try:
             # Non-blocking put with timeout
+            timeout = 0.1 if event_type not in self.critical_events else 5.0
             await asyncio.wait_for(
                 self.event_queue.put({"type": event_type, "data": data}),
-                timeout=0.1
+                timeout=timeout
             )
         except asyncio.TimeoutError:
-            # If queue is full, skip (don't block installation)
-            logger.warning(f"Event queue full, dropping event: {event_type}")
+            if event_type in self.critical_events:
+                # Critical events MUST be logged (GDPR Art. 30 compliance)
+                logger.error(f"CRITICAL: Event queue timeout on {event_type} — blocking installation")
+                raise RuntimeError(f"Audit trail failure: cannot queue critical event {event_type}")
+            else:
+                # Non-critical events can be dropped with warning
+                logger.warning(f"Event queue full, dropping non-critical event: {event_type}")
 
 
 class PluginInstallationQueue:
