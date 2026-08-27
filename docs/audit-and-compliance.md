@@ -312,6 +312,27 @@ voice-audit verify --tenant acme      # specific tenant
 Returns `(ok, problems)` where `problems` is a list of `{line, issue,
 expected_*, actual_*}` records.
 
+### Headless compliance CLI — `corvin audit` / `corvin consent`
+
+The headless OS (`corvinos-run`, no Console) still exposes audit and consent as
+first-class CLI subcommands through the `corvin` launcher (ADR-0352 P2.4,
+`ops/launcher/corvin/compliance_cmd.py`). These are **read + revoke only** — the
+CLI never *grants* consent (a grant is a per-user in-band act via the disclosure
+card and the user's own opt-in command):
+
+```bash
+corvin audit verify [--path P]              # verify the audit hash-chain; exit 1 if broken
+corvin audit health [--path P]              # boot-style health check (chain ok + record count)
+corvin consent list   CHANNEL CHATKEY       # list who has consented in a room
+corvin consent status CHANNEL CHATKEY UID   # one user's consent status
+corvin consent revoke CHANNEL CHATKEY UID   # revoke one user's consent (GDPR Art. 7(3))
+```
+
+`corvin audit verify` shares the fail-closed exit-1 contract with `voice-audit
+verify` and the boot tripwire. Exit codes: `0` = ok, `1` = a real negative result
+(chain broken / no such consent), `2` = the operation could not run (module
+missing, store corrupted, I/O error).
+
 ### Per-tenant Prometheus metrics
 
 Phase 6 exposes `/v1/tenants/{tid}/metrics` (bearer-token gated).
