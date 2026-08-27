@@ -109,6 +109,16 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "tool_calls_count", "started_at", "completed_at", "exit_code",
         "turn_number",  # optional: turn index in session
     }),
+    # Phase 4 — Console Plugin Integration (ADR-0366 + ADR-0299)
+    "console.panel_created": frozenset({
+        "panel_id", "title", "nav_group", "icon",
+        "tenant_id", "sid_fingerprint",
+        "created_by",  # "ai" | fingerprint of operator
+    }),
+    "console.panel_deleted": frozenset({
+        "panel_id", "tenant_id", "sid_fingerprint",
+        "deleted_by",  # fingerprint of operator
+    }),
 }
 
 
@@ -392,6 +402,62 @@ def execution_context(
         "console.execution_context",
         tenant_id=tenant_id,
         details=details,
+        severity="INFO",
+    )
+
+
+def panel_created(
+    *,
+    tenant_id: str,
+    panel_id: str,
+    title: str,
+    nav_group: str,
+    icon: str,
+    sid_fingerprint: str,
+    created_by: str,
+) -> None:
+    """Emit when a panel is created (ADR-0366 + ADR-0299).
+
+    Args:
+        panel_id: Stable panel identifier
+        title: Panel title (from HTML or user input)
+        nav_group: Nav sidebar group ("ai" | "build" | etc.)
+        icon: Icon name ("Sparkles" | etc.)
+        created_by: "ai" (from chat worker) or operator fingerprint
+    """
+    _emit(
+        "console.panel_created",
+        tenant_id=tenant_id,
+        details={
+            "panel_id": panel_id,
+            "title": title,
+            "nav_group": nav_group,
+            "icon": icon,
+            "tenant_id": tenant_id,
+            "sid_fingerprint": sid_fingerprint,
+            "created_by": created_by,
+        },
+        severity="INFO",
+    )
+
+
+def panel_deleted(
+    *,
+    tenant_id: str,
+    panel_id: str,
+    sid_fingerprint: str,
+    deleted_by: str,
+) -> None:
+    """Emit when a panel is deleted (ADR-0366 + ADR-0299)."""
+    _emit(
+        "console.panel_deleted",
+        tenant_id=tenant_id,
+        details={
+            "panel_id": panel_id,
+            "tenant_id": tenant_id,
+            "sid_fingerprint": sid_fingerprint,
+            "deleted_by": deleted_by,
+        },
         severity="INFO",
     )
 

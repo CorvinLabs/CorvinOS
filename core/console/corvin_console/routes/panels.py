@@ -9,7 +9,8 @@ as an iframe panel (through the same PanelHost as every other panel).
 Storage is tenant-scoped: <tenant_global>/console_panels/<id>/{index.html, meta.json}.
 The id is validated as a safe path segment. Generated HTML is served same-origin and
 embedded in a sandboxed iframe (allow-scripts) — it is first-party (the operator's own
-KI) but still isolated. Mutations require CSRF.
+KI) but still isolated. Mutations require CSRF and emit audit events per ADR-0299
+(console.panel_created, console.panel_deleted — metadata only, no HTML content).
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from .. import audit as _audit
 from .. import auth as session_auth
 from ..deps import require_session, require_csrf
 
@@ -142,6 +144,21 @@ async def create_panel(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # ADR-0299 + ADR-0366: audit trail for panel creation (metadata only, no HTML)
+    try:
+        _audit.panel_created(
+            tenant_id=rec.tenant_id,
+            panel_id=body.id,
+            title=body.title,
+            nav_group=body.nav_group,
+            icon=body.icon,
+            sid_fingerprint=getattr(rec, "sid_fingerprint", "unknown"),
+            created_by=meta["created_by"],
+        )
+    except Exception:  # pragma: no cover — audit unavailable should not block the panel
+        pass
+
     return {"ok": True, "panel": meta, "route": f"/app/{body.id}"}
 
 
@@ -173,4 +190,16 @@ async def delete_panel(
     for f in pdir.glob("*"):
         f.unlink(missing_ok=True)
     pdir.rmdir()
+
+    # ADR-0299 + ADR-0366: audit trail for panel deletion
+    try:
+        _audit.panel_deleted(
+            tenant_id=rec.tenant_id,
+            panel_id=panel_id,
+            sid_fingerprint=getattr(rec, "sid_fingerprint", "unknown"),
+            deleted_by=getattr(rec, "fingerprint", None) or "operator",
+        )
+    except Exception:  # pragma: no cover — audit unavailable should not block the delete
+        pass
+
     return {"ok": True, "deleted": panel_id}
