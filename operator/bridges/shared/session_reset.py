@@ -33,6 +33,7 @@ import os
 import re
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -344,18 +345,20 @@ def _wipe_voice_state(*, channel: str, chat_id: str,
         return False
 
 
-def _reset_budget(*, forge_chan_id: str, failures: list[str]) -> bool:
+def _reset_budget(*, chat_id: str, failures: list[str]) -> bool:
     """Layer 20 — reset the session's token budget quota.
 
     Unregisters the session from budgets.json so the next adapter turn
-    will auto-register a fresh budget with 0 tokens used. Returns True
-    iff the session had a registered budget. Best-effort — failure must
-    never block the rest of the reset.
+    will auto-register a fresh budget with 0 tokens used. Uses bare chat_id
+    (not forge_channel_id) because adapter registers budgets with the raw
+    chat_id as the session key (ADR-0180, Layer 20). Returns True iff the
+    session had a registered budget. Best-effort — failure must never block
+    the rest of the reset.
     """
     if _unregister_budget is None:
         return False
     try:
-        return _unregister_budget(forge_chan_id)
+        return _unregister_budget(str(chat_id))
     except Exception as e:  # noqa: BLE001
         failures.append(f"budget reset: {e!s}")
         return False
@@ -501,8 +504,10 @@ def reset_session(
     # Layer 20 — reset the session's context budget quota so the next turn
     # starts with a fresh 100k tokens (or the operator's configured default).
     # Best-effort: budget unavailability must not block the reset.
+    # Use bare chat_id (not forge_channel_id) because adapter registers budgets
+    # with the raw chat_id as the session key.
     budget_reset = _reset_budget(
-        forge_chan_id=forge_chan_id, failures=failures,
+        chat_id=chat_id, failures=failures,
     )
 
     # The slot mirror is purged inline by SkillRegistry.delete(); the
