@@ -27,7 +27,6 @@ import {
   Package,
   Plug,
   Blocks,
-  Puzzle,
   Server,
   Settings,
   ShieldCheck,
@@ -181,9 +180,11 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/skills",     label: "Skills",          icon: BookOpen },
       { to: "/app/packages",   label: "Packages",        icon: Package },
       { to: "/app/agents",      label: "Agents",          icon: ShieldCheck },
-      { to: "/app/extensions",  label: "Extensions",      icon: Puzzle },
-      { to: "/app/mcp-plugins", label: "MCP Plugins",     icon: Package },
-      { to: "/app/plugins",     label: "Plugins",         icon: Blocks },
+      // Unified hub for the three extend-CorvinOS subsystems (plugin registry,
+      // MCP tools, layer extensions) — one entry, three tabs. Replaces the former
+      // separate "Extensions" / "MCP Plugins" / "Plugins" entries, which pointed
+      // at distinct backends but read as synonyms in the sidebar.
+      { to: "/app/plugin-center", label: "Plugins & Extensions", icon: Blocks },
     ],
   },
   {

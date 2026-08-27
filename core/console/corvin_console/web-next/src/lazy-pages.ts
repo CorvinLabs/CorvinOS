@@ -177,6 +177,12 @@ export const PluginsPage = React.lazy(() =>
   import("@/pages/plugins").then((m) => ({ default: m.PluginsPage }))
 );
 
+// Unified Plugins & Extensions hub — one sidebar entry, three tabs wrapping the
+// three page components above (ExtensionsPage / McpPluginsPage / PluginsPage).
+export const PluginCenterPage = React.lazy(() =>
+  import("@/pages/plugin-center").then((m) => ({ default: m.PluginCenterPage }))
+);
+
 
 export const VibeEngineeringPage = React.lazy(() =>
   import("@/pages/vibe-engineering").then((m) => ({ default: m.default }))
