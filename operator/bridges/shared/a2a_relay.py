@@ -553,7 +553,14 @@ class RelayListener:
                     cfg = _json.loads(p.read_text("utf-8"))
                 except (OSError, ValueError):
                     continue
-                if not cfg.get("_friendship") or not cfg.get("enabled"):
+                if not cfg.get("_friendship"):
+                    continue
+                if not cfg.get("enabled"):
+                    # A deliberately-disabled/revoked friendship must not be
+                    # resurrected by a lingering pending record for the same kid:
+                    # claim the kid in `seen` so the pending branch below skips it,
+                    # but do NOT register a relay slot for it.
+                    seen.add(p.stem)
                     continue
                 hmac_key = cfg.get("hmac_key")
                 if isinstance(hmac_key, str) and len(hmac_key) == 64 and p.stem not in seen:
