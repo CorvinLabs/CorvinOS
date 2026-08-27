@@ -19,7 +19,7 @@ import {
   CoworkPage, LddPage, CompliancePage, FilesPage, SpacePage, MemoryPage,
   AgentHubPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
-  ExtensionsPage, McpPluginsPage, PluginsPage, ActivityFeedPage,
+  ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage, ActivityFeedPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage,
   BrainMonitorPage, ContextIntelligencePage, LearningHubPage, SessionExplorerPage,
 } from "@/lazy-pages";
@@ -72,6 +72,12 @@ export const PANELS: ConsolePanel[] = [
   rc("data-sources", "Data Sources", DataSourcesPage),
   rc("flows", "Flows", FlowsPage),
   rc("agents", "Agents", AgentsPage),
+  // Unified "Plugins & Extensions" hub — the ONE sidebar entry for the three
+  // extend-CorvinOS subsystems (roadmap de-dup of the plugin triple). It renders
+  // the three components below as tabs. The three standalone routes stay mounted
+  // for deep-link stability but are dropped from the sidebar — see NAV_EXEMPT in
+  // tests/unit/panel-nav-wiring.test.ts.
+  rc("plugin-center", "Plugins & Extensions", PluginCenterPage),
   rc("extensions", "Extensions", ExtensionsPage),
   rc("mcp-plugins", "MCP Plugins", McpPluginsPage),
   rc("plugins", "Plugins", PluginsPage),

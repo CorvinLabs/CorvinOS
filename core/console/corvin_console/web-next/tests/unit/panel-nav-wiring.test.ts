@@ -39,6 +39,12 @@ const NAV_EXEMPT = new Set<string>([
   // once the routes exist.
   "audit",
   "releases",
+  // Folded into the unified "Plugins & Extensions" hub (/app/plugin-center),
+  // which renders these three as tabs. The standalone routes stay mounted for
+  // deep-link stability but are intentionally no longer in the sidebar.
+  "extensions",
+  "mcp-plugins",
+  "plugins",
 ]);
 
 describe("panel wiring: registry route <-> sidebar nav", () => {
