@@ -6,6 +6,19 @@ from pathlib import Path
 
 from core.skill_management.github_exporter import GitHubExporter
 from core.skill_management.github_importer import GitHubImporter, ConflictResolution
+from core.skill_management.tenant_validator import validate_tenant_id
+
+
+def _ck_tenant(tenant: str) -> str:
+    """Validate --tenant before it is interpolated into a filesystem path
+    (TENANT-002, ADR-0007) — the sync commands both read and mkdir under the
+    tenant root, so a crafted value would be a traversal read/write primitive.
+    Local copy to avoid importing across the `operator` package shadow.
+    """
+    try:
+        return validate_tenant_id(tenant)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--tenant")
 
 
 @click.group("skill-sync", help="GitHub skill synchronization")
@@ -21,6 +34,7 @@ def skill_sync_group():
 @click.option("--dry-run", is_flag=True, help="Preview without pushing")
 def sync_push(tenant: str, repo: str, branch: str, dry_run: bool):
     """Export skills to GitHub."""
+    tenant = _ck_tenant(tenant)
     click.echo(f"🚀 Exporting skills to {repo}/{branch}...\n")
 
     exporter = GitHubExporter(repo, branch, tenant)
@@ -56,6 +70,7 @@ def sync_push(tenant: str, repo: str, branch: str, dry_run: bool):
 @click.option("--dry-run", is_flag=True, help="Preview without importing")
 def sync_pull(tenant: str, tarball: str, merge: str, dry_run: bool):
     """Import skills from tarball."""
+    tenant = _ck_tenant(tenant)
     click.echo(f"📥 Importing skills...\n")
 
     tarball_path = Path(tarball)
@@ -92,6 +107,7 @@ def sync_pull(tenant: str, tarball: str, merge: str, dry_run: bool):
 @click.option("--push-frequency", type=click.Choice(["daily", "weekly", "manual"]), default="manual", help="Push frequency")
 def configure_sync(tenant: str, repo: str, branch: str, enable_sync: bool, push_frequency: str):
     """Configure GitHub sync settings."""
+    tenant = _ck_tenant(tenant)
     click.echo(f"⚙️  Configuring GitHub sync for tenant '{tenant}'...\n")
 
     tenant_path = Path.home() / ".corvin" / "tenants" / tenant
