@@ -156,11 +156,17 @@ def _audit_path_unified() -> Path:
     env = os.environ.get("VOICE_AUDIT_PATH")
     if env:
         return Path(env)
-    try:
-        from .audit import audit_path  # type: ignore
-    except ImportError:
+    # Always use absolute import to avoid conflicts with operator/forge/paths.py
+    # when this module is loaded directly (not as part of a package).
+    # Add HERE to sys.path first so local audit + paths imports work reliably.
+    if str(HERE) not in sys.path:
         sys.path.insert(0, str(HERE))
+    try:
         from audit import audit_path  # type: ignore
+    except ImportError:
+        # Fallback: use the same resolver that audit.py provides
+        from paths import corvin_home as _ch  # type: ignore
+        return _ch() / "global" / "forge" / "audit.jsonl"
     return audit_path()
 
 

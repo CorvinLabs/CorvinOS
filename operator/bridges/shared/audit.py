@@ -43,6 +43,7 @@ Public API:
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -75,14 +76,24 @@ def _forge_workspace_root() -> Path:
     if env:
         return Path(env).expanduser()
     # paths.py sits next to audit.py in operator/bridges/shared/.
-    # Tests load audit.py as a top-level module (sys.path injection),
-    # so relative import only works in package mode — fall back to
-    # absolute when needed.
+    # Direct load by file path to avoid sys.path conflicts with
+    # operator/forge/paths.py (a stub without corvin_home). This ensures
+    # we always get the correct implementation when imported after other
+    # modules have polluted sys.path.
+    _audit_dir = Path(__file__).resolve().parent
+    _local_paths_file = _audit_dir / "paths.py"
     try:
-        from .paths import corvin_home as corvin_home  # type: ignore
-    except ImportError:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from paths import corvin_home as corvin_home  # type: ignore
+        spec = importlib.util.spec_from_file_location("_paths_audit", _local_paths_file)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load spec from {_local_paths_file}")
+        _paths_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_paths_module)
+        corvin_home = _paths_module.corvin_home  # type: ignore
+    except (ImportError, FileNotFoundError, AttributeError) as e:
+        raise RuntimeError(
+            f"Cannot load corvin_home from paths.py at {_local_paths_file}. "
+            "This is a critical dependency of the audit system."
+        ) from e
     # Audit-chain default lives at the user-global root regardless of
     # active workspace scope, so it stays unified across sessions.
     return corvin_home() / "global" / "forge"
