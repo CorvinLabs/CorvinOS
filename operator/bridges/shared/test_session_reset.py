@@ -454,6 +454,69 @@ def case_08_engine_e2e() -> None:
     shutil.rmtree(sandbox, ignore_errors=True)
 
 
+# ── case 9: budget reset on session reset ──────────────────────────────────
+
+
+def case_09_budget_reset() -> None:
+    print("\n=== case 9: reset clears token budget quota ===")
+    sandbox = _make_sandbox("09")
+    home = sandbox / "home"
+    slot = sandbox / "slot"
+    chat = "chatA"
+    cid = _forge_chan("discord", chat)
+
+    # Create a budget entry (Layer 20) and account some tokens
+    budget_code = (
+        "import sys, os\n"
+        "sys.path.insert(0, {!r})\n"
+        "import context_budget\n"
+        "os.environ['CORVIN_HOME'] = sys.argv[1]\n"
+        "session_id = sys.argv[2]\n"
+        "# Register with 100k quota\n"
+        "context_budget.register_session_budget(session_id, quota=100_000)\n"
+        "# Account 50k tokens (50% used)\n"
+        "context_budget.account_turn(session_id, 'turn1', 25_000)\n"
+        "context_budget.account_turn(session_id, 'turn2', 25_000)\n"
+        "# Verify budget exists and shows 50k used\n"
+        "rec = context_budget.get_budget(session_id)\n"
+        "assert rec is not None, 'budget should exist'\n"
+        "assert rec['used'] == 50_000, f'used should be 50k, got {rec[\"used\"]}'\n"
+        "print('PRE-RESET: budget registered, 50k/100k used')\n"
+    ).format(ROOT)
+
+    _run_helper(home, slot, budget_code, str(home), cid)
+
+    # Call session_reset
+    result = _call_reset(home, slot, channel="discord", chat_id=chat)
+
+    # Verify reset output
+    eq(result["budget_reset"], True, "reset output: budget_reset should be True")
+
+    # Verify budget was deleted
+    verify_code = (
+        "import sys, os\n"
+        "sys.path.insert(0, {!r})\n"
+        "import context_budget\n"
+        "os.environ['CORVIN_HOME'] = sys.argv[1]\n"
+        "session_id = sys.argv[2]\n"
+        "# After reset, budget should not exist\n"
+        "rec = context_budget.get_budget(session_id)\n"
+        "if rec is None:\n"
+        "    print('POST-RESET: budget deleted (correct)')\n"
+        "else:\n"
+        "    print(f'ERROR: budget still exists: {rec}')\n"
+        "    sys.exit(1)\n"
+    ).format(ROOT)
+
+    try:
+        _run_helper(home, slot, verify_code, str(home), cid)
+        ok("reset deletes budget from budgets.json")
+    except subprocess.CalledProcessError as e:
+        bad(f"budget verification failed: {e.stderr}")
+
+    shutil.rmtree(sandbox, ignore_errors=True)
+
+
 # ── main ───────────────────────────────────────────────────────────────────
 
 
@@ -466,6 +529,7 @@ def main() -> int:
     case_06_chain_valid()
     case_07_timeout_sweep()
     case_08_engine_e2e()
+    case_09_budget_reset()
     print(f"\n{PASS} pass, {FAIL} fail")
     return 0 if FAIL == 0 else 1
 

@@ -97,6 +97,15 @@ try:
 except Exception:  # noqa: BLE001
     _abp_cancel_session = None  # type: ignore[assignment]
 
+# Layer 20 — Context Budget: reset per-session token quota on reset.
+# Silent best-effort: missing context_budget module does not block the reset.
+try:
+    from context_budget import (  # type: ignore
+        unregister_session_budget as _unregister_budget,
+    )
+except Exception:  # noqa: BLE001
+    _unregister_budget = None  # type: ignore[assignment]
+
 
 # Every shipped channel, from the one list (channels.py). This tuple used to be
 # hand-written with five entries, which made `--channel signal` / `--channel
@@ -329,6 +338,23 @@ def _wipe_voice_state(*, channel: str, chat_id: str,
         return False
 
 
+def _reset_budget(*, forge_chan_id: str, failures: list[str]) -> bool:
+    """Layer 20 — reset the session's token budget quota.
+
+    Unregisters the session from budgets.json so the next adapter turn
+    will auto-register a fresh budget with 0 tokens used. Returns True
+    iff the session had a registered budget. Best-effort — failure must
+    never block the rest of the reset.
+    """
+    if _unregister_budget is None:
+        return False
+    try:
+        return _unregister_budget(forge_chan_id)
+    except Exception as e:  # noqa: BLE001
+        failures.append(f"budget reset: {e!s}")
+        return False
+
+
 def reset_session(
     *,
     channel: str,
@@ -347,10 +373,12 @@ def reset_session(
       3. Purge forge tools.
       4. Defensive rmtree of the forge session workspace dir.
       5. Defensive rmtree of the voice session-state dir.
+      6. Reset Layer-20 context budget quota (so next turn gets fresh budget).
 
-    Returns a dict with per-layer counts, the audit event id, the
-    event type, and a list of any failures encountered. Idempotent —
-    a second call on the same chat returns counts of zero.
+    Returns a dict with per-layer counts (including budget_reset: bool),
+    the audit event id, the event type, and a list of any failures
+    encountered. Idempotent — a second call on the same chat returns
+    counts of zero.
 
     ``tenant_id`` is propagated to sub-calls that require it
     (ADR-0099 batch cancel, ADR-0096 MCP session clear).
@@ -405,6 +433,7 @@ def reset_session(
             "slot_mirrors_removed":     0,
             "artifacts_removed":        0,
             "worker_sessions_removed":  0,
+            "budget_reset":             False,
             "audit_event_id":           None,
             "audit_event_type":         audit_event_type,
             "reason":                   reason,
@@ -463,6 +492,12 @@ def reset_session(
     voice_state_removed = _wipe_voice_state(
         channel=channel, chat_id=chat_id, failures=failures,
     )
+    # Layer 20 — reset the session's context budget quota so the next turn
+    # starts with a fresh 100k tokens (or the operator's configured default).
+    # Best-effort: budget unavailability must not block the reset.
+    budget_reset = _reset_budget(
+        forge_chan_id=forge_chan_id, failures=failures,
+    )
 
     # The slot mirror is purged inline by SkillRegistry.delete(); the
     # registry doesn't return per-skill slot counts, so we report it as
@@ -476,6 +511,7 @@ def reset_session(
         "slot_mirrors_removed":     slot_mirrors_removed,
         "artifacts_removed":        artifacts_removed,
         "worker_sessions_removed":  worker_sessions_removed,
+        "budget_reset":             budget_reset,
         "audit_event_id":           audit_event_id,
         "audit_event_type":         audit_event_type,
         "reason":                   reason,

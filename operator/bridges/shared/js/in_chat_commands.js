@@ -1079,6 +1079,7 @@ function resetReply(ctx) {
   lines.push(`- skills removed: ${out.skills_removed} (slot mirrors: ${out.slot_mirrors_removed})`);
   lines.push(`- forge tools removed: ${out.forge_tools_removed}`);
   lines.push(`- voice state cleared: ${out.voice_state_removed ? 'yes' : 'no'}`);
+  lines.push(`- token budget reset: ${out.budget_reset ? 'yes' : 'no'}`);
   if (out.audit_event_id) {
     lines.push(`- audit event: ${out.audit_event_type} (${String(out.audit_event_id).slice(0, 16)})`);
   } else {
