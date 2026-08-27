@@ -18,6 +18,13 @@ try:
 except ImportError:
     _notification_router = None
 
+# Import task heartbeat for long-running phase monitoring
+try:
+    from .task_heartbeat import get_task_heartbeat
+    _heartbeat = get_task_heartbeat()
+except ImportError:
+    _heartbeat = None
+
 
 @dataclass(frozen=True)
 class Phase:
@@ -166,7 +173,7 @@ class TaskOrchestrator:
         return final_task
 
     async def _execute_phase(self, task_id: str, phase: Phase, tenant_id: str) -> Dict:
-        """Execute one phase with timeout."""
+        """Execute one phase with timeout + heartbeat monitoring."""
         # Mark as running
         task = await self.registry.get_task(task_id, tenant_id)
         running_phase = PhaseMetadata(
@@ -187,8 +194,37 @@ class TaskOrchestrator:
         )
         await self.registry.append_task(task)
 
+        # Phase notification callbacks
+        async def on_heartbeat(data):
+            """Periodic heartbeat during phase execution."""
+            if _notification_router:
+                await _notification_router.on_phase_heartbeat({
+                    "task_id": task_id,
+                    "phase_id": phase.phase_id,
+                    **data
+                })
+
+        async def on_stall(data):
+            """Phase is running too long (stall detection)."""
+            if _notification_router:
+                await _notification_router.on_phase_stalled({
+                    "task_id": task_id,
+                    "phase_id": phase.phase_id,
+                    **data
+                })
+
         try:
-            result = await asyncio.wait_for(phase.handler(), timeout=phase.timeout_s)
+            # Execute with heartbeat monitoring (if available)
+            if _heartbeat:
+                result = await _heartbeat.monitor_phase(
+                    task_id, phase.phase_id,
+                    phase.handler,
+                    phase.timeout_s,
+                    on_heartbeat, on_stall
+                )
+            else:
+                # Fallback to simple wait_for if heartbeat not available
+                result = await asyncio.wait_for(phase.handler(), timeout=phase.timeout_s)
             return result
         except asyncio.TimeoutError as e:
             raise RuntimeError(f"Phase {phase.phase_id} timeout after {phase.timeout_s}s") from e

@@ -49,6 +49,32 @@ class NotificationRouter:
         message = f"❌ Phase `{phase_id}` failed: {error}"
         await self._send_discord(message, color=0xFF0000)
 
+    async def on_phase_heartbeat(self, data: Dict):
+        """Send periodic heartbeat for long-running phase."""
+        phase_id = data.get("phase_id")
+        elapsed_s = data.get("elapsed_s", 0)
+        remaining_s = data.get("remaining_s", 0)
+        status = data.get("status", "running")
+
+        if status == "warning_timeout_approaching":
+            message = f"⚠️ Phase `{phase_id}` timeout in {remaining_s}s"
+            await self._send_discord(message, color=0xFFFF00)
+        else:
+            # Only send every 5 min (skip some heartbeats to avoid spam)
+            if elapsed_s % 300 == 0:
+                message = f"💫 Phase `{phase_id}` running... ({elapsed_s}s elapsed, {remaining_s}s remaining)"
+                await self._send_discord(message, color=0x808080)
+
+    async def on_phase_stalled(self, data: Dict):
+        """Notify when phase is running too long (stall detection)."""
+        phase_id = data.get("phase_id")
+        elapsed_s = data.get("elapsed_s", 0)
+        threshold_s = data.get("threshold_s", 900)
+        reason = data.get("reason", "Unknown")
+
+        message = f"⏱️ Phase `{phase_id}` stalled: {reason}"
+        await self._send_discord(message, color=0xFF8800)
+
     async def _send_discord(self, message: str, color: int = 0x808080):
         """Send message to Discord webhook (fire-and-forget)."""
         webhook_url = self.prefs.get("default", {}).get("discord_webhook")
