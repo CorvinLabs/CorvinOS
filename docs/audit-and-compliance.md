@@ -98,6 +98,7 @@ all subsystems. A non-exhaustive sample:
 | Skill-Forge | `skill.created`, `skill.namespace_denied`, `skill.outcome_graded` |
 | Policy | `policy.import_denied`, `policy.namespace_denied`, `acl.persona_denied`, `acl.persona_secret_denied` |
 | Path-gate | `path_gate.denied`, `path_gate.self_test_failed` |
+| Console | `console.panel_created`, `console.panel_deleted` (ADR-0366 + ADR-0299 — AI-generated panels installed/removed) |
 | Session | `session.reset`, `session.timeout` |
 | Consent (Layer 16 P4) | `consent.observer_dropped`, `consent.share_admitted`, `consent.consume_drift`, `consent.store_corrupted` (CRITICAL), `consent.gate_unavailable_drop` (WARNING), `consent.granted`, `consent.revoked`, `consent.expired`, `consent.toctou_drop` (WARNING) |
 | Disclosure (Layer 19) | `disclosure.shown`, `disclosure.action`, `disclosure.joined` |
