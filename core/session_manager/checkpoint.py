@@ -144,7 +144,11 @@ class SessionCheckpoint:
         """Reconstruct checkpoint from dictionary."""
         # Parse nested objects
         if data.get("created_at"):
-            created_at = datetime.fromisoformat(data["created_at"].rstrip("Z"))
+            ca = data["created_at"]
+            if isinstance(ca, datetime):
+                created_at = ca
+            else:
+                created_at = datetime.fromisoformat(ca.rstrip("Z"))
         else:
             created_at = datetime.utcnow()
 
@@ -161,7 +165,11 @@ class SessionCheckpoint:
 
         open_subgoals = []
         for sg in data.get("open_subgoals", []):
-            sg_ts = datetime.fromisoformat(sg.get("timestamp", "").rstrip("Z")) if sg.get("timestamp") else datetime.utcnow()
+            sg_ts_val = sg.get("timestamp")
+            if sg_ts_val:
+                sg_ts = sg_ts_val if isinstance(sg_ts_val, datetime) else datetime.fromisoformat(sg_ts_val.rstrip("Z"))
+            else:
+                sg_ts = datetime.utcnow()
             open_subgoals.append(
                 SubgoalRecord(
                     description=sg.get("description", ""),

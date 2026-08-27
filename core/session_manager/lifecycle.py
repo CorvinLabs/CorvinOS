@@ -191,6 +191,23 @@ class SessionLifecycleManager:
             f"Created session {session_id} for task {task_id} phase {phase}"
         )
 
+        # Publish session created event (GDPR Art. 30, 32)
+        if self.hub:
+            try:
+                audit_event = {
+                    "event_type": "session.created",
+                    "tenant_id": tenant_id,
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "phase": phase,
+                    "timestamp": now.isoformat() + "Z",
+                    "user_id": user_id,
+                    "parent_session_id": parent_session_id,
+                }
+                self.hub.publish_event("session.created", audit_event)
+            except Exception as e:
+                logger.error(f"Failed to publish session created event: {e}")
+
         return metadata
 
     def record_iteration(self, session_id: str) -> None:
