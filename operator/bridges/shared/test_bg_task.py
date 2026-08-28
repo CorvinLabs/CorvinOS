@@ -187,6 +187,108 @@ def test_task_command_registers_and_spawns() -> None:
         shutil.rmtree(base, ignore_errors=True)
 
 
+def test_task_command_registers_a_supervised_run_when_the_flag_is_on() -> None:
+    """REACHABILITY PROOF for task_supervisor.register_run.
+
+    A unit test proves register_run writes a record when called. This proves
+    the real `/task` handler CALLS it — driven through `adapter.process_one`,
+    the same entry point a Discord message takes, with the ship-dark flags on.
+    Without this, the supervisor could be perfectly correct and never reached.
+    """
+    base = Path(tempfile.mkdtemp(prefix="bgtask-sup-"))
+    inbox, outbox, processed, home = (base / "inbox", base / "outbox",
+                                      base / "processed", base / "home")
+    for p in (inbox, outbox, processed, home):
+        p.mkdir(parents=True)
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX": str(inbox), "ADAPTER_OUTBOX": str(outbox),
+            "ADAPTER_PROCESSED": str(processed), "CORVIN_HOME": str(home),
+        })
+
+        class _FakePopen:
+            def __init__(self, args, **kw):
+                pass
+
+        adapter.subprocess.Popen = _FakePopen
+        # Turn both ship-dark flags on. The flag RESOLUTION is covered by the
+        # registry's own tests; what is under test here is the handler wiring.
+        seen_flags = []
+
+        def _flags_on(flag_id):
+            seen_flags.append(flag_id)
+            return True
+
+        adapter._bg_flag = _flags_on
+
+        env = {"id": "msg-sup-1", "channel": "sandbox-task", "from": "u42",
+               "chat_id": "chan-99", "text": "/task audit every module",
+               "ts": 0}
+        f = inbox / "msg-sup-1.json"
+        f.write_text(json.dumps(env))
+        adapter.process_one(f, settings={"whitelist": ["u42"]})
+
+        assert "bridge_task_supervision" in seen_flags, seen_flags
+        assert "bridge_task_progress_updates" in seen_flags, seen_flags
+
+        runs = list((home / "task_runs").glob("*.json"))
+        assert len(runs) == 1, f"the /task handler did not create a run: {runs}"
+        run = json.loads(runs[0].read_text())
+        # The instruction MUST be persisted here — the spec file the worker
+        # reads is unlinked immediately, so this record is the only thing that
+        # makes the work resumable at all.
+        assert run["instruction"] == "audit every module"
+        assert run["channel"] == "sandbox-task"
+        assert run["chat_key"] == "chan-99"
+        assert run["sender"] == "u42"
+        assert run["state"] == "active"
+        assert run["supervise"] is True and run["progress"] is True
+        print("PASS: /task creates a supervised run record (flags on)")
+    finally:
+        adapter.subprocess.Popen = _REAL_POPEN
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_task_command_writes_no_run_record_when_flags_are_off() -> None:
+    """Flag-off must be the pre-feature path exactly: no run record is written,
+    and the presence of that record is the only switch every downstream
+    component reads."""
+    base = Path(tempfile.mkdtemp(prefix="bgtask-nosup-"))
+    inbox, outbox, processed, home = (base / "inbox", base / "outbox",
+                                      base / "processed", base / "home")
+    for p in (inbox, outbox, processed, home):
+        p.mkdir(parents=True)
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX": str(inbox), "ADAPTER_OUTBOX": str(outbox),
+            "ADAPTER_PROCESSED": str(processed), "CORVIN_HOME": str(home),
+        })
+
+        class _FakePopen:
+            def __init__(self, args, **kw):
+                pass
+
+        adapter.subprocess.Popen = _FakePopen
+        adapter._bg_flag = lambda flag_id: False
+
+        env = {"id": "msg-nosup-1", "channel": "sandbox-task", "from": "u42",
+               "chat_id": "chan-99", "text": "/task audit every module",
+               "ts": 0}
+        f = inbox / "msg-nosup-1.json"
+        f.write_text(json.dumps(env))
+        adapter.process_one(f, settings={"whitelist": ["u42"]})
+
+        assert not (home / "task_runs").exists() or \
+            not list((home / "task_runs").glob("*.json")), \
+            "flag-off must write no run record"
+        # …and the pre-feature completion record is still registered as before.
+        assert len(list((home / "pending_notifications").glob("*.json"))) == 1
+        print("PASS: /task writes no run record with the flags off")
+    finally:
+        adapter.subprocess.Popen = _REAL_POPEN
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def test_task_command_empty_usage() -> None:
     base = Path(tempfile.mkdtemp(prefix="bgtask2-"))
     inbox, outbox, processed, home = (base / "inbox", base / "outbox",
@@ -460,6 +562,8 @@ def main() -> int:
         test_worker_end_to_end,
         test_worker_wall_clock_timeout,
         test_task_command_registers_and_spawns,
+        test_task_command_registers_a_supervised_run_when_the_flag_is_on,
+        test_task_command_writes_no_run_record_when_flags_are_off,
         test_task_command_empty_usage,
         test_task_command_concurrency_cap,
         test_task_command_house_rules_deny,

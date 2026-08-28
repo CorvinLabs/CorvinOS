@@ -298,6 +298,32 @@ def mark_done(task_id: str, *, text: str, ok: bool = True) -> bool:
 # ─── delivery (poller) API ─────────────────────────────────────────────────
 
 
+def _supervised(task_id) -> bool:
+    """True when *task_id* is an ACTIVE run owned by ``task_supervisor``.
+
+    Lazy import, and False on any failure: when the supervisor is unavailable
+    nobody will resume the task, so the dead-producer reap below is exactly the
+    right behaviour and must still run.
+    """
+    if not task_id:
+        return False
+    try:
+        _here = str(Path(__file__).resolve().parent)
+        # Guarded: this runs once per pending record per poll tick, and an
+        # unguarded insert grew sys.path without bound in the long-running
+        # adapter process (slowing every subsequent import).
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import task_supervisor as _sup  # type: ignore
+
+        run = _sup.get_run(str(task_id))
+    except Exception:  # noqa: BLE001
+        return False
+    if not run:
+        return False
+    return run.get("state") == "active" and bool(run.get("supervise", True))
+
+
 def _envelope_for(rec: dict, *, voice_path: str | None = None) -> dict:
     """Build the outbox envelope with the correct per-channel routing key.
 
@@ -426,6 +452,15 @@ def deliver_ready(
                     (boot and boot != _host_boot_id())
                     or not _pid_alive(int(pid))
                 )
+                # A SUPERVISED run has an owner for exactly this situation:
+                # task_supervisor will relaunch the worker. Reaping it here
+                # would tell the user "the worker stopped" while the resume
+                # that fixes it is already in flight — and worse, mark the
+                # record ready, so the real result would be dropped by
+                # mark_done later. The supervisor calls mark_done itself once
+                # its attempt/time budget is genuinely spent.
+                if producer_gone and _supervised(rec.get("id")):
+                    producer_gone = False
                 if producer_gone:
                     rec["state"] = _STATE_READY
                     rec["ok"] = False
