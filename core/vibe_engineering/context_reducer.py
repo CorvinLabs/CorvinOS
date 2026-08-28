@@ -204,22 +204,32 @@ class ContextReducer:
         return kept
 
     def _filter_learnings(self, learnings: List[Dict[str, Any]]) -> List[EssentialSection]:
-        """Filter learnings: keep relevant (Tier 2), drop tangential (Tier 3)."""
+        """Filter learnings: keep them, DROP the tangential (Tier 3) ones.
+
+        The default is KEEP. This used to require a Tier-2 keyword ("lesson",
+        "pattern", "optimization", …) to be present in the learning's own text
+        before it was kept — so a learning phrased like a normal finding ("TTL
+        alone is insufficient") matched nothing and was silently discarded.
+        Everything in this list is already a learning by construction; making a
+        vocabulary match the precondition for keeping one inverted the default
+        from keep to drop, and a long autonomous run — whose context is reduced
+        at every checkpoint — therefore forgot most of what it had learned,
+        every time it compressed.
+        """
         kept = []
 
         for l in learnings:
             learning_text = l.get("learning", "")
             applies_to = l.get("applies_to", "")
 
-            # Check tier
-            if self._is_tier_2(learning_text + " " + applies_to):
-                kept.append(EssentialSection(
-                    section_type="learning",
-                    content=learning_text,
-                    iteration=l.get("iter", -1),
-                    reason=f"Applies to: {applies_to}"
-                ))
-            # else: Tier 3, drop it
+            if self._is_tier_3(learning_text + " " + applies_to):
+                continue  # tangential / nice-to-know — this is the one to drop
+            kept.append(EssentialSection(
+                section_type="learning",
+                content=learning_text,
+                iteration=l.get("iter", -1),
+                reason=f"Applies to: {applies_to}"
+            ))
 
         return kept
 

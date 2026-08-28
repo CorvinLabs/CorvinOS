@@ -1,5 +1,7 @@
 """Phase 3.1b: Background Monitor Unit Tests (Discord webhook, retry logic, milestones)."""
 
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta
@@ -186,15 +188,26 @@ async def test_discord_webhook_timeout_retry(monitor_with_webhook, snapshot):
     """Test: Discord webhook retries on timeout."""
     call_count = 0
 
-    async def mock_post_timeout(*args, **kwargs):
+    class _PostCM:
+        """`session.post(...)` returns an async CONTEXT MANAGER, not a
+        coroutine. The old mock was `async def`, so `async with session.post()`
+        raised TypeError before the body ever ran — call_count stayed 0 and the
+        test measured nothing."""
+
+        async def __aenter__(self):
+            mock_resp = AsyncMock()
+            mock_resp.status = 204
+            return mock_resp
+
+        async def __aexit__(self, *exc):
+            return False
+
+    def mock_post_timeout(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count < 2:
             raise asyncio.TimeoutError("Connection timeout")
-
-        mock_resp = AsyncMock()
-        mock_resp.status = 204
-        return mock_resp
+        return _PostCM()
 
     with patch('aiohttp.ClientSession.post', side_effect=mock_post_timeout):
         with patch('asyncio.sleep', new_callable=AsyncMock):

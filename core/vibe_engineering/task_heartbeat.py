@@ -22,7 +22,7 @@ class TaskHeartbeat:
 
     def __init__(self, config: Optional[HeartbeatConfig] = None):
         self.config = config or HeartbeatConfig()
-        self._active_phases = {}  # task_id → {phase_id, start_time}
+        self._active_phases = {}  # (task_id, phase_id) → {phase_id, start_time}
 
     async def monitor_phase(self, task_id: str, phase_id: str,
                            phase_handler: Callable,
@@ -36,7 +36,13 @@ class TaskHeartbeat:
         If phase takes too long, notify user via on_stall.
         """
         start_time = datetime.now()
-        self._active_phases[task_id] = {
+        # Keyed by (task_id, phase_id), NOT task_id alone. The orchestrator runs
+        # every ready phase of a task concurrently via asyncio.gather, so a
+        # task-only key made concurrent phases overwrite each other and the
+        # second one to finish raised KeyError out of the `finally` below —
+        # turning a SUCCESSFUL phase into a failure.
+        key = (task_id, phase_id)
+        self._active_phases[key] = {
             "phase_id": phase_id,
             "start_time": start_time,
             "timeout_s": timeout_s,
@@ -53,7 +59,8 @@ class TaskHeartbeat:
             )
             return result
         finally:
-            del self._active_phases[task_id]
+            # pop, not del: idempotent under any unwind path.
+            self._active_phases.pop(key, None)
 
     async def _monitor_with_heartbeat(self, task_id: str, phase_id: str,
                                       phase_handler: Callable,
@@ -70,7 +77,28 @@ class TaskHeartbeat:
         warn_deadline = timeout_deadline - timedelta(seconds=self.config.timeout_grace_s)
 
         phase_task = asyncio.create_task(phase_handler())
+        try:
+            return await self._heartbeat_loop(
+                phase_task, task_id, phase_id, timeout_s, start_time,
+                timeout_deadline, heartbeat_deadline, stall_deadline,
+                warn_deadline, on_heartbeat, on_stall,
+            )
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            # The outer wait_for gave up. Without this the phase coroutine
+            # keeps running detached FOREVER — the "timed out" phase is still
+            # burning the engine, the budget and the CPU, invisibly.
+            phase_task.cancel()
+            try:
+                await phase_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            raise
 
+    async def _heartbeat_loop(self, phase_task, task_id: str, phase_id: str,
+                              timeout_s: int, start_time, timeout_deadline,
+                              heartbeat_deadline, stall_deadline, warn_deadline,
+                              on_heartbeat: Callable, on_stall: Callable) -> Dict:
+        """Emit heartbeats until *phase_task* finishes; return its result."""
         while not phase_task.done():
             now = datetime.now()
 
@@ -78,7 +106,7 @@ class TaskHeartbeat:
             if now >= heartbeat_deadline:
                 elapsed = (now - start_time).total_seconds()
                 remaining = timeout_s - elapsed
-                await on_heartbeat({
+                await self._safe(on_heartbeat, {
                     "task_id": task_id,
                     "phase_id": phase_id,
                     "elapsed_s": int(elapsed),
@@ -90,7 +118,7 @@ class TaskHeartbeat:
             # Detect stall (running too long)
             if now >= stall_deadline and now < warn_deadline:
                 elapsed = (now - start_time).total_seconds()
-                await on_stall({
+                await self._safe(on_stall, {
                     "task_id": task_id,
                     "phase_id": phase_id,
                     "elapsed_s": int(elapsed),
@@ -103,7 +131,7 @@ class TaskHeartbeat:
             if now >= warn_deadline:
                 remaining = (timeout_deadline - now).total_seconds()
                 if remaining > 0:
-                    await on_heartbeat({
+                    await self._safe(on_heartbeat, {
                         "task_id": task_id,
                         "phase_id": phase_id,
                         "elapsed_s": int((now - start_time).total_seconds()),
@@ -117,6 +145,22 @@ class TaskHeartbeat:
 
         # Phase completed (or raised exception)
         return await phase_task
+
+    @staticmethod
+    async def _safe(callback: Callable, payload: Dict) -> None:
+        """Run a notification callback without letting it kill the phase.
+
+        A raising or hanging notifier used to propagate straight out of the
+        heartbeat loop and fail the phase it was merely reporting on. Bounded
+        as well as guarded: a notifier that blocks forever would otherwise
+        stall the loop that is supposed to detect stalls.
+        """
+        try:
+            result = callback(payload)
+            if asyncio.iscoroutine(result):
+                await asyncio.wait_for(result, timeout=30)
+        except Exception:  # noqa: BLE001 — includes TimeoutError
+            pass
 
 
 # Singleton

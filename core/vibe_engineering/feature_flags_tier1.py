@@ -1,4 +1,11 @@
-"""Tier-1 Feature Flags: Activate autonomy features for production."""
+"""Tier-1 Feature Flags: Activate autonomy features for production.
+
+**Not read by anything in production** (audited 2026-08-28): the only importer
+of this module is `tests/integration/test_week4_production_ready.py`. The
+registry the running system reads is `core/console/corvin_core/feature_flags.py`
+— add a new flag there (default False, per CLAUDE.md § Feature Flags), never
+here, where it would gate nothing while looking like a shipped decision.
+"""
 
 import os
 from typing import Dict
@@ -10,7 +17,12 @@ class FeatureFlagResolver:
     TIER_1_FLAGS = {
         "task_orchestrator_multiphase": True,  # TaskOrchestrator + Registry (ENABLED)
         "auto_session_renewal": True,           # SessionRenewerEngine (ENABLED)
-        "notification_system_v1": True,         # Discord notifications (ENABLED for 100% rollout)
+        # OPT-IN, not on. Discord notifications for autonomous runs ship behind
+        # the CANONICAL flags `bridge_task_progress_updates` /
+        # `bridge_task_supervision` (ADR-0445), both default off. A second flag
+        # here that says "ENABLED for 100% rollout" is a second truth about the
+        # same feature, and the wrong one — this resolver reaches no code.
+        "notification_system_v1": False,
     }
 
     TIER_2_FLAGS = {

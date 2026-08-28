@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from ..hermes_bridge import HermesBridge, HermesResponse, HermesRequest
-from ..event_broadcaster import EventBroadcaster, StatusLevel, StatusEvent, ConsoleNotifier
+from ..event_broadcaster import EventBroadcaster, StatusLevel, StatusEvent, ConsoleNotifier, DiscordNotifier
 
 
 @pytest.fixture
@@ -111,7 +111,10 @@ async def test_console_notifier(event_broadcaster):
 @pytest.mark.asyncio
 async def test_discord_notifier_emoji(event_broadcaster):
     """Test: DiscordNotifier generates correct emoji."""
-    notifier = ConsoleNotifier(console_api=None)
+    # `_emoji_for_level` lives on DiscordNotifier; the test instantiated
+    # ConsoleNotifier, which has no such method — so it asserted nothing about
+    # the class named in its own title.
+    notifier = DiscordNotifier(webhook_url=None)
 
     # Emoji generation
     assert notifier._emoji_for_level("info") == "ℹ️"

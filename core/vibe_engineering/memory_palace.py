@@ -78,12 +78,21 @@ class MemoryPalace:
         return entry.id
 
     async def get_strategy_weights(self, persona_id: str, task_type: str) -> Dict[str, float]:
-        """Retrieve learned strategy weights for persona + task type."""
+        """Retrieve learned strategy weights for persona + task type.
+
+        Returns a SNAPSHOT. Returning `self.weights[key].weights` directly
+        handed every caller a live reference into the store: the "weights I
+        decided on" silently changed the moment anything learned, and code that
+        compares a before against an after — which is what a learning system
+        does — was comparing one object with itself and could never observe a
+        change. A copy is also what makes a decision reproducible: the ranking
+        that produced a Decision is the ranking that was in effect.
+        """
         key = f"{persona_id}:{task_type}"
         if key not in self.weights:
             # Default uniform
             self.weights[key] = StrategyWeights(persona_id, task_type)
-        return self.weights[key].weights
+        return dict(self.weights[key].weights)
 
     async def update_strategy_weight(self, persona_id: str, task_type: str,
                                     strategy: str, success: bool):

@@ -2,6 +2,21 @@
 Feature Flag Resolver for Vibe Engineering
 
 Enables safe gradual rollout with kill switches and dependency validation.
+
+**NOT the canonical flag registry, and NOT read by anything in production**
+(audited 2026-08-28). `get_resolver()` is called only by the four convenience
+functions below, and nothing calls those — a `grep` for them outside this file
+and its tests returns nothing. The registry the running system actually reads
+is `core/console/corvin_core/feature_flags.py`, which resolves
+`features.json` → `spec.features.<id>` → the registry default, is what the
+Console Settings panel writes, and is what `_validate_registry` guards against
+flagging a compliance mechanism.
+
+Add a NEW feature flag THERE, never here. An entry added to `DEFAULTS` below
+gates nothing, and a `True` one is a ship-dark violation that looks like a
+shipped decision. This module is kept because its dependency-validation logic
+is still referenced by the Vibe design docs; treat it as a design artifact
+until it is either wired to the canonical registry or removed.
 """
 
 import os
@@ -21,13 +36,19 @@ class FeatureFlagResolver:
     - Graceful degradation (flag failure doesn't crash task)
     """
 
-    # Default feature configuration
-    # ✅ Changed to direct 100% deployment (single-user environment)
+    # Default feature configuration — every entry is False.
+    #
+    # CLAUDE.md § Feature Flags is load-bearing: a flag is off on a fresh
+    # install and off after an upgrade. Three of these were True with the note
+    # "direct 100% deployment (single-user environment)", which is not a
+    # deployment mode this file can grant — see the module docstring: nothing
+    # in production reads this resolver, so the True values enabled nothing and
+    # only modelled a policy the canonical registry forbids.
     DEFAULTS = {
-        "vibe_engineering_v0_2": True,  # Base system: ENABLED (100% deployment)
-        "vibe_engineering_encryption": False,  # Checkpoint encryption (Phase 2, can defer)
-        "vibe_engineering_ml_classifiers": True,  # ML-based tiers (Phase 2, ready)
-        "vibe_engineering_monitoring_dashboard": True,  # Dashboard (Phase 3.1, ready)
+        "vibe_engineering_v0_2": False,
+        "vibe_engineering_encryption": False,       # Checkpoint encryption (Phase 2)
+        "vibe_engineering_ml_classifiers": False,   # ML-based tiers (Phase 2)
+        "vibe_engineering_monitoring_dashboard": False,  # Dashboard (Phase 3.1)
     }
 
     # Dependency graph: feature -> required parents

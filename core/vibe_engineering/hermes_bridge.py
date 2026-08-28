@@ -98,19 +98,51 @@ class HermesBridge:
             logger.error(f"Hermes diagnosis failed: {e}")
             return await self._fallback_diagnosis(error, context)
 
+    # Substring sets for the fallback heuristic. Kept as data next to the
+    # exception types so the two stay in step.
+    #
+    # The original heuristic matched only the exact tokens "timeout" /
+    # "complexity" / "too large", and therefore missed the phrasings Python and
+    # this codebase actually produce — "timed out", "too complex", "deadline
+    # exceeded". Those all fell through to `escalate`, so a long autonomous run
+    # that hit its wall clock asked a human for help instead of retrying, which
+    # is exactly the behaviour that stops a long task from finishing on its own.
+    _RETRY_HINTS = ("timeout", "timed out", "timed-out", "deadline", "network",
+                    "connection", "temporarily unavailable", "rate limit",
+                    "try again")
+    _DECOMPOSE_HINTS = ("complexity", "too complex", "too large", "too big",
+                        "context length", "token limit", "exceeds", "too long")
+
     async def _fallback_diagnosis(self, error: Exception, context: Dict[str, Any]) -> HermesResponse:
         """Fallback heuristic diagnosis (no Hermes)."""
         error_msg = str(error).lower()
         fallback_skills = context.get("fallback_skills", [])
 
-        if "timeout" in error_msg or "network" in error_msg:
+        # Classify on the exception TYPE first: it is unambiguous where a
+        # message substring is guesswork, and it cannot drift with wording.
+        if isinstance(error, (TimeoutError, ConnectionError, OSError)) and \
+                not isinstance(error, (NotADirectoryError, IsADirectoryError,
+                                       FileNotFoundError, PermissionError)):
+            return HermesResponse(
+                primary_strategy="retry",
+                confidence=0.7,
+                reason=f"Transient {type(error).__name__} (fallback heuristic)"
+            )
+        if isinstance(error, MemoryError):
+            return HermesResponse(
+                primary_strategy="decompose",
+                confidence=0.7,
+                reason="Ran out of memory — split the work (fallback heuristic)"
+            )
+
+        if any(h in error_msg for h in self._RETRY_HINTS):
             return HermesResponse(
                 primary_strategy="retry",
                 confidence=0.6,
                 reason="Transient network/timeout error (fallback heuristic)"
             )
 
-        elif "complexity" in error_msg or "too large" in error_msg:
+        elif any(h in error_msg for h in self._DECOMPOSE_HINTS):
             return HermesResponse(
                 primary_strategy="decompose",
                 confidence=0.65,
@@ -135,7 +167,9 @@ class HermesBridge:
     def _classify_error(self, error: Exception) -> str:
         """Classify error type from exception."""
         error_msg = str(error).lower()
-        if "timeout" in error_msg or "deadline" in error_msg:
+        if isinstance(error, TimeoutError) or any(
+                h in error_msg for h in ("timeout", "timed out", "timed-out",
+                                         "deadline")):
             return "timeout"
         elif "resource" in error_msg or "memory" in error_msg:
             return "resource"

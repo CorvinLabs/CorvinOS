@@ -224,7 +224,7 @@ class VibeOrchestrator:
         iteration_num: int,
         context_tokens: int,
         tokens_used: int,
-        phase: str = "execution"
+        phase: Optional[str] = None
     ):
         """
         Record an iteration step in task execution.
@@ -234,12 +234,20 @@ class VibeOrchestrator:
             iteration_num: Iteration number
             context_tokens: Current context token count
             tokens_used: Tokens consumed this iteration
-            phase: Current phase (initialization, execution, completion, etc.)
+            phase: Move the task to this phase. ``None`` (the default) KEEPS
+                the task's current phase.
+
+        The default used to be the literal ``"execution"``, so every
+        `record_iteration` call that did not pass a phase silently moved the
+        task back to "execution" — overwriting a phase the caller had just set.
+        The wrong phase was then checkpointed, and a resume restarted the run in
+        a phase it had already left.
         """
         task.iteration_count = iteration_num
         task.context_tokens = context_tokens
         task.tokens_burned_today += tokens_used
-        task.current_phase = phase
+        if phase is not None:
+            task.current_phase = phase
 
         logger.debug(
             f"Iteration {iteration_num}: context={context_tokens} tokens, "
