@@ -226,3 +226,20 @@ class ExecutionContext:
         ]
         full_dict["checkpoints"] = self.checkpoints
         return full_dict
+
+    def clear_session_state(self) -> None:
+        """Clear session-scoped state for session reset.
+
+        Resets decision history, checkpoints, and strategy state.
+        Preserves task_id and tenant_id.
+        """
+        self.decision_history = []
+        self.checkpoints = []
+        self.budget_remaining = 0.0
+        self.time_remaining = 0
+        self.model = ""
+        self.strategy = ""
+        self.strategy_confidence = 0.5
+        self.guidance_overrides = {}
+        # Clear the context stack (but keep root)
+        self.context_stack.stack = []

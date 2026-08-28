@@ -173,3 +173,33 @@ class SessionLifecycleManager(Subsystem):
         elif request_type == "list_sessions":
             return list(self.sessions.values())
         return None
+
+    def shutdown(self) -> None:
+        """Cleanup."""
+        logger.info("SessionLifecycleManager shutdown")
+
+    def clear_session_cache(self, session_id: Optional[str] = None) -> None:
+        """Drop tracking state for the session that was reset.
+
+        MUST NOT be named ``on_session_reset``: that name is already this
+        class's async event-bus handler (subscribed in ``startup()`` and
+        dispatched from ``on_event()``), and a second definition under the
+        same name silently replaced it — leaving the bus calling a sync
+        method with ``(event_name, event_data)``.
+
+        One process serves many chats, so a ``/new`` in one of them must not
+        touch any other. Passing ``session_id`` removes exactly that entry;
+        omitting it clears everything, which is only ever correct for a
+        whole-process teardown — never for a user-initiated reset.
+        """
+        try:
+            if session_id is not None:
+                if self.sessions.pop(session_id, None) is not None:
+                    logger.info(
+                        "SessionLifecycleManager cleared session %s", session_id
+                    )
+                return
+            self.sessions.clear()
+            logger.info("SessionLifecycleManager cleared ALL session state")
+        except Exception as e:
+            logger.error(f"SessionLifecycleManager clear_session_cache failed: {e}")

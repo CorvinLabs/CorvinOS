@@ -261,7 +261,7 @@ Forge tools and skills share the same five-scope model:
 | Scope | Lifetime | Storage | Slot-mirror |
 |---|---|---|---|
 | `task` | One LLM request | in-memory | no |
-| `session` | Until `/new` or `/reset` | `<corvin_home>/sessions/<bridge>:<chat>/` | no |
+| `session` | Until `/new` or `/reset` | `<corvin_home>/tenants/<tid>/sessions/<bridge>:<chat>/` | no |
 | `project` | Repo-wide persistent | `.corvin/` in project | yes |
 | `user` | Globally persistent | `~/.corvin/` | yes |
 | `tenant` | Tenant-wide | `~/.corvin/tenants/<id>/` | yes |

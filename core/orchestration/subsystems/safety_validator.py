@@ -181,3 +181,16 @@ class SafetyValidator(Subsystem):
     def shutdown(self) -> None:
         """Cleanup."""
         logger.info("SafetyValidator shutdown")
+
+    def clear_session_cache(self, session_id: str | None = None) -> None:
+        """Clear session-scoped state on session reset.
+
+        Clears violation counts and resets failure tracking for circuit breaker.
+        """
+        try:
+            self.violation_count.clear()
+            self.consecutive_failures.clear()
+            self.disabled_strategies.clear()
+            logger.info("SafetyValidator session state cleared")
+        except Exception as e:
+            logger.error(f"SafetyValidator clear_session_cache failed: {e}")

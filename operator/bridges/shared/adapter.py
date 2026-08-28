@@ -4171,26 +4171,18 @@ def _format_observer_block(entries: list[dict]) -> str:
 
 def _reset_session_state(workdir: Path) -> list[str]:
     """Delete only Claude's conversation state — keep all project files.
-    Returns the names of the entries that were removed (for logging)."""
-    removed: list[str] = []
-    for name in (".claude.json", ".session_started", ".main_session.json"):
-        p = workdir / name
-        if p.exists():
-            p.unlink()
-            removed.append(name)
-    claude_dir = workdir / ".claude"
-    if claude_dir.exists():
-        shutil.rmtree(claude_dir)
-        removed.append(".claude/")
-    # Glob anything else Claude might version (e.g. .claude.session.json)
-    for p in workdir.glob(".claude*"):
-        if p.exists():
-            if p.is_dir():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
-            removed.append(p.name)
-    return removed
+    Returns the names of the entries that were removed (for logging).
+
+    Delegates to ``session_state``, which is also what ``session_reset.py``
+    calls for ``/new``. Keeping one implementation is the point: this function
+    and the bridge reset must agree on what "session state" means, and when
+    they were two hand-written lists that agreement silently lapsed.
+    """
+    try:
+        from .session_state import reset_claude_session_state  # type: ignore
+    except ImportError:
+        from session_state import reset_claude_session_state  # type: ignore
+    return reset_claude_session_state(workdir)
 
 
 def _build_context_bar(channel: str, chat_key: str, profile: dict | None) -> str:

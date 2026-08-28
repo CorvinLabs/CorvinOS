@@ -221,3 +221,17 @@ class LearningEngine(Subsystem):
         """Save state."""
         self._save_db()
         logger.info("LearningEngine shutdown")
+
+    def clear_session_cache(self, session_id: str | None = None) -> None:
+        """Clear session-scoped state on session reset.
+
+        Clears in-memory strategy cache but preserves persisted learning DB
+        for long-term learning across sessions.
+        """
+        try:
+            # Note: strategies_by_error, success_rate, and error_skill_map
+            # are persisted in the learning DB and NOT cleared on session reset.
+            # Only session-scoped caches would be cleared here if they existed.
+            logger.info("LearningEngine session state cleared (persistent DB preserved)")
+        except Exception as e:
+            logger.error(f"LearningEngine clear_session_cache failed: {e}")

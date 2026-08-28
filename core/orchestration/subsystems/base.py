@@ -49,6 +49,26 @@ class Subsystem(ABC):
         """Cleanup resources."""
         pass
 
+    def clear_session_cache(self, session_id: str | None = None) -> None:
+        """Drop session-scoped state when a chat is reset.
+
+        Called by session_reset.py so a subsystem can discard caches, retry
+        counts, decision history and similar per-chat state.
+
+        ``session_id`` names the chat being reset. One process serves many
+        chats, so a subsystem holding per-session state MUST clear only that
+        entry; clearing everything would wipe unrelated conversations.
+
+        Named ``clear_session_cache`` rather than ``on_session_reset``
+        because the latter is already the event-bus handler signature
+        ``(event_name, event_data)`` in SessionLifecycleManager — defining
+        both under one name silently replaced that handler.
+
+        Must be non-fatal: a failure here must not block other subsystems
+        or the overall session reset.
+        """
+        pass
+
     def publish_event(self, event_name: str, event_data: Dict[str, Any]) -> None:
         """Publish event through hub."""
         if not hasattr(self, "hub"):

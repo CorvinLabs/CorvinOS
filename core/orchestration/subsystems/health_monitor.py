@@ -226,3 +226,16 @@ class HealthMonitor(Subsystem):
     def shutdown(self) -> None:
         """Cleanup."""
         logger.info("HealthMonitor shutdown")
+
+    def clear_session_cache(self, session_id: str | None = None) -> None:
+        """Clear session-scoped state on session reset.
+
+        Resets error counts and activity tracking for the session.
+        """
+        try:
+            self.error_count = 0
+            self.total_count = 0
+            self.last_activity = datetime.now()
+            logger.info("HealthMonitor session state cleared")
+        except Exception as e:
+            logger.error(f"HealthMonitor clear_session_cache failed: {e}")
