@@ -6,6 +6,7 @@ Four scopes determine where a forged tool lives:
   session  ~/.corvin/tenants/<tenant_id>/sessions/<channel-id>/forge/      (one bridge channel)
   project  <repo-root>/.corvin/forge/                  (one git repo)
   user     ~/.corvin/tenants/<tenant_id>/forge/       (permanent, tenant-scoped)
+  package  ~/.corvin/tenants/<tenant_id>/packages/forge/  (delivered by an installed package; ADR-0451)
 
 Detection precedence (when caller does not pass an explicit scope):
 
@@ -33,7 +34,7 @@ from pathlib import Path
 
 from .paths import corvin_home, fs_safe_component, tenant_home, _validate_tenant_id
 
-VALID_SCOPES = ("task", "session", "project", "user")
+VALID_SCOPES = ("task", "session", "project", "user", "package")
 
 
 def _resolve_repo_workspace(repo: Path) -> Path:
@@ -148,5 +149,12 @@ def scope_root(scope: str, *,
     if scope == "user":
         # User scope: ~/.corvin/tenants/<tenant_id>/forge (tenant-native)
         return tenant_home(tenant_id) / "forge"
+
+    if scope == "package":
+        # Package scope (ADR-0451 F): artifacts delivered by an installed package live in their
+        # OWN tenant-scoped home, isolable from operator-authored `user` artifacts. Distinct
+        # location so a package skill is enumerable as its own class; MultiSkillRegistry strips
+        # the trailing forge/ and appends skill-forge/, giving package skills their own tree.
+        return tenant_home(tenant_id) / "packages" / "forge"
 
     raise ValueError(f"unknown scope: {scope!r} (valid: {VALID_SCOPES})")
