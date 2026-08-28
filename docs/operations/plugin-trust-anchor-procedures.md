@@ -193,6 +193,124 @@ Refused immediately; no way to override (fail-closed per ADR-0249).
 
 ---
 
+## CLI Command Reference (Stage 6)
+
+The `corvin-gateway plugin install` command is the primary operator interface for plugin installation.
+
+### Basic Syntax
+
+```bash
+python -m corvin_gateway.cli plugin install <path> [options]
+```
+
+### Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `<path>` | **Required.** Local directory containing `plugin.yaml` (or `setup.py`/`pyproject.toml` for legacy) | — |
+| `--tenant TENANT_ID` | Tenant to install into | `_default` |
+| `--force` | Reinstall if plugin already exists | false |
+| `--no-prompt` | Skip operator confirmation for community plugins (for CI/automation) | false |
+
+### Examples
+
+**1. Install a community plugin (with confirmation prompt):**
+```bash
+python -m corvin_gateway.cli plugin install /path/to/my-plugin
+```
+
+**2. Install for CI/automation (non-interactive):**
+```bash
+python -m corvin_gateway.cli plugin install /path/to/plugin --no-prompt
+```
+
+**3. Upgrade/reinstall an existing plugin:**
+```bash
+python -m corvin_gateway.cli plugin install /path/to/plugin --force
+```
+
+**4. Install to a non-default tenant:**
+```bash
+python -m corvin_gateway.cli plugin install /path/to/plugin --tenant staging
+```
+
+### Plugin Metadata Discovery
+
+The CLI looks for metadata in this order:
+
+1. **`plugin.yaml`** (recommended, new ADR-0249 format)
+   ```yaml
+   id: com.example.my_plugin
+   name: My Plugin
+   version: 1.0.0
+   origin: community          # or "vetted" or "builtin"
+   boot_layer: installed      # or "bundled"
+   class_path: my_pkg.backend:Handler
+   config:
+     key: value
+   signature:
+     algorithm: ed25519
+     public_key: "MCowBQYD..." # base64url DER
+     value: "..."              # base64url signature
+   ```
+
+2. **`setup.py`** (legacy fallback)
+   ```python
+   setup(name="plugin-name", version="1.0.0", ...)
+   ```
+
+3. **`pyproject.toml`** (legacy fallback)
+   ```toml
+   [project]
+   name = "plugin-name"
+   version = "1.0.0"
+   ```
+
+### Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success (plugin installed or already present) |
+| `1` | Error (URL rejected, path not found, signature failed, confirmation denied, or config error) |
+
+### Output Examples
+
+**Success (community plugin with confirmation):**
+```
+Plugin requires operator confirmation:
+  ID:       com.example.demo
+  Name:     Demo Plugin
+  Version:  1.0.0
+  Origin:   community
+
+This plugin is UNREVIEWED. Load it?
+(yes/no): yes
+
+✅ Plugin installed: com.example.demo v1.0.0
+```
+
+**Success (vetted plugin, automatic):**
+```
+✅ Plugin installed: com.example.vetted v2.0.0
+```
+
+**Failure (already installed, not forced):**
+```
+Plugin 'com.example.existing' already installed. Use --force to reinstall.
+```
+
+**Failure (URL rejected):**
+```
+Error: URL installation not supported. Provide a local directory path.
+```
+
+**Failure (vetted signature verification):**
+```
+Error: Plugin signature verification failed: vetted plugin missing required signature
+```
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

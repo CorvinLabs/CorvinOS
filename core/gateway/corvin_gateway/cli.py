@@ -7,6 +7,7 @@ Usage::
     python -m corvin_gateway.cli tenant init         <tenant_id>
     python -m corvin_gateway.cli tenant show         <tenant_id>
     python -m corvin_gateway.cli package build|verify|install ...
+    python -m corvin_gateway.cli plugin install     <path> [--tenant ID]
 
 Token auth has been removed; static atlr_* tokens are no longer issued.
 For local deployments the loopback binding is the security boundary.
@@ -236,6 +237,10 @@ def build_parser() -> argparse.ArgumentParser:
     install_p.add_argument("--tenant", required=True)
     install_p.add_argument("--public-key", required=True)
     install_p.set_defaults(func=_cmd_package_install)
+
+    # ── Plugin management (ADR-0249 Stage 6) ──────────────────────────
+    from . import plugin_cmd
+    plugin_cmd.add_plugin_subcommand(sub)
 
     return p
 
