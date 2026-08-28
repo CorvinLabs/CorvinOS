@@ -365,6 +365,7 @@ def test_the_unconsumed_set_is_recorded_not_incidental():
         "data_connector",   # L24 resolves its own DSI adapters
         "worker_engine",    # L22 engine_registry has no register()
         "bridge_channel",   # no channel_registry class exists
+        "web_surface",      # loader→mount path unwired (ADR-0365 P7); SPA never fetches /surfaces
     }
     assert set(consumed_types()) == {
         "router_backend",

@@ -262,6 +262,27 @@ SURFACES: tuple[ExtensionSurface, ...] = (
             "drops delivered answers — raise."
         ),
     ),
+    ExtensionSurface(
+        plugin_type="web_surface",
+        ctx_handle="web_surface_registry",
+        provider_module=None,
+        template=None,
+        consumed_by=None,
+        dead_reason=(
+            "The loader→mount path is unwired (ADR-0365 P7). "
+            "core/console/corvin_console/routes/capabilities.py::_loaded_web_surfaces() "
+            "enumerates loaded web_surface plugins, but the SPA never fetches "
+            "/capabilities/surfaces and the console SPA is still mounted hard-wired "
+            "in standalone.py, not through the loader. The Console "
+            "(core/plugins/corvin_plugins/console/plugin.py) declares plugin_type "
+            "web_surface but starts no server and mounts nothing itself, so nothing "
+            "hands a plugin the web_surface_registry handle yet. Verified 2026-08-28."
+        ),
+        invariant=(
+            "A web_surface must not run its own server — the OS owns the ASGI mount; "
+            "the plugin only declares mount_path + spa_dist_dir()."
+        ),
+    ),
 )
 
 

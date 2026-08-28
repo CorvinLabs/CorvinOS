@@ -37,6 +37,11 @@ class PluginContext:
     # and had no registry to hand itself to.
     stt_registry: Any | None = None            # providers.stt_provider._registry
     data_connector_registry: Any | None = None  # providers.data_connector._registry
+    # web_surface (ADR-0356/0365): the type is in KNOWN_PLUGIN_TYPES but the surface map had no
+    # row, so surface_for("web_surface") raised KeyError and its guard test was committed red.
+    # This handle exists so the row's ctx_handle names a real field; it is currently unpopulated —
+    # the loader→mount path (P7) is not wired yet, so web_surface stays an honest dead surface.
+    web_surface_registry: Any | None = None    # loader → capabilities._loaded_web_surfaces (P7, unwired)
     extra: dict = field(default_factory=dict)
 
 
