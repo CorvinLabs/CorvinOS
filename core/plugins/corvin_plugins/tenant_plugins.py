@@ -43,6 +43,7 @@ class TenantPluginEntry:
     installed_at: Optional[str] = None
     installed_by: Optional[str] = None
     boot_layer: str = "installed"
+    origin: str = "community"  # community, vetted, or builtin (ADR-0249)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -82,23 +83,62 @@ class TenantPluginRegistry:
         self.installed_dir.mkdir(parents=True, exist_ok=True)
 
     def load_registry(self) -> None:
-        """Load registry from disk; defaults to empty list if file doesn't exist."""
-        if self.registry_path.exists():
-            try:
-                import yaml
+        """Load registry from disk; empty list only when the file is absent.
 
-                data = yaml.safe_load(self.registry_path.read_text(encoding="utf-8"))
-                if data and isinstance(data, dict):
-                    self.plugins = [
-                        TenantPluginEntry.from_dict(p)
-                        for p in data.get("plugins", [])
-                    ]
-                    self.schema_version = data.get("schema_version", "1.0")
-            except Exception as exc:
-                log.warning(f"failed to load registry from {self.registry_path}: {exc}")
-                self.plugins = []
-        else:
+        Fail-closed on a present-but-unparseable or wrong-shape file (ADR-0250 philosophy):
+        an unreadable registry is NEVER silently treated as "no plugins" and then overwritten,
+        because `save_registry()` would destroy the real records. In particular a state.py
+        *dict*-format registry (``plugins:`` mapping) on the same path is rejected rather than
+        reset — the two persistence formats must not clobber each other.
+        """
+        if not self.registry_path.exists():
             self.plugins = []
+            return
+        import yaml
+
+        try:
+            data = yaml.safe_load(self.registry_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # unreadable YAML — do NOT reset+overwrite
+            raise ValueError(
+                f"tenant plugin registry unreadable, refusing to reset: {self.registry_path}: {exc}"
+            ) from exc
+        if data is None:
+            self.plugins = []
+            return
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"tenant plugin registry has unexpected shape (not a mapping): {self.registry_path}"
+            )
+        raw = data.get("plugins", [])
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"tenant plugin registry 'plugins' is {type(raw).__name__}, expected a list — "
+                f"refusing to reset (this looks like a different registry format): {self.registry_path}"
+            )
+        self.plugins = [TenantPluginEntry.from_dict(p) for p in raw if isinstance(p, dict)]
+        self.schema_version = data.get("schema_version", "1.0")
+
+    def _safe_installed_dest(self, plugin_id: str) -> Path:
+        """Resolve ``installed/<plugin_id>`` with two independent guards.
+
+        Mirrors ``state.instance_dir`` because this path is handed to ``shutil.rmtree``/
+        ``copytree`` and one guard is one bug away from a delete outside the tenant:
+        1. ``validate_plugin_id`` — an allowlist charset that rejects ``..`` / separators.
+        2. a resolved-containment check — even an id that slips the charset cannot resolve
+           outside ``<tenant>/plugins/installed``.
+        """
+        from .manifest import validate_plugin_id
+
+        validate_plugin_id(plugin_id)
+        root = self.installed_dir
+        candidate = root / plugin_id
+        resolved_root = root.resolve(strict=False)
+        resolved = candidate.resolve(strict=False)
+        if resolved != resolved_root and resolved_root not in resolved.parents:
+            raise ValueError(
+                f"plugin_id {plugin_id!r} resolves outside the tenant installed dir"
+            )
+        return candidate
 
     def save_registry(self) -> None:
         """Persist registry to disk."""
@@ -139,9 +179,9 @@ class TenantPluginRegistry:
         if not plugin_path.is_dir():
             raise ValueError(f"plugin directory not found: {plugin_path}")
 
-        # Install to tenant
+        # Install to tenant (guarded dest — never rmtree/copytree outside the tenant)
         self._ensure_dirs()
-        dest = self.installed_dir / plugin_id
+        dest = self._safe_installed_dest(plugin_id)
         if dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(plugin_path, dest)
@@ -158,6 +198,7 @@ class TenantPluginRegistry:
             installed_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             installed_by=installed_by,
             boot_layer=metadata.get("boot_layer", "installed"),
+            origin=metadata.get("origin", "community"),
         )
         self.plugins.append(entry)
         self.save_registry()
@@ -175,8 +216,8 @@ class TenantPluginRegistry:
         if entry is None:
             raise ValueError(f"plugin {plugin_id!r} not found in registry")
 
-        # Remove directory
-        dest = self.installed_dir / plugin_id
+        # Remove directory (guarded dest — never rmtree outside the tenant)
+        dest = self._safe_installed_dest(plugin_id)
         if dest.exists():
             shutil.rmtree(dest)
 
@@ -191,8 +232,11 @@ class TenantPluginRegistry:
         return list(self.plugins)
 
     def get_plugin_path(self, plugin_id: str) -> Optional[Path]:
-        """Return the installation path for a plugin, or None if not found."""
-        path = self.installed_dir / plugin_id
+        """Return the installation path for a plugin, or None if not found.
+
+        Validates the id (raises on a traversal id) rather than returning an out-of-tenant path.
+        """
+        path = self._safe_installed_dest(plugin_id)
         return path if path.is_dir() else None
 
     def get_plugin_entry(self, plugin_id: str) -> Optional[TenantPluginEntry]:
