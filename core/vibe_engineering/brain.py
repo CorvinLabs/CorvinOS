@@ -62,9 +62,15 @@ class Brain:
         if not available:
             available = self.skills.list_skills()  # fallback to all
 
+        # Rank by the weight of the STRATEGY each skill realises. Looking the
+        # weight up under `s.id` (the original) always missed — weights are
+        # keyed "decompose" / "direct_fix" / "backtrack", skills are
+        # "decompose_task" / "code_analysis" / "direct_fix" — so every skill
+        # scored the uniform default, the sort was a no-op, and nothing the
+        # memory learned ever reached this decision.
         ranked = sorted(
             available,
-            key=lambda s: weights.get(s.id, 0.33),
+            key=lambda s: weights.get(self._strategy_of(s), 0.33),
             reverse=True
         )
 
@@ -77,7 +83,7 @@ class Brain:
             )
 
         top_skill = ranked[0]
-        confidence = weights.get(top_skill.id, 0.33)
+        confidence = weights.get(self._strategy_of(top_skill), 0.33)
 
         return Decision(
             skill_id=top_skill.id,
@@ -85,6 +91,17 @@ class Brain:
             fallback=[s.id for s in ranked[1:3]],
             parameters={"task_type": task_type}
         )
+
+    @staticmethod
+    def _strategy_of(skill) -> str:
+        """The learned-weight key for *skill*.
+
+        A skill declares the strategy it realises (`Skill.strategy`); falling
+        back to its id keeps a skill whose id already IS a strategy name
+        (`direct_fix`) working, and keeps a third-party skill that declares
+        nothing scoring the uniform default rather than crashing.
+        """
+        return getattr(skill, "strategy", None) or skill.id
 
     async def recover(self, task: Dict, error: Exception, context: Any) -> Recovery:
         """Decide recovery strategy from error."""
@@ -135,8 +152,14 @@ class Brain:
 
         # Determine batch size based on spawn strategy
         if use_spawn and total_items > self.spawn_threshold:
-            # Larger batches for distributed: 1 task per 10 items (cheaper spawning)
-            batch_size = max(5, total_items // 10)
+            # Larger batches for distributed work, because SPAWNING is the
+            # expensive part. `max(5, total_items // 10)` computed the number of
+            # TASKS, not the size of a batch — inverted against its own comment:
+            # for 20 items it yielded batches of 5 (four spawns) where the rule
+            # says two. Floor at 10 items per spawned task, and for large inputs
+            # let the batch grow so the spawn COUNT stays ~10 rather than the
+            # batch count growing without bound.
+            batch_size = max(10, total_items // 10)
         else:
             # Smaller batches for sequential: 5 items per batch
             batch_size = 5

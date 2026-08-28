@@ -36,6 +36,13 @@ class BackgroundMonitor:
         self.last_notified: Dict[str, datetime] = {}
         self.notification_cooldown = timedelta(seconds=60)  # Min time between notifs per task
         self._background_task: Optional[asyncio.Task] = None  # Store task ref to prevent GC
+        # Tasks whose TERMINAL state (completed/failed) has been announced.
+        # Without this, `_cleanup_completed_tasks` deleted the cooldown entry of
+        # a task that is still in the publisher's index, so the very next poll
+        # saw "state changed: completed" with no cooldown, notified again, and
+        # cleaned up again — an unbounded notification loop, one message per
+        # poll interval, forever. It is also what makes the cleanup safe at all.
+        self.terminal_notified: Set[str] = set()
 
     async def start(self):
         """Start background monitoring (runs forever until stopped)."""
@@ -87,14 +94,21 @@ class BackgroundMonitor:
         should_notify = False
         reason = ""
 
-        # Milestone 1: Task progressed significantly
-        last_iter = self.last_seen_iteration.get(task_id, -1)
+        # Milestone 1: Task progressed significantly.
+        # The baseline for a task the monitor has not tracked yet is 0, not -1.
+        # The old `-1` default made the first threshold 4 instead of 5, so a
+        # task was announced one iteration early on first sight and every
+        # subsequent step was measured from a shifted origin.
+        last_iter = self.last_seen_iteration.get(task_id, 0)
         if latest.iteration_num > last_iter + 5:  # Every 5 iterations
             should_notify = True
             reason = f"Progress milestone: iteration {latest.iteration_num}"
 
-        # Milestone 2: State changed
-        elif latest.state in [TaskState.COMPLETED, TaskState.FAILED, TaskState.AWAITING_INPUT]:
+        # Milestone 2: State changed — announced exactly once per task.
+        elif latest.state in [TaskState.COMPLETED, TaskState.FAILED,
+                              TaskState.AWAITING_INPUT]:
+            if task_id in self.terminal_notified:
+                return
             should_notify = True
             reason = f"State changed: {latest.state.value}"
 
@@ -113,6 +127,9 @@ class BackgroundMonitor:
             await self._send_notification(latest, reason)
             self.last_notified[task_id] = datetime.now()
             self.last_seen_iteration[task_id] = latest.iteration_num
+            if latest.state in (TaskState.COMPLETED, TaskState.FAILED,
+                                TaskState.AWAITING_INPUT):
+                self.terminal_notified.add(task_id)
 
     def _cleanup_completed_tasks(self):
         """Remove completed/failed tasks from tracking dicts to prevent unbounded growth."""
@@ -123,6 +140,13 @@ class BackgroundMonitor:
                 completed_tasks.add(task_id)
 
         for task_id in completed_tasks:
+            # Mark the task as finished-with BEFORE dropping its cooldown.
+            # Dropping the cooldown alone (the old behaviour) re-armed the very
+            # notification this cleanup had just finished with: the task is
+            # still in the publisher's index, so the next poll saw "state
+            # changed: completed" with no cooldown, notified, and cleaned up
+            # again — one message per poll interval, forever.
+            self.terminal_notified.add(task_id)
             self.last_notified.pop(task_id, None)
             self.last_seen_iteration.pop(task_id, None)
             logger.debug(f"BackgroundMonitor cleaned up tracking for {task_id}")
@@ -148,8 +172,31 @@ class BackgroundMonitor:
                         json=payload,
                         timeout=aiohttp.ClientTimeout(total=10)
                     ) as resp:
-                        if resp.status == 204:
+                        if 200 <= resp.status < 300:
+                            # Any 2xx is success. Testing only for 204 meant a
+                            # 200 (what Discord returns for ?wait=true) fell
+                            # through every branch and the loop RE-POSTED the
+                            # same message up to max_retries times.
                             logger.debug(f"Discord webhook posted: {snapshot.task_id} — {reason}")
+                            return
+                        elif resp.status == 429:
+                            # Discord's own rate limit. Retrying blindly is what
+                            # gets a bot limited at the edge — honour the
+                            # Retry-After the API hands back.
+                            retry_after = 1.0
+                            try:
+                                body = await resp.json()
+                                retry_after = float(
+                                    resp.headers.get("Retry-After")
+                                    or body.get("retry_after", 1.0)
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                            logger.warning(
+                                f"Discord rate limited; retry in {retry_after}s")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(min(retry_after, 30.0))
+                                continue
                             return
                         elif resp.status >= 400:
                             text = await resp.text()
@@ -181,13 +228,33 @@ def get_monitor() -> BackgroundMonitor:
     return _monitor
 
 async def start_background_monitor(poll_interval: float = 30.0, discord_webhook: Optional[str] = None):
-    """Start the background monitor (call once at app startup)."""
-    monitor = BackgroundMonitor(poll_interval=poll_interval, discord_webhook=discord_webhook)
+    """Start the background monitor (call once at app startup).
+
+    The started monitor becomes THE global instance. Previously this created a
+    local one and left the module global pointing at a different, idle monitor
+    — so `stop_background_monitor()` stopped the wrong object and the polling
+    loop kept running after shutdown, holding the event loop open.
+
+    Idempotent: calling it twice returns the already-running monitor rather
+    than starting a second polling loop against the same publisher.
+    """
+    global _monitor
+    if _monitor is not None and _monitor.is_running:
+        return _monitor
+    _monitor = BackgroundMonitor(poll_interval=poll_interval,
+                                 discord_webhook=discord_webhook)
     # Run in background (don't await) — store task to prevent GC from cancelling it
-    monitor._background_task = asyncio.create_task(monitor.start())
-    return monitor
+    _monitor._background_task = asyncio.create_task(_monitor.start())
+    return _monitor
 
 def stop_background_monitor():
     """Stop the background monitor (call on app shutdown)."""
-    monitor = get_monitor()
-    monitor.stop()
+    global _monitor
+    if _monitor is None:
+        return
+    _monitor.stop()
+    task = _monitor._background_task
+    if task is not None and not task.done():
+        # stop() only clears the flag; the loop is parked in `await sleep()` for
+        # up to poll_interval seconds and would keep the loop alive that long.
+        task.cancel()

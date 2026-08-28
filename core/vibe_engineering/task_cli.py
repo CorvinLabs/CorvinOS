@@ -82,7 +82,7 @@ class TaskCLI:
 
         except json.JSONDecodeError as e:
             logger.error(f"Checkpoint JSON parse error: {e}")
-            return {"status": "error", "reason": f"Invalid checkpoint JSON: {e}"}
+            return {"status": "error", "reason": f"JSON parse error in checkpoint: {e}"}
         except Exception as e:
             logger.error(f"Resume failed: {e}")
             return {"status": "error", "reason": str(e)}

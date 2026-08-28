@@ -21,6 +21,13 @@ class Skill:
     description: str
     task_types: List[str]  # which tasks use this?
     entry_point: Callable  # async function
+    # Which learned STRATEGY this skill realises (MemoryPalace.StrategyWeights
+    # is keyed by strategy: "decompose" / "direct_fix" / "backtrack", not by
+    # skill id). Without this the Brain looked up `weights[skill.id]`, always
+    # missed, and every skill scored the uniform default — so nothing the
+    # memory learned ever reached the decision it exists to inform. None means
+    # "the id IS the strategy name".
+    strategy: Optional[str] = None
     parameters: Dict[str, Any] = None
     cost_estimate: float = 1.0
     time_estimate: float = 5.0
@@ -45,6 +52,7 @@ class SkillsEngine:
             description="Analyze code for issues",
             task_types=["refactoring", "testing"],
             entry_point=self._builtin_code_analysis,
+            strategy="direct_fix",
         )
         self.skills["decompose_task"] = Skill(
             id="decompose_task",
@@ -52,6 +60,7 @@ class SkillsEngine:
             description="Break task into subtasks",
             task_types=["any"],
             entry_point=self._builtin_decompose,
+            strategy="decompose",
         )
         self.skills["direct_fix"] = Skill(
             id="direct_fix",
@@ -59,6 +68,7 @@ class SkillsEngine:
             description="Apply direct code fix",
             task_types=["bug_fix"],
             entry_point=self._builtin_direct_fix,
+            strategy="direct_fix",
         )
 
     async def _builtin_code_analysis(self, context: Any) -> SkillResult:

@@ -76,6 +76,83 @@ class TaskRegistryPersistence:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()  # Serialize writes
 
+        # Incremental index over the append-only log: (tenant_id, task_id) →
+        # latest record, plus the byte offset up to which the file has been
+        # parsed. Every read used to slurp and json-parse the ENTIRE file, and
+        # a phase update happens several times per phase — so a long run's cost
+        # was quadratic in its own length and a multi-hundred-phase task spent
+        # most of its wall clock re-reading its own history. Parsing only the
+        # bytes appended since the last read makes it linear. Correct under
+        # concurrent appenders because the log is strictly append-only: bytes
+        # already parsed never change.
+        self._index: Dict[tuple, Dict] = {}
+        self._offset = 0
+        self._corrupt_lines = 0
+
+    def _refresh_index(self) -> None:
+        """Parse the bytes appended since the last refresh. Never raises."""
+        try:
+            size = self.registry_path.stat().st_size
+        except OSError:
+            self._index, self._offset = {}, 0
+            return
+        if size < self._offset:
+            # The file shrank — it was compacted, rotated or replaced. The
+            # index describes a file that no longer exists; rebuild from zero.
+            self._index, self._offset = {}, 0
+        if size == self._offset:
+            return
+        try:
+            # BINARY mode, deliberately. `self._offset` is a BYTE offset, and
+            # `TextIOWrapper.seek()` is documented to accept only an opaque
+            # cookie from `tell()`. Passing a byte offset happens to work for
+            # UTF-8 at a character boundary in CPython — it packs start_pos into
+            # the low bits of the cookie — but that is an implementation detail,
+            # not a contract. Reading bytes and decoding explicitly is exact and
+            # also makes the `consumed` accounting below byte-precise by
+            # construction.
+            with open(self.registry_path, "rb") as f:
+                f.seek(self._offset)
+                raw = f.read()
+        except OSError as e:
+            raise RuntimeError(f"Failed to read registry: {e}") from e
+
+        consumed = 0
+        for bline in raw.splitlines(keepends=True):
+            if not bline.endswith(b"\n"):
+                # A partially written final line: another process is mid-append.
+                # Stop here and pick it up on the next refresh rather than
+                # treating a torn write as corruption.
+                break
+            consumed += len(bline)
+            stripped = bline.strip()
+            if not stripped:
+                continue
+            try:
+                # json.loads accepts bytes and handles the UTF-8 decode; a line
+                # with invalid UTF-8 raises here and is skipped as corrupt,
+                # which is the right outcome for a torn write.
+                record = json.loads(stripped)
+                key = (record.get("tenant_id", "_default"), record.get("task_id"))
+            except (json.JSONDecodeError, ValueError, AttributeError,
+                    UnicodeDecodeError):
+                # SKIP a corrupt line instead of failing the whole read. The
+                # original code raised RuntimeError here, so a single torn or
+                # truncated line (a crash mid-append, a full disk) made EVERY
+                # task in the registry permanently unreadable — losing every
+                # in-flight long run at once.
+                self._corrupt_lines += 1
+                continue
+            if key[1]:
+                self._index[key] = record
+        self._offset += consumed
+
+    @property
+    def corrupt_line_count(self) -> int:
+        """Corrupt lines skipped so far — surfaced so silent data loss is
+        observable rather than invisible."""
+        return self._corrupt_lines
+
     async def append_task(self, task: TaskMetadata) -> None:
         """Append task metadata to registry (write-once)."""
         async with self._lock:
@@ -103,8 +180,14 @@ class TaskRegistryPersistence:
             }
 
             try:
-                with open(self.registry_path, "a") as f:
-                    f.write(json.dumps(record) + "\n")
+                # One write() of one complete line, then fsync. Without the
+                # flush+fsync a crash can leave the record only in the page
+                # cache — the phase looks done in memory and is gone on disk,
+                # which is precisely the state a resume cannot recover from.
+                with open(self.registry_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
             except IOError as e:
                 raise RuntimeError(f"Failed to append to registry: {e}")
 
@@ -113,41 +196,65 @@ class TaskRegistryPersistence:
         async with self._lock:
             if not self.registry_path.exists():
                 return None
-
-            try:
-                with open(self.registry_path, "r") as f:
-                    lines = f.readlines()
-                    # Find the LAST occurrence of this task_id (latest version)
-                    for line in reversed(lines):
-                        record = json.loads(line)
-                        if record.get("task_id") == task_id and record.get("tenant_id") == tenant_id:
-                            return self._deserialize_task(record)
+            self._refresh_index()
+            record = self._index.get((tenant_id, task_id))
+            if record is None:
                 return None
-            except (IOError, json.JSONDecodeError) as e:
-                raise RuntimeError(f"Failed to read registry: {e}")
+            try:
+                return self._deserialize_task(record)
+            except (KeyError, ValueError, TypeError) as e:
+                # A structurally valid JSON line with an unexpected shape (an
+                # older schema, a hand-edited file). Treat it as absent rather
+                # than raising into the orchestrator's hot loop.
+                self._corrupt_lines += 1
+                print(f"task_registry: unreadable record for {task_id}: {e}")
+                return None
 
     async def list_tasks(self, tenant_id: str = "_default") -> List[TaskMetadata]:
         """Retrieve all latest versions of tasks for a tenant."""
         async with self._lock:
             if not self.registry_path.exists():
                 return []
+            self._refresh_index()
+            out: List[TaskMetadata] = []
+            for (tid, _task_id), record in self._index.items():
+                if tid != tenant_id:
+                    continue
+                try:
+                    out.append(self._deserialize_task(record))
+                except (KeyError, ValueError, TypeError):
+                    self._corrupt_lines += 1
+            return out
 
-            try:
-                seen_task_ids = {}
-                with open(self.registry_path, "r") as f:
-                    lines = f.readlines()
-                    # Read backwards to find latest version of each task
-                    for line in reversed(lines):
-                        record = json.loads(line)
-                        if record.get("tenant_id") != tenant_id:
-                            continue
-                        task_id = record.get("task_id")
-                        if task_id not in seen_task_ids:
-                            seen_task_ids[task_id] = record
+    async def compact(self) -> int:
+        """Rewrite the log keeping only the latest record per task.
 
-                return [self._deserialize_task(r) for r in seen_task_ids.values()]
-            except (IOError, json.JSONDecodeError) as e:
-                raise RuntimeError(f"Failed to list tasks: {e}")
+        The log is append-only, so a long run's file grows with every phase
+        update and never shrinks. This collapses it.
+
+        PRECONDITION: no other process may be appending while this runs. The
+        rewrite is atomic (tmp + rename) so the file is never observed
+        half-written, but a record appended by ANOTHER process between the read
+        and the rename would be lost — which is why this is an explicit
+        maintenance call and is deliberately NOT invoked automatically from the
+        hot path. Returns the number of records in the compacted file.
+        """
+        async with self._lock:
+            if not self.registry_path.exists():
+                return 0
+            self._refresh_index()
+            records = list(self._index.values())
+            tmp = self.registry_path.with_suffix(".jsonl.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for record in records:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.replace(self.registry_path)
+            # The index still describes the OLD byte layout; force a rebuild.
+            self._offset = 0
+            self._index = {}
+            return len(records)
 
     def _deserialize_task(self, record: Dict) -> TaskMetadata:
         """Deserialize a task from a registry record."""

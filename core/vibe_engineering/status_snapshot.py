@@ -132,7 +132,7 @@ class StatusSnapshot:
 
         fields = [
             {"name": "Task ID", "value": self.task_id, "inline": True},
-            {"name": "Progress", "value": f"{self.progress_percent:.0f}% ({self.iteration_num}/{self.total_iterations})", "inline": True},
+            {"name": "Progress", "value": f"{self.progress_percent:.1f}% ({self.iteration_num}/{self.total_iterations})", "inline": True},
             {"name": "State", "value": self.state.value.upper(), "inline": True},
             {"name": "Current Action", "value": self.current_action, "inline": False},
             {"name": "Latest", "value": self.latest_message, "inline": False},
@@ -181,7 +181,7 @@ class StatusSnapshot:
 
         lines = [
             f"\n{status_emoji} Task: {self.task_id}",
-            f"   State: {self.state.value.upper()} | Progress: {self.progress_percent:.0f}% ({self.iteration_num}/{self.total_iterations})",
+            f"   State: {self.state.value.upper()} | Progress: {self.progress_percent:.1f}% ({self.iteration_num}/{self.total_iterations})",
             f"   Action: {self.current_action}",
             f"   Message: {self.latest_message}"
         ]
@@ -202,7 +202,7 @@ class StatusSnapshot:
         progress_bar = "▓" * int(self.progress_percent / 10) + "░" * (10 - int(self.progress_percent / 10))
         return (
             f"**Task {self.task_id}** | {self.state.value.upper()} | "
-            f"[{progress_bar}] {self.progress_percent:.0f}% | "
+            f"[{progress_bar}] {self.progress_percent:.1f}% | "
             f"{self.current_action}"
         )
 

@@ -11,6 +11,34 @@
 
 ---
 
+## Amendment 2026-08-28 — the audit reviewed the DESIGN; three mechanisms did not RUN
+
+This audit read the code and found the right mechanisms in the right places.
+That remains true. What it did not test is whether those mechanisms executed,
+and three of them did not (ADR-0445). Corrected in code; recorded here because a
+compliance document that says "All events audited" must not keep saying so while
+the write path is broken.
+
+| Claim in this document | What was actually happening | Fixed by |
+|---|---|---|
+| "All events audited: tenant_id, user_id, timestamp, event_type" (Art. 30 row) | `EventStore.__init__` raised `sqlite3.OperationalError: near "INDEX": syntax error` — SQLite has no inline `INDEX` clause in `CREATE TABLE` — so the store could not be constructed. Where it could be, `json.dumps(asdict(event))` then raised on the `datetime` field, and BOTH emitters wrap the emit in a fail-closed `except`. **Not one learning event was ever persisted, and nothing said so.** | separate `CREATE INDEX` statements; a `_serialize`/`_deserialize` pair that handles `datetime` and `Enum` deterministically (the hash chain depends on determinism); the swallowing `except` in `confidence_scorer` now logs |
+| "Every score emission includes tenant_id … No PII in event payloads" | `ConfidenceScorer` emitted only via the legacy `LearningEventStore.append_event`. Given the canonical hash-chained `EventStore`, that call raised `AttributeError` into the same silent `except`. Confidence events therefore reached **no** store, and by construction bypassed the audit chain that ADR-0314's own constraints forbid bypassing. | the scorer now prefers `write_event` with a canonical `LearningEventType.CONFIDENCE_SCORE` event carrying **scores only** — the scoring context (task keywords, i.e. whatever the user typed) is deliberately excluded from the payload |
+| "tenant isolation … met" | `UserProfileManager._get_profiles_dir` returned the directory override **verbatim, ignoring `tenant_id`**. Two tenants shared one `user_1.json`: the second tenant's load read the first tenant's profile off disk and its save overwrote it. The in-process `(user_id, tenant_id)` cache masked this, so it read as correct within a single process. | the override is now a BASE directory with the tenant segment appended — it is not an escape hatch out of isolation |
+
+**Method note.** All three were invisible to a design review and to the existing
+unit tests, and became visible only when an integration test constructed the
+real store and asserted an event came back. A `except Exception: pass` around an
+emit is what turned three hard failures into silence; where an emit must not
+raise, it must still LOG. See CONCEPT-0008 (reachability as its own review
+axis).
+
+Regression coverage: `tests/integration/test_learning_persistence_hardening.py`
+(8 tests, each verified to fail against the pre-fix code) and
+`tests/integration/test_learning_phase3_integration.py` (26 tests, previously
+26 collection errors).
+
+---
+
 ## Executive Summary
 
 | GDPR Article | Finding | Evidence |

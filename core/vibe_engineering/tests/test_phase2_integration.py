@@ -35,7 +35,7 @@ from core.vibe_engineering.vibe_orchestrator import (
     OrchestratorState,
     OrchestrationMetrics,
 )
-from core.vibe_engineering.session_lifecycle_manager import SplitTrigger
+from core.vibe_engineering.session_lifecycle_manager import SessionState, SplitTrigger
 from core.vibe_engineering.checkpoint_manager import CheckpointManager
 from core.vibe_engineering.recovery_engine import RecoveryEngine
 
@@ -225,11 +225,13 @@ class TestTriggerDetection:
             constraints=[]
         )
 
-        # Manually set last_progress_time to 31 minutes ago
-        session_state = self.orchestrator.session_lifecycle_manager.evaluation_history[-1]
-
-        # Create a new state with old progress time
-        task_state_with_old_progress = self.orchestrator.session_lifecycle_manager.SessionState(
+        # Build a state whose last progress was 31 minutes ago.
+        # (Two test-side defects removed here: reading
+        # `evaluation_history[-1]` into an unused variable — start_task runs no
+        # evaluation, so the list is empty and the read raised IndexError before
+        # the assertions were ever reached — and constructing SessionState off
+        # the manager INSTANCE, which does not expose the class.)
+        task_state_with_old_progress = SessionState(
             session_id=task.session_id,
             phase="execution",
             iteration_count=5,

@@ -136,12 +136,22 @@ class CheckpointFallback:
             logger.info(f"Checkpoint loaded (memory): {checkpoint_id}")
             return self.memory_checkpoints[checkpoint_id]
 
-        # Try filesystem
+        # Try filesystem. Match on the checkpoint id in the FILENAME
+        # (`{task_id}_{checkpoint_id}_{iter:03d}.json`) rather than guessing the
+        # task id with `checkpoint_id.split('_')[0]` — that guess yields "ckpt"
+        # for an id like "ckpt_001", so `list_checkpoints` searched a task that
+        # does not exist and every filesystem load returned None. A checkpoint
+        # saved successfully to disk was therefore unrecoverable.
         try:
-            checkpoints = self.manager.list_checkpoints(checkpoint_id.split('_')[0])
-            for meta in checkpoints:
-                if meta.checkpoint_id == checkpoint_id:
-                    loaded = self.manager.load(meta.file_path)
+            for filepath in sorted(
+                self.manager.checkpoint_dir.glob(f"*_{checkpoint_id}_*.json"),
+                reverse=True,
+            ):
+                try:
+                    loaded = self.manager.load(filepath)
+                except Exception:  # noqa: BLE001 — a torn file must not stop
+                    continue      # the search; try the next candidate
+                if loaded.checkpoint_id == checkpoint_id:
                     logger.info(f"Checkpoint loaded (filesystem): {checkpoint_id}")
                     return loaded
         except Exception as e:
@@ -152,12 +162,22 @@ class CheckpointFallback:
 
     def recovery_possible(self) -> bool:
         """
-        Check if recovery is possible (filesystem healthy or memory fallback available).
+        Check whether recovery is possible.
 
         Returns:
-            True if at least one checkpoint exists.
+            True if at least one checkpoint actually EXISTS — in memory or on
+            disk. The old implementation returned
+            ``len(memory) > 0 or self.persistence_healthy``, which is True on a
+            fresh install with nothing saved anywhere: "the disk is fine" was
+            being reported as "there is something to recover from". A resume
+            decision taken on that answer starts a recovery with no checkpoint.
         """
-        return len(self.memory_checkpoints) > 0 or self.persistence_healthy
+        if self.memory_checkpoints:
+            return True
+        try:
+            return any(self.manager.checkpoint_dir.glob("*.json"))
+        except OSError:
+            return False
 
     def get_status(self) -> Dict[str, Any]:
         """

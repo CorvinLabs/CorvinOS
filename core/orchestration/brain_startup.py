@@ -55,7 +55,16 @@ class ContextInitializer:
         # Per CLAUDE.md: Boot tripwire (fail-closed; asserts the CORE audit writer is reachable)
         # ADR-0232: Tripwire assertions at boot: Missing mechanism → platform SHUTS DOWN
         try:
-            from core.compliance.tripwire import assert_all
+            # The tripwire lives at core/compliance/corvin_compliance_reports/
+            # tripwire.py (CLAUDE.md names this path). The import used to read
+            # `core.compliance.tripwire`, which does not exist — so it raised
+            # ModuleNotFoundError, was caught by the handler below, and reported
+            # as "compliance tripwire failure". Fail-CLOSED, so nothing unsafe
+            # got through; but the tripwire ASSERTED NOTHING. It never checked
+            # that the core audit writer was reachable or that its chain
+            # verified — it only ever crashed on its own import, and this whole
+            # startup path was dead as a result.
+            from core.compliance.corvin_compliance_reports.tripwire import assert_all
             assert_all()
             logger.info("Compliance tripwire passed — core audit mechanisms reachable")
         except Exception as e:

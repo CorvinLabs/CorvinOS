@@ -13,8 +13,9 @@ import hashlib
 import json
 import sqlite3
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
@@ -61,13 +62,23 @@ class EventStore:
                     event_json TEXT NOT NULL,
                     event_hash TEXT NOT NULL,
                     prev_hash TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    INDEX idx_tenant (tenant_id),
-                    INDEX idx_type (event_type),
-                    INDEX idx_sequence (sequence)
+                    created_at TEXT NOT NULL
                 )
                 """
             )
+            # SQLite has no inline INDEX clause — that is MySQL syntax. The
+            # three indexes used to sit inside the CREATE TABLE above, so the
+            # statement raised `OperationalError: near "INDEX": syntax error`
+            # and the EventStore could not be CONSTRUCTED at all: every
+            # learning event (ADR-0314) failed at the very first write.
+            for name, column in (
+                ("idx_events_tenant", "tenant_id"),
+                ("idx_events_type", "event_type"),
+                ("idx_events_sequence", "sequence"),
+            ):
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {name} ON events ({column})"
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS hash_chain (
@@ -82,6 +93,72 @@ class EventStore:
             )
             conn.commit()
 
+    @staticmethod
+    def _json_default(value: Any) -> Any:
+        """JSON encoder for the field types LearningEvent actually carries.
+
+        `json.dumps(asdict(event))` raised "Object of type datetime is not JSON
+        serializable" on EVERY write — and both callers wrap the emit in a
+        fail-closed `except`, so the exception was swallowed and not one
+        learning event was ever persisted, silently. Enum is handled here too:
+        `LearningEventType` is a `str` Enum so it happens to serialize today,
+        but relying on that makes the hash chain hostage to an unrelated base
+        class change.
+        """
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, Enum):
+            return value.value
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+    @classmethod
+    def _serialize(cls, event: LearningEvent) -> str:
+        """Deterministic JSON for hashing and storage.
+
+        `sort_keys` + no whitespace is what makes the hash chain reproducible;
+        do not "prettify" this.
+        """
+        event_data = asdict(event)
+        # Audit fields are set during the write, so they are not part of what
+        # the chain commits to.
+        event_data.pop("audit_id", None)
+        return json.dumps(
+            event_data, sort_keys=True, separators=(",", ":"),
+            default=cls._json_default,
+        )
+
+    @staticmethod
+    def _deserialize(event_json: str) -> LearningEvent:
+        """Rebuild a LearningEvent, restoring the types JSON flattened.
+
+        `LearningEvent(**json.loads(...))` (the original) handed back
+        `timestamp_utc` as a str and `event_type` as a str, so a round-tripped
+        event was NOT equal to the one written and `event.timestamp_utc` had no
+        datetime API. Reconstruct the real types.
+        """
+        data = json.loads(event_json)
+        # Tolerate schema drift. This is an APPEND-ONLY audit store: events
+        # written by an older (or newer) build must stay readable, and
+        # `LearningEvent(**data)` raises TypeError on any key the current
+        # dataclass does not declare — which would make a whole tenant's
+        # history unreadable after one field is added.
+        known = {f.name for f in fields(LearningEvent)}
+        dropped = set(data) - known
+        if dropped:
+            print(f"[WARN] EventStore: ignoring unknown event field(s) "
+                  f"{sorted(dropped)} — schema drift")
+            data = {k: v for k, v in data.items() if k in known}
+        raw_ts = data.get("timestamp_utc")
+        if isinstance(raw_ts, str):
+            try:
+                data["timestamp_utc"] = datetime.fromisoformat(raw_ts)
+            except ValueError:
+                data["timestamp_utc"] = datetime.utcnow()
+        raw_type = data.get("event_type")
+        if not isinstance(raw_type, LearningEventType):
+            data["event_type"] = LearningEventType(raw_type)
+        return LearningEvent(**data)
+
     def write_event(self, event: LearningEvent) -> str:
         """Write event to store with hash-chaining.
 
@@ -92,11 +169,8 @@ class EventStore:
             Hash of the written event
         """
         with self._lock:
-            # Serialize event (deterministic)
-            event_data = asdict(event)
-            # Remove audit fields for hashing (they're set during write)
-            event_data.pop("audit_id", None)
-            event_json = json.dumps(event_data, sort_keys=True, separators=(",", ":"))
+            # Serialize event (deterministic — see _serialize)
+            event_json = self._serialize(event)
 
             # Compute hash: H(prev_hash || event_json)
             combined = (self._last_hash + event_json).encode("utf-8")
@@ -159,8 +233,7 @@ class EventStore:
         if not row:
             return None
 
-        event_data = json.loads(row[0])
-        return LearningEvent(**event_data)
+        return self._deserialize(row[0])
 
     def read_events_by_tenant(self, tenant_id: str, limit: int = 1000) -> list[LearningEvent]:
         """Read all events for a tenant (GDPR Art. 15 right of access)."""
@@ -178,8 +251,7 @@ class EventStore:
 
         events = []
         for (event_json,) in rows:
-            event_data = json.loads(event_json)
-            events.append(LearningEvent(**event_data))
+            events.append(self._deserialize(event_json))
 
         return events
 
@@ -201,8 +273,7 @@ class EventStore:
 
         events = []
         for (event_json,) in rows:
-            event_data = json.loads(event_json)
-            events.append(LearningEvent(**event_data))
+            events.append(self._deserialize(event_json))
 
         return events
 

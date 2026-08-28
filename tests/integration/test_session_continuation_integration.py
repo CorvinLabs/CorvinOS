@@ -12,6 +12,15 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import pytest
 
 from core.orchestration.brain_startup import ContextInitializer, BrainStartupError
+
+# NOTE: the boot tripwire is imported FUNCTION-LOCALLY inside `brain_startup`
+# (from core.compliance.corvin_compliance_reports.tripwire), so there
+# is no `brain_startup.assert_all` module attribute to patch — these tests used
+# to patch that name and every one of them died with AttributeError before
+# reaching its assertions. Patch the real source instead. Do NOT "fix" this by
+# hoisting the import to module level: a function-local import is resolved from
+# the module object at CALL time, which is the harder form to tamper with, and
+# CLAUDE.md is explicit that the tripwire has no override.
 from core.orchestration.brain import TaskBrain
 from core.context_engineering.session_checkpoint import (
     SessionCheckpoint,
@@ -64,13 +73,18 @@ class TestSessionContinuationIntegration:
         """Test initializing a fresh task (no checkpoint)."""
         with patch("core.orchestration.brain_startup.MemoryCoordinator") as mock_mc:
             mock_mc_instance = AsyncMock()
-            mock_mc_instance.load_task_template.return_value = {
+            # `MemoryCoordinator.load_task_template` is SYNCHRONOUS, and
+            # brain_startup calls it without await. An AsyncMock attribute
+            # returns a coroutine, so the caller's `.get(...)` hit
+            # "'coroutine' object has no attribute 'get'" — the mock, not the
+            # code, was the wrong shape.
+            mock_mc_instance.load_task_template = MagicMock(return_value={
                 "task_type": "code_fix",
                 "_source": "global",
-            }
+            })
             mock_mc.return_value = mock_mc_instance
 
-            with patch("core.orchestration.brain_startup.assert_all"):
+            with patch("core.compliance.corvin_compliance_reports.tripwire.assert_all"):
                 initializer = ContextInitializer(temp_corvin_home)
                 initializer.memory_coordinator = mock_mc_instance
 
@@ -115,7 +129,7 @@ class TestSessionContinuationIntegration:
         )
 
         # Now initialize from checkpoint
-        with patch("core.orchestration.brain_startup.assert_all"):
+        with patch("core.compliance.corvin_compliance_reports.tripwire.assert_all"):
             initializer = ContextInitializer(temp_corvin_home)
 
             result = await initializer.initialize_context(
@@ -137,7 +151,7 @@ class TestSessionContinuationIntegration:
 
     def test_brain_save_checkpoint(self, temp_corvin_home):
         """Test TaskBrain.save_task_checkpoint()."""
-        with patch("core.orchestration.brain_startup.assert_all"):
+        with patch("core.compliance.corvin_compliance_reports.tripwire.assert_all"):
             brain = TaskBrain(corvin_home=temp_corvin_home)
 
             # Create a mock task and execution context
@@ -173,7 +187,7 @@ class TestSessionContinuationIntegration:
 
     def test_brain_get_checkpoint_metadata(self, temp_corvin_home):
         """Test TaskBrain.get_checkpoint_metadata()."""
-        with patch("core.orchestration.brain_startup.assert_all"):
+        with patch("core.compliance.corvin_compliance_reports.tripwire.assert_all"):
             brain = TaskBrain(corvin_home=temp_corvin_home)
 
             # Create and save checkpoints
@@ -217,7 +231,7 @@ class TestSessionContinuationIntegration:
         2. Task resumes in Session B from checkpoint
         3. Verify state is preserved
         """
-        with patch("core.orchestration.brain_startup.assert_all"):
+        with patch("core.compliance.corvin_compliance_reports.tripwire.assert_all"):
             # Session A: Initial task execution
             brain_a = TaskBrain(corvin_home=temp_corvin_home)
 

@@ -95,7 +95,9 @@ async def test_decomposition():
 
     # Should create batches + integration phase
     assert len(subtasks) > 1
-    assert any(s["type"] == "merge" for s in subtasks)  # Integration phase
+    # `decompose` returns Subtask OBJECTS, not dicts — the subscript form
+    # raised TypeError before this assertion could ever run.
+    assert any(s.type == "merge" for s in subtasks)  # Integration phase
 
 
 @pytest.mark.asyncio

@@ -89,7 +89,7 @@ class ConfidenceScorer:
         Uses tag overlap + keyword matching:
         - Extract context keywords (from "keywords", "tags", "task_description" keys)
         - Compare with skill tags and name
-        - Return overlap ratio in [0.0, 1.0]
+        - Return the fraction of the QUERY covered by the skill, in [0.0, 1.0]
 
         Edge cases:
         - Skill not found: return 0.0
@@ -128,12 +128,20 @@ class ConfidenceScorer:
             # No tags/name to match; neutral relevance
             return 0.5
 
-        # Calculate overlap ratio (Jaccard similarity)
+        # COVERAGE of the query, not Jaccard similarity.
+        #
+        # Jaccard divides by the UNION, so a skill is penalised for being well
+        # described: `json-parser` tagged {json, parsing, production} answering
+        # the query {json, parsing} scored 2/4 = 0.5 — "half relevant" for a
+        # query whose every term it matches, and directly contrary to this
+        # method's own documented edge case ("Perfect tag match: return 1.0").
+        # Adding one more accurate tag to a skill would have made it look LESS
+        # relevant to every query. The question this score answers is "how much
+        # of what was asked for does this skill cover", so the denominator is
+        # the query.
         intersection = context_kw & all_skill_tokens
-        union = context_kw | all_skill_tokens
-
-        overlap = len(intersection) / len(union) if union else 0.0
-        return self._clip(overlap, 0.0, 1.0)
+        coverage = len(intersection) / len(context_kw) if context_kw else 0.0
+        return self._clip(coverage, 0.0, 1.0)
 
     def score_reliability(self, skill_id: str) -> float:
         """Score how reliably a skill has performed historically.
@@ -325,6 +333,36 @@ class ConfidenceScorer:
             return
 
         try:
+            # Prefer the CANONICAL hash-chained store (ADR-0314): it is the one
+            # with audit-trail integration, and CLAUDE.md's ADR-0314 constraints
+            # forbid bypassing that chain. This scorer only ever spoke the older
+            # `LearningEventStore.append_event` API, so a caller injecting the
+            # canonical `EventStore` got an AttributeError that the blanket
+            # `except` below silently swallowed — every confidence event was
+            # dropped with no signal at all. Support both, canonical first.
+            if hasattr(self.event_store, "write_event"):
+                from .event_schema import LearningEvent as CanonicalEvent
+                from .event_schema import LearningEventType
+
+                self.event_store.write_event(CanonicalEvent(
+                    event_type=LearningEventType.CONFIDENCE_SCORE,
+                    tenant_id=str(context.get("tenant_id") or "_default"),
+                    instance_id="confidence-scorer",  # System component
+                    skill_name=skill_id,
+                    session_id="system",
+                    timestamp_utc=datetime.now(),
+                    user_id=context.get("user_id"),
+                    # Scores only. The scoring CONTEXT (task keywords, which can
+                    # carry anything the user typed) must never reach the
+                    # payload — GDPR Art. 5(1)(a) data minimisation.
+                    payload={
+                        "relevance": round(float(relevance), 6),
+                        "reliability": round(float(reliability), 6),
+                    },
+                    tags=["confidence"],
+                ))
+                return
+
             event = LearningEvent(
                 subject_id=skill_id,
                 event_type="confidence_computed",
@@ -333,9 +371,11 @@ class ConfidenceScorer:
                 context=context,  # Contains tenant_id, user_id (no PII)
             )
             self.event_store.append_event(skill_id, event)
-        except Exception:
-            # Fail-closed: never raise during emit; just skip
-            pass
+        except Exception as e:  # noqa: BLE001
+            # Fail-closed: never raise during emit. But do NOT go quiet — a
+            # silent `pass` is exactly how this defect survived: the store was
+            # wired, the call was made, and nothing was ever written.
+            print(f"[WARN] Failed to emit confidence event for {skill_id}: {e}")
 
     @staticmethod
     def _clip(value: float, min_val: float, max_val: float) -> float:

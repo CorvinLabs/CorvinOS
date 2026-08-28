@@ -170,6 +170,9 @@ async def test_plugin_dependencies_check_placeholder(plugin_registry):
         id="dep_test",
         version="1.0.0",
         author="test",
+        # `description` became required on PluginManifest; this call was never
+        # updated, so the test raised TypeError before reaching its assertion.
+        description="dependency-resolution placeholder",
         dependencies=[{"id": "nonexistent", "min_version": "1.0"}]
     )
 

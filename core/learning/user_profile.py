@@ -156,9 +156,22 @@ class UserProfileManager:
         self._profiles_cache: dict[tuple[str, str], UserProfile] = {}
 
     def _get_profiles_dir(self, tenant_id: str) -> Path:
-        """Get or create profiles directory for tenant (GDPR Art. 32)."""
+        """Get or create profiles directory for tenant (GDPR Art. 32).
+
+        The override is a BASE directory, and the tenant segment is appended to
+        it — it is not an escape hatch out of tenant isolation. Returning the
+        override verbatim (the original) made every tenant share ONE directory,
+        so `user_1.json` was the same file for tenant_a and tenant_b: the second
+        tenant's load read the first tenant's profile off disk, and its save
+        overwrote it. Within a single process the `(user_id, tenant_id)` cache
+        masked this, which is why it read as correct while the on-disk state was
+        a cross-tenant leak. CLAUDE.md § Multi-tenant: every read/write filters
+        by tenant_id, no exceptions for a test hook.
+        """
         if self._profiles_dir_override:
-            return self._profiles_dir_override
+            profile_dir = Path(self._profiles_dir_override) / tenant_id
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            return profile_dir
 
         # Lazy import to avoid circular dependency
         try:
@@ -446,6 +459,14 @@ class UserProfileManager:
                     "feedback_keys": list(feedback.keys()),
                     "decision_style": profile.decision_style.value,
                     "conciseness": profile.conciseness_preference,
+                    # Which skills the feedback touched, BY ID ONLY — never a
+                    # description, a name or free text (GDPR Art. 5(1)(a) data
+                    # minimisation). Without this the event recorded only that
+                    # "skill_feedback" happened, which is not enough to audit
+                    # or replay what was learned.
+                    "skill_ids": sorted(
+                        str(k) for k in (feedback.get("skill_feedback") or {})
+                    ),
                 },
                 tags=["user-preference"],
             )
