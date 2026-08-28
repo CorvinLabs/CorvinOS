@@ -224,6 +224,28 @@ def cmd_run(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
+    # Purge the intermediate-update queue (task_progress/) and the supervised
+    # run records (task_runs/) for exactly the same reason as the two stores
+    # above: both live at the CORVIN_HOME root, outside the session dir and the
+    # per-tenant sweep, and both carry routing PII (sender uid + chat_id) — the
+    # run record additionally holds the instruction text the subject wrote.
+    # Best-effort, never blocks erasure.
+    try:
+        from task_progress import purge_user as _tp_purge  # type: ignore
+        tp_removed = _tp_purge(req.subject_id)
+        if tp_removed:
+            print(f"task_progress: purged {tp_removed} update(s) for {req.subject_id}")
+    except Exception:
+        pass
+
+    try:
+        from task_supervisor import purge_user as _sup_purge  # type: ignore
+        sup_removed = _sup_purge(req.subject_id)
+        if sup_removed:
+            print(f"task_supervisor: purged {sup_removed} run(s) for {req.subject_id}")
+    except Exception:
+        pass
+
     result = orch.execute(req)
 
     if args.format == "json":

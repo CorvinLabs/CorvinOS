@@ -103,6 +103,44 @@ def _outbox_path() -> Path:
     return Path(__file__).resolve().parent / "outbox"
 
 
+def _deliver_progress() -> int:
+    """Backup poller for the durable INTERMEDIATE-update queue.
+
+    Same relationship to task_progress that _deliver_completions has to
+    completion_notify: the adapter main loop flushes it while the bridge polls,
+    this runs from the systemd timer so a long autonomous run still reports in
+    while the adapter is idle or restarting. Idempotent with the adapter
+    (per-record O_EXCL lock), so double-delivery is impossible.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import task_progress as _tp  # type: ignore
+
+        return _tp.deliver_progress(_outbox_path())
+    except Exception as e:  # noqa: BLE001
+        print(f"bg_monitor: progress delivery failed: {e}", file=sys.stderr)
+        return 0
+
+
+def _supervise_runs() -> int:
+    """Heal stopped/wedged background runs (task_supervisor).
+
+    THE reason this timer exists for long autonomous work: a worker that was
+    killed, OOMed, wedged, or hit its own wall clock is otherwise never
+    restarted, and the run dies wherever it stopped. One tick per timer
+    interval reconciles every supervised run against reality and relaunches
+    what needs relaunching, within its attempt and wall-clock budgets.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import task_supervisor as _sup  # type: ignore
+
+        return _sup.supervise()
+    except Exception as e:  # noqa: BLE001
+        print(f"bg_monitor: supervision failed: {e}", file=sys.stderr)
+        return 0
+
+
 def _deliver_completions() -> int:
     """Backup poller for the durable completion queue.
 
@@ -192,23 +230,36 @@ def purge_user(uid: str) -> int:
 
 
 def run_once() -> int:
-    """Deliver ready background completions, and (legacy, opt-in) inject idle
-    wakeups.
+    """Supervise running background tasks, deliver their notifications, and
+    (legacy, opt-in) inject idle wakeups.
 
-    Primary job: flush the durable completion queue to the outbox so a finished
-    background task reaches the messenger even while the adapter is idle.
+    Primary jobs: (a) heal supervised runs whose worker stopped or wedged, so a
+    long autonomous task is carried through to completion instead of dying
+    wherever it stopped; (b) flush the durable completion AND progress queues to
+    the outbox so a finished — or still-running — background task reaches the
+    messenger even while the adapter is idle.
 
     Legacy job (only when BGW_LEGACY_WAKEUP=1): inject a synthetic wakeup turn
     for sessions idle past BGW_IDLE_GRACE so the SDK can flush pending
     notifications. Off by default — see BGW_LEGACY_WAKEUP.
 
-    Returns the count of delivered completions + injected wakeups.
+    Returns the count of delivered completions + progress updates +
+    injected wakeups.
     Called by the systemd timer and importable for tests.
     """
     now = time.time()
 
-    # 1) Always deliver ready durable completions (idempotent backup poller).
+    # 1) Heal first, deliver second. Supervision can mark_done a run whose
+    #    budget just ran out, and doing it BEFORE the delivery pass means that
+    #    verdict reaches the user in this tick instead of waiting 60 s for the
+    #    next one. It can also emit a resume notice, same reasoning.
+    _supervise_runs()
+
+    # 2) Always deliver ready durable completions (idempotent backup poller).
     delivered = _deliver_completions()
+
+    # 3) …and the intermediate updates of still-running autonomous work.
+    delivered += _deliver_progress()
 
     state = _load_state()
     if not state:
@@ -311,6 +362,9 @@ def run_once() -> int:
 if __name__ == "__main__":
     n = run_once()
     if n:
-        print(f"bg_monitor: {n} wakeup(s) injected")
+        # The count now covers completions + progress updates delivered as well
+        # as legacy wakeups injected, so say "action(s)" rather than the old
+        # "wakeup(s) injected", which was true when delivery was the only job.
+        print(f"bg_monitor: {n} action(s)")
     else:
         print("bg_monitor: nothing to do")

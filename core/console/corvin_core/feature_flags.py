@@ -220,6 +220,48 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("delegation", "measurement"),
     ),
     FeatureFlag(
+        id="bridge_task_supervision",
+        label="Supervise and auto-resume long background tasks",
+        description=(
+            "Keep a `/task` background run going until it is DONE. Off, a "
+            "detached worker gets exactly one attempt: hitting its 30-minute "
+            "wall clock, being OOM-killed, or wedging without exiting ends the "
+            "work permanently and the user is told it stopped — the instruction "
+            "is already gone at that point, so nothing could resume it. On, the "
+            "task's instruction and routing are kept in a durable run record and "
+            "the pollers that already run every ~60s (adapter loop + bg_monitor "
+            "timer) relaunch a stopped or wedged worker with a continuation "
+            "prompt. Bounded by BOTH an attempt count (SUP_MAX_ATTEMPTS, "
+            "default 5) and a total wall clock (SUP_TOTAL_BUDGET, default 6h); "
+            "when either runs out the run fails honestly with an account of "
+            "what was tried. Off means the pre-feature path, byte-identical: no "
+            "run record is written and nothing resumes anything."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("bridges", "orchestration"),
+    ),
+    FeatureFlag(
+        id="bridge_task_progress_updates",
+        label="Intermediate progress updates for background tasks",
+        description=(
+            "Let a long `/task` run report in while it works. Off, the worker "
+            "passes on_status=None and the user sees nothing between the "
+            "acknowledgement and the final result — for a multi-hour run that "
+            "is indistinguishable from a task that silently died. On, status "
+            "lines are queued into a durable update store and delivered through "
+            "the SAME outbox the completion path uses (a normal message, not "
+            "the daemon's sticky _progress, which the next reply would delete). "
+            "Rate-limited hard: at most one delivered update per task per "
+            "TP_MIN_INTERVAL (default 120s, emits inside the window coalesce "
+            "into the newest) and at most TP_MAX_UPDATES (default 40) per task. "
+            "Off means no update store is written and no update is sent."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("bridges", "orchestration", "notifications"),
+    ),
+    FeatureFlag(
         id="bridge_big_data_delegation",
         label="Big-data delegation on messenger bridges",
         description=(

@@ -2056,6 +2056,22 @@ def _house_rules_audit_path() -> Path:
     return _ch / "global" / "forge" / "audit.jsonl"
 
 
+def _bg_flag(flag_id: str) -> bool:
+    """Resolve one ship-dark feature flag for the current tenant.
+
+    Absent/unreadable console package or config means OFF — the same
+    fail-to-off contract `_maybe_delegate_big_data` uses, so a bridge-only
+    deployment without the console never accidentally enables a dark feature.
+    """
+    try:
+        from corvin_core import feature_flags as _ff  # type: ignore  # noqa: PLC0415
+
+        tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        return bool(_ff.is_enabled(flag_id, tid))
+    except Exception:  # noqa: BLE001 — console package absent → feature is off
+        return False
+
+
 def _check_house_rules_or_fail(
     *, prompt: str | None, persona: str | None, channel: str, chat_key: str,
     engine_id: str = "", tenant_id: str | None = None,
@@ -10271,6 +10287,36 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                             "sender": sender,
                             "profile": _bg_profile, "msg_id": f"{msg_id}_bgt",
                         }
+                        # Supervised-run record (ships dark). Created BEFORE the
+                        # worker starts, so a worker that dies during start-up is
+                        # still resumable — and it is the ONLY thing that makes
+                        # the work resumable at all, because the spec file below
+                        # is unlinked the moment the worker reads it. With both
+                        # flags off no record is written and every downstream
+                        # component takes its pre-feature path.
+                        _sup_on = _bg_flag("bridge_task_supervision")
+                        _prog_on = _bg_flag("bridge_task_progress_updates")
+                        if _sup_on or _prog_on:
+                            try:
+                                try:
+                                    from . import task_supervisor as _sup  # type: ignore
+                                except ImportError:
+                                    import task_supervisor as _sup  # type: ignore[no-redef]
+                                _sup.register_run(
+                                    task_id, instruction=instruction,
+                                    channel=channel, chat_key=str(chat_key),
+                                    sender=sender,
+                                    tenant_id=(os.environ.get("CORVIN_TENANT_ID")
+                                               or "_default"),
+                                    profile=_bg_profile,
+                                    msg_id=f"{msg_id}_bgt",
+                                    supervise_enabled=_sup_on,
+                                    progress_enabled=_prog_on,
+                                )
+                            except Exception as _se:  # noqa: BLE001 — supervision
+                                # is an enhancement; a failure here must never
+                                # stop the task from running unsupervised.
+                                log(f"task_supervisor register failed: {_se}")
                         # Pass the spec via a 0600 temp FILE, not argv — argv is
                         # world-readable in /proc/<pid>/cmdline and `ps`, which
                         # would leak the instruction text + routing ids (PII).
@@ -12147,6 +12193,33 @@ def main() -> int:
                             log(f"completion_notify: delivered {sent} notification(s)")
                     except Exception as e:
                         log(f"completion_notify tick failed: {e}")
+                    # Same tick, same reasoning, for a run that is still going:
+                    # heal whatever stopped, then flush its intermediate updates.
+                    # Healing first so a budget-exhausted verdict or a resume
+                    # notice reaches the user in THIS tick, not the next one.
+                    # Both are idempotent with bg_monitor's timer (per-record
+                    # O_EXCL locks), so running in both places cannot
+                    # double-deliver or double-launch.
+                    try:
+                        try:
+                            from . import task_supervisor as _sup  # type: ignore
+                        except ImportError:
+                            import task_supervisor as _sup  # type: ignore[no-redef]
+                        healed = _sup.supervise()
+                        if healed:
+                            log(f"task_supervisor: resumed {healed} stopped run(s)")
+                    except Exception as e:
+                        log(f"task_supervisor tick failed: {e}")
+                    try:
+                        try:
+                            from . import task_progress as _tp  # type: ignore
+                        except ImportError:
+                            import task_progress as _tp  # type: ignore[no-redef]
+                        prog = _tp.deliver_progress(OUTBOX)
+                        if prog:
+                            log(f"task_progress: delivered {prog} update(s)")
+                    except Exception as e:
+                        log(f"task_progress tick failed: {e}")
                     last_cn_poll = time.monotonic()
                 if time.monotonic() - last_cleanup > CLEANUP_INTERVAL:
                     _cleanup_in_flight()

@@ -23,6 +23,21 @@ A wall-clock deadline (CORVIN_BG_TASK_TIMEOUT, default 1800s) bounds the turn:
 a wedged engine that streams/loops forever is stopped and reported, so a
 detached worker can never run unbounded. Never raises to the OS — any failure
 is recorded as a failed completion so the user is still notified.
+
+SUPERVISED MODE (opt-in, `bridge_task_supervision`). When the adapter created a
+`task_supervisor` run record for this task, three things change — and ONLY
+then, so a flag-off install runs the exact code path it always did:
+
+* liveness: a daemon thread stamps a heartbeat every `_HEARTBEAT_INTERVAL`
+  seconds, so a worker that is alive-but-wedged is detectable at all (the pid
+  check alone never was);
+* progress: `on_status` is wired to `task_progress` instead of being None, so a
+  long run reports in — rate-limited and coalesced, so it cannot spam;
+* continuation: hitting the wall clock or crashing no longer ends the work. The
+  attempt is recorded as RESUMABLE with its partial output and the supervisor
+  launches the next attempt with a continuation prompt. `mark_done` is left to
+  the supervisor, which calls it only once the retry/time budget is spent —
+  otherwise a "the worker stopped" message would race the resume that fixes it.
 """
 from __future__ import annotations
 
@@ -34,12 +49,43 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
+# How often a supervised worker stamps liveness. Must stay comfortably below
+# task_supervisor.SUP_HEARTBEAT_STALE (default 600 s) or a healthy worker would
+# be declared wedged and restarted under itself.
+_HEARTBEAT_INTERVAL = float(os.environ.get("CORVIN_BG_TASK_HEARTBEAT", "30"))
+
 
 def _load_cn():
     sys.path.insert(0, str(HERE))
     import completion_notify as cn  # type: ignore
 
     return cn
+
+
+def _load_supervisor():
+    """Import task_supervisor, or None when it is unavailable.
+
+    Never fatal: a worker that cannot load the supervisor simply runs the
+    pre-supervision path (single attempt, mark_done on failure).
+    """
+    try:
+        sys.path.insert(0, str(HERE))
+        import task_supervisor as sup  # type: ignore
+
+        return sup
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _load_progress():
+    """Import task_progress, or None when it is unavailable."""
+    try:
+        sys.path.insert(0, str(HERE))
+        import task_progress as tp  # type: ignore
+
+        return tp
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def main() -> int:
@@ -80,8 +126,59 @@ def main() -> int:
     except Exception:  # noqa: BLE001 — claim is best-effort
         pass
 
+    # Supervised mode is decided by the PRESENCE of a run record, which the
+    # adapter creates only when `bridge_task_supervision` is on. No record =
+    # the pre-feature path, unchanged.
+    sup = _load_supervisor()
+    run = None
+    if sup is not None:
+        try:
+            run = sup.get_run(task_id)
+        except Exception:  # noqa: BLE001
+            run = None
+    supervised = bool(run) and bool(run.get("supervise", True))
+    want_progress = bool(run) and bool(run.get("progress", False))
+
+    if run is not None:
+        try:
+            sup.attempt_started(task_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Liveness heartbeat. A pid check alone cannot see a worker that is alive
+    # but wedged (the engine streaming forever, a deadlocked tool) — which was
+    # the failure nothing in the system detected. A daemon thread means the
+    # stamp keeps ticking regardless of what the main thread is blocked on.
+    stop_hb = threading.Event()
+
+    def _heartbeat_loop() -> None:
+        while not stop_hb.wait(_HEARTBEAT_INTERVAL):
+            try:
+                sup.touch_heartbeat(task_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    hb_thread = None
+    if run is not None:
+        hb_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+        hb_thread.start()
+
+    # Progress relay. The pre-feature worker passed on_status=None ("no live
+    # progress spam"), which is why a long run reported nothing at all. Route
+    # it through task_progress instead, which coalesces and rate-limits, so
+    # "some signal" cannot become "spam".
+    tp = _load_progress() if want_progress else None
+    on_status = None
+    if tp is not None:
+        def on_status(status_text: str) -> None:  # noqa: ANN001 — adapter contract
+            try:
+                tp.emit(task_id, str(status_text)[:300], kind="progress")
+            except Exception:  # noqa: BLE001 — a status line never kills the work
+                pass
+
     ok = True
     text = ""
+    resumable = False
     try:
         sys.path.insert(0, str(HERE))
         import adapter  # type: ignore  # heavy but self-contained
@@ -110,7 +207,9 @@ def main() -> int:
                 prompt=instruction,
                 channel=channel,
                 chat_key=chat_key,
-                on_status=None,  # no live progress spam — only the final notification
+                # Supervised runs relay live status through task_progress;
+                # unsupervised ones keep the original silence (on_status=None).
+                on_status=on_status,
                 profile=spec.get("profile"),
                 msg_id=spec.get("msg_id"),
                 sender=str(spec.get("sender") or ""),
@@ -119,15 +218,41 @@ def main() -> int:
             timer.cancel()
         if timed_out["v"]:
             ok = False
+            # Under supervision a timeout is a CONTINUATION point, not a
+            # verdict: the partial output becomes the carry for the next
+            # attempt. Unsupervised it stays exactly what it always was.
+            resumable = supervised
             text = (f"background task timed out after {int(timeout)}s and was "
                     f"stopped.\n\n{text}".strip())
     except Exception as e:  # noqa: BLE001 — never let the worker die silently
         ok = False
+        resumable = supervised
         text = f"background task crashed: {type(e).__name__}: {e}"
         print(f"bg_task_worker: {text}", file=sys.stderr)
+    finally:
+        stop_hb.set()
+
+    if run is not None:
+        try:
+            sup.attempt_finished(task_id, ok=ok, summary=(text or ""),
+                                 resumable=resumable)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if resumable:
+        # Deliberately NO mark_done: the supervisor owns the verdict now and
+        # will resume. Reporting "it stopped" here would race — and usually
+        # beat — the resume that fixes it, so the user would be told the task
+        # failed while it was in fact still running.
+        return 0
 
     # A gate refusal comes back as text (ok stays True) — the user still gets it.
     cn.mark_done(task_id, text=(text or "(no output)"), ok=ok)
+    if tp is not None:
+        try:
+            tp.finish(task_id)
+        except Exception:  # noqa: BLE001
+            pass
     return 0
 
 

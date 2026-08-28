@@ -582,6 +582,8 @@ _DEFAULT_SETTINGS = {
         "acs_context_sync": False,
         "bridge_big_data_delegation": False,
         "bridge_worker_engine_parity": False,
+        "bridge_task_supervision": False,
+        "bridge_task_progress_updates": False,
     },
 }
 
