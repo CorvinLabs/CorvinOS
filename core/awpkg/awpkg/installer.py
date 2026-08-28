@@ -432,6 +432,22 @@ def is_installed(
     return (dest / "_awpkg_meta.json").exists()
 
 
+def _parse_frontmatter(text: str) -> dict[str, Any]:
+    """Best-effort YAML front-matter parse (``---`` … ``---`` at the top). Never raises."""
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}
+    try:
+        import yaml  # type: ignore[import]
+
+        data = yaml.safe_load(text[3:end])
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def register_components(
     installed: InstalledPackage,
     *,
@@ -470,35 +486,58 @@ def register_components(
         _shutil.copy2(src, dest_dir / "tool.json")
         registered["forge_tools"].append(tool_name)
 
-    # --- SkillForge skills -------------------------------------------------
-    skill_forge_root = home / "skill-forge" / "skills" / "user"
-    for skill_arc_path in installed.components.get("skills", []):
-        src = installed.install_dir / skill_arc_path
-        if not src.exists():
-            continue
-        # arc path shape: "skills/<name>/SKILL.md"
-        parts = Path(skill_arc_path).parts
-        skill_name = parts[1] if len(parts) > 2 else Path(skill_arc_path).stem
-        dest_dir = skill_forge_root / skill_name
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        _shutil.copy2(src, dest_dir / "SKILL.md")
-        meta_file = dest_dir / "meta.json"
-        if not meta_file.exists():
-            meta_file.write_text(
-                _json.dumps(
-                    {
-                        "name": skill_name,
-                        "scope": "user",
-                        "created_at": _time.time(),
-                        "grades": [],
-                        "mean_score": 0.0,
-                        "source": f"awpkg:{installed.id}@{installed.version}",
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-        registered["skills"].append(skill_name)
+    # --- SkillForge skills (ADR-0451/0459) ---------------------------------
+    # Register package skills into the MANIFEST-DRIVEN SkillForge registry (registry.create),
+    # not by hand-writing files — hand-written files are invisible to skill_inject, which reads
+    # skills_registry.json. Skills land in the dedicated `package` scope (ADR-0459), and get a
+    # provenance-tagged bootstrap grade so they clear the injection gate (n_grades>=1, mean>0).
+    #
+    # Boundary (ADR-0451 D2): this runs ONLY here, on the human-gated install path — install()
+    # (the deposit) never calls it, so a deposited-but-not-installed package injects nothing.
+    # Failures are recorded as skipped-with-reason, never a crash of the whole install.
+    skills = installed.components.get("skills", [])
+    if skills:
+        skipped: list[str] = []
+        try:
+            from skill_forge.multi_registry import MultiSkillRegistry  # type: ignore[import]
+
+            _skreg = MultiSkillRegistry(tenant_id=tenant_id)
+        except Exception as exc:  # registry unavailable — honest skip, no fake success
+            _skreg = None
+            for skill_arc_path in skills:
+                skipped.append(f"{Path(skill_arc_path).stem}: skill registry unavailable ({exc})")
+        if _skreg is not None:
+            _VALID = ("domain", "persona-style", "repo-context", "learned-experience")
+            for skill_arc_path in skills:
+                src = installed.install_dir / skill_arc_path
+                if not src.exists():
+                    continue
+                parts = Path(skill_arc_path).parts
+                dir_name = parts[1] if len(parts) > 2 else Path(skill_arc_path).stem
+                body = src.read_text(encoding="utf-8")
+                fm = _parse_frontmatter(body)
+                name = str(fm.get("name") or dir_name)
+                stype = fm.get("type")
+                if stype not in _VALID:
+                    stype = "learned-experience"
+                description = str(fm.get("description") or f"Skill from package {installed.id}")
+                try:
+                    _skreg.create(
+                        scope="package", name=name, type=stype, body_md=body,
+                        description=description, overwrite=True,
+                        created_by=f"awpkg:{installed.id}",
+                    )
+                    # Bootstrap grade, capped low, provenance-tagged — awpkg install, NOT a human
+                    # mint (ADR-0451): lets the skill pass skill_inject's n_grades>=1 / mean>0 gate.
+                    _skreg.grade(
+                        name, run_id=f"awpkg-install-seed:{installed.id}", score=0.3,
+                        notes="bootstrap seed on package install (awpkg, no human mint, ADR-0451)",
+                    )
+                    registered["skills"].append(name)
+                except Exception as exc:  # linter reject / bad name / etc. — skip honestly
+                    skipped.append(f"{name}: {type(exc).__name__}: {exc}")
+        if skipped:
+            registered["skills_skipped"] = skipped
 
     emit(
         "package.components_registered",
