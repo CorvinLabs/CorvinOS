@@ -57,7 +57,7 @@ class MultiSkillRegistry:
         project_root: Path | None = None,
         hash_chain: bool = True,
     ):
-        # Resolve tenant_id: explicit > env > _default (ADR-0362)
+        # Resolve tenant_id: explicit > env > _default (ADR-0433)
         # Import here to avoid circular dependency
         import os as _os
         resolved_tenant = tenant_id or _os.environ.get("CORVIN_TENANT_ID") or "_default"

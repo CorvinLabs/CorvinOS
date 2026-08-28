@@ -1,4 +1,4 @@
-# ADR-0362 Implementation Plan: Tenant-Native Data Persistence
+# ADR-0433 Implementation Plan: Tenant-Native Data Persistence
 
 **Status:** DRAFT  
 **Prepared:** 2026-08-20  
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-This plan outlines the phased implementation of **ADR-0362: Tenant-Native Data Persistence**, which eliminates the five critical findings from the Data Tenancy Matrix:
+This plan outlines the phased implementation of **ADR-0433: Tenant-Native Data Persistence**, which eliminates the five critical findings from the Data Tenancy Matrix:
 
 1. **Split-Brain Audit Trail** — Audit events scattered across `~/.corvin/tenants/_default/audit.jsonl` and per-session trails
 2. **ToolForge Cross-Tenant Visibility** — Tools created in Tenant A leak into Tenant B's registry
@@ -1117,7 +1117,7 @@ Before proceeding to Phase F, ALL of the following must be true:
 - ✅ Adversarial tests: 0 CRITICAL findings
 - ✅ No regressions on existing tests
 - ✅ Code coverage: >85% for Phase A–C changes
-- ✅ ADR-0362 acceptance ready (all paths documented)
+- ✅ ADR-0433 acceptance ready (all paths documented)
 
 ---
 
@@ -1367,7 +1367,7 @@ def test_feature_flag_removed():
 
 - ✅ **Code review:** All phases reviewed by ≥1 peer
 
-- ✅ **ADR-0362 acceptance:** Design documented, paths identified
+- ✅ **ADR-0433 acceptance:** Design documented, paths identified
 
 - ✅ **Documentation updated:**
   - docs/layer-X-tenant-persistence.md (new)
@@ -1428,7 +1428,7 @@ def test_feature_flag_removed():
 | `docs/implementation-plans/migration-to-tenant-native.md` | Guide | D | HIGH |
 | `docs/implementation-plans/operator-quickstart-tenant-native.md` | Guide | F | MEDIUM |
 | Inline code comments on `scope_root()` | Code | B | HIGH |
-| ADR-0362 acceptance document | ADR | E | HIGH |
+| ADR-0433 acceptance document | ADR | E | HIGH |
 | `CLAUDE.md` update (tenant-native is default) | Repo Convention | F | MEDIUM |
 
 ---
@@ -1439,7 +1439,7 @@ def test_feature_flag_removed():
 
 1. **Symlink detection:** Currently not implemented; can be added in Phase 2 if needed.
 2. **Cross-tenant audits:** No built-in cross-tenant audit queries; each tenant isolated.
-3. **Shared configuration:** Some OS-level config (e.g., TLS certs) might still be global; clarify in ADR-0362.
+3. **Shared configuration:** Some OS-level config (e.g., TLS certs) might still be global; clarify in ADR-0433.
 
 ### Future Work (v1.1+)
 

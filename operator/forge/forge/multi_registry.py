@@ -34,7 +34,7 @@ class MultiRegistry:
         hash_chain: bool = True,
     ):
         from .paths import _resolve_tenant_id
-        # Resolve tenant_id: explicit > env > _default (ADR-0362)
+        # Resolve tenant_id: explicit > env > _default (ADR-0433)
         self.tenant_id = _resolve_tenant_id(tenant_id)
         self._kwargs = dict(
             tenant_id=self.tenant_id,

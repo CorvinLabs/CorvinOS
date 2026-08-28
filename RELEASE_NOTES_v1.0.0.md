@@ -1,15 +1,15 @@
-# CorvinOS v1.0.0 Release Notes — ADR-0362 Complete
+# CorvinOS v1.0.0 Release Notes — ADR-0433 Complete
 
 **Release Date:** 2026-08-20  
 **Status:** STABLE (Production Ready)  
-**Focus:** Tenant-Native Data Persistence (ADR-0362 Phases A–E Complete)  
+**Focus:** Tenant-Native Data Persistence (ADR-0433 Phases A–E Complete)  
 **Version Tag:** `v1.0.0-ADR0362`
 
 ---
 
 ## ⭐ Major Changes
 
-### Tenant-Native Data Persistence — ADR-0362 Complete
+### Tenant-Native Data Persistence — ADR-0433 Complete
 
 All data persisted by CorvinOS is now **tenant-scoped by construction**. This eliminates split-brain audit trails, cross-tenant tool visibility, and bridge credential leakage — fixing 8 CRITICAL/HIGH security findings from the pre-release adversarial audit.
 
@@ -200,7 +200,7 @@ If you have multiple tenants (e.g., `tenant_prod`, `tenant_staging`):
 
 ## 📝 Documentation Updates
 
-- ✅ ADR-0362 — Complete specification (see Corvin-ADR repository)
+- ✅ ADR-0433 — Complete specification (see Corvin-ADR repository)
 - ✅ [Layer 7 SkillForge](docs/claude-ref/layer-7-skillforge.md) — Updated for tenant-scoped storage
 - ✅ [Layer 6 Forge](docs/claude-ref/layer-6-forge.md) — Updated for tenant-scoped tools
 - ✅ [Multi-Tenant](docs/claude-ref/multi-tenant.md) — Tenant isolation guarantees documented
@@ -246,7 +246,7 @@ After migration, old paths at `~/.corvin/global/` and `~/.corvin/<old_paths>/` r
 - Tenant-native storage is now the **only supported path strategy**
 - Use `core.paths.tenant_*` functions for all new storage paths
 - Legacy `scope_root()` behavior is removed; code must provide `tenant_id`
-- See ADR-0362 (in Corvin-ADR repository) for architecture
+- See ADR-0433 (in Corvin-ADR repository) for architecture
 
 ---
 
@@ -255,7 +255,7 @@ After migration, old paths at `~/.corvin/global/` and `~/.corvin/<old_paths>/` r
 Contributions to CorvinOS are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) and note:
 - All new features must be tenant-scoped (use `core.paths.tenant_*` APIs)
 - All PRs must pass the adversarial test suite (Phase E)
-- ADR-0362 is now **MANDATORY REFERENCE** for any path-resolution code
+- ADR-0433 is now **MANDATORY REFERENCE** for any path-resolution code
 
 ---
 

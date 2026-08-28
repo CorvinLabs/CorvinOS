@@ -17,7 +17,7 @@ CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id
 - **GDPR Art. 5/6/7/32 Violations** — Isolation not "by construction"; compliance cannot be claimed
 - **Risk Level: CRITICAL** — Compliance audit failure, data leaks, RCE vectors all possible
 
-**Recommended Solution:** ADR-0362 "Tenant-Native Data Persistence" — Refactor central path APIs with mandatory `tenant_id` parameter, enforce at fail-closed gates.
+**Recommended Solution:** ADR-0433 "Tenant-Native Data Persistence" — Refactor central path APIs with mandatory `tenant_id` parameter, enforce at fail-closed gates.
 
 **Implementation Timeline:** 3–4 weeks (2–3 engineers); **Blocker Gate:** Adversarial Testing must yield **0 CRITICAL findings** before shipping.
 
@@ -27,7 +27,7 @@ CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id
 
 ### Subsystem-by-Subsystem Persistence Analysis
 
-| Subsystem | Data Type | Current Persistence | Tenant-Aware? | Criticality | ADR-0362 Phase | Status |
+| Subsystem | Data Type | Current Persistence | Tenant-Aware? | Criticality | ADR-0433 Phase | Status |
 |---|---|---|---|---|---|---|
 | **SkillForge** | Skill Files (SKILL.md) | `~/.corvin/tenants/<tid>/skill-forge/` (Console) + `~/.corvin/tenants/_default/` (API) | ⚠️ SPLIT | CRITICAL | C | Inconsistent |
 | | Skill Registry | Global `~/.corvin/global/skill-forge/registry.json` | ❌ NO | CRITICAL | C | Cross-tenant Visible |
@@ -84,7 +84,7 @@ CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id
 
 ### GDPR Articles vs. Current State
 
-| Regulation | Article | Requirement | Current State | ADR-0362 Fix | Success Criterion | Risk Assessment |
+| Regulation | Article | Requirement | Current State | ADR-0433 Fix | Success Criterion | Risk Assessment |
 |---|---|---|---|---|---|---|
 | **GDPR** | Art. 5(1)(a) — Lawfulness, Fairness, Transparency | Data processing based on lawful basis + user knows | ⚠️ Implicit heuristics; "by construction" claim weak | ✅ Fail-closed validation via `validate_tenant_id()` | `validate_tenant_id()` rejects all non-tenant-scoped inputs | **CRITICAL RISK** — No enforcement today |
 | | Art. 5(1)(f) — Integrity/Confidentiality | Data isolation guaranteed by design | ❌ Not guaranteed (shared registries leak data) | ✅ Filesystem-level isolation with validated paths | Zero cross-tenant read paths possible | **CRITICAL RISK** — Shared registries expose all data |
@@ -96,7 +96,7 @@ CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id
 | **EU AI Act** | Art. 5(1) — Transparency (AI disclosure) | AI nature must be disclosed | ✅ Yes (bot-disclosure card) | ✅ No regression expected | Tenant-scoped disclosure card | **OK** — No change |
 | | Art. 50 — Human Override (opt-out) | User can opt out of AI processing | ✅ Yes (`/pass`, `/leave`) | ✅ tenant-scoped via Art. 7 fix | Operator can verify per-tenant | **OK** — Tied to GDPR Art. 7 fix |
 
-### Compliance Delta (Current → ADR-0362)
+### Compliance Delta (Current → ADR-0433)
 
 | Metric | Before | After | Impact |
 |---|---|---|---|
@@ -108,7 +108,7 @@ CorvinOS has a **systematic tenant-isolation deficit** due to missing `tenant_id
 
 ---
 
-## 4. IMPLEMENTATION ROADMAP (ADR-0362)
+## 4. IMPLEMENTATION ROADMAP (ADR-0433)
 
 ### Phase A: Foundation (2–3 Days)
 **Goal:** Implement canonical tenant-path resolution APIs.
@@ -298,7 +298,7 @@ metrics_a = get_metrics(tenant_id="tenant_a")
 ### ✅ GO FOR IMPLEMENTATION
 
 **Rationale:**
-1. ✅ ADR-0362 is design-complete + architecture-sound
+1. ✅ ADR-0433 is design-complete + architecture-sound
 2. ✅ Implementation Plan is detailed (6 phases, ~10–15 days)
 3. ✅ Risk Mitigation identified + feasible
 4. ✅ Compliance Impact is positive (6/8 GDPR articles fixed)
@@ -338,7 +338,7 @@ metrics_a = get_metrics(tenant_id="tenant_a")
 
 ### Immediate (This Week)
 
-1. ✅ ADR-0362 Code Review + Acceptance (Architecture Team + Security)
+1. ✅ ADR-0433 Code Review + Acceptance (Architecture Team + Security)
 2. ✅ Implementation Plan Review + Task Breakdown (Dev Lead)
 3. ✅ Kick-off Phase A (1 Engineer: `core/paths/tenant.py`)
 
@@ -364,7 +364,7 @@ metrics_a = get_metrics(tenant_id="tenant_a")
 
 ## 10. APPENDICES
 
-### Appendix A: ADR-0362 Design Principles
+### Appendix A: ADR-0433 Design Principles
 
 1. **Fail-Closed Validation** — Every `tenant_id` validated before use
 2. **Explicit Tenant Routing** — No fallback to `_default` tenant
@@ -374,7 +374,7 @@ metrics_a = get_metrics(tenant_id="tenant_a")
 
 ### Appendix B: Compliance Mapping (Full Table)
 
-See Section 3 above for detailed GDPR → ADR-0362 mapping.
+See Section 3 above for detailed GDPR → ADR-0433 mapping.
 
 ### Appendix C: Implementation Checklist (Phase-by-Phase)
 
@@ -440,10 +440,10 @@ See Section 5 for full adversarial test examples (path-traversal, symlink, conte
 | **Current State** | Split-brain audit, global registries, cross-tenant leakage |
 | **Critical Findings** | 5 CRITICAL, 3 HIGH (all blocking) |
 | **Compliance Risk** | 6/8 GDPR articles at risk |
-| **Solution** | ADR-0362: Tenant-Native Data Persistence |
+| **Solution** | ADR-0433: Tenant-Native Data Persistence |
 | **Implementation Timeline** | 3–4 weeks (2–3 engineers) |
 | **Blocker Gate** | Phase E adversarial testing: 0 CRITICAL findings required |
-| **Recommendation** | ✅ APPROVE ADR-0362 + BEGIN PHASE A IMMEDIATELY |
+| **Recommendation** | ✅ APPROVE ADR-0433 + BEGIN PHASE A IMMEDIATELY |
 
 ---
 
