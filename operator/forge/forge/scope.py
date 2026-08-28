@@ -1,4 +1,4 @@
-"""Workspace-scope detection for forge artifacts — TENANT-NATIVE (ADR-0362).
+"""Workspace-scope detection for forge artifacts — TENANT-NATIVE (ADR-0433).
 
 Four scopes determine where a forged tool lives:
 
@@ -93,7 +93,7 @@ def scope_root(scope: str, *,
     Raises:
         ValueError: If tenant_id is invalid or required args missing.
     """
-    # Validate tenant_id fail-closed (ADR-0362 compliance)
+    # Validate tenant_id fail-closed (ADR-0433 compliance)
     _validate_tenant_id(tenant_id)
 
     if scope == "task":

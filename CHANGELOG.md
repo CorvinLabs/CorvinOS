@@ -6,11 +6,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.0.0] — 2026-08-20 — Tenant-Native Data Persistence (ADR-0362 Complete)
+## [1.0.0] — 2026-08-20 — Tenant-Native Data Persistence (ADR-0433 Complete)
 
 ### Added — Major: Tenant-Native Data Persistence (Phases A–E Complete)
 
-**ADR-0362 Delivered.** All CorvinOS data is now tenant-scoped by construction:
+**ADR-0433 Delivered.** All CorvinOS data is now tenant-scoped by construction:
 
 - **Phase A:** Central tenant-aware path APIs (`core/paths/tenant.py`, 200 LoC)
 - **Phase B:** Refactored `scope_root()` to require mandatory `tenant_id` parameter (~100 call-sites updated)

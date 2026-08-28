@@ -159,7 +159,7 @@ Dashboard (VibeMetrics panel in Console) [Phase 2]
 
 **Syntax Check:** ✅ All files pass `py_compile`  
 **Type Check:** ✅ Dataclasses frozen + immutable  
-**ADR Documentation:** ✅ ADR-0362 (K=1) + ADR-0363 (K=2)
+**ADR Documentation:** ✅ ADR-0432 (K=1) + ADR-0363 (K=2)
 
 ---
 
@@ -266,7 +266,7 @@ tests/unit/
   ✅ test_token_metrics_phase1_complete.py [NEW] 220 lines
 
 Corvin-ADR/
-  ✅ decisions/ADR-0362-*.md [NEW] (K=1)
+  ✅ decisions/ADR-0432-*.md [NEW] (K=1)
   ✅ decisions/ADR-0363-*.md [NEW] (K=2)
 
 docs/
