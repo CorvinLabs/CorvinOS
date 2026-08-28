@@ -10,14 +10,29 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 
 def _cmd_install(args: argparse.Namespace) -> int:
-    from awpkg.installer import install, InstallError
+    from awpkg.installer import install, register_components, InstallError
     try:
         pkg = install(args.file, scope=args.scope)
-        print(f"Installed {pkg.id}  v{pkg.version}  [{args.scope}]")
-        return 0
     except InstallError as exc:
         print(f"install error: {exc}", file=sys.stderr)
         return 1
+    print(f"Installed {pkg.id}  v{pkg.version}  [{args.scope}]")
+    # Activate the package: register its skills/tools into the runtime registries so they
+    # become visible to skill_inject / Forge. This is the operator-initiated (human-gated)
+    # install path — the correct place per ADR-0451/0460 (install() alone is a deposit and
+    # registers nothing; the operator running `pkg install` is the human gate). A registration
+    # failure does NOT undo the on-disk install, but it is reported (never a silent partial).
+    try:
+        tenant_id = getattr(args, "tenant", None) or "_default"
+        summary = register_components(pkg, tenant_id=tenant_id)
+        n_sk, n_tl = len(summary.get("skills", [])), len(summary.get("forge_tools", []))
+        if n_sk or n_tl:
+            print(f"Registered {n_sk} skill(s), {n_tl} tool(s)")
+        for s in summary.get("skills_skipped", []):
+            print(f"  skipped skill: {s}", file=sys.stderr)
+    except Exception as exc:
+        print(f"warning: package installed but component registration failed: {exc}", file=sys.stderr)
+    return 0
 
 
 def _cmd_remove(args: argparse.Namespace) -> int:
