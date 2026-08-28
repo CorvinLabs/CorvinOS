@@ -130,3 +130,15 @@ class Orchestrator(Subsystem):
     def shutdown(self) -> None:
         """Cleanup."""
         logger.info("Orchestrator shutdown")
+
+    def clear_session_cache(self, session_id: str | None = None) -> None:
+        """Clear session-scoped state on session reset.
+
+        Clears active tasks and dependency tracking for the session.
+        """
+        try:
+            self.active_tasks.clear()
+            self.dependencies.clear()
+            logger.info("Orchestrator session state cleared")
+        except Exception as e:
+            logger.error(f"Orchestrator clear_session_cache failed: {e}")

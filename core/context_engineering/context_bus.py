@@ -79,6 +79,8 @@ class ContextBus:
     ordering across all subscribers. Backed by asyncio.Queue.
     """
 
+    _instance: Optional["ContextBus"] = None
+
     def __init__(self):
         self.event_queue: Optional[asyncio.Queue] = None
         self.worker_task: Optional[asyncio.Task] = None
@@ -184,6 +186,24 @@ class ContextBus:
             ctx: ExecutionContext to store.
         """
         _EXECUTION_CONTEXT.set(ctx)
+
+    @classmethod
+    def get_instance(cls) -> Optional["ContextBus"]:
+        """Get the global singleton ContextBus instance.
+
+        Returns None if the singleton has not been set.
+        Used by session_reset and other modules to access the bus without
+        importing the hub.
+        """
+        return cls._instance
+
+    @classmethod
+    def set_instance(cls, instance: Optional["ContextBus"]) -> None:
+        """Set the global singleton ContextBus instance.
+
+        Called by SubsystemHub during initialization to register the bus.
+        """
+        cls._instance = instance
 
     def subscriber_count(self, event_type: str) -> int:
         """Get count of subscribers for event type."""

@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """session_timeout_sweep — daily cleanup of inactive bridge chats.
 
-Walks ``<corvin_home>/sessions/<bridge>:<chat>/`` and computes the
+Walks ``<corvin_home>/tenants/<tid>/sessions/<bridge>:<chat>/`` and computes the
 recursive newest mtime per session dir. Any session whose newest mtime
 is older than ``--ttl-days`` (default 7, env override
 ``CORVIN_SESSION_TTL_DAYS``) is wiped via
 ``session_reset.reset_session(reason='timeout')``.
 
-A second pass walks ``<corvin_home>/voice/sessions/<channel>/<chat>/``
+A second pass walks ``<corvin_home>/tenants/<tid>/sessions/voice/<channel>/<chat>/``
 to catch voice-only orphans (chats with voice state but no forge dir of
 the same safe-name).
+
+Both roots are tenant-aware (ADR-0007 Phase 1.2). They were not until
+2026-08-28: this script still walked the pre-migration layout, so the daily
+timer fired, matched nothing and no chat was ever aged out.
 
 User scope (``<corvin_home>/global/``) and project scope
 (``<repo>/.corvin/``) are NEVER pruned.
@@ -38,10 +42,33 @@ PLUGIN_ROOT = HERE.parent  # operator/voice/
 SHARED_DIR = PLUGIN_ROOT.parent / "bridges" / "shared"
 sys.path.insert(0, str(SHARED_DIR))
 
-from paths import corvin_home  # noqa: E402
+from paths import corvin_home  # noqa: E402  (kept: used by the docstring's scope note)
+from session_state import (  # noqa: E402
+    has_claude_session_state, tenant_sessions_root,
+)
 from session_reset import (  # noqa: E402
     VALID_CHANNELS, reset_session,
 )
+
+
+def _forge_sessions_root() -> Path:
+    """``<corvin_home>/tenants/<tid>/sessions/`` — the forge session workspaces.
+
+    ADR-0007 Phase 1.2 moved these under the tenant home. This sweep kept
+    walking the pre-migration ``<corvin_home>/sessions/`` until 2026-08-28,
+    so the daily timer ran, found nothing, and no chat was ever aged out.
+    """
+    root = tenant_sessions_root(None)
+    return root if root is not None else corvin_home() / "sessions"
+
+
+def _voice_sessions_root() -> Path:
+    """``<tenant_sessions>/voice/`` — the adapter's per-chat session dirs.
+
+    Derived from the same SSOT the adapter and session_reset use, rather
+    than the dead ``<corvin_home>/voice/sessions/`` this used to build.
+    """
+    return _forge_sessions_root() / "voice"
 
 
 # Forge-side ``<channel>:<chat_id>`` syntax. Bridge name MUST start with a
@@ -73,8 +100,7 @@ def _newest_mtime(path: Path) -> float:
 
 def sweep_forge_sessions(*, ttl_seconds: float, dry_run: bool) -> list[dict]:
     """First pass: walk forge session workspaces."""
-    home = corvin_home()
-    sessions_root = home / "sessions"
+    sessions_root = _forge_sessions_root()
     purged: list[dict] = []
     if not sessions_root.is_dir():
         return purged
@@ -147,8 +173,7 @@ def sweep_worker_sessions(*, ttl_seconds: float, dry_run: bool) -> list[dict]:
     """
     import json
 
-    home = corvin_home()
-    sessions_root = home / "sessions"
+    sessions_root = _forge_sessions_root()
     purged: list[dict] = []
     if not sessions_root.is_dir():
         return purged
@@ -229,8 +254,7 @@ def sweep_voice_orphans(
 ) -> list[dict]:
     """Second pass: voice-only orphans — voice state present, no matching
     forge session dir."""
-    home = corvin_home()
-    voice_root = home / "voice" / "sessions"
+    voice_root = _voice_sessions_root()
     purged: list[dict] = []
     if not voice_root.is_dir():
         return purged
@@ -253,6 +277,14 @@ def sweep_voice_orphans(
             newest = _newest_mtime(chat_dir)
             age = now - newest if newest else 0.0
             if age <= ttl_seconds:
+                continue
+            # A reset clears the conversation state but deliberately keeps the
+            # chat's project files, so this directory survives it. Without this
+            # guard the sweep would re-purge the same aged-out chat every night
+            # — its mtime stays old — and write a fresh session.timeout event
+            # into the audit chain each time. Nothing left to resume from means
+            # nothing left to time out.
+            if not has_claude_session_state(chat_dir):
                 continue
             info = {
                 "bridge":  bridge,

@@ -361,3 +361,15 @@ class LoopEngineer(Subsystem):
     def shutdown(self) -> None:
         """Cleanup."""
         logger.info("LoopEngineer shutdown")
+
+    def clear_session_cache(self, session_id: str | None = None) -> None:
+        """Clear session-scoped state on session reset.
+
+        Clears retry counts and strategy history for the session.
+        """
+        try:
+            self.retry_count.clear()
+            self.strategy_history.clear()
+            logger.info("LoopEngineer session state cleared")
+        except Exception as e:
+            logger.error(f"LoopEngineer clear_session_cache failed: {e}")

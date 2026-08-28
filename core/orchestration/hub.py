@@ -48,6 +48,9 @@ class SubsystemHub:
         if self._context_bus is None:
             from core.context_engineering.context_bus import ContextBus
             self._context_bus = ContextBus()
+            # Register singleton instance so session_reset.py can access it
+            ContextBus.set_instance(self._context_bus)
+            self._context_bus.hub = self
         return self._context_bus
 
     def register_subsystem(self, subsystem: "Subsystem") -> None:  # noqa: F821

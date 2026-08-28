@@ -749,6 +749,58 @@ the send timeout, the tick-stall detector, the preCheck-stall detector, and
 
 ---
 
+## Session state has one address (2026-08-28)
+
+`operator/bridges/shared/session_state.py` is the single source of truth for
+**where** a bridge chat's Claude conversation state lives and **what** counts as
+that state. `adapter._reset_session_state()` and
+`session_reset._wipe_voice_state()` both call into it; neither builds a path of
+its own any more.
+
+It exists because they did, and drifted. ADR-0007 Phase 1.2 moved the adapter
+onto the tenant-aware resolver `paths.voice_session_dir()`
+(`<corvin_home>/tenants/<tid>/sessions/voice/<channel>/<chat>/`); `session_reset`
+was not moved with it and kept rmtree-ing `<corvin_home>/voice/sessions/…`, a
+path that resolves to nothing under any configuration. The consequences:
+
+| Layer | Hand-built path | What survived every `/new` |
+|---|---|---|
+| Claude conversation state | `<home>/voice/sessions/…` | `.main_session.json` → the next turn ran `claude --resume <old id>` and the chat continued verbatim |
+| forge session workspace | `<home>/sessions/<chan>` | forge tools, `forge/memory.md`, worker sessions |
+| `session_timeout_sweep` | both of the above | the daily timer fired, matched nothing, and no chat was ever aged out |
+
+Discord channel 1501315335750684803 sat on session id `1e53620a…` for weeks
+while `/new` cheerfully reported `voice state cleared: no`.
+
+**A reset clears conversation state only.** `.main_session.json`,
+`.session_started`, `.claude.json` and `.claude/` go; everything else in the
+directory stays — `outputs/`, `tasks/`, the operator's project files, and the
+L37-retained `cel-briefs/` audit sidecars. This is what the `/new` reply
+promises in so many words, and it is why the reset deletes entries rather than
+the directory.
+
+### `operator/forge/paths.py` was shadowing `bridges/shared/paths.py`
+
+Removed the same day. It was a nine-line stub ("stub for audit_metrics
+compatibility") whose symbols nothing imported — `audit_metrics` uses the
+package-qualified `forge.paths` — but it sat on the top-level name `paths`, so
+any process that put `operator/forge/` earlier on `sys.path` got it instead of
+the real resolver. About 25 modules under `bridges/shared/` do
+`from paths import corvin_home` (or `tenant_global_dir` / `voice_dir`) at import
+time and raised ImportError under the shadowed name. Two mattered to the reset
+and were failing into their own `except Exception`:
+
+* `context_budget` — the Layer-20 quota was never unregistered, so `/new`
+  reported `token budget reset: no` no matter what.
+* `instance_identity` — the `session.reset` audit event shipped without its
+  instance signature.
+
+`session_reset.py` additionally re-asserts its own directory at the front of
+`sys.path` after adding the forge tops, so the shadowing cannot come back
+through a caller's path order.
+
+---
+
 ## The channel list is one list (2026-07-28)
 
 `operator/bridges/shared/channels.py::BRIDGE_CHANNELS` is the canonical set of

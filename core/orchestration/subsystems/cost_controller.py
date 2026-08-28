@@ -253,3 +253,16 @@ class CostController(Subsystem):
     def shutdown(self) -> None:
         """Cleanup."""
         logger.info("CostController shutdown")
+
+    def clear_session_cache(self, session_id: str | None = None) -> None:
+        """Clear session-scoped state on session reset.
+
+        Clears session cost tracking but preserves long-term cost history
+        and strategy efficiency scores.
+        """
+        try:
+            self.spent_today = 0.0
+            self.token_count = {"input": 0, "output": 0}
+            logger.info("CostController session state cleared")
+        except Exception as e:
+            logger.error(f"CostController clear_session_cache failed: {e}")

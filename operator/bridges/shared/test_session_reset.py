@@ -119,7 +119,7 @@ def _create_forge_tool(home: Path, slot: Path, *, channel_id: str,
         "from forge.scope import scope_root\n"
         "from forge.registry import Registry\n"
         "os.environ['CORVIN_CHANNEL_ID'] = sys.argv[1]\n"
-        "root = scope_root('session', channel_id=sys.argv[1])\n"
+        "root = scope_root('session', channel_id=sys.argv[1], tenant_id='_default')\n"
         "root.mkdir(parents=True, exist_ok=True)\n"
         "reg = Registry(root)\n"
         "reg.create(name=sys.argv[2], description='demo',\n"
@@ -153,10 +153,35 @@ def _forge_chan(channel: str, chat_id: str) -> str:
     return f"{channel}:{safe_chat}"
 
 
+def _sessions_root(home: Path) -> Path:
+    """<corvin_home>/tenants/_default/sessions — where forge scope_root writes."""
+    return home / "tenants" / "_default" / "sessions"
+
+
 def _voice_state_dir(home: Path, channel: str, chat_id: str) -> Path:
-    safe_channel = "".join(c if c.isalnum() else "_" for c in channel)[:64] or "anon"
+    """The directory adapter._session_dir() really resolves to.
+
+    This used to hand-build ``home/voice/sessions/<channel>/<chat>`` — the same
+    dead path session_reset.py was deleting — so the test agreed with the bug
+    instead of catching it, and ``/new`` shipped broken. Resolve through the
+    SSOT the adapter itself uses so the two can no longer drift apart
+    unnoticed.
+    """
     safe_chat = "".join(c if c.isalnum() else "_" for c in chat_id)[:64] or "anon"
-    return home / "voice" / "sessions" / safe_channel / safe_chat
+    code = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(ROOT)!r})\n"
+        "import paths\n"
+        "print(paths.voice_session_dir(sys.argv[1], sys.argv[2]))\n"
+    )
+    env = dict(os.environ)
+    env["CORVIN_HOME"] = str(home)
+    env.pop("CORVIN_TENANT_ID", None)
+    out = subprocess.run(
+        [sys.executable, "-c", code, channel, safe_chat],
+        env=env, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return Path(out)
 
 
 def _seed_voice_state(home: Path, channel: str, chat_id: str) -> Path:
@@ -202,7 +227,7 @@ def case_01_skill_clear() -> None:
     _create_skill(home, slot, channel_id=cid,
                   name="demo.alpha", body=body,
                   description="case 1 skill", grade=0.8)
-    canonical = (home / "sessions" / cid / "skill-forge"
+    canonical = (_sessions_root(home) / cid / "skill-forge"
                  / "skills" / "demo.alpha" / "SKILL.md")
     slot_md = _slot_dir(slot, "demo.alpha") / "SKILL.md"
     eq(canonical.exists(), True, "canonical SKILL.md created")
@@ -229,7 +254,7 @@ def case_02_forge_tool_clear() -> None:
     chat = "chatB"
     cid = _forge_chan("discord", chat)
     _create_forge_tool(home, slot, channel_id=cid, name="case2.tool")
-    forge_root = home / "sessions" / cid / "forge"
+    forge_root = _sessions_root(home) / cid / "forge"
     impl = forge_root / "tools" / "case2.tool.py"
     eq(impl.exists(), True, "forge tool impl created")
 
@@ -254,7 +279,12 @@ def case_03_voice_state_clear() -> None:
 
     out = _call_reset(home, slot, channel="telegram", chat_id=chat)
     eq(out["voice_state_removed"], True, "reset reports voice state removed")
-    eq(vs.exists(), False, "voice session dir gone")
+    # The DIRECTORY survives by design — it holds the chat's project files.
+    # What must be gone is the conversation state the next turn resumes from.
+    eq((vs / ".claude.json").exists(), False, "voice .claude.json gone")
+    eq((vs / ".claude").exists(), False, "voice .claude/ gone")
+    eq((vs / ".session_started").exists(), False, "voice .session_started gone")
+    eq(any(vs.glob(".claude*")), False, "no Claude state left to resume from")
     shutil.rmtree(sandbox, ignore_errors=True)
 
 
@@ -347,8 +377,8 @@ def case_07_timeout_sweep() -> None:
                   body="# demo.stale\n\nSTALE-MARK.\n",
                   description="stale", grade=0.7)
 
-    fresh_dir = home / "sessions" / fresh_cid
-    stale_dir = home / "sessions" / stale_cid
+    fresh_dir = _sessions_root(home) / fresh_cid
+    stale_dir = _sessions_root(home) / stale_cid
     eq(fresh_dir.exists(), True, "fresh session dir exists pre-sweep")
     eq(stale_dir.exists(), True, "stale session dir exists pre-sweep")
 
@@ -480,11 +510,11 @@ def case_09_budget_reset() -> None:
         "# Verify budget exists and shows 50k used\n"
         "rec = context_budget.get_budget(session_id)\n"
         "assert rec is not None, 'budget should exist'\n"
-        "assert rec['used'] == 50_000, f'used should be 50k, got {rec[\"used\"]}'\n"
+        "assert rec['used'] == 50_000, f'used should be 50k, got {{rec[\"used\"]}}'\n"
         "print('PRE-RESET: budget registered, 50k/100k used')\n"
-    ).format(ROOT)
+    ).format(str(ROOT))
 
-    _run_helper(home, slot, budget_code, str(home), cid)
+    _run_helper(home, slot, budget_code, str(home), chat)
 
     # Call session_reset
     result = _call_reset(home, slot, channel="discord", chat_id=chat)
@@ -504,12 +534,12 @@ def case_09_budget_reset() -> None:
         "if rec is None:\n"
         "    print('POST-RESET: budget deleted (correct)')\n"
         "else:\n"
-        "    print(f'ERROR: budget still exists: {rec}')\n"
+        "    print(f'ERROR: budget still exists: {{rec}}')\n"
         "    sys.exit(1)\n"
-    ).format(ROOT)
+    ).format(str(ROOT))
 
     try:
-        _run_helper(home, slot, verify_code, str(home), cid)
+        _run_helper(home, slot, verify_code, str(home), chat)
         ok("reset deletes budget from budgets.json")
     except subprocess.CalledProcessError as e:
         bad(f"budget verification failed: {e.stderr}")

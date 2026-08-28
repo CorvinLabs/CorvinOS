@@ -272,3 +272,15 @@ class StrategyAdvisor(Subsystem):
     def shutdown(self) -> None:
         """Cleanup."""
         logger.info("StrategyAdvisor shutdown")
+
+    def clear_session_cache(self, session_id: str | None = None) -> None:
+        """Clear session-scoped state on session reset.
+
+        Clears prediction cache but preserves strategy scores for long-term
+        learning across sessions.
+        """
+        try:
+            self.prediction_cache.clear()
+            logger.info("StrategyAdvisor session state cleared")
+        except Exception as e:
+            logger.error(f"StrategyAdvisor clear_session_cache failed: {e}")

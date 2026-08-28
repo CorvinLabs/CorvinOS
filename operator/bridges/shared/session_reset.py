@@ -8,10 +8,21 @@ operation that purges the four cleanup layers a chat owns:
      ``operator/skill-forge/skills/dyn/``).
   2. Forge tools in the **session** scope (manifest + impl files).
   3. Forge session workspace dir at
-     ``<corvin_home>/sessions/<channel>:<chat>/`` — defensive rmtree.
-  4. Voice conversation state at
-     ``<corvin_home>/voice/sessions/<safe_channel>/<safe_chat>/`` —
-     ``.claude.json``, ``.claude/`` and any session-scoped Claude state.
+     ``<corvin_home>/tenants/<tid>/sessions/<channel>:<chat>/`` — defensive
+     rmtree (also takes ``forge/memory.md`` and the worker-session files).
+  4. Claude conversation state in the adapter's per-chat session dir,
+     resolved through ``session_state`` (the SSOT the adapter itself uses):
+     ``.main_session.json``, ``.session_started``, ``.claude.json`` and
+     ``.claude/``. Only those — project files in the same directory are
+     deliberately kept, which is what the ``/new`` reply promises.
+
+Both path families are tenant-aware (ADR-0007 Phase 1.2). They were NOT until
+2026-08-28: this module still hand-built the pre-migration
+``<corvin_home>/sessions/`` and ``<corvin_home>/voice/sessions/`` layouts,
+neither of which resolved to anything, so ``/new`` deleted nothing the next
+turn cared about and the chat resumed its old Claude session verbatim. Path
+resolution now goes through ``session_state`` so the two sides cannot drift
+apart again.
 
 The audit event lands FIRST so the on-disk action is always traceable
 even if the rmtree later fails for any reason.
@@ -48,6 +59,26 @@ _SKILL_FORGE_TOP = PLUGINS / "skill-forge"
 for _p in (_FORGE_TOP, _SKILL_FORGE_TOP):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
+
+# ...and then put OUR OWN directory back in front of them.
+#
+# ``operator/forge/`` ships a legacy top-level ``paths.py`` (FORGE_ROOT /
+# get_forge_home / …) that is unrelated to ``bridges/shared/paths.py`` and
+# shadows it whenever it sits earlier in sys.path. Roughly 25 sibling modules
+# do ``from paths import corvin_home`` (or tenant_global_dir / voice_dir) at
+# import time and raise ImportError under the shadowed name. Two of them are
+# load-bearing right here and were failing silently into their own
+# ``except Exception`` handlers:
+#   * ``context_budget``    → the Layer-20 quota was never reset, so /new kept
+#                             reporting "token budget reset: no".
+#   * ``instance_identity`` → the session.reset audit event shipped without its
+#                             instance signature.
+# Nothing in forge/ or skill-forge/ imports the bare name ``paths`` — they all
+# go through the package-qualified ``forge.paths`` — so restoring our own
+# precedence is safe and keeps both worlds importable.
+if str(HERE) in sys.path:
+    sys.path.remove(str(HERE))
+sys.path.insert(0, str(HERE))
 
 
 # Optional dependencies — silent fallback when forge / skill-forge missing.
@@ -114,6 +145,15 @@ except Exception:  # noqa: BLE001
 # "session reset failed: invalid choice" and the session was never reset.
 from channels import BRIDGE_CHANNELS  # noqa: E402  — local module, HERE is on sys.path
 
+# SSOT for the adapter's session-state location + contents. Not optional in
+# spirit — without it a reset cannot clear what the next turn resumes from —
+# but imported defensively so a broken install still runs the other layers and
+# surfaces the gap as an explicit failure entry rather than a traceback.
+try:
+    import session_state as _session_state  # type: ignore  # noqa: E402
+except Exception:  # noqa: BLE001
+    _session_state = None  # type: ignore[assignment]
+
 VALID_CHANNELS = BRIDGE_CHANNELS
 VALID_REASONS = ("manual", "timeout")
 
@@ -136,6 +176,22 @@ def _corvin_home_safe() -> Path:
 def _safe_id(s: str) -> str:
     """Same shape as adapter._safe_id — used for the **voice** session path."""
     return "".join(ch if ch.isalnum() else "_" for ch in str(s))[:64] or "anon"
+
+
+def _sessions_root(tenant_id: str = "_default") -> Path:
+    """``<corvin_home>/tenants/<tid>/sessions/`` — where forge session workspaces live.
+
+    ADR-0007 Phase 1.2 moved these under the tenant home; this module kept
+    building ``<corvin_home>/sessions/`` until 2026-08-28, so the forge tools,
+    ``forge/memory.md`` and the worker-session files of a real chat were never
+    reached by ``/new``. Falls back to the pre-migration layout only when the
+    resolver is genuinely unavailable.
+    """
+    if _session_state is not None:
+        root = _session_state.tenant_sessions_root(tenant_id)
+        if root is not None:
+            return root
+    return _corvin_home_safe() / "sessions"
 
 
 def forge_channel_id(channel: str, chat_id: str) -> str:
@@ -273,15 +329,15 @@ def _purge_forge_tools(*, forge_chan_id: str, failures: list[str],
 
 
 def _purge_worker_sessions(*, forge_chan_id: str,
-                           failures: list[str]) -> int:
+                           failures: list[str],
+                           tenant_id: str = "_default") -> int:
     """ADR-0049 — purge all worker_sessions/*.session.json files for a chat.
 
     Audit-first per file (best-effort, a write failure MUST NOT block the
     subsequent rmtree of the parent directory).  Returns count of files
     removed.
     """
-    home = _corvin_home_safe()
-    ws_dir = home / "sessions" / forge_chan_id / "worker_sessions"
+    ws_dir = _sessions_root(tenant_id) / forge_chan_id / "worker_sessions"
     if not ws_dir.is_dir():
         return 0
 
@@ -313,12 +369,13 @@ def _purge_worker_sessions(*, forge_chan_id: str,
 
 
 def _wipe_forge_session_dir(*, forge_chan_id: str,
-                            failures: list[str]) -> bool:
-    """Defensive rmtree of <corvin_home>/sessions/<chan_id>/ — picks up
-    leftovers (audit.jsonl, .lock, manifest) that the registry deletes
-    above don't touch. Returns True iff a directory was removed."""
-    home = _corvin_home_safe()
-    target = home / "sessions" / forge_chan_id
+                            failures: list[str],
+                            tenant_id: str = "_default") -> bool:
+    """Defensive rmtree of <tenant_sessions_root>/<chan_id>/ — picks up
+    leftovers (audit.jsonl, .lock, manifest, forge/memory.md) that the
+    registry deletes above don't touch. Returns True iff a directory was
+    removed."""
+    target = _sessions_root(tenant_id) / forge_chan_id
     if not target.exists():
         return False
     try:
@@ -330,19 +387,59 @@ def _wipe_forge_session_dir(*, forge_chan_id: str,
 
 
 def _wipe_voice_state(*, channel: str, chat_id: str,
-                      failures: list[str]) -> bool:
-    """Remove the voice adapter's per-chat session directory. Mirrors the
-    layout used by adapter._session_dir() — sessions/<safe_channel>/<safe_chat>/."""
-    home = _corvin_home_safe()
-    target = home / "voice" / "sessions" / _safe_id(channel) / _safe_id(chat_id)
-    if not target.exists():
+                      failures: list[str],
+                      tenant_id: str = "_default") -> bool:
+    """Clear Claude's conversation state in the adapter's per-chat session dir.
+
+    Resolution and deletion both go through ``session_state`` — the SSOT the
+    adapter itself uses (see that module's docstring). Two properties matter:
+
+      * The directory is the one ``adapter._session_dir()`` really resolves to.
+        Until 2026-08-28 this function hand-built ``<home>/voice/sessions/...``,
+        which matched nothing after the ADR-0007 Phase 1.2 migration, so
+        ``.main_session.json`` survived every ``/new`` and the next turn
+        resumed the old Claude session.
+      * Only conversation state is deleted, never the whole directory. The
+        reset reply promises the chat's project files are kept, and the same
+        directory holds ``outputs/``, ``tasks/`` and the L37-retained
+        ``cel-briefs/`` audit sidecars.
+
+    Returns True iff at least one state entry was actually removed.
+    """
+    if _session_state is None:
+        failures.append(
+            "session_reset: session_state module unavailable — "
+            "Claude conversation state could NOT be cleared "
+            f"(channel={channel!r} chat_id={chat_id!r})"
+        )
         return False
-    try:
-        shutil.rmtree(target, ignore_errors=False)
-        return True
-    except Exception as e:  # noqa: BLE001
-        failures.append(f"rmtree {target}: {e!s}")
+
+    candidates = _session_state.claude_session_dirs(
+        channel, chat_id, tenant_id=tenant_id,
+    )
+    if not candidates:
+        # The resolver produced nothing at all. That is never a legitimate
+        # "nothing to do" — it means path resolution itself failed, which is
+        # precisely how this layer stayed broken for weeks while reporting a
+        # cheerful "voice state cleared: no".
+        failures.append(
+            "session_reset: could not resolve any session directory — "
+            f"Claude conversation state NOT cleared (channel={channel!r} "
+            f"chat_id={chat_id!r} tenant={tenant_id!r})"
+        )
         return False
+
+    removed_any = False
+    for target in candidates:
+        if not target.is_dir():
+            continue
+        try:
+            removed = _session_state.reset_claude_session_state(target)
+            if removed:
+                removed_any = True
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"reset session state {target}: {e!s}")
+    return removed_any
 
 
 def _reset_budget(*, chat_id: str, failures: list[str]) -> bool:
@@ -356,6 +453,13 @@ def _reset_budget(*, chat_id: str, failures: list[str]) -> bool:
     the rest of the reset.
     """
     if _unregister_budget is None:
+        # Surface it instead of returning a quiet False. This import failing
+        # silently is exactly how the Layer-20 reset stayed broken while the
+        # reply reported "token budget reset: no" as if that were normal.
+        failures.append(
+            "session_reset: context_budget unavailable — token budget quota "
+            f"NOT reset (chat_id={chat_id!r})"
+        )
         return False
     try:
         return _unregister_budget(str(chat_id))
@@ -486,6 +590,7 @@ def reset_session(
     # so per-file audit events land while the directory is still intact.
     worker_sessions_removed = _purge_worker_sessions(
         forge_chan_id=forge_chan_id, failures=failures,
+        tenant_id=tenant_id,
     )
     # Layer 33 — purge session-scope artifacts BEFORE the rmtree below
     # so the audit event `artifact.session_purged` lands while the
@@ -497,9 +602,11 @@ def reset_session(
     )
     _ = _wipe_forge_session_dir(
         forge_chan_id=forge_chan_id, failures=failures,
+        tenant_id=tenant_id,
     )
     voice_state_removed = _wipe_voice_state(
         channel=channel, chat_id=chat_id, failures=failures,
+        tenant_id=tenant_id,
     )
     # Layer 20 — reset the session's context budget quota so the next turn
     # starts with a fresh 100k tokens (or the operator's configured default).
@@ -604,7 +711,7 @@ def _dialectic_session_reset(*, channel: str, chat_id: str,
     n_skills = 0
     n_tools = 0
     try:
-        sessions_root = _corvin_home_safe() / "sessions" / forge_chan_id
+        sessions_root = _sessions_root(tenant_id) / forge_chan_id
         skills_dir = sessions_root / "skill-forge" / "skills"
         if skills_dir.is_dir():
             n_skills = sum(1 for _ in skills_dir.iterdir() if _.is_dir())
@@ -658,6 +765,74 @@ def _cli(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _clear_execution_context() -> None:
+    """Clear ExecutionContext for session reset (best-effort).
+
+    Resets the current ExecutionContext via ContextVar to allow a fresh
+    context for the next session. Non-fatal: failure does NOT block reset.
+
+    ADR-0296/0298: Session design in Brain.
+    """
+    try:
+        from core.context_engineering.context_bus import (  # type: ignore
+            set_execution_context,
+        )
+        # Clear the current ExecutionContext
+        set_execution_context(None)
+        import logging
+        logging.getLogger(__name__).debug("ExecutionContext cleared for session reset")
+    except Exception:  # noqa: BLE001
+        # Best-effort: session reset proceeds even if context clearing fails
+        pass
+
+
+def _call_subsystem_resets(session_id: str | None = None) -> None:
+    """Call clear_session_cache() on all Brain subsystems (best-effort).
+
+    Allows subsystems to clear session-scoped state (caches, retry counts,
+    decision history, etc.). Non-fatal: failure in one subsystem does NOT
+    block other subsystems or the overall session reset.
+
+    ``session_id`` names the chat being reset and is passed on to every
+    handler that accepts it. One process serves many chats, so a handler
+    that clears its whole cache would wipe unrelated conversations; a
+    handler is called without the argument only if its signature predates
+    this and takes none.
+
+    ADR-0296/0298: Session design in Brain.
+    """
+    import inspect
+    try:
+        from core.context_engineering.context_bus import ContextBus  # type: ignore
+        bus = ContextBus.get_instance()
+        if bus and hasattr(bus, 'hub') and bus.hub:
+            # Call clear_session_cache() on all subsystems
+            hub = bus.hub
+            for subsystem in hub.subsystems.values():
+                try:
+                    handler = getattr(subsystem, 'clear_session_cache', None)
+                    if handler is None:
+                        continue
+                    try:
+                        accepts_id = 'session_id' in inspect.signature(
+                            handler).parameters
+                    except (TypeError, ValueError):
+                        accepts_id = False
+                    if accepts_id:
+                        handler(session_id=session_id)
+                    else:
+                        handler()
+                except Exception as e:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Subsystem {getattr(subsystem, 'name', 'unknown')} "
+                        f"clear_session_cache failed: {e}"
+                    )
+    except Exception:  # noqa: BLE001
+        # Best-effort: session reset proceeds even if subsystem resets fail
+        pass
+
+
 def _emit_session_reset_event(
     *,
     session_id: str,
@@ -669,7 +844,8 @@ def _emit_session_reset_event(
     """Emit session_reset event to Brain graph (best-effort).
 
     Allows Brain subsystems to track session lifecycle and update
-    session state in the graph. Non-fatal: event emission failure
+    session state in the graph. Also triggers ExecutionContext clear
+    and subsystem resets. Non-fatal: event emission failure
     does NOT block session reset.
 
     ADR-0296/0298: Session design in Brain.
@@ -679,17 +855,29 @@ def _emit_session_reset_event(
         from core.context_engineering.context_bus import ContextBus  # type: ignore
         bus = ContextBus.get_instance()
         if bus:
-            bus.publish("session_reset", {
-                "session_id": session_id,
-                "tenant_id": tenant_id,
-                "reason": reason,
-                "channel": channel,
-                "chat_id": str(chat_id),
-                "timestamp": datetime.now().isoformat(),
-            })
+            # Emit the session reset event
+            import asyncio
+            try:
+                asyncio.create_task(bus.publish("session_reset", {
+                    "session_id": session_id,
+                    "tenant_id": tenant_id,
+                    "reason": reason,
+                    "channel": channel,
+                    "chat_id": str(chat_id),
+                    "timestamp": datetime.now().isoformat(),
+                }))
+            except RuntimeError:
+                # No event loop running; skip async publish
+                pass
     except Exception:  # noqa: BLE001
         # Best-effort: session reset proceeds even if event emission fails
         pass
+
+    # Clear ExecutionContext (non-fatal)
+    _clear_execution_context()
+
+    # Call clear_session_cache() on all subsystems (non-fatal)
+    _call_subsystem_resets(session_id)
 
 
 if __name__ == "__main__":
