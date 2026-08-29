@@ -281,6 +281,16 @@ class PluginReplacementRefused(PermissionError):
     """
 
 
+class PluginPrivilegeEscalationRefused(PermissionError):
+    """Raised when a plugin attempts to escalate privilege via thread escape (BUG #1).
+
+    ADR-0233 D5: A plugin that unregisters and re-registers with elevated
+    privilege in the same epoch (indicating a thread escape attack) is refused
+    and downgraded to installed. This exception documents the attack vector
+    when it's detected.
+    """
+
+
 # ── Web surface protocol (ADR-0356, P2.5) ─────────────────────────────────────
 
 @runtime_checkable
