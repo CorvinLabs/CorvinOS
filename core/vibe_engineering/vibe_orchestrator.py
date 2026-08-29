@@ -25,6 +25,7 @@ from pathlib import Path
 from enum import Enum
 import json
 import logging
+import asyncio
 
 from core.vibe_engineering.session_lifecycle_manager import (
     SessionLifecycleManager,
@@ -43,6 +44,8 @@ from core.vibe_engineering.recovery_engine import (
     RecoveryEngine,
     ExecutionState,
 )
+from core.console.corvin_console.task_worker_pool import TaskWorkerPool
+from core.console.corvin_console.task_queue import TaskQueue
 
 logger = logging.getLogger(__name__)
 
@@ -119,20 +122,31 @@ class VibeOrchestrator:
     def __init__(
         self,
         checkpoint_dir: Optional[Path] = None,
-        context_reduction_target_pct: int = 91
+        context_reduction_target_pct: int = 91,
+        task_queue: Optional[TaskQueue] = None,
+        max_workers: Optional[int] = None,
     ):
         """
-        Initialize orchestrator with component managers.
+        Initialize orchestrator with component managers and worker pool.
 
         Args:
             checkpoint_dir: Where to persist checkpoints.
                            Defaults to ~/.corvin/vibe/checkpoints/
             context_reduction_target_pct: Target compression (typically 91%).
+            task_queue: TaskQueue for worker pool. If None, creates a default.
+            max_workers: Max concurrent workers. Defaults to CORVIN_TASK_MAX_WORKERS env var or 5.
         """
         self.checkpoint_manager = CheckpointManager(checkpoint_dir)
         self.context_reducer = ContextReducer(context_reduction_target_pct)
         self.recovery_engine = RecoveryEngine()
         self.session_lifecycle_manager = SessionLifecycleManager()
+
+        # Initialize worker pool (F-C2 integration)
+        self.task_queue = task_queue or self._create_default_task_queue()
+        self.worker_pool = TaskWorkerPool(
+            task_queue=self.task_queue,
+            max_workers=max_workers
+        )
 
         self.state = OrchestratorState.IDLE
         self.metrics = OrchestrationMetrics()
@@ -142,12 +156,14 @@ class VibeOrchestrator:
             "on_checkpoint_created": [],
             "on_recovery_started": [],
             "on_recovery_complete": [],
+            "on_task_submitted_to_pool": [],
             "on_error": [],
         }
 
         logger.info(
             f"VibeOrchestrator initialized "
-            f"(checkpoint_dir={self.checkpoint_manager.checkpoint_dir})"
+            f"(checkpoint_dir={self.checkpoint_manager.checkpoint_dir}, "
+            f"worker_pool={self.worker_pool.max_workers} max workers)"
         )
 
     def register_callback(self, event_type: str, callback: Callable):
@@ -590,6 +606,99 @@ class VibeOrchestrator:
                 "recovery_failures": self.metrics.recovery_failure_count,
             }
         }
+
+    # ========================================================================
+    # WORKER POOL INTEGRATION (F-C2)
+    # ========================================================================
+
+    def _create_default_task_queue(self) -> TaskQueue:
+        """Create default TaskQueue pointing to tenant global dir."""
+        try:
+            from forge import paths as _forge_paths  # type: ignore
+            tenant_global_dir = _forge_paths.tenant_global_dir("_default")
+            return TaskQueue(tenant_global_dir)
+        except Exception as e:
+            logger.error(f"Failed to create default TaskQueue: {e}")
+            # Fallback: create with current path
+            from core.console.corvin_console.task_queue import TaskQueue as TQ
+            return TQ(Path.home() / ".corvin" / "global")
+
+    async def submit_task_to_worker_pool(
+        self,
+        task_id: str,
+        instruction: str,
+        chat_key: Optional[str] = None,
+        tenant_id: str = "_default",
+    ) -> bool:
+        """
+        Submit a task to the worker pool for execution.
+
+        This is the production integration point: tasks submitted here execute
+        through the real worker pool with full audit trail + L34/L35 gates.
+
+        Args:
+            task_id: Unique task identifier
+            instruction: Task instruction/prompt
+            chat_key: Optional chat session key
+            tenant_id: Tenant ID (defaults to "_default")
+
+        Returns:
+            True if task was successfully queued, False otherwise
+        """
+        try:
+            # Enqueue the task through the task_queue
+            from core.console.corvin_console.task_queue import TaskStatus
+
+            self.task_queue.enqueue(
+                task_id=task_id,
+                instruction=instruction,
+                chat_key=chat_key,
+                tenant_id=tenant_id,
+                status=TaskStatus.PENDING,
+            )
+            logger.info(
+                f"Task {task_id} submitted to worker pool "
+                f"(instruction_len={len(instruction)}, tenant={tenant_id})"
+            )
+            self._emit_event(
+                "on_task_submitted_to_pool",
+                {
+                    "task_id": task_id,
+                    "instruction_len": len(instruction),
+                    "chat_key": chat_key[:8] if chat_key else "",
+                    "tenant_id": tenant_id,
+                }
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to submit task {task_id} to worker pool: {e}")
+            self._emit_event(
+                "on_error",
+                {
+                    "task_id": task_id,
+                    "error": str(e),
+                    "phase": "task_submission",
+                }
+            )
+            return False
+
+    async def run_worker_pool(self, poll_interval_ms: float = 100) -> None:
+        """
+        Run the worker pool (blocking until shutdown).
+
+        This drives the actual task execution. Call this from a task or thread
+        to process enqueued tasks asynchronously.
+
+        Args:
+            poll_interval_ms: How often to poll for new tasks
+        """
+        logger.info("Starting worker pool event loop")
+        await self.worker_pool.run(poll_interval_ms=poll_interval_ms)
+
+    async def shutdown_worker_pool(self) -> None:
+        """Gracefully shutdown the worker pool."""
+        logger.info("Shutting down worker pool")
+        await self.worker_pool.shutdown()
 
     # ========================================================================
     # HELPER METHODS

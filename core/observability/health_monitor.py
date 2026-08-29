@@ -17,6 +17,9 @@ from typing import Dict, Optional, List
 from datetime import datetime
 from enum import Enum
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class HealthStatus(Enum):
@@ -102,10 +105,13 @@ class HealthMonitor:
         self.subsystems[subsystem_id] = health
 
         # Emit event
-        await self.event_queue.put({
-            "type": "health_status",
-            "data": health.to_dict(),
-        })
+        try:
+            await self.event_queue.put({
+                "type": "health_status",
+                "data": health.to_dict(),
+            })
+        except asyncio.QueueFull:
+            logger.error(f"Health monitor queue full, dropping event for: {subsystem_id}")
 
     def get_overall_status(self) -> HealthStatus:
         """Get overall system health."""

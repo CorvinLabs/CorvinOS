@@ -124,8 +124,12 @@ class NotificationBus:
             created_at=datetime.utcnow(),
             metadata=metadata or {},
         )
-        await self._queue.put(notif)
-        self._delivered.append(notif)
+        try:
+            await self._queue.put(notif)
+            self._delivered.append(notif)
+        except asyncio.QueueFull:
+            logger.error(f"Notification queue full, dropping: {notification_id}")
+            raise
 
     async def process_queue(self) -> None:
         """Process queued notifications (run in background).

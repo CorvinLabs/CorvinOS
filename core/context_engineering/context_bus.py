@@ -168,7 +168,10 @@ class ContextBus:
             raise RuntimeError("ContextBus not started; call await start() first")
         if self.event_queue is None:
             raise RuntimeError("Event queue is None")
-        await self.event_queue.put((event_type, payload))
+        try:
+            await self.event_queue.put((event_type, payload))
+        except asyncio.QueueFull:
+            logger.error(f"Context bus queue full, dropping event: {event_type}")
 
     @staticmethod
     def get_context() -> Optional["ExecutionContext"]:

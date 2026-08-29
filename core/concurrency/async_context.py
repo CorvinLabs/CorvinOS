@@ -16,6 +16,11 @@ T = TypeVar('T')
 logger = logging.getLogger(__name__)
 
 
+class QueueOverflowError(Exception):
+    """Raised when queue put() times out due to overflow (F-C3: backpressure)."""
+    pass
+
+
 class TaskExecutionStatus(Enum):
     """Task execution status tracking (ADR-0305)."""
     PENDING = "pending"
@@ -286,3 +291,97 @@ class AsyncContextTaskGroup:
             Number of tasks created
         """
         return self.task_count
+
+
+class BoundedAsyncQueue(asyncio.Queue):
+    """Bounded async queue with backpressure and overflow detection (F-C3 fix).
+
+    This queue enforces a size limit and raises QueueOverflowError when put()
+    times out, preventing silent data loss. Unlike asyncio.Queue.put_nowait()
+    which silently drops items when full, this implementation provides explicit
+    backpressure with fail-closed semantics.
+
+    Use case: Learning event emission, audit trails, and other critical async
+    workloads where silent drops are unacceptable.
+    """
+
+    def __init__(self, maxsize: int = 1000, timeout: float = 1.0):
+        """Initialize bounded async queue.
+
+        Args:
+            maxsize: Maximum number of items (must be > 0)
+            timeout: Timeout in seconds for put() operations
+
+        Raises:
+            ValueError: If maxsize <= 0
+        """
+        if maxsize <= 0:
+            raise ValueError(f"maxsize must be > 0, got {maxsize}")
+        super().__init__(maxsize=maxsize)
+        self.timeout = timeout
+        self._overflow_count = 0
+
+    async def put(self, item: Any, timeout: Optional[float] = None) -> None:
+        """Put an item with timeout and backpressure.
+
+        Args:
+            item: Item to add
+            timeout: Timeout in seconds (if None, uses instance default)
+
+        Raises:
+            QueueOverflowError: If put times out (queue remains full for timeout duration)
+            asyncio.CancelledError: If cancelled
+        """
+        effective_timeout = timeout if timeout is not None else self.timeout
+
+        try:
+            await asyncio.wait_for(
+                super().put(item),
+                timeout=effective_timeout
+            )
+        except asyncio.TimeoutError:
+            self._overflow_count += 1
+            msg = (
+                f"QueueOverflow: Failed to put item after {effective_timeout}s "
+                f"(queue size={self.qsize()}, maxsize={self.maxsize}, "
+                f"total overflows={self._overflow_count})"
+            )
+            logger.error(msg)
+            raise QueueOverflowError(msg) from None
+
+    async def put_nowait_with_backpressure(self, item: Any) -> None:
+        """Put item with backpressure (fail-closed on full).
+
+        This is a wrapper that immediately raises on full, rather than silently
+        dropping (which asyncio.Queue.put_nowait does). Use this when you want
+        fail-closed behavior but cannot block.
+
+        Args:
+            item: Item to add
+
+        Raises:
+            QueueOverflowError: If queue is full
+        """
+        try:
+            self.put_nowait(item)
+        except asyncio.QueueFull:
+            self._overflow_count += 1
+            msg = (
+                f"QueueOverflow: put_nowait_with_backpressure failed "
+                f"(queue size={self.qsize()}, maxsize={self.maxsize}, "
+                f"total overflows={self._overflow_count})"
+            )
+            logger.error(msg)
+            raise QueueOverflowError(msg) from None
+
+    def get_overflow_count(self) -> int:
+        """Get total number of overflow events (for monitoring).
+
+        Returns:
+            Count of overflow events since queue creation
+        """
+        return self._overflow_count
+
+    def reset_overflow_count(self) -> None:
+        """Reset overflow counter (for testing)."""
+        self._overflow_count = 0
