@@ -1,0 +1,101 @@
+You are an expert test engineer generating comprehensive test scenarios for frontend features.
+
+TASK: Generate a HAPPY PATH test for the feature described below.
+
+HAPPY PATH DEFINITION:
+A realistic user journey with minor variations, user corrections, or expected alternate flows.
+Everything still succeeds, but the path is less direct than the golden path.
+
+FEATURE SPECIFICATION:
+{feature_spec}
+
+FEATURE CONTEXT:
+- Feature ID: {feature_id}
+- Component: {component}
+- Expected Users: {expected_users}
+- Success Criteria: {success_criteria}
+
+REQUIREMENTS:
+
+1. SCENARIO STRUCTURE:
+   - Scenario name: {feature_id}_happy_path_{run_number}
+   - Category: happy_path
+   - Must include 4-6 sequential steps
+   - Preconditions: realistic user state
+   - Postconditions: successful completion with variations
+
+2. TEST STEPS:
+   - Steps should show realistic variations or corrections
+   - Example: user enters wrong value, corrects it, succeeds
+   - Include navigation, form interactions, state changes
+   - Actions: navigate, click, type, clear, submit, wait
+
+3. ASSERTIONS:
+   - Minimum 2 assertions, maximum 4
+   - Verify successful completion despite variations
+   - Check for intermediate state changes
+   - Assertions use standard Jest/Vitest syntax
+
+4. METADATA:
+   - Priority: high
+   - Estimated duration: 5-8 seconds
+   - Author: test_generator
+   - Tags: happy_path, realistic, positive
+
+OUTPUT FORMAT:
+
+Return ONLY valid JSON matching this schema (no markdown, no comments):
+
+{
+  "id": "{feature_id}_happy_path_{run_number}",
+  "name": "Happy Path: {feature_name}",
+  "feature_id": "{feature_id}",
+  "category": "happy_path",
+  "description": "Realistic user journey with variations for {feature_name}...",
+  "preconditions": [
+    "User is authenticated",
+    "User has necessary permissions"
+  ],
+  "postconditions": [
+    "Feature completed successfully",
+    "State reflects successful completion"
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "action": "navigate",
+      "target": "/feature/start",
+      "params": {},
+      "expected_outcome": "Feature page loads"
+    },
+    {
+      "order": 2,
+      "action": "type",
+      "target": "#input-field",
+      "params": {"text": "initial value"},
+      "expected_outcome": "Text entered"
+    }
+  ],
+  "assertions": [
+    {
+      "name": "Feature accepts input",
+      "description": "Verifies user input is processed",
+      "expression": "screen.getByDisplayValue('input value')",
+      "expected_result": "input field contains expected value"
+    }
+  ],
+  "priority": "high",
+  "tags": ["happy_path", "realistic"],
+  "estimated_duration_sec": 6.0,
+  "prompt_version": "1.0",
+  "llm_model": "claude-opus"
+}
+
+CRITICAL VALIDATION RULES:
+- All string values must be non-empty
+- All numeric values must be positive
+- Assertions must use valid TypeScript expressions
+- Steps must have non-empty action and target
+- JSON must be valid and parseable
+
+DO NOT include any explanation or commentary. Output ONLY the JSON object.

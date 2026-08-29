@@ -1,0 +1,118 @@
+You are an expert test engineer generating comprehensive test scenarios for frontend features.
+
+TASK: Generate a COMPLIANCE test for the feature described below.
+
+COMPLIANCE DEFINITION:
+Tests that verify regulatory, security, accessibility, and data-governance requirements.
+Focus on adherence to standards: GDPR, EU AI Act, WCAG 2.1, data protection, consent flows.
+
+FEATURE SPECIFICATION:
+{feature_spec}
+
+FEATURE CONTEXT:
+- Feature ID: {feature_id}
+- Component: {component}
+- Expected Users: {expected_users}
+- Success Criteria: {success_criteria}
+- Regulatory Scope: GDPR, EU AI Act 2026, WCAG 2.1
+
+REQUIREMENTS:
+
+1. SCENARIO STRUCTURE:
+   - Scenario name: {feature_id}_compliance_{run_number}
+   - Category: compliance
+   - Must include 3-5 steps focused on compliance
+   - Preconditions: user state with compliance requirements
+   - Postconditions: compliance requirements verified
+
+2. COMPLIANCE FOCUS AREAS:
+   - Consent management (opt-in/opt-out flows)
+   - Data privacy (no PII leakage)
+   - Accessibility (WCAG 2.1 AA)
+   - Audit trail (actions logged)
+   - User rights (deletion, export, correction)
+   - Transparency (disclosures visible)
+
+3. TEST STEPS:
+   - Steps verify compliance requirements in action
+   - Example: verify consent prompt appears, user can opt-out
+   - Example: verify PII fields are encrypted/masked
+   - Example: verify audit log entry created
+   - Actions: navigate, check_visibility, verify_consent, audit_log
+
+4. ASSERTIONS:
+   - Minimum 2 assertions, maximum 5
+   - Each assertion verifies a specific compliance requirement
+   - Use accessibility testing libraries (testing-library/jest-dom)
+   - Assertions use standard Jest/Vitest syntax
+
+5. METADATA:
+   - Priority: high (compliance is critical)
+   - Estimated duration: 5-10 seconds
+   - Author: test_generator
+   - Tags: compliance, regulatory, gdpr, wcag
+
+OUTPUT FORMAT:
+
+Return ONLY valid JSON matching this schema (no markdown, no comments):
+
+{
+  "id": "{feature_id}_compliance_{run_number}",
+  "name": "Compliance: {feature_name}",
+  "feature_id": "{feature_id}",
+  "category": "compliance",
+  "description": "Compliance verification for {feature_name} (GDPR/WCAG)...",
+  "preconditions": [
+    "User has not yet given consent",
+    "Audit logging is enabled"
+  ],
+  "postconditions": [
+    "Consent preference is recorded",
+    "Audit event is logged",
+    "Feature behavior respects consent"
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "action": "navigate",
+      "target": "/feature",
+      "params": {},
+      "expected_outcome": "Feature loads with consent prompt"
+    },
+    {
+      "order": 2,
+      "action": "verify_consent",
+      "target": ".consent-banner",
+      "params": {"required_text": "We use your data to..."},
+      "expected_outcome": "Consent text is visible and clear"
+    }
+  ],
+  "assertions": [
+    {
+      "name": "Consent prompt is visible",
+      "description": "Verifies GDPR-required consent is displayed",
+      "expression": "screen.getByRole('button', {name: /accept/i})",
+      "expected_result": "consent controls are present"
+    },
+    {
+      "name": "Opt-out option exists",
+      "description": "Verifies user can decline",
+      "expression": "screen.getByRole('button', {name: /decline/i})",
+      "expected_result": "decline button is accessible"
+    }
+  ],
+  "priority": "high",
+  "tags": ["compliance", "gdpr", "wcag", "regulatory"],
+  "estimated_duration_sec": 7.0,
+  "prompt_version": "1.0",
+  "llm_model": "claude-opus"
+}
+
+CRITICAL VALIDATION RULES:
+- All string values must be non-empty
+- All numeric values must be positive
+- Assertions must use valid TypeScript expressions
+- Steps must have non-empty action and target
+- JSON must be valid and parseable
+
+DO NOT include any explanation or commentary. Output ONLY the JSON object.

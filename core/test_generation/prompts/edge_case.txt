@@ -1,0 +1,132 @@
+You are an expert test engineer generating comprehensive test scenarios for frontend features.
+
+TASK: Generate an EDGE CASE test for the feature described below.
+
+EDGE CASE DEFINITION:
+Tests for boundary conditions, error states, unusual inputs, timing issues, and recovery.
+These tests verify the feature handles unexpected situations gracefully.
+
+FEATURE SPECIFICATION:
+{feature_spec}
+
+FEATURE CONTEXT:
+- Feature ID: {feature_id}
+- Component: {component}
+- Expected Users: {expected_users}
+- Success Criteria: {success_criteria}
+
+EDGE CASE CATEGORIES:
+- Boundary values (empty, max, min, negative)
+- Invalid inputs (wrong type, malformed data)
+- Timing issues (race conditions, slow network)
+- Resource exhaustion (large data, memory)
+- State errors (locked, disabled, expired)
+- Recovery (retry, fallback, error handling)
+
+REQUIREMENTS:
+
+1. SCENARIO STRUCTURE:
+   - Scenario name: {feature_id}_edge_case_{run_number}
+   - Category: edge_case
+   - Must include 3-5 steps with edge case conditions
+   - Preconditions: setup for edge case
+   - Postconditions: graceful error handling verified
+
+2. TEST STEPS:
+   - Steps intentionally trigger edge cases
+   - Example: submit empty form, verify error message
+   - Example: enter max-length string, verify truncation/error
+   - Example: rapid clicks, verify debouncing works
+   - Example: network error, verify retry mechanism
+   - Actions: submit, type_boundary, rapid_click, simulate_error
+
+3. ASSERTIONS:
+   - Minimum 2 assertions, maximum 4
+   - Verify feature handles edge case gracefully
+   - Check for appropriate error messages
+   - Verify recovery mechanisms work
+   - Assertions use standard Jest/Vitest syntax
+
+4. ERROR HANDLING VERIFICATION:
+   - User-friendly error messages displayed
+   - No console errors or exceptions
+   - Recovery is possible (retry, reset, etc.)
+   - State is consistent after error
+
+5. METADATA:
+   - Priority: medium-to-high (robustness)
+   - Estimated duration: 5-8 seconds
+   - Author: test_generator
+   - Tags: edge_case, robustness, error_handling
+
+OUTPUT FORMAT:
+
+Return ONLY valid JSON matching this schema (no markdown, no comments):
+
+{
+  "id": "{feature_id}_edge_case_{run_number}",
+  "name": "Edge Case: {feature_name}",
+  "feature_id": "{feature_id}",
+  "category": "edge_case",
+  "description": "Edge case and boundary condition testing for {feature_name}...",
+  "preconditions": [
+    "Feature is loaded",
+    "User has invalid data prepared"
+  ],
+  "postconditions": [
+    "Feature handles error gracefully",
+    "Error message is displayed",
+    "State remains consistent"
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "action": "navigate",
+      "target": "/feature",
+      "params": {},
+      "expected_outcome": "Feature loads"
+    },
+    {
+      "order": 2,
+      "action": "type_boundary",
+      "target": "#input-field",
+      "params": {"value": "", "boundary_type": "empty"},
+      "expected_outcome": "Empty input is handled"
+    },
+    {
+      "order": 3,
+      "action": "submit",
+      "target": "#submit-button",
+      "params": {},
+      "expected_outcome": "Form submission fails gracefully"
+    }
+  ],
+  "assertions": [
+    {
+      "name": "Error message is displayed",
+      "description": "Verifies user-friendly error feedback",
+      "expression": "screen.getByRole('alert')",
+      "expected_result": "error alert is visible"
+    },
+    {
+      "name": "Feature remains functional",
+      "description": "Verifies state is consistent after error",
+      "expression": "screen.getByText(/Please enter/i)",
+      "expected_result": "form validation message shown"
+    }
+  ],
+  "priority": "medium",
+  "tags": ["edge_case", "robustness", "error_handling"],
+  "estimated_duration_sec": 6.0,
+  "prompt_version": "1.0",
+  "llm_model": "claude-opus"
+}
+
+CRITICAL VALIDATION RULES:
+- All string values must be non-empty
+- All numeric values must be positive
+- Assertions must use valid TypeScript expressions
+- Steps must have non-empty action and target
+- JSON must be valid and parseable
+
+DO NOT include any explanation or commentary. Output ONLY the JSON object.

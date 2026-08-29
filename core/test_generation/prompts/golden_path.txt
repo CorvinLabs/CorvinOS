@@ -1,0 +1,101 @@
+You are an expert test engineer generating comprehensive test scenarios for frontend features.
+
+TASK: Generate a GOLDEN PATH test for the feature described below.
+
+GOLDEN PATH DEFINITION:
+The happiest possible scenario where everything works perfectly, all preconditions are met,
+and the feature delivers full value. This is the ideal user journey.
+
+FEATURE SPECIFICATION:
+{feature_spec}
+
+FEATURE CONTEXT:
+- Feature ID: {feature_id}
+- Component: {component}
+- Expected Users: {expected_users}
+- Success Criteria: {success_criteria}
+
+REQUIREMENTS:
+
+1. SCENARIO STRUCTURE:
+   - Scenario name: {feature_id}_golden_path_{run_number}
+   - Category: golden_path
+   - Must include 3-5 sequential steps
+   - Preconditions: list all assumptions that must be true
+   - Postconditions: describe final state
+
+2. TEST STEPS:
+   - Each step must be atomic and verifiable
+   - Steps must use real TypeScript/browser APIs when possible
+   - Include only necessary steps to demonstrate happy path
+   - Actions: click, submit, type, navigate, wait, assert
+
+3. ASSERTIONS:
+   - Minimum 2 assertions, maximum 5
+   - Each assertion must verify core feature functionality
+   - Assertions use standard Jest/Vitest syntax
+   - Example: "expect(element).toHaveTextContent('Success')"
+
+4. METADATA:
+   - Priority: high
+   - Estimated duration: 3-5 seconds
+   - Author: test_generator
+   - Tags: golden_path, must_pass, critical
+
+OUTPUT FORMAT:
+
+Return ONLY valid JSON matching this schema (no markdown, no comments):
+
+{
+  "id": "{feature_id}_golden_path_{run_number}",
+  "name": "Golden Path: {feature_name}",
+  "feature_id": "{feature_id}",
+  "category": "golden_path",
+  "description": "Complete happy-path scenario for {feature_name}...",
+  "preconditions": [
+    "User is logged in",
+    "Feature is enabled"
+  ],
+  "postconditions": [
+    "Feature completed successfully",
+    "State persisted"
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "action": "navigate",
+      "target": "/feature/path",
+      "params": {},
+      "expected_outcome": "Feature page loads"
+    },
+    {
+      "order": 2,
+      "action": "click",
+      "target": "#button-id",
+      "params": {},
+      "expected_outcome": "Modal opens"
+    }
+  ],
+  "assertions": [
+    {
+      "name": "Feature loads successfully",
+      "description": "Verifies feature renders without errors",
+      "expression": "screen.getByText('Feature Title')",
+      "expected_result": "element is visible"
+    }
+  ],
+  "priority": "high",
+  "tags": ["golden_path", "must_pass"],
+  "estimated_duration_sec": 4.0,
+  "prompt_version": "1.0",
+  "llm_model": "claude-opus"
+}
+
+CRITICAL VALIDATION RULES:
+- All string values must be non-empty
+- All numeric values must be positive
+- Assertions must use valid TypeScript expressions
+- Steps must have non-empty action and target
+- JSON must be valid and parseable
+
+DO NOT include any explanation or commentary. Output ONLY the JSON object.
