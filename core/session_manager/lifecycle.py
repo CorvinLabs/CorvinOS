@@ -449,16 +449,21 @@ class SessionLifecycleManager:
         split_event: SplitTriggerEvent,
         checkpoint_manager: Optional[Any] = None,
         workflow_executor: Optional[Any] = None,
+        goal: str = "",
+        goal_alignment_score: float = 0.0,
     ) -> Optional[Any]:
-        """Convenience method: create checkpoint when split is detected (k=3 Session Manager Wiring).
+        """Convenience method: create checkpoint when split is detected (k=4 Session Manager Wiring).
 
-        Integrates with WorkflowExecutor to capture workflow state.
+        Integrates with WorkflowExecutor to capture workflow state and goal alignment.
+        Preserves goal and alignment score across session splits.
 
         Args:
             session_id: Current session ID
             split_event: SplitTriggerEvent that triggered the checkpoint
             checkpoint_manager: CheckpointManager instance
             workflow_executor: WorkflowExecutor instance (optional, for workflow state capture)
+            goal: Current goal being pursued (k=4 Session Drift Validation)
+            goal_alignment_score: Goal alignment score at checkpoint time (0.0-1.0) (k=4)
 
         Returns:
             SessionCheckpoint if created, None otherwise
@@ -487,11 +492,14 @@ class SessionLifecycleManager:
             iterations=metrics.iterations,
             token_count=metrics.context_size_tokens,
             workflow_execution_state=workflow_state,
+            goal=goal,
+            goal_alignment_score=goal_alignment_score,
         )
 
         logger.info(
             f"Created checkpoint {checkpoint.checkpoint_id} for split: "
-            f"session={session_id}, trigger={split_event.trigger_type.value}"
+            f"session={session_id}, trigger={split_event.trigger_type.value}, "
+            f"goal_alignment={goal_alignment_score:.2f}"
         )
 
         return checkpoint
@@ -511,6 +519,62 @@ class SessionLifecycleManager:
 
         if session_id in self.session_metrics:
             del self.session_metrics[session_id]
+
+    def restore_session_from_checkpoint(
+        self,
+        checkpoint: Any,
+        goal_alignment_monitor: Optional[Any] = None,
+    ) -> Optional[str]:
+        """Restore a session from a checkpoint (k=4 Session Manager Wiring).
+
+        Recreates session metadata and metrics from checkpoint.
+        Optionally restores goal alignment state.
+
+        Args:
+            checkpoint: SessionCheckpoint to restore from
+            goal_alignment_monitor: Optional GoalAlignmentMonitor to restore state
+
+        Returns:
+            New session_id if restored, None if restoration failed
+        """
+        try:
+            # Recreate session metadata
+            new_session = self.create_session(
+                task_id=checkpoint.task_id,
+                phase=checkpoint.phase,
+                tenant_id=checkpoint.tenant_id,
+                parent_session_id=checkpoint.session_id,  # Link to previous session
+            )
+
+            # Restore metrics
+            if new_session.session_id in self.session_metrics:
+                metrics = self.session_metrics[new_session.session_id]
+                metrics.iterations = checkpoint.iterations_at_checkpoint
+                metrics.context_size_tokens = checkpoint.token_count_at_checkpoint
+
+            # Restore goal alignment state if monitor provided
+            if goal_alignment_monitor and checkpoint.goal:
+                goal_alignment_monitor.set_goal(
+                    new_session.session_id,
+                    checkpoint.task_id,
+                    checkpoint.tenant_id,
+                    checkpoint.goal,
+                )
+                logger.info(
+                    f"Restored goal alignment state for new session {new_session.session_id}: "
+                    f"goal='{checkpoint.goal[:100]}...', alignment_score={checkpoint.goal_alignment_score:.2f}"
+                )
+
+            logger.info(
+                f"Restored session {new_session.session_id} from checkpoint {checkpoint.checkpoint_id} "
+                f"(parent: {checkpoint.session_id})"
+            )
+
+            return new_session.session_id
+
+        except Exception as e:
+            logger.error(f"Failed to restore session from checkpoint {checkpoint.checkpoint_id}: {e}")
+            return None
 
     # ========================================================================
     # Event Handlers (subscribe to Hub events)
