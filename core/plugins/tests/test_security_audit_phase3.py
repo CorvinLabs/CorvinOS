@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 
-from corvin_plugins.marketplace import (
+from marketplace import (
     BootLayer,
     PluginCategory,
     PluginInstallation,

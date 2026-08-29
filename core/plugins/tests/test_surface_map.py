@@ -463,6 +463,11 @@ def test_the_worker_registration_surface_is_still_unreachable_from_a_plugin():
             "operator/bridges/shared/test_",
             "operator/bridges/shared/adapter.py",  # _register_engine, different API
             "core/plugins/tests/",
+            # FallbackChain.register_engine (core/engines/engine_interface.py:211)
+            # is a different class from WorkerServer.register_engine
+            # (core/compute/corvin_compute/worker.py:146); these are test callers
+            # of the FallbackChain double, not a plugin route to the worker.
+            "core/orchestration/tests/",
         ),
     )
     assert not hits, (

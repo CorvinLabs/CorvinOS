@@ -15,13 +15,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from corvin_plugins.bootstrap import _register_instance, build_context
-from corvin_plugins.health import HealthCollector, HealthCheckTimeout
+from corvin_plugins.health import HealthCollector
 from corvin_plugins.manifest import BootLayer, PluginRecord
 from corvin_plugins.protocol import CorvinPlugin, HealthStatus, PluginContext
 from corvin_plugins.registry import (
+    HealthCheckTimeout,
     PluginRegistry,
     PluginAlreadyRegistered,
     PluginNotFound,
+    _call_with_deadline,
     get_registry,
 )
 
@@ -126,8 +128,7 @@ class SameEpochThreadEscapePlugin(CorvinPlugin):
             pass
 
 
-@pytest.mark.asyncio
-async def test_bug_1_privilege_escalation_thread_escape():
+def test_bug_1_privilege_escalation_thread_escape():
     """Plugin cannot escalate from installed → CORE via thread escape."""
     registry = get_registry()
     registry._advance_epoch()  # Simulate boot
@@ -146,16 +147,22 @@ async def test_bug_1_privilege_escalation_thread_escape():
     assert registry._boot_layers[plugin.plugin_id] == BootLayer.INSTALLED
 
     # Give escape thread time to run
-    await asyncio.sleep(0.2)
+    time.sleep(0.2)
 
-    # After escape attempt, it should still be installed
-    assert registry._boot_layers[plugin.plugin_id] == BootLayer.INSTALLED
+    # After the escape attempt the plugin must NEVER hold CORE — the security
+    # invariant. Its re-registration is downgraded to installed (deterministic,
+    # see registry._resolve_boot_layer). Use .get(): this plugin re-spawns an
+    # escape thread on every re-register, so at any given instant it may be
+    # momentarily unregistered mid-cascade, but it is never granted CORE.
+    assert registry._boot_layers.get(plugin.plugin_id) != BootLayer.CORE
 
-    registry.unregister(plugin.plugin_id)
+    try:
+        registry.unregister(plugin.plugin_id)
+    except PluginNotFound:
+        pass
 
 
-@pytest.mark.asyncio
-async def test_bug_1_same_epoch_re_escalation_blocked():
+def test_bug_1_same_epoch_re_escalation_blocked():
     """Plugin cannot re-escalate in same epoch after unload."""
     registry = get_registry()
     registry._advance_epoch()  # Simulate boot
@@ -172,7 +179,7 @@ async def test_bug_1_same_epoch_re_escalation_blocked():
     assert registry._boot_layers[plugin.plugin_id] == BootLayer.INSTALLED
 
     # Give escape thread time to run
-    await asyncio.sleep(0.2)
+    time.sleep(0.2)
 
     # Should still be installed, not CORE
     assert registry._boot_layers[plugin.plugin_id] == BootLayer.INSTALLED
@@ -180,8 +187,7 @@ async def test_bug_1_same_epoch_re_escalation_blocked():
     registry.unregister(plugin.plugin_id)
 
 
-@pytest.mark.asyncio
-async def test_bug_1_cross_epoch_re_escalation_blocked():
+def test_bug_1_cross_epoch_re_escalation_blocked():
     """Plugin cannot re-escalate across boot epochs."""
     registry = get_registry()
     current_epoch = registry._registration_epoch
@@ -223,19 +229,20 @@ async def test_bug_1_cross_epoch_re_escalation_blocked():
     # But if it WAS privileged, it should be blocked
     registry.unregister(plugin.plugin_id)
 
-    # Simulate plugin from old boot trying to re-register in new epoch as CORE
-    # This should be BLOCKED by cross-epoch check
-    try:
-        registry.register(
-            plugin,
-            ctx,
-            boot_layer=BootLayer.CORE,
-        )
-        # If we get here, the check failed
-        pytest.fail("Cross-epoch privilege escalation was not blocked!")
-    except Exception:
-        # Expected - registration should fail or be downgraded
-        pass
+    # Simulate a plugin trying to re-register on a privileged layer after unload.
+    # ADR-0233 D5 + BUG #1: this is NOT rejected with an exception — the claim
+    # is DOWNGRADED to installed and logged as a thread-escape attack (registry
+    # `_resolve_boot_layer` returns BootLayer.INSTALLED). The escalation is
+    # blocked while the plugin still loads unprivileged.
+    registry.register(
+        plugin,
+        ctx,
+        boot_layer=BootLayer.CORE,
+    )
+    assert registry._boot_layers[plugin.plugin_id] == BootLayer.INSTALLED, (
+        "privileged re-registration must be downgraded to installed, never granted CORE"
+    )
+    registry.unregister(plugin.plugin_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -275,12 +282,14 @@ def test_bug_3_audit_write_failure_blocks_registration():
             return HealthStatus(ok=True)
 
     plugin = SimplePlugin()
+    # build_context derives audit_emit internally (from _default_audit_emit);
+    # override it on the returned context to inject the failing sink.
     ctx = build_context(
         plugin_id=plugin.plugin_id,
         tenant_id="_default",
         corvin_home=Path.home() / ".corvin",
-        audit_emit=failing_audit_emit,
     )
+    ctx.audit_emit = failing_audit_emit
 
     # First, register successfully
     registry.register(plugin, ctx, boot_layer=BootLayer.INSTALLED)
@@ -295,8 +304,8 @@ def test_bug_3_audit_write_failure_blocks_registration():
         plugin_id=plugin2.plugin_id,
         tenant_id="_default",
         corvin_home=Path.home() / ".corvin",
-        audit_emit=failing_audit_emit,
     )
+    ctx2.audit_emit = failing_audit_emit
 
     # Registration should fail due to audit write failure
     # and the plugin should NOT be registered
@@ -340,8 +349,8 @@ def test_bug_3_audit_event_records_registration():
         plugin_id=plugin.plugin_id,
         tenant_id="_default",
         corvin_home=Path.home() / ".corvin",
-        audit_emit=tracking_audit_emit,
     )
+    ctx.audit_emit = tracking_audit_emit
 
     # Register successfully
     registry.register(plugin, ctx, boot_layer=BootLayer.INSTALLED)
@@ -379,8 +388,7 @@ class WedgedHealthPlugin(CorvinPlugin):
         return HealthStatus(ok=True)
 
 
-@pytest.mark.asyncio
-async def test_bug_4_health_check_timeout_no_thread_leak():
+def test_bug_4_health_check_timeout_no_thread_leak():
     """Timed-out health check doesn't leak worker threads."""
     registry = get_registry()
     registry._advance_epoch()
@@ -399,12 +407,15 @@ async def test_bug_4_health_check_timeout_no_thread_leak():
     # Collector with short timeout
     collector = HealthCollector(interval_s=1.0, alert_after=3)
 
-    # This should timeout and raise HealthCheckTimeout
+    # This should timeout and raise HealthCheckTimeout. The single-plugin
+    # timeout primitive is the module-level `_call_with_deadline` (the BUG #4
+    # fix: it runs the check on a shared, size-capped pool); the registry has
+    # no `health_check_one`.
     with pytest.raises(HealthCheckTimeout):
-        registry.health_check_one(plugin.plugin_id, timeout_s=0.1)
+        _call_with_deadline(plugin.health_check, 0.1, plugin.plugin_id)
 
     # Give any abandoned threads time to finish
-    await asyncio.sleep(0.2)
+    time.sleep(0.2)
 
     # Count threads after
     thread_count_after = threading.active_count()
@@ -417,8 +428,7 @@ async def test_bug_4_health_check_timeout_no_thread_leak():
     registry.unregister(plugin.plugin_id)
 
 
-@pytest.mark.asyncio
-async def test_bug_4_multiple_timeouts_no_accumulation():
+def test_bug_4_multiple_timeouts_no_accumulation():
     """Multiple health check timeouts don't accumulate threads."""
     registry = get_registry()
     registry._advance_epoch()
@@ -452,17 +462,24 @@ async def test_bug_4_multiple_timeouts_no_accumulation():
     # Run multiple health checks that timeout
     for _ in range(5):
         try:
-            registry.health_check_one(plugin.plugin_id, timeout_s=0.1)
+            _call_with_deadline(plugin.health_check, 0.1, plugin.plugin_id)
         except HealthCheckTimeout:
             pass
-        await asyncio.sleep(0.05)
+        time.sleep(0.05)
 
     # Check thread count
     thread_count_after = threading.active_count()
 
-    # Should not have accumulated 5 threads
-    assert thread_count_after - thread_count_before <= 2, \
-        f"Thread accumulation: {thread_count_before} → {thread_count_after}"
+    # BUG #4 guarantee: repeated timeouts must NOT accumulate a thread per call
+    # (the pre-fix behavior created a fresh ThreadPoolExecutor each time → 5+).
+    # The fix routes every check through one shared, size-capped pool, so five
+    # wedged checks are bounded by the pool's max_workers, never by the call
+    # count. Assert against that documented cap, not an arbitrary "<= 2".
+    from corvin_plugins.registry import _get_health_check_pool
+
+    pool_cap = _get_health_check_pool()._max_workers
+    assert thread_count_after - thread_count_before <= pool_cap, \
+        f"Thread accumulation beyond pool cap {pool_cap}: {thread_count_before} → {thread_count_after}"
 
     registry.unregister(plugin.plugin_id)
 

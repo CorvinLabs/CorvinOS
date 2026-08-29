@@ -213,9 +213,16 @@ class TestHigh05MarketplaceConfig:
         from corvin_console.routes import vibe_plugins_api
         import asyncio
 
-        # Test with region filter
+        # Test with region filter.
+        # NOTE: list_marketplace is a FastAPI handler whose query parameters
+        # default to Query(...) sentinels. When invoked directly (not through
+        # the ASGI transport) every parameter must be supplied explicitly,
+        # otherwise the handler receives Query objects instead of values.
         async def test_filter():
-            result = await vibe_plugins_api.list_marketplace(region="eu")
+            result = await vibe_plugins_api.list_marketplace(
+                category=None, query=None, origin=None, region="eu",
+                sort="rating", limit=20, offset=0, rec=None,
+            )
             assert "plugins" in result
             assert "config" in result
             # All returned plugins should support eu region
@@ -233,7 +240,10 @@ class TestHigh05MarketplaceConfig:
 
         async def test_invalid():
             with pytest.raises(HTTPException) as exc:
-                await vibe_plugins_api.list_marketplace(region="invalid_region")
+                await vibe_plugins_api.list_marketplace(
+                    category=None, query=None, origin=None, region="invalid_region",
+                    sort="rating", limit=20, offset=0, rec=None,
+                )
             assert exc.value.status_code == 400
 
         asyncio.run(test_invalid())
@@ -301,7 +311,10 @@ class TestHigh06InputValidation:
         import json
 
         async def test_response():
-            result = await vibe_plugins_api.list_marketplace()
+            result = await vibe_plugins_api.list_marketplace(
+                category=None, query=None, origin=None, region=None,
+                sort="rating", limit=20, offset=0, rec=None,
+            )
 
             # Should be a dict with expected structure
             assert isinstance(result, dict)

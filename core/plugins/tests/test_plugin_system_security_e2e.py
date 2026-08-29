@@ -235,9 +235,13 @@ class TestSandboxIsolation:
         # A malicious plugin loaded in-process could:
         # 1. Read environment variables
         import os
+        from collections.abc import MutableMapping
 
-        # os.environ is accessible (no containment)
-        assert isinstance(os.environ, dict)
+        # os.environ is accessible (no containment). It is os._Environ, a
+        # MutableMapping — NOT a dict subclass — so prove accessibility by
+        # reading through it, not with a (never-true) isinstance-dict check.
+        assert isinstance(os.environ, MutableMapping)
+        assert os.environ.get("PATH") is not None or dict(os.environ) is not None
 
         # 2. Access file system
         assert isinstance(Path.home(), Path)
@@ -312,11 +316,16 @@ class TestAuditTrail:
             assert details["operator"] == "alice"
             assert details["digest"] == "abc123"
 
-    def test_load_refused_emits_audit_event(self):
+    def test_load_refused_emits_audit_event(self, monkeypatch):
         """TEST: Plugin refused on load → plugin.load_refused audit event.
 
         When a plugin is refused (forged signature, no consent), the decision
         must be recorded in the audit trail.
+
+        The provenance gate is ``bootstrap._trust_permits`` (ADR-0249). With
+        the ship-dark flag OFF (the default) a forged plugin still loads, so
+        there is no refusal to audit — the refusal path exists only when
+        enforcement is enabled, so this test forces it on.
         """
         with tempfile.TemporaryDirectory() as tmp:
             corvin_home = Path(tmp)
@@ -325,38 +334,56 @@ class TestAuditTrail:
             # Create a forged plugin (claims vetted but unsigned)
             record = PluginRecord.from_dict(_record(origin="vetted"))
 
-            # Simulate the bootstrap decision logic
-            def mock_audit_emit(event_type, details):
-                seen.append((event_type, details))
+            monkeypatch.setattr(
+                trust, "enforcement_enabled", lambda tenant_id="_default": True
+            )
+            monkeypatch.setattr(
+                bootstrap,
+                "_audit_degradation",
+                lambda tid, event_type, details: seen.append((event_type, details)),
+            )
 
-            # Call _should_allow (internal but testable)
-            allowed = bootstrap._should_allow(
+            allowed = bootstrap._trust_permits(
                 record,
                 tenant_id="_default",
                 corvin_home=corvin_home,
             )
 
-            # The plugin is refused (no valid signature)
+            # The plugin is refused (claims vetted, no valid pinned signature)
             assert not allowed
+            # …and the refusal is recorded (GDPR Art. 30).
+            assert any(e == "plugin.load_refused" for e, _ in seen)
 
-    def test_community_plugin_without_consent_is_refused_and_audited(self):
+    def test_community_plugin_without_consent_is_refused_and_audited(self, monkeypatch):
         """TEST: Community plugin without consent → refused + plugin.load_refused event."""
         with tempfile.TemporaryDirectory() as tmp:
             corvin_home = Path(tmp)
+            seen = []
 
             # Plugin has no consent grant
             record = PluginRecord.from_dict(_record())
 
-            # Bootstrap check
-            allowed = bootstrap._should_allow(
+            # Force the ship-dark enforcement flag on: with it off (default) an
+            # unreviewed community plugin still loads, so there is no refusal.
+            monkeypatch.setattr(
+                trust, "enforcement_enabled", lambda tenant_id="_default": True
+            )
+            monkeypatch.setattr(
+                bootstrap,
+                "_audit_degradation",
+                lambda tid, event_type, details: seen.append((event_type, details)),
+            )
+
+            # Bootstrap provenance gate refuses + audits (ADR-0249).
+            allowed = bootstrap._trust_permits(
                 record,
                 tenant_id="_default",
                 corvin_home=corvin_home,
             )
+            assert not allowed
+            assert any(e == "plugin.load_refused" for e, _ in seen)
 
-            # Refused when enforcement is on (default in bootstrap)
-            # Note: enforcement defaults to off, so this requires calling
-            # the function directly with enforcement=True
+            # …and the underlying verdict is COMMUNITY (unreviewed, no consent).
             d = trust.evaluate(
                 record.to_dict(),
                 corvin_home=corvin_home,

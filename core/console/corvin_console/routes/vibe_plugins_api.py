@@ -10,7 +10,7 @@ import json
 import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Annotated
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, model_validator
 
 from ..deps import require_session
 from .. import auth as session_auth
@@ -67,12 +67,18 @@ class PluginInstallRequest(BaseModel):
     manifest_url: Optional[str] = Field(None, description="URL to plugin manifest")
     manifest_json: Optional[Dict[str, Any]] = Field(None, description="Inline plugin manifest")
 
-    @validator('manifest_url', 'manifest_json')
-    def at_least_one_required(cls, v, values):
-        """Ensure at least manifest_url or manifest_json is provided."""
-        if not values and not v:
+    @model_validator(mode="after")
+    def at_least_one_required(self):
+        """Ensure at least manifest_url or manifest_json is provided.
+
+        A per-field ``@validator`` cannot enforce this: under pydantic v2 an
+        unset field with a default does not trigger its field validator, so a
+        request with BOTH fields omitted slipped through. A model validator runs
+        once after all fields are populated and sees the whole object.
+        """
+        if not self.manifest_url and not self.manifest_json:
             raise ValueError("Either manifest_url or manifest_json must be provided")
-        return v
+        return self
 
     class Config:
         extra = "forbid"  # Reject unknown fields

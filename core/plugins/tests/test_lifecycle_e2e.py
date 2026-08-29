@@ -450,11 +450,13 @@ class TestPluginLifecycleE2E(unittest.TestCase):
             log = logging.getLogger(__name__)
 
             class AuditBackendWithHook:
+                plugin_id = "{plugin_id}"
                 plugin_type = "audit_backend"
                 version = "1.0.0"
 
-                def __init__(self, plugin_id):
-                    self.plugin_id = plugin_id
+                def __init__(self):
+                    # No-arg constructor — the loader instantiates via cls().
+                    pass
 
                 def on_load(self, ctx):
                     from corvin_plugins import extension_points
@@ -496,7 +498,7 @@ class TestPluginLifecycleE2E(unittest.TestCase):
         chain = Path(os.environ["VOICE_AUDIT_PATH"])
 
         # Test 1: Hook returns a valid model name
-        from operator.bridges.shared import model_selector
+        import model_selector
         result = model_selector.resolve_step_model(
             "claude-haiku-4-5-20251001",
             engine_id="claude_code",
@@ -588,6 +590,7 @@ class TestPluginLifecycleE2E(unittest.TestCase):
         ctx = PluginContext(
             plugin_id=plugin_id,
             tenant_id="_default",
+            corvin_home=self.corvin_home,
             config={"enabled": True},
             audit_emit=audit_emitter,
         )

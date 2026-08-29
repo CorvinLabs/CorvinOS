@@ -80,6 +80,38 @@ def _sandbox(tmp_path: Path):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
+        # Stage 4 of the upload flow shells out to the `corvin` CLI binary
+        # (`ops.launcher.corvin.cli:main`), which is not installed on PATH in
+        # the unit-test venv. That external-binary dependency is out of scope
+        # for this HTTP-boundary E2E (infeasibility), so stub only that one
+        # subprocess step; every other stage still runs through the real route.
+        from corvin_console.routes import plugin_upload as _plugin_upload
+
+        async def _stub_install(plugin_dir, tid, yes_flag=False):
+            # A real `corvin plugin install` writes a registry record for this
+            # plugin_id; only then can the route's in-process Stage-5 enable
+            # (PluginLifecycle.enable) and Stage-6 health check find it. Seed that
+            # exact record — the one PluginLifecycle reads — from the plugin.yaml
+            # the route extracted, so the real enable/health path executes and the
+            # E2E stays genuine through the HTTP boundary. (The `corvin` CLI binary
+            # itself is unavailable in the unit-test venv, hence the stub.)
+            import yaml as _yaml
+            from corvin_plugins.manifest import PluginRecord
+            from corvin_plugins.state import PluginLifecycle
+
+            pdir = Path(plugin_dir)
+            manifest = _yaml.safe_load((pdir / "plugin.yaml").read_text(encoding="utf-8"))
+            record = PluginRecord.from_dict(manifest)
+            lifecycle = PluginLifecycle(tenant_id=tid, lifecycle_enabled=True)
+            try:
+                lifecycle.install(record, installed_by="corvin-cli")
+            except Exception as exc:  # noqa: BLE001
+                if "already installed" not in str(exc):
+                    return False, str(exc)
+            return True, f"installed {manifest['plugin_id']}"
+
+        _plugin_upload._install_via_cli = _stub_install
+
         rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint="test-fp")
         app = FastAPI()
         app.include_router(router, prefix="/v1/console")
@@ -107,7 +139,7 @@ def _create_test_plugin_tarball(
     Returns gzip-compressed tar bytes.
     """
     tar_buffer = io.BytesIO()
-    tar = tarfile.open(mode="r:gz", fileobj=tar_buffer)
+    tar = tarfile.open(mode="w:gz", fileobj=tar_buffer)
 
     # Create plugin directory structure
     plugin_dir = f"{plugin_id.replace('.', '_')}_1_0_0"
@@ -182,9 +214,9 @@ class TestPluginInstallFlow(unittest.TestCase):
         return {"X-CSRF-Token": csrf}
 
     def _flag(self, client, csrf: str, flag_id: str, on: bool) -> None:
-        resp = client.put(
-            f"/v1/console/settings/features/{flag_id}",
-            json={"enabled": on},
+        resp = client.post(
+            f"/v1/console/settings/features/{flag_id}/toggle",
+            json={"id": flag_id, "enabled": on},
             headers=self._hdr(csrf),
         )
         self.assertEqual(resp.status_code, 200, resp.text)
@@ -270,10 +302,11 @@ class TestPluginInstallFlow(unittest.TestCase):
             tarball = _create_test_plugin_tarball()
             checksum = _compute_sha256(tarball)
 
-            # Correct checksum should pass
+            # Correct checksum should pass. `checksum` is a query param on the
+            # upload route (a scalar alongside the File(...) body), not form data.
             resp = client.post(
                 "/v1/console/plugins/upload",
-                data={"checksum": checksum},
+                params={"checksum": checksum},
                 files={"file": ("test.tar.gz", io.BytesIO(tarball), "application/gzip")},
                 headers=self._hdr(csrf),
             )
@@ -282,7 +315,7 @@ class TestPluginInstallFlow(unittest.TestCase):
             # Wrong checksum should fail
             resp = client.post(
                 "/v1/console/plugins/upload",
-                data={"checksum": "0" * 64},  # Wrong checksum
+                params={"checksum": "0" * 64},  # Wrong checksum
                 files={"file": ("test.tar.gz", io.BytesIO(tarball), "application/gzip")},
                 headers=self._hdr(csrf),
             )
@@ -296,7 +329,7 @@ class TestPluginInstallFlow(unittest.TestCase):
 
             # Create empty tarball
             tar_buffer = io.BytesIO()
-            tar = tarfile.open(mode="r:gz", fileobj=tar_buffer)
+            tar = tarfile.open(mode="w:gz", fileobj=tar_buffer)
             tar.close()
             tar_buffer.seek(0)
 
@@ -326,8 +359,11 @@ class TestPluginInstallFlow(unittest.TestCase):
 
             self.assertEqual(resp.status_code, 200, resp.text)
 
-            # Check audit trail exists
-            audit_path = home / "audit.jsonl"
+            # Check audit trail exists. Console audit writes to the tenant's
+            # hash-chained forge log (audit.py::_audit_path), not VOICE_AUDIT_PATH.
+            audit_path = (
+                home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+            )
             self.assertTrue(audit_path.exists(), "audit.jsonl should be created")
 
     # ── Stage 4-6: Install + Enable + Health Check ────────────────────────────
@@ -379,7 +415,7 @@ class TestPluginInstallFlow(unittest.TestCase):
             tarball = _create_test_plugin_tarball()
             resp = client.post(
                 "/v1/console/plugins/upload",
-                data={"auto_enable": "true"},
+                params={"auto_enable": "true"},
                 files={"file": ("test.tar.gz", io.BytesIO(tarball), "application/gzip")},
                 headers=self._hdr(csrf),
             )

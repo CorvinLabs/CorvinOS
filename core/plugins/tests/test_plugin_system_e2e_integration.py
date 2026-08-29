@@ -78,21 +78,23 @@ class MockCorvinPlugin(CorvinPlugin):
 
     plugin_id = "mock-plugin"
     plugin_type = "audit_backend"
+    version = "1.0.0"
+    display_name = "Mock Corvin Plugin"
 
     def __init__(self):
         self.loaded = False
         self.unloaded = False
         self.health_ok = True
 
-    async def on_load(self) -> None:
+    def on_load(self, ctx: PluginContext) -> None:
         """Called when plugin is loaded."""
         self.loaded = True
 
-    async def on_unload(self) -> None:
+    def on_unload(self) -> None:
         """Called when plugin is unloaded."""
         self.unloaded = True
 
-    async def health_check(self) -> HealthStatus:
+    def health_check(self) -> HealthStatus:
         """Return plugin health status."""
         if self.health_ok:
             return HealthStatus(ok=True, message="Healthy")
@@ -119,10 +121,13 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
         """Test 1: Plugin discovery - list all plugins in registry."""
         # Register a plugin
         plugin = MockCorvinPlugin()
+        plugin.plugin_id = "test-plugin"
         ctx = PluginContext(
             plugin_id="test-plugin",
             tenant_id=self.tenant_id,
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
 
         self.registry.register(plugin, ctx, boot_layer=BootLayer.BUNDLED)
@@ -136,10 +141,13 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
     def test_e2e_2_register_plugin(self) -> None:
         """Test 2: Plugin registration - add new plugin to registry."""
         plugin = MockCorvinPlugin()
+        plugin.plugin_id = "new-plugin"
         ctx = PluginContext(
             plugin_id="new-plugin",
             tenant_id=self.tenant_id,
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
 
         # Register the plugin
@@ -147,7 +155,7 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
 
         # Verify it was registered
         self.assertIn("new-plugin", self.registry.discover())
-        layer = boot_layer_of("new-plugin")
+        layer = self.registry.boot_layer_of("new-plugin")
         self.assertEqual(layer, BootLayer.BUNDLED)
 
     # ── Test 3: Load plugin by ID ────────────────────────────────────────────
@@ -156,10 +164,13 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
         # Register a plugin
         plugin = MockCorvinPlugin()
         plugin_id = "loader-test-plugin"
+        plugin.plugin_id = plugin_id
         ctx = PluginContext(
             plugin_id=plugin_id,
             tenant_id=self.tenant_id,
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
         self.registry.register(plugin, ctx)
 
@@ -173,14 +184,18 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
         # Create and register a plugin
         plugin = MockCorvinPlugin()
         plugin_id = "lifecycle-test"
+        plugin.plugin_id = plugin_id
         ctx = PluginContext(
             plugin_id=plugin_id,
             tenant_id=self.tenant_id,
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
 
         self.registry.register(plugin, ctx, boot_layer=BootLayer.BUNDLED)
-        self.assertFalse(plugin.loaded)
+        # register() calls on_load(ctx) synchronously, so the plugin is loaded.
+        self.assertTrue(plugin.loaded)
 
         # Verify plugin can be disabled (if not compliance layer)
         can_disable = self.registry.can_disable(plugin_id)
@@ -199,10 +214,13 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
         def register_and_unregister(plugin_id: str):
             try:
                 plugin = MockCorvinPlugin()
+                plugin.plugin_id = plugin_id
                 ctx = PluginContext(
                     plugin_id=plugin_id,
                     tenant_id=self.tenant_id,
-                    operator_id="test-operator",
+                    corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
                 )
                 self.registry.register(plugin, ctx)
 
@@ -252,10 +270,13 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
         """Test 7: Health monitoring - verify health check calls work."""
         plugin = MockCorvinPlugin()
         plugin_id = "health-test"
+        plugin.plugin_id = plugin_id
         ctx = PluginContext(
             plugin_id=plugin_id,
             tenant_id=self.tenant_id,
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
         self.registry.register(plugin, ctx)
 
@@ -274,10 +295,13 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
             (BootLayer.INSTALLED, "installed"),
         ]:
             plugin = MockCorvinPlugin()
+            plugin.plugin_id = f"plugin-{suffix}"
             ctx = PluginContext(
                 plugin_id=f"plugin-{suffix}",
                 tenant_id=self.tenant_id,
-                operator_id="test-operator",
+                corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
             )
             self.registry.register(plugin, ctx, boot_layer=layer)
 
@@ -294,11 +318,14 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
         """Test 9: Type-based discovery - filter plugins by type."""
         # Register plugins with different types
         plugin1 = MockCorvinPlugin()
+        plugin1.plugin_id = "audit-plugin"
         plugin1.plugin_type = "audit_backend"
         ctx1 = PluginContext(
             plugin_id="audit-plugin",
             tenant_id=self.tenant_id,
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
         self.registry.register(plugin1, ctx1)
 
@@ -311,10 +338,13 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
     def test_e2e_10_compliance_layer_protection(self) -> None:
         """Test 10: Compliance enforcement - verify compliance plugins cannot be disabled."""
         plugin = MockCorvinPlugin()
+        plugin.plugin_id = "compliance-plugin"
         ctx = PluginContext(
             plugin_id="compliance-plugin",
             tenant_id=self.tenant_id,
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
         self.registry.register(plugin, ctx, boot_layer=BootLayer.COMPLIANCE)
 
@@ -333,11 +363,14 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
         # Register plugins of same type
         for i in range(3):
             plugin = MockCorvinPlugin()
+            plugin.plugin_id = f"test-plugin-{i}"
             plugin.plugin_type = "test_type"
             ctx = PluginContext(
                 plugin_id=f"test-plugin-{i}",
                 tenant_id=self.tenant_id,
-                operator_id="test-operator",
+                corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
             )
             self.registry.register(plugin, ctx)
 
@@ -348,27 +381,37 @@ class TestPluginSystemE2EIntegration(unittest.TestCase):
     # ── Test 12: Tenant isolation ────────────────────────────────────────────
     def test_e2e_12_tenant_isolation(self) -> None:
         """Test 12: Multi-tenancy - verify plugins are isolated per tenant."""
-        # Register plugin for tenant 1
+        # Register plugin for tenant 1. The in-process PluginRegistry is keyed
+        # globally by plugin.plugin_id (tenant scoping for plugins lives in the
+        # on-disk per-tenant TenantRegistry, not this object), so each tenant's
+        # plugin carries its own distinct id and records its tenant on the ctx.
         plugin1 = MockCorvinPlugin()
+        plugin1.plugin_id = "tenant-1-plugin"
         ctx1 = PluginContext(
-            plugin_id="tenant-test-plugin",
+            plugin_id="tenant-1-plugin",
             tenant_id="tenant-1",
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
         self.registry.register(plugin1, ctx1)
 
         # Register plugin for tenant 2
         plugin2 = MockCorvinPlugin()
+        plugin2.plugin_id = "tenant-2-plugin"
         ctx2 = PluginContext(
-            plugin_id="tenant-test-plugin",
+            plugin_id="tenant-2-plugin",
             tenant_id="tenant-2",
-            operator_id="test-operator",
+            corvin_home=self.corvin_home,
+            config={},
+            audit_emit=lambda *a, **k: None,
         )
         self.registry.register(plugin2, ctx2)
 
-        # Both should exist (different contexts)
+        # Both should exist independently, each tagged with its own tenant.
         discovered = self.registry.discover()
-        self.assertIn("tenant-test-plugin", discovered)
+        self.assertIn("tenant-1-plugin", discovered)
+        self.assertIn("tenant-2-plugin", discovered)
 
 
 class TestPluginLoaderIntegration(unittest.TestCase):
@@ -421,10 +464,10 @@ class TestPluginLifecycleIntegration(unittest.TestCase):
 
     def test_lifecycle_manager_creation(self) -> None:
         """Test that lifecycle manager can be created."""
-        tenant_registry = TenantRegistry(
-            path=self.corvin_home / "tenants" / self.tenant_id / "plugins" / "registry.yaml"
+        lifecycle = PluginLifecycle(
+            tenant_id=self.tenant_id,
+            corvin_home_path=self.corvin_home,
         )
-        lifecycle = PluginLifecycle(tenant_registry=tenant_registry)
         self.assertIsNotNone(lifecycle)
 
 

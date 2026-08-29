@@ -418,7 +418,19 @@ async def upload_plugin(
         enable_attempted = False
         try:
             from corvin_plugins.state import PluginLifecycle
-            lifecycle = PluginLifecycle(tenant_id=rec.tenant_id)
+            # This endpoint already 403s above unless `plugin_runtime_lifecycle`
+            # is on for the tenant, so enable is only reachable behind that gate.
+            # Pass the SAME flag as the lifecycle's enabled-check (never a bare
+            # True) so the ship-dark flag stays the single source of truth and a
+            # future reordering cannot enable a plugin while the flag is off —
+            # without it the constructor default (False) made auto-enable always
+            # raise LifecycleDisabled.
+            lifecycle = PluginLifecycle(
+                tenant_id=rec.tenant_id,
+                lifecycle_enabled=lambda: _feature_flags.is_enabled(
+                    "plugin_runtime_lifecycle", rec.tenant_id
+                ),
+            )
             if auto_enable:
                 lifecycle.enable(plugin_id, consent_granted_by="console" if trust_verdict == "community" else None)
                 enable_attempted = True

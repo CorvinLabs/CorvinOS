@@ -393,18 +393,23 @@ def test_install_stores_plugin_in_registry(
 def test_install_rejects_duplicate_plugin(
     plugin_dir, temp_corvin_home, monkeypatch, capsys
 ):
-    """Installing the same plugin twice should fail."""
+    """Installing the same plugin twice is idempotent (skips, rc 0).
+
+    ``cmd_install`` treats an already-installed plugin as a no-op (rc 0,
+    "already installed, skipping" on stdout), not an error — see
+    plugin_runtime_cmd.py::cmd_install.
+    """
     args = Namespace(path=str(plugin_dir), tenant=None, yes=True)
 
     # First install
     rc1 = cmd_install(args)
     assert rc1 == 0
 
-    # Second install (same plugin)
+    # Second install (same plugin) is idempotent: skipped, rc 0.
     rc2 = cmd_install(args)
-    assert rc2 == 1, "Duplicate install should fail"
-    _, err = capsys.readouterr()
-    assert "already installed" in err
+    assert rc2 == 0, "Duplicate install should be idempotent (skip, rc 0)"
+    out, _ = capsys.readouterr()
+    assert "already installed" in out.lower()
 
 
 __all__ = [

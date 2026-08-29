@@ -1033,12 +1033,19 @@ class TestDefensiveEdges(_Base):
 
     def test_the_flag_lookup_degrades_to_off_when_the_console_is_absent(self):
         # Headless core (ADR-0241): core/plugins must import and run without
-        # the Console package.  Absent Console reads as "off" — the pre-feature
-        # path — never as "assume on".
-        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_console")}
-        for key in saved:
-            del sys.modules[key]
-        sys.modules["corvin_console"] = None  # type: ignore[assignment]
+        # the flag registry (`corvin_core.feature_flags`, ADR-0352 P2.2).
+        # Absent registry reads as "off" — the pre-feature path — never as
+        # "assume on".  The cached attribute on `corvin_core` must be removed
+        # too, or `from corvin_core import feature_flags` returns it before ever
+        # consulting sys.modules.
+        import corvin_core
+
+        saved_ff = sys.modules.get("corvin_core.feature_flags", "MISSING")
+        had_attr = hasattr(corvin_core, "feature_flags")
+        saved_attr = getattr(corvin_core, "feature_flags", None)
+        if had_attr:
+            del corvin_core.feature_flags
+        sys.modules["corvin_core.feature_flags"] = None  # type: ignore[assignment]
         try:
             # (enabled, lookup_broken): off, and NOT broken — a layout that has
             # no flag registry is a complete answer, not a degradation, so it
@@ -1052,8 +1059,12 @@ class TestDefensiveEdges(_Base):
             )
             self.assertEqual(ep.invoke("engine.model_selection", {}, default="d"), "d")
         finally:
-            del sys.modules["corvin_console"]
-            sys.modules.update(saved)
+            if saved_ff == "MISSING":
+                sys.modules.pop("corvin_core.feature_flags", None)
+            else:
+                sys.modules["corvin_core.feature_flags"] = saved_ff
+            if had_attr:
+                corvin_core.feature_flags = saved_attr
 
     def test_a_raising_flag_lookup_is_reported_as_broken_not_as_off(self):
         # The two look identical from the call site and are not the same thing.
@@ -1152,17 +1163,31 @@ class TestDefensiveEdges(_Base):
         # but its flag registry unimportable (a broken install), and a raising
         # lookup.  The middle one is where the operator most plausibly DID
         # enable the flag, and it read as a deliberate "off".
-        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_console")}
-        broken_root = Path(self._tmp.name) / "broken-console"
-        pkg = broken_root / "corvin_console"
-        pkg.mkdir(parents=True)
-        (pkg / "__init__.py").write_text("", encoding="utf-8")
-        (pkg / "feature_flags.py").write_text(
-            "import _a_dependency_this_install_is_missing\n", encoding="utf-8"
-        )
-        for key in saved:
-            del sys.modules[key]
-        sys.path.insert(0, str(broken_root))
+        #
+        # The flag registry moved to `corvin_core.feature_flags` (ADR-0352 P2.2)
+        # — `_flag_state` imports it from there — so a "broken install" is
+        # simulated by making THAT import raise a non-registry ImportError
+        # (a half-installed dependency inside the Console), classified as
+        # "broken" because its `.name` is not in `_FLAG_MODULES`.
+        import importlib.abc
+        import corvin_core
+
+        class _BrokenFinder(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path, target=None):
+                if name == "corvin_core.feature_flags":
+                    raise ImportError(
+                        "half-installed Console",
+                        name="_a_dependency_this_install_is_missing",
+                    )
+                return None
+
+        saved_ff = sys.modules.pop("corvin_core.feature_flags", "MISSING")
+        had_attr = hasattr(corvin_core, "feature_flags")
+        saved_attr = getattr(corvin_core, "feature_flags", None)
+        if had_attr:
+            del corvin_core.feature_flags
+        finder = _BrokenFinder()
+        sys.meta_path.insert(0, finder)
         try:
             self.assertEqual(ep._flag_state("_default"), (False, True))
 
@@ -1175,25 +1200,42 @@ class TestDefensiveEdges(_Base):
             self.assertEqual(len(degraded), 1)
             self.assertEqual(degraded[0]["point"], "workflow.workflow_gate")
         finally:
-            sys.path.remove(str(broken_root))
-            for key in [k for k in sys.modules if k.startswith("corvin_console")]:
-                del sys.modules[key]
-            sys.modules.update(saved)
+            sys.meta_path.remove(finder)
+            if saved_ff != "MISSING":
+                sys.modules["corvin_core.feature_flags"] = saved_ff
+            if had_attr:
+                corvin_core.feature_flags = saved_attr
             ep._degraded_reported.clear()
 
     def test_an_absent_console_is_still_not_a_broken_one(self):
         # The other side of the same distinction — guarded here as well so a
         # future tightening of the import classification cannot start reporting
         # a headless layout (ADR-0241) as a degradation on every gate.
-        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_console")}
-        for key in saved:
-            del sys.modules[key]
-        sys.modules["corvin_console"] = None  # type: ignore[assignment]
+        #
+        # The flag registry lives at `corvin_core.feature_flags` (ADR-0352 P2.2).
+        # A headless layout ships without it; `None` in sys.modules makes the
+        # submodule import raise an ImportError whose `.name` IS in
+        # `_FLAG_MODULES`, so it classifies as "absent" (False, False), never
+        # "broken".  The cached attribute on `corvin_core` must be removed too,
+        # or `from corvin_core import feature_flags` returns it before ever
+        # consulting sys.modules.
+        import corvin_core
+
+        saved_ff = sys.modules.get("corvin_core.feature_flags", "MISSING")
+        had_attr = hasattr(corvin_core, "feature_flags")
+        saved_attr = getattr(corvin_core, "feature_flags", None)
+        if had_attr:
+            del corvin_core.feature_flags
+        sys.modules["corvin_core.feature_flags"] = None  # type: ignore[assignment]
         try:
             self.assertEqual(ep._flag_state("_default"), (False, False))
         finally:
-            del sys.modules["corvin_console"]
-            sys.modules.update(saved)
+            if saved_ff == "MISSING":
+                sys.modules.pop("corvin_core.feature_flags", None)
+            else:
+                sys.modules["corvin_core.feature_flags"] = saved_ff
+            if had_attr:
+                corvin_core.feature_flags = saved_attr
 
     # `test_no_call_site_is_wired_yet` stood here until 2026-07-27. It asserted
     # that NOTHING used the bus, and it named its own successor: "When the call

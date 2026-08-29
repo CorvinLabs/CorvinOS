@@ -28,6 +28,8 @@ class TestBug5AuditEventLossOnEmitFailure:
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
         plugin.plugin_id = "test-plugin"
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
 
@@ -43,13 +45,15 @@ class TestBug5AuditEventLossOnEmitFailure:
 
         # Plugin should NOT be registered (rollback occurred)
         with pytest.raises(PluginNotFound):
-            registry.lookup("test-plugin")
+            registry.get("test-plugin")
 
     def test_audit_emit_failure_revokes_hooks(self):
         """Hooks claimed by the plugin should be revoked if audit_emit fails."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
         plugin.plugin_id = "hook-plugin"
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
 
@@ -57,19 +61,22 @@ class TestBug5AuditEventLossOnEmitFailure:
         ctx.tenant_id = "_default"
         ctx.audit_emit = MagicMock(side_effect=RuntimeError("Write failed"))
 
-        # Simulate hook ownership
-        with patch('corvin_plugins.registry._verify_hook_ownership') as mock_verify:
+        # When audit_emit fails, the rollback path must revoke any hooks the
+        # plugin claimed (registry._revoke_hooks), not leave them orphaned.
+        with patch('corvin_plugins.registry._revoke_hooks') as mock_revoke:
             with pytest.raises(RuntimeError):
                 registry.register(plugin, ctx)
 
-            # _verify_hook_ownership should have been called before audit_emit
-            mock_verify.assert_called_once_with("hook-plugin", "_default")
+            # Hooks for this plugin_id should be revoked during rollback
+            mock_revoke.assert_called_with("hook-plugin")
 
     def test_audit_emit_failure_detaches_provider_slot(self):
         """Provider slots should be cleaned up if audit_emit fails."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
         plugin.plugin_id = "provider-plugin"
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
 
@@ -90,6 +97,8 @@ class TestBug5AuditEventLossOnEmitFailure:
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
         plugin.plugin_id = "good-plugin"
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
 
@@ -101,7 +110,7 @@ class TestBug5AuditEventLossOnEmitFailure:
         registry.register(plugin, ctx)
 
         # Plugin should be registered
-        assert registry.lookup("good-plugin") is plugin
+        assert registry.get("good-plugin") is plugin
 
         # Audit event should be emitted
         ctx.audit_emit.assert_called_once()
@@ -133,7 +142,7 @@ class TestBug6BootLayerValidation:
 
         # Plugin should not be registered
         with pytest.raises(PluginNotFound):
-            registry.lookup("test-plugin")
+            registry.get("test-plugin")
 
     def test_boot_layer_validation_before_lock(self):
         """boot_layer validation should happen before acquiring _op_lock."""
@@ -161,6 +170,8 @@ class TestBug6BootLayerValidation:
         for layer_name in ["installed", "bundled", "core", "compliance"]:
             plugin = MagicMock(spec=CorvinPlugin)
             plugin.plugin_id = f"plugin-{layer_name}"
+            plugin.plugin_type = "audit_backend"
+            plugin.version = "1.0.0"
             plugin.on_load = MagicMock(return_value=None)
             plugin.on_unload = MagicMock(return_value=None)
 
@@ -181,6 +192,8 @@ class TestBug6BootLayerValidation:
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
         plugin.plugin_id = "enum-test"
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
 
@@ -207,6 +220,8 @@ class TestBug7HookOrphaning:
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
         plugin.plugin_id = "hook-test"
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
 
@@ -239,6 +254,8 @@ class TestBug7HookOrphaning:
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
         plugin.plugin_id = "consistency-test"
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
 
@@ -251,13 +268,15 @@ class TestBug7HookOrphaning:
 
         # Plugin should not be in registry (full rollback)
         with pytest.raises(PluginNotFound):
-            registry.lookup("consistency-test")
+            registry.get("consistency-test")
 
     def test_successful_registration_emits_audit(self):
         """Successful registration should emit audit event with hook info."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
         plugin.plugin_id = "audit-test"
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
 

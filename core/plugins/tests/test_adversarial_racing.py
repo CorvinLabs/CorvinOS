@@ -21,8 +21,6 @@ from corvin_plugins import (
     BootLayer,
     CorvinPlugin,
     HealthStatus,
-    Locality,
-    NetworkEgress,
     PIIRisk,
     PluginAlreadyRegistered,
     PluginContext,
@@ -32,9 +30,23 @@ from corvin_plugins import (
     PluginRegistry,
     PluginReplacementRefused,
 )
-from corvin_plugins.manifest import DependencyResolver, PluginError
+from corvin_plugins.manifest import DependencyResolver, Locality, NetworkEgress, PluginError
 from corvin_plugins.protocol import PluginDisableRefused
 from corvin_plugins.state import TenantRegistry, registry_mutation, _MUTATION_LOCK
+
+
+def _mock_ctx(tenant_id: str = "_default") -> MagicMock:
+    """A PluginContext mock carrying the fields register()/unregister() read.
+
+    ``spec=PluginContext`` alone does not expose the dataclass *instance*
+    fields (``tenant_id``, ``audit_emit``) — a class spec only sees class-level
+    attributes — so register()'s ``ctx.tenant_id`` / ``ctx.audit_emit`` accesses
+    would raise. Set them explicitly.
+    """
+    ctx = MagicMock(spec=PluginContext)
+    ctx.tenant_id = tenant_id
+    ctx.audit_emit = MagicMock()
+    return ctx
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -53,9 +65,11 @@ class TestConcurrentPluginInstalls:
         """
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "test-plugin"
         plugin.on_load = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         results = {"success": [], "error": []}
         lock = threading.Lock()
@@ -93,10 +107,12 @@ class TestConcurrentPluginInstalls:
         """
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "cycle-plugin"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         results = {"register": 0, "unregister": 0, "error": []}
         lock = threading.Lock()
@@ -144,6 +160,8 @@ class TestConcurrentPluginInstalls:
         """
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "wedge-plugin"
 
         # Health check that hangs
@@ -154,7 +172,7 @@ class TestConcurrentPluginInstalls:
         plugin.health_check = slow_health
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         registry.register(plugin, ctx)
         results = {"health": None, "unload": None, "error": []}
@@ -162,7 +180,7 @@ class TestConcurrentPluginInstalls:
 
         def check_health():
             try:
-                status = registry.health("wedge-plugin")
+                status = registry.health_check_all()["wedge-plugin"]
                 with lock:
                     results["health"] = status
             except Exception as e:
@@ -210,14 +228,17 @@ class TestConcurrentPluginInstalls:
                     # Simulate a mutation
                     record = PluginRecord(
                         plugin_id=f"test-{plugin_num}",
+                        version="1.0.0",
+                        display_name="Test",
+                        plugin_type="audit_backend",
                         origin=PluginOrigin.COMMUNITY,
                         enabled=True,
                         boot_layer=BootLayer.INSTALLED,
-                        locality=Locality.INPROCESS,
+                        locality=Locality.LOCAL,
                         network_egress=[],
                         pii_risk=PIIRisk.NONE,
                     )
-                    tr.add_record(record)
+                    tr.records[record.plugin_id] = record
                     with lock:
                         records.append(record)
             except Exception as e:
@@ -258,14 +279,17 @@ class TestPluginStateTransitions:
         with registry_mutation(tenant_id="_default", corvin_home_path=corvin_home) as tr:
             record = PluginRecord(
                 plugin_id="disabled-plugin",
+                version="1.0.0",
+                display_name="Test",
+                plugin_type="audit_backend",
                 origin=PluginOrigin.COMMUNITY,
                 enabled=False,
                 boot_layer=BootLayer.INSTALLED,
-                locality=Locality.INPROCESS,
+                locality=Locality.LOCAL,
                 network_egress=[],
                 pii_risk=PIIRisk.NONE,
             )
-            tr.add_record(record)
+            tr.records[record.plugin_id] = record
 
         # Disable already-disabled
         with registry_mutation(tenant_id="_default", corvin_home_path=corvin_home) as tr:
@@ -273,7 +297,7 @@ class TestPluginStateTransitions:
 
         # Should succeed without error
         with registry_mutation(tenant_id="_default", corvin_home_path=corvin_home) as tr:
-            records = tr.records()
+            records = tr.records
             assert records["disabled-plugin"].enabled is False
 
     def test_enable_nonexistent_plugin_fails(self, tmp_path):
@@ -290,10 +314,12 @@ class TestPluginStateTransitions:
         """Unregistering the same plugin twice."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "once-plugin"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         registry.register(plugin, ctx)
         registry.unregister("once-plugin")
@@ -311,35 +337,41 @@ class TestPluginStateTransitions:
         with registry_mutation(tenant_id="_default", corvin_home_path=corvin_home) as tr:
             record = PluginRecord(
                 plugin_id="cycle-test",
+                version="1.0.0",
+                display_name="Test",
+                plugin_type="audit_backend",
                 origin=PluginOrigin.COMMUNITY,
                 enabled=True,
                 boot_layer=BootLayer.INSTALLED,
-                locality=Locality.INPROCESS,
+                locality=Locality.LOCAL,
                 network_egress=[],
                 pii_risk=PIIRisk.NONE,
             )
-            tr.add_record(record)
+            tr.records[record.plugin_id] = record
 
         # Uninstall
         with registry_mutation(tenant_id="_default", corvin_home_path=corvin_home) as tr:
-            tr.remove_record("cycle-test")
+            del tr.records["cycle-test"]
 
         # Reinstall
         with registry_mutation(tenant_id="_default", corvin_home_path=corvin_home) as tr:
             record = PluginRecord(
                 plugin_id="cycle-test",
+                version="1.0.0",
+                display_name="Test",
+                plugin_type="audit_backend",
                 origin=PluginOrigin.COMMUNITY,
                 enabled=True,
                 boot_layer=BootLayer.INSTALLED,
-                locality=Locality.INPROCESS,
+                locality=Locality.LOCAL,
                 network_egress=[],
                 pii_risk=PIIRisk.NONE,
             )
-            tr.add_record(record)
+            tr.records[record.plugin_id] = record
 
         # Verify final state
         with registry_mutation(tenant_id="_default", corvin_home_path=corvin_home) as tr:
-            records = tr.records()
+            records = tr.records
             assert "cycle-test" in records
 
 
@@ -356,10 +388,13 @@ class TestEdgeCases:
         with pytest.raises((ValueError, PluginError)):
             PluginRecord(
                 plugin_id="",
+                version="1.0.0",
+                display_name="Test",
+                plugin_type="audit_backend",
                 origin=PluginOrigin.COMMUNITY,
                 enabled=True,
                 boot_layer=BootLayer.INSTALLED,
-                locality=Locality.INPROCESS,
+                locality=Locality.LOCAL,
                 network_egress=[],
                 pii_risk=PIIRisk.NONE,
             )
@@ -370,10 +405,13 @@ class TestEdgeCases:
         with pytest.raises((ValueError, PluginError)):
             PluginRecord(
                 plugin_id=long_id,
+                version="1.0.0",
+                display_name="Test",
+                plugin_type="audit_backend",
                 origin=PluginOrigin.COMMUNITY,
                 enabled=True,
                 boot_layer=BootLayer.INSTALLED,
-                locality=Locality.INPROCESS,
+                locality=Locality.LOCAL,
                 network_egress=[],
                 pii_risk=PIIRisk.NONE,
             )
@@ -382,26 +420,30 @@ class TestEdgeCases:
         """Plugin name with emoji: 'plugin-🎉-test'."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "plugin-🎉-test"
         plugin.on_load = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         # Should not crash during serialization
         registry.register(plugin, ctx)
-        assert registry.lookup("plugin-🎉-test") == plugin
+        assert registry.get("plugin-🎉-test") == plugin
 
     def test_null_boot_layer(self):
         """Boot layer as None should default to INSTALLED."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "null-layer"
         plugin.boot_layer = None
         plugin.on_load = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         registry.register(plugin, ctx, boot_layer=None)
         # Should succeed and default to INSTALLED
-        assert registry.lookup("null-layer") is not None
+        assert registry.get("null-layer") is not None
 
     def test_malformed_yaml_registry_fails_closed(self, tmp_path):
         """Corrupted YAML registry file should raise, not silently erase."""
@@ -425,21 +467,25 @@ class TestEdgeCases:
         """Very large description should be accepted or truncated cleanly."""
         large_desc = "x" * (10 * 1024 * 1024)  # 10 MB
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "large-desc"
         plugin.description = large_desc
         plugin.on_load = MagicMock(return_value=None)
 
         registry = PluginRegistry()
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         # Should not crash or consume unbounded memory
         registry.register(plugin, ctx)
-        assert registry.lookup("large-desc") is not None
+        assert registry.get("large-desc") is not None
 
     def test_zero_timeout_race(self):
         """Millisecond-scale timeout (1ms) in concurrent operations."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "zero-timeout"
 
         def instant_health():
@@ -447,12 +493,12 @@ class TestEdgeCases:
 
         plugin.health_check = instant_health
         plugin.on_load = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         registry.register(plugin, ctx)
 
         # Should not hang or crash on very tight deadline
-        status = registry.health("zero-timeout")
+        status = registry.health_check_all()["zero-timeout"]
         assert status is not None
 
 
@@ -528,10 +574,12 @@ class TestSecurityAndValidation:
         """
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "escalate-plugin"
         plugin.on_load = MagicMock(return_value=None)
         plugin.on_unload = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         # Register as INSTALLED
         registry.register(plugin, ctx, boot_layer=BootLayer.INSTALLED)
@@ -581,7 +629,7 @@ class TestSecurityAndValidation:
                 origin=PluginOrigin.COMMUNITY,
                 enabled="yes",  # should be bool
                 boot_layer=BootLayer.INSTALLED,
-                locality=Locality.INPROCESS,
+                locality=Locality.LOCAL,
                 network_egress=[],
                 pii_risk=PIIRisk.NONE,
             )
@@ -590,6 +638,8 @@ class TestSecurityAndValidation:
         """Health message contains PII (email) which should be scrubbed."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "leaky-plugin"
         plugin.on_load = MagicMock(return_value=None)
 
@@ -600,10 +650,10 @@ class TestSecurityAndValidation:
             )
 
         plugin.health_check = leaky_health
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         registry.register(plugin, ctx)
-        status = registry.health("leaky-plugin")
+        status = registry.health_check_all()["leaky-plugin"]
 
         # Message should be scrubbed or redacted
         if status.message:
@@ -659,14 +709,17 @@ class TestMutationResistance:
         with registry_mutation(tenant_id="_default", corvin_home_path=corvin_home) as tr:
             record = PluginRecord(
                 plugin_id="audit-test",
+                version="1.0.0",
+                display_name="Test",
+                plugin_type="audit_backend",
                 origin=PluginOrigin.COMMUNITY,
                 enabled=False,
                 boot_layer=BootLayer.INSTALLED,
-                locality=Locality.INPROCESS,
+                locality=Locality.LOCAL,
                 network_egress=[],
                 pii_risk=PIIRisk.NONE,
             )
-            tr.add_record(record)
+            tr.records[record.plugin_id] = record
 
         # Track audit calls (simplified; in real code, use audit mock)
         audit_calls = []
@@ -695,21 +748,24 @@ class TestMutationResistance:
         with registry_mutation(tenant_id="tenant-a", corvin_home_path=corvin_home) as tr:
             record = PluginRecord(
                 plugin_id="secret-plugin",
+                version="1.0.0",
+                display_name="Test",
+                plugin_type="audit_backend",
                 origin=PluginOrigin.COMMUNITY,
                 enabled=True,
                 boot_layer=BootLayer.INSTALLED,
-                locality=Locality.INPROCESS,
+                locality=Locality.LOCAL,
                 network_egress=[],
                 pii_risk=PIIRisk.NONE,
             )
-            tr.add_record(record)
+            tr.records[record.plugin_id] = record
 
         # Query from tenant B should NOT see it
         registry_b = corvin_home / "tenants" / "tenant-b" / "plugins" / "registry.yaml"
         registry_b.parent.mkdir(parents=True, exist_ok=True)
 
         with registry_mutation(tenant_id="tenant-b", corvin_home_path=corvin_home) as tr:
-            records = tr.records()
+            records = tr.records
             assert "secret-plugin" not in records, (
                 "Tenant B can see Tenant A's plugins! "
                 "Tenant isolation is broken."
@@ -719,6 +775,8 @@ class TestMutationResistance:
         """Enable should refuse without consent when consent_required() is true."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "consent-required"
 
         def needs_consent():
@@ -726,7 +784,7 @@ class TestMutationResistance:
 
         plugin.consent_required = needs_consent
         plugin.on_load = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         registry.register(plugin, ctx)
 
@@ -753,9 +811,11 @@ class TestResourceContention:
         # Try to create MAX_OP_LOCKS + 100 distinct plugins
         for i in range(registry.MAX_OP_LOCKS + 100):
             plugin = MagicMock(spec=CorvinPlugin)
+            plugin.plugin_type = "audit_backend"
+            plugin.version = "1.0.0"
             plugin.plugin_id = f"plugin-{i}"
             plugin.on_load = MagicMock(return_value=None)
-            ctx = MagicMock(spec=PluginContext)
+            ctx = _mock_ctx()
 
             try:
                 registry.register(plugin, ctx)
@@ -774,9 +834,11 @@ class TestResourceContention:
         # Register plugins for many tenants
         for tenant_id in [f"tenant-{i}" for i in range(registry.MAX_TENANT_HISTORY + 100)]:
             plugin = MagicMock(spec=CorvinPlugin)
+            plugin.plugin_type = "audit_backend"
+            plugin.version = "1.0.0"
             plugin.plugin_id = f"plugin-{tenant_id}"
             plugin.on_load = MagicMock(return_value=None)
-            ctx = MagicMock(spec=PluginContext)
+            ctx = _mock_ctx()
 
             try:
                 registry.register(plugin, ctx)
@@ -792,6 +854,8 @@ class TestResourceContention:
         """Wedged health check thread is abandoned, not joined."""
         registry = PluginRegistry()
         plugin = MagicMock(spec=CorvinPlugin)
+        plugin.plugin_type = "audit_backend"
+        plugin.version = "1.0.0"
         plugin.plugin_id = "stuck-health"
 
         def never_returns():
@@ -799,14 +863,14 @@ class TestResourceContention:
 
         plugin.health_check = never_returns
         plugin.on_load = MagicMock(return_value=None)
-        ctx = MagicMock(spec=PluginContext)
+        ctx = _mock_ctx()
 
         registry.register(plugin, ctx)
 
         # health() should timeout and not wait for the thread
         try:
             import concurrent.futures
-            registry.health("stuck-health")
+            registry.health_check_all()["stuck-health"]
         except Exception:
             pass  # Timeout expected
 

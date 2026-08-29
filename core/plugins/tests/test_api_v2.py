@@ -9,6 +9,7 @@ Covers:
 - Version compatibility
 """
 
+import asyncio
 import pytest
 from datetime import datetime, timedelta
 
@@ -149,7 +150,7 @@ class TestPluginResponse:
 
     def test_error_response(self):
         """Error response."""
-        resp = PluginResponse.error("Something went wrong", code="ERROR_001")
+        resp = PluginResponse.error_response("Something went wrong", code="ERROR_001")
         assert resp.status == "error"
         assert resp.error == "Something went wrong"
         assert resp.error_code == "ERROR_001"
@@ -239,12 +240,13 @@ class TestPluginBase:
         result = asyncio.run(plugin.on_error(ctx, "err-1", "RuntimeError", "msg", None))
         assert result.status == "success"
 
-    @pytest.mark.asyncio
-    async def test_plugin_init_required(self):
+    def test_plugin_init_required(self):
         """Plugin init() is abstract and must be implemented."""
         with pytest.raises(TypeError):
             class BadPlugin(PluginBase):
                 pass  # Missing init()
+
+            BadPlugin()  # Abstract instantiation must fail
 
 
 class TestPluginExceptions:
@@ -270,8 +272,7 @@ class TestPluginExceptions:
 class TestPluginValidateDeadline:
     """Test deadline validation in plugins."""
 
-    @pytest.mark.asyncio
-    async def test_validate_deadline_expired(self):
+    def test_validate_deadline_expired(self):
         """Validate deadline raises if exceeded."""
         class TestPlugin(PluginBase):
             async def init(self, context):
@@ -292,13 +293,12 @@ class TestPluginValidateDeadline:
             audit_hash="hash",
         )
 
-        await plugin.init(ctx)
+        asyncio.run(plugin.init(ctx))
 
         with pytest.raises(PluginTimeoutException):
             plugin.validate_deadline()
 
-    @pytest.mark.asyncio
-    async def test_validate_deadline_valid(self):
+    def test_validate_deadline_valid(self):
         """Validate deadline doesn't raise if valid."""
         class TestPlugin(PluginBase):
             async def init(self, context):
@@ -319,7 +319,7 @@ class TestPluginValidateDeadline:
             audit_hash="hash",
         )
 
-        await plugin.init(ctx)
+        asyncio.run(plugin.init(ctx))
 
         # Should not raise
         plugin.validate_deadline()
@@ -328,8 +328,7 @@ class TestPluginValidateDeadline:
 class TestPluginMetadata:
     """Test plugin metadata reporting."""
 
-    @pytest.mark.asyncio
-    async def test_plugin_metadata_method(self):
+    def test_plugin_metadata_method(self):
         """Plugin can report metadata."""
         class CustomPlugin(PluginBase):
             __plugin_id__ = "my-plugin"
@@ -347,7 +346,7 @@ class TestPluginMetadata:
                 }
 
         plugin = CustomPlugin()
-        metadata = await plugin.get_plugin_metadata()
+        metadata = asyncio.run(plugin.get_plugin_metadata())
         assert metadata["plugin_id"] == "my-plugin"
         assert metadata["version"] == "1.5.2"
         assert "name" in metadata

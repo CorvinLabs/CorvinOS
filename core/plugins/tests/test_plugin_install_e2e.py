@@ -178,7 +178,13 @@ def test_e2e_community_plugin_with_confirmation(
 def test_e2e_duplicate_install_is_rejected(
     minimal_plugin_dir, temp_corvin_home, monkeypatch, capsys
 ):
-    """E2E: Installing the same plugin twice in the same tenant fails."""
+    """E2E: Installing the same plugin twice is idempotent (skips, rc 0).
+
+    ``cmd_install`` deliberately treats an already-installed plugin as a no-op
+    (rc 0, "already installed, skipping" on stdout) rather than an error —
+    see plugin_runtime_cmd.py::cmd_install ("Make idempotent: if already
+    installed, that's not an error").
+    """
     args = Namespace(
         path=str(minimal_plugin_dir),
         tenant=None,
@@ -192,12 +198,12 @@ def test_e2e_duplicate_install_is_rejected(
     # Capture and clear the output
     capsys.readouterr()
 
-    # Second install (should fail)
+    # Second install is idempotent: skipped, rc 0.
     rc2 = cmd_install(args)
-    assert rc2 == 1, "Second install should fail (duplicate)"
+    assert rc2 == 0, "Duplicate install should be idempotent (skip, rc 0)"
 
-    _, err = capsys.readouterr()
-    assert "already installed" in err or "duplicate" in err.lower()
+    out, _ = capsys.readouterr()
+    assert "already installed" in out.lower()
 
 
 def test_e2e_invalid_manifest_is_rejected(

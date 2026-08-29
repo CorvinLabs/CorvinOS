@@ -112,8 +112,15 @@ class PluginResponse:
         )
 
     @classmethod
-    def error(cls, message: str, code: Optional[str] = None, metadata: Optional[Dict] = None, audit_hash: str = "") -> "PluginResponse":
-        """Factory: error response."""
+    def error_response(cls, message: str, code: Optional[str] = None, metadata: Optional[Dict] = None, audit_hash: str = "") -> "PluginResponse":
+        """Factory: error response.
+
+        Named ``error_response`` (not ``error``) on purpose: a classmethod named
+        ``error`` would shadow the ``error`` dataclass field, so ``@dataclass``
+        would capture the bound classmethod as the field's default and every
+        ``success(...)`` would then trip ``__post_init__``'s ``error is None``
+        assertion.
+        """
         return cls(
             status="error",
             error=message,
