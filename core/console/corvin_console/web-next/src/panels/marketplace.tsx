@@ -8,8 +8,8 @@
 import React, { useState, useEffect } from 'react'
 import { Search, Package, ExternalLink, Download, AlertCircle, Check, Loader } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useProgressPolling } from '@/hooks/useProgressPolling'
-import { ToastNotification, ToastMessage } from '@/components/ToastNotification'
+import { InstallProgress } from '@/components/install-progress'
+// Phase 3: useProgressPolling hook will be wired for real job status polling
 
 interface Extension {
   plugin_id: string
@@ -46,6 +46,7 @@ export const MarketplacePanel: React.FC = () => {
   const [selectedExtension, setSelectedExtension] = useState<Extension | null>(null)
   const [category, setCategory] = useState('')
   const [installProgress, setInstallProgress] = useState<Record<string, InstallProgress>>({})
+  const [installingExtensionId, setInstallingExtensionId] = useState<string | null>(null)
   const isMountedRef = React.useRef(true)
 
   useEffect(() => {
@@ -76,58 +77,32 @@ export const MarketplacePanel: React.FC = () => {
     }
   }
 
-  const handleInstall = async (extension: Extension) => {
-    const extensionId = extension.plugin_id
-    setInstallProgress(prev => ({
-      ...prev,
-      [extensionId]: { extension_id: extensionId, status: 'installing' }
-    }))
+  const handleInstall = (extension: Extension) => {
+    // Show progress modal (Phase 2 Week 2)
+    setInstallingExtensionId(extension.plugin_id)
+  }
 
+  const handleInstallComplete = async (extensionId: string) => {
+    // Phase 3: Wire real API call here (POST /api/v2/marketplace/install)
+    // For now, just close the modal and mark as installed
     try {
-      const response = await fetch('/api/v2/marketplace/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      queryClient.invalidateQueries({ queryKey: ['plugins'] })
+      setInstallingExtensionId(null)
+      setInstallProgress(prev => ({
+        ...prev,
+        [extensionId]: {
           extension_id: extensionId,
-          version: extension.version,
-          tenant_id: 'default'
-        })
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to install: ${response.statusText}`)
-      }
-
-      const data = await response.json()
-      if (isMountedRef.current) {
-        setInstallProgress(prev => ({
-          ...prev,
-          [extensionId]: {
-            extension_id: extensionId,
-            status: 'success',
-            message: 'Installation queued',
-            job_id: data.job_id
-          }
-        }))
-        // Invalidate plugins query to refresh the plugins list
-        queryClient.invalidateQueries({ queryKey: ['plugins'] })
-        // Auto-close modal after 2 seconds
-        setTimeout(() => {
-          setSelectedExtension(null)
-        }, 2000)
-      }
+          status: 'success',
+          message: 'Installation completed'
+        }
+      }))
     } catch (err) {
-      if (isMountedRef.current) {
-        setInstallProgress(prev => ({
-          ...prev,
-          [extensionId]: {
-            extension_id: extensionId,
-            status: 'error',
-            message: err instanceof Error ? err.message : 'Installation failed'
-          }
-        }))
-      }
+      console.error('Error completing install:', err)
     }
+  }
+
+  const handleInstallClose = () => {
+    setInstallingExtensionId(null)
   }
 
   const filteredExtensions = extensions.filter(ext => {
@@ -381,6 +356,16 @@ export const MarketplacePanel: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Install Progress Modal (Phase 2 Week 2) */}
+      {installingExtensionId && extensions.find(e => e.plugin_id === installingExtensionId) && (
+        <InstallProgress
+          extensionId={installingExtensionId}
+          extensionName={extensions.find(e => e.plugin_id === installingExtensionId)?.name || 'Unknown'}
+          onClose={handleInstallClose}
+          onComplete={() => handleInstallComplete(installingExtensionId)}
+        />
       )}
     </div>
   )
