@@ -8,6 +8,8 @@
 import React, { useState, useEffect } from 'react'
 import { Search, Package, ExternalLink, Download, AlertCircle, Check, Loader } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useProgressPolling } from '@/hooks/useProgressPolling'
+import { ToastNotification, ToastMessage } from '@/components/ToastNotification'
 
 interface Extension {
   plugin_id: string

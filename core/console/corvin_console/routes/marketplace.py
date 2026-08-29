@@ -384,3 +384,35 @@ async def marketplace_disable(extension_id: str, body: Optional[Dict[str, Any]] 
     except Exception as e:
         logger.error(f"Disable failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/install/{job_id}/progress")
+async def marketplace_install_progress(job_id: str) -> Dict[str, Any]:
+    """
+    GET /api/v2/marketplace/install/{job_id}/progress
+
+    Poll installation progress. Returns:
+    {
+      "status": "pending|in_progress|completed|failed",
+      "progress": 0-100,
+      "message": "Status message (no PII per ADR-0297)"
+    }
+
+    Error: 404 (job not found), 500 (backend error)
+
+    Note: Phase 3 stub. Phase 3b will implement real job tracking.
+    """
+    try:
+        # Stub: Return mock progress based on job_id
+        # In reality, this would query a job queue (celery, etc.)
+
+        # Mock: Assume job is "in_progress"
+        return {
+            "status": "in_progress",
+            "progress": 75,
+            "message": "Installation in progress"
+        }
+
+    except Exception as e:
+        logger.error(f"Progress polling error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get installation progress")
