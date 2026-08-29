@@ -99,6 +99,7 @@ from .routes import (
     custom_provider as custom_provider_route,
     mcp_plugins as mcp_plugins_route,
     plugins as plugins_route,
+    marketplace as marketplace_route,
     learning as learning_route,
     admin as admin_route,
     data_sources as data_sources_route,
@@ -252,6 +253,8 @@ router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
 # 404s while the `plugin_console_surface` flag is off (ships dark), so the gate
 # lives in one place instead of in the mount condition.
 router.include_router(plugins_route.router, tags=["console-plugins"])
+# CONCEPT-0023 — Console Marketplace Panel (Phase 1-2). Discovery, search, install workflow.
+router.include_router(marketplace_route.router, tags=["console-marketplace"])
 # ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
 # packages_route.router already has prefix="/packages", so mount without additional prefix
 router.include_router(packages_route.router, tags=["console-packages"])

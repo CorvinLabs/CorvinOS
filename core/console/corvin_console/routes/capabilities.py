@@ -82,6 +82,32 @@ def _read_flags(tenant_id: str) -> dict[str, bool]:
     return out
 
 
+def _get_plugin_panels() -> list[dict]:
+    """Get all auto-registered plugin panels (Phase 3 Integration).
+
+    Returns panels registered by installed plugins via PluginPanelRegistry.
+    Degrades gracefully if registry is unavailable (panel registry not yet created).
+    """
+    try:
+        from core.plugins.plugin_panel_registry import get_panel_registry
+        registry = get_panel_registry()
+        panels = registry.get_all_enabled_panels()
+        return [
+            {
+                "id": p["panel_id"],
+                "plugin_id": p["plugin_id"],
+                "label": p["label"],
+                "route": p["route"],
+                "icon": p["icon"],
+                "group": p["group"],
+            }
+            for p in panels
+        ]
+    except Exception:  # noqa: BLE001
+        # Registry unavailable: no plugin panels available, but Console still works
+        return []
+
+
 @router.get("")
 async def get_capabilities(session: Any = Depends(require_session)) -> dict:
     """Return the versioned capability manifest for the caller's tenant."""
@@ -90,6 +116,7 @@ async def get_capabilities(session: Any = Depends(require_session)) -> dict:
         "contract_version": CONTRACT_VERSION,
         "capabilities": list(CORE_CAPABILITIES),
         "flags": _read_flags(tenant_id),
+        "plugin_panels": _get_plugin_panels(),  # Phase 3: auto-registered panels
     }
 
 

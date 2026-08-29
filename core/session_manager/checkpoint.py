@@ -5,7 +5,13 @@ k=2: CheckpointManager with JSON serialization
 - Enables idempotent session resumption
 - Includes learning state and context essentials
 
-ADR-0XXX: Session Manager Architecture
+k=3: Phase 1 Task Context Drift — Goal persistence + integrity
+- GoalContext with SHA256 hash added to checkpoint
+- Goal restored when resuming from checkpoint
+- Audit trail: every goal event logged (GDPR Art. 30)
+
+ADR-0405: GoalContext Persistence
+ADR-0407: Task Context Drift Prevention (Master)
 GDPR Art. 30, 32: Checkpoint creation is audit-logged.
 """
 
@@ -16,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Any, Dict
 from uuid import uuid4
+
+from .goal_context import GoalContext
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +127,10 @@ class SessionCheckpoint:
     goal: str = ""  # Current goal being pursued
     goal_alignment_score: float = 0.0  # Alignment score at checkpoint time (0.0-1.0)
 
+    # Goal Context (Phase 1: Task Context Drift Prevention)
+    # Persistent goal with SHA256 integrity (GDPR Art. 32)
+    goal_context: Optional[GoalContext] = None
+
     def __post_init__(self):
         """Validate checkpoint."""
         if not self.session_id:
@@ -159,6 +171,7 @@ class SessionCheckpoint:
             "workflow_execution_state": workflow_state_dict,
             "goal": self.goal,
             "goal_alignment_score": self.goal_alignment_score,
+            "goal_context": self.goal_context.to_dict() if self.goal_context else None,
         }
 
     @classmethod

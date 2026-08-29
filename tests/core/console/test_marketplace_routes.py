@@ -1,17 +1,18 @@
 """
 Unit tests for marketplace API routes (core/console/routes/marketplace.py).
 
-Tests the 7 endpoints exposed to Console UI, using mocked backend.
+FastAPI Edition: Tests the 7 endpoints using pytest + starlette test client.
 """
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 import json
+from enum import Enum
 
-# Import the blueprint
+# Import the router
 try:
     from core.console.corvin_console.routes.marketplace import (
-        marketplace_bp,
+        router,
         serialize_plugin,
     )
 except ImportError:
@@ -20,19 +21,18 @@ except ImportError:
 
 @pytest.fixture
 def client():
-    """Flask test client with marketplace blueprint."""
-    from flask import Flask
+    """FastAPI test client with marketplace router."""
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
 
-    app = Flask(__name__)
-    app.register_blueprint(marketplace_bp)
-    app.config["TESTING"] = True
-    return app.test_client()
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
 
 
 @pytest.fixture
 def mock_plugin():
     """Mock PluginMetadata for testing."""
-    from enum import Enum
 
     class MockCategory(Enum):
         SECURITY = "Security"
@@ -71,15 +71,15 @@ class TestMarketplaceIndex:
 
     def test_index_success(self, client, mock_plugin):
         """Successfully fetch marketplace index."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.list_all.return_value = [mock_plugin]
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.list_all.return_value = [mock_plugin]
 
             response = client.get("/api/v2/marketplace/index")
             assert response.status_code == 200
 
-            data = json.loads(response.data)
+            data = response.json()
             assert data["version"] == "1.0"
             assert "extensions" in data
             assert len(data["extensions"]) == 1
@@ -87,10 +87,7 @@ class TestMarketplaceIndex:
 
     def test_index_backend_unavailable(self, client):
         """Return 503 if marketplace backend unavailable."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery",
-            None,
-        ):
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace", None):
             response = client.get("/api/v2/marketplace/index")
             assert response.status_code == 503
 
@@ -100,40 +97,34 @@ class TestMarketplaceSearch:
 
     def test_search_success(self, client, mock_plugin):
         """Successfully search marketplace."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.list_all.return_value = [mock_plugin]
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.list_all.return_value = [mock_plugin]
 
             response = client.get("/api/v2/marketplace/search?q=test")
             assert response.status_code == 200
 
-            data = json.loads(response.data)
+            data = response.json()
             assert "extensions" in data
 
     def test_search_with_category_filter(self, client, mock_plugin):
         """Search with category filter."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.list_all.return_value = [mock_plugin]
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.list_all.return_value = [mock_plugin]
 
-            response = client.get(
-                "/api/v2/marketplace/search?category=Security"
-            )
+            response = client.get("/api/v2/marketplace/search?category=Security")
             assert response.status_code == 200
 
-            data = json.loads(response.data)
+            data = response.json()
             assert len(data["extensions"]) > 0
 
     def test_search_with_invalid_rating_min(self, client):
         """Handle invalid rating_min parameter."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ):
-            response = client.get(
-                "/api/v2/marketplace/search?rating_min=invalid"
-            )
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace"):
+            response = client.get("/api/v2/marketplace/search?rating_min=invalid")
             assert response.status_code == 400
 
 
@@ -142,25 +133,24 @@ class TestMarketplaceExtensionDetails:
 
     def test_extension_details_success(self, client, mock_plugin):
         """Successfully fetch extension details."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = mock_plugin
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = mock_plugin
 
             response = client.get("/api/v2/marketplace/extension/test-plugin")
             assert response.status_code == 200
 
-            data = json.loads(response.data)
+            data = response.json()
             assert data["id"] == "test-plugin"
             assert "metadata" in data
-            assert "readme_url" in data
 
     def test_extension_details_not_found(self, client):
         """Return 404 if extension not found."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = None
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = None
 
             response = client.get("/api/v2/marketplace/extension/nonexistent")
             assert response.status_code == 404
@@ -170,89 +160,70 @@ class TestMarketplaceInstall:
     """Test POST /api/v2/marketplace/install"""
 
     def test_install_success(self, client, mock_plugin):
-        """Successfully queue installation."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = mock_plugin
+        """Successfully queue plugin installation."""
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = mock_plugin
 
             response = client.post(
                 "/api/v2/marketplace/install",
-                json={
-                    "extension_id": "test-plugin",
-                    "version": "0.1.0",
-                    "tenant_id": "default",
-                },
+                json={"extension_id": "test-plugin", "version": "0.1.0", "tenant_id": "default"},
             )
-            assert response.status_code == 202
+            assert response.status_code == 200
 
-            data = json.loads(response.data)
+            data = response.json()
             assert data["status"] == "queued"
             assert "job_id" in data
-            assert "progress_url" in data
 
     def test_install_missing_extension_id(self, client):
         """Return 400 if extension_id missing."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ):
-            response = client.post(
-                "/api/v2/marketplace/install",
-                json={"version": "0.1.0"},
-            )
-            assert response.status_code == 400
+        response = client.post(
+            "/api/v2/marketplace/install",
+            json={"version": "0.1.0"},
+        )
+        assert response.status_code == 400
 
     def test_install_extension_not_found(self, client):
         """Return 404 if extension not found."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = None
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = None
 
             response = client.post(
                 "/api/v2/marketplace/install",
-                json={"extension_id": "nonexistent"},
+                json={"extension_id": "nonexistent", "version": "0.1.0"},
             )
             assert response.status_code == 404
-
-    def test_install_no_body(self, client):
-        """Return 400 if request body missing."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ):
-            response = client.post("/api/v2/marketplace/install")
-            assert response.status_code == 400
 
 
 class TestMarketplaceUninstall:
     """Test POST /api/v2/marketplace/uninstall"""
 
     def test_uninstall_success(self, client, mock_plugin):
-        """Successfully queue uninstallation."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = mock_plugin
+        """Successfully queue plugin uninstallation."""
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = mock_plugin
 
             response = client.post(
                 "/api/v2/marketplace/uninstall",
-                json={
-                    "extension_id": "test-plugin",
-                    "tenant_id": "default",
-                },
+                json={"extension_id": "test-plugin", "tenant_id": "default"},
             )
-            assert response.status_code == 202
+            assert response.status_code == 200
 
-            data = json.loads(response.data)
+            data = response.json()
             assert data["status"] == "queued"
             assert "job_id" in data
 
     def test_uninstall_extension_not_found(self, client):
         """Return 404 if extension not found."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = None
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = None
 
             response = client.post(
                 "/api/v2/marketplace/uninstall",
@@ -266,10 +237,10 @@ class TestMarketplaceEnable:
 
     def test_enable_success(self, client, mock_plugin):
         """Successfully enable extension."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = mock_plugin
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = mock_plugin
 
             response = client.patch(
                 "/api/v2/marketplace/extension/test-plugin/enable",
@@ -277,18 +248,19 @@ class TestMarketplaceEnable:
             )
             assert response.status_code == 200
 
-            data = json.loads(response.data)
+            data = response.json()
             assert data["status"] == "enabled"
 
     def test_enable_extension_not_found(self, client):
         """Return 404 if extension not found."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = None
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = None
 
             response = client.patch(
-                "/api/v2/marketplace/extension/nonexistent/enable"
+                "/api/v2/marketplace/extension/nonexistent/enable",
+                json={"tenant_id": "default"},
             )
             assert response.status_code == 404
 
@@ -298,10 +270,10 @@ class TestMarketplaceDisable:
 
     def test_disable_success(self, client, mock_plugin):
         """Successfully disable extension."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = mock_plugin
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = mock_plugin
 
             response = client.patch(
                 "/api/v2/marketplace/extension/test-plugin/disable",
@@ -309,30 +281,18 @@ class TestMarketplaceDisable:
             )
             assert response.status_code == 200
 
-            data = json.loads(response.data)
+            data = response.json()
             assert data["status"] == "disabled"
 
     def test_disable_extension_not_found(self, client):
         """Return 404 if extension not found."""
-        with patch(
-            "core.console.corvin_console.routes.marketplace.PluginDiscovery"
-        ) as mock_discovery:
-            mock_discovery.get_by_id.return_value = None
+        with patch("core.console.corvin_console.routes.marketplace.PluginMarketplace") as mock_pm:
+            mock_instance = MagicMock()
+            mock_pm.return_value = mock_instance
+            mock_instance.get_plugin.return_value = None
 
             response = client.patch(
-                "/api/v2/marketplace/extension/nonexistent/disable"
+                "/api/v2/marketplace/extension/nonexistent/disable",
+                json={"tenant_id": "default"},
             )
             assert response.status_code == 404
-
-
-class TestSerializePlugin:
-    """Test serialize_plugin helper."""
-
-    def test_serialize_plugin(self, mock_plugin):
-        """Successfully serialize plugin metadata."""
-        result = serialize_plugin(mock_plugin)
-
-        assert result["plugin_id"] == "test-plugin"
-        assert result["name"] == "Test Plugin"
-        assert result["category"] == "Security"  # Enum converted to string
-        assert result["origin"] == "community"

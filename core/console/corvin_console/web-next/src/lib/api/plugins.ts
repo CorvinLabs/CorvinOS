@@ -160,7 +160,7 @@ export interface InstallJobResponse {
 export async function listMarketplace(
   signal?: AbortSignal,
 ): Promise<MarketplaceIndexResponse> {
-  return api<MarketplaceIndexResponse>("/marketplace/index", { signal });
+  return api<MarketplaceIndexResponse>("/api/v2/marketplace/index", { signal });
 }
 
 export async function searchMarketplace(
@@ -174,7 +174,7 @@ export async function searchMarketplace(
   if (category) params.append("category", category);
   if (origin) params.append("origin", origin);
   const qs = params.toString() ? `?${params.toString()}` : "";
-  return api<{ extensions: MarketplaceExtension[] }>(`/marketplace/search${qs}`, {
+  return api<{ extensions: MarketplaceExtension[] }>(`/api/v2/marketplace/search${qs}`, {
     signal,
   });
 }
@@ -183,7 +183,7 @@ export async function getExtensionDetails(
   extensionId: string,
   signal?: AbortSignal,
 ): Promise<ExtensionDetailsResponse> {
-  return api<ExtensionDetailsResponse>(`/marketplace/extension/${encodeURIComponent(extensionId)}`, {
+  return api<ExtensionDetailsResponse>(`/api/v2/marketplace/extension/${encodeURIComponent(extensionId)}`, {
     signal,
   });
 }
@@ -193,7 +193,7 @@ export async function installMarketplacePlugin(
   version?: string,
   tenantId?: string,
 ): Promise<InstallJobResponse> {
-  return api<InstallJobResponse>("/marketplace/install", {
+  return api<InstallJobResponse>("/api/v2/marketplace/install", {
     method: "POST",
     body: {
       extension_id: extensionId,
@@ -207,7 +207,7 @@ export async function uninstallMarketplacePlugin(
   extensionId: string,
   tenantId?: string,
 ): Promise<{ status: "queued"; job_id: string }> {
-  return api<{ status: "queued"; job_id: string }>("/marketplace/uninstall", {
+  return api<{ status: "queued"; job_id: string }>("/api/v2/marketplace/uninstall", {
     method: "POST",
     body: {
       extension_id: extensionId,
@@ -221,7 +221,7 @@ export async function enableMarketplacePlugin(
   tenantId?: string,
 ): Promise<{ status: "enabled" }> {
   return api<{ status: "enabled" }>(
-    `/marketplace/extension/${encodeURIComponent(extensionId)}/enable`,
+    `/api/v2/marketplace/extension/${encodeURIComponent(extensionId)}/enable`,
     {
       method: "PATCH",
       body: {
@@ -236,7 +236,7 @@ export async function disableMarketplacePlugin(
   tenantId?: string,
 ): Promise<{ status: "disabled" }> {
   return api<{ status: "disabled" }>(
-    `/marketplace/extension/${encodeURIComponent(extensionId)}/disable`,
+    `/api/v2/marketplace/extension/${encodeURIComponent(extensionId)}/disable`,
     {
       method: "PATCH",
       body: {

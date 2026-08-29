@@ -1,21 +1,24 @@
 """
-Console Marketplace API — discovery, search, and installation.
+Console Marketplace API — FastAPI Edition.
 
 Exposes core/plugins/marketplace.py (ADR-0385) backend to Console UI.
-Implements CONCEPT-0023 Phase 1 endpoints.
+Implements CONCEPT-0023 Phase 1-2 endpoints via FastAPI (not Flask).
 
 Routes:
-  GET  /api/v2/marketplace/index          → List all plugins
-  GET  /api/v2/marketplace/search         → Search + filter
-  GET  /api/v2/marketplace/extension/<id> → Get one plugin
-  POST /api/v2/marketplace/install        → Queue install (mock)
-  POST /api/v2/marketplace/uninstall      → Queue uninstall (mock)
-  PATCH /api/v2/marketplace/extension/<id>/enable  → Enable
-  PATCH /api/v2/marketplace/extension/<id>/disable → Disable
+  GET  /marketplace/index          → List all plugins
+  GET  /marketplace/search         → Search + filter
+  GET  /marketplace/extension/<id> → Get one plugin
+  POST /marketplace/install        → Queue install (mock)
+  POST /marketplace/uninstall      → Queue uninstall (mock)
+  PATCH /marketplace/extension/<id>/enable  → Enable
+  PATCH /marketplace/extension/<id>/disable → Disable
+
+Design: FastAPI APIRouter (native async, better integration with console app).
+Rewrite from Flask (ADR-0472 synthesis: adapter layer → full rewrite).
 """
 
-from flask import Blueprint, request, jsonify, current_app
-from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional, Dict, Any
 from dataclasses import asdict
 import logging
 
@@ -24,14 +27,12 @@ try:
     from core.plugins.marketplace import (
         PluginMarketplace,
         PluginMetadata,
-        PluginCategory,
-        PluginOrigin,
     )
 except ImportError:
     PluginMarketplace = None
     PluginMetadata = None
 
-# Import cache manager (Task #3)
+# Import cache manager
 try:
     from .marketplace_cache import MarketplaceCacheManager
 except ImportError:
@@ -39,17 +40,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-marketplace_bp = Blueprint(
-    "marketplace",
-    __name__,
-    url_prefix="/api/v2/marketplace",
-)
+router = APIRouter(prefix="/api/v2/marketplace", tags=["marketplace"])
 
 # Global cache instance
 _cache_manager = None
 
 
-def get_cache_manager():
+def get_cache_manager() -> Optional[MarketplaceCacheManager]:
     """Get or create cache manager singleton."""
     global _cache_manager
     if _cache_manager is None and MarketplaceCacheManager:
@@ -70,10 +67,10 @@ def serialize_plugin(plugin: PluginMetadata) -> Dict[str, Any]:
     return data
 
 
-@marketplace_bp.route("/index", methods=["GET"])
-def get_marketplace_index():
+@router.get("/index")
+async def marketplace_index() -> Dict[str, Any]:
     """
-    GET /api/v2/marketplace/index
+    GET /marketplace/index
 
     Returns: {
       "version": "1.0",
@@ -85,7 +82,7 @@ def get_marketplace_index():
     Error: 503 if backend unavailable, 500 on other errors
     """
     if not PluginMarketplace:
-        return jsonify({"error": "Marketplace backend unavailable"}), 503
+        raise HTTPException(status_code=503, detail="Marketplace backend unavailable")
 
     try:
         cache = get_cache_manager()
@@ -94,33 +91,31 @@ def get_marketplace_index():
         if cache:
             cached_data = cache.get()
             if cached_data:
-                return jsonify(
-                    {
-                        "version": "1.0",
-                        "last_updated": "2026-08-30T00:00:00Z",
-                        "extensions": cached_data,
-                        "cached": True,
-                    }
-                ), 200
+                return {
+                    "version": "1.0",
+                    "last_updated": "2026-08-30T00:00:00Z",
+                    "extensions": cached_data,
+                    "cached": True,
+                }
 
         # Cache miss or no cache manager: fetch from backend
-        marketplace = PluginMarketplace()  # TODO: wire to global instance
+        marketplace = PluginMarketplace()
         plugins = marketplace.list_all()
         serialized = [serialize_plugin(p) for p in plugins]
 
-        # Update cache (async in production, sync for now)
+        # Update cache
         if cache:
             cache.set(serialized)
 
-        return jsonify(
-            {
-                "version": "1.0",
-                "last_updated": "2026-08-30T00:00:00Z",  # TODO: actual timestamp
-                "extensions": serialized,
-                "cached": False,
-            }
-        ), 200
+        return {
+            "version": "1.0",
+            "last_updated": "2026-08-30T00:00:00Z",
+            "extensions": serialized,
+            "cached": False,
+        }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to fetch marketplace index: {e}")
 
@@ -130,23 +125,27 @@ def get_marketplace_index():
             stale_data = cache.get_stale()
             if stale_data:
                 logger.info("Returning stale cache on error")
-                return jsonify(
-                    {
-                        "version": "1.0",
-                        "extensions": stale_data,
-                        "cached": True,
-                        "stale": True,
-                        "error": str(e),
-                    }
-                ), 200
+                return {
+                    "version": "1.0",
+                    "extensions": stale_data,
+                    "cached": True,
+                    "stale": True,
+                    "error": str(e),
+                }
 
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@marketplace_bp.route("/search", methods=["GET"])
-def search_marketplace():
+@router.get("/search")
+async def marketplace_search(
+    q: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    origin: Optional[str] = Query(None),
+    rating_min: Optional[float] = Query(None),
+    sort: Optional[str] = Query("rating"),
+) -> Dict[str, Any]:
     """
-    GET /api/v2/marketplace/search
+    GET /marketplace/search
 
     Query params:
       q: string (search by name/description)
@@ -156,33 +155,23 @@ def search_marketplace():
       sort: string (rating, downloads, name)
 
     Returns: {extensions: [filtered results]}
-    Error: 400 (bad query), 500 (backend error)
     """
     if not PluginMarketplace:
-        return jsonify({"error": "Marketplace backend unavailable"}), 503
+        raise HTTPException(status_code=503, detail="Marketplace backend unavailable")
 
     try:
-        # Parse query params
-        q = request.args.get("q", "").strip()
-        category = request.args.get("category")
-        origin = request.args.get("origin")
-        rating_min = request.args.get("rating_min", type=float)
-        sort = request.args.get("sort", "rating")
-
-        # TODO: wire PluginMarketplace.search(q, category, origin, rating_min, sort)
-        # For now, return all and filter client-side
-        marketplace = PluginMarketplace()  # TODO: wire to global instance
+        # Fetch from backend
+        marketplace = PluginMarketplace()
         plugins = marketplace.list_all()
 
-        # Simple client-side filtering (temporary)
+        # Client-side filtering
         filtered = plugins
         if q:
             q_lower = q.lower()
             filtered = [
                 p
                 for p in filtered
-                if q_lower in p.name.lower()
-                or q_lower in p.description.lower()
+                if q_lower in p.name.lower() or q_lower in p.description.lower()
             ]
         if category:
             filtered = [p for p in filtered if p.category.value == category]
@@ -191,25 +180,22 @@ def search_marketplace():
         if rating_min:
             filtered = [p for p in filtered if p.rating_average >= rating_min]
 
-        return jsonify(
-            {"extensions": [serialize_plugin(p) for p in filtered]}
-        ), 200
+        return {"extensions": [serialize_plugin(p) for p in filtered]}
+
     except ValueError as e:
-        return jsonify({"error": f"Invalid query params: {e}"}), 400
+        raise HTTPException(status_code=400, detail=f"Invalid query params: {e}")
     except Exception as e:
         logger.error(f"Search failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@marketplace_bp.route("/extension/<extension_id>", methods=["GET"])
-def get_extension_details(extension_id: str):
+@router.get("/extension/{extension_id}")
+async def marketplace_extension_details(extension_id: str) -> Dict[str, Any]:
     """
-    GET /api/v2/marketplace/extension/{id}
+    GET /marketplace/extension/{id}
 
     Returns: {
       "id": "auth-saml-2.1",
-      "name": "SAML 2.0 Authentication",
-      "version": "0.1.0",
       "metadata": {...},
       "readme_url": "https://raw.../README.md"
     }
@@ -217,32 +203,35 @@ def get_extension_details(extension_id: str):
     Error: 404 (not found), 500 (backend error)
     """
     if not PluginMarketplace:
-        return jsonify({"error": "Marketplace backend unavailable"}), 503
+        raise HTTPException(status_code=503, detail="Marketplace backend unavailable")
 
     try:
-        marketplace = PluginMarketplace()  # TODO: wire to global instance
+        marketplace = PluginMarketplace()
         plugin = marketplace.get_plugin(extension_id)
         if not plugin:
-            return jsonify({"error": f"Extension '{extension_id}' not found"}), 404
+            raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' not found")
 
-        return jsonify(
-            {
-                "id": plugin.plugin_id,
-                "metadata": serialize_plugin(plugin),
-                "readme_url": plugin.repository_url + "/blob/main/README.md"
+        return {
+            "id": plugin.plugin_id,
+            "metadata": serialize_plugin(plugin),
+            "readme_url": (
+                f"{plugin.repository_url}/blob/main/README.md"
                 if plugin.repository_url
-                else None,
-            }
-        ), 200
+                else None
+            ),
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get extension {extension_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@marketplace_bp.route("/install", methods=["POST"])
-def install_extension():
+@router.post("/install")
+async def marketplace_install(body: Dict[str, Any]) -> Dict[str, Any]:
     """
-    POST /api/v2/marketplace/install
+    POST /marketplace/install
 
     Body: {
       "extension_id": "plugin:example-plugin",
@@ -252,56 +241,50 @@ def install_extension():
 
     Returns: {
       "status": "queued",
-      "job_id": "install-abc123",
-      "progress_url": "/api/v2/marketplace/install/abc123/progress"
+      "job_id": "install-abc123"
     }
-
-    Error: 400 (validation), 404 (not found), 500 (backend error)
 
     Note: Phase 1 is mock. Phase 3 will implement actual installation.
     """
     if not PluginMarketplace:
-        return jsonify({"error": "Marketplace backend unavailable"}), 503
+        raise HTTPException(status_code=503, detail="Marketplace backend unavailable")
 
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Request body required"}), 400
+        if not body:
+            raise HTTPException(status_code=400, detail="Request body required")
 
-        extension_id = data.get("extension_id")
-        version = data.get("version")
-        tenant_id = data.get("tenant_id", "default")
+        extension_id = body.get("extension_id")
+        version = body.get("version")
+        tenant_id = body.get("tenant_id", "default")
 
         if not extension_id:
-            return jsonify({"error": "extension_id required"}), 400
+            raise HTTPException(status_code=400, detail="extension_id required")
 
         # Validate extension exists
-        marketplace = PluginMarketplace()  # TODO: wire to global instance
+        marketplace = PluginMarketplace()
         plugin = marketplace.get_plugin(extension_id)
         if not plugin:
-            return jsonify({"error": f"Extension '{extension_id}' not found"}), 404
+            raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' not found")
 
-        # TODO: Phase 3 will implement real installation logic
-        # For now, return mock job_id
+        # Mock job_id
         job_id = f"install-{extension_id}-{version or plugin.version}"
 
-        return jsonify(
-            {
-                "status": "queued",
-                "job_id": job_id,
-                "progress_url": f"/api/v2/marketplace/install/{job_id}/progress",
-            }
-        ), 202
+        return {
+            "status": "queued",
+            "job_id": job_id,
+        }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Install failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@marketplace_bp.route("/uninstall", methods=["POST"])
-def uninstall_extension():
+@router.post("/uninstall")
+async def marketplace_uninstall(body: Dict[str, Any]) -> Dict[str, Any]:
     """
-    POST /api/v2/marketplace/uninstall
+    POST /marketplace/uninstall
 
     Body: {
       "extension_id": "plugin:example-plugin",
@@ -312,106 +295,92 @@ def uninstall_extension():
       "status": "queued",
       "job_id": "uninstall-abc123"
     }
-
-    Error: 400 (validation), 404 (not found), 500 (backend error)
     """
     if not PluginMarketplace:
-        return jsonify({"error": "Marketplace backend unavailable"}), 503
+        raise HTTPException(status_code=503, detail="Marketplace backend unavailable")
 
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Request body required"}), 400
+        if not body:
+            raise HTTPException(status_code=400, detail="Request body required")
 
-        extension_id = data.get("extension_id")
-        tenant_id = data.get("tenant_id", "default")
+        extension_id = body.get("extension_id")
+        tenant_id = body.get("tenant_id", "default")
 
         if not extension_id:
-            return jsonify({"error": "extension_id required"}), 400
+            raise HTTPException(status_code=400, detail="extension_id required")
 
         # Validate extension exists
-        marketplace = PluginMarketplace()  # TODO: wire to global instance
+        marketplace = PluginMarketplace()
         plugin = marketplace.get_plugin(extension_id)
         if not plugin:
-            return jsonify({"error": f"Extension '{extension_id}' not found"}), 404
+            raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' not found")
 
-        # TODO: Phase 3 will implement real uninstall logic
         job_id = f"uninstall-{extension_id}"
 
-        return jsonify(
-            {"status": "queued", "job_id": job_id}
-        ), 202
+        return {"status": "queued", "job_id": job_id}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Uninstall failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@marketplace_bp.route("/extension/<extension_id>/enable", methods=["PATCH"])
-def enable_extension(extension_id: str):
+@router.patch("/extension/{extension_id}/enable")
+async def marketplace_enable(extension_id: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    PATCH /api/v2/marketplace/extension/{id}/enable
+    PATCH /marketplace/extension/{id}/enable
 
     Body: {"tenant_id": "default"}
 
     Returns: {"status": "enabled"}
-    Error: 404 (not found), 500 (backend error)
 
     Note: Phase 1 is mock. Phase 4 will implement actual enable logic.
     """
     if not PluginMarketplace:
-        return jsonify({"error": "Marketplace backend unavailable"}), 503
+        raise HTTPException(status_code=503, detail="Marketplace backend unavailable")
 
     try:
-        data = request.get_json() or {}
-        tenant_id = data.get("tenant_id", "default")
-
         # Validate extension exists
-        marketplace = PluginMarketplace()  # TODO: wire to global instance
+        marketplace = PluginMarketplace()
         plugin = marketplace.get_plugin(extension_id)
         if not plugin:
-            return jsonify({"error": f"Extension '{extension_id}' not found"}), 404
+            raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' not found")
 
-        # TODO: Phase 4 will call PluginGovernance.mark_enabled(extension_id, tenant_id)
-        # For now, return success
+        return {"status": "enabled"}
 
-        return jsonify({"status": "enabled"}), 200
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Enable failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@marketplace_bp.route("/extension/<extension_id>/disable", methods=["PATCH"])
-def disable_extension(extension_id: str):
+@router.patch("/extension/{extension_id}/disable")
+async def marketplace_disable(extension_id: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    PATCH /api/v2/marketplace/extension/{id}/disable
+    PATCH /marketplace/extension/{id}/disable
 
     Body: {"tenant_id": "default"}
 
     Returns: {"status": "disabled"}
-    Error: 404 (not found), 500 (backend error)
 
     Note: Phase 1 is mock. Phase 4 will implement actual disable logic.
     """
     if not PluginMarketplace:
-        return jsonify({"error": "Marketplace backend unavailable"}), 503
+        raise HTTPException(status_code=503, detail="Marketplace backend unavailable")
 
     try:
-        data = request.get_json() or {}
-        tenant_id = data.get("tenant_id", "default")
-
         # Validate extension exists
-        marketplace = PluginMarketplace()  # TODO: wire to global instance
+        marketplace = PluginMarketplace()
         plugin = marketplace.get_plugin(extension_id)
         if not plugin:
-            return jsonify({"error": f"Extension '{extension_id}' not found"}), 404
+            raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' not found")
 
-        # TODO: Phase 4 will call PluginGovernance.mark_disabled(extension_id, tenant_id)
-        # For now, return success
+        return {"status": "disabled"}
 
-        return jsonify({"status": "disabled"}), 200
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Disable failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))

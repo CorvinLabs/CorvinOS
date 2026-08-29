@@ -216,36 +216,60 @@ class PluginInstallTask:
         return items
 
     async def _register_panel(self, manifest: Dict[str, Any]):
-        """Register Settings Panel in Console."""
-        # This would integrate with Console's PANELS registry
-        panel_spec = manifest.get("console", {}).get("settings_panel", {})
+        """Register Settings Panel in Console (Phase 3 Integration).
+
+        Extracts console.settings_panel from manifest and registers it
+        with PluginPanelRegistry, making it appear in Console sidebar.
+        """
+        from core.plugins.plugin_panel_registry import get_panel_registry
+
+        panel_spec = manifest.get("console", {}).get("settings_panel")
 
         if not panel_spec:
-            logger.warning("No settings panel to register")
+            logger.warning(f"No settings panel to register for {self.plugin_id}")
             return
 
-        # Stub: would call PANELS.register() here
-        logger.info(f"Panel registered: {panel_spec.get('id')}")
+        try:
+            registry = get_panel_registry()
+            panel_id = registry.register_panel(
+                plugin_id=self.plugin_id,
+                panel_spec=panel_spec
+            )
+            logger.info(f"✓ Panel auto-registered: {panel_id}")
+        except Exception as e:
+            logger.error(f"Panel registration failed: {e}")
+            # Don't fail the entire install if panel registration fails
+            # Console remains usable, plugin is installed but panel won't show
+            pass
 
     async def _rollback(self):
-        """Rollback on failure."""
+        """Rollback on failure: remove plugin, registry, and panels."""
         logger.warning(f"Rolling back plugin installation: {self.plugin_id}")
 
+        # 1. Remove plugin directory
         plugin_dir = Path.home() / ".corvin" / "plugins" / self.plugin_id
-
         try:
             if plugin_dir.exists():
                 shutil.rmtree(plugin_dir)
                 logger.info(f"Removed plugin directory: {plugin_dir}")
         except Exception as e:
-            logger.error(f"Rollback error: {e}")
+            logger.error(f"Rollback error (directory): {e}")
 
+        # 2. Remove from registry
         try:
             from core.plugins.plugin_registry import PluginRegistry
             registry = PluginRegistry()
             registry.remove(self.plugin_id)
         except Exception as e:
             logger.error(f"Registry rollback error: {e}")
+
+        # 3. Unregister all panels (Phase 3)
+        try:
+            from core.plugins.plugin_panel_registry import get_panel_registry
+            panel_registry = get_panel_registry()
+            panel_registry.unregister_plugin_panels(self.plugin_id)
+        except Exception as e:
+            logger.error(f"Panel registry rollback error: {e}")
 
     async def _emit_event(self, event_type: str, data: Dict[str, Any]):
         """
