@@ -21,8 +21,12 @@ class LearningEventType(str, Enum):
 
     # Core learning events (ADR-0314+)
     CONFIDENCE_SCORE = "confidence.score"
+    # Backward compatibility aliases
+    CONFIDENCE = "confidence.score"
     DECISION_RECORD = "decision.record"
     USER_FEEDBACK = "feedback.user_provided"
+    # Backward compatibility alias
+    FEEDBACK = "feedback.user_provided"
     OUTCOME_OBSERVED = "outcome.observed"
     PREFERENCE_SET = "preference.set"
     ATTENTION_CONSUMED = "attention.consumed"

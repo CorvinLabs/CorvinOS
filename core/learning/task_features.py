@@ -15,26 +15,49 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
+# Optional numpy import for performance; fallback to pure Python
+try:
+    import numpy as np
+    _NUMPY_AVAILABLE = True
+except ImportError:
+    _NUMPY_AVAILABLE = False
+    np = None  # type: ignore
+
+# Optional sklearn import
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    _SKLEARN_AVAILABLE = False
+    TfidfVectorizer = None  # type: ignore
 
 
 @dataclass
 class FeatureVector:
     """Normalized feature vector for ML inference."""
-    text_features: np.ndarray  # TF-IDF (50 dims)
-    context_features: np.ndarray  # Context (32 dims)
-    user_features: np.ndarray  # User (32 dims)
+    text_features: Any  # TF-IDF (50 dims) — numpy array or list
+    context_features: Any  # Context (32 dims) — numpy array or list
+    user_features: Any  # User (32 dims) — numpy array or list
     raw_text: str
     task_id: Optional[str] = None
 
-    def to_array(self) -> np.ndarray:
+    def to_array(self) -> Any:
         """Concatenate all features into single vector (114 dims)."""
-        return np.concatenate([
-            self.text_features,
-            self.context_features,
-            self.user_features,
-        ])
+        if _NUMPY_AVAILABLE:
+            return np.concatenate([
+                self.text_features,
+                self.context_features,
+                self.user_features,
+            ])
+        else:
+            # Pure Python concatenation
+            result = []
+            for features in [self.text_features, self.context_features, self.user_features]:
+                if isinstance(features, list):
+                    result.extend(features)
+                else:
+                    result.extend(list(features))
+            return result
 
 
 class TaskFeatureExtractor:
@@ -63,13 +86,16 @@ class TaskFeatureExtractor:
             tfidf_max_features: Maximum number of TF-IDF features to extract
         """
         self.tfidf_max_features = tfidf_max_features
-        self.tfidf_vectorizer = TfidfVectorizer(
-            max_features=tfidf_max_features,
-            lowercase=True,
-            stop_words="english",
-            min_df=1,
-            max_df=0.95,
-        )
+        if _SKLEARN_AVAILABLE:
+            self.tfidf_vectorizer = TfidfVectorizer(
+                max_features=tfidf_max_features,
+                lowercase=True,
+                stop_words="english",
+                min_df=1,
+                max_df=0.95,
+            )
+        else:
+            self.tfidf_vectorizer = None
         self._tfidf_fitted = False
 
     def fit(self, texts: list[str]) -> None:
@@ -80,30 +106,35 @@ class TaskFeatureExtractor:
         """
         if not texts:
             raise ValueError("Cannot fit TF-IDF on empty text list")
-        self.tfidf_vectorizer.fit(texts)
+        if self.tfidf_vectorizer is not None:
+            self.tfidf_vectorizer.fit(texts)
         self._tfidf_fitted = True
 
-    def extract_text_features(self, task_text: str) -> np.ndarray:
+    def extract_text_features(self, task_text: str) -> Any:
         """Extract TF-IDF text features from task description.
 
         Args:
             task_text: Task description text
 
         Returns:
-            Normalized vector (50 dims)
+            Normalized vector (50 dims) — numpy array or list
         """
-        if not self._tfidf_fitted:
-            # Return zero vector if not fitted yet
-            return np.zeros(self.tfidf_max_features)
+        if _NUMPY_AVAILABLE:
+            if not self._tfidf_fitted:
+                # Return zero vector if not fitted yet
+                return np.zeros(self.tfidf_max_features)
 
-        if not task_text or not isinstance(task_text, str):
-            return np.zeros(self.tfidf_max_features)
+            if not task_text or not isinstance(task_text, str):
+                return np.zeros(self.tfidf_max_features)
 
-        vector = self.tfidf_vectorizer.transform([task_text]).toarray()[0]
-        # Pad/truncate to expected size
-        if len(vector) < self.tfidf_max_features:
-            vector = np.pad(vector, (0, self.tfidf_max_features - len(vector)))
-        return vector[:self.tfidf_max_features]
+            vector = self.tfidf_vectorizer.transform([task_text]).toarray()[0]
+            # Pad/truncate to expected size
+            if len(vector) < self.tfidf_max_features:
+                vector = np.pad(vector, (0, self.tfidf_max_features - len(vector)))
+            return vector[:self.tfidf_max_features]
+        else:
+            # Pure Python fallback: return zero vector
+            return [0.0] * self.tfidf_max_features
 
     def extract_context_features(
         self,
@@ -111,7 +142,7 @@ class TaskFeatureExtractor:
         task_type: Optional[str] = None,
         prior_complexity: Optional[str] = None,
         domain_tags: Optional[list[str]] = None,
-    ) -> np.ndarray:
+    ) -> Any:
         """Extract context features from task metadata.
 
         Features (32 dims):
@@ -127,9 +158,12 @@ class TaskFeatureExtractor:
             domain_tags: Domain-specific tags
 
         Returns:
-            Normalized vector (32 dims)
+            Normalized vector (32 dims) — numpy array or list
         """
-        features = np.zeros(32)
+        if _NUMPY_AVAILABLE:
+            features = np.zeros(32)
+        else:
+            features = [0.0] * 32
 
         # 1. Domain keyword matches (8 dims)
         lower_text = task_text.lower()
@@ -166,7 +200,13 @@ class TaskFeatureExtractor:
         features[29] = task_text.count(".") / 5  # sentence count
         features[30] = task_text.count("(") / 3  # code indicator
 
-        return features / np.linalg.norm(features + 1e-8)  # L2 norm
+        # L2 normalization
+        if _NUMPY_AVAILABLE:
+            return features / np.linalg.norm(features + 1e-8)  # L2 norm
+        else:
+            # Pure Python L2 norm
+            norm = (sum(f**2 for f in features) + 1e-8)**0.5
+            return [f / norm for f in features]
 
     def extract_user_features(
         self,
@@ -174,7 +214,7 @@ class TaskFeatureExtractor:
         user_complexity_history: Optional[dict[str, int]] = None,
         user_success_rate: float = 0.5,
         tasks_completed: int = 0,
-    ) -> np.ndarray:
+    ) -> Any:
         """Extract user history features.
 
         Features (32 dims):
@@ -190,9 +230,12 @@ class TaskFeatureExtractor:
             tasks_completed: Total tasks completed
 
         Returns:
-            Normalized vector (32 dims)
+            Normalized vector (32 dims) — numpy array or list
         """
-        features = np.zeros(32)
+        if _NUMPY_AVAILABLE:
+            features = np.zeros(32)
+        else:
+            features = [0.0] * 32
 
         if user_complexity_history is None:
             user_complexity_history = {}
@@ -226,7 +269,13 @@ class TaskFeatureExtractor:
         features[24] = min(1.0, tasks_completed / 1000)  # overall activity
         features[25] = user_success_rate * (tasks_completed / 100)  # weighted score
 
-        return features / np.linalg.norm(features + 1e-8)
+        # L2 normalization
+        if _NUMPY_AVAILABLE:
+            return features / np.linalg.norm(features + 1e-8)
+        else:
+            # Pure Python L2 norm
+            norm = (sum(f**2 for f in features) + 1e-8)**0.5
+            return [f / norm for f in features]
 
     def extract_all_features(
         self,

@@ -10,6 +10,7 @@ must use these functions rather than constructing paths directly.
 GDPR Art. 5 (integrity) + ADR-0007 (multi-tenant axis).
 """
 
+import os
 from pathlib import Path
 
 from core.tenants import (
@@ -22,7 +23,7 @@ from core.tenants import (
 def tenant_home(tenant_id: str) -> Path:
     """Construct tenant home directory path.
 
-    Returns: ~/.corvin/tenants/<tenant_id>/
+    Returns: ~/.corvin/tenants/<tenant_id>/ or $CORVIN_HOME/tenants/<tenant_id>/ if set
 
     Args:
         tenant_id: Tenant identifier (validated)
@@ -34,6 +35,11 @@ def tenant_home(tenant_id: str) -> Path:
         ValueError: If tenant_id is invalid
     """
     validate_tenant_id(tenant_id)
+    # Check for CORVIN_HOME env var (for testing and multi-home scenarios)
+    corvin_home = os.environ.get("CORVIN_HOME")
+    if corvin_home:
+        return Path(corvin_home) / "tenants" / tenant_id
+    # Default: ~/.corvin/tenants/<tenant_id>/
     return Path.home() / ".corvin" / "tenants" / tenant_id
 
 

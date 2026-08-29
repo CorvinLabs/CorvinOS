@@ -122,6 +122,7 @@ def _standalone_write(event_type: str, *, tenant_id: str = "_default", **details
                 "ts": time.time(),
                 "event_type": str(event_type)[:128],
                 "severity": severity,
+                "tenant_id": tenant_id,
                 "run_id": "",
                 "tool": "",
                 "details": _det,

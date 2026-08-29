@@ -33,36 +33,78 @@ from .migration import MigrationPlanner
 from .anomaly_detector import AnomalyDetector, AnomalyAlert
 # Phase 4: Learned Classification for Context Engineering (ADR-0393)
 from .task_features import TaskFeatureExtractor, FeatureVector
-from .classifier_model import LearnedClassifier, PredictionResult, ClassifierMetrics
-from .classifier_trainer import ClassifierTrainer, TrainingDataset, TrainingDataPoint
-from .active_feedback import ActiveFeedbackCollector, FeedbackRecord, FeedbackMetrics
-from .classifier_serving import ClassifierService
+
+# Optional imports — numpy/sklearn may not be available in all environments
+try:
+    from .classifier_model import LearnedClassifier, PredictionResult, ClassifierMetrics
+    from .classifier_trainer import ClassifierTrainer, TrainingDataset, TrainingDataPoint
+    from .active_feedback import ActiveFeedbackCollector, FeedbackRecord, FeedbackMetrics
+    from .classifier_serving import ClassifierService
+    _CLASSIFIER_AVAILABLE = True
+except ImportError:
+    # Gracefully handle missing numpy/sklearn
+    LearnedClassifier = None  # type: ignore
+    PredictionResult = None  # type: ignore
+    ClassifierMetrics = None  # type: ignore
+    ClassifierTrainer = None  # type: ignore
+    TrainingDataset = None  # type: ignore
+    TrainingDataPoint = None  # type: ignore
+    ActiveFeedbackCollector = None  # type: ignore
+    FeedbackRecord = None  # type: ignore
+    FeedbackMetrics = None  # type: ignore
+    ClassifierService = None  # type: ignore
+    _CLASSIFIER_AVAILABLE = False
+
 # Phase 6: Learning Loop (ADR-0428)
-from .feedback_pipeline import (
-    FeedbackPipeline,
-    TestResult,
-    TestResultType,
-    FailureCategory,
-    PatternAnalysis,
-    PromptRefinement,
-)
-from .ab_testing import (
-    ABTestingFramework,
-    ExperimentMetric,
-    ExperimentGroup,
-    ExperimentStatus,
-    Experiment,
-    RolloutPlan,
-    RolloutPhase,
-)
-from .learning_dashboard import (
-    LearningDashboard,
-    MetricType as DashboardMetricType,
-    MetricPoint,
-    AggregatedMetric,
-    MetricAlert,
-    AggregationWindow,
-)
+try:
+    from .feedback_pipeline import (
+        FeedbackPipeline,
+        TestResult,
+        TestResultType,
+        FailureCategory,
+        PatternAnalysis,
+        PromptRefinement,
+    )
+    from .ab_testing import (
+        ABTestingFramework,
+        ExperimentMetric,
+        ExperimentGroup,
+        ExperimentStatus,
+        Experiment,
+        RolloutPlan,
+        RolloutPhase,
+    )
+    from .learning_dashboard import (
+        LearningDashboard,
+        MetricType as DashboardMetricType,
+        MetricPoint,
+        AggregatedMetric,
+        MetricAlert,
+        AggregationWindow,
+    )
+    _LEARNING_LOOP_AVAILABLE = True
+except ImportError:
+    # Gracefully handle missing dependencies
+    FeedbackPipeline = None  # type: ignore
+    TestResult = None  # type: ignore
+    TestResultType = None  # type: ignore
+    FailureCategory = None  # type: ignore
+    PatternAnalysis = None  # type: ignore
+    PromptRefinement = None  # type: ignore
+    ABTestingFramework = None  # type: ignore
+    ExperimentMetric = None  # type: ignore
+    ExperimentGroup = None  # type: ignore
+    ExperimentStatus = None  # type: ignore
+    Experiment = None  # type: ignore
+    RolloutPlan = None  # type: ignore
+    RolloutPhase = None  # type: ignore
+    LearningDashboard = None  # type: ignore
+    DashboardMetricType = None  # type: ignore
+    MetricPoint = None  # type: ignore
+    AggregatedMetric = None  # type: ignore
+    MetricAlert = None  # type: ignore
+    AggregationWindow = None  # type: ignore
+    _LEARNING_LOOP_AVAILABLE = False
 
 __all__ = [
     "TreeNode",
@@ -94,33 +136,42 @@ __all__ = [
     # Phase 4: Learned Classifier (ADR-0393)
     "TaskFeatureExtractor",
     "FeatureVector",
-    "LearnedClassifier",
-    "PredictionResult",
-    "ClassifierMetrics",
-    "ClassifierTrainer",
-    "TrainingDataset",
-    "TrainingDataPoint",
-    "ActiveFeedbackCollector",
-    "FeedbackRecord",
-    "FeedbackMetrics",
-    "ClassifierService",
-    # Phase 6: Learning Loop (ADR-0428)
-    "FeedbackPipeline",
-    "TestResult",
-    "TestResultType",
-    "FailureCategory",
-    "PatternAnalysis",
-    "PromptRefinement",
-    "ABTestingFramework",
-    "ExperimentMetric",
-    "ExperimentGroup",
-    "ExperimentStatus",
-    "Experiment",
-    "RolloutPlan",
-    "RolloutPhase",
-    "LearningDashboard",
-    "MetricPoint",
-    "AggregatedMetric",
-    "MetricAlert",
-    "AggregationWindow",
 ]
+
+# Conditionally add classifier modules
+if _CLASSIFIER_AVAILABLE:
+    __all__.extend([
+        "LearnedClassifier",
+        "PredictionResult",
+        "ClassifierMetrics",
+        "ClassifierTrainer",
+        "TrainingDataset",
+        "TrainingDataPoint",
+        "ActiveFeedbackCollector",
+        "FeedbackRecord",
+        "FeedbackMetrics",
+        "ClassifierService",
+    ])
+
+# Conditionally add learning loop modules
+if _LEARNING_LOOP_AVAILABLE:
+    __all__.extend([
+        "FeedbackPipeline",
+        "TestResult",
+        "TestResultType",
+        "FailureCategory",
+        "PatternAnalysis",
+        "PromptRefinement",
+        "ABTestingFramework",
+        "ExperimentMetric",
+        "ExperimentGroup",
+        "ExperimentStatus",
+        "Experiment",
+        "RolloutPlan",
+        "RolloutPhase",
+        "LearningDashboard",
+        "MetricPoint",
+        "AggregatedMetric",
+        "MetricAlert",
+        "AggregationWindow",
+    ])
