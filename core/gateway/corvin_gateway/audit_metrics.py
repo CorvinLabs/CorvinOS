@@ -303,6 +303,31 @@ _FAMILIES: list[MetricFamily] = [
         "corvin_os_model_escalated_total", "counter",
         "OS-turn context-overflow escalations (Haiku → Sonnet retries) by reason.",
     ),
+    # Phase 2: Engine, workflow, and context metrics (ADR-0314+)
+    MetricFamily(
+        "corvin_engine_executions_total", "counter",
+        "Engine executions by status (success/failed/error types).",
+    ),
+    MetricFamily(
+        "corvin_engine_execution_duration_seconds", "histogram",
+        "Engine execution latency (successful and failed runs).",
+    ),
+    MetricFamily(
+        "corvin_engine_tokens_used_total", "counter",
+        "Total tokens used across successful engine executions.",
+    ),
+    MetricFamily(
+        "corvin_workflow_completions_total", "counter",
+        "Workflow completions by status.",
+    ),
+    MetricFamily(
+        "corvin_workflow_duration_seconds", "histogram",
+        "Workflow completion time.",
+    ),
+    MetricFamily(
+        "corvin_context_stack_depth", "gauge",
+        "Current execution context stack depth.",
+    ),
     MetricFamily(
         "corvin_audit_chain_events_total", "counter",
         "Total audit-chain events read for this projection (sanity).",
@@ -651,6 +676,62 @@ def _project(events: Iterable[dict[str, Any]]) -> _Snapshot:
                          _safe_label("escalation_reason", reason)),
                     )
 
+        # ── Phase 2: Engine execution metrics (ADR-0314+) ──────────────
+        elif et == "engine.execution_completed":
+            if isinstance(details, dict):
+                engine_id = details.get("engine_id", "unknown")
+                latency_ms = details.get("latency_ms", 0)
+                tokens_used = details.get("tokens_used")
+                # Count successful executions
+                snap.counter("corvin_engine_executions_total").inc(
+                    (_safe_label("status", "success"),),
+                )
+                # Record latency histogram (convert ms to seconds)
+                latency_s = latency_ms / 1000.0
+                snap.histogram(
+                    "corvin_engine_execution_duration_seconds",
+                    _DURATION_BUCKETS_S,
+                ).observe((_safe_label("status", "success"),), latency_s)
+                # Count tokens if present
+                if isinstance(tokens_used, int):
+                    snap.counter("corvin_engine_tokens_used_total").inc(
+                        (_safe_label("engine", engine_id),), tokens_used,
+                    )
+        elif et == "engine.execution_failed":
+            if isinstance(details, dict):
+                error_type = details.get("error_type", "unknown")
+                latency_ms = details.get("latency_ms", 0)
+                # Count failures
+                snap.counter("corvin_engine_executions_total").inc(
+                    (_safe_label("status", error_type),),
+                )
+                # Record failure latency histogram
+                latency_s = latency_ms / 1000.0
+                snap.histogram(
+                    "corvin_engine_execution_duration_seconds",
+                    _DURATION_BUCKETS_S,
+                ).observe((_safe_label("status", error_type),), latency_s)
+
+        # ── Workflow metrics (ADR-0314+) ───────────────────────────────
+        elif et == "workflow.completed":
+            if isinstance(details, dict):
+                status = details.get("status", "unknown")
+                duration_ms = details.get("duration_ms", 0)
+                # Count completion
+                snap.counter("corvin_workflow_completions_total").inc(
+                    (_safe_label("status", status),),
+                )
+                # Record duration histogram
+                duration_s = duration_ms / 1000.0
+                snap.histogram(
+                    "corvin_workflow_duration_seconds",
+                    _DURATION_BUCKETS_S,
+                ).observe((_safe_label("status", status),), duration_s)
+
+        # ── Context metrics (ADR-0314+) ────────────────────────────────
+        # context.push and context.pop don't contribute to Prometheus metrics
+        # in this phase; they're recorded in the chain for observability.
+
     return snap
 
 
@@ -689,6 +770,13 @@ _LABEL_ORDER: dict[str, tuple[str, ...]] = {
     # ADR-0024 Layer 29.5 Phase 3 — adaptive OS-turn model selection
     "corvin_os_model_selected_total":                  ("model", "os_selection_reason"),
     "corvin_os_model_escalated_total":                 ("model", "model", "escalation_reason"),
+    # Phase 2: Engine, workflow, context metrics (ADR-0314+)
+    "corvin_engine_executions_total":                  ("status",),
+    "corvin_engine_execution_duration_seconds":        ("status",),
+    "corvin_engine_tokens_used_total":                 ("engine",),
+    "corvin_workflow_completions_total":               ("status",),
+    "corvin_workflow_duration_seconds":                ("status",),
+    "corvin_context_stack_depth":                      (),
 }
 
 
