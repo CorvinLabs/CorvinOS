@@ -846,6 +846,17 @@ def _cli(argv: List[str]) -> int:
     roots = [Path(__file__).resolve().parent.parent]
     services = discover_services(roots)
     sup = Supervisor(services)
+
+    # Initialize secure file permissions on ~/.corvin (cross-platform)
+    try:
+        from core.platform import setup_corvin_home_permissions
+        corvin_home = Path.home() / ".corvin"
+        if corvin_home.exists():
+            setup_corvin_home_permissions(corvin_home)
+    except Exception as exc:
+        # Logging permission errors is a nice-to-have, not critical
+        print(f"Note: permission setup warning: {exc}", file=sys.stderr)
+
     try:
         if cmd == "list":
             for row in sup.list_status():
