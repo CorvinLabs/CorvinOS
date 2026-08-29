@@ -44,7 +44,51 @@ flag ON build their own home and pass it explicitly, so they are unaffected.
 """
 from __future__ import annotations
 
+import importlib
+import sys
+from pathlib import Path
+
 import pytest
+
+# ``import audit`` collision isolation (added 2026-08-29)
+# ------------------------------------------------------
+# Nine different ``audit.py`` modules are bare-importable in this repo (bridges,
+# learning, console, compute, awpkg, …). Seven files in THIS suite do a runtime
+# ``import audit`` and expect the ``operator/bridges/shared/audit.py`` one — the
+# module that carries ``_se`` / ``audit_event`` / ``verify_audit``. But
+# ``sys.modules['audit']`` is a process-global cache: whichever file imports
+# ``audit`` first wins, so when the whole suite runs together a different
+# ``audit.py`` (e.g. ``core/learning/audit.py``, which has no ``_se``) could
+# already be cached, and every later test read the wrong module —
+# ``AttributeError: module 'audit' has no attribute '_se'``. Each file passed in
+# isolation and failed in the aggregate: classic cross-file ``sys.modules``
+# pollution, invisible on a per-file CI shard.
+#
+# conftest is imported before any test module in this directory, so pre-binding
+# the correct ``audit`` here — and re-pinning it before every test, in case a
+# test popped or replaced it — makes the bare name resolve deterministically.
+_SHARED = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+
+
+def _bind_shared_audit():
+    if str(_SHARED) not in sys.path:
+        sys.path.insert(0, str(_SHARED))
+    cached = sys.modules.get("audit")
+    want = (_SHARED / "audit.py").resolve()
+    if cached is None or Path(getattr(cached, "__file__", "")).resolve() != want:
+        sys.modules.pop("audit", None)
+        return importlib.import_module("audit")
+    return cached
+
+
+_SHARED_AUDIT = _bind_shared_audit()
+
+
+@pytest.fixture(autouse=True)
+def _pin_shared_audit_module():
+    """Every ``import audit`` in this suite resolves to bridges/shared/audit.py."""
+    sys.modules["audit"] = _SHARED_AUDIT
+    yield
 
 
 @pytest.fixture(autouse=True)
