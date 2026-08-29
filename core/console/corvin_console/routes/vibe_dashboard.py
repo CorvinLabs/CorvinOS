@@ -1,15 +1,22 @@
 """
-Vibe Engineering Phase 2: Operator Dashboard Routes
+Vibe Engineering Dashboard Routes (Phase 2 + Phase 3)
 
-Flask API for checkpoint browser, task execution timeline, and session statistics.
+Flask API for checkpoint browser, task execution timeline, session statistics,
+and guidance decision management.
 
-Endpoints:
+Phase 2 Endpoints:
 - GET /vibe/checkpoints/<task_id> — List checkpoints for task
 - GET /vibe/checkpoint/<task_id>/<checkpoint_id> — Get checkpoint details
 - GET /vibe/task-status/<task_id> — Get task execution status
 - GET /vibe/metrics — Get system-wide metrics
 - POST /vibe/restore/<task_id>/<checkpoint_id> — Restore checkpoint
 - GET /vibe/tasks — List all active/recent tasks
+
+Phase 3 Endpoints (Guidance Decisions):
+- GET /v1/vibe/decisions — List recent guidance decisions
+- GET /v1/vibe/guidance/<id> — Get decision details
+- POST /v1/vibe/feedback/<id> — Submit operator feedback
+- GET /v1/vibe/stats — Get Vibe subsystem statistics
 """
 
 from flask import Blueprint, request, jsonify
@@ -409,3 +416,235 @@ def health_check() -> Dict[str, Any]:
             "status": "unhealthy",
             "error": str(e)
         }), 503
+
+
+# ============================================================================
+# PHASE 3: GUIDANCE DECISION MANAGEMENT
+# ============================================================================
+
+# In-memory decision history (would be persistent in production)
+_DECISION_HISTORY: list = []
+_DECISION_MAX_RETENTION = 1000
+
+
+@vibe_bp.route("/decisions", methods=["GET"])
+def list_decisions() -> Dict[str, Any]:
+    """
+    List recent guidance decisions (paginated, filterable).
+
+    Query parameters:
+      - limit (int): Results per page (default: 20, max: 100)
+      - offset (int): Pagination offset (default: 0)
+      - category (str): Filter by category (e.g., 'parallelize')
+      - min_confidence (float): Filter by confidence >= value
+
+    Response:
+    {
+        "decisions": [
+            {
+                "id": "task-123-0",
+                "task_id": "task-123",
+                "category": "parallelize",
+                "confidence": 0.85,
+                "rationale": "Found parallel branches",
+                "timestamp": "2026-08-29T12:30:00"
+            }
+        ],
+        "total_count": 42,
+        "has_more": true
+    }
+    """
+    limit = min(request.args.get("limit", 20, type=int), 100)
+    offset = request.args.get("offset", 0, type=int)
+    category_filter = request.args.get("category")
+    min_confidence = request.args.get("min_confidence", 0.0, type=float)
+
+    # Filter
+    filtered = _DECISION_HISTORY
+    if category_filter:
+        filtered = [d for d in filtered if d.get("category") == category_filter]
+    if min_confidence > 0:
+        filtered = [d for d in filtered if d.get("confidence", 0) >= min_confidence]
+
+    # Sort by timestamp (newest first)
+    filtered = sorted(filtered, key=lambda d: d.get("timestamp", ""), reverse=True)
+
+    total = len(filtered)
+    paginated = filtered[offset:offset + limit]
+
+    return jsonify({
+        "decisions": paginated,
+        "total_count": total,
+        "has_more": offset + limit < total,
+        "offset": offset,
+        "limit": limit
+    })
+
+
+@vibe_bp.route("/guidance/<decision_id>", methods=["GET"])
+def get_guidance_details(decision_id: str) -> Dict[str, Any]:
+    """
+    Get detailed information about a guidance decision.
+
+    Response:
+    {
+        "decision": { ... full decision object ... },
+        "related_decisions": [ ... decisions for same task ... ],
+        "feedback_count": 2
+    }
+    """
+    decision = None
+    for d in _DECISION_HISTORY:
+        if d.get("id") == decision_id:
+            decision = d
+            break
+
+    if not decision:
+        return jsonify({"error": "Decision not found"}), 404
+
+    # Find related decisions
+    related = [
+        d for d in _DECISION_HISTORY
+        if d.get("task_id") == decision.get("task_id")
+        and d.get("id") != decision_id
+    ][:5]
+
+    return jsonify({
+        "decision": decision,
+        "related_decisions": related,
+        "feedback_count": len(decision.get("feedback_history", []))
+    })
+
+
+@vibe_bp.route("/feedback/<decision_id>", methods=["POST"])
+def submit_feedback(decision_id: str) -> Dict[str, Any]:
+    """
+    Submit operator feedback on a decision.
+
+    Request body:
+    {
+        "rating": "good" | "bad" | "neutral",
+        "notes": "Optional feedback",
+        "corrective_action": "What should have happened"
+    }
+
+    Response:
+    {
+        "decision_id": "task-123-0",
+        "feedback_recorded": true,
+        "rating": "good"
+    }
+    """
+    decision = None
+    decision_idx = None
+    for idx, d in enumerate(_DECISION_HISTORY):
+        if d.get("id") == decision_id:
+            decision = d
+            decision_idx = idx
+            break
+
+    if not decision:
+        return jsonify({"error": "Decision not found"}), 404
+
+    data = request.get_json() or {}
+    rating = data.get("rating")
+
+    if rating not in ("good", "bad", "neutral"):
+        return jsonify({"error": "Rating must be 'good', 'bad', or 'neutral'"}), 400
+
+    feedback_entry = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "rating": rating,
+        "notes": data.get("notes", ""),
+        "corrective_action": data.get("corrective_action", "")
+    }
+
+    if "feedback_history" not in decision:
+        decision["feedback_history"] = []
+    decision["feedback_history"].append(feedback_entry)
+
+    _DECISION_HISTORY[decision_idx] = decision
+
+    return jsonify({
+        "decision_id": decision_id,
+        "feedback_recorded": True,
+        "rating": rating
+    })
+
+
+@vibe_bp.route("/stats", methods=["GET"])
+def get_vibe_stats() -> Dict[str, Any]:
+    """
+    Get Vibe subsystem statistics.
+
+    Response:
+    {
+        "total_decisions": 42,
+        "categories": {
+            "parallelize": 15,
+            "error_recovery": 12,
+            "optimize_cost": 10,
+            "refactor": 5
+        },
+        "avg_confidence": 0.78,
+        "feedback_rate": 0.5
+    }
+    """
+    categories: Dict[str, int] = {}
+    for d in _DECISION_HISTORY:
+        cat = d.get("category", "unknown")
+        categories[cat] = categories.get(cat, 0) + 1
+
+    confidences = [d.get("confidence", 0.5) for d in _DECISION_HISTORY]
+    avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+
+    feedback_count = sum(
+        len(d.get("feedback_history", []))
+        for d in _DECISION_HISTORY
+    )
+    feedback_rate = (
+        feedback_count / len(_DECISION_HISTORY)
+        if _DECISION_HISTORY
+        else 0.0
+    )
+
+    return jsonify({
+        "total_decisions": len(_DECISION_HISTORY),
+        "categories": categories,
+        "avg_confidence": round(avg_confidence, 2),
+        "feedback_count": feedback_count,
+        "feedback_rate": round(feedback_rate, 2),
+        "retention_max": _DECISION_MAX_RETENTION
+    })
+
+
+def record_guidance_decision(event: Dict[str, Any]) -> None:
+    """Record a guidance event to history (called by publisher).
+
+    Args:
+        event: GuidanceEvent dict from VibeEventPublisher
+    """
+    global _DECISION_HISTORY
+
+    record = {
+        "id": f"{event.get('task_id')}-{len(_DECISION_HISTORY)}",
+        "timestamp": event.get("timestamp"),
+        "task_id": event.get("task_id"),
+        "tenant_id": event.get("tenant_id"),
+        "category": event.get("category"),
+        "confidence": event.get("confidence"),
+        "rationale": event.get("rationale"),
+        "recommended_action": event.get("recommended_action"),
+        "fallback_used": event.get("fallback_used"),
+        "severity": event.get("severity"),
+        "supporting_metrics": event.get("supporting_metrics", {}),
+        "feedback_history": []
+    }
+
+    if len(_DECISION_HISTORY) >= _DECISION_MAX_RETENTION:
+        _DECISION_HISTORY = _DECISION_HISTORY[-(
+            _DECISION_MAX_RETENTION // 2
+        ):]
+
+    _DECISION_HISTORY.append(record)
+    logger.debug(f"Recorded guidance decision for task {event.get('task_id')}")
