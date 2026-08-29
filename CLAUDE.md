@@ -309,6 +309,80 @@ Canonical runtime root: `~/.corvin/`; voice/secret config: `~/.config/corvin-voi
 
 ---
 
+## Plugin System — Complete Reference (ADR-0030/0033/0233/0243/0249)
+
+**Purpose:** CorvinOS extends without forking, restarting, or compromising security. Plugins
+are Python classes (in-process) or declarative configs (personas, Forge tools, SkillForge skills)
+that hook into 4 extension points.
+
+### Four Extension Surfaces
+
+| Layer | Extension | Type | Reload | Compliance |
+|---|---|---|---|---|
+| **L4** | Personas (role selection) | Declarative JSON | Hot (per msg) | Consent gate |
+| **L6** | Forge tools (schema-bound runtime code) | Python MCP | Hot (Session scope) | Audit trail |
+| **L7** | SkillForge skills (prompt injection) | Markdown | Hot (per chat) | Audit trail |
+| **In-process plugins** | Audit/user/notification backends | Python class | Bootstrap only | Tripwire + audit trail |
+
+**Key invariants (never weaken):**
+- Plugin **perimeter is ATTRIBUTION, not security.** An in-process plugin is part of the process.
+  The only in-process guard is the boot tripwire (non-overridable, runs first).
+- **Anything that must hold against a hostile plugin belongs in a subprocess** (ADR-0241/0238).
+- **Three orthogonal axes, never conflated:**
+  - `boot_layer`: compliance·core·bundled·installed (load order + disableability)
+  - `tier`: capability boundary + license gate (Tier A/B/C)
+  - `origin`: builtin·vetted·community (provenance)
+- **One registry contract** in `core/plugins/corvin_plugins/`. Never add a second registry, lifecycle, taxonomy, or marketplace.
+
+### Plugin Trust Anchor — Maintainer Key Custody (ADR-0249, Stage 6)
+
+**Purpose:** Pin the maintainer's Ed25519 key so that `origin=vetted` plugins are
+cryptographically verified to originate from the Corvin Labs maintainer, not from any
+self-signed author.
+
+**The mechanism:**
+- Maintainer generates one Ed25519 keypair (offline, backed up)
+- Public half (DER-encoded, base64url) stored in `~/.corvin/global/plugin_trust_anchors.txt`
+- `corvin plugin install <path>` verifies plugin manifest's Ed25519 signature
+- Signature verifies + key pinned → allowed (no prompt)
+- Signature fails or key unpinned → refused, fail-closed (no override)
+- No signature or `origin=community` → operator confirmation prompt
+
+**Console Governance UI (ADR-0249):**
+- Trust badge display (Builtin | Vetted ✓ | Community ⚠) per plugin
+- Permissions disclosure (data locality, network egress, PII risk)
+- Report modal (reason + details, audit trail)
+- Route: `GET /v1/vibe/plugins/<id>`, `POST /v1/vibe/plugins/<id>/report`
+- Files: `PluginTrustBadge.tsx`, `vibe_plugins_api.py`
+
+**Installation Flow (ADR-0249 Stage 6):**
+1. **Upload**: Multipart tarball + optional SHA256 checksum (web + CLI)
+2. **Verify**: Extract manifest, validate schema, check trust verdict
+3. **Audit**: Emit `plugin.installation_started` event (hash-chained)
+4. **Install**: Call Stage 6 CLI (`corvin plugin install`)
+5. **Enable**: Hot-reload or mark for next boot
+6. **Health Check**: `health_check()` passes within 2s
+- Route: `POST /v1/console/plugins/upload`
+- Files: `plugin_upload.py`, `PluginUpload.tsx`, `test_plugin_install_flow_e2e.py`
+
+**Feature flags (ship dark):**
+- `plugin_trust_enforcement` (default: off) — when off, verdicts computed but nothing refused
+- `plugin_console_surface` (default: off) — when off, Console governance UI hidden
+- `plugin_runtime_lifecycle` (default: off) — when off, runtime install/enable hidden
+
+**Must NOT do (absolute):**
+- Commit the private key (it is the signing secret)
+- Hardcode keys in code (anchors are ephemeral configuration)
+- Create "allow unsigned" escape hatch or env kill-flag
+- Weaken fail-closed trust checks under any condition
+- Describe trust checks as live guarantees before flag flips to default-on
+
+**Custody procedure:** See [docs/operations/plugin-trust-anchor-procedures.md](docs/operations/plugin-trust-anchor-procedures.md)
+
+→ Full spec: ADR-0249 (provenance + consent), ADR-0248 (`install` command), ADR-0243 (boot layers), ADR-0233 (consolidation)
+
+---
+
 ## Feature Flags — Ship Dark by Default (load-bearing)
 
 **Goal: a stable CorvinOS core.** New functionality must never change the behavior of an

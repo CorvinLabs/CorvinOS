@@ -1,0 +1,107 @@
+[
+  {
+    "test_name": "concurrent_100_plugins",
+    "num_plugins": 1000,
+    "concurrency": 100,
+    "total_duration_s": 0.11364286900061416,
+    "success_count": 989,
+    "failure_count": 11,
+    "success_rate": 0.989,
+    "statistics": {
+      "count": 989,
+      "mean_ms": 10.264486302411697,
+      "median_ms": 10.077708000608254,
+      "stdev_ms": 0.6712525393308871,
+      "min_ms": 10.0075869995635,
+      "max_ms": 16.40179099922534,
+      "p50_ms": 10.077708000608254,
+      "p95_ms": 11.28080700073042,
+      "p99_ms": 13.864778000424849,
+      "throughput_ops_per_sec": 8702.701794642788
+    }
+  },
+  {
+    "test_name": "profile_concurrency_1",
+    "num_plugins": 1000,
+    "concurrency": 1,
+    "total_duration_s": 10.139111641001364,
+    "success_count": 979,
+    "failure_count": 21,
+    "success_rate": 0.979,
+    "statistics": {
+      "count": 979,
+      "mean_ms": 10.091781873348037,
+      "median_ms": 10.08140400153934,
+      "stdev_ms": 0.09857647492213079,
+      "min_ms": 10.026762000052258,
+      "max_ms": 12.968016002560034,
+      "p50_ms": 10.08140400153934,
+      "p95_ms": 10.138010999071412,
+      "p99_ms": 10.218223000265425,
+      "throughput_ops_per_sec": 96.55678275018101
+    }
+  },
+  {
+    "test_name": "profile_concurrency_10",
+    "num_plugins": 1000,
+    "concurrency": 10,
+    "total_duration_s": 1.0142375790019287,
+    "success_count": 987,
+    "failure_count": 13,
+    "success_rate": 0.987,
+    "statistics": {
+      "count": 987,
+      "mean_ms": 10.092544648396032,
+      "median_ms": 10.080080999614438,
+      "stdev_ms": 0.05561724522106784,
+      "min_ms": 10.009098001319217,
+      "max_ms": 10.68426099664066,
+      "p50_ms": 10.080080999614438,
+      "p95_ms": 10.150324000278488,
+      "p99_ms": 10.333027999877231,
+      "throughput_ops_per_sec": 973.1447743942479
+    }
+  },
+  {
+    "test_name": "profile_concurrency_100",
+    "num_plugins": 1000,
+    "concurrency": 100,
+    "total_duration_s": 0.11275543900046614,
+    "success_count": 989,
+    "failure_count": 11,
+    "success_rate": 0.989,
+    "statistics": {
+      "count": 989,
+      "mean_ms": 10.303791875619668,
+      "median_ms": 10.123002000909764,
+      "stdev_ms": 0.5658231267408071,
+      "min_ms": 10.00973900227109,
+      "max_ms": 14.318231002107495,
+      "p50_ms": 10.123002000909764,
+      "p95_ms": 11.040571000194177,
+      "p99_ms": 13.55923000301118,
+      "throughput_ops_per_sec": 8771.195507437218
+    }
+  },
+  {
+    "test_name": "profile_concurrency_500",
+    "num_plugins": 1000,
+    "concurrency": 500,
+    "total_duration_s": 0.07049323300088872,
+    "success_count": 992,
+    "failure_count": 8,
+    "success_rate": 0.992,
+    "statistics": {
+      "count": 992,
+      "mean_ms": 10.888404046373845,
+      "median_ms": 10.212455999862868,
+      "stdev_ms": 1.4096021008429098,
+      "min_ms": 10.010799996962305,
+      "max_ms": 18.797093998728087,
+      "p50_ms": 10.214714999165153,
+      "p95_ms": 13.952921999589307,
+      "p99_ms": 17.01748900086386,
+      "throughput_ops_per_sec": 14072.272724213028
+    }
+  }
+]

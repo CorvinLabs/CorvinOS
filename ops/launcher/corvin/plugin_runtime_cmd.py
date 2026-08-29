@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 # Imported lazily — only when a runtime command is actually invoked.
 
@@ -31,38 +34,46 @@ def _warn(msg: str) -> None:
 # ── corvin plugin install ────────────────────────────────────────────────────
 
 def cmd_install(args: argparse.Namespace) -> int:
-    """Install a plugin to the current tenant."""
+    """Install a plugin from a local directory to the current tenant.
+
+    Handles origin-based trust decisions: community plugins require explicit
+    operator confirmation (ADR-0249), vetted plugins must verify against trust
+    anchors (fail-closed if key missing). Local paths only; URLs are rejected.
+    """
     from corvinOS.shared.paths import _resolve_tenant_id
 
     try:
         from corvin_plugins.tenant_plugins import get_tenant_registry
         from corvin_plugins.validation import validate_manifest_file
+        from corvin_plugins.trust import evaluate, load_trust_anchors, grant_consent
     except ImportError as exc:
         _err(f"plugin system not available: {exc}")
         return 2
 
+    # ── Input validation: reject URLs ───
+    path_arg = args.path
+    if path_arg.startswith(("http://", "https://", "ftp://", "file://")):
+        _err(
+            f"URL arguments are not supported: {path_arg}\n"
+            f"Plugin install only accepts local directory paths.\n"
+            f"Please download the plugin first and provide a local path."
+        )
+        return 1
+
     tenant_id = _resolve_tenant_id(args.tenant)
-    plugin_dir = Path(args.path).expanduser().resolve()
+    plugin_dir = Path(path_arg).expanduser().resolve()
 
     if not plugin_dir.is_dir():
         _err(f"plugin directory not found: {plugin_dir}")
         return 2
 
-    # Validate manifest exists
+    # ── Validate manifest exists ───
     manifest_file = plugin_dir / "plugin.yaml"
     if not manifest_file.is_file():
         _err(f"no plugin.yaml found at {manifest_file}")
         return 2
 
-    # Validate manifest
-    report = validate_manifest_file(manifest_file)
-    if not report.ok:
-        _err("manifest validation failed:")
-        for finding in report.findings:
-            print(f"  {finding}", file=sys.stderr)
-        return 1
-
-    # Extract plugin metadata
+    # ── Extract plugin metadata (before validation) ───
     try:
         import yaml
 
@@ -78,11 +89,116 @@ def cmd_install(args: argparse.Namespace) -> int:
 
         version = manifest_data.get("version", "0.1.0")
         display_name = manifest_data.get("display_name", plugin_id)
+        origin = str(manifest_data.get("origin", "community")).lower()
     except Exception as exc:
         _err(f"failed to parse plugin.yaml: {exc}")
         return 2
 
-    # Install
+    # ── Validate manifest (signature field is stripped for validation) ───
+    # The signature is for trust verification, not part of the PluginRecord schema
+    validation_data = {k: v for k, v in manifest_data.items() if k != "signature"}
+    try:
+        import yaml as yaml_module
+
+        # Temporarily write validation data to a temp file for validation
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml_module.dump(validation_data, f)
+            temp_manifest = Path(f.name)
+
+        try:
+            report = validate_manifest_file(temp_manifest)
+        finally:
+            temp_manifest.unlink(missing_ok=True)
+    except Exception as exc:
+        _err(f"failed to validate manifest: {exc}")
+        return 2
+
+    if not report.ok:
+        _err("manifest validation failed:")
+        for finding in report.findings:
+            print(f"  {finding}", file=sys.stderr)
+        return 1
+
+    # ── Trust evaluation (ADR-0249) ───
+    from pathlib import Path as PathlibPath
+
+    try:
+        from corvinOS.shared.paths import corvin_home
+
+        ch = corvin_home()
+    except ImportError:
+        ch = PathlibPath.home() / ".corvin"
+
+    trust_anchors = load_trust_anchors(ch)
+    from corvin_plugins.trust import Verdict, enforcement_enabled
+
+    # Evaluate with enforcement=True to get correct verdict
+    decision = evaluate(
+        manifest_data,
+        corvin_home=ch,
+        tenant_id=tenant_id,
+        enforcement=True,  # Get correct verdict
+        trust_anchors=trust_anchors,
+    )
+
+    # Check if enforcement is enabled globally
+    enforce = enforcement_enabled(tenant_id)
+
+    # ── Handle origin-specific logic ───
+    if origin == "vetted" and decision.verdict == Verdict.FORGED:
+        # Vetted plugin with invalid signature: always refuse
+        _err(
+            f"Plugin '{plugin_id}' claims origin=vetted but fails trust verification:\n"
+            f"{decision.reason}\n"
+            f"Installation refused."
+        )
+        return 1
+
+    if origin == "vetted" and decision.verdict == Verdict.VETTED:
+        print(f"✓ Trust verified: {decision.reason}")
+
+    if origin == "community" and not decision.allowed:
+        # Community plugin without consent
+        if enforce:
+            # Enforcement is ON: refuse without prompting
+            _err(
+                f"Plugin '{plugin_id}' is unreviewed third-party code.\n"
+                f"Installation refused (enforcement enabled).\n"
+                f"To approve, use: corvin plugin install --yes"
+            )
+            return 1
+
+        # Enforcement is OFF: prompt for confirmation
+        print(
+            f"\nPlugin '{plugin_id}' is unreviewed third-party code.\n"
+            f"Installing it will run untested code in this process.\n"
+        )
+        if not getattr(args, "yes", False):  # Allow --yes flag for automation
+            try:
+                response = input(f"Approve installation of {plugin_id}? [y/N] ")
+                if response.lower() != "y":
+                    print("Installation cancelled.")
+                    return 1
+            except EOFError:
+                _err("no TTY available for confirmation (use --yes to skip)")
+                return 1
+        print(f"✓ Confirmed: installing {plugin_id}")
+
+        # Grant consent in the system
+        try:
+            grant_consent(
+                plugin_id,
+                corvin_home=ch,
+                tenant_id=tenant_id,
+                operator="cli",
+                audit_emit=None,  # TODO: wire in audit emitter
+            )
+        except Exception as exc:
+            log.warning(f"could not record consent: {exc}")
+
+    # ── Install ───
     try:
         registry = get_tenant_registry(tenant_id)
         registry.register_plugin(
@@ -92,13 +208,19 @@ def cmd_install(args: argparse.Namespace) -> int:
                 "version": version,
                 "display_name": display_name,
                 "boot_layer": manifest_data.get("boot_layer", "installed"),
+                "origin": origin,  # Persist origin for audit trail
             },
             installed_by="corvin-cli",
         )
         print(f"✓ Installed {plugin_id}@{version} to tenant {tenant_id}")
         return 0
     except ValueError as exc:
-        _err(str(exc))
+        exc_msg = str(exc)
+        # Make idempotent: if already installed, that's not an error
+        if "is already installed" in exc_msg:
+            print(f"Plugin {plugin_id!r} already installed, skipping.")
+            return 0
+        _err(exc_msg)
         return 1
     except Exception as exc:
         _err(f"installation failed: {exc}")
@@ -237,12 +359,17 @@ def add_runtime_parser(sub: Any) -> None:
         "install",
         help="Install a plugin from a directory to the current tenant",
     )
-    install_parser.add_argument("path", metavar="PATH", help="Plugin directory")
+    install_parser.add_argument("path", metavar="PATH", help="Local plugin directory (URLs not supported)")
     install_parser.add_argument(
         "--tenant",
         metavar="ID",
         default=None,
         help="Tenant ID (default: _default)",
+    )
+    install_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompt for community plugins (for automation)",
     )
     install_parser.set_defaults(plugin_cmd="install", func=cmd_install)
 

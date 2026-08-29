@@ -99,6 +99,8 @@ from .routes import (
     custom_provider as custom_provider_route,
     mcp_plugins as mcp_plugins_route,
     plugins as plugins_route,
+    plugin_upload as plugin_upload_route,
+    vibe_plugins_api as vibe_plugins_route,
     learning as learning_route,
     admin as admin_route,
     data_sources as data_sources_route,
@@ -252,6 +254,8 @@ router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
 # 404s while the `plugin_console_surface` flag is off (ships dark), so the gate
 # lives in one place instead of in the mount condition.
 router.include_router(plugins_route.router, tags=["console-plugins"])
+# ADR-0249 Stage 6 — Plugin upload flow (verify, audit, install, enable, health check)
+router.include_router(plugin_upload_route.router, tags=["console-plugins"])
 # ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
 # packages_route.router already has prefix="/packages", so mount without additional prefix
 router.include_router(packages_route.router, tags=["console-packages"])
@@ -292,6 +296,7 @@ router.include_router(models_route.router, tags=["console-models"])
 router.include_router(stats_features_route.router, tags=["console-stats"])
 router.include_router(talent_route.router, tags=["console-talent"])
 router.include_router(vibe_engineering_route.router, tags=["console-vibe-engineering"])
+router.include_router(vibe_plugins_route.router, tags=["console-vibe-plugins"])
 # ADR-0400 — Task Graph Visualization (Phase 1-2 MVP)
 router.include_router(task_graph_api_route.router, tags=["console-task-graph"])
 router.include_router(capabilities_route.router, tags=["console-capabilities"])

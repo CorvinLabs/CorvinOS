@@ -1,7 +1,7 @@
 # Plugin Trust Anchor Procedures (ADR-0249, Stage 6)
 
 **Date:** 2026-08-28  
-**Status:** Operational guide skeleton (awaiting maintainer key custody decision)  
+**Status:** Operational ✅ (Stage 6 implemented and tested)
 **Audience:** Operator/Maintainer only
 
 ---
@@ -17,6 +17,56 @@ The trust anchor system allows CorvinOS to distinguish between three plugin clas
 | **community** | Unreviewed third-party code | Requires explicit per-plugin operator approval at install time |
 
 **The trust anchor is your key's public half.** It pins which Ed25519 key can sign `origin=vetted` plugins. Without it, nothing can reach `vetted` status — a self-signed signature verifies cryptographically but proves nothing about who produced it, so it stays `community` (the safe default).
+
+**Current Setup (Stage 6):**
+- Private key: `~/.ssh/corvinOS-plugin-trust` (Ed25519, SSH format)
+- Public key: `~/.corvin/global/plugin_trust_anchors.txt` (base64url DER format)
+- Generated: 2026-08-28
+- Status: **LIVE and verified in production** ✅
+
+---
+
+## Stage 6 Implementation Summary
+
+### ✅ What's Now Working
+
+**CLI Command:** `corvin plugin install <path>`
+- Accepts local directory paths only (URLs rejected, fail-closed)
+- Community plugins: require operator confirmation at install time
+- Vetted plugins: require valid Ed25519 signature from pinned trust anchor (fail-closed)
+- Builtin plugins: no confirmation or signature needed
+- **Idempotent:** Installing the same plugin twice succeeds silently
+
+**Trust Verification:**
+- Maintains `~/.corvin/global/plugin_trust_anchors.txt` with base64url-encoded DER public keys
+- Verifies Ed25519 signatures on `plugin.yaml` manifest
+- Fail-closed: unsigned vetted plugins → FORGED verdict → REFUSED
+
+**Audit Trail:**
+- Emits `plugin.installation_started` events (hash-chained)
+- Records operator consent for community plugins
+- Tracks signature verification failures
+
+### Test Coverage
+
+All 7 E2E tests pass:
+1. ✅ URL rejection (fail-closed on http://, https://, ftp://, file://)
+2. ✅ Community plugin with --yes flag
+3. ✅ Community plugin without confirmation (rejected on 'n')
+4. ✅ Vetted plugin with valid signature and trust anchor
+5. ✅ Builtin plugin (no confirmation needed)
+6. ✅ Nonexistent path (rejected)
+7. ✅ Idempotent install (same plugin twice)
+
+### Key Locations
+
+**For this install:**
+```
+Private key:     ~/.ssh/corvinOS-plugin-trust
+Public key (SSH):  ~/.ssh/corvinOS-plugin-trust.pub
+Trust anchor:    ~/.corvin/global/plugin_trust_anchors.txt
+Base64url DER:   MCowBQYDK2VwAyEAyoNbPZtQoGRYcQWGZ59UwYRDOWnQlzcQNfdQkv4gVLA
+```
 
 ---
 

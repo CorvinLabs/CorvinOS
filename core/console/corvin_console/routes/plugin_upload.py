@@ -204,18 +204,21 @@ async def _emit_installation_started_event(
     version: str,
     trust_verdict: str | None,
 ) -> None:
-    """Emit plugin.installation_started audit event (Stage 3: Audit)."""
+    """Emit plugin.installation_started audit event (Stage 3: Audit).
+
+    Uses forge.security_events.write_event directly for plugin-specific events
+    (ADR-0249, console_audit.action_performed is for console mutations only).
+    """
     try:
-        console_audit.action_initiated(
-            tenant_id=rec.tenant_id,
-            sid_fingerprint=rec.sid_fingerprint,
-            action="plugin.installation_started",
-            target_kind="plugin",
-            target_id=plugin_id,
+        from forge import security_events
+        security_events.write_event(
+            event_type="plugin.installation_started",
             details={
+                "plugin_id": plugin_id,
                 "version": version,
                 "trust_verdict": trust_verdict,
                 "source": "console_upload",
+                "tenant_id": rec.tenant_id,
             },
         )
     except Exception as exc:

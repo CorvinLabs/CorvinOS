@@ -1721,3 +1721,166 @@ here, a test that runs the command.
 - Don't add a `plugin_type` to the classifier's keyword table that isn't in the
   live `KNOWN_PLUGIN_TYPES` — that would be exactly the second taxonomy this
   file already forbids, one layer up.
+
+---
+
+## Console Plugin Governance UI (ADR-0249 Stage 6)
+
+The Console provides a web UI for plugin discovery, installation, and governance — no CLI required for operators.
+
+### Routes
+
+| Endpoint | Method | Purpose | Feature Flag |
+|---|---|---|---|
+| `/v1/vibe/plugins` | GET | List installed plugins (loaded + failed) | `plugin_runtime_lifecycle` |
+| `/v1/vibe/plugins/<plugin_id>` | GET | Plugin details (manifest, governance info) | `plugin_runtime_lifecycle` |
+| `/v1/vibe/plugins/<plugin_id>/install` | POST | Install from manifest URL or tarball | `plugin_console_surface` |
+| `/v1/vibe/plugins/<plugin_id>/enable` | POST | Enable plugin (mark for next boot or hot-reload) | `plugin_runtime_lifecycle` |
+| `/v1/vibe/plugins/<plugin_id>/disable` | POST | Disable plugin (audit trail) | `plugin_runtime_lifecycle` |
+| `/v1/vibe/plugins/<plugin_id>/report` | POST | Report plugin for abuse (governance) | `plugin_governance_reporting` |
+| `/v1/console/plugins/upload` | POST | Upload & install plugin tarball (multipart) | `plugin_console_surface` |
+
+**Tenant resolution:** All routes use `rec.tenant_id` from authenticated `SessionRecord`, never env vars.
+
+### Components
+
+**PluginTrustBadge.tsx** (governance disclosure):
+- Display trust level badge (Builtin | Vetted ✓ | Community ⚠)
+- Show author + signer details
+- Permissions disclosure: data locality, network egress, PII risk (with tooltips)
+- Read-only star rating (write deferred to Phase 2)
+- Report button → modal (reason + details, 10-500 chars)
+- Color-coded risk levels
+
+**PluginUpload.tsx** (drag-drop installation):
+- File input + drag-and-drop UI
+- Optional SHA256 checksum verification
+- Progress through 6 stages: Upload → Verify → Audit → Install → Enable → Health Check
+- Trust verdict display (vetted/community/forged)
+- Auto-enable toggle
+- Error handling + success feedback
+
+**VibePluginsPanel.tsx** (plugin dashboard):
+- List installed plugins with status badges
+- Trust column (origin badges)
+- Info button per plugin → governance drawer
+- Filter by status (loaded/failed)
+- Manual enable/disable toggles
+- Health check status
+
+### Installation Flow (6 Stages)
+
+1. **Upload**: Multipart tarball + optional SHA256 checksum
+   - Validate file format (.tar.gz only, not empty)
+   - Prepare form data with optional checksum
+2. **Verify**: Extract manifest, validate schema
+   - Extract tarball to temp directory
+   - Locate and parse `plugin.yaml` / `plugin.json`
+   - Validate required fields (plugin_id, version, plugin_type)
+   - Check trust verdict (builtin/vetted/community)
+3. **Audit**: Emit `plugin.installation_started` event
+   - Hash-chained to `audit.jsonl` (GDPR Art. 30)
+   - Includes plugin_id, version, trust_verdict, source=console_upload
+4. **Install**: Call Stage 6 CLI (`corvin plugin install`)
+   - Moves tarball to registry
+   - Records PluginRecord in registry.yaml
+5. **Enable**: Mark for next boot or hot-reload
+   - If hot-reload available: emit `plugin.enabled` event
+   - Else: emit `plugin.enabled_pending_restart` (audit trail only, no immediate effect)
+6. **Health Check**: `health_check()` passes within 2 seconds
+   - Async polling (5-second timeout for whole flow)
+   - Returns overall status + health message
+
+### Governance Data Model
+
+Each plugin carries governance metadata:
+
+```python
+class PluginGovernanceInfo:
+    origin: str                  # builtin | vetted | community
+    author: str | None          # Plugin author name
+    author_url: str | None      # Contact or homepage URL
+    pii_risk: str              # none | low | medium | high
+    locality: str              # local | eu_cloud | us_cloud | unknown
+    network_egress: str         # none | local | external
+    egress_hosts: list[str]    # Declared external hosts (if applicable)
+    requires_consent: bool      # Whether operator must approve
+    rating: float | None        # 0-5 stars (read-only in Phase 1)
+    report_count: int          # Number of abuse reports (read-only)
+```
+
+**Trust Verdict Algorithm:**
+- `builtin`: `boot_layer=compliance` or `origin=builtin`
+- `vetted`: `origin=vetted` AND Ed25519 signature verifies against trust anchor
+- `community`: `origin=community` (unsigned, community-submitted) OR forged (fails verification)
+- Verdict cached during install flow, displayed in UI + audit trail
+
+### Reporting (Phase 1 MVP)
+
+Operators can report suspicious plugins. Report endpoint:
+
+```
+POST /v1/vibe/plugins/<plugin_id>/report
+Content-Type: application/json
+
+{
+  "reason": "malicious | inappropriate | permission_abuse | misrepresentation | other",
+  "details": "10-500 character description"
+}
+```
+
+**Response (200):**
+```json
+{
+  "status": "success",
+  "message": "Report submitted. Thank you for reporting this plugin.",
+  "report_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Validation:**
+- Reason must be in allowed set (fail-closed)
+- Details must be 10-500 characters (enforced, no empty or overly long)
+- Generates UUID4 report ID
+- Emits audit event: `plugin.reported` (metadata-only, no user details — GDPR Art. 5)
+- Graceful error handling (audit failure ≠ API failure)
+
+**Write capability deferred:** Rating/review submission (Phase 2) awaits community trust model definition.
+
+### Feature Flags (ship dark)
+
+- **`plugin_console_surface`** (default: off) — Enable Console UI for upload + install
+- **`plugin_runtime_lifecycle`** (default: off) — Enable runtime enable/disable/health routes
+- **`plugin_governance_reporting`** (default: off) — Enable reporting endpoint (audit trail still records)
+- **`plugin_trust_enforcement`** (default: off) — Enforce Ed25519 signature verification (refuse unsigned vetted plugins)
+
+All flags default to `false` to preserve existing behavior on upgrade. Operators opt-in via Console Settings → Features panel (no restart needed).
+
+### Testing
+
+**E2E test file:** `core/plugins/tests/test_plugin_install_flow_e2e.py` (12+ tests)
+- All 6 stages covered
+- Error handling (tarball corruption, schema validation, trust verification)
+- Checksum validation
+- Audit trail verification
+- Feature flag gating
+- CSRF + authentication checks
+
+**Unit test file:** `core/console/tests/test_plugin_governance_e2e.py` (40+ tests)
+- Trust badge rendering
+- Governance info display
+- Report modal validation
+- API response schema
+- Audit trail events
+
+### Deployment Checklist
+
+- [ ] Feature flags created (all default off)
+- [ ] Console routes registered in `app.py`
+- [ ] React components bundled + hard-refreshed
+- [ ] E2E tests passing (12+ install flow, 40+ governance)
+- [ ] Audit trail events verified (hash-chain integrity)
+- [ ] CSRF + auth checks enabled on all routes
+- [ ] Tenant isolation verified (no cross-tenant leakage)
+- [ ] Operator runbook written ([plugin-marketplace-procedures.md](../../operations/plugin-marketplace-procedures.md))
+- [ ] ADR-0249 status → ACCEPTED, references linked

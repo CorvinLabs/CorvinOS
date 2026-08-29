@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import stat
 import tempfile
 import threading
 from dataclasses import replace
@@ -131,6 +132,150 @@ class RegistryCorrupt(PluginError):
     """registry.yaml exists but cannot be parsed — refuse rather than reset."""
 
 
+class BackupManager:
+    """Manage timestamped registry backups (ADR-0250 Part 2).
+
+    Keeps the last 5 backups with YYYY-MM-DDTHH:MM:SSZ timestamps.
+    """
+
+    #: Maximum number of backups to keep
+    MAX_BACKUPS = 5
+
+    def __init__(self, registry_path: Path):
+        self.registry_path = registry_path
+        self.backups_dir = registry_path.parent / ".registry_backups"
+
+    def create_backup(self) -> Optional[Path]:
+        """Create a timestamped backup of the current registry.
+
+        Returns the path to the created backup, or None if current registry doesn't exist.
+        """
+        if not self.registry_path.exists():
+            return None
+
+        try:
+            # Verify current registry is readable
+            current_content = self.registry_path.read_text()
+            yaml.safe_load(current_content)  # Validate YAML
+        except Exception as exc:
+            log.error(f"cannot backup unreadable registry: {type(exc).__name__}")
+            return None
+
+        # Create backups directory
+        self.backups_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate timestamp in ISO 8601 format with microseconds for uniqueness
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"  # milliseconds
+        backup_path = self.backups_dir / f"registry.{timestamp}.yaml"
+
+        # Ensure filename is unique (in case of rapid successive backups)
+        counter = 0
+        original_path = backup_path
+        while backup_path.exists():
+            counter += 1
+            timestamp_part = original_path.stem.split("registry.")[-1].replace(".yaml", "")
+            backup_path = self.backups_dir / f"registry.{timestamp_part}-{counter}.yaml"
+
+        # Atomic backup write
+        try:
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(self.backups_dir), prefix=".registry-", suffix=".tmp"
+            )
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(current_content)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, backup_path)
+                log.debug(f"registry backup created: {backup_path}")
+                return backup_path
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+        except Exception as exc:
+            log.error(f"failed to create timestamped backup: {type(exc).__name__}")
+            return None
+
+    def cleanup_old_backups(self) -> None:
+        """Remove backups older than the last MAX_BACKUPS (5)."""
+        if not self.backups_dir.exists():
+            return
+
+        try:
+            backups = sorted(self.backups_dir.glob("registry.*.yaml"))
+            if len(backups) <= self.MAX_BACKUPS:
+                return
+
+            # Delete oldest backups
+            for old_backup in backups[:-self.MAX_BACKUPS]:
+                try:
+                    old_backup.unlink()
+                    log.debug(f"removed old backup: {old_backup.name}")
+                except Exception as exc:
+                    log.error(f"failed to remove old backup {old_backup.name}: {exc}")
+        except Exception as exc:
+            log.error(f"error during backup cleanup: {exc}")
+
+    def list_backups(self) -> list[Path]:
+        """Return list of all available backups, newest first."""
+        if not self.backups_dir.exists():
+            return []
+        return sorted(self.backups_dir.glob("registry.*.yaml"), reverse=True)
+
+    def restore_from_backup(self, backup_path: Path) -> bool:
+        """Restore registry from a specific backup.
+
+        Args:
+            backup_path: Path to backup file to restore from
+
+        Returns:
+            True if restore succeeded, False otherwise
+        """
+        try:
+            # Verify backup is readable
+            backup_content = backup_path.read_text()
+            yaml.safe_load(backup_content)  # Validate YAML
+
+            # Atomic restore
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(self.registry_path.parent), prefix=".registry-", suffix=".tmp"
+            )
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(backup_content)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, self.registry_path)
+                log.info(f"registry restored from backup: {backup_path.name}")
+                return True
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+        except Exception as exc:
+            log.error(f"failed to restore from backup {backup_path.name}: {exc}")
+            return False
+
+    def verify_all_backups(self) -> Dict[str, bool]:
+        """Verify all backups are valid YAML.
+
+        Returns dict mapping backup name -> is_valid.
+        """
+        results = {}
+        for backup_path in self.list_backups():
+            try:
+                content = backup_path.read_text()
+                yaml.safe_load(content)
+                results[backup_path.name] = True
+            except Exception:
+                results[backup_path.name] = False
+        return results
+
+
 class ConsentRequired(PluginError):
     """The record needs explicit consent before it may be enabled."""
 
@@ -187,6 +332,26 @@ def registry_path(
     *, tenant_id: Optional[str] = None, corvin_home_path: Optional[Path] = None
 ) -> Path:
     return _tenant_root(tenant_id, corvin_home_path) / "registry.yaml"
+
+
+def registry_backup_path(
+    *, tenant_id: Optional[str] = None, corvin_home_path: Optional[Path] = None
+) -> Path:
+    """Path to backup file created before each mutation (ADR-0250).
+
+    DEPRECATED: Use BackupManager for multi-backup support. This is kept for
+    compatibility with single-backup recovery.
+    """
+    return registry_path(tenant_id=tenant_id, corvin_home_path=corvin_home_path).with_suffix(
+        ".yaml.bak"
+    )
+
+
+def registry_backups_dir(
+    *, tenant_id: Optional[str] = None, corvin_home_path: Optional[Path] = None
+) -> Path:
+    """Directory for timestamped registry backups (ADR-0250 Part 2)."""
+    return _tenant_root(tenant_id, corvin_home_path) / ".registry_backups"
 
 
 def instance_dir(
@@ -278,7 +443,19 @@ class TenantRegistry:
         *,
         tenant_id: Optional[str] = None,
         corvin_home_path: Optional[Path] = None,
+        auto_recover: bool = True,
     ) -> TenantRegistry:
+        """Load registry, with auto-recovery from backup on corruption.
+
+        Args:
+            tenant_id: Tenant identifier (resolved via current_tenant if None)
+            corvin_home_path: Override default corvin_home
+            auto_recover: If True (default), attempt recovery from .bak on corruption
+
+        Raises:
+            RegistryCorrupt: If the registry is unreadable and auto_recover is False
+                or no backup is available to restore.
+        """
         path = registry_path(tenant_id=tenant_id, corvin_home_path=corvin_home_path)
         if not path.exists():
             return cls(path)
@@ -286,11 +463,41 @@ class TenantRegistry:
         try:
             raw = yaml.safe_load(path.read_text()) or {}
         except (yaml.YAMLError, OSError) as exc:
-            # Fail closed: do NOT return an empty registry. Returning empty would
-            # let the next save() overwrite a merely unreadable file with {}.
-            raise RegistryCorrupt(
-                f"{path} is unreadable ({type(exc).__name__}); refusing to continue"
-            ) from exc
+            # ADR-0250 Part 1: On corruption, attempt recovery from backup
+            if auto_recover:
+                log.warning(
+                    f"{path} is corrupted ({type(exc).__name__}); "
+                    f"attempting recovery from backup"
+                )
+                _audit(
+                    "plugin.registry_corruption_detected",
+                    {
+                        "path": str(path),
+                        "error": type(exc).__name__,
+                        "recovery_attempted": True,
+                    },
+                    tenant_id=tenant_id or "_default",
+                )
+                temp_reg = cls(path)
+                try:
+                    restored_from = temp_reg.restore_from_backup()
+                    if restored_from:
+                        # Retry the load with the restored file
+                        raw = yaml.safe_load(path.read_text()) or {}
+                    else:
+                        # No backup to restore from — still fail closed
+                        raise RegistryCorrupt(
+                            f"{path} is unreadable ({type(exc).__name__}) "
+                            f"and no backup is available"
+                        ) from exc
+                except RegistryCorrupt:
+                    raise
+            else:
+                # Fail closed: do NOT return an empty registry. Returning empty would
+                # let the next save() overwrite a merely unreadable file with {}.
+                raise RegistryCorrupt(
+                    f"{path} is unreadable ({type(exc).__name__}); refusing to continue"
+                ) from exc
 
         if not isinstance(raw, dict):
             raise RegistryCorrupt(f"{path} is not a mapping")
@@ -320,12 +527,48 @@ class TenantRegistry:
         return cls(path, records)
 
     def save(self) -> None:
-        """Persist atomically with mode 0600."""
+        """Persist atomically with mode 0600, creating backup before mutation.
+
+        Creates both a timestamped backup and the legacy .bak file for compatibility.
+        """
         payload = {
             "spec": {"schema_version": REGISTRY_SCHEMA_VERSION},
             "plugins": {pid: rec.to_dict() for pid, rec in sorted(self.records.items())},
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        # ADR-0250: Create backups before any mutation (fail-safe recovery).
+        # Support both legacy single-backup (.yaml.bak) and new timestamped backups.
+        backup_mgr = BackupManager(self.path)
+
+        # Create timestamped backup (new system)
+        if self.path.exists():
+            backup_mgr.create_backup()
+            backup_mgr.cleanup_old_backups()
+
+            # Also create legacy .bak file for compatibility
+            try:
+                current_content = self.path.read_text()
+                bak_path = self.path.with_suffix(".yaml.bak")
+                bak_fd, bak_tmp_name = tempfile.mkstemp(
+                    dir=str(self.path.parent), prefix=".registry-", suffix=".bak.tmp"
+                )
+                bak_tmp = Path(bak_tmp_name)
+                try:
+                    with os.fdopen(bak_fd, "w") as bak_fh:
+                        bak_fh.write(current_content)
+                        bak_fh.flush()
+                        os.fsync(bak_fh.fileno())
+                    os.chmod(bak_tmp, 0o600)
+                    os.replace(bak_tmp, bak_path)
+                    log.debug(f"registry backup created: {bak_path}")
+                except BaseException:
+                    bak_tmp.unlink(missing_ok=True)
+                    log.error("failed to create backup; continuing with mutation (no fallback)")
+            except Exception as exc:
+                log.error(f"backup creation error: {type(exc).__name__} — continuing (risky)")
+
+        # Atomic write: temp file → sync → chmod → replace (same process as save)
         fd, tmp_name = tempfile.mkstemp(
             dir=str(self.path.parent), prefix=".registry-", suffix=".tmp"
         )
@@ -340,6 +583,136 @@ class TenantRegistry:
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+
+    def restore_from_backup(self) -> Optional[Path]:
+        """Recover registry from .bak file if current is corrupted.
+
+        Returns the path to the backup that was restored, or None if no backup exists.
+        Raises RegistryCorrupt if backup is also unreadable.
+
+        ADR-0250 Part 1: Recovery gate — corruption detection and fail-safe restore.
+        """
+        bak_path = self.path.with_suffix(".yaml.bak")
+
+        if not bak_path.exists():
+            log.warning(f"no backup available for recovery: {bak_path}")
+            return None
+
+        try:
+            # Verify backup is readable and valid YAML
+            backup_text = bak_path.read_text()
+            yaml.safe_load(backup_text)  # Verify it's valid YAML
+
+            # Atomic restore: backup → temp → replace current
+            restore_fd, restore_tmp_name = tempfile.mkstemp(
+                dir=str(self.path.parent), prefix=".registry-", suffix=".tmp"
+            )
+            restore_tmp = Path(restore_tmp_name)
+            try:
+                with os.fdopen(restore_fd, "w") as restore_fh:
+                    restore_fh.write(backup_text)
+                    restore_fh.flush()
+                    os.fsync(restore_fh.fileno())
+                os.chmod(restore_tmp, 0o600)
+                os.replace(restore_tmp, self.path)
+                log.info(f"registry restored from backup: {bak_path}")
+                return bak_path
+            except BaseException:
+                restore_tmp.unlink(missing_ok=True)
+                raise
+        except (yaml.YAMLError, OSError) as exc:
+            raise RegistryCorrupt(
+                f"backup {bak_path} is also corrupted ({type(exc).__name__}); "
+                f"cannot recover — manual intervention required"
+            ) from exc
+
+    def restore_from_timestamped_backup(self, backup_path: Optional[Path] = None) -> bool:
+        """Recover registry from timestamped backup (ADR-0250 Part 2).
+
+        Args:
+            backup_path: Specific backup to restore. If None, uses most recent.
+
+        Returns:
+            True if restoration succeeded, False otherwise.
+        """
+        backup_mgr = BackupManager(self.path)
+        backups = backup_mgr.list_backups()
+
+        if not backups:
+            log.warning("no timestamped backups available for recovery")
+            return False
+
+        if backup_path is None:
+            backup_path = backups[0]  # Most recent
+            log.info(f"using most recent backup: {backup_path.name}")
+
+        if not backup_path.exists():
+            log.error(f"backup not found: {backup_path}")
+            return False
+
+        return backup_mgr.restore_from_backup(backup_path)
+
+    def verify_records_schema(self) -> tuple[bool, list[str]]:
+        """Verify all records conform to expected schema.
+
+        Returns:
+            (is_valid, error_messages)
+        """
+        errors = []
+
+        for plugin_id, record in self.records.items():
+            try:
+                # Verify required fields
+                if not record.plugin_id:
+                    errors.append(f"record {plugin_id!r}: missing plugin_id")
+                if not record.plugin_type:
+                    errors.append(f"record {plugin_id!r}: missing plugin_type")
+                if not record.version:
+                    errors.append(f"record {plugin_id!r}: missing version")
+
+                # Verify enums are valid
+                if not isinstance(record.origin, PluginOrigin):
+                    errors.append(f"record {plugin_id!r}: invalid origin {record.origin!r}")
+                if not isinstance(record.pii_risk, PIIRisk):
+                    errors.append(f"record {plugin_id!r}: invalid pii_risk {record.pii_risk!r}")
+
+            except Exception as exc:
+                errors.append(f"record {plugin_id!r}: validation error: {exc}")
+
+        return (len(errors) == 0, errors)
+
+    def verify_integrity(self) -> tuple[bool, list[str]]:
+        """Comprehensive integrity check including schema and file permissions.
+
+        Returns:
+            (is_valid, error_messages)
+        """
+        errors = []
+
+        # Check file permissions
+        try:
+            if self.path.exists():
+                mode = stat.S_IMODE(self.path.stat().st_mode)
+                if mode != 0o600:
+                    errors.append(
+                        f"registry has mode {oct(mode)}, expected 0o600 — "
+                        f"readable by other users (security issue)"
+                    )
+        except Exception as exc:
+            errors.append(f"cannot check file permissions: {exc}")
+
+        # Check schema
+        schema_valid, schema_errors = self.verify_records_schema()
+        errors.extend(schema_errors)
+
+        # Check backups
+        backup_mgr = BackupManager(self.path)
+        backup_status = backup_mgr.verify_all_backups()
+        for backup_name, is_valid in backup_status.items():
+            if not is_valid:
+                errors.append(f"backup {backup_name} is corrupted")
+
+        return (len(errors) == 0, errors)
 
     # ── accessors ────────────────────────────────────────────────────────────
 
@@ -885,5 +1258,7 @@ __all__ = [
     "RegistryCorrupt",
     "TenantRegistry",
     "instance_dir",
+    "registry_backup_path",
     "registry_path",
+    "registry_mutation",
 ]

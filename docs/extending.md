@@ -1,11 +1,15 @@
-# CorvinOS — Extensibility Hub
+# Extending CorvinOS: Plugin Author Guide
+
+**This guide is for building plugins that extend CorvinOS.** To *use* CorvinOS, see
+[Getting Started](./getting-started.md). To understand the plugin system architecture,
+see [Plugin Architecture](./plugin-architecture.md) and [ADR-0249](../Corvin-ADR/decisions/ADR-0249-plugin-trust-anchor.md).
 
 CorvinOS is designed as a platform, not a product. You extend it by dropping files
 into a configuration tree — no forking, no patching core code, no restart in most
 cases. The system reads your additions on the next message, grades them against real
 usage, and promotes the ones that work.
 
-This document is the entry point for five extension surfaces:
+The system supports four extension surfaces (plus bridge adapters for new messaging channels):
 
 | Surface | What it is | Where it lives | Hot-reload |
 |---|---|---|---|

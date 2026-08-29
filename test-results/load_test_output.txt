@@ -1,0 +1,102 @@
+2026-08-28 17:47:06,327 - __main__ - INFO - Starting load test: concurrent_100_plugins (1000 plugins, concurrency=100)
+2026-08-28 17:47:06,440 - __main__ - INFO - Load test completed in 0.11s
+2026-08-28 17:47:06,441 - __main__ - INFO - Starting load test: profile_concurrency_1 (1000 plugins, concurrency=1)
+2026-08-28 17:47:16,580 - __main__ - INFO - Load test completed in 10.14s
+2026-08-28 17:47:16,582 - __main__ - INFO -   Concurrency 1: p99=10.22ms, throughput=96.6 ops/s
+2026-08-28 17:47:16,582 - __main__ - INFO - Starting load test: profile_concurrency_10 (1000 plugins, concurrency=10)
+2026-08-28 17:47:17,597 - __main__ - INFO - Load test completed in 1.01s
+2026-08-28 17:47:17,599 - __main__ - INFO -   Concurrency 10: p99=10.33ms, throughput=973.1 ops/s
+2026-08-28 17:47:17,599 - __main__ - INFO - Starting load test: profile_concurrency_100 (1000 plugins, concurrency=100)
+2026-08-28 17:47:17,712 - __main__ - INFO - Load test completed in 0.11s
+2026-08-28 17:47:17,715 - __main__ - INFO -   Concurrency 100: p99=13.56ms, throughput=8771.2 ops/s
+2026-08-28 17:47:17,715 - __main__ - INFO - Starting load test: profile_concurrency_500 (1000 plugins, concurrency=500)
+2026-08-28 17:47:17,785 - __main__ - INFO - Load test completed in 0.07s
+2026-08-28 17:47:17,790 - __main__ - INFO -   Concurrency 500: p99=17.02ms, throughput=14072.3 ops/s
+2026-08-28 17:47:17,798 - __main__ - INFO - Results exported to test-results/load_test_results.json
+2026-08-28 17:47:17,816 - __main__ - INFO - Results exported to test-results/load_test_results.csv
+
+====================================================================================================
+LOAD TEST REPORT
+====================================================================================================
+
+Test: concurrent_100_plugins
+  Plugins: 1000
+  Concurrency: 100
+  Duration: 0.11s
+  Success Rate: 98.9% (989/1000)
+  Latency (ms):
+    Mean: 10.26
+    Median: 10.08
+    Stdev: 0.67
+    Min: 10.01
+    Max: 16.40
+    p50: 10.08
+    p95: 11.28
+    p99: 13.86
+  Throughput: 8702.7 ops/sec
+
+Test: profile_concurrency_1
+  Plugins: 1000
+  Concurrency: 1
+  Duration: 10.14s
+  Success Rate: 97.9% (979/1000)
+  Latency (ms):
+    Mean: 10.09
+    Median: 10.08
+    Stdev: 0.10
+    Min: 10.03
+    Max: 12.97
+    p50: 10.08
+    p95: 10.14
+    p99: 10.22
+  Throughput: 96.6 ops/sec
+
+Test: profile_concurrency_10
+  Plugins: 1000
+  Concurrency: 10
+  Duration: 1.01s
+  Success Rate: 98.7% (987/1000)
+  Latency (ms):
+    Mean: 10.09
+    Median: 10.08
+    Stdev: 0.06
+    Min: 10.01
+    Max: 10.68
+    p50: 10.08
+    p95: 10.15
+    p99: 10.33
+  Throughput: 973.1 ops/sec
+
+Test: profile_concurrency_100
+  Plugins: 1000
+  Concurrency: 100
+  Duration: 0.11s
+  Success Rate: 98.9% (989/1000)
+  Latency (ms):
+    Mean: 10.30
+    Median: 10.12
+    Stdev: 0.57
+    Min: 10.01
+    Max: 14.32
+    p50: 10.12
+    p95: 11.04
+    p99: 13.56
+  Throughput: 8771.2 ops/sec
+
+Test: profile_concurrency_500
+  Plugins: 1000
+  Concurrency: 500
+  Duration: 0.07s
+  Success Rate: 99.2% (992/1000)
+  Latency (ms):
+    Mean: 10.89
+    Median: 10.21
+    Stdev: 1.41
+    Min: 10.01
+    Max: 18.80
+    p50: 10.21
+    p95: 13.95
+    p99: 17.02
+  Throughput: 14072.3 ops/sec
+
+====================================================================================================
