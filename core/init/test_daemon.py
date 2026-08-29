@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""test_daemon.py — E2E for Phase-4.2 init.py daemon mode.
+"""test_daemon.py — E2E for Phase-4.2 init.py daemon mode (cross-platform).
 
-Spawns init.py daemon as a real subprocess, talks to it via the Unix
-domain socket at <corvin_home>/run/init.sock, and verifies:
+Spawns init.py daemon as a real subprocess, talks to it via a platform-neutral
+transport (Unix socket on Unix/Linux/macOS, TCP loopback on Windows), and verifies:
 
-  - Daemon starts, creates the socket, accepts connections
+  - Daemon starts, creates endpoint, accepts connections
   - ping returns {ok: true, pong: true}
   - list returns the discovered services with status
   - start <name> launches a real subprocess (verified via status)
@@ -16,11 +16,11 @@ domain socket at <corvin_home>/run/init.sock, and verifies:
   - unknown commands return {ok: false, error: ...}
   - shutdown command makes the daemon exit gracefully
   - SIGTERM also makes the daemon exit gracefully (cleanup happens)
-  - Stale socket file from a crashed previous run is cleaned up
+  - Stale endpoint files from a crashed previous run are cleaned up
 
-Per-subtask E2E rule: real subprocess for the daemon, real
-subprocesses for the supervised services (Python sleep loops),
-real Unix-domain socket, real SIGTERM. No mocks for moving parts.
+Per-subtask E2E rule: real subprocess for the daemon, real subprocesses for
+the supervised services (Python sleep loops), real transport (Unix socket or
+TCP loopback based on platform), real SIGTERM. No mocks for moving parts.
 """
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ import json
 import os
 import shutil
 import signal
-import socket as _socket
 import subprocess
 import sys
 import tempfile
@@ -86,21 +85,44 @@ def _socket_path(home: Path) -> Path:
 
 
 def _wait_for_socket(home: Path, timeout: float = 5.0) -> bool:
+    """Wait for the daemon to be ready.
+
+    On Unix: wait for socket file to exist.
+    On Windows: wait for daemon.port file to exist.
+    """
     deadline = time.time() + timeout
     sock_path = _socket_path(home)
+    port_file = sock_path.parent / "daemon.port"
+
     while time.time() < deadline:
-        if sock_path.exists():
-            return True
+        if sys.platform == "win32":
+            if port_file.exists():
+                return True
+        else:
+            if sock_path.exists():
+                return True
         time.sleep(0.05)
     return False
 
 
 def _call(home: Path, command: str, *args: str,
           timeout: float = 3.0) -> dict:
-    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-    sock.settimeout(timeout)
+    # Import the transport module directly using importlib
+    import importlib.util
+    transport_path = Path(__file__).parent / "daemon_transport.py"
+    spec = importlib.util.spec_from_file_location("daemon_transport", transport_path)
+    transport_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transport_module)
+    create_transport = transport_module.create_transport
+
+    socket_path = _socket_path(home)
+    transport = create_transport(socket_path)
     try:
-        sock.connect(str(_socket_path(home)))
+        sock = transport.connect(timeout=timeout)
+    except (OSError, RuntimeError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+    try:
         payload = {"command": command, "args": list(args)}
         sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
         data = b""

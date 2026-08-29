@@ -676,7 +676,15 @@ def daemon(plugin_roots: Optional[List[Path]] = None,
     grained control of which services start.
     """
     import select as _select
-    from .daemon_transport import create_transport
+    import importlib.util
+
+    # Import daemon_transport using absolute path to support both
+    # module-mode and direct execution
+    transport_path = Path(__file__).parent / "daemon_transport.py"
+    spec = importlib.util.spec_from_file_location("daemon_transport", transport_path)
+    transport_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transport_module)
+    create_transport = transport_module.create_transport
 
     if plugin_roots is None:
         plugin_roots = [Path(__file__).resolve().parent.parent]
@@ -784,7 +792,14 @@ def daemon_call(command: str, *args: str,
     E2E test driver. Never raises on protocol errors — returns a
     {ok: false, error: ...} dict.
     """
-    from .daemon_transport import create_transport
+    import importlib.util
+
+    # Import daemon_transport using absolute path
+    transport_path = Path(__file__).parent / "daemon_transport.py"
+    spec = importlib.util.spec_from_file_location("daemon_transport", transport_path)
+    transport_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transport_module)
+    create_transport = transport_module.create_transport
 
     if socket_path is None:
         socket_path = _socket_path()
