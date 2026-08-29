@@ -419,4 +419,7 @@ addopts = "--verbose"
 asyncio_mode = "auto"
 markers = [
     "live: real-LLM end-to-end tests (opt-in via CLAUDE_LIVE_E2E=1)",
+    "integration: integration tests for subsystems",
+    "high_risk: critical path tests",
+    "asyncio: async test using pytest-asyncio",
 ]
