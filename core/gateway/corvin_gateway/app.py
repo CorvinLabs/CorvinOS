@@ -334,9 +334,38 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "A2A relay listener failed to start (non-fatal)"
         )
 
+    # KPI Collector Daemon — continuous background metrics emission (Phase 6.3, ADR-0470)
+    _metrics_daemon_task = None
+    try:
+        from core.monitoring import start_daemon as _start_metrics_daemon
+        import logging as _metrics_log
+        _metrics_daemon_task = await _start_metrics_daemon()
+        _metrics_log.getLogger("corvin.metrics.daemon").info(
+            "KPI collector daemon started"
+        )
+    except Exception:
+        import logging as _metrics_log
+        _metrics_log.getLogger("corvin.metrics.daemon").warning(
+            "KPI collector daemon failed to start (non-fatal)", exc_info=True
+        )
+
     try:
         yield
     finally:
+        # Stop KPI collector daemon first
+        if _metrics_daemon_task is not None:
+            try:
+                from core.monitoring import stop_daemon as _stop_metrics_daemon
+                await _stop_metrics_daemon(timeout=5.0)
+                import logging as _metrics_log
+                _metrics_log.getLogger("corvin.metrics.daemon").info(
+                    "KPI collector daemon stopped"
+                )
+            except Exception:
+                import logging as _metrics_log
+                _metrics_log.getLogger("corvin.metrics.daemon").warning(
+                    "Error stopping KPI collector daemon (non-fatal)", exc_info=True
+                )
         if _relay_listener is not None:
             _relay_listener.stop()
         if _relay_task is not None:
