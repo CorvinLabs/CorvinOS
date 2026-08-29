@@ -925,6 +925,45 @@ class PluginRegistry:
         with self._lock:
             return [p for p in self._plugins.values() if p.plugin_type == plugin_type]
 
+    def plugins_with_filters(
+        self,
+        boot_layer: BootLayer | str | None = None,
+        plugin_type: str | None = None,
+    ) -> list[CorvinPlugin]:
+        """Return all registered plugins matching the given filters.
+
+        Filters are combined with AND logic (all must match).
+        None for a filter means "any value" for that dimension.
+
+        Args:
+            boot_layer: If specified, only plugins on this boot layer
+            plugin_type: If specified, only plugins of this type
+
+        Returns:
+            List of matching plugins, sorted by plugin_id
+
+        Example:
+            >>> bundled_audit = registry.plugins_with_filters(
+            ...     boot_layer=BootLayer.BUNDLED,
+            ...     plugin_type="audit_backend"
+            ... )
+        """
+        with self._lock:
+            result = list(self._plugins.values())
+
+            if boot_layer is not None:
+                wanted = BootLayer(boot_layer)
+                result = [
+                    p for p in result
+                    if self._boot_layers.get(p.plugin_id, BootLayer.INSTALLED) is wanted
+                ]
+
+            if plugin_type is not None:
+                result = [p for p in result if p.plugin_type == plugin_type]
+
+            # Sort by plugin_id for deterministic output
+            return sorted(result, key=lambda p: p.plugin_id)
+
     # ── Discovery ─────────────────────────────────────────────────────────────
 
     def discover(self) -> list[str]:
@@ -969,6 +1008,13 @@ def boot_layer_of(plugin_id: str) -> BootLayer:
 
 def plugins_by_boot_layer(boot_layer: BootLayer | str) -> list[CorvinPlugin]:
     return _registry.plugins_by_boot_layer(boot_layer)
+
+
+def plugins_with_filters(
+    boot_layer: BootLayer | str | None = None,
+    plugin_type: str | None = None,
+) -> list[CorvinPlugin]:
+    return _registry.plugins_with_filters(boot_layer=boot_layer, plugin_type=plugin_type)
 
 
 def replace(
