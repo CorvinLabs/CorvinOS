@@ -540,6 +540,28 @@ class PluginRegistry:
                 self._boot_layers.pop(plugin.plugin_id, None)
             raise
 
+        # BUG #3 FIX: Write audit event BEFORE recording privilege epoch.
+        # If audit write fails, roll back the entire registration. This ensures
+        # the audit trail is never broken by a registration without a corresponding event.
+        try:
+            ctx.audit_emit("plugin.loaded", {
+                "plugin_id": plugin.plugin_id,
+                "plugin_type": plugin.plugin_type,
+                "boot_layer": resolved.value,
+                "version": plugin.version,
+                "tenant_id": ctx.tenant_id,
+            })
+        except Exception:
+            # Audit write failed — roll back the registration
+            _detach_provider_slot(plugin)
+            _revoke_hooks(plugin.plugin_id)
+            _breakers.forget(plugin.plugin_id)
+            with self._lock:
+                self._plugins.pop(plugin.plugin_id, None)
+                self._contexts.pop(plugin.plugin_id, None)
+                self._boot_layers.pop(plugin.plugin_id, None)
+            raise
+
         # ADR-0233 D5: Record that this plugin_id was granted this privilege in this epoch.
         # Prevents a thread spawned during on_load() from re-escalating after the
         # loading context resets. If a plugin unregisters and tries to re-register
@@ -563,13 +585,6 @@ class PluginRegistry:
                 operation="on_load",
                 context={"plugin_type": plugin.plugin_type, "version": plugin.version},
             )
-        ctx.audit_emit("plugin.loaded", {
-            "plugin_id": plugin.plugin_id,
-            "plugin_type": plugin.plugin_type,
-            "boot_layer": resolved.value,
-            "version": plugin.version,
-            "tenant_id": ctx.tenant_id,
-        })
 
     def unregister(self, plugin_id: str, *, operator_initiated: bool = False) -> None:
         """Call plugin.on_unload() and remove it from the registry.
