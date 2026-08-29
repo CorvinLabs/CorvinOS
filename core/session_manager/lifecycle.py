@@ -443,6 +443,59 @@ class SessionLifecycleManager:
             except Exception as e:
                 logger.error(f"Failed to publish split trigger event: {e}")
 
+    def create_checkpoint_for_split(
+        self,
+        session_id: str,
+        split_event: SplitTriggerEvent,
+        checkpoint_manager: Optional[Any] = None,
+        workflow_executor: Optional[Any] = None,
+    ) -> Optional[Any]:
+        """Convenience method: create checkpoint when split is detected (k=3 Session Manager Wiring).
+
+        Integrates with WorkflowExecutor to capture workflow state.
+
+        Args:
+            session_id: Current session ID
+            split_event: SplitTriggerEvent that triggered the checkpoint
+            checkpoint_manager: CheckpointManager instance
+            workflow_executor: WorkflowExecutor instance (optional, for workflow state capture)
+
+        Returns:
+            SessionCheckpoint if created, None otherwise
+        """
+        if not checkpoint_manager:
+            logger.warning("checkpoint_manager not provided; skipping checkpoint creation")
+            return None
+
+        if session_id not in self.session_metrics:
+            logger.warning(f"Session {session_id} not found in metrics")
+            return None
+
+        metrics = self.session_metrics[session_id]
+
+        # Capture workflow state if executor is provided
+        workflow_state = None
+        if workflow_executor and hasattr(workflow_executor, "execution_state"):
+            workflow_state = workflow_executor.execution_state
+
+        checkpoint = checkpoint_manager.create_checkpoint(
+            session_id=session_id,
+            task_id=split_event.task_id,
+            phase=split_event.phase,
+            tenant_id=split_event.tenant_id,
+            trigger_type=split_event.trigger_type.value,
+            iterations=metrics.iterations,
+            token_count=metrics.context_size_tokens,
+            workflow_execution_state=workflow_state,
+        )
+
+        logger.info(
+            f"Created checkpoint {checkpoint.checkpoint_id} for split: "
+            f"session={session_id}, trigger={split_event.trigger_type.value}"
+        )
+
+        return checkpoint
+
     def close_session(self, session_id: str) -> None:
         """Close a session.
 

@@ -25,6 +25,10 @@ class TaskCreateRequest(BaseModel):
     chat_key: str | None = None
     instruction: str
     ttl_seconds: int = 3600
+    # Optional routing info for Discord/Telegram/etc (Phase 2: routing-wiring)
+    channel: str | None = None          # "discord", "telegram", etc.
+    chat_id: str | int | None = None    # Channel/conversation ID
+    sender: str | None = None            # User ID/identifier (for audit)
 
 
 class TaskCreateResponse(BaseModel):
@@ -47,14 +51,20 @@ async def create_task_handler(
     chat_key: str | None,
     instruction: str,
     ttl_seconds: int,
+    channel: str | None = None,
+    chat_id: str | int | None = None,
+    sender: str | None = None,
 ) -> TaskCreateResponse:
-    """Create a tenant-global task.
+    """Create a tenant-global task with optional messenger routing.
 
     Args:
         tenant_id: Tenant identifier.
         chat_key: Chat identifier (e.g., 'web:sid'). If None, uses current session.
         instruction: User instruction.
         ttl_seconds: Task timeout.
+        channel: (Optional) Messenger channel ("discord", "telegram", etc.)
+        chat_id: (Optional) Channel/conversation ID for notifications
+        sender: (Optional) User ID/identifier (for audit)
 
     Returns:
         TaskCreateResponse with task_id.
@@ -73,6 +83,10 @@ async def create_task_handler(
             instruction=instruction,
             ttl_seconds=ttl_seconds,
             check_quota=True,
+            # Phase 2: Pass routing info for completion_notify registration
+            channel=channel,
+            chat_id=chat_id,
+            sender=sender,
         )
     except QuotaExceededError:
         raise HTTPException(

@@ -109,6 +109,16 @@ class SessionCheckpoint:
     # Context Essentials
     context_essentials: Optional[ContextEssentials] = None
 
+    # Workflow State (k=3 Session Manager Wiring)
+    # Captures WorkflowExecutionState for session split/resume
+    # None if this checkpoint doesn't involve a workflow
+    workflow_execution_state: Optional[Any] = None  # WorkflowExecutionState from execution_engine.py
+
+    # Goal Alignment (k=3 Session Drift Validation)
+    # Persists goal and alignment score across session splits
+    goal: str = ""  # Current goal being pursued
+    goal_alignment_score: float = 0.0  # Alignment score at checkpoint time (0.0-1.0)
+
     def __post_init__(self):
         """Validate checkpoint."""
         if not self.session_id:
@@ -122,6 +132,15 @@ class SessionCheckpoint:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert checkpoint to dictionary (JSON-serializable)."""
+        # Serialize workflow_execution_state if present (WorkflowExecutionState is a dataclass)
+        workflow_state_dict = None
+        if self.workflow_execution_state:
+            try:
+                workflow_state_dict = asdict(self.workflow_execution_state)
+            except Exception as e:
+                logger.warning(f"Failed to serialize workflow_execution_state: {e}")
+                workflow_state_dict = None
+
         return {
             "checkpoint_id": self.checkpoint_id,
             "session_id": self.session_id,
@@ -137,6 +156,9 @@ class SessionCheckpoint:
             "artifacts": [asdict(art) for art in self.artifacts],
             "learning_state": asdict(self.learning_state) if self.learning_state else None,
             "context_essentials": asdict(self.context_essentials) if self.context_essentials else None,
+            "workflow_execution_state": workflow_state_dict,
+            "goal": self.goal,
+            "goal_alignment_score": self.goal_alignment_score,
         }
 
     @classmethod
@@ -209,6 +231,15 @@ class SessionCheckpoint:
                 reduction_percentage=ce.get("reduction_percentage", 0.0),
             )
 
+        # Deserialize workflow_execution_state if present
+        # Note: We store it as-is (dict or object) to avoid circular import on WorkflowExecutionState
+        # Conversion to actual WorkflowExecutionState happens in WorkflowExecutor.restore_execution_state()
+        workflow_execution_state = None
+        if data.get("workflow_execution_state"):
+            wes = data["workflow_execution_state"]
+            # Store the dict representation; WorkflowExecutor will reconstruct the actual object
+            workflow_execution_state = wes
+
         return cls(
             checkpoint_id=data.get("checkpoint_id", str(uuid4())),
             session_id=data.get("session_id", ""),
@@ -224,10 +255,34 @@ class SessionCheckpoint:
             artifacts=artifacts,
             learning_state=learning_state,
             context_essentials=context_essentials,
+            workflow_execution_state=workflow_execution_state,
+            goal=data.get("goal", ""),
+            goal_alignment_score=data.get("goal_alignment_score", 0.0),
         )
 
     def to_audit_event(self) -> dict[str, Any]:
         """Convert to audit.jsonl format (GDPR Art. 30, 32)."""
+        workflow_summary = {}
+        if self.workflow_execution_state:
+            workflow_state = self.workflow_execution_state
+            if isinstance(workflow_state, dict):
+                workflow_summary = {
+                    "workflow_id": workflow_state.get("workflow_id"),
+                    "run_id": workflow_state.get("run_id"),
+                    "status": workflow_state.get("status"),
+                    "nodes_executed": len(workflow_state.get("nodes_executed", [])),
+                    "errors_count": len(workflow_state.get("errors", [])),
+                }
+            else:
+                # Assume it's a WorkflowExecutionState object
+                workflow_summary = {
+                    "workflow_id": getattr(workflow_state, "workflow_id", None),
+                    "run_id": getattr(workflow_state, "run_id", None),
+                    "status": getattr(workflow_state, "status", None),
+                    "nodes_executed": len(getattr(workflow_state, "nodes_executed", [])),
+                    "errors_count": len(getattr(workflow_state, "errors", [])),
+                }
+
         return {
             "event_type": "session.checkpoint_created",
             "tenant_id": self.tenant_id,
@@ -242,6 +297,7 @@ class SessionCheckpoint:
                 "token_count": self.token_count_at_checkpoint,
                 "subgoals_open": len(self.open_subgoals),
                 "artifacts": len(self.artifacts),
+                "workflow": workflow_summary if workflow_summary else None,
             },
         }
 
@@ -301,6 +357,9 @@ class CheckpointManager:
         artifacts: Optional[List[ArtifactRecord]] = None,
         learning_state: Optional[LearningState] = None,
         context_essentials: Optional[ContextEssentials] = None,
+        workflow_execution_state: Optional[Any] = None,
+        goal: str = "",
+        goal_alignment_score: float = 0.0,
     ) -> SessionCheckpoint:
         """Create a new checkpoint.
 
@@ -317,6 +376,9 @@ class CheckpointManager:
             artifacts: List of generated artifacts
             learning_state: Learning state snapshot
             context_essentials: Context essentials for restoration
+            workflow_execution_state: Workflow execution state (k=3 Session Manager Wiring)
+            goal: Current goal being pursued (k=3 Session Drift Validation)
+            goal_alignment_score: Goal alignment score at checkpoint time (k=3 Session Drift Validation)
 
         Returns:
             SessionCheckpoint
@@ -334,6 +396,9 @@ class CheckpointManager:
             artifacts=artifacts or [],
             learning_state=learning_state,
             context_essentials=context_essentials,
+            workflow_execution_state=workflow_execution_state,
+            goal=goal,
+            goal_alignment_score=goal_alignment_score,
         )
 
         # Store in memory cache
