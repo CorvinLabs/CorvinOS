@@ -1,0 +1,22 @@
+# Requirements for JSON ↔ CSV Data Transformer Plugin
+#
+# This plugin uses only Python standard library modules and has NO external dependencies.
+# The requirements.txt is empty by design to minimize dependencies.
+#
+# Modules used:
+#   - csv (stdlib) - CSV parsing and generation
+#   - json (stdlib) - JSON parsing
+#   - logging (stdlib) - Event logging
+#   - io (stdlib) - StringIO for in-memory buffers
+#   - pathlib (stdlib) - Path handling
+#   - typing (stdlib) - Type hints
+#   - dataclasses (stdlib, Python 3.7+) - Data structures
+#   - datetime (stdlib) - Timestamp handling
+#
+# For development/testing:
+#   - pytest >= 7.0
+#   - pytest-cov >= 4.0
+#
+# For type checking (optional):
+#   - mypy >= 1.0
+#   - types-all

@@ -20,6 +20,21 @@ const _SILENT_WAV =
 const _TTS_UNAVAILABLE_MSG =
   "Voice synthesis unavailable — check Settings → Voice (an LLM/TTS backend is needed).";
 
+// Shown when playFull() (an explicit "read full answer" click) stops BEFORE
+// the known segment count, i.e. a mid-playlist segment came back 204/empty
+// while `index` was still < `total` from an earlier segment's response.
+// 2026-08-04, adversarial review: the loop's own `while (index < total)`
+// bound already handles the TRUE end of the playlist without ever needing a
+// 204 (the next fetch is skipped in favour of a local `Promise.resolve(null)`
+// once `index + 1 >= total`) — so a 204 received while `index < total` is
+// always a genuine synthesis failure (subprocess timeout, provider chain
+// exhaustion, or a concurrency slot-wait timeout), never a normal end. The
+// file's own policy above (line ~16) already says click paths must not fail
+// silently; this was the one click path still exempted from it, and it read
+// as "the read-aloud just stops partway through with nothing shown."
+const _TTS_SEGMENT_FAILED_MSG =
+  "Read-aloud stopped early — a segment failed to synthesize. Try Replay.";
+
 // play() rejections carry the browser's verdict in `name`: ONLY
 // "NotAllowedError" means autoplay-blocked, i.e. a user tap will fix it.
 // Anything else (e.g. "NotSupportedError" on undecodable audio) must NOT
@@ -329,12 +344,29 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
           // owns the element now; applying this would clobber it and leak the URL.
           if (myRequestId !== requestIdRef.current) return;
           if (!seg || !seg.blob.size) {
-            // 204 mid-playlist is the normal end-of-playlist signal — but on
-            // the FIRST segment it means no synthesis at all (zero-config box
-            // without a TTS/LLM backend). playFull always starts from an
+            // On the FIRST segment this means no synthesis at all (zero-config
+            // box without a TTS/LLM backend) — playFull always starts from an
             // explicit click, and a click that does nothing, silently,
-            // arbitrarily often reads as a dead button — say why, once.
-            if (index === 0) onError?.(_TTS_UNAVAILABLE_MSG);
+            // arbitrarily often reads as a dead button, so say why once.
+            //
+            // For any LATER segment (index > 0): `total` is already known and
+            // finite (set from an earlier segment's own response below), and
+            // the loop's own `while (index < total)` bound is what stops the
+            // NEXT fetch from ever firing once `index + 1 >= total` — see
+            // `pending = index + 1 < total ? ttsSegment(...) : Promise.resolve(null)`
+            // just below. That means a 204 received here, with `index` still
+            // < `total`, can only be a genuine synthesis failure on a segment
+            // the server itself already promised exists (subprocess timeout,
+            // provider chain exhaustion, or a concurrency slot-wait timeout) —
+            // never the natural end of the playlist, which never needs a
+            // server round-trip to signal at all. 2026-08-04, adversarial
+            // review (live report: "voice summary sometimes cut off"):
+            // treating this identically to a real end-of-playlist silently
+            // stopped playback with zero indication, once playback had
+            // already been running successfully — exactly the "explicit
+            // click did less than it promised" case this file's own policy
+            // (see _TTS_UNAVAILABLE_MSG above) already says must not be silent.
+            onError?.(index === 0 ? _TTS_UNAVAILABLE_MSG : _TTS_SEGMENT_FAILED_MSG);
             return;
           }
           total = seg.total;

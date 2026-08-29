@@ -1,0 +1,60 @@
+# Example Audit Backend Plugin Manifest
+# Copy this as a starting point for your own audit backend plugin
+
+plugin_id: example-audit-backend
+version: 0.1.0
+display_name: "Example Audit Backend"
+
+# Type of plugin — must match your Python class's plugin_type attribute
+plugin_type: audit_backend
+
+# Boot layers: compliance, core, bundled, installed (default: installed)
+boot_layer: installed
+
+# Provenance: builtin, vetted, community (default: community)
+origin: community
+
+# Compliance declarations
+pii_risk: low                    # How much PII might this plugin see?
+requires_consent: false          # Operator must explicitly enable?
+audit_required: true             # Should events be logged to audit trail?
+
+# Where work happens and what it talks to
+locality: local                  # local, eu_cloud, us_cloud, unknown
+network_egress: external         # none, local, external
+egress_hosts: []                 # Specific hosts if network_egress != external
+
+# Author information
+author: "Your Name"
+email: "your.email@example.com"
+homepage: "https://github.com/your-org/example-audit-backend"
+license: "Apache-2.0"
+
+# Dependencies on other plugins
+dependencies: []
+
+# Settings schema (JSON Schema Draft 7) — what config the operator provides
+settings_schema:
+  type: object
+  properties:
+    destination:
+      type: string
+      description: "Where to send audit events (e.g., S3 bucket, PostgreSQL host)"
+      default: "localhost"
+
+    api_key:
+      type: string
+      description: "API key for authentication"
+      # NOTE: secrets like passwords should NOT have defaults in the schema
+
+  required:
+    - destination
+
+# Schema version (for migration tracking across breaking changes)
+settings_schema_version: "1.0"
+
+# Optional: breaking changes from a previous version
+# breaking_changes:
+#   - old_setting: "db_host"
+#     new_setting: "destination"
+#     migration: "Rename db_host to destination"

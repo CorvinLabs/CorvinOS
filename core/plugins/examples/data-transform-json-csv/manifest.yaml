@@ -1,0 +1,39 @@
+id: data-transform-json-csv
+version: "1.0.0"
+name: "JSON ↔ CSV Data Transformer"
+description: "Convert between JSON and CSV formats with validation and error handling"
+author: "Claude Code"
+email: "claude@anthropic.com"
+license: "Apache-2.0"
+
+origin: "community"
+boot_layer: "installed"
+entry_point: "plugin.py::DataTransformPlugin"
+
+plugin_type: "custom"
+
+permissions:
+  network_egress: "none"  # No external network calls
+  pii_risk: "medium"      # May handle structured data that could contain PII
+  data_locality: "local"  # Processing happens locally
+
+dependencies: []
+
+settings_schema:
+  type: "object"
+  properties:
+    max_rows:
+      type: "integer"
+      default: 10000
+      description: "Maximum rows allowed in CSV conversion"
+    strict_mode:
+      type: "boolean"
+      default: false
+      description: "Fail on any data inconsistency (default: lenient)"
+    encoding:
+      type: "string"
+      default: "utf-8"
+      description: "File encoding for CSV operations"
+  required: []
+
+settings_schema_version: "1.0"

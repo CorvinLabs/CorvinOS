@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useVoicePlayback } from '@/lib/useVoicePlayback';
-import { ttsBlob } from '@/lib/api';
+import { ttsBlob, ttsSegment } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   ttsBlob: vi.fn(async () => new Blob(['fake-audio-bytes'], { type: 'audio/mpeg' })),
+  ttsSegment: vi.fn(),
+  getLastTtsReason: vi.fn(() => null),
+  sessionSummaryBlob: vi.fn(async () => new Blob(['fake-audio-bytes'], { type: 'audio/mpeg' })),
 }));
 
 /** A manually-resolvable promise, so a test can control exactly when (and in
@@ -359,5 +362,118 @@ describe('useVoicePlayback — playTts() success path (audio.play() resolves)', 
     // URL and leaving the ref desynced from the (now broken) idle state.
     expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
     expect(result.current.voiceState).toBe('idle');
+  });
+});
+
+/**
+ * 2026-08-04 adversarial review, live report: "the voice summary in the
+ * Console chat sometimes gets cut off / doesn't come out complete."
+ *
+ * playFull()'s own loop bound (`while (index < total)`) already stops
+ * fetching once the playlist is genuinely exhausted (the next segment fetch
+ * is skipped in favour of a local `Promise.resolve(null)` once
+ * `index + 1 >= total`) — so a 204/null response for a segment where
+ * `index` is still < the already-known `total` can only be a genuine
+ * synthesis failure (subprocess timeout, provider chain exhaustion, a
+ * concurrency slot-wait timeout), never the natural end of the playlist.
+ * Before this fix, that case was treated identically to a normal end and
+ * playback stopped with ZERO indication to the user — exactly the reported
+ * symptom, once playback had already been running successfully for one or
+ * more segments.
+ */
+describe('useVoicePlayback — playFull() mid-playlist segment failure (2026-08-04 adversarial review)', () => {
+  let playMock: ReturnType<typeof vi.fn>;
+  let createdAudioEls: HTMLAudioElement[];
+  let OriginalAudio: typeof Audio;
+
+  beforeEach(() => {
+    playMock = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.play = playMock;
+    HTMLMediaElement.prototype.pause = vi.fn();
+    if (!('createObjectURL' in URL)) {
+      // @ts-expect-error - happy-dom may not implement this
+      URL.createObjectURL = vi.fn(() => 'blob:fake-url');
+    }
+    if (!('revokeObjectURL' in URL)) {
+      // @ts-expect-error - happy-dom may not implement this
+      URL.revokeObjectURL = vi.fn();
+    }
+
+    createdAudioEls = [];
+    OriginalAudio = window.Audio;
+    window.Audio = new Proxy(OriginalAudio, {
+      construct(target, args) {
+        const instance = Reflect.construct(target, args as ConstructorParameters<typeof Audio>);
+        createdAudioEls.push(instance as HTMLAudioElement);
+        return instance;
+      },
+    }) as unknown as typeof Audio;
+
+    vi.mocked(ttsSegment).mockReset();
+  });
+
+  afterEach(() => {
+    window.Audio = OriginalAudio;
+    vi.restoreAllMocks();
+  });
+
+  it('calls onError instead of silently stopping when a mid-playlist segment comes back empty', async () => {
+    // Segment 0 succeeds and reports total=3 (three segments expected).
+    // Segment 1 simulates a genuine synthesis failure: null, exactly what a
+    // 204 from /voice/segment maps to.
+    vi.mocked(ttsSegment).mockImplementation(async (_text, _lang, _csrf, _sid, index) => {
+      if (index === 0) {
+        return { blob: new Blob(['seg0'], { type: 'audio/mpeg' }), total: 3, index: 0 };
+      }
+      if (index === 1) {
+        return null;
+      }
+      throw new Error(`unexpected fetch for index ${index} — playlist should have stopped`);
+    });
+
+    const onError = vi.fn();
+    const { result } = renderHook(() => useVoicePlayback('csrf-token', onError));
+
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.playFull('Eine lange Antwort mit mehreren Segmenten.', 'de', 'sid-1');
+    });
+
+    // Let segment 0's fetch resolve and audio.play() settle.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createdAudioEls).toHaveLength(1);
+    const audioEl = createdAudioEls[0];
+
+    // Segment 0 "finishes playing" — the loop advances to await segment 1's
+    // already-in-flight (mocked) fetch, which resolves null.
+    await act(async () => {
+      audioEl.onended?.(new Event('ended'));
+      await done;
+    });
+
+    expect(onError).toHaveBeenCalledWith(expect.stringMatching(/stopped early/i));
+    // Regression guard: the pre-fix code called onError only for index === 0
+    // (the "no synthesis at all" case) — asserting the exact non-generic
+    // message here also guards against silently regressing back to the old
+    // catch-all _TTS_UNAVAILABLE_MSG for a mid-playlist failure.
+    expect(onError).not.toHaveBeenCalledWith(expect.stringMatching(/check Settings/i));
+  });
+
+  it('still uses the "unavailable" message (not "stopped early") when the FIRST segment fails', async () => {
+    vi.mocked(ttsSegment).mockResolvedValue(null);
+
+    const onError = vi.fn();
+    const { result } = renderHook(() => useVoicePlayback('csrf-token', onError));
+
+    await act(async () => {
+      await result.current.playFull('Kurze Antwort.', 'de', 'sid-1');
+    });
+
+    expect(onError).toHaveBeenCalledWith(expect.stringMatching(/check Settings/i));
+    expect(onError).not.toHaveBeenCalledWith(expect.stringMatching(/stopped early/i));
   });
 });

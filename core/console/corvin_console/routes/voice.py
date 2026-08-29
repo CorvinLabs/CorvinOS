@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import os
 import random
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -608,37 +607,6 @@ def _resolve_tts_voice(lang: str) -> str | None:
 _MAX_VOICE_SEGMENTS = 24
 _TTS_PROVIDER_CHAR_LIMIT = 4000  # OpenAI TTS-1 hard cap is 4096; stay under it
 _TTS_SUMMARIZE_MAX_CHARS = 400   # same default build_voice_summary() uses for bridges
-# Shortest prefix worth keeping when a sentence boundary is found — a period at
-# character 5 would collapse a summary to "Hi." and is worse than a mid-word cut.
-_TTS_MIN_SENTENCE_CUT = 80
-
-
-def _cut_at_sentence_boundary(text: str, limit: int,
-                              min_cut: int = _TTS_MIN_SENTENCE_CUT) -> str:
-    """Bound ``text`` to ``limit`` chars, ending at a sentence boundary when one
-    exists late enough in the window; otherwise a hard cut.
-
-    Live report 2026-08-04 — "the voice summary in the Console chat sometimes
-    gets cut off / doesn't come out complete". `_voice_tts_sync` clamped the
-    SUMMARY with a bare ``text[:limit]`` slice, unlike its own two neighbouring
-    fallback branches which already cut at a boundary. That mattered because
-    ``summarize.py::adaptive_target()`` scales the target to ~85% of the ORIGINAL
-    answer with no hard cap ("completeness wins"), so a long answer legitimately
-    produces a summary longer than the provider limit — and the raw slice then
-    cut it mid-word, which TTS reads aloud as a broken-off sentence.
-
-    The fix was specified by `test_voice_summary_truncation_boundary.py` in
-    4f76526 but the helper was never written, so that whole module raised
-    AttributeError and the duplicated inline logic stayed in two places. Now all
-    THREE truncation sites go through here (found in the R6/R7 review sweep).
-    """
-    if len(text) <= limit:
-        return text
-    cut = text[:limit]
-    dot = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
-    if dot > min_cut:
-        return cut[:dot + 1].strip()
-    return cut
 # summarize.py's OWN internal budget is CLI (90s) + Hermes (45s) = up to 135s
 # worst case (see summarize.py's _SUMMARY_CLI_TIMEOUT_S/_SUMMARY_HERMES_TIMEOUT_S).
 # A shorter wrapper timeout here would routinely cut off a legitimate
@@ -859,10 +827,6 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     "TTS failed" banner — breaking the deliberate design (204-on-failure
     everywhere else) that a TTS problem never surfaces as an error to the user.
     Control characters are unspeakable anyway; dropping them loses nothing.
-
-    Uses `uv run` to ensure say.py executes in the project's virtual environment,
-    guaranteeing access to openai, edge-tts, piper-tts, and pywhispercpp (ADR-0194).
-    Falls back to sys.executable if uv is unavailable (e.g. in vendored wheels).
     """
     safe_text = "".join(
         ch for ch in text
@@ -870,16 +834,8 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     )
     voice = _resolve_tts_voice(lang)
     provider = _resolve_tts_provider()
-
-    # Try to use uv run for correct venv isolation; fall back to sys.executable
-    try:
-        shutil.which("uv")  # noqa: B605
-        cmd = ["uv", "run", "python", str(_VOICE_SCRIPTS / "say.py"),
-               str(out_path), safe_text, lang, voice or ""]
-    except (OSError, TypeError):
-        cmd = [sys.executable, str(_VOICE_SCRIPTS / "say.py"),
-               str(out_path), safe_text, lang, voice or ""]
-
+    cmd = [sys.executable, str(_VOICE_SCRIPTS / "say.py"),
+           str(out_path), safe_text, lang, voice or ""]
     if provider:
         cmd.append(provider)
     return cmd
@@ -1143,6 +1099,30 @@ async def voice_tts(
     return resp
 
 
+def _cut_at_sentence_boundary(text: str, limit: int, *, min_cut: int = 80) -> str:
+    """Bound ``text`` to at most ``limit`` chars, preferring the last sentence
+    boundary (``. ``/``! ``/``? ``) within that window over a raw mid-word cut.
+
+    2026-08-04, adversarial review: the automatic per-turn voice summary was
+    clamped to ``_TTS_PROVIDER_CHAR_LIMIT`` with a bare ``text[:limit]`` slice
+    in `_voice_tts_sync` -- unlike its own neighboring fallback branches,
+    which already did this sentence-boundary dance inline. Reachable in
+    practice: `summarize.py::adaptive_target()` scales the summarizer's
+    target to ~85% of the ORIGINAL answer's length with no hard cap
+    ("completeness wins"), so a long chat answer (roughly >4700 chars) can
+    legitimately produce a summary itself longer than the 4000-char provider
+    limit -- and the raw slice then cut it mid-word, exactly the "voice
+    summary sometimes gets cut off" symptom reported live. If ``text`` is
+    already within budget, returned unchanged (whitespace-stripped only) --
+    never pads or alters short input.
+    """
+    _cut = text[:limit]
+    if len(_cut) < limit:
+        return _cut.strip()
+    _dot = max(_cut.rfind(". "), _cut.rfind("! "), _cut.rfind("? "))
+    return (_cut[: _dot + 1] if _dot > min_cut else _cut).strip()
+
+
 def _voice_tts_sync(
     body: TtsRequest,
     rec: session_auth.SessionRecord,
@@ -1196,8 +1176,7 @@ def _voice_tts_sync(
     # constructs a sid-less TtsRequest for an ordinary long answer).
     if body.system_generated:
         _raw = " ".join((body.text or "").split())
-        tts_text = _cut_at_sentence_boundary(
-            _raw, _TTS_SUMMARIZE_MAX_CHARS * 2).strip()
+        tts_text = _cut_at_sentence_boundary(_raw, _TTS_SUMMARIZE_MAX_CHARS * 2)
     else:
         # summarize.py now BOUNDS even its degraded (no-LLM) fallback to the spoken
         # budget (2026-07-24) — it can no longer return the whole answer, so the
@@ -1207,17 +1186,17 @@ def _voice_tts_sync(
         # to a spoken size here rather than clamped only at the 4096 provider limit.
         _summary = _summarize_for_speech(body.text, body.lang)
         if _summary:
-            # The bug the live report described: this was a bare
-            # `_summary[:_TTS_PROVIDER_CHAR_LIMIT]`, so an oversized LLM summary
-            # (legitimate — adaptive_target scales to ~85% of the answer with no
-            # cap) was spoken with its last sentence sliced mid-word.
+            # adaptive_target() has no hard cap for a successful LLM summary
+            # (scales to ~85% of the ORIGINAL answer's length) — a long
+            # answer can legitimately produce a summary past the provider
+            # limit, so this must cut at a sentence boundary like every
+            # other branch here, not with a bare slice (2026-08-04).
             tts_text = _cut_at_sentence_boundary(_summary, _TTS_PROVIDER_CHAR_LIMIT)
         else:
             # No summary at all — bound the raw answer to roughly the spoken budget
             # at a sentence boundary instead of speaking up to 4096 raw chars.
             _raw = " ".join((body.text or "").split())
-            tts_text = _cut_at_sentence_boundary(
-                _raw, _TTS_SUMMARIZE_MAX_CHARS * 2).strip()
+            tts_text = _cut_at_sentence_boundary(_raw, _TTS_SUMMARIZE_MAX_CHARS * 2)
 
     # Resolve the user's pins ONCE, before choosing a synthesis path. Before
     # this restructure the OpenAI branch ran FIRST — on raw un-summarized text,
@@ -1757,7 +1736,7 @@ def voice_summarize(
                 target_id="web",
                 reason="summarize-empty-output",
             )
-            fallback = body.text[:body.max_chars].strip()
+            fallback = _cut_at_sentence_boundary(body.text, body.max_chars)
             return SummarizeResponse(
                 summary=fallback,
                 original_len=len(body.text),
