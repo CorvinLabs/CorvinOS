@@ -253,6 +253,12 @@ class SessionCheckpoint:
             # Store the dict representation; WorkflowExecutor will reconstruct the actual object
             workflow_execution_state = wes
 
+        # Deserialize goal_context if present (Phase 1: Task Context Drift)
+        goal_context = None
+        if data.get("goal_context"):
+            gc_data = data["goal_context"]
+            goal_context = GoalContext.from_dict(gc_data)
+
         return cls(
             checkpoint_id=data.get("checkpoint_id", str(uuid4())),
             session_id=data.get("session_id", ""),
@@ -271,6 +277,7 @@ class SessionCheckpoint:
             workflow_execution_state=workflow_execution_state,
             goal=data.get("goal", ""),
             goal_alignment_score=data.get("goal_alignment_score", 0.0),
+            goal_context=goal_context,
         )
 
     def to_audit_event(self) -> dict[str, Any]:
@@ -296,6 +303,14 @@ class SessionCheckpoint:
                     "errors_count": len(getattr(workflow_state, "errors", [])),
                 }
 
+        # Goal context summary (Phase 1: Task Context Drift)
+        goal_context_summary = None
+        if self.goal_context:
+            goal_context_summary = {
+                "goal_hash": self.goal_context.goal_hash,
+                "created_at": self.goal_context.created_at,
+            }
+
         return {
             "event_type": "session.checkpoint_created",
             "tenant_id": self.tenant_id,
@@ -311,6 +326,7 @@ class SessionCheckpoint:
                 "subgoals_open": len(self.open_subgoals),
                 "artifacts": len(self.artifacts),
                 "workflow": workflow_summary if workflow_summary else None,
+                "goal_context": goal_context_summary,
             },
         }
 
@@ -373,6 +389,7 @@ class CheckpointManager:
         workflow_execution_state: Optional[Any] = None,
         goal: str = "",
         goal_alignment_score: float = 0.0,
+        goal_context: Optional[GoalContext] = None,
     ) -> SessionCheckpoint:
         """Create a new checkpoint.
 
@@ -392,6 +409,7 @@ class CheckpointManager:
             workflow_execution_state: Workflow execution state (k=3 Session Manager Wiring)
             goal: Current goal being pursued (k=3 Session Drift Validation)
             goal_alignment_score: Goal alignment score at checkpoint time (k=3 Session Drift Validation)
+            goal_context: GoalContext with SHA256 hash (Phase 1: Task Context Drift)
 
         Returns:
             SessionCheckpoint
@@ -412,6 +430,7 @@ class CheckpointManager:
             workflow_execution_state=workflow_execution_state,
             goal=goal,
             goal_alignment_score=goal_alignment_score,
+            goal_context=goal_context,
         )
 
         # Store in memory cache
