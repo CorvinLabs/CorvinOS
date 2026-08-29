@@ -24,13 +24,14 @@
  * fire — the three subsystems are never all polled at once.
  */
 import { useSearchParams } from "react-router-dom";
-import { Blocks, Package, Puzzle } from "lucide-react";
+import { Blocks, Package, Puzzle, ShoppingCart } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ExtensionsPage } from "@/pages/extensions";
 import McpPluginsPage from "@/pages/mcp-plugins";
 import { PluginsPage } from "@/pages/plugins";
+import { MarketplaceTab } from "@/components/MarketplaceTab";
 
-const TABS = ["plugins", "mcp", "extensions"] as const;
+const TABS = ["plugins", "marketplace", "mcp", "extensions"] as const;
 type TabId = (typeof TABS)[number];
 
 function isTabId(v: string | null): v is TabId {
@@ -66,6 +67,9 @@ export function PluginCenterPage() {
           <TabsTrigger value="plugins" data-testid="plugin-center-tab-plugins">
             <Puzzle className="h-4 w-4" /> Plugins
           </TabsTrigger>
+          <TabsTrigger value="marketplace" data-testid="plugin-center-tab-marketplace">
+            <ShoppingCart className="h-4 w-4" /> Marketplace
+          </TabsTrigger>
           <TabsTrigger value="mcp" data-testid="plugin-center-tab-mcp">
             <Package className="h-4 w-4" /> MCP Tools
           </TabsTrigger>
@@ -78,6 +82,9 @@ export function PluginCenterPage() {
             inactive content, so only the active subsystem's queries run. */}
         <TabsContent value="plugins">
           <PluginsPage />
+        </TabsContent>
+        <TabsContent value="marketplace">
+          <MarketplaceTab />
         </TabsContent>
         <TabsContent value="mcp">
           <McpPluginsPage />
