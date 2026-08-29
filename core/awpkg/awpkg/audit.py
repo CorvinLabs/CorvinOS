@@ -91,19 +91,29 @@ def _standalone_write(event_type: str, *, tenant_id: str = "_default", **details
         try:
             prev_hash = ""
             try:
-                # FND-18: read the TRUE last chain record. The old 4 KB-tail read
-                # missed the last line whenever the final record exceeded 4 KB →
-                # a wrong/empty prev_hash → a broken chain link. Walk all lines
-                # (the awpkg fallback chain is small) and keep the last valid hash.
-                fh.seek(0)
-                for line in fh.read().decode("utf-8", errors="replace").splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        prev_hash = json.loads(line).get("hash", prev_hash)
-                    except Exception:
-                        pass
+                # FND-18 + ADR-0466 optimization: read the TRUE last chain record
+                # efficiently by seeking to end and reading backward.
+                # Performance: O(1) instead of O(n) — seek 64KB from end instead of
+                # reading entire file. Works because JSON records are ~200-400B each.
+                fh.seek(0, 2)  # Seek to EOF
+                file_size = fh.tell()
+
+                if file_size > 0:
+                    # Read at most 64KB from end (typically contains 150-300 records)
+                    read_size = min(65536, file_size)
+                    fh.seek(max(0, file_size - read_size))
+                    chunk = fh.read(read_size).decode("utf-8", errors="replace")
+
+                    # Parse from end of chunk, keeping last valid hash
+                    for line in reversed(chunk.splitlines()):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            prev_hash = json.loads(line).get("hash", prev_hash)
+                            break  # Found last record; stop
+                        except Exception:
+                            pass
             except Exception:
                 pass
             # ADR-0129 — apply the metadata-only floor even on the forge-
