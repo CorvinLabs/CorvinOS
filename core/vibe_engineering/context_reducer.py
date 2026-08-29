@@ -6,6 +6,7 @@ Preserves: goal, constraints, decisions made, errors encountered, learnings.
 Drops: metadata, debug logs, intermediate attempts, tangential notes.
 
 Integration: CheckpointManager stores reduced context in context_essentials field.
+Thread-safe: Uses RWLock for concurrent cache access (reads exclusive, writes serialized).
 """
 
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
 import logging
+from core.concurrency.locks import RWLock
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ class ContextReducer:
     - Drops debug logs, intermediate attempts, tangential notes
     - Idempotent: same context always produces same reduced form
     - Recoverable: dropped sections recorded for full-context restore (Phase 3)
+    - Thread-safe: RWLock protects concurrent cache access
     """
 
     # Essential keywords (Tier 1: MUST KEEP)
@@ -79,15 +82,20 @@ class ContextReducer:
         "debug", "verbose", "introspection", "meta"
     }
 
+    # Max cache size: recent 100 reductions
+    MAX_CACHE_SIZE = 100
+
     def __init__(self, target_reduction_pct: int = 91):
         """
-        Initialize reducer.
+        Initialize reducer with thread-safe cache.
 
         Args:
             target_reduction_pct: Target compression (typically 91%).
         """
         self.target_reduction_pct = target_reduction_pct
-        logger.info(f"ContextReducer initialized (target: {target_reduction_pct}% reduction)")
+        self.state_lock = RWLock(timeout=5.0)
+        self._cache: Dict[str, ReducedContext] = {}  # Cache key → ReducedContext
+        logger.info(f"ContextReducer initialized (target: {target_reduction_pct}% reduction, RWLock enabled)")
 
     def reduce(
         self,
@@ -99,7 +107,7 @@ class ContextReducer:
         original_size_tokens: int = 10000  # Approximate
     ) -> ReducedContext:
         """
-        Reduce context to essential sections only.
+        Reduce context to essential sections only (thread-safe with cache).
 
         Args:
             goal: Original task goal (always kept).
@@ -112,6 +120,16 @@ class ContextReducer:
         Returns:
             ReducedContext with 91% compression.
         """
+        # Generate cache key from inputs (for memoization)
+        cache_key = self._make_cache_key(goal, constraints, decisions, errors, learnings)
+
+        # Try cache lookup with read lock
+        with self.state_lock.read_lock():
+            if cache_key in self._cache:
+                logger.debug(f"Cache hit for context reduction (key={cache_key[:20]}...)")
+                return self._cache[cache_key]
+
+        # Cache miss: compute the reduction
         # Keep goal (always)
         reduced_goal = goal
 
@@ -159,6 +177,17 @@ class ContextReducer:
             f"({reduction_pct}% reduction, {len(reduced_decisions)} decisions, "
             f"{len(reduced_errors)} errors, {len(reduced_learnings)} learnings)"
         )
+
+        # Store in cache with write lock
+        with self.state_lock.write_lock():
+            # Check again (double-checked locking) to avoid duplicate work
+            if cache_key not in self._cache:
+                self._cache[cache_key] = reduced_context
+                # Evict oldest entry if cache is full
+                if len(self._cache) > self.MAX_CACHE_SIZE:
+                    oldest_key = next(iter(self._cache))
+                    del self._cache[oldest_key]
+                    logger.debug(f"Cache evicted oldest entry (size={len(self._cache)})")
 
         return reduced_context
 
@@ -255,6 +284,48 @@ class ContextReducer:
         json_str = json.dumps(context_dict, default=str)
         # Approximate: 1 token per 4 characters
         return len(json_str) // 4
+
+    def _make_cache_key(
+        self,
+        goal: str,
+        constraints: List[str],
+        decisions: List[Dict[str, Any]],
+        errors: List[Dict[str, Any]],
+        learnings: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Generate a cache key from reduction inputs.
+
+        Uses SHA256 hash for compact, deterministic key.
+        """
+        import hashlib
+        key_parts = json.dumps({
+            "goal": goal,
+            "constraints": sorted(constraints),
+            "decisions": json.dumps(decisions, default=str, sort_keys=True),
+            "errors": json.dumps(errors, default=str, sort_keys=True),
+            "learnings": json.dumps(learnings, default=str, sort_keys=True),
+        }, sort_keys=True, default=str)
+        return hashlib.sha256(key_parts.encode()).hexdigest()
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics (for monitoring/testing).
+
+        Returns with read lock held.
+        """
+        with self.state_lock.read_lock():
+            return {
+                "cache_size": len(self._cache),
+                "max_cache_size": self.MAX_CACHE_SIZE,
+                "fill_pct": int((len(self._cache) / self.MAX_CACHE_SIZE) * 100)
+            }
+
+    def clear_cache(self) -> None:
+        """Clear cache (for testing/maintenance)."""
+        with self.state_lock.write_lock():
+            self._cache.clear()
+            logger.info("Context reduction cache cleared")
 
     def _identify_dropped(
         self,
