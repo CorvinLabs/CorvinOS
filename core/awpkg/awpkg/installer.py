@@ -432,6 +432,18 @@ def is_installed(
     return (dest / "_awpkg_meta.json").exists()
 
 
+def _sanitize_skill_name(name: str) -> str:
+    """Normalise a package skill name to the registry charset (alnum + '.' + '_').
+
+    Package authors commonly use hyphens; the SkillForge registry rejects them (charset rule).
+    Rather than drop those skills, map every disallowed char (notably '-') to '_', collapse '..'
+    and strip leading/trailing '.'. Returns "" if nothing usable remains (caller skips it).
+    """
+    safe = re.sub(r"[^A-Za-z0-9._]", "_", name or "")
+    safe = re.sub(r"\.\.+", ".", safe).strip(".")
+    return safe[:128]
+
+
 def _parse_frontmatter(text: str) -> dict[str, Any]:
     """Best-effort YAML front-matter parse (``---`` … ``---`` at the top). Never raises."""
     if not text.startswith("---"):
@@ -508,6 +520,7 @@ def register_components(
                 skipped.append(f"{Path(skill_arc_path).stem}: skill registry unavailable ({exc})")
         if _skreg is not None:
             _VALID = ("domain", "persona-style", "repo-context", "learned-experience")
+            _used: set[str] = set()
             for skill_arc_path in skills:
                 src = installed.install_dir / skill_arc_path
                 if not src.exists():
@@ -516,11 +529,24 @@ def register_components(
                 dir_name = parts[1] if len(parts) > 2 else Path(skill_arc_path).stem
                 body = src.read_text(encoding="utf-8")
                 fm = _parse_frontmatter(body)
-                name = str(fm.get("name") or dir_name)
+                raw_name = str(fm.get("name") or dir_name)
+                # A2: normalise to the registry charset (e.g. hyphens -> underscores) so package
+                # skills with common names still register, with a collision guard so two names that
+                # normalise to the same value do not silently overwrite each other.
+                name = _sanitize_skill_name(raw_name)
+                if not name:
+                    skipped.append(f"{raw_name!r}: no usable name after normalisation")
+                    continue
+                if name in _used:
+                    skipped.append(f"{raw_name!r}: normalised name {name!r} collides with another skill in this package")
+                    continue
+                _used.add(name)
                 stype = fm.get("type")
                 if stype not in _VALID:
                     stype = "learned-experience"
                 description = str(fm.get("description") or f"Skill from package {installed.id}")
+                if name != raw_name:
+                    description = f"{description} (original name: {raw_name})"
                 try:
                     _skreg.create(
                         scope="package", name=name, type=stype, body_md=body,
