@@ -1,18 +1,62 @@
-"""ADR-0424: Context Propagation for Async — ContextVar preservation through asyncio boundaries."""
+"""ADR-0305/0424: Context Propagation for Async — ContextVar preservation through asyncio boundaries.
+
+This module provides utilities for preserving ContextVar state across asyncio task boundaries,
+including exception handling, timeout management, and task cancellation semantics (ADR-0305).
+"""
 
 import asyncio
 import sys
+import logging
 from contextvars import ContextVar, copy_context, Context
-from typing import Callable, Any, Coroutine, List, TypeVar
+from typing import Callable, Any, Coroutine, List, TypeVar, Optional, Dict
+from dataclasses import dataclass
+from enum import Enum
 
 T = TypeVar('T')
+logger = logging.getLogger(__name__)
+
+
+class TaskExecutionStatus(Enum):
+    """Task execution status tracking (ADR-0305)."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+
+
+@dataclass
+class TaskExecutionContext:
+    """Captures execution context for a task (ADR-0305 exception handling).
+
+    Stores context snapshots and exception information for debugging and audit trails.
+    """
+    task_id: str
+    status: TaskExecutionStatus
+    context_snapshot: Dict[str, Any]
+    exception: Optional[Exception] = None
+    exception_context_vars: Optional[Dict[str, Any]] = None
+    execution_time_ms: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Export execution context as dict (for audit trail)."""
+        return {
+            "task_id": self.task_id,
+            "status": self.status.value,
+            "context_snapshot": self.context_snapshot,
+            "exception": str(self.exception) if self.exception else None,
+            "exception_context_vars": self.exception_context_vars,
+            "execution_time_ms": self.execution_time_ms,
+        }
 
 
 class AsyncContextPropagator:
     """Propagate ContextVars through asyncio.create_task() and asyncio.gather() (ADR-0424 Part 1).
 
     Python 3.7+ automatically copies context when create_task() is called. This class
-    provides explicit wrappers for clarity and control.
+    provides explicit wrappers for clarity and control, plus enhancements for exception
+    handling and timeout management (ADR-0305).
     """
 
     @staticmethod
@@ -100,6 +144,74 @@ class AsyncContextPropagator:
         )
 
     @staticmethod
+    async def create_task_with_timeout(
+        coro: Coroutine[Any, Any, T],
+        timeout: float,
+        context: Context = None,
+    ) -> T:
+        """Create task with explicit timeout and context preservation (ADR-0305).
+
+        Args:
+            coro: Coroutine to run
+            timeout: Timeout in seconds
+            context: ContextVar context (if None, uses current)
+
+        Returns:
+            Result of the coroutine
+
+        Raises:
+            asyncio.TimeoutError: if coro exceeds timeout
+            TypeError: if coro is not a coroutine
+        """
+        if not asyncio.iscoroutine(coro):
+            raise TypeError(f"Expected coroutine, got {type(coro)}")
+
+        try:
+            task = AsyncContextPropagator.create_task_with_context(coro, context)
+            return await asyncio.wait_for(task, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f"Task timed out after {timeout}s")
+            raise
+
+    @staticmethod
+    async def create_task_with_exception_capture(
+        coro: Coroutine[Any, Any, T],
+        context: Context = None,
+        context_vars_to_capture: Optional[List[ContextVar]] = None,
+    ) -> tuple[Optional[T], Optional[Exception], Optional[Dict[str, Any]]]:
+        """Create task with exception context capture (ADR-0305 exception handling).
+
+        Args:
+            coro: Coroutine to run
+            context: ContextVar context (if None, uses current)
+            context_vars_to_capture: List of ContextVar to capture on exception
+
+        Returns:
+            Tuple of (result, exception, captured_context_vars)
+            - result: coroutine result or None if exception
+            - exception: Exception raised or None
+            - captured_context_vars: Dict of captured ContextVar values at time of exception
+        """
+        if not asyncio.iscoroutine(coro):
+            raise TypeError(f"Expected coroutine, got {type(coro)}")
+
+        task = AsyncContextPropagator.create_task_with_context(coro, context)
+        try:
+            result = await task
+            return result, None, None
+        except Exception as e:
+            # Capture context vars at time of exception
+            captured_vars = {}
+            if context_vars_to_capture:
+                for var in context_vars_to_capture:
+                    try:
+                        captured_vars[var.name] = var.get()
+                    except LookupError:
+                        captured_vars[var.name] = None
+            logger.error(f"Task failed with {type(e).__name__}: {e}", exc_info=True)
+            return None, e, captured_vars
+
+    @staticmethod
     def create_task_group_with_context(
         context: Context = None,
     ) -> 'AsyncContextTaskGroup':
@@ -137,6 +249,7 @@ class AsyncContextTaskGroup:
             raise RuntimeError("AsyncContextTaskGroup requires Python 3.11+")
         self.context = context or copy_context()
         self.task_group = None
+        self.task_count = 0
 
     async def __aenter__(self) -> 'AsyncContextTaskGroup':
         """Enter the async context manager."""
@@ -161,6 +274,15 @@ class AsyncContextTaskGroup:
         """
         if self.task_group is None:
             raise RuntimeError("TaskGroup not yet entered")
+        self.task_count += 1
         return self.task_group.create_task(
             AsyncContextPropagator._run_in_context(coro, self.context)
         )
+
+    def task_count_created(self) -> int:
+        """Return number of tasks created in this group.
+
+        Returns:
+            Number of tasks created
+        """
+        return self.task_count
