@@ -12,6 +12,11 @@ Core modules:
 - metrics: ExecutionMetrics, MetricsCollector
 - active_loop: ActiveLearningLoop (exec → event → confidence)
 - anomaly_detector: AnomalyDetector, AnomalyAlert (Phase 8: Anomaly Detection & Auto-Recovery)
+
+Phase 6: Learning Loop
+- feedback_pipeline: CI/CD feedback ingestion, pattern analysis, prompt refinement
+- ab_testing: A/B testing framework, statistical analysis, auto-rollout/rollback
+- learning_dashboard: Metrics collection, aggregation, alerting, visualization
 """
 
 from .models import TreeNode, LearningEvent, ConfidenceEvent, CompositionType
@@ -32,6 +37,32 @@ from .classifier_model import LearnedClassifier, PredictionResult, ClassifierMet
 from .classifier_trainer import ClassifierTrainer, TrainingDataset, TrainingDataPoint
 from .active_feedback import ActiveFeedbackCollector, FeedbackRecord, FeedbackMetrics
 from .classifier_serving import ClassifierService
+# Phase 6: Learning Loop (ADR-0428)
+from .feedback_pipeline import (
+    FeedbackPipeline,
+    TestResult,
+    TestResultType,
+    FailureCategory,
+    PatternAnalysis,
+    PromptRefinement,
+)
+from .ab_testing import (
+    ABTestingFramework,
+    ExperimentMetric,
+    ExperimentGroup,
+    ExperimentStatus,
+    Experiment,
+    RolloutPlan,
+    RolloutPhase,
+)
+from .learning_dashboard import (
+    LearningDashboard,
+    MetricType as DashboardMetricType,
+    MetricPoint,
+    AggregatedMetric,
+    MetricAlert,
+    AggregationWindow,
+)
 
 __all__ = [
     "TreeNode",
@@ -73,4 +104,23 @@ __all__ = [
     "FeedbackRecord",
     "FeedbackMetrics",
     "ClassifierService",
+    # Phase 6: Learning Loop (ADR-0428)
+    "FeedbackPipeline",
+    "TestResult",
+    "TestResultType",
+    "FailureCategory",
+    "PatternAnalysis",
+    "PromptRefinement",
+    "ABTestingFramework",
+    "ExperimentMetric",
+    "ExperimentGroup",
+    "ExperimentStatus",
+    "Experiment",
+    "RolloutPlan",
+    "RolloutPhase",
+    "LearningDashboard",
+    "MetricPoint",
+    "AggregatedMetric",
+    "MetricAlert",
+    "AggregationWindow",
 ]
