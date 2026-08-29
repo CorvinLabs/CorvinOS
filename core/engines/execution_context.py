@@ -1,4 +1,9 @@
-"""ExecutionContext (Phase 0) — Immutable serializable task execution state (LEGACY).
+"""ExecutionContext (Phase 0) — Immutable serializable task execution state (DEPRECATED).
+
+⚠️ DEPRECATED (ADR-0423 Phase 0, 2026-08-29):
+This location is now DEPRECATED. Import from canonical location instead:
+  from core.context_engineering.execution_context import ExecutionContext  ← CANONICAL v2
+  from core.engines.execution_context import ExecutionContext  ← DEPRECATED (legacy v1 replay state)
 
 IMMUTABLE VERSION: For task reproducibility and replay.
 
@@ -7,6 +12,15 @@ Captures all context needed to:
 2. Replay tasks deterministically
 3. Merge state across systems (CRDT operations)
 4. Audit task execution history
+
+⚠️ NOTE: This module defines ExecutionContext for Phase 0 task state (immutable replay).
+For live Brain subsystem execution state, use core.context_engineering.execution_context.ExecutionContext.
+For turn-level metadata, use core.console.corvin_core.execution_context.ExecutionContext.
+
+DEPRECATION PLAN:
+- Phase 1 (Week 2): Update all imports to canonical location
+- Phase 2 (Week 3): Remove this module entirely
+- Until then: This module remains functional but marked deprecated
 
 Do NOT confuse with:
 - core.context_engineering.execution_context.ExecutionContext — mutable v2 (CANONICAL)
@@ -18,11 +32,21 @@ Use this for: frozen serialization, not for live Brain subsystem state.
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 from uuid import uuid4
+
+# ADR-0423 Phase 0: Emit deprecation warning on module import
+warnings.warn(
+    "core.engines.execution_context is DEPRECATED (ADR-0423). "
+    "Import from canonical location: from core.context_engineering.execution_context import ExecutionContext. "
+    "This legacy module will be removed in Phase 2 (Week 3, 2026-09-12).",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class ExecutionState(str, Enum):
