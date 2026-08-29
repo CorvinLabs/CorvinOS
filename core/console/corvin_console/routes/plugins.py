@@ -589,6 +589,79 @@ async def uninstall_plugin(
     return {"uninstalled": plugin_id, "audit_retained": True}
 
 
+class PluginReportIn(BaseModel):
+    """Plugin report submission (ADR-0249: Trust Anchor)."""
+    reason: str = Field(
+        ...,
+        description="Report reason",
+        pattern="^(malicious|inappropriate|permission_abuse|misrepresentation|other)$"
+    )
+    details: str = Field(
+        ...,
+        description="Detailed description (10-500 characters)",
+        min_length=10,
+        max_length=500
+    )
+
+
+class PluginReportOut(BaseModel):
+    """Plugin report response."""
+    status: str
+    message: str
+    report_id: str
+
+
+@router.post("/plugins/{plugin_id}/report")
+async def report_plugin(
+    plugin_id: str,
+    body: PluginReportIn,
+    rec: Annotated[Any, Depends(require_csrf)],
+) -> PluginReportOut:
+    """Report a plugin as inappropriate or malicious (ADR-0249 Stage 6).
+
+    Reasons: malicious, inappropriate, permission_abuse, misrepresentation, other.
+    Details must be 10-500 characters describing the issue.
+
+    Metadata-only audit event (never includes user's report text, PII protection).
+    """
+    try:
+        import uuid
+        report_id = str(uuid.uuid4())
+
+        # Write audit event (metadata-only: reason + report_id, never details text)
+        try:
+            console_audit.action_initiated(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="plugin.reported",
+                target_kind="plugin",
+                target_id=plugin_id,
+                details={
+                    "reason": body.reason,
+                    "report_id": report_id,
+                    # Never include the full user-provided details text (PII protection)
+                },
+            )
+        except Exception as audit_err:
+            log.warning(f"failed to write report audit event: {audit_err}")
+            # Don't fail the API call — audit failure is logged but not blocking
+
+        log.info(
+            f"Plugin {plugin_id} reported by {rec.tenant_id}: "
+            f"{body.reason} (report_id={report_id})"
+        )
+
+        return PluginReportOut(
+            status="success",
+            message="Report submitted. Thank you for reporting this plugin.",
+            report_id=report_id,
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        log.error(f"report plugin failed: {exc}", exc_info=True)
+        raise _mutation_error(exc) from exc
+
+
 @router.get("/plugins/{plugin_id}/schema-defaults")
 async def schema_defaults(
     plugin_id: str,
