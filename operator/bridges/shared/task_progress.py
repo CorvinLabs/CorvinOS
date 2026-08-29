@@ -172,9 +172,14 @@ def _routing_for(task_id: str) -> dict | None:
         import completion_notify as _cn  # type: ignore
 
         rec = _cn._read(_cn._record_path(task_id))  # noqa: SLF001 — sibling module
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        print(f"[task_progress] ERROR: _routing_for({task_id}) import/read failed: {e}",
+              file=sys.stderr)
         return None
     if not rec:
+        print(f"[task_progress] WARNING: _routing_for({task_id}) no completion_notify record found "
+              f"— task was not registered for notifications",
+              file=sys.stderr)
         return None
     return {
         "channel": rec.get("channel") or "discord",

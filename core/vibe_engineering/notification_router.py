@@ -70,7 +70,11 @@ def _load_task_progress():
         import task_progress  # type: ignore
 
         return task_progress
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            f"[notification_router] Failed to load task_progress module: {e}. "
+            f"Task progress notifications will not be delivered to outbox."
+        )
         return None
 
 
