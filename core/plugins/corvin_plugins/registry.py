@@ -110,6 +110,23 @@ _PROVIDER_MODULE_NAMES: tuple[str, ...] = (
 #: "must not block for more than 2 s"; this is what makes the sentence true.
 HEALTH_CHECK_DEADLINE_S = 2.0
 
+#: Shared thread pool for health checks (BUG #4 fix).  Using a single pool
+#: instead of creating a new ThreadPoolExecutor per check prevents unbounded
+#: thread accumulation on repeated timeouts.
+_HEALTH_CHECK_POOL: Optional[Any] = None
+
+
+def _get_health_check_pool():
+    """Get or create the shared health check thread pool."""
+    global _HEALTH_CHECK_POOL
+    if _HEALTH_CHECK_POOL is None:
+        import concurrent.futures as _futures
+        _HEALTH_CHECK_POOL = _futures.ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="health-check-",
+        )
+    return _HEALTH_CHECK_POOL
+
 
 class HealthCheckTimeout(TimeoutError):
     """A plugin's ``health_check()`` did not answer within its deadline."""
@@ -124,19 +141,14 @@ def _call_with_deadline(fn: "Callable[[], Any]", deadline_s: float, plugin_id: s
     with no recovery path and no signal. The compliance boot layer made it worse
     rather than better, because there containment is deliberately off.
 
-    The worker thread is a daemon and is abandoned, not killed — Python cannot
-    kill a thread. Abandoning it costs one stuck thread; waiting on it costs the
-    admin API. A plugin that wedges repeatedly therefore leaks threads, which is
-    the visible symptom of a bug it already has.
+    BUG #4 FIX: Use a shared thread pool (max 4 workers) instead of creating
+    a new ThreadPoolExecutor per check. This prevents unbounded thread accumulation
+    on repeated timeouts. The pool has a fixed size, so wedged threads are
+    bounded and the pool naturally cleans up finished work.
     """
     import concurrent.futures as _futures
 
-    # NOT a context manager: ThreadPoolExecutor.__exit__ joins its worker, which
-    # is precisely what must not happen when the worker is wedged — the deadline
-    # would then be a lie. shutdown(wait=False) abandons it instead.
-    pool = _futures.ThreadPoolExecutor(
-        max_workers=1, thread_name_prefix=f"health-{plugin_id[:24]}"
-    )
+    pool = _get_health_check_pool()
     future = pool.submit(fn)
     try:
         return future.result(timeout=deadline_s)
@@ -144,16 +156,6 @@ def _call_with_deadline(fn: "Callable[[], Any]", deadline_s: float, plugin_id: s
         raise HealthCheckTimeout(
             f"health_check for {plugin_id!r} exceeded {deadline_s:.1f}s"
         ) from None
-    finally:
-        # An earlier version cleared `concurrent.futures.thread._threads_queues`
-        # here. That map is PROCESS-WIDE, not pool-local, and `_python_exit`
-        # iterates it at interpreter shutdown to wake and join every pool in the
-        # process. Clearing it meant that after ONE wedged health check, no
-        # ThreadPoolExecutor anywhere — compute, workflows, boot healer, the
-        # bridge adapter, every `run_in_executor(None, …)` — was joined at exit,
-        # so their in-flight work was lost silently. Same class as the outbox
-        # incident: a local convenience that quietly broke a global contract.
-        pool.shutdown(wait=False)
 
 
 def _detach_provider_slot(plugin: CorvinPlugin) -> None:
