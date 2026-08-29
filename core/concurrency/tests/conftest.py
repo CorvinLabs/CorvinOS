@@ -1,11 +1,11 @@
 """Fixtures for ADR-0304 Concurrency Tests."""
 
-import pytest
-import threading
 import asyncio
-from contextvars import ContextVar
-from typing import List
+import threading
 import time
+from contextvars import ContextVar
+
+import pytest
 
 
 @pytest.fixture

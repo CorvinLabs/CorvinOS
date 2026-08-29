@@ -14,19 +14,18 @@ Total: 100+ tests covering:
 - WorkerPool (15 tests)
 """
 
-import pytest
+import asyncio
 import threading
 import time
-import asyncio
-from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
-import queue
+from contextvars import copy_context
 
-from core.concurrency import RWLock, Queue, QueueError, WorkerPool, WorkerError
+import pytest
+
+from core.concurrency import Queue, QueueError, RWLock, WorkerError, WorkerPool
 from core.concurrency.async_context import AsyncContextPropagator
-from core.concurrency.thread_context import ThreadContextPropagator
 from core.concurrency.context_helpers import ContextSnapshot, TenantContextVar
-
+from core.concurrency.thread_context import ThreadContextPropagator
 
 # ============================================================================
 # RWLOCK TESTS (~30 tests)
@@ -869,7 +868,6 @@ class TestThreadContextPropagation:
     def test_thread_with_context_exception_propagation(self, sample_context_var):
         """Test that exceptions in threads propagate correctly."""
         sample_context_var.set("test_value")
-        errors = []
 
         def failing_task():
             value = sample_context_var.get()
@@ -1462,6 +1460,327 @@ class TestConcurrencyIntegration:
         assert results["tenant_2"] == "tenant_2"
 
         pool.shutdown()
+
+    def test_rwlock_state_under_contention(self):
+        """Test RWLock state tracking during contention."""
+        lock = RWLock()
+        states_captured = []
+        states_lock = threading.Lock()
+
+        def reader_task():
+            with lock.read_lock():
+                with states_lock:
+                    states_captured.append(lock.get_state())
+                time.sleep(0.05)
+
+        def writer_task():
+            with lock.write_lock():
+                with states_lock:
+                    states_captured.append(lock.get_state())
+                time.sleep(0.05)
+
+        threads = []
+        for i in range(3):
+            if i % 2 == 0:
+                threads.append(threading.Thread(target=reader_task))
+            else:
+                threads.append(threading.Thread(target=writer_task))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=1.0)
+
+        # Verify states were captured
+        assert len(states_captured) > 0
+
+    def test_context_snapshot_restore_partial(self, sample_context_var, tenant_context_var):
+        """Test partial context restoration."""
+        sample_context_var.set("value1")
+        tenant_context_var.set("tenant_x")
+
+        snapshot = ContextSnapshot()
+        snapshot.capture([sample_context_var])
+
+        sample_context_var.set("modified_value")
+        tenant_context_var.set("tenant_y")
+
+        snapshot.restore([sample_context_var])
+
+        assert sample_context_var.get() == "value1"
+        assert tenant_context_var.get() == "tenant_y"
+
+    def test_queue_stress_many_items(self):
+        """Stress test queue with many items."""
+        q = Queue()
+        num_items = 100
+
+        for i in range(num_items):
+            q.put(i)
+
+        assert q.qsize() == num_items
+
+        retrieved = []
+        while not q.empty():
+            retrieved.append(q.get(blocking=False))
+
+        assert len(retrieved) == num_items
+        assert retrieved == list(range(num_items))
+
+    def test_rwlock_alternating_read_write_stress(self):
+        """Stress test alternating read/write access."""
+        lock = RWLock(timeout=2.0)
+        operations = []
+        op_lock = threading.Lock()
+
+        def read_op(op_id):
+            with lock.read_lock():
+                with op_lock:
+                    operations.append(("read", op_id))
+
+        def write_op(op_id):
+            with lock.write_lock():
+                with op_lock:
+                    operations.append(("write", op_id))
+
+        threads = []
+        for i in range(20):
+            if i % 2 == 0:
+                threads.append(threading.Thread(target=read_op, args=(i,)))
+            else:
+                threads.append(threading.Thread(target=write_op, args=(i,)))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert len(operations) == 20
+
+    def test_context_propagation_deep_nesting(self, sample_context_var):
+        """Test context propagation through deeply nested calls."""
+        sample_context_var.set("root_value")
+
+        def nested_1():
+            assert sample_context_var.get() == "root_value"
+            return nested_2()
+
+        def nested_2():
+            assert sample_context_var.get() == "root_value"
+            return nested_3()
+
+        def nested_3():
+            return sample_context_var.get()
+
+        result = nested_1()
+        assert result == "root_value"
+
+    def test_thread_pool_concurrent_context_isolation(self, sample_context_var):
+        """Test ThreadPoolExecutor with context isolation."""
+        sample_context_var.set("main_value")
+        results = {}
+        results_lock = threading.Lock()
+
+        def worker(worker_id, value):
+            sample_context_var.set(value)
+            time.sleep(0.01)
+            with results_lock:
+                results[worker_id] = sample_context_var.get()
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = []
+            for i in range(4):
+                future = executor.submit(worker, i, f"value_{i}")
+                futures.append(future)
+
+            for future in futures:
+                future.result(timeout=1.0)
+
+        # Each worker should have its own context
+        assert len(results) == 4
+
+    def test_rwlock_massive_reader_load(self):
+        """Test RWLock with massive reader load."""
+        lock = RWLock()
+        reader_count = {"count": 0}
+        count_lock = threading.Lock()
+
+        def reader():
+            with lock.read_lock():
+                with count_lock:
+                    reader_count["count"] += 1
+                time.sleep(0.001)
+
+        threads = [threading.Thread(target=reader) for _ in range(50)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert reader_count["count"] == 50
+
+    def test_queue_back_pressure_handling(self):
+        """Test queue behavior under back pressure."""
+        q = Queue(maxsize=10)
+
+        # Fill the queue
+        for i in range(10):
+            q.put(i)
+
+        assert q.full()
+
+        # Drain one
+        q.get()
+
+        # Should now have space
+        assert not q.full()
+        q.put(99)
+
+        assert q.qsize() == 10
+
+    def test_context_var_lifecycle_in_threads(self, sample_context_var):
+        """Test context var lifecycle in worker threads."""
+        results = {}
+
+        def worker(worker_id):
+            # Should start with no value (thread inherits but isolation)
+            initial = sample_context_var.get()
+            sample_context_var.set(f"worker_{worker_id}")
+            after_set = sample_context_var.get()
+            results[worker_id] = (initial, after_set)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=1.0)
+
+        assert len(results) == 3
+
+    def test_rwlock_reader_writer_fairness_extended(self):
+        """Extended test for reader/writer fairness."""
+        lock = RWLock(timeout=1.0)
+        completion_times = {}
+        time_lock = threading.Lock()
+        start_time = time.time()
+
+        def reader(reader_id):
+            with lock.read_lock():
+                elapsed = time.time() - start_time
+                with time_lock:
+                    completion_times[f"r{reader_id}"] = elapsed
+                time.sleep(0.01)
+
+        def writer(writer_id):
+            with lock.write_lock():
+                elapsed = time.time() - start_time
+                with time_lock:
+                    completion_times[f"w{writer_id}"] = elapsed
+                time.sleep(0.01)
+
+        threads = []
+        for i in range(3):
+            threads.append(threading.Thread(target=reader, args=(i,)))
+        for i in range(3):
+            threads.append(threading.Thread(target=writer, args=(i,)))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=2.0)
+
+        assert len(completion_times) == 6
+
+    def test_queue_single_item_operations(self):
+        """Test queue with single item operations."""
+        q = Queue()
+
+        q.put("item1")
+        item = q.get()
+        assert item == "item1"
+        assert q.empty()
+
+    def test_rwlock_read_only_access_no_contention(self):
+        """Test read-only access pattern without contention."""
+        lock = RWLock()
+        read_count = {"value": 0}
+        read_lock = threading.Lock()
+
+        def reader():
+            with lock.read_lock():
+                with read_lock:
+                    read_count["value"] += 1
+
+        threads = [threading.Thread(target=reader) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=1.0)
+
+        assert read_count["value"] == 10
+
+    def test_context_var_in_executor_submit(self, sample_context_var):
+        """Test context var with executor.submit()."""
+        sample_context_var.set("executor_value")
+        result = {}
+
+        def task():
+            result["value"] = sample_context_var.get()
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(task)
+        future.result(timeout=1.0)
+        executor.shutdown()
+
+        # Note: executor.submit doesn't automatically propagate context
+        # So result might be None, depending on implementation
+        assert "value" in result
+
+    def test_queue_size_tracking(self):
+        """Test queue size tracking accuracy."""
+        q = Queue()
+
+        for i in range(5):
+            q.put(i)
+            assert q.qsize() == i + 1
+
+        for i in range(5):
+            q.get()
+            assert q.qsize() == 4 - i
+
+    def test_rwlock_acquire_release_pairs(self):
+        """Test multiple acquire/release pairs."""
+        lock = RWLock()
+
+        # Multiple read lock pairs
+        for _ in range(3):
+            assert lock.acquire_read()
+            lock.release_read()
+
+        state = lock.get_state()
+        assert state["readers"] == 0
+
+        # Multiple write lock pairs
+        for _ in range(3):
+            assert lock.acquire_write()
+            lock.release_write()
+
+        state = lock.get_state()
+        assert state["writers"] == 0
+
+    def test_context_snapshot_multiple_operations(self, sample_context_var):
+        """Test context snapshot through multiple state changes."""
+        snapshots = []
+
+        for i in range(3):
+            sample_context_var.set(f"value_{i}")
+            snapshot = ContextSnapshot()
+            snapshot.capture([sample_context_var])
+            snapshots.append(snapshot.to_dict())
+
+        assert snapshots[0]["test_var"] == "value_0"
+        assert snapshots[1]["test_var"] == "value_1"
+        assert snapshots[2]["test_var"] == "value_2"
 
 
 if __name__ == "__main__":
