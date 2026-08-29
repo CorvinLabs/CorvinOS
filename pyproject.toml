@@ -422,4 +422,6 @@ markers = [
     "integration: integration tests for subsystems",
     "high_risk: critical path tests",
     "asyncio: async test using pytest-asyncio",
+    "e2e: Playwright end-to-end browser tests",
+    "full_pipeline: full task orchestration pipeline tests",
 ]
