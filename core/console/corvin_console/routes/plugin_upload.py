@@ -206,23 +206,20 @@ async def _emit_installation_started_event(
 ) -> None:
     """Emit plugin.installation_started audit event (Stage 3: Audit).
 
-    Uses forge.security_events.write_event directly for plugin-specific events
-    (ADR-0249, console_audit.action_performed is for console mutations only).
+    Uses console_audit.plugin_installed() — unifies plugin events into the
+    hash-chained audit trail with metadata-only validation (GDPR Art. 30, 32).
+
+    Fails CLOSED: raises AuditFieldNotAllowed on schema violation; caller must
+    handle and return 503 to prevent unaudited mutations (ADR-0233, ADR-0249).
     """
-    try:
-        from forge import security_events
-        security_events.write_event(
-            event_type="plugin.installation_started",
-            details={
-                "plugin_id": plugin_id,
-                "version": version,
-                "trust_verdict": trust_verdict,
-                "source": "console_upload",
-                "tenant_id": rec.tenant_id,
-            },
-        )
-    except Exception as exc:
-        log.warning(f"failed to emit audit event: {exc}")
+    console_audit.plugin_installed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=getattr(rec, 'sid_fingerprint', 'unknown'),
+        plugin_id=plugin_id,
+        version=version,
+        trust_verdict=trust_verdict,
+        source="console_upload",
+    )
 
 
 async def _install_via_cli(
@@ -375,18 +372,33 @@ async def upload_plugin(
 
         if not trust_allowed and trust_verdict == "forged":
             # Forged plugins are always refused
-            await _emit_installation_started_event(
-                rec, plugin_id, version, "forged"
-            )
+            try:
+                await _emit_installation_started_event(
+                    rec, plugin_id, version, "forged"
+                )
+            except Exception as exc:
+                # Audit failure on a denial is critical — fail-closed (ADR-0233)
+                log.error(f"audit failure on plugin rejection: {exc}", exc_info=True)
+                raise HTTPException(
+                    status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="audit system unavailable",
+                )
             raise HTTPException(
                 status_code=http_status.HTTP_403_FORBIDDEN,
                 detail=f"plugin {plugin_id} failed trust verification (forged)",
             )
 
-        # Stage 3: Audit event
-        await _emit_installation_started_event(
-            rec, plugin_id, version, trust_verdict
-        )
+        # Stage 3: Audit event (fail-closed on write failure)
+        try:
+            await _emit_installation_started_event(
+                rec, plugin_id, version, trust_verdict
+            )
+        except Exception as exc:
+            log.error(f"audit failure on plugin installation: {exc}", exc_info=True)
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="audit system unavailable",
+            )
 
         # Stage 4: Install via CLI
         success, install_message = await _install_via_cli(

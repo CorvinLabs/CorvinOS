@@ -413,7 +413,7 @@ class PluginRegistry:
                     )
                     return BootLayer.INSTALLED
 
-                # ADR-0233 D5: Check if this plugin_id was already granted a
+                # ADR-0233 D5 + BUG #1 FIX: Check if this plugin_id was already granted a
                 # privilege (in ANY epoch). If so, prevent re-escalation attempts:
                 # (a) re-registration in a DIFFERENT epoch (thread spawned in old boot)
                 # (b) re-registration in the SAME epoch after unload (same-epoch thread escape)
@@ -421,6 +421,18 @@ class PluginRegistry:
                 with self._lock:
                     already_privileged_epoch = self._privileged_registration_epoch.get(pid)
                     unregistered_epoch = self._unregistered_this_epoch.get(pid)
+
+                # BUG #1 FIX: Block same-epoch re-registration on privileged layers,
+                # regardless of whether the plugin was ever privileged before. A thread
+                # spawned during on_load() could unregister and re-register with escalated privilege.
+                if unregistered_epoch == self._registration_epoch:
+                    log.error(
+                        "plugin %r attempted to re-register on privileged layer after unload "
+                        "within the same epoch (epoch %d) — this indicates a thread-escape "
+                        "attack; downgraded to installed",
+                        pid, self._registration_epoch,
+                    )
+                    return BootLayer.INSTALLED
 
                 if already_privileged_epoch is not None:
                     if already_privileged_epoch != self._registration_epoch:
@@ -432,20 +444,6 @@ class PluginRegistry:
                             pid, already_privileged_epoch, self._registration_epoch,
                         )
                         return BootLayer.INSTALLED
-                    else:
-                        # Same-epoch re-escalation: thread from this boot trying to re-register
-                        # after being unregistered (unregister + re-register attack).
-                        # This happens when a thread spawned during on_load() outlives the
-                        # loading context, calls unregister(), and tries to re-register with
-                        # privilege while _loading.current() is None.
-                        if unregistered_epoch == self._registration_epoch:
-                            log.error(
-                                "plugin %r attempted to re-register on privileged layer %s "
-                                "within the same epoch (epoch %d) after unload — this indicates "
-                                "a thread-escape attack; downgraded to installed",
-                                pid, requested.value, self._registration_epoch,
-                            )
-                            return BootLayer.INSTALLED
             return requested
         declared = getattr(plugin, "boot_layer", None)
         if declared is None:
@@ -480,7 +478,22 @@ class PluginRegistry:
         Raises PluginAlreadyRegistered if plugin.plugin_id is already registered.
         ``boot_layer`` (ADR-0243) records which boot layer the plugin belongs to;
         it is keyword-only and defaults to the least privileged value.
+
+        BUG #6 FIX: boot_layer is validated early (before locks) for clear error messages.
         """
+        # BUG #6 fix: Validate boot_layer parameter early (before locks and setup).
+        # This ensures invalid boot_layer strings raise ValueError immediately
+        # with a clear error message, rather than deep inside _resolve_boot_layer.
+        if boot_layer is not None and not isinstance(boot_layer, BootLayer):
+            try:
+                # Test if it's a valid string representation of BootLayer
+                BootLayer(boot_layer)
+            except (ValueError, TypeError) as e:
+                raise ValueError(
+                    f"Invalid boot_layer {boot_layer!r}: must be one of "
+                    f"{[b.value for b in BootLayer]} or a BootLayer enum"
+                ) from e
+
         resolved = self._resolve_boot_layer(plugin, boot_layer, plugin_id=plugin.plugin_id)
         with self._op_lock(plugin.plugin_id):
             self._register_locked(plugin, ctx, resolved)

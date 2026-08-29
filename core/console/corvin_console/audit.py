@@ -119,6 +119,17 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "panel_id", "tenant_id", "sid_fingerprint",
         "deleted_by",  # fingerprint of operator
     }),
+    # ADR-0249 — Plugin Trust Anchor Integration
+    "console.plugin_installed": frozenset({
+        "plugin_id", "version", "trust_verdict",
+        "tenant_id", "sid_fingerprint",
+        "source",  # "console_upload" | "cli" | "registry"
+    }),
+    "console.plugin_reported": frozenset({
+        "plugin_id", "reason",
+        "tenant_id", "sid_fingerprint",
+        "report_id",  # UUID for correlation
+    }),
 }
 
 
@@ -154,6 +165,16 @@ def _emit(
     details: dict[str, Any],
     severity: str | None = None,
 ) -> None:
+    """Emit an audit event to the hash-chained audit trail.
+
+    Fails CLOSED on any error:
+    - Forbidden fields → raises AuditFieldNotAllowed
+    - Unknown fields → raises AuditFieldNotAllowed
+    - Audit write failure → re-raises the exception (fail-closed)
+
+    Callers MUST handle exceptions and return 503 to the client, ensuring
+    zero unaudited mutations (GDPR Art. 30, 32, ADR-0233).
+    """
     bad = _FORBIDDEN_FIELDS.intersection(details.keys())
     if bad:
         raise AuditFieldNotAllowed(
@@ -168,12 +189,11 @@ def _emit(
                 f"allowed={sorted(allowed)}"
             )
     chain = _audit_path(tenant_id)
-    try:
-        _security_events.write_event(
-            chain, event_type, details=details, severity=severity,
-        )
-    except Exception:  # pragma: no cover — chain unreachable
-        pass
+    # CRITICAL: Fail-closed on write failure. Audit chain integrity is non-negotiable.
+    # If we can't write the event, the mutation must fail. (GDPR Art. 30, 32; ADR-0233)
+    _security_events.write_event(
+        chain, event_type, details=details, severity=severity,
+    )
 
 
 def session_started(
@@ -480,4 +500,60 @@ def system_event(
         tenant_id=tenant_id,
         details=details,
         severity=severity,
+    )
+
+
+def plugin_installed(
+    *,
+    tenant_id: str,
+    sid_fingerprint: str,
+    plugin_id: str,
+    version: str,
+    trust_verdict: str | None = None,
+    source: str = "console_upload",
+) -> None:
+    """Emit when a plugin is successfully installed (ADR-0249 Stage 6).
+
+    Fails CLOSED — raises AuditFieldNotAllowed on schema violation, propagates
+    to caller. Caller must handle audit failure as a deployment failure.
+    """
+    _emit(
+        "console.plugin_installed",
+        tenant_id=tenant_id,
+        details={
+            "plugin_id": plugin_id,
+            "version": version,
+            "trust_verdict": trust_verdict or "unknown",
+            "tenant_id": tenant_id,
+            "sid_fingerprint": sid_fingerprint,
+            "source": source,
+        },
+        severity="INFO",
+    )
+
+
+def plugin_reported(
+    *,
+    tenant_id: str,
+    sid_fingerprint: str,
+    plugin_id: str,
+    reason: str,
+    report_id: str,
+) -> None:
+    """Emit when a plugin is reported as malicious/inappropriate (ADR-0249).
+
+    Fails CLOSED — raises AuditFieldNotAllowed on schema violation, propagates
+    to caller.
+    """
+    _emit(
+        "console.plugin_reported",
+        tenant_id=tenant_id,
+        details={
+            "plugin_id": plugin_id,
+            "reason": reason,
+            "tenant_id": tenant_id,
+            "sid_fingerprint": sid_fingerprint,
+            "report_id": report_id,
+        },
+        severity="WARNING",
     )

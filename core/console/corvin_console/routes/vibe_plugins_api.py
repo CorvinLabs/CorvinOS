@@ -4,10 +4,16 @@ FastAPI routes for POST /v1/vibe/plugins/install, GET /v1/vibe/plugins, etc.
 Includes marketplace discovery endpoint (ADR-0249 v0.1).
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException, Depends, status as http_status
 import logging
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+import json
+import os
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Annotated
+from pydantic import BaseModel, Field, validator
+
+from ..deps import require_session
+from .. import auth as session_auth
 
 logger = logging.getLogger(__name__)
 
@@ -17,135 +23,59 @@ router = APIRouter(prefix="/vibe/plugins", tags=["vibe-plugins"])
 # Global plugin API handler (injected at app init)
 _plugin_api = None
 
-# Hardcoded marketplace for v0.1 (discovery-only)
-# In v0.2, this will be backed by a remote registry
-_MARKETPLACE_PLUGINS: List[Dict[str, Any]] = [
-    {
-        "plugin_id": "auth-saml-enterprise",
-        "name": "Enterprise SAML Authentication",
-        "version": "2.1.0",
-        "category": "Authentication",
-        "origin": "vetted",
-        "author": "Corvin Labs",
-        "author_email": "support@corvin.io",
-        "description": "Enterprise SAML 2.0 provider integration for CorvinOS.",
-        "long_description": "Enables SAML 2.0 single sign-on for enterprise deployments. Supports multiple IdP configurations, attribute mapping, and audit logging.",
-        "rating": 4.8,
-        "rating_count": 42,
-        "download_count": 1250,
-        "pii_risk": "medium",
-        "locality": "eu_cloud",
-        "network_egress": "external",
-        "egress_hosts": ["idp.enterprise.example.com"],
-        "boot_layer": "bundled",
-        "license": "Apache-2.0",
-        "repository_url": "https://github.com/corvin-labs/plugin-auth-saml",
-        "homepage_url": "https://docs.corvin.io/plugins/auth-saml",
-        "dependencies": [],
-        "requires_consent": True,
-        "listed": True,
-    },
-    {
-        "plugin_id": "monitoring-datadog",
-        "name": "Datadog Monitoring",
-        "version": "1.5.0",
-        "category": "Analytics",
-        "origin": "vetted",
-        "author": "Corvin Labs",
-        "author_email": "support@corvin.io",
-        "description": "Real-time monitoring and alerting via Datadog.",
-        "long_description": "Integrates CorvinOS metrics with Datadog dashboards and alert pipelines. Supports custom metrics, distributed tracing, and SLO tracking.",
-        "rating": 4.6,
-        "rating_count": 28,
-        "download_count": 890,
-        "pii_risk": "low",
-        "locality": "us_cloud",
-        "network_egress": "external",
-        "egress_hosts": ["api.datadoghq.com"],
-        "boot_layer": "bundled",
-        "license": "Apache-2.0",
-        "repository_url": "https://github.com/corvin-labs/plugin-datadog",
-        "homepage_url": "https://docs.corvin.io/plugins/datadog",
-        "dependencies": [],
-        "requires_consent": False,
-        "listed": True,
-    },
-    {
-        "plugin_id": "database-postgres-sync",
-        "name": "PostgreSQL Sync",
-        "version": "3.2.1",
-        "category": "Database",
-        "origin": "vetted",
-        "author": "Corvin Labs",
-        "author_email": "support@corvin.io",
-        "description": "Bidirectional PostgreSQL data synchronization.",
-        "long_description": "Maintains real-time sync between CorvinOS and PostgreSQL databases. Supports CDC (Change Data Capture), conflict resolution, and automatic failover.",
-        "rating": 4.9,
-        "rating_count": 156,
-        "download_count": 4230,
-        "pii_risk": "high",
-        "locality": "local",
-        "network_egress": "local",
-        "egress_hosts": [],
-        "boot_layer": "installed",
-        "license": "Apache-2.0",
-        "repository_url": "https://github.com/corvin-labs/plugin-postgres-sync",
-        "homepage_url": "https://docs.corvin.io/plugins/postgres-sync",
-        "dependencies": ["postgres-driver@14+"],
-        "requires_consent": True,
-        "listed": True,
-    },
-    {
-        "plugin_id": "security-vault-integration",
-        "name": "HashiCorp Vault Integration",
-        "version": "2.0.0",
-        "category": "Security",
-        "origin": "vetted",
-        "author": "Corvin Labs",
-        "author_email": "support@corvin.io",
-        "description": "Secrets management via HashiCorp Vault.",
-        "long_description": "Secure credential storage and rotation. Supports dynamic secrets, audit logging, and multi-cloud deployments.",
-        "rating": 4.7,
-        "rating_count": 89,
-        "download_count": 2100,
-        "pii_risk": "high",
-        "locality": "local",
-        "network_egress": "local",
-        "egress_hosts": [],
-        "boot_layer": "core",
-        "license": "Apache-2.0",
-        "repository_url": "https://github.com/corvin-labs/plugin-vault",
-        "homepage_url": "https://docs.corvin.io/plugins/vault",
-        "dependencies": [],
-        "requires_consent": False,
-        "listed": True,
-    },
-    {
-        "plugin_id": "tooling-terraform-state",
-        "name": "Terraform State Bridge",
-        "version": "1.1.0",
-        "category": "Tooling",
-        "origin": "vetted",
-        "author": "Corvin Labs",
-        "author_email": "support@corvin.io",
-        "description": "Infrastructure-as-Code state synchronization.",
-        "long_description": "Sync Terraform state with CorvinOS resource graph. Enables drift detection and policy enforcement.",
-        "rating": 4.3,
-        "rating_count": 34,
-        "download_count": 680,
-        "pii_risk": "low",
-        "locality": "local",
-        "network_egress": "local",
-        "egress_hosts": [],
-        "boot_layer": "installed",
-        "license": "Apache-2.0",
-        "repository_url": "https://github.com/corvin-labs/plugin-terraform",
-        "homepage_url": "https://docs.corvin.io/plugins/terraform",
-        "dependencies": ["terraform@1.5+"],
-        "requires_consent": False,
-        "listed": True,
-    },
-]
+# Marketplace cache (loaded from config file)
+_MARKETPLACE_PLUGINS: List[Dict[str, Any]] = []
+_MARKETPLACE_CONFIG: Dict[str, Any] = {}
+_MARKETPLACE_LOADED = False
+
+
+def _load_marketplace_config() -> None:
+    """Load marketplace plugins from JSON config file."""
+    global _MARKETPLACE_PLUGINS, _MARKETPLACE_CONFIG, _MARKETPLACE_LOADED
+
+    if _MARKETPLACE_LOADED:
+        return
+
+    # Try to find the marketplace config file
+    config_paths = [
+        Path(__file__).parent.parent.parent.parent / "gateway" / "corvin_gateway" / "config" / "marketplace.json",
+        Path("/etc/corvin/marketplace.json"),  # System-wide override
+        Path.home() / ".corvin" / "marketplace.json",  # User override
+    ]
+
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    data = json.load(f)
+                _MARKETPLACE_PLUGINS = data.get("plugins", [])
+                _MARKETPLACE_CONFIG = data.get("config", {})
+                logger.info(f"Loaded marketplace from {config_path}")
+                _MARKETPLACE_LOADED = True
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load marketplace from {config_path}: {e}")
+                continue
+
+    # Fallback: Empty marketplace if no config found
+    logger.warning("No marketplace config found, starting with empty catalog")
+    _MARKETPLACE_LOADED = True
+
+
+class PluginInstallRequest(BaseModel):
+    """Pydantic model for plugin installation request."""
+    manifest_url: Optional[str] = Field(None, description="URL to plugin manifest")
+    manifest_json: Optional[Dict[str, Any]] = Field(None, description="Inline plugin manifest")
+
+    @validator('manifest_url', 'manifest_json')
+    def at_least_one_required(cls, v, values):
+        """Ensure at least manifest_url or manifest_json is provided."""
+        if not values and not v:
+            raise ValueError("Either manifest_url or manifest_json must be provided")
+        return v
+
+    class Config:
+        extra = "forbid"  # Reject unknown fields
 
 def set_plugin_api(api):
     """Inject plugin API handler."""
@@ -157,7 +87,7 @@ def get_plugin_api():
     return _plugin_api
 
 @router.post("/install")
-async def install_plugin(body: Dict[str, Any]):
+async def install_plugin(request: PluginInstallRequest):
     """
     Install plugin from manifest.
 
@@ -175,21 +105,37 @@ async def install_plugin(body: Dict[str, Any]):
         "manifest": {...}
     }
     """
-    from ...vibe_engineering.plugin_api import PluginInstallRequest
-
     try:
         api = get_plugin_api()
         if not api:
-            return {"error": "Plugin API not initialized"}
+            raise HTTPException(status_code=503, detail="Plugin API not initialized")
 
-        install_req = PluginInstallRequest.from_request_body(body)
+        # Validate request
+        if not request.manifest_url and not request.manifest_json:
+            raise HTTPException(status_code=400, detail="Either manifest_url or manifest_json is required")
+
+        # Convert Pydantic model to dict for compatibility
+        install_req_dict = request.dict(exclude_none=True)
+
+        # Import the actual PluginInstallRequest if it exists in vibe_engineering
+        try:
+            from ...vibe_engineering.plugin_api import PluginInstallRequest as VibePR
+            install_req = VibePR.from_request_body(install_req_dict)
+        except (ImportError, AttributeError):
+            # Fallback if vibe_engineering is not available
+            install_req = install_req_dict
+
         response = await api.install_plugin(install_req)
+        return response.to_dict() if hasattr(response, 'to_dict') else response
 
-        return response.to_dict()
-
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning(f"Invalid install request: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid request: {str(e)}")
     except Exception as e:
         logger.error(f"Install failed: {e}")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Installation failed: {str(e)}")
 
 @router.get("/list")
 async def list_plugins():
@@ -272,30 +218,34 @@ async def report_plugin(plugin_id: str, body: Dict[str, Any]):
     }
 
     ADR-0249: Plugin Trust Anchor — allows community to flag malicious plugins.
+
+    CRITICAL: Audit failure returns 503, preventing unaudited reports (GDPR Art. 30, 32).
     """
     try:
-        from pathlib import Path
-        import sys
         import uuid
-
-        # Import audit trail
-        _THIS_DIR = Path(__file__).resolve().parent.parent
-        _CONSOLE_AUDIT = _THIS_DIR / "audit.py"
-        if str(_THIS_DIR) not in sys.path:
-            sys.path.insert(0, str(_THIS_DIR))
+        from fastapi import HTTPException, status as http_status
 
         # Validate request
         reason = body.get("reason", "").strip()
         details = body.get("details", "").strip()
 
         if not reason:
-            return {"error": "Missing reason field"}
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="Missing reason field",
+            )
 
         if not details:
-            return {"error": "Missing details field"}
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="Missing details field",
+            )
 
         if len(details) < 10 or len(details) > 500:
-            return {"error": "Details must be 10-500 characters"}
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="Details must be 10-500 characters",
+            )
 
         valid_reasons = {
             "malicious",
@@ -305,25 +255,31 @@ async def report_plugin(plugin_id: str, body: Dict[str, Any]):
             "other",
         }
         if reason not in valid_reasons:
-            return {"error": f"Invalid reason. Must be one of {valid_reasons}"}
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid reason. Must be one of {valid_reasons}",
+            )
 
         # Generate report ID
         report_id = str(uuid.uuid4())
 
-        # Write audit event (metadata-only: no details, just reason)
+        # Write audit event with fail-closed semantics (ADR-0249, ADR-0233)
         try:
-            from forge import security_events
-            security_events.write_event(
-                event_type="plugin.reported",
-                details={
-                    "plugin_id": plugin_id,
-                    "reason": reason,
-                    "report_id": report_id,
-                },
+            from corvinOS.core.console.corvin_console import audit as console_audit
+
+            console_audit.plugin_reported(
+                tenant_id="_default",  # Reports from unauthenticated context use default tenant
+                sid_fingerprint="anonymous",
+                plugin_id=plugin_id,
+                reason=reason,
+                report_id=report_id,
             )
         except Exception as audit_err:
-            logger.error(f"Failed to write audit event: {audit_err}")
-            # Don't fail the API call — audit failure is logged but not blocking
+            logger.error(f"Audit failure on plugin report: {audit_err}", exc_info=True)
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="audit system unavailable",
+            )
 
         logger.info(f"Plugin {plugin_id} reported: {reason} (report_id={report_id})")
 
@@ -333,64 +289,79 @@ async def report_plugin(plugin_id: str, body: Dict[str, Any]):
             "report_id": report_id,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Report plugin failed: {e}")
-        return {"error": str(e)}
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Report submission failed: {type(e).__name__}",
+        )
 
 @router.get("/marketplace")
 async def list_marketplace(
     category: Optional[str] = Query(None),
     query: Optional[str] = Query(None),
     origin: Optional[str] = Query(None),
+    region: Optional[str] = Query(None, description="Filter by region (eu, us, apac)"),
     sort: str = Query("rating"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = None,
 ):
     """
     Discover available plugins in the marketplace.
+
+    CRITICAL: Requires authenticated session (tenant isolation per GDPR Art. 5, 6, 32).
+    Without session context, returns 403 Forbidden (CRIT-02).
 
     Query parameters:
     - category: Filter by category (Authentication, Performance, Security, Database, Integration, UI, Analytics, Tooling)
     - query: Search in name/description
     - origin: Filter by origin (vetted, community, builtin)
+    - region: Filter by region (eu, us, apac) - operator-customizable
     - sort: Sort by rating|downloads|recent (default: rating)
     - limit: Max results (default: 20, max: 100)
     - offset: Pagination offset (default: 0)
 
     Response:
     {
-        "plugins": [
-            {
-                "plugin_id": "...",
-                "name": "...",
-                "version": "...",
-                "category": "...",
-                "origin": "vetted|community",
-                "author": "...",
-                "description": "...",
-                "rating": 4.8,
-                "rating_count": 42,
-                "download_count": 1250,
-                "pii_risk": "none|low|medium|high",
-                "locality": "local|eu_cloud|us_cloud",
-                "network_egress": "none|local|external",
-                "egress_hosts": ["..."],
-                "trust_badge": "verified|community|unverified",
-                "listed": true
-            }
-        ],
+        "plugins": [...],
         "total": 42,
         "limit": 20,
-        "offset": 0
+        "offset": 0,
+        "config": {
+            "allow_region_filtering": true,
+            "default_region": "eu"
+        }
     }
 
     ADR-0249 v0.1: Discovery-only marketplace. Install-from-catalog deferred to v0.2.
+    Config is operator-customizable via /core/gateway/corvin_gateway/config/marketplace.json
     """
     try:
+        # CRIT-02: Tenant isolation via session requirement (GDPR Art. 5, 6, 32)
+        # rec.tenant_id is now available from authenticated session.
+        # Future: Filter marketplace by tenant_id when per-tenant catalogs are supported.
+        tenant_id = rec.tenant_id if rec else "_default"
+
+        # Load marketplace if not already loaded
+        _load_marketplace_config()
+
         # Normalize query parameters
         category_filter = (category or "").strip().lower()
         query_filter = (query or "").strip().lower()
         origin_filter = (origin or "").strip().lower()
+        region_filter = (region or "").strip().lower()
+
+        # Validate region parameter
+        valid_regions = {"eu", "us", "apac"}
+        if region_filter and region_filter not in valid_regions:
+            logger.warning(f"Invalid region filter: {region_filter}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid region. Must be one of: {', '.join(valid_regions)}"
+            )
 
         # Start with all marketplace plugins
         results = []
@@ -402,6 +373,12 @@ async def list_marketplace(
             # Filter by origin
             if origin_filter and plugin.get("origin", "").lower() != origin_filter:
                 continue
+
+            # Filter by region
+            if region_filter:
+                plugin_regions = plugin.get("regions", [])
+                if region_filter not in plugin_regions:
+                    continue
 
             # Filter by search query
             if query_filter:
@@ -447,11 +424,17 @@ async def list_marketplace(
             "total": total,
             "limit": limit,
             "offset": offset,
+            "config": {
+                "allow_region_filtering": _MARKETPLACE_CONFIG.get("allow_region_filtering", True),
+                "default_region": _MARKETPLACE_CONFIG.get("default_region", "eu"),
+            }
         }
 
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.warning(f"Invalid query parameter: {e}")
-        return {"error": f"Invalid query parameter: {e}"}
+        raise HTTPException(status_code=400, detail=f"Invalid query parameter: {str(e)}")
     except Exception as e:
         logger.error(f"Marketplace list failed: {e}")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Marketplace query failed: {str(e)}")

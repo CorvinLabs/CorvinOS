@@ -45,13 +45,24 @@ class RegistryRecoveryTools:
         """
         backups_info = []
         for backup_path in self.backup_mgr.list_backups():
+            # HIGH-04 fix: Initialize stat=None before try block to prevent
+            # UnboundLocalError if backup_path.stat() fails.
+            stat = None
+            is_valid = False
             try:
                 stat = backup_path.stat()
                 content = backup_path.read_text()
                 yaml.safe_load(content)  # Validate
                 is_valid = True
-            except Exception:
-                is_valid = False
+            except (OSError, IOError) as e:
+                # File cannot be read (permissions, deleted, etc.)
+                log.warning(f"Cannot read backup {backup_path.name}: {e}")
+            except yaml.YAMLError as e:
+                # Invalid YAML content
+                log.warning(f"Invalid YAML in backup {backup_path.name}: {e}")
+            except Exception as e:
+                # Other unexpected errors
+                log.warning(f"Error validating backup {backup_path.name}: {e}")
 
             backups_info.append({
                 "name": backup_path.name,
