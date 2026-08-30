@@ -219,26 +219,18 @@ def _do_increment_and_check(
 
                         # Check if limit would be exceeded
                         if current >= limit_int:
-                            # Calculate reset time (next UTC midnight)
-                            now = datetime.now(timezone.utc)
-                            reset_time = (
-                                now.replace(
-                                    hour=0, minute=0, second=0, microsecond=0
-                                )
-                                + timezone.utc.localize(
-                                    datetime.now(timezone.utc).replace(
-                                        hour=0, minute=0, second=0, microsecond=0
-                                    )
-                                ).replace(day=datetime.now(timezone.utc).day + 1)
-                                if datetime.now(timezone.utc).day
-                                < datetime(
-                                    datetime.now(timezone.utc).year,
-                                    datetime.now(timezone.utc).month,
-                                    28,
-                                ).day
-                                else "tomorrow 00:00 UTC"
-                            )
-
+                            # A `reset_time` was computed here and never used.
+                            # Worse, it crashed: it called
+                            # `timezone.utc.localize(...)`, which is pytz's API
+                            # -- `datetime.timezone` has no `localize`. The
+                            # expression only evaluated when
+                            # `now.day < 28`, so on days 1-27 of every month
+                            # this raised AttributeError at exactly the moment a
+                            # user hit their quota. The caller's `except
+                            # Exception` then re-ran the gate and reported
+                            # "feature not available on tier 'free'" instead of
+                            # "limit exceeded" -- the wrong message, on 27 days
+                            # out of ~30. Removed: the value had no consumer.
                             raise LicenseLimitError(
                                 feature,
                                 requested=current + 1,

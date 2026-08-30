@@ -3,11 +3,14 @@
 import pytest
 import os
 from pathlib import Path
-from operator.cowork.remote_paths import (
-    get_remote_origins_dir,
-    get_remote_endpoints_dir,
-    _find_repo_root,
-)
+# `operator/` is not importable as a package (stdlib `operator` shadows it),
+# so this module is loaded by file path -- see load_operator_module in conftest.py.
+from corvin_test_support import load_operator_module
+
+_remote_paths = load_operator_module("cowork/remote_paths.py")
+get_remote_origins_dir = _remote_paths.get_remote_origins_dir
+get_remote_endpoints_dir = _remote_paths.get_remote_endpoints_dir
+_find_repo_root = _remote_paths._find_repo_root
 
 
 class TestRemotePathsUnified:
@@ -79,12 +82,12 @@ class TestPathDivergenceFix:
         """a2a_pair module should use get_remote_origins_dir()."""
         # This is a verification test: a2a_pair.py MUST import + use unified resolver
         # (actual import test would go in a2a_pair's test file)
-        from operator.cowork.remote_paths import get_remote_origins_dir
+        get_remote_origins_dir = load_operator_module("cowork/remote_paths.py").get_remote_origins_dir
         assert callable(get_remote_origins_dir)
 
     def test_remote_trigger_receiver_uses_unified_resolver(self):
         """remote_trigger_receiver module should use get_remote_origins_dir()."""
-        from operator.cowork.remote_paths import get_remote_origins_dir
+        get_remote_origins_dir = load_operator_module("cowork/remote_paths.py").get_remote_origins_dir
         assert callable(get_remote_origins_dir)
 
     def test_both_get_same_path(self, tmp_path, monkeypatch):

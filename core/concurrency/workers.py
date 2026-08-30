@@ -137,14 +137,25 @@ class WorkerPool:
 
             return task.future.cancel()
 
+    def _active_task_ids_locked(self) -> List[int]:
+        """Active task IDs. The caller MUST already hold ``self._lock``.
+
+        Split out from :meth:`get_active_tasks` because ``self._lock`` is a
+        plain, NON-reentrant ``threading.Lock``: calling the public,
+        self-locking method from inside a held lock deadlocks the calling
+        thread forever. Both :meth:`wait_all` and :meth:`get_stats` did exactly
+        that, so both hung on every single call.
+        """
+        return [
+            tid
+            for tid, task in self._tasks.items()
+            if not task.future.done()
+        ]
+
     def get_active_tasks(self) -> List[int]:
         """Get list of active task IDs."""
         with self._lock:
-            return [
-                tid
-                for tid, task in self._tasks.items()
-                if not task.future.done()
-            ]
+            return self._active_task_ids_locked()
 
     def wait_all(self, timeout: float = 60.0) -> None:
         """
@@ -160,7 +171,7 @@ class WorkerPool:
 
         while True:
             with self._lock:
-                active = self.get_active_tasks()
+                active = self._active_task_ids_locked()
                 if not active:
                     break
 
@@ -183,7 +194,7 @@ class WorkerPool:
     def get_stats(self) -> dict:
         """Get pool statistics."""
         with self._lock:
-            active = len(self.get_active_tasks())
+            active = len(self._active_task_ids_locked())
             total = len(self._tasks)
 
         return {

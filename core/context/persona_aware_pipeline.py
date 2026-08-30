@@ -13,28 +13,22 @@ from enum import Enum
 from typing import Optional, Literal, Any
 from core.context import PipelineContext, PipelineAddition, QualityTier
 
-# Fallback if persona_model not available (optional dependency)
-try:
-    from core.security.persona_model import (
-        Persona,
-        Role,
-        Tier,
-        CapabilityRegistry,
-    )
-except ImportError:
-    # Stub implementations for optional persona module
-    class Persona:
-        """Stub persona model."""
-        pass
-    class Role:
-        """Stub role model."""
-        pass
-    class Tier:
-        """Stub tier model."""
-        pass
-    class CapabilityRegistry:
-        """Stub capability registry."""
-        pass
+# ADR-0302 persona capabilities are a deny-by-default SECURITY mechanism, so this
+# import is deliberately unguarded. It previously pointed at `core.security.
+# persona_model` -- a module that has never existed -- behind a `try/except
+# ImportError` that substituted empty stub classes. The result was silent
+# failure: `Persona` became a bare object, the `_DEFAULT_POLICIES` table below
+# raised AttributeError on `Persona.CONSOLE_OPERATOR` at import time, and
+# `core/context/__init__.py` swallowed THAT too, so the whole persona-aware
+# pipeline was unreachable while every import still looked healthy.
+# The canonical home of the model is `core.context_engineering`; a failure to
+# import it must be loud, never a degraded no-gate pipeline.
+from core.context_engineering import (
+    Persona,
+    Role,
+    Tier,
+    CapabilityRegistry,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,6 @@ from .decision_history import DecisionRecorder
 from .outcome_feedback import OutcomeRecorder, OutcomeType
 from .metrics import MetricsCollector, MetricType
 from .event_emitter import EventEmitter
-from .user_profile import UserProfileBuilder
 
 
 class SkillLearningHooks:

@@ -21,7 +21,10 @@ from core.context.persona_aware_pipeline import (
     create_persona_aware_pipeline,
     ContextVisibility,
 )
-from core.security.persona_model import Persona, Role
+# ADR-0302 persona model lives in core.context_engineering; core.security.persona_model
+# has never existed (the pipeline module referenced it too and silently fell back
+# to stub classes, which is how the gate ended up inert).
+from core.context_engineering import Persona, Role
 
 
 class TestCoderPersonaE2E:

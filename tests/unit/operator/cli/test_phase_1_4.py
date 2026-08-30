@@ -6,15 +6,18 @@ from pathlib import Path
 from datetime import datetime
 from click.testing import CliRunner
 
-from operator.cli.skill_commands import (
-    skill_group,
-    list_skills,
-    skill_info,
-    validate_skills,
-    show_dependencies,
-    migrate,
-    init_structure
-)
+# `operator/` is not importable as a package (stdlib `operator` shadows it),
+# so this module is loaded by file path -- see load_operator_module in conftest.py.
+from corvin_test_support import load_operator_module
+
+_skill_commands = load_operator_module("cli/skill_commands.py")
+skill_group = _skill_commands.skill_group
+list_skills = _skill_commands.list_skills
+skill_info = _skill_commands.skill_info
+validate_skills = _skill_commands.validate_skills
+show_dependencies = _skill_commands.show_dependencies
+migrate = _skill_commands.migrate
+init_structure = _skill_commands.init_structure
 
 
 @pytest.fixture

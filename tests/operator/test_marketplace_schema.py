@@ -3,12 +3,16 @@
 import json
 import pytest
 from pathlib import Path
-from operator.marketplace.generate_index import (
-    validate_semver,
-    validate_extension_id,
-    validate_url,
-    build_extension_entry,
-)
+# `operator/` is not importable as a package (stdlib `operator` wins) and
+# `marketplace` collides with core/plugins/marketplace.py, so this module is
+# loaded by file path -- see load_operator_module in tests/conftest.py.
+from corvin_test_support import load_operator_module
+
+_generate_index = load_operator_module("marketplace/generate_index.py")
+validate_semver = _generate_index.validate_semver
+validate_extension_id = _generate_index.validate_extension_id
+validate_url = _generate_index.validate_url
+build_extension_entry = _generate_index.build_extension_entry
 
 
 class TestSemverValidation:
@@ -81,7 +85,12 @@ class TestSchemaFile:
 
     def test_schema_has_required_fields(self, schema):
         """Schema has required fields."""
-        assert "version" in schema
+        # `version` is a property of the DOCUMENT the schema describes, not a
+        # key of the schema itself -- a JSON Schema has $schema/title/type/
+        # properties/definitions at the top level. The assertion read
+        # `"version" in schema`, which conflated the two and could never pass.
+        assert "version" in schema["properties"]
+        assert "version" in schema["required"]
         assert "title" in schema
         assert "type" in schema
         assert "properties" in schema
