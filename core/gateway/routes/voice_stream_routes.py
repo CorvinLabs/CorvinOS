@@ -349,15 +349,15 @@ async def voice_stream_websocket(websocket: WebSocket, task_id: str, channel_id:
                             "channel_id": channel_id,
                             "task_id": task_id,
                             "actor": actor,
-                            "text": mock_final_text,
-                            "confidence": 0.92,
+                            "text": final_text,
+                            "confidence": confidence,
                             "is_final": True
                         })
-                        logger.info(f"Published user_said event to Hub: {mock_final_text}")
+                        logger.info(f"Published user_said event to Hub: {final_text}")
                     except Exception as e:
                         logger.error(f"Failed to publish user_said event: {e}")
 
-                    logger.info(f"Transcribed: {mock_final_text}")
+                    logger.info(f"Transcribed: {final_text}")
 
             except asyncio.TimeoutError:
                 # Timeout waiting for audio; check for control messages

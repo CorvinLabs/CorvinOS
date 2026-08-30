@@ -303,8 +303,13 @@ class VoiceCoordinator(Subsystem):
 
     def publish_event(self, event_name: str, event_data: Dict[str, Any]):
         """Publish event to Hub (Brain listens)."""
-        # TODO: Integrate with actual Hub (similar to BtwAdvisor)
-        logger.debug(f"VoiceCoordinator event: {event_name} → {event_data}")
+        if self.hub:
+            try:
+                self.hub.publish_event(event_name, event_data)
+            except Exception as e:
+                logger.error(f"Error publishing {event_name} event: {e}")
+        else:
+            logger.warning(f"Hub not initialized; event {event_name} not published")
 
     async def cleanup_channel(self, channel_id: str):
         """Clean up voice channel (e.g., on task completion)."""
