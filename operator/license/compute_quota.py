@@ -30,12 +30,18 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-# LIC-1: the counter is a read-modify-write. On POSIX fcntl.flock gives
+# LIC-1 + HIGH-002 FIX: the counter is a read-modify-write. On POSIX fcntl.flock gives
 # cross-process safety, but on Windows fcntl is a no-op stub (below), so the
 # only defence against the dominant race — the console threadpool servicing
 # concurrent POST /compute/runs in ONE process — is this module-level lock.
 # It serialises every read-modify-write so N concurrent requests cannot all
 # read current=0 and each write 1, blowing past a 1/day cap.
+# HIGH-002 INVARIANT: This lock MUST be held for the entire duration of:
+#   1. _load(path) to read current count
+#   2. Fetch limit via get_limit(feature)
+#   3. Check (current + 1) > limit_int
+#   4. _save(path) with incremented count
+# The check and increment CANNOT be split across lock boundaries (HIGH-002 TOCTOU fix).
 _INCREMENT_LOCK = threading.Lock()
 
 _IS_WINDOWS = sys.platform.startswith("win")

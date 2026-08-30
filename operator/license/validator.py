@@ -669,19 +669,23 @@ def _check_device_fp(claims: dict[str, Any]) -> bool:
         # Compare the CANONICAL tier (review R1 #12): a legacy tier="universal"
         # session_permit canonicalizes to "member" and must NOT bypass the
         # single-device binding (the literal "member" check let it through).
+        # ADR-0092 AMENDED (device binding fix): device_fp missing is a fail-closed
+        # gate for BOTH session_permit AND license tokens when member-tier (HIGH-001).
         if (canonical_tier(str(claims.get("tier", ""))) == "member"
-                and claims.get("type") == "session_permit"):
+                and claims.get("type") in ("session_permit", "license")):
             log.warning(
-                "license: member-tier session permit missing device_fp claim — "
-                "expected device binding per ADR-0098. Free tier active."
+                "license: member-tier %s missing device_fp claim — "
+                "expected device binding per ADR-0098. Free tier active.",
+                claims.get("type", "unknown"),
             )
             _audit(
                 "license.device_fp_missing",
                 jti=str(claims.get("jti", ""))[:8],
                 tier="member",
+                token_type=claims.get("type", "unknown"),
             )
             return False
-        return True  # emailed license / non-permit token — valid on any machine
+        return True  # emailed license / legacy non-device-bound token — valid on any machine
     try:
         import hmac as _hmac
         local_fp = _local_device_fp()
@@ -1095,7 +1099,7 @@ def load_license_from_env(*, force: bool = False) -> None:
         if (
             claims is not None
             and claims.get("iss") == "corvinlabs.io"       # CVE-CORVIN-001: issuer guard
-            and claims.get("type") == "session_permit"
+            and claims.get("type") in ("session_permit", "license")  # ADR-0092 AMENDED: apply to both types
             and claims.get("exp") is not None
             and claims.get("exp") < time.time()
         ):
@@ -1103,13 +1107,15 @@ def load_license_from_env(*, force: bool = False) -> None:
                 # ADR-0095-R1: enforce instance_id_bound even for expired permits.
                 if not _check_instance_id_bound(claims):
                     log.warning(
-                        "license: grace-period session permit has instance_id mismatch — "
-                        "Free tier active."
+                        "license: grace-period %s has instance_id mismatch — "
+                        "Free tier active.",
+                        claims.get("type", "unknown"),
                     )
                     _audit(
                         "license.instance_id_mismatch",
                         jti=str(claims.get("jti", ""))[:8],
                         tier=claims.get("tier", ""),
+                        token_type=claims.get("type", "unknown"),
                     )
                     _set_active_license(None)
                     return
@@ -1357,22 +1363,24 @@ def reload_from_disk() -> None:
         if (
             claims is not None
             and claims.get("iss") == "corvinlabs.io"
-            and claims.get("type") == "session_permit"
+            and claims.get("type") in ("session_permit", "license")  # ADR-0092 AMENDED: apply to both types
             and claims.get("exp") is not None
             and claims.get("exp") < time.time()
         ):
             if _check_session_grace_period(int(claims["exp"])):
                 if not _check_instance_id_bound(claims):
-                    log.warning("license: reload — grace-period permit instance_id mismatch")
+                    log.warning("license: reload — grace-period %s instance_id mismatch", claims.get("type", "unknown"))
                     _audit("license.instance_id_mismatch",
-                           jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""))
+                           jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""),
+                           token_type=claims.get("type", "unknown"))
                     _set_active_license(None)
                     _LICENSE_LOADED_AT = time.time()
                     return
                 if not _check_device_fp(claims):
-                    log.warning("license: reload — grace-period permit device_fp mismatch")
+                    log.warning("license: reload — grace-period %s device_fp mismatch", claims.get("type", "unknown"))
                     _audit("license.device_fp_mismatch",
-                           jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""))
+                           jti=str(claims.get("jti", ""))[:8], tier=claims.get("tier", ""),
+                           token_type=claims.get("type", "unknown"))
                     _set_active_license(None)
                     _LICENSE_LOADED_AT = time.time()
                     return

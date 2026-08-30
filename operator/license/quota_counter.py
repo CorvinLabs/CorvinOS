@@ -27,6 +27,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+# HIGH-002 FIX: Module-level lock serializes ALL read-modify-write operations
+# across threads within a single process. Combined with file-level fcntl.flock
+# for cross-process safety, this ensures the ENTIRE quota operation (read current
+# count, check limit, increment, write) is atomic — preventing TOCTOU races where
+# multiple threads could all read count=0, all see they're under limit, and all
+# increment, blowing past the cap. MUST HOLD this lock for the duration of:
+#   1. _load(path)
+#   2. Evaluate (current + 1) > limit_int check
+#   3. _save(path) with new count
+# Releasing the lock between check and increment is NOT PERMITTED (HIGH-002 fix).
 _INCREMENT_LOCK = threading.Lock()
 
 _IS_WINDOWS = sys.platform.startswith("win")
