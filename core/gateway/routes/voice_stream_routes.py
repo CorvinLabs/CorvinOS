@@ -25,12 +25,86 @@ import asyncio
 import logging
 import json
 import base64
+import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+# Try to import OpenAI client for real STT (2b-1)
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logger.warning("OpenAI SDK not available; using mock STT (2b-1 MVP)")
+
 voice_router = APIRouter(prefix="/v1/voice", tags=["voice"])
+
+
+async def transcribe_audio_chunk_real(audio_bytes: bytes, language: str = "en") -> Dict[str, Any]:
+    """Real STT via OpenAI Whisper API (2b-1 implementation).
+
+    Args:
+        audio_bytes: PCM audio data (16kHz, 16-bit)
+        language: Language code (default: "en")
+
+    Returns:
+        {"text": "...", "confidence": 0.95}
+    """
+    if not OPENAI_AVAILABLE:
+        # Fallback to mock STT
+        return {
+            "text": "[mock STT - OpenAI SDK not installed]",
+            "confidence": 0.5
+        }
+
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            logger.warning("OPENAI_API_KEY not set; using mock STT")
+            return {"text": "[mock STT - API key not configured]", "confidence": 0.5}
+
+        client = OpenAI(api_key=api_key)
+
+        # Save audio to temp file (Whisper API requires file-like object)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(audio_bytes)
+            temp_path = f.name
+
+        try:
+            # Call OpenAI Whisper API
+            with open(temp_path, "rb") as audio_file:
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language=language
+                )
+
+            # Extract text and compute confidence
+            # Note: Whisper doesn't return confidence; use high confidence for now
+            text = transcript.text
+            confidence = 0.95  # TODO: compute from word_timings if available
+
+            logger.info(f"Real STT transcribed: {text} (confidence={confidence:.2f})")
+
+            return {"text": text, "confidence": confidence}
+
+        finally:
+            # Clean up temp file
+            import os as os_module
+            try:
+                os_module.unlink(temp_path)
+            except Exception as e:
+                logger.debug(f"Failed to clean up temp file: {e}")
+
+    except Exception as e:
+        logger.error(f"Real STT failed: {e}; falling back to mock")
+        return {
+            "text": f"[STT error: {str(e)[:50]}]",
+            "confidence": 0.3
+        }
 
 
 class VoiceStreamSession:
@@ -180,10 +254,11 @@ async def voice_stream_websocket(websocket: WebSocket, task_id: str, channel_id:
 
         logger.info(f"Voice session started: task={task_id}, channel={channel_id}, actor={actor}")
 
-        # Simulate STT (Phase 2: will integrate with OpenAI Whisper or local Ollama)
-        # For now: mock STT that echoes back with high confidence
+        # Real STT via OpenAI Whisper (2b-1 implementation, k=3)
+        # Falls back to mock STT if OpenAI SDK or API key not available
         audio_buffer = b""
         chunk_count = 0
+        language = websocket.query_params.get("language", "en")
 
         while session.is_connected:
             # Receive audio chunk (or control message)
@@ -200,17 +275,26 @@ async def voice_stream_websocket(websocket: WebSocket, task_id: str, channel_id:
                 audio_buffer += data
                 chunk_count += 1
 
-                # Simulate partial transcription every 3 chunks (500ms at ~60ms/chunk)
+                # Send partial transcription every 3 chunks
+                # (In production, would use VAD or stream chunks to Whisper API)
                 if chunk_count % 3 == 0:
-                    # Mock transcription (Phase 2: will call real STT)
-                    mock_text = f"[partial transcription chunk {chunk_count}]"
-                    await session.send_partial_transcript(mock_text, confidence=0.85)
+                    partial_text = f"[listening... {len(audio_buffer)} bytes]"
+                    await session.send_partial_transcript(partial_text, confidence=0.70)
 
                 # Check for end-of-utterance heuristic (silence or buffer size)
-                if len(audio_buffer) > 32000:  # ~1 second at 16kHz
-                    # Mock final transcription
-                    mock_final_text = "[complete transcription from " + str(chunk_count) + " chunks]"
-                    await session.send_final_transcript(mock_final_text, confidence=0.92)
+                # ~1 second at 16kHz = 32000 bytes
+                if len(audio_buffer) > 32000:
+                    # Call real STT API (2b-1, k=3)
+                    stt_result = await asyncio.to_thread(
+                        transcribe_audio_chunk_real,
+                        audio_buffer,
+                        language
+                    )
+
+                    final_text = stt_result.get("text", "[STT failed]")
+                    confidence = stt_result.get("confidence", 0.5)
+
+                    await session.send_final_transcript(final_text, confidence=confidence)
 
                     # Reset for next utterance
                     audio_buffer = b""
