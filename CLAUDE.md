@@ -16,6 +16,57 @@ under the maintainer account. Confirmation is not required.
 
 ---
 
+## Phase 2b Deployment — Local Plugin Activation Strategy
+
+**Effective: 2026-08-31 (Phase 2b Deploy)**
+
+**All plugins ALWAYS ACTIVE on local `.corvin/` installations** (developer, staging, test).
+
+**Why:** Phase 2b introduces VIBE Engineering hub wiring (ADR-0510) + marketplace (ADR-0511). Maintainers and developers must test all components immediately post-deploy without manual activation steps. Faster feedback, fewer surprises in production.
+
+**Configuration (tenant.corvin.yaml):**
+```yaml
+plugins_activation:
+  default_enabled: true
+  scope: local_development
+  buildin_plugins:
+    enabled: true
+    categories: [memory, security_compliance, integration, data_processing, observability]
+  contributor_plugins:
+    enabled: true
+  hub_subsystems:
+    btw_advisor: true
+    voice_coordinator: true
+    task_manager: true
+```
+
+**Scope:**
+- ✅ **LOCAL:** `~/.corvin/` (dev machines, staging, test environments)
+- ❌ **PRODUCTION:** Production deployments use explicit whitelists (separate ADR-0XXX for prod config)
+
+**How to Test Post-Deploy:**
+```bash
+# After Phase 2b deploy, all plugins active by default
+curl -X POST http://localhost:8765/v1/console/btw \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "/btw use Opus", "task_id": "test_123"}'
+# Expected: 200 OK, guidance_received event published to Hub
+
+# Voice coordinator active
+wscat -c ws://localhost:8765/v1/voice/stream?task_id=test&channel_id=ch1
+# Expected: WebSocket connects, VoiceCoordinator publishes events
+
+# Marketplace active
+curl -s http://localhost:8765/v1/console/marketplace/index | jq .
+# Expected: Full plugin index with all categories active
+```
+
+**Must NOT do (local-only rule):**
+- Don't enable this in production (separate config needed)
+- Don't disable individual plugins locally without documenting why (defeats testing purpose)
+
+---
+
 ## Compliance Baseline — EU AI Act 2026 + GDPR (load-bearing)
 
 Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature must ask:
