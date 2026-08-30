@@ -582,27 +582,41 @@ def put_delegation_budget(
 # app.py solves it for OTHER routers by include order, which cannot help a
 # route defined in this same file.
 class WorkerEngineRequest(BaseModel):
-    """Request to change worker engine."""
-    engine: str
+    """Request to change worker engine (``mode`` = native | acs | tde)."""
+    mode: str
     re_auth_token: str | None = None
 
 
 @router.get("/settings/worker-engine")
 async def get_worker_engine(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-) -> dict[str, str]:
-    """Get the current worker engine setting."""
-    config = _read_features_config(rec.tenant_id)
-    engine = config.get("worker_engine", "native")
-    return {"engine": engine}
+) -> dict[str, Any]:
+    """Get the current worker-engine selection plus its choice-space.
+
+    Single source of truth is ``corvin_core.feature_flags`` (ADR-0255):
+    ``worker_engine_mode`` resolves overlay → tenant YAML → ``native``, and
+    ``WORKER_ENGINE_MODES`` / ``WORKER_ENGINE_DEFAULT`` name the choice-space the
+    Settings UI renders. The route MUST NOT hand-roll its own copy — that drift
+    is exactly what returned a bare ``{"engine": …}`` the SPA could not read.
+    """
+    return {
+        "mode": _feature_flags_module.worker_engine_mode(rec.tenant_id),
+        "default": _feature_flags_module.WORKER_ENGINE_DEFAULT,
+        "modes": list(_feature_flags_module.WORKER_ENGINE_MODES),
+    }
 
 
 @router.put("/settings/worker-engine")
 async def set_worker_engine(
     body: WorkerEngineRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> dict[str, str]:
-    """Change the worker engine setting.
+) -> dict[str, Any]:
+    """Change the worker-engine selection.
+
+    Delegates the write to ``feature_flags.set_worker_engine_mode`` (the same
+    overlay the ``worker_engine_mode`` resolver and the CLI read), so the
+    console never becomes a second source of truth. An unknown mode is rejected
+    with 400 and nothing is written.
 
     See ``set_feature`` for why ``verify_reauth`` is called inline instead of
     through ``Depends()``.
@@ -621,20 +635,16 @@ async def set_worker_engine(
             detail={"reason": "reauth-failed"},
         )
 
-    # Validate engine choice
-    valid_engines = ["native", "acs", "tde"]
-    if body.engine not in valid_engines:
+    try:
+        mode = _feature_flags_module.set_worker_engine_mode(body.mode, rec.tenant_id)
+    except ValueError:
         raise HTTPException(
-            status_code=400,
-            detail={"reason": "invalid-engine", "valid": valid_engines},
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "invalid-engine",
+                "valid": list(_feature_flags_module.WORKER_ENGINE_MODES),
+            },
         )
-
-    # Read current config
-    config = _read_features_config(rec.tenant_id)
-    config["worker_engine"] = body.engine
-
-    # Write back
-    _write_features_config(rec.tenant_id, config)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -644,7 +654,7 @@ async def set_worker_engine(
         target_id="worker_engine",
     )
 
-    return {"engine": body.engine, "status": "updated"}
+    return {"mode": mode, "ok": True}
 
 
 @router.put("/settings/{label}")
@@ -766,91 +776,54 @@ def settings_write(
 # Import feature flag module at module level (not inside handler)
 from corvin_core import feature_flags as _feature_flags_module
 
-class FeatureState(BaseModel):
-    """Feature flag state."""
-    id: str
-    label: str
-    description: str
-    enabled: bool
-    release_tier: str | None = None
-    self_locking: bool = False
-
-
-def _read_features_config(tenant_id: str) -> dict:
-    """Read feature flag state from tenant config."""
-    try:
-        path = _forge_paths.tenant_home(tenant_id) / "global" / "features.json"
-        if path.exists():
-            return _json.load(open(path))
-    except Exception:
-        pass
-    return {"flags": {}}
-
-
-def _write_features_config(tenant_id: str, config: dict) -> None:
-    """Write feature flag state to tenant config."""
-    path = _forge_paths.tenant_home(tenant_id) / "global" / "features.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        _json.dump(config, f, indent=2)
-
-
 @router.get("/settings/features")
 async def get_features(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-) -> dict[str, list[FeatureState]]:
-    """List all available feature flags.
+) -> dict[str, Any]:
+    """List all available feature flags for the Settings UI.
 
-    Returns the feature registry with current enabled/disabled state.
-    Respects the whitelist strategy if spec.features_whitelist exists.
+    Single source of truth is ``corvin_core.feature_flags.describe_all`` — it
+    resolves each flag's ``enabled`` state (overlay → whitelist → tenant YAML →
+    registry default) AND its provenance ``source`` in one place, alongside the
+    fields the SPA renders unconditionally (``owner``, ``target_release``,
+    ``tags``, ``default``, ``self_locking``, ``recovery_command``). The route
+    MUST NOT rebuild a thinner dict by hand: that drift dropped ``source`` and
+    friends and left the ``FeatureFlagState`` the SPA types as partly undefined.
     """
-    # Build feature list from registry with proper resolution logic
-    features: list[FeatureState] = []
-    for flag in _feature_flags_module.REGISTRY:
-        # Use is_enabled() which respects whitelist, overlay, and defaults
-        enabled = _feature_flags_module.is_enabled(flag.id, rec.tenant_id)
-        features.append(FeatureState(
-            id=flag.id,
-            label=flag.label,
-            description=flag.description,
-            enabled=enabled,
-            release_tier=flag.release_tier,
-            self_locking=flag.self_locking,
-        ))
-
-    return {"features": features}
+    return {"features": _feature_flags_module.describe_all(rec.tenant_id)}
 
 
 class FeatureToggleRequest(BaseModel):
     """Request to toggle a feature flag."""
-    id: str
     enabled: bool
     re_auth_token: str | None = None
 
 
-@router.post("/settings/features/{flag_id}/toggle")
+@router.put("/settings/features/{flag_id}")
 async def set_feature(
     flag_id: str,
     body: FeatureToggleRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
-    """Toggle a feature flag for the tenant.
+    """Enable/disable a feature flag for the tenant (ADR-0390).
 
-    Updates the tenant's feature configuration.
+    A plain ``PUT`` on the flag resource: ``feature_flags.set_enabled`` writes
+    the SAME tenant overlay the resolver and the CLI off-ramp read (one overlay,
+    two surfaces), and rejects any id that is not in the registry with
+    ``UnknownFlagError`` — mapped here to 404 ``unknown_flag`` so nothing outside
+    the registry (e.g. a compliance mechanism id) can ever be written.
 
     ``verify_reauth`` is a PLAIN helper, not a FastAPI dependency — it takes a
     ``SessionRecord`` and the presented token as ordinary arguments. Wiring it
-    through ``Depends()`` made FastAPI read its signature as request params:
-    ``rec`` (a dataclass) became a second BODY field and ``presented_token`` a
-    REQUIRED query param, so the generated schema demanded
-    ``{"body": {...}, "rec": {...}}?presented_token=…`` and every console
-    toggle got a 422. Call it inline, like the settings-write endpoint does.
+    through ``Depends()`` made FastAPI read its signature as request params and
+    every console toggle got a 422. Call it inline, like the settings-write
+    endpoint does.
     """
     if not verify_reauth(rec, body.re_auth_token):
         console_audit.action_failed(
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
-            action="feature.toggle",
+            action="settings.feature_toggle",
             target_kind="feature_flag",
             target_id=flag_id,
             reason="reauth-failed",
@@ -860,35 +833,35 @@ async def set_feature(
             detail={"reason": "reauth-failed"},
         )
 
-    # The path segment is authoritative; a body carrying a different id is a
-    # client bug we refuse loudly rather than silently toggling the wrong flag.
-    if body.id != flag_id:
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail={"reason": "flag-id-mismatch", "path": flag_id, "body": body.id},
+    try:
+        enabled = _feature_flags_module.set_enabled(
+            flag_id, body.enabled, rec.tenant_id,
         )
-
-    # Read current config
-    config = _read_features_config(rec.tenant_id)
-    # Ensure flags dict exists
-    if "flags" not in config:
-        config["flags"] = {}
-    config["flags"][flag_id] = body.enabled
-
-    # Write back
-    _write_features_config(rec.tenant_id, config)
+    except _feature_flags_module.UnknownFlagError:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="settings.feature_toggle",
+            target_kind="feature_flag",
+            target_id=flag_id,
+            reason="unknown-flag",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="unknown_flag",
+        )
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
-        action="feature.toggle",
+        action="settings.feature_toggle",
         target_kind="feature_flag",
         target_id=flag_id,
     )
 
     return {
         "id": flag_id,
-        "enabled": body.enabled,
+        "enabled": enabled,
         "ok": True,
     }
 

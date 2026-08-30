@@ -93,10 +93,10 @@ export function setFeatureFlag(
   enabled: boolean,
   csrf: string,
 ): Promise<{ id: string; enabled: boolean; ok: boolean }> {
-  return api(`/settings/features/${encodeURIComponent(id)}/toggle`, {
-    method: "POST",
+  return api(`/settings/features/${encodeURIComponent(id)}`, {
+    method: "PUT",
     csrf,
-    body: { id, enabled },
+    body: { enabled },
   });
 }
 
