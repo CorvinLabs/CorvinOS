@@ -6753,6 +6753,24 @@ def call_claude_streaming(
                            sender=sender, workload_hint=workload_hint)
     env["VOICE_HOOK_RECURSION"] = "1"
 
+    # Bridge 404 fix (2026-08-30): Sanitize local-mode sentinels, matching call_claude() logic.
+    # When claude_code_local mode sets ANTHROPIC_API_KEY='local', remove it so claude CLI
+    # authenticates via connectors instead of treating 'local' as a sentinel.
+    # Also strip BASE_URL sentinel when local mode was active, so claude CLI can fall through
+    # to claude.ai login if Ollama is unreachable (same as call_claude K1-006).
+    if env.get("ANTHROPIC_API_KEY") == "local":
+        env.pop("ANTHROPIC_API_KEY", None)
+    if env.get("ANTHROPIC_AUTH_TOKEN") == "local":
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    if env.get("CORVIN_CC_LOCAL_MODE") == "1":
+        env.pop("ANTHROPIC_BASE_URL", None)
+        env.pop("CORVIN_CC_LOCAL_MODE", None)
+    # Provider mode: keep BASE_URL + credential for proxy auth (ADR-0181 M3).
+    if not env.get("CORVIN_CC_PROVIDER"):
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        env.pop("ANTHROPIC_API_BASE", None)
+
     has_session = any(workdir.glob(".claude*")) or (workdir / ".session_started").exists()
 
     # ADR-0050 §1 — main-thread session pinning via --resume <id>.
