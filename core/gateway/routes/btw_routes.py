@@ -7,6 +7,7 @@ Feature-flagged: btw_steering_enabled (Tier A, default OFF)
 Integration: Published to Hub → BtwAdvisor subsystem queues it.
 """
 
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
@@ -110,16 +111,23 @@ async def handle_btw(req: BtwRequest) -> BtwResponse:
     audit_log_btw_action(actor, task_id, instruction_text, "received")
 
     try:
-        # K1-003 Fix: Wire real Hub import
-        # Note: Hub may not be fully initialized yet; this endpoint assumes
-        # BtwAdvisor subsystem is already registered with the task's Hub instance
-        # For MVP: just log and queue locally; production will publish to Hub
-        logger.info(f"Queued /btw guidance: {instruction_text} for task {task_id}")
+        # K1-003 Fix: Wire real Hub import (2b-3 implementation, k=1)
+        from core.orchestration.hub import SubsystemHub
 
-        # TODO: K1-003 — Integrate with actual Hub
-        # from core.orchestration.hub import get_hub
-        # hub = get_hub(task_id)
-        # await hub.publish_event("guidance_received", {...})
+        # For MVP: create a Hub instance per task (production will use tenant's shared Hub)
+        # This allows BtwAdvisor to receive guidance_received events immediately
+        hub = SubsystemHub()
+
+        # Publish guidance_received event to Hub
+        # BtwAdvisor.on_event() listens for this and queues the instruction
+        hub.publish_event("guidance_received", {
+            "actor": actor,
+            "task_id": task_id,
+            "instruction": instruction_text,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+        logger.info(f"Published /btw guidance to Hub: {instruction_text} for task {task_id}")
 
         # Audit: Log success
         audit_log_btw_action(actor, task_id, instruction_text, "queued")
@@ -162,12 +170,22 @@ async def get_btw_status(task_id: str) -> Dict[str, Any]:
         )
 
     try:
-        # TODO: K1-003 — Integrate with actual Hub
-        # from core.orchestration.hub import get_hub
-        # hub = get_hub(task_id)
-        # response = await hub.request_from_subsystem("btw_advisor", "peek_pending_guidance", task_id=task_id)
-        # if response and response.get("instruction"):
-        #     return {"has_pending": True, "pending_instructions": [response["instruction"]]}
+        # K1-003 Fix: Wire real Hub (2b-3 implementation, k=1)
+        # Query BtwAdvisor subsystem via Hub to peek at pending guidance
+        from core.orchestration.hub import SubsystemHub
+
+        hub = SubsystemHub()
+        response = await hub.request_from_subsystem(
+            "btw_advisor",
+            "peek_pending_guidance",
+            task_id=task_id
+        )
+
+        if response and response.get("instruction"):
+            return {
+                "has_pending": True,
+                "pending_instructions": [response["instruction"].to_dict()]
+            }
 
         return {
             "has_pending": False,

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 from enum import Enum
+from .base import Subsystem
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ class PendingGuidance:
         return len(self.instructions) > 0
 
 
-class BtwAdvisor:
+class BtwAdvisor(Subsystem):
     """Midstream guidance advisor subsystem (Phase 1).
 
     Lifecycle:
@@ -92,13 +93,30 @@ class BtwAdvisor:
     6. Audit: Every instruction logged to audit chain
     """
 
-    name = "btw_advisor"
-    version = "1.0.0"
+    @property
+    def name(self) -> str:
+        return "btw_advisor"
+
+    @property
+    def version(self) -> str:
+        return "1.0.0"
 
     def __init__(self):
         self.pending_guidance: Dict[str, PendingGuidance] = {}  # task_id → PendingGuidance
         self.guidance_history: List[BtwInstruction] = []  # Immutable log for audit
         self._lock = asyncio.Lock()  # Thread-safe queue operations
+        self.hub = None  # Set by startup()
+
+    def startup(self, hub: "SubsystemHub") -> None:  # noqa: F821
+        """Initialize BtwAdvisor and subscribe to guidance_received events."""
+        self.hub = hub
+        self.hub.subscribe("guidance_received", self.on_event)
+        logger.info(f"{self.name} v{self.version} started")
+
+    def shutdown(self) -> None:
+        """Cleanup resources."""
+        self.pending_guidance.clear()
+        logger.info(f"{self.name} shut down")
 
     async def on_event(self, event_name: str, event_data: Dict[str, Any]):
         """Handle incoming events from Hub."""

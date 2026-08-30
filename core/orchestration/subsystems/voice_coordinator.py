@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 from enum import Enum
+from .base import Subsystem
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class VoiceChannel:
         self.tts_playing = False
 
 
-class VoiceCoordinator:
+class VoiceCoordinator(Subsystem):
     """Coordinate voice I/O for Brain decisions (Proposal 2, Week 2).
 
     Lifecycle:
@@ -94,14 +95,34 @@ class VoiceCoordinator:
     - VoiceCoordinator: streams TTS + watches for interrupts
     """
 
-    name = "voice_coordinator"
-    version = "1.0.0"
+    @property
+    def name(self) -> str:
+        return "voice_coordinator"
+
+    @property
+    def version(self) -> str:
+        return "1.0.0"
 
     def __init__(self):
         self.active_channels: Dict[str, VoiceChannel] = {}  # channel_id → VoiceChannel
         self.tts_queue: List[Dict[str, Any]] = []  # Queued TTS requests
         self._lock = asyncio.Lock()  # Thread-safe channel operations
         self.clarification_threshold = 0.7  # Require at least 70% confidence
+        self.hub = None  # Set by startup()
+
+    def startup(self, hub: "SubsystemHub") -> None:  # noqa: F821
+        """Initialize VoiceCoordinator and subscribe to voice events."""
+        self.hub = hub
+        self.hub.subscribe("user_said", self.on_event)
+        self.hub.subscribe("interrupt_received", self.on_event)
+        self.hub.subscribe("response_ready", self.on_event)
+        logger.info(f"{self.name} v{self.version} started")
+
+    def shutdown(self) -> None:
+        """Cleanup resources."""
+        self.active_channels.clear()
+        self.tts_queue.clear()
+        logger.info(f"{self.name} shut down")
 
     async def on_event(self, event_name: str, event_data: Dict[str, Any]):
         """Handle incoming events from Hub."""

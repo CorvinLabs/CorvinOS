@@ -216,8 +216,23 @@ async def voice_stream_websocket(websocket: WebSocket, task_id: str, channel_id:
                     audio_buffer = b""
                     chunk_count = 0
 
-                    # Emit event to Hub (Brain will receive)
-                    # TODO: Integrate with Hub.publish_event("user_said", {...})
+                    # Emit event to Hub (Brain will receive via VoiceCoordinator)
+                    # (2b-3 implementation, k=1: Voice Hub wiring)
+                    try:
+                        from core.orchestration.hub import SubsystemHub
+                        hub = SubsystemHub()
+                        hub.publish_event("user_said", {
+                            "channel_id": channel_id,
+                            "task_id": task_id,
+                            "actor": actor,
+                            "text": mock_final_text,
+                            "confidence": 0.92,
+                            "is_final": True
+                        })
+                        logger.info(f"Published user_said event to Hub: {mock_final_text}")
+                    except Exception as e:
+                        logger.error(f"Failed to publish user_said event: {e}")
+
                     logger.info(f"Transcribed: {mock_final_text}")
 
             except asyncio.TimeoutError:
@@ -226,6 +241,21 @@ async def voice_stream_websocket(websocket: WebSocket, task_id: str, channel_id:
                 if control_msg:
                     if control_msg.get("type") == "interrupt":
                         logger.warning(f"Interrupt received on channel {channel_id}")
+
+                        # Emit interrupt event to Hub (2b-3 implementation, k=1)
+                        try:
+                            from core.orchestration.hub import SubsystemHub
+                            hub = SubsystemHub()
+                            hub.publish_event("interrupt_received", {
+                                "channel_id": channel_id,
+                                "task_id": task_id,
+                                "actor": actor,
+                                "reason": control_msg.get("reason", "user_request")
+                            })
+                            logger.info(f"Published interrupt_received event to Hub")
+                        except Exception as e:
+                            logger.error(f"Failed to publish interrupt_received event: {e}")
+
                         await session.send_json({
                             "type": "interrupt_ack",
                             "message": "Playback stopped",

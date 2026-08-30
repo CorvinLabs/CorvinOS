@@ -14,6 +14,7 @@ from typing import Optional, Dict, List, Any
 from datetime import datetime
 import json
 from pathlib import Path
+from .base import Subsystem
 
 logger = logging.getLogger(__name__)
 
@@ -189,11 +190,16 @@ class LDDOptimizer:
         return {"recommendations": recommendations} if recommendations else None
 
 
-class TaskManager:
+class TaskManager(Subsystem):
     """Orchestrate task-level learning (Proposal 3)."""
 
-    name = "task_manager"
-    version = "1.0.0"
+    @property
+    def name(self) -> str:
+        return "task_manager"
+
+    @property
+    def version(self) -> str:
+        return "1.0.0"
 
     def __init__(self, tenant_id: str = "_default", corvin_home: str = None):
         self.tenant_id = tenant_id
@@ -202,6 +208,20 @@ class TaskManager:
         self.learning_validator = LearningValidator()
         self.active_tasks: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        self.hub = None  # Set by startup()
+
+    def startup(self, hub: "SubsystemHub") -> None:  # noqa: F821
+        """Initialize TaskManager and subscribe to task events."""
+        self.hub = hub
+        self.hub.subscribe("task_started", self.on_event)
+        self.hub.subscribe("task_completed", self.on_event)
+        self.hub.subscribe("loss_signal", self.on_event)
+        logger.info(f"{self.name} v{self.version} started")
+
+    def shutdown(self) -> None:
+        """Cleanup resources."""
+        self.active_tasks.clear()
+        logger.info(f"{self.name} shut down")
 
     async def on_event(self, event_name: str, event_data: Dict[str, Any]):
         """Handle task events."""
