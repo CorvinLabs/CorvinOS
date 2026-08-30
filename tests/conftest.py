@@ -25,3 +25,19 @@ def _isolated_audit_chain_for_all_tests(monkeypatch, tmp_path):
     # Off by default; the R4 persistence tests opt in by passing persist_path
     # directly to LossProfileTracker, which bypasses this env gate.
     monkeypatch.setenv("CORVIN_TDE_LOSS_PERSIST", "0")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_corvin_home(monkeypatch, tmp_path):
+    """Keep tests out of the operator's real ~/.corvin.
+
+    The license quota counters live under ``<corvin_home>/quotas/``. Once the
+    quota gate was repaired (it had been dead behind a broken import), a plain
+    `pytest tests/` run began incrementing the REAL daily counters and burned
+    the free tier's tool_forge budget for the day -- the same class of incident
+    this file's audit-chain isolation already guards against.
+
+    Tests that need a specific root still win: their own monkeypatch.setenv
+    runs after this fixture and overrides it for their scope.
+    """
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin-home"))

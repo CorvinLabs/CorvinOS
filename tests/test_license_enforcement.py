@@ -16,8 +16,15 @@ Verify:
 import pytest
 from pathlib import Path
 from datetime import datetime, timezone
-from operator.license.quota_counter import increment_and_check, get_today_count
-from operator.license.limits import LicenseLimitError
+# `operator/` is not importable as a package (stdlib `operator` shadows it),
+# so this module is loaded by file path -- see load_operator_module in conftest.py.
+from corvin_test_support import load_operator_module
+
+_quota = load_operator_module("license/quota_counter.py")
+_limits = load_operator_module("license/limits.py")
+increment_and_check = _quota.increment_and_check
+get_today_count = _quota.get_today_count
+LicenseLimitError = _limits.LicenseLimitError
 
 
 class TestBrainTasksQuota:
@@ -32,7 +39,7 @@ class TestBrainTasksQuota:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -52,7 +59,7 @@ class TestBrainTasksQuota:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -75,7 +82,7 @@ class TestBrainTasksQuota:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -99,7 +106,7 @@ class TestToolForgeQuota:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -118,7 +125,7 @@ class TestToolForgeQuota:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -143,7 +150,7 @@ class TestSkillForgeQuota:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -162,7 +169,7 @@ class TestSkillForgeQuota:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -185,7 +192,7 @@ class TestMemberTierUnlimited:
             return None  # None = unlimited
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -204,7 +211,7 @@ class TestMemberTierUnlimited:
             return None  # None = unlimited
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -221,7 +228,7 @@ class TestMemberTierUnlimited:
             return None  # None = unlimited
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -244,7 +251,7 @@ class TestCrossTenantIsolation:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -292,7 +299,7 @@ class TestAtomicity:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -335,7 +342,7 @@ class TestErrorHandling:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -352,7 +359,7 @@ class TestErrorHandling:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -373,7 +380,7 @@ class TestErrorHandling:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -402,7 +409,7 @@ class TestQuotaResetAtDayBoundary:
             return None
 
         monkeypatch.setattr(
-            "operator.license.quota_counter.get_limit",
+            _quota, "get_limit",
             mock_get_limit,
             raising=False,
         )
@@ -423,7 +430,7 @@ class TestQuotaResetAtDayBoundary:
                 return "2026-08-18"  # Subsequent calls use Aug 18
 
         monkeypatch.setattr(
-            "operator.license.quota_counter._today_utc",
+            _quota, "_today_utc",
             mock_today_utc,
         )
 

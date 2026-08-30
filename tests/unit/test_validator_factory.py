@@ -117,11 +117,17 @@ class TestValidateFlagId:
 
     def test_valid_flag_id(self):
         """Valid flag IDs pass."""
+        # "a" was listed here as a valid flag id, which contradicted
+        # tests/test_validator_factory.py::TestFlagIdValidator::
+        # test_flag_id_too_short ("Flag ID < 3 chars rejected"). Both files
+        # cannot hold: the 3-char floor won, because every flag that actually
+        # ships is far longer (console_auto_reload, frontend_forge,
+        # dual_gate_pipeline_enabled -- the shortest real one is 13 chars) and
+        # a 1-char operator-visible settings key is not reviewable.
         valid_ids = [
             "plugin_builder_enabled",
             "tde_mode",
             "l44_strict",
-            "a",
             "z_9_a",
         ]
         for flag_id in valid_ids:

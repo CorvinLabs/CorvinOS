@@ -30,6 +30,7 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  ShoppingCart,
   Sparkles,
   Users,
   UsersRound,
@@ -185,6 +186,7 @@ const NAV_GROUPS: NavGroup[] = [
       // separate "Extensions" / "MCP Plugins" / "Plugins" entries, which pointed
       // at distinct backends but read as synonyms in the sidebar.
       { to: "/app/plugin-center", label: "Plugins & Extensions", icon: Blocks },
+      { to: "/app/marketplace",   label: "Marketplace",         icon: ShoppingCart, requiredFlag: "console_marketplace_panel" },
     ],
   },
   {

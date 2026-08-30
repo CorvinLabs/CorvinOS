@@ -15,6 +15,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, List, Dict, Any
 
+from core.session_manager.goal_validation_gate import (
+    GoalAlignmentValidator,
+    ValidationResult,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,14 +42,25 @@ class ContextReductionResult:
     kept_items: List[str] = field(default_factory=list)
     dropped_items: List[str] = field(default_factory=list)
     tier_breakdown: Dict[str, int] = field(default_factory=dict)  # Tier -> token count
+    validation_result: Optional[ValidationResult] = None  # Goal alignment validation
+    validation_applied: bool = False  # Whether validation gate was applied
 
     def summary(self) -> str:
         """Get summary of reduction."""
-        return (
+        summary = (
             f"Reduced {self.original_tokens} → {self.reduced_tokens} tokens "
             f"({self.reduction_percentage:.1%} reduction). "
             f"Kept {len(self.kept_items)} items, dropped {len(self.dropped_items)}."
         )
+
+        # Add validation info if available
+        if self.validation_result:
+            summary += (
+                f" [Validation: {'PASS' if self.validation_result.is_valid else 'FAIL'} "
+                f"score={self.validation_result.composite_score:.2f}]"
+            )
+
+        return summary
 
 
 class ContextReducer:
@@ -67,10 +83,19 @@ class ContextReducer:
     TOKENS_PER_WORD = 1.3  # Approximate for Claude
     TOKENS_PER_DEBUG_LOG_LINE = 5
 
-    def __init__(self):
-        """Initialize ContextReducer."""
+    def __init__(
+        self, validator: Optional[GoalAlignmentValidator] = None
+    ):
+        """Initialize ContextReducer.
+
+        Args:
+            validator: Optional GoalAlignmentValidator for goal preservation
+                If None (default), validation is skipped (backward compatible)
+                If provided, validates goal preservation during reduction
+        """
         self.name = "context_reducer"
         self.version = "0.1.0"
+        self.validator = validator
 
     def reduce_context(
         self,
@@ -136,6 +161,62 @@ class ContextReducer:
             ),
         }
 
+        # Validate that reduced context preserves goal (Phase 2: Goal Alignment Gate)
+        validation_result = None
+        if self.validator and goal.strip():
+            try:
+                # Build reduced context string for validation
+                reduced_text = tier_0_content + "\n" + tier_1_content
+
+                # Run goal alignment validation
+                validation_result = self.validator.validate_reduction(goal, reduced_text)
+
+                # Fail-closed: if validation fails, use FULL context
+                if not validation_result.is_valid:
+                    logger.warning(
+                        f"Goal alignment validation FAILED for {task_id}: "
+                        f"score={validation_result.composite_score:.2f} < "
+                        f"threshold={validation_result.threshold}. "
+                        f"Using FULL context (fail-closed)."
+                    )
+
+                    # Return full context unchanged
+                    result = ContextReductionResult(
+                        original_tokens=original_tokens,
+                        reduced_tokens=original_tokens,  # No reduction
+                        reduction_percentage=0.0,  # No reduction applied
+                        kept_items=kept_items,
+                        dropped_items=[],  # Nothing dropped due to validation failure
+                        tier_breakdown={
+                            ContextTier.TIER_0.value: original_tokens,
+                            ContextTier.TIER_1.value: 0,
+                            ContextTier.TIER_2.value: 0,
+                            ContextTier.TIER_3.value: 0,
+                        },
+                        validation_result=validation_result,
+                        validation_applied=True,
+                    )
+
+                    logger.info(
+                        f"Context reduction for {task_id}: {result.summary()} "
+                        f"(validation triggered fail-closed)"
+                    )
+                    return result
+                else:
+                    # Validation passed: proceed with reduction
+                    logger.info(
+                        f"Goal alignment validation PASSED for {task_id}: "
+                        f"score={validation_result.composite_score:.2f} >= "
+                        f"threshold={validation_result.threshold}. "
+                        f"Proceeding with reduction."
+                    )
+
+            except Exception as e:
+                # Fail-closed: on validation error, use full context
+                logger.error(f"Goal alignment validation error for {task_id}: {e}. Using FULL context.")
+                validation_result = None
+                # Continue with original reduction (conservative)
+
         result = ContextReductionResult(
             original_tokens=original_tokens,
             reduced_tokens=reduced_tokens,
@@ -143,6 +224,8 @@ class ContextReducer:
             kept_items=kept_items,
             dropped_items=dropped_items,
             tier_breakdown=tier_breakdown,
+            validation_result=validation_result,
+            validation_applied=validation_result is not None,
         )
 
         logger.info(f"Context reduction for {task_id}: {result.summary()}")

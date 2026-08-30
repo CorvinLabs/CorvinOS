@@ -183,6 +183,103 @@ class QueueHealth:
             )
 
 
+class ExecutorHealth:
+    """Health check for SkillExecutor (ADR-0307 + ADR-0309).
+
+    Monitors:
+    - Skill execution success rate
+    - Timeout/resource error rates
+    - Auto-disable on 3+ consecutive failures
+    - Per-skill health status
+    """
+
+    def __init__(self, min_success_rate: float = 0.5, failure_threshold: int = 3):
+        """Initialize.
+
+        Args:
+            min_success_rate: Mark unhealthy if success_rate < this (default 0.5 = 50%)
+            failure_threshold: Consecutive failures to trigger auto-disable (default 3)
+        """
+        self.min_success_rate = min_success_rate
+        self.failure_threshold = failure_threshold
+        self.disabled_skills: set[str] = set()  # Skills that have been auto-disabled
+
+    async def check(self, executor: Any, tenant_id: str) -> HealthStatus:
+        """Check executor health across all skills in tenant.
+
+        Args:
+            executor: SkillExecutor instance
+            tenant_id: Tenant identifier
+
+        Returns:
+            HealthStatus indicating executor health
+        """
+        try:
+            stats_by_skill = executor.get_all_stats(tenant_id)
+
+            if not stats_by_skill:
+                return HealthStatus(
+                    component="executor",
+                    healthy=True,
+                    message="Executor idle (no executions)",
+                    metrics={},
+                )
+
+            # Check for unhealthy skills
+            unhealthy_skills = []
+            newly_disabled = []
+
+            for skill_name, stats in stats_by_skill.items():
+                # Check success rate
+                if stats.total_executions > 0:
+                    if stats.success_rate < self.min_success_rate:
+                        unhealthy_skills.append(
+                            f"{skill_name} (success_rate={stats.success_rate:.2%})"
+                        )
+
+                # Check for auto-disable
+                if stats.is_disabled and skill_name not in self.disabled_skills:
+                    self.disabled_skills.add(skill_name)
+                    newly_disabled.append(skill_name)
+
+            # Compile health metrics
+            metrics = {
+                "total_skills": len(stats_by_skill),
+                "unhealthy_skills": len(unhealthy_skills),
+                "auto_disabled_skills": len(self.disabled_skills),
+                "newly_disabled": newly_disabled,
+                "skills": {
+                    name: {
+                        "success_rate": stats.success_rate,
+                        "total_executions": stats.total_executions,
+                        "is_disabled": stats.is_disabled,
+                    }
+                    for name, stats in stats_by_skill.items()
+                },
+            }
+
+            healthy = len(unhealthy_skills) == 0 and len(newly_disabled) == 0
+            message = (
+                f"Executor healthy ({len(stats_by_skill)} skills)"
+                if healthy
+                else f"Executor degraded: {len(unhealthy_skills)} unhealthy, "
+                     f"{len(newly_disabled)} newly disabled"
+            )
+
+            return HealthStatus(
+                component="executor",
+                healthy=healthy,
+                message=message,
+                metrics=metrics,
+            )
+        except Exception as e:
+            return HealthStatus(
+                component="executor",
+                healthy=False,
+                message=f"Executor check error: {type(e).__name__}: {str(e)}",
+            )
+
+
 class HealthMonitor:
     """Monitors multiple health checks."""
 

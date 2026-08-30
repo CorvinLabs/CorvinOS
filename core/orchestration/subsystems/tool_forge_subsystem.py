@@ -606,11 +606,12 @@ class ToolForgeSubsystem(Subsystem):
         try:
             # ADR-0365: Enforce tool_forge_per_day quota
             from pathlib import Path
-            from operator.license.quota_counter import increment_and_check
+            from core.orchestration.quota_gate import increment_and_check
             # Use _default tenant if not available from context
             tenant_id = getattr(self, 'tenant_id', '_default')
-            corvin_home = Path.home() / ".corvin"
-            increment_and_check(corvin_home, "tool_forge_per_day", tenant_id)
+            # corvin_home resolved by the gate (honours CORVIN_HOME); hard-coding
+            # Path.home() counted quota in a root the install may never read.
+            increment_and_check(None, "tool_forge_per_day", tenant_id)
 
             # Estimate cost
             impl = payload.get("impl", "")
@@ -1138,6 +1139,21 @@ class ToolForgeSubsystem(Subsystem):
             Sanitized error message safe for audit trail
         """
         sanitized = error_msg
+
+        # Credential assignments FIRST, and independent of value length.
+        # The quoted-string rule below only fires at >=20 chars, so a typical
+        # secret slipped straight through into the audit trail:
+        # `password="super_secret_12345"` is 18 chars, and most real passwords
+        # and API keys are shorter still. The key name is kept (it is useful
+        # for debugging and is not itself sensitive); only the value is
+        # redacted. Runs before the path rule so secrets containing slashes
+        # are masked as credentials rather than partially rewritten as paths.
+        sanitized = re.sub(
+            r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|"
+            r"auth|credential|bearer)\b\s*[:=]\s*[\"']?[^\s\"',;)]+[\"']?",
+            r"\1=[REDACTED]",
+            sanitized,
+        )
 
         # Remove absolute paths
         sanitized = re.sub(r"/[a-zA-Z0-9/_\-\.]+", "[PATH]", sanitized)

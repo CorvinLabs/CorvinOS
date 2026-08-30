@@ -230,9 +230,15 @@ class TaskBrain:
         # ADR-0365: Enforce brain_tasks_per_day quota
         try:
             from pathlib import Path
-            from core.operator.license.quota_counter import increment_and_check
-            corvin_home = Path(self._context_initializer._corvin_home or Path.home() / ".corvin")
-            increment_and_check(corvin_home, "brain_tasks_per_day", tenant_id)
+            from core.orchestration.quota_gate import increment_and_check
+            # Configured root wins; the gate resolves CORVIN_HOME (then
+            # ~/.corvin) when the initializer has none.
+            _configured = self._context_initializer._corvin_home
+            increment_and_check(
+                Path(_configured) if _configured else None,
+                "brain_tasks_per_day",
+                tenant_id,
+            )
         except Exception as e:
             logger.error(f"Brain task quota check failed: {e}")
             raise

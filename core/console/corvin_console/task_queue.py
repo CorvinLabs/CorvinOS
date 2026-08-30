@@ -5,17 +5,22 @@ Tasks survive session death and are processed by independent worker pool.
 ADR-0080 M4: Quota gates (max_concurrent, max_per_day), event log rotation.
 ADR-0101 M3: Instruction text split into per-task payload files (mode 0600),
 keeping the queue JSONL metadata-only (no user content in the log).
+Phase 2: completion_notify routing registration for Discord/Telegram notifications.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class QuotaExceededError(Exception):
@@ -232,11 +237,19 @@ class TaskQueue:
         ttl_seconds: int = 3600,
         check_quota: bool = True,
         quota_limits: dict | None = None,
+        channel: str | None = None,
+        chat_id: str | int | None = None,
+        sender: str | None = None,
     ) -> str:
-        """Enqueue a new task.
+        """Enqueue a new task with optional messenger routing.
 
         The instruction is stored in a separate payload file (0600); the queue
         JSONL log contains only metadata — no user text (ADR-0101 M3).
+
+        Phase 2: If channel + chat_id provided, registers routing with
+        completion_notify so task completion notifications can be routed to the
+        originating messenger (Discord, Telegram, etc.). Sender field is
+        PII-gated per ADR-0297.
 
         Returns:
             task_id (UUID4 string).
@@ -258,6 +271,49 @@ class TaskQueue:
         # Write instruction to payload file BEFORE the queue event,
         # so the worker always finds a payload when it dequeues.
         self._write_payload(task_id, instruction)
+
+        # Phase 2: Register routing for completion notifications (ADR-0297 PII gate)
+        if channel and chat_id:
+            try:
+                root = Path(__file__).resolve().parents[2]
+                shared = root / "operator" / "bridges" / "shared"
+                if str(shared) not in sys.path:
+                    sys.path.insert(0, str(shared))
+                import completion_notify as _cn
+
+                # PII GATE (ADR-0297): scan sender for PII before registration
+                sanitized_sender = sender or "api"
+                if sender:
+                    try:
+                        from core.pii import has_sensitive
+                        if has_sensitive(sender):
+                            logger.warning(
+                                f"[task_queue] Task {task_id}: sender contains PII, "
+                                f"dropping sender field for completion_notify"
+                            )
+                            sanitized_sender = "api"
+                    except Exception as e:
+                        logger.warning(f"[task_queue] PII check failed for sender: {e}")
+                        # Fail-closed: drop sender on PII check error
+                        sanitized_sender = "api"
+
+                _cn.register(
+                    task_id=task_id,
+                    channel=channel,
+                    chat_id=str(chat_id),
+                    tenant_id=tenant_id,
+                    sender=sanitized_sender,
+                    label="background task",
+                )
+                logger.info(
+                    f"[task_queue] Registered routing for task {task_id}: "
+                    f"channel={channel}, chat_id={chat_id}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[task_queue] Failed to register completion_notify for {task_id}: {e}. "
+                    f"Task will proceed but notifications will not be routed."
+                )
 
         self._write_event(
             tenant_id,

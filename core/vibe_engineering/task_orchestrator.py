@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Callable, Optional, Literal
 import asyncio
 import os
+import logging
 from datetime import datetime
 from enum import Enum
 
@@ -12,11 +13,23 @@ from .task_registry import (
     TaskRegistryPersistence, get_default_registry
 )
 
+logger = logging.getLogger(__name__)
+
 # Import notification router (optional, fail-gracefully if not available)
 try:
     from .notification_router import NotificationRouter
     _notification_router = NotificationRouter()
-except ImportError:
+except ImportError as e:
+    logger.warning(
+        f"[task_orchestrator] Failed to import NotificationRouter: {e}. "
+        f"Task notifications will not be sent to Discord."
+    )
+    _notification_router = None
+except Exception as e:
+    logger.warning(
+        f"[task_orchestrator] Failed to initialize NotificationRouter: {e}. "
+        f"Task notifications will not be sent to Discord."
+    )
     _notification_router = None
 
 # Import task heartbeat for long-running phase monitoring

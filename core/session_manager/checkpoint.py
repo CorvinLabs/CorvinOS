@@ -5,7 +5,13 @@ k=2: CheckpointManager with JSON serialization
 - Enables idempotent session resumption
 - Includes learning state and context essentials
 
-ADR-0XXX: Session Manager Architecture
+k=3: Phase 1 Task Context Drift — Goal persistence + integrity
+- GoalContext with SHA256 hash added to checkpoint
+- Goal restored when resuming from checkpoint
+- Audit trail: every goal event logged (GDPR Art. 30)
+
+ADR-0405: GoalContext Persistence
+ADR-0407: Task Context Drift Prevention (Master)
 GDPR Art. 30, 32: Checkpoint creation is audit-logged.
 """
 
@@ -16,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Any, Dict
 from uuid import uuid4
+
+from .goal_context import GoalContext
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +117,20 @@ class SessionCheckpoint:
     # Context Essentials
     context_essentials: Optional[ContextEssentials] = None
 
+    # Workflow State (k=3 Session Manager Wiring)
+    # Captures WorkflowExecutionState for session split/resume
+    # None if this checkpoint doesn't involve a workflow
+    workflow_execution_state: Optional[Any] = None  # WorkflowExecutionState from execution_engine.py
+
+    # Goal Alignment (k=3 Session Drift Validation)
+    # Persists goal and alignment score across session splits
+    goal: str = ""  # Current goal being pursued
+    goal_alignment_score: float = 0.0  # Alignment score at checkpoint time (0.0-1.0)
+
+    # Goal Context (Phase 1: Task Context Drift Prevention)
+    # Persistent goal with SHA256 integrity (GDPR Art. 32)
+    goal_context: Optional[GoalContext] = None
+
     def __post_init__(self):
         """Validate checkpoint."""
         if not self.session_id:
@@ -122,6 +144,15 @@ class SessionCheckpoint:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert checkpoint to dictionary (JSON-serializable)."""
+        # Serialize workflow_execution_state if present (WorkflowExecutionState is a dataclass)
+        workflow_state_dict = None
+        if self.workflow_execution_state:
+            try:
+                workflow_state_dict = asdict(self.workflow_execution_state)
+            except Exception as e:
+                logger.warning(f"Failed to serialize workflow_execution_state: {e}")
+                workflow_state_dict = None
+
         return {
             "checkpoint_id": self.checkpoint_id,
             "session_id": self.session_id,
@@ -137,6 +168,10 @@ class SessionCheckpoint:
             "artifacts": [asdict(art) for art in self.artifacts],
             "learning_state": asdict(self.learning_state) if self.learning_state else None,
             "context_essentials": asdict(self.context_essentials) if self.context_essentials else None,
+            "workflow_execution_state": workflow_state_dict,
+            "goal": self.goal,
+            "goal_alignment_score": self.goal_alignment_score,
+            "goal_context": self.goal_context.to_dict() if self.goal_context else None,
         }
 
     @classmethod
@@ -209,6 +244,21 @@ class SessionCheckpoint:
                 reduction_percentage=ce.get("reduction_percentage", 0.0),
             )
 
+        # Deserialize workflow_execution_state if present
+        # Note: We store it as-is (dict or object) to avoid circular import on WorkflowExecutionState
+        # Conversion to actual WorkflowExecutionState happens in WorkflowExecutor.restore_execution_state()
+        workflow_execution_state = None
+        if data.get("workflow_execution_state"):
+            wes = data["workflow_execution_state"]
+            # Store the dict representation; WorkflowExecutor will reconstruct the actual object
+            workflow_execution_state = wes
+
+        # Deserialize goal_context if present (Phase 1: Task Context Drift)
+        goal_context = None
+        if data.get("goal_context"):
+            gc_data = data["goal_context"]
+            goal_context = GoalContext.from_dict(gc_data)
+
         return cls(
             checkpoint_id=data.get("checkpoint_id", str(uuid4())),
             session_id=data.get("session_id", ""),
@@ -224,10 +274,43 @@ class SessionCheckpoint:
             artifacts=artifacts,
             learning_state=learning_state,
             context_essentials=context_essentials,
+            workflow_execution_state=workflow_execution_state,
+            goal=data.get("goal", ""),
+            goal_alignment_score=data.get("goal_alignment_score", 0.0),
+            goal_context=goal_context,
         )
 
     def to_audit_event(self) -> dict[str, Any]:
         """Convert to audit.jsonl format (GDPR Art. 30, 32)."""
+        workflow_summary = {}
+        if self.workflow_execution_state:
+            workflow_state = self.workflow_execution_state
+            if isinstance(workflow_state, dict):
+                workflow_summary = {
+                    "workflow_id": workflow_state.get("workflow_id"),
+                    "run_id": workflow_state.get("run_id"),
+                    "status": workflow_state.get("status"),
+                    "nodes_executed": len(workflow_state.get("nodes_executed", [])),
+                    "errors_count": len(workflow_state.get("errors", [])),
+                }
+            else:
+                # Assume it's a WorkflowExecutionState object
+                workflow_summary = {
+                    "workflow_id": getattr(workflow_state, "workflow_id", None),
+                    "run_id": getattr(workflow_state, "run_id", None),
+                    "status": getattr(workflow_state, "status", None),
+                    "nodes_executed": len(getattr(workflow_state, "nodes_executed", [])),
+                    "errors_count": len(getattr(workflow_state, "errors", [])),
+                }
+
+        # Goal context summary (Phase 1: Task Context Drift)
+        goal_context_summary = None
+        if self.goal_context:
+            goal_context_summary = {
+                "goal_hash": self.goal_context.goal_hash,
+                "created_at": self.goal_context.created_at,
+            }
+
         return {
             "event_type": "session.checkpoint_created",
             "tenant_id": self.tenant_id,
@@ -242,6 +325,8 @@ class SessionCheckpoint:
                 "token_count": self.token_count_at_checkpoint,
                 "subgoals_open": len(self.open_subgoals),
                 "artifacts": len(self.artifacts),
+                "workflow": workflow_summary if workflow_summary else None,
+                "goal_context": goal_context_summary,
             },
         }
 
@@ -301,6 +386,10 @@ class CheckpointManager:
         artifacts: Optional[List[ArtifactRecord]] = None,
         learning_state: Optional[LearningState] = None,
         context_essentials: Optional[ContextEssentials] = None,
+        workflow_execution_state: Optional[Any] = None,
+        goal: str = "",
+        goal_alignment_score: float = 0.0,
+        goal_context: Optional[GoalContext] = None,
     ) -> SessionCheckpoint:
         """Create a new checkpoint.
 
@@ -317,6 +406,10 @@ class CheckpointManager:
             artifacts: List of generated artifacts
             learning_state: Learning state snapshot
             context_essentials: Context essentials for restoration
+            workflow_execution_state: Workflow execution state (k=3 Session Manager Wiring)
+            goal: Current goal being pursued (k=3 Session Drift Validation)
+            goal_alignment_score: Goal alignment score at checkpoint time (k=3 Session Drift Validation)
+            goal_context: GoalContext with SHA256 hash (Phase 1: Task Context Drift)
 
         Returns:
             SessionCheckpoint
@@ -334,6 +427,10 @@ class CheckpointManager:
             artifacts=artifacts or [],
             learning_state=learning_state,
             context_essentials=context_essentials,
+            workflow_execution_state=workflow_execution_state,
+            goal=goal,
+            goal_alignment_score=goal_alignment_score,
+            goal_context=goal_context,
         )
 
         # Store in memory cache

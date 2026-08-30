@@ -99,6 +99,10 @@ const COMMANDS = [
   { name: 'ldd-preset', description: 'Swap the whole config to a named preset.',
     options: [{ name: 'args', description: 'default | strict | quick | off', type: 3, required: true }] },
 
+  // ── Background task control (Phase 3: Discord Bridge Integration) ───
+  { name: 'task', description: 'Start a long-running background task (with Discord notifications).',
+    options: [{ name: 'args', description: 'The task instruction', type: 3, required: true }] },
+
   // ── Profile / memory / vault / schedule ────────────────────────────
   { name: 'profile',  description: 'Bridge-wide profile.',
     options: [{ name: 'args', description: 'show | set k=v | get k | rm k | reset', type: 3, required: false }] },

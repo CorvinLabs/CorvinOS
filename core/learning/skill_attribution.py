@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from .event_schema import LearningEvent, LearningEventType
 from .event_store import EventStore
+from .event_emitter import EventEmitter
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ class SkillAttributionEngine:
     event_store: EventStore
     model: AttributionModel = AttributionModel.EQUAL
     emit_events: bool = True  # If False, records but does not emit
+    event_emitter: Optional[EventEmitter] = None  # For non-blocking event emission (ADR-0314)
 
     async def attribute_outcome(
         self,
@@ -243,7 +245,12 @@ class SkillAttributionEngine:
             )
 
             # Attempt to emit (fire-and-forget on error)
-            await self.event_store.write_event(event)
+            # Prefer EventEmitter (async, non-blocking) — ADR-0314
+            if self.event_emitter is not None:
+                await self.event_emitter.emit(event)
+            else:
+                # Fallback: Direct EventStore.write_event (blocking, legacy path)
+                await self.event_store.write_event(event)
             logger.debug(
                 f"Emitted attribution event {payload.attribution_id} "
                 f"for strategy {payload.strategy_id} (model: {self.model.value})"

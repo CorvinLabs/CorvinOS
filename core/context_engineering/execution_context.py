@@ -6,6 +6,7 @@ CANONICAL VERSION: This is the primary ExecutionContext used by Brain subsystems
 - Recording decisions via audit trail
 - Nested scope hierarchy (ContextStack)
 - Query/update API for subsystems
+- Goal Alignment Monitoring (ADR-0407)
 
 Do NOT confuse with:
 - core.engines.execution_context.ExecutionContext — immutable Phase 0 task state for replay
@@ -19,6 +20,15 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .decision_record import DecisionRecord
+
+
+def _get_goal_alignment_monitor():
+    """Lazy import of GoalAlignmentMonitor to avoid circular dependencies."""
+    try:
+        from core.session_manager.monitors.goal_alignment import GoalAlignmentMonitor
+        return GoalAlignmentMonitor()
+    except ImportError:
+        return None
 
 
 @dataclass(frozen=False)
@@ -106,6 +116,11 @@ class ExecutionContext:
 
     Tracks execution progress, decisions, budget, and guidance overrides.
     Must be mutable for subsystems to update state; is NOT thread-safe.
+
+    Goal Alignment Monitoring (ADR-0407):
+    - original_goal: Original goal text (set on init)
+    - goal_alignment_monitor: GoalAlignmentMonitor instance
+    - iterations_since_last_goal_check: Counter for periodic checks
     """
 
     task_id: str
@@ -120,6 +135,9 @@ class ExecutionContext:
     strategy_confidence: float = 0.5  # 0.0–1.0
     guidance_overrides: dict = field(default_factory=dict)
     checkpoints: list[dict] = field(default_factory=list)
+    original_goal: str = ""  # Set on init from task_template
+    goal_alignment_monitor: Any = field(default_factory=_get_goal_alignment_monitor)
+    iterations_since_last_goal_check: int = 0  # Counter for periodic checks (every k=5)
 
     def get_field(self, key: str) -> Any:
         """Query context field by name.
@@ -243,3 +261,76 @@ class ExecutionContext:
         self.guidance_overrides = {}
         # Clear the context stack (but keep root)
         self.context_stack.stack = []
+
+    def initialize_goal_monitoring(self, session_id: str, task_id: str) -> None:
+        """Initialize goal alignment monitoring.
+
+        Called on ExecutionContext creation to set up goal tracking.
+        Extracts original_goal from task_template if present.
+
+        Args:
+            session_id: Session ID for monitor tracking
+            task_id: Task ID for monitor tracking
+        """
+        # Extract goal from task_template if present
+        if isinstance(self.task_template, dict):
+            goal = self.task_template.get("goal") or self.task_template.get("task") or ""
+            if goal:
+                self.original_goal = str(goal)
+
+        # Initialize monitor with goal
+        if self.goal_alignment_monitor:
+            try:
+                self.goal_alignment_monitor.set_goal(
+                    session_id=session_id,
+                    task_id=task_id,
+                    tenant_id=self.tenant_id,
+                    goal=self.original_goal,
+                )
+            except Exception as e:
+                # Fail-closed: goal monitoring is optional
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Failed to initialize goal alignment monitor: {e}"
+                )
+
+    def check_goal_alignment(self, current_work: str, check_interval: int = 5) -> Optional[Any]:
+        """Check goal alignment periodically during execution.
+
+        Called every iteration from LDD loop. Checks alignment every k=5 iterations.
+        If goal drift is detected, returns the MonitorAlert; otherwise None.
+
+        Args:
+            current_work: Current work transcript/summary
+            check_interval: Check every N iterations (default 5)
+
+        Returns:
+            MonitorAlert if drift detected, None otherwise
+        """
+        if not self.goal_alignment_monitor:
+            return None
+
+        self.iterations_since_last_goal_check += 1
+
+        if self.iterations_since_last_goal_check < check_interval:
+            return None
+
+        # Reset counter
+        self.iterations_since_last_goal_check = 0
+
+        # Update metadata with current work
+        state = self.goal_alignment_monitor.create_or_get_state(
+            session_id="<session>",  # Placeholder (set by caller)
+            task_id=self.task_id,
+            tenant_id=self.tenant_id,
+        )
+        state.metadata["current_work"] = current_work
+
+        # Check for goal drift
+        try:
+            alert = self.goal_alignment_monitor.check(state)
+            return alert
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Goal alignment check failed: {e}")
+            return None

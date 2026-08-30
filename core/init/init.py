@@ -44,8 +44,11 @@ CLI:
 Daemon mode (Phase 4.2):
 
     The `daemon` subcommand starts a long-lived supervisor that listens
-    on a Unix-domain socket at <corvin_home>/run/init.sock. Each
-    incoming connection sends one JSON line of the form
+    on a platform-neutral transport:
+      - Unix/Linux/macOS: Unix-domain socket at <corvin_home>/run/init.sock
+      - Windows: TCP loopback at 127.0.0.1:<port>, port stored in <corvin_home>/run/daemon.port
+
+    Each incoming connection sends one JSON line of the form
         {"command": "list" | "start" | "stop" | "restart" | "status"
                   | "journal" | "shutdown",
          "args": [...optional...]}
@@ -59,7 +62,7 @@ Daemon mode (Phase 4.2):
       - SIGTERM => shutdown_all in reverse-topological order, exit 0
 
     Phase-4.4 will migrate bridge.sh up/down to call into this
-    daemon over the socket.
+    daemon over the transport.
 
 Status states:
 
@@ -673,7 +676,15 @@ def daemon(plugin_roots: Optional[List[Path]] = None,
     grained control of which services start.
     """
     import select as _select
-    import socket as _socket
+    import importlib.util
+
+    # Import daemon_transport using absolute path to support both
+    # module-mode and direct execution
+    transport_path = Path(__file__).parent / "daemon_transport.py"
+    spec = importlib.util.spec_from_file_location("daemon_transport", transport_path)
+    transport_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transport_module)
+    create_transport = transport_module.create_transport
 
     if plugin_roots is None:
         plugin_roots = [Path(__file__).resolve().parent.parent]
@@ -681,12 +692,6 @@ def daemon(plugin_roots: Optional[List[Path]] = None,
 
     if socket_path is None:
         socket_path = _socket_path()
-    # Best-effort cleanup of stale socket from a crashed previous run.
-    try:
-        if socket_path.exists():
-            socket_path.unlink()
-    except OSError:
-        pass
 
     journal_dir = socket_path.parent / "log"
     sup = Supervisor(services, journal_dir=journal_dir)
@@ -699,31 +704,17 @@ def daemon(plugin_roots: Optional[List[Path]] = None,
                 print(f"[init-daemon] start {name} failed: {exc}",
                       file=sys.stderr, flush=True)
 
-    # Set up the listener socket. AF_UNIX + SOCK_STREAM, line-delimited
-    # JSON. One connection per request keeps the protocol simple — the
-    # CLI client opens, sends, reads reply, closes.
-    #
-    # Critical: bind() creates the socket file with permissions derived
-    # from the process umask. Default umask 0o022 → mode 0o755, which
-    # would let any local user connect. Set a tight umask BEFORE bind
-    # so the file lands at 0o600 atomically; restore the umask after.
-    # The chmod(0o600) below is belt-and-braces — covers the rare case
-    # where the parent dir's setgid + ACLs would override our umask.
-    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-    prev_umask = os.umask(0o077)
+    # Set up the listener socket using platform-neutral transport.
+    # Windows: TCP loopback (127.0.0.1:random_port)
+    # Unix: AF_UNIX domain socket (existing behavior)
+    transport = create_transport(socket_path)
     try:
-        sock.bind(str(socket_path))
-    except OSError as exc:
-        os.umask(prev_umask)
-        print(f"[init-daemon] bind {socket_path}: {exc}",
+        sock, endpoint = transport.bind()
+    except RuntimeError as exc:
+        print(f"[init-daemon] bind failed: {exc}",
               file=sys.stderr, flush=True)
         return 2
-    finally:
-        os.umask(prev_umask)
-    try:
-        socket_path.chmod(0o600)
-    except OSError:
-        pass  # umask already gave us the right mode; chmod is best-effort
+
     sock.listen(64)  # deep enough to absorb burst connects without ECONNREFUSED
     sock.settimeout(0.0)  # non-blocking, we drive it via select
 
@@ -786,10 +777,7 @@ def daemon(plugin_roots: Optional[List[Path]] = None,
             sock.close()
         except OSError:
             pass
-        try:
-            socket_path.unlink()
-        except OSError:
-            pass
+        transport.cleanup()
         sup.shutdown_all()
         print("[init-daemon] shutdown complete", flush=True)
     return 0
@@ -804,16 +792,26 @@ def daemon_call(command: str, *args: str,
     E2E test driver. Never raises on protocol errors — returns a
     {ok: false, error: ...} dict.
     """
-    import socket as _socket
+    import importlib.util
+
+    # Import daemon_transport using absolute path
+    transport_path = Path(__file__).parent / "daemon_transport.py"
+    spec = importlib.util.spec_from_file_location("daemon_transport", transport_path)
+    transport_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transport_module)
+    create_transport = transport_module.create_transport
+
     if socket_path is None:
         socket_path = _socket_path()
-    if not socket_path.exists():
-        return {"ok": False, "error": f"daemon not running ({socket_path})"}
+
+    transport = create_transport(socket_path)
     payload = {"command": command, "args": list(args)}
-    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-    sock.settimeout(timeout)
     try:
-        sock.connect(str(socket_path))
+        sock = transport.connect(timeout=timeout)
+    except (OSError, RuntimeError) as exc:
+        return {"ok": False, "error": f"daemon call failed: {exc}"}
+
+    try:
         sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
         data = b""
         while b"\n" not in data and len(data) < 65536:
@@ -848,6 +846,17 @@ def _cli(argv: List[str]) -> int:
     roots = [Path(__file__).resolve().parent.parent]
     services = discover_services(roots)
     sup = Supervisor(services)
+
+    # Initialize secure file permissions on ~/.corvin (cross-platform)
+    try:
+        from core.platform import setup_corvin_home_permissions
+        corvin_home = Path.home() / ".corvin"
+        if corvin_home.exists():
+            setup_corvin_home_permissions(corvin_home)
+    except Exception as exc:
+        # Logging permission errors is a nice-to-have, not critical
+        print(f"Note: permission setup warning: {exc}", file=sys.stderr)
+
     try:
         if cmd == "list":
             for row in sup.list_status():

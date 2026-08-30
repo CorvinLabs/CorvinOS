@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .event_schema import LearningEvent, LearningEventType
+from .event_emitter import EventEmitter
 
 
 class DecisionStyle(str, Enum):
@@ -142,7 +143,12 @@ class UserProfileManager:
         >>> manager.set_override("user_1", "_default", "model", "claude-3-opus")
     """
 
-    def __init__(self, event_store: Optional[Any] = None, profiles_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        event_store: Optional[Any] = None,
+        profiles_dir: Optional[Path] = None,
+        event_emitter: Optional[EventEmitter] = None,
+    ):
         """Initialize manager with optional persistence directory.
 
         Args:
@@ -150,8 +156,11 @@ class UserProfileManager:
                 If None, preference changes are logged but not emitted as learning events.
             profiles_dir: Directory for profile JSON files. If None, uses
                 tenant_home()/<tenant_id>/learning/profiles
+            event_emitter: EventEmitter for non-blocking event emission (ADR-0314).
+                If None, event_store is used directly (blocking fallback).
         """
         self.event_store = event_store
+        self.event_emitter = event_emitter
         self._profiles_dir_override = profiles_dir
         self._profiles_cache: dict[tuple[str, str], UserProfile] = {}
 
@@ -430,6 +439,47 @@ class UserProfileManager:
 
         return prediction
 
+    async def _queue_preference_updated(
+        self, profile: UserProfile, feedback: dict[str, Any]
+    ) -> None:
+        """Async helper for emitting preference events via EventEmitter (ADR-0314).
+
+        Called from sync _emit_preference_updated via asyncio.create_task.
+        """
+        event = LearningEvent(
+            event_type=LearningEventType.PREFERENCE_SET,
+            tenant_id=profile.tenant_id,
+            instance_id="user-profile-manager",  # System component
+            skill_name=None,
+            session_id="system",  # Out-of-band profile update
+            timestamp_utc=datetime.now(),
+            user_id=profile.user_id,
+            payload={
+                "feedback_keys": list(feedback.keys()),
+                "decision_style": profile.decision_style.value,
+                "conciseness": profile.conciseness_preference,
+                # Which skills the feedback touched, BY ID ONLY — never a
+                # description, a name or free text (GDPR Art. 5(1)(a) data
+                # minimisation). Without this the event recorded only that
+                # "skill_feedback" happened, which is not enough to audit
+                # or replay what was learned.
+                "skill_ids": sorted(
+                    str(k) for k in (feedback.get("skill_feedback") or {})
+                ),
+            },
+            tags=["user-preference"],
+        )
+
+        try:
+            if self.event_emitter is not None:
+                await self.event_emitter.emit(event)
+            else:
+                # Fallback: Direct EventStore.write_event (blocking, legacy path)
+                self.event_store.write_event(event)
+        except Exception as e:
+            # Fail-closed: log but do not raise
+            print(f"[WARN] Failed to emit preference update event: {e}")
+
     def _emit_preference_updated(
         self, profile: UserProfile, feedback: dict[str, Any]
     ) -> None:
@@ -442,37 +492,36 @@ class UserProfileManager:
             profile: Updated profile
             feedback: Feedback that triggered update
         """
-        if not self.event_store:
-            return  # Event store not configured; skip emission
+        if not self.event_store and not self.event_emitter:
+            return  # Neither configured; skip emission
 
         try:
-            # Create immutable learning event
-            event = LearningEvent(
-                event_type=LearningEventType.PREFERENCE_SET,
-                tenant_id=profile.tenant_id,
-                instance_id="user-profile-manager",  # System component
-                skill_name=None,
-                session_id="system",  # Out-of-band profile update
-                timestamp_utc=datetime.now(),
-                user_id=profile.user_id,
-                payload={
-                    "feedback_keys": list(feedback.keys()),
-                    "decision_style": profile.decision_style.value,
-                    "conciseness": profile.conciseness_preference,
-                    # Which skills the feedback touched, BY ID ONLY — never a
-                    # description, a name or free text (GDPR Art. 5(1)(a) data
-                    # minimisation). Without this the event recorded only that
-                    # "skill_feedback" happened, which is not enough to audit
-                    # or replay what was learned.
-                    "skill_ids": sorted(
-                        str(k) for k in (feedback.get("skill_feedback") or {})
-                    ),
-                },
-                tags=["user-preference"],
-            )
-
-            # Emit asynchronously (fail-closed if queue full)
-            self.event_store.write_event(event)
+            # Schedule async emission without blocking main thread
+            import asyncio
+            try:
+                asyncio.create_task(self._queue_preference_updated(profile, feedback))
+            except RuntimeError:
+                # No event loop running; fall back to sync write_event
+                if self.event_store:
+                    event = LearningEvent(
+                        event_type=LearningEventType.PREFERENCE_SET,
+                        tenant_id=profile.tenant_id,
+                        instance_id="user-profile-manager",
+                        skill_name=None,
+                        session_id="system",
+                        timestamp_utc=datetime.now(),
+                        user_id=profile.user_id,
+                        payload={
+                            "feedback_keys": list(feedback.keys()),
+                            "decision_style": profile.decision_style.value,
+                            "conciseness": profile.conciseness_preference,
+                            "skill_ids": sorted(
+                                str(k) for k in (feedback.get("skill_feedback") or {})
+                            ),
+                        },
+                        tags=["user-preference"],
+                    )
+                    self.event_store.write_event(event)
         except Exception as e:
             # Fail-closed: log but do not raise
             print(f"[WARN] Failed to emit preference update event: {e}")

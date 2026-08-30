@@ -308,6 +308,54 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand || !interaction.isChatInputCommand()) return;
     const userId = interaction.user.id;
     const channelId = interaction.channelId;
+
+    // Phase 3: Handle /task command specially (routing to task creation API)
+    if (interaction.commandName === 'task') {
+      const instruction = interaction.options.getString('args') || 'task';
+      log(`/task from=${userId} ch=${channelId} instr="${instruction.slice(0, 50)}..."`);
+
+      try {
+        // Acknowledge immediately (Discord requires ack within 3s)
+        await interaction.deferReply({ ephemeral: false });
+
+        // Call task creation API with routing info
+        const response = await fetch('http://127.0.0.1:8765/v1/console/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_key: `discord:${channelId}`,
+            instruction: instruction,
+            ttl_seconds: 3600,
+            // Phase 2/3 routing info
+            channel: 'discord',
+            chat_id: String(channelId),
+            sender: String(userId),
+          }),
+        });
+
+        if (!response.ok) {
+          const error = await response.text();
+          log(`task creation failed: ${response.status} ${error}`);
+          await interaction.editReply(`❌ Task creation failed: ${response.status}`);
+          return;
+        }
+
+        const result = await response.json();
+        const taskId = result.task_id;
+
+        log(`task created: ${taskId}`);
+        await interaction.editReply(
+          `✅ Task started: \`${taskId}\`\n` +
+          `Running: ${instruction}\n` +
+          `📊 Updates will arrive here when done.`
+        );
+      } catch (e) {
+        log(`/task API error: ${e.message}`);
+        await interaction.editReply(`❌ Error: ${e.message}`);
+      }
+      return;  // Don't process as normal command
+    }
+
     const text = slashCommands.interactionToText(interaction);
     log(`interaction cmd=${interaction.commandName} from=${userId} ch=${channelId}`);
 

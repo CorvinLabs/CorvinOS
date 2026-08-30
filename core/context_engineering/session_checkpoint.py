@@ -45,6 +45,9 @@ class SessionCheckpoint:
     - Decision history (all prior decisions)
     - Checkpoints (internal recovery points)
     - Error recovery state (optional)
+    - Original goal for context-drift prevention (ADR-0405)
+
+    ADR-0405: Goal is persisted to enable cross-session integrity validation.
     """
 
     # Identity
@@ -67,6 +70,10 @@ class SessionCheckpoint:
     tokens_consumed: int = 0  # Total tokens up to this checkpoint
     cost_consumed_cents: float = 0.0  # Total cost up to this checkpoint
     error_recovery_state: Optional[Dict[str, Any]] = None
+
+    # Context drift prevention (ADR-0405)
+    original_goal: Optional[str] = None  # Task goal for similarity validation on resume
+    goal_alignment_score: float = 1.0  # Last measured similarity [0.0-1.0]
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""

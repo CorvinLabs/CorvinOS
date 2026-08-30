@@ -9,7 +9,14 @@ from click.testing import CliRunner
 
 from core.skill_management.github_exporter import GitHubExporter
 from core.skill_management.github_importer import GitHubImporter, ConflictResolution
-from operator.cli.skill_sync_commands import sync_push, sync_pull, configure_sync
+# `operator/` is not importable as a package (stdlib `operator` shadows it),
+# so this module is loaded by file path -- see load_operator_module in conftest.py.
+from corvin_test_support import load_operator_module
+
+_skill_sync = load_operator_module("cli/skill_sync_commands.py")
+sync_push = _skill_sync.sync_push
+sync_pull = _skill_sync.sync_pull
+configure_sync = _skill_sync.configure_sync
 
 
 @pytest.fixture
@@ -204,7 +211,7 @@ class TestCliSync:
         ])
 
         # Then check status
-        from operator.cli.skill_sync_commands import sync_status
+        sync_status = load_operator_module("cli/skill_sync_commands.py").sync_status
         result = cli_runner.invoke(sync_status, ["--tenant", "_default"])
 
         assert result.exit_code == 0

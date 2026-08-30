@@ -90,6 +90,11 @@ dependencies = [
     "qrcode >= 7.0",
     "flask>=3.1.3",
     "flask-cors>=6.0.5",
+    # Console release manager (release_manager.py) parses and orders version
+    # strings with semver.VersionInfo. It was imported at module level without
+    # ever being declared, so importing that module raised ModuleNotFoundError
+    # on every install.
+    "semver >= 3.0",
 ]
 
 [project.optional-dependencies]
@@ -419,4 +424,9 @@ addopts = "--verbose"
 asyncio_mode = "auto"
 markers = [
     "live: real-LLM end-to-end tests (opt-in via CLAUDE_LIVE_E2E=1)",
+    "integration: integration tests for subsystems",
+    "high_risk: critical path tests",
+    "asyncio: async test using pytest-asyncio",
+    "e2e: Playwright end-to-end browser tests",
+    "full_pipeline: full task orchestration pipeline tests",
 ]

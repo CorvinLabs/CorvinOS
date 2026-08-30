@@ -13,6 +13,7 @@ import { Loader2 } from "lucide-react";
 import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
+import { MarketplacePanel } from "./marketplace";
 import {
   DashboardPage, SettingsPage, EnginesPage, BrowserPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
@@ -81,6 +82,7 @@ export const PANELS: ConsolePanel[] = [
   rc("extensions", "Extensions", ExtensionsPage),
   rc("mcp-plugins", "MCP Plugins", McpPluginsPage),
   rc("plugins", "Plugins", PluginsPage),
+  rc("marketplace", "Marketplace", MarketplacePanel, { requiredFlag: "console_marketplace_panel" }),
   rc("activity", "Activity", ActivityFeedPage),
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,

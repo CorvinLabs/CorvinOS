@@ -3,6 +3,7 @@
 from .capabilities import Capability, Persona, Role, Tier
 from .persona_model import (
     CapabilityDenied,
+    _REGISTRY as REGISTRY,
     CapabilityLockError,
     CapabilityRegistry,
     get_current_persona,
@@ -48,6 +49,13 @@ __all__ = [
     "Capability",
     "CapabilityRegistry",
     "CapabilityDenied",
+    # `CapabilityDeniedError` is the spelling used by callers and by
+    # core/capabilities/registry.py's exception of the same role; both names
+    # refer to one class so a caller cannot catch the wrong one.
+    "CapabilityDeniedError",
+    # The process-wide registry singleton. `get_registry()` returns this same
+    # object; the module-level name is what call sites and tests reach for.
+    "REGISTRY",
     "CapabilityLockError",
     "get_registry",
     "get_current_persona",
@@ -70,3 +78,6 @@ __all__ = [
     "MemoryLayerNotFound",
     "EventPersistenceError",
 ]
+
+# Alias: one exception class, two spellings in use across the codebase.
+CapabilityDeniedError = CapabilityDenied

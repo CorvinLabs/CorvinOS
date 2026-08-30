@@ -3,6 +3,12 @@
 Runs hourly. Checks every flag: can it promote? Should it demote?
 Logs audit events for all transitions.
 Fully automatic; no maintainer approval needed.
+
+Telemetry (ADR-0325):
+  - Emits KPI: promotion_daemon_runs (counter)
+  - Emits KPI: skills_promoted_24h (gauge)
+  - Emits KPI: skills_demoted_24h (gauge)
+  - Logs promotion/demotion decisions to audit trail
 """
 from __future__ import annotations
 
@@ -11,13 +17,14 @@ import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Optional
 
 from .promotion_gates import (
     DemotionGates,
     PromotionGates,
 )
 from core.telemetry import get_flag_metrics
+from core.telemetry.source_of_truth import TelemetryRegistry, MetricType
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +42,44 @@ class AuditEvent:
     metrics_snapshot: dict
 
 
+def _initialize_telemetry_contracts() -> None:
+    """Register telemetry metrics for promotion daemon.
+
+    Registers:
+      - promotion_daemon_runs: counter (how many times daemon checked flags)
+      - skills_promoted_24h: gauge (skills promoted in last 24h)
+      - skills_demoted_24h: gauge (skills demoted in last 24h)
+    """
+    registry = TelemetryRegistry()
+
+    if not registry.is_metric_registered("promotion_daemon_runs"):
+        registry.register_metric(
+            "promotion_daemon_runs",
+            MetricType.COUNTER,
+            required_labels={"tenant_id"},
+            description="Number of times promotion daemon ran promotion checks",
+            unit="count",
+        )
+
+    if not registry.is_metric_registered("skills_promoted_24h"):
+        registry.register_metric(
+            "skills_promoted_24h",
+            MetricType.GAUGE,
+            required_labels={"tenant_id"},
+            description="Number of skills promoted in the last 24 hours",
+            unit="count",
+        )
+
+    if not registry.is_metric_registered("skills_demoted_24h"):
+        registry.register_metric(
+            "skills_demoted_24h",
+            MetricType.GAUGE,
+            required_labels={"tenant_id"},
+            description="Number of skills demoted in the last 24 hours",
+            unit="count",
+        )
+
+
 class PromotionDaemon:
     """Daemon that checks promotion gates hourly and demotes on error spikes."""
 
@@ -44,6 +89,7 @@ class PromotionDaemon:
         registry_getter: Callable[[], dict] | None = None,
         interval_seconds: int = 3600,
         enabled: bool = True,
+        tenant_id: str = "_default",
     ):
         """Initialize daemon.
 
@@ -52,14 +98,21 @@ class PromotionDaemon:
             registry_getter: Function to get current registry (flag_id → tier)
             interval_seconds: How often to check (default 1 hour)
             enabled: Whether daemon is enabled
+            tenant_id: Tenant ID for metric isolation
         """
         self.audit_fn = audit_fn
         self.registry_getter = registry_getter or (lambda: {})
         self.interval_seconds = interval_seconds
         self.enabled = enabled
+        self.tenant_id = tenant_id
         self._running = False
         self._task: asyncio.Task | None = None
         self._start_lock = threading.Lock()
+        self._promotions_count = 0
+        self._demotions_count = 0
+
+        # Initialize telemetry contracts on creation
+        _initialize_telemetry_contracts()
 
     async def run(self) -> None:
         """Main daemon loop."""
@@ -85,12 +138,42 @@ class PromotionDaemon:
         if not self.enabled:
             return
 
+        # Emit KPI: daemon ran
+        try:
+            registry = TelemetryRegistry()
+            registry.record_metric(
+                "promotion_daemon_runs",
+                value=1.0,
+                labels={"tenant_id": self.tenant_id},
+                tenant_id=self.tenant_id,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record promotion_daemon_runs KPI: {e}")
+
         registry = self.registry_getter()
         for flag_id, current_tier in registry.items():
             try:
                 await self.check_flag(flag_id, current_tier)
             except Exception as e:
                 logger.error(f"Error checking flag {flag_id}: {e}", exc_info=True)
+
+        # Emit KPI: promotions/demotions in this run
+        try:
+            registry = TelemetryRegistry()
+            registry.record_metric(
+                "skills_promoted_24h",
+                value=float(self._promotions_count),
+                labels={"tenant_id": self.tenant_id},
+                tenant_id=self.tenant_id,
+            )
+            registry.record_metric(
+                "skills_demoted_24h",
+                value=float(self._demotions_count),
+                labels={"tenant_id": self.tenant_id},
+                tenant_id=self.tenant_id,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record promotion/demotion KPIs: {e}")
 
     async def check_flag(self, flag_id: str, current_tier: str) -> None:
         """Check one flag for promotion or demotion."""
@@ -162,6 +245,7 @@ class PromotionDaemon:
     ) -> None:
         """Promote a flag (automatic)."""
         logger.info(f"Promoting {flag_id}: {old_tier} → {new_tier} ({reason})")
+        self._promotions_count += 1
 
         event = AuditEvent(
             event_type="flag_auto_promoted",
@@ -193,6 +277,7 @@ class PromotionDaemon:
             return
 
         logger.warning(f"Demoting {flag_id}: {current_tier} → {new_tier} ({reason})")
+        self._demotions_count += 1
 
         event = AuditEvent(
             event_type="flag_auto_demoted",
@@ -228,10 +313,23 @@ def initialize_daemon(
     audit_fn: Callable[[AuditEvent], None] | None = None,
     registry_getter: Callable[[], dict] | None = None,
     enabled: bool = True,
+    tenant_id: str = "_default",
 ) -> PromotionDaemon:
-    """Initialize the global promotion daemon."""
+    """Initialize the global promotion daemon.
+
+    Args:
+        audit_fn: Function to log audit events
+        registry_getter: Function to get current registry (flag_id → tier)
+        enabled: Whether daemon is enabled
+        tenant_id: Tenant ID for metric isolation
+    """
     global _DAEMON
-    _DAEMON = PromotionDaemon(audit_fn=audit_fn, registry_getter=registry_getter, enabled=enabled)
+    _DAEMON = PromotionDaemon(
+        audit_fn=audit_fn,
+        registry_getter=registry_getter,
+        enabled=enabled,
+        tenant_id=tenant_id,
+    )
     return _DAEMON
 
 

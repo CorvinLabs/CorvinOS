@@ -17,6 +17,7 @@ from typing import Optional, Callable
 
 from .models import LearningEvent
 from .storage import LearningEventStore
+from .event_emitter import EventEmitter
 from core.skills.skill import Skill
 
 
@@ -71,17 +72,21 @@ class ConfidenceScorer:
         self,
         skills_fetcher: Callable[[str], Optional[Skill]],
         event_store: Optional[LearningEventStore] = None,
+        event_emitter: Optional[EventEmitter] = None,
     ):
         """Initialize ConfidenceScorer.
 
         Args:
             skills_fetcher: Callable that takes skill_id and returns Skill or None.
                            Allows DI; can be lambda sid: registry.get_skill(sid).
-            event_store: LearningEventStore for emitting confidence events.
-                        If None, no events are emitted (but scoring still works).
+            event_store: (Deprecated) LearningEventStore for emitting confidence events.
+                        If None, event_emitter is used instead.
+            event_emitter: EventEmitter for non-blocking event emission (ADR-0314).
+                          If None, event_store is used (sync fallback).
         """
         self.skills_fetcher = skills_fetcher
         self.event_store = event_store
+        self.event_emitter = event_emitter
 
     def score_relevance(self, skill_id: str, context: dict) -> float:
         """Score how well a skill matches the current context.
@@ -321,56 +326,69 @@ class ConfidenceScorer:
         reliability: float,
         context: dict,
     ) -> None:
-        """Emit a learning event for confidence scoring (internal).
+        """Emit a learning event for confidence scoring (internal, non-blocking).
 
         GDPR-compliant:
         - No PII in event payload
         - Scores only (no task details, user details)
         - Context limited to tenant_id, user_id (for audit)
-        - Fail-closed: if event_store is None, no-op
+        - Fail-closed: if event_emitter and event_store are None, no-op
+
+        Uses EventEmitter (ADR-0314) for non-blocking async queue emission.
+        Falls back to direct EventStore.write_event() if EventEmitter unavailable.
         """
-        if self.event_store is None:
+        if self.event_emitter is None and self.event_store is None:
             return
 
-        try:
-            # Prefer the CANONICAL hash-chained store (ADR-0314): it is the one
-            # with audit-trail integration, and CLAUDE.md's ADR-0314 constraints
-            # forbid bypassing that chain. This scorer only ever spoke the older
-            # `LearningEventStore.append_event` API, so a caller injecting the
-            # canonical `EventStore` got an AttributeError that the blanket
-            # `except` below silently swallowed — every confidence event was
-            # dropped with no signal at all. Support both, canonical first.
-            if hasattr(self.event_store, "write_event"):
-                from .event_schema import LearningEvent as CanonicalEvent
-                from .event_schema import LearningEventType
+        from .event_schema import LearningEvent as CanonicalEvent
+        from .event_schema import LearningEventType
 
-                self.event_store.write_event(CanonicalEvent(
-                    event_type=LearningEventType.CONFIDENCE_SCORE,
-                    tenant_id=str(context.get("tenant_id") or "_default"),
-                    instance_id="confidence-scorer",  # System component
-                    skill_name=skill_id,
-                    session_id="system",
-                    timestamp_utc=datetime.now(),
-                    user_id=context.get("user_id"),
-                    # Scores only. The scoring CONTEXT (task keywords, which can
-                    # carry anything the user typed) must never reach the
-                    # payload — GDPR Art. 5(1)(a) data minimisation.
-                    payload={
-                        "relevance": round(float(relevance), 6),
-                        "reliability": round(float(reliability), 6),
-                    },
-                    tags=["confidence"],
-                ))
+        event = CanonicalEvent(
+            event_type=LearningEventType.CONFIDENCE_SCORE,
+            tenant_id=str(context.get("tenant_id") or "_default"),
+            instance_id="confidence-scorer",  # System component
+            skill_name=skill_id,
+            session_id="system",
+            timestamp_utc=datetime.now(),
+            user_id=context.get("user_id"),
+            # Scores only. The scoring CONTEXT (task keywords, which can
+            # carry anything the user typed) must never reach the
+            # payload — GDPR Art. 5(1)(a) data minimisation.
+            payload={
+                "relevance": round(float(relevance), 6),
+                "reliability": round(float(reliability), 6),
+            },
+            tags=["confidence"],
+        )
+
+        try:
+            # Prefer EventEmitter (async, non-blocking) — ADR-0314
+            if self.event_emitter is not None:
+                import asyncio
+                try:
+                    # Schedule async task without blocking
+                    asyncio.create_task(self.event_emitter.emit(event))
+                except RuntimeError:
+                    # No event loop running; fallback to sync write_event
+                    if self.event_store is not None and hasattr(self.event_store, "write_event"):
+                        self.event_store.write_event(event)
                 return
 
-            event = LearningEvent(
-                subject_id=skill_id,
-                event_type="confidence_computed",
-                confidence_delta=0.0,  # No update, just record
-                reason=f"relevance={relevance:.3f}, reliability={reliability:.3f}",
-                context=context,  # Contains tenant_id, user_id (no PII)
-            )
-            self.event_store.append_event(skill_id, event)
+            # Fallback: Direct EventStore.write_event (blocking, legacy path)
+            if self.event_store is not None and hasattr(self.event_store, "write_event"):
+                self.event_store.write_event(event)
+                return
+
+            # Legacy fallback: LearningEventStore.append_event
+            if self.event_store is not None:
+                legacy_event = LearningEvent(
+                    subject_id=skill_id,
+                    event_type="confidence_computed",
+                    confidence_delta=0.0,  # No update, just record
+                    reason=f"relevance={event.payload['relevance']:.3f}, reliability={event.payload['reliability']:.3f}",
+                    context=context,  # Contains tenant_id, user_id (no PII)
+                )
+                self.event_store.append_event(skill_id, legacy_event)
         except Exception as e:  # noqa: BLE001
             # Fail-closed: never raise during emit. But do NOT go quiet — a
             # silent `pass` is exactly how this defect survived: the store was

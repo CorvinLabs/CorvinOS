@@ -64,6 +64,17 @@ from .webhooks import WebhookDispatcher
 from . import tenant_config as _tenant_config
 from . import durable_queue as _durable_queue
 
+# Phase 2: Metric recorders for engine/workflow/context metrics.
+# Best-effort: failures never crash the dispatcher.
+try:
+    from core.monitoring import (
+        EngineMetricsCollector,
+        WorkflowMetricsCollector,
+    )
+except ImportError:
+    EngineMetricsCollector = None  # type: ignore[assignment]
+    WorkflowMetricsCollector = None  # type: ignore[assignment]
+
 # Engine/zone-policy audit events live in the unified hash chain.
 # forge.security_events is already on sys.path via runs.py / auth.py;
 # registering keeps EVENT_SEVERITY authoritative.
@@ -646,6 +657,13 @@ class RunDispatcher:
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
                                    engine_id=engine_name, status="error",
                                    duration_ms=int(duration * 1000))
+            # Record timeout error metric
+            if EngineMetricsCollector is not None:
+                EngineMetricsCollector.record_error(
+                    tenant_id, engine_name or "unknown",
+                    error_type="budget_exceeded",
+                    latency_ms=int(duration * 1000),
+                )
             self._set_terminal(
                 tenant_id, run_id, "budget_exceeded",
                 error=(
@@ -672,6 +690,13 @@ class RunDispatcher:
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
                                    engine_id=engine_name, status="error",
                                    duration_ms=int(duration * 1000))
+            # Record cancellation metric
+            if EngineMetricsCollector is not None:
+                EngineMetricsCollector.record_error(
+                    tenant_id, engine_name or "unknown",
+                    error_type="cancelled",
+                    latency_ms=int(duration * 1000),
+                )
             # No "cancelled" state exists in the run state-machine
             # (runs.ALL_STATES = accepted/running/completed/failed/
             # budget_exceeded); set_status would reject it → ValueError →
@@ -686,9 +711,17 @@ class RunDispatcher:
             # CancelledError MUST propagate for cooperative cancellation.
             raise
         except Exception as exc:  # engine crash, import error, etc.
+            duration = time.time() - start
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
                                    engine_id=engine_name, status="error",
-                                   duration_ms=int((time.time() - start) * 1000))
+                                   duration_ms=int(duration * 1000))
+            # Record error metric
+            if EngineMetricsCollector is not None:
+                EngineMetricsCollector.record_error(
+                    tenant_id, engine_name or "unknown",
+                    error_type=type(exc).__name__,
+                    latency_ms=int(duration * 1000),
+                )
             self._set_terminal(
                 tenant_id, run_id, "failed",
                 error=f"{type(exc).__name__}: {exc}",
@@ -700,9 +733,17 @@ class RunDispatcher:
         # (not an exception) still surfaces here and routes to
         # "failed" with the engine's diagnostic intact.
         if outcome.get("error"):
+            duration_ms = int(outcome.get("duration_ms", 0))
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
                                    engine_id=engine_name, status="error",
-                                   duration_ms=int(outcome.get("duration_ms", 0)))
+                                   duration_ms=duration_ms)
+            # Record engine-level error metric
+            if EngineMetricsCollector is not None:
+                EngineMetricsCollector.record_error(
+                    tenant_id, engine_name or "unknown",
+                    error_type="engine_error",
+                    latency_ms=duration_ms,
+                )
             self._set_terminal(
                 tenant_id, run_id, "failed",
                 result={"usage": outcome.get("usage") or {}},
@@ -710,9 +751,18 @@ class RunDispatcher:
             )
             return
 
+        duration_ms = int(outcome.get("duration_ms", 0))
+        tokens_used = outcome.get("usage", {}).get("output_tokens")
         self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
                                engine_id=engine_name, status="ok",
-                               duration_ms=int(outcome.get("duration_ms", 0)))
+                               duration_ms=duration_ms)
+        # Record successful execution metric
+        if EngineMetricsCollector is not None:
+            EngineMetricsCollector.record_success(
+                tenant_id, engine_name or "unknown",
+                latency_ms=duration_ms,
+                tokens_used=tokens_used,
+            )
         self._set_terminal(
             tenant_id, run_id, "completed",
             result={

@@ -354,3 +354,23 @@ class TokenMetricsDB:
             "by_task_type": self.aggregate_by_task_type(session_id, tenant_id),
             "subsystems": self.aggregate_by_subsystem(session_id, tenant_id),
         }
+
+
+# ---------------------------------------------------------------------------
+# Backend alias.
+#
+# `TokenMetricsDB` above IS the SQLite backend (it opens sqlite3 directly).
+#
+# CAVEAT: this alias only restores the NAME the factory imports -- it does not
+# supply the API that tests/unit/test_token_metrics_db_k2.py expects, which is
+# a different class: async methods and a persistent `.conn` attribute, neither
+# of which TokenMetricsDB has. Those tests still fail, and should: the async
+# SqliteMetricsDB they describe was never written. Do not paper over that by
+# bolting `conn` onto this class.
+# `token_metrics_db_factory.create_metrics_db()` selects a backend by URI and
+# refers to the SQLite one by its backend name, so expose that name here rather
+# than duplicating the class. When a second backend (PostgresMetricsDB) is
+# added, `TokenMetricsDB` becomes the abstract base and this alias is replaced
+# by a real subclass -- the factory's contract does not change either way.
+# ---------------------------------------------------------------------------
+SqliteMetricsDB = TokenMetricsDB

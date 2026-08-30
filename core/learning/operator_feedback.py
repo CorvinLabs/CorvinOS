@@ -30,6 +30,7 @@ from .event_schema import (
     OperatorRatedSkillPayload,
 )
 from .event_store import EventStore
+from .event_emitter import EventEmitter
 
 logger = logging.getLogger(__name__)
 
@@ -282,14 +283,22 @@ class OperatorFeedbackHandler:
     5. Maintain audit trail (who rated what, when, with what sentiment)
     """
 
-    def __init__(self, event_store: EventStore, min_sample_size: int = 3):
+    def __init__(
+        self,
+        event_store: EventStore,
+        min_sample_size: int = 3,
+        event_emitter: Optional[EventEmitter] = None,
+    ):
         """Initialize feedback handler.
 
         Args:
             event_store: EventStore instance for querying feedback events
             min_sample_size: Minimum ratings needed before aggregation (default 3)
+            event_emitter: EventEmitter for non-blocking event emission (ADR-0314).
+                          If None, event_store is used directly.
         """
         self.event_store = event_store
+        self.event_emitter = event_emitter
         self.min_sample_size = min_sample_size
         self._aggregate_cache: Dict[str, FeedbackStats] = {}
         self._cache_timestamp: Optional[datetime] = None
@@ -341,7 +350,12 @@ class OperatorFeedbackHandler:
         )
 
         try:
-            self.event_store.write_event(event)
+            # Prefer EventEmitter (async, non-blocking) — ADR-0314
+            if self.event_emitter is not None:
+                await self.event_emitter.emit(event)
+            else:
+                # Fallback: Direct EventStore.write_event (blocking, legacy path)
+                self.event_store.write_event(event)
             logger.info(
                 f"Recorded tool rating: tool_id={tool_id}, rating={rating}, tenant={tenant_id}"
             )
@@ -398,7 +412,12 @@ class OperatorFeedbackHandler:
         )
 
         try:
-            self.event_store.write_event(event)
+            # Prefer EventEmitter (async, non-blocking) — ADR-0314
+            if self.event_emitter is not None:
+                await self.event_emitter.emit(event)
+            else:
+                # Fallback: Direct EventStore.write_event (blocking, legacy path)
+                self.event_store.write_event(event)
             logger.info(
                 f"Recorded skill rating: skill_id={skill_id}, rating={rating}, tenant={tenant_id}"
             )
