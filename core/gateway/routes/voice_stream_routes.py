@@ -31,15 +31,55 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# Try to import OpenAI client for real STT (2b-1)
+# Try to import OpenAI client for real STT/TTS (2b-1, 2b-2)
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-    logger.warning("OpenAI SDK not available; using mock STT (2b-1 MVP)")
+    logger.warning("OpenAI SDK not available; using mock STT/TTS (2b-1/2b-2 MVP)")
 
 voice_router = APIRouter(prefix="/v1/voice", tags=["voice"])
+
+
+async def generate_speech_real(text: str, voice: str = "nova") -> Optional[bytes]:
+    """Real TTS via OpenAI TTS API (2b-2 implementation, k=4).
+
+    Args:
+        text: Text to convert to speech
+        voice: Voice name (nova, alloy, echo, fable, onyx, shimmer; default: nova)
+
+    Returns:
+        Audio bytes (MP3) or None if failed
+    """
+    if not OPENAI_AVAILABLE:
+        logger.warning("OpenAI SDK not available; TTS skipped (2b-2 MVP)")
+        return None
+
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            logger.warning("OPENAI_API_KEY not set; TTS skipped")
+            return None
+
+        client = OpenAI(api_key=api_key)
+
+        # Call OpenAI TTS API
+        response = client.audio.speech.create(
+            model="tts-1",  # Fast TTS (vs tts-1-hd for higher quality)
+            voice=voice,
+            input=text
+        )
+
+        # Extract audio bytes
+        audio_bytes = response.content
+        logger.info(f"Real TTS generated {len(audio_bytes)} bytes for: {text[:50]}...")
+
+        return audio_bytes
+
+    except Exception as e:
+        logger.error(f"Real TTS failed: {e}")
+        return None
 
 
 async def transcribe_audio_chunk_real(audio_bytes: bytes, language: str = "en") -> Dict[str, Any]:
