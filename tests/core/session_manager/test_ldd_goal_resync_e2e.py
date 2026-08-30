@@ -46,8 +46,8 @@ class TestE2EFullLifecycle:
 
         # === Phase 0: Initialize Goal Context (Session Start) ===
         goal = "Root cause cache invalidation bug in payment processing"
-        goal_context = GoalContext(
-            original_goal=goal,
+        goal_context = GoalContext.create(
+            goal=goal,
             session_id="test-session-123",
             tenant_id="default",
         )
@@ -150,8 +150,8 @@ class TestE2EReachabilityProof:
         from core.session_manager.ldd_goal_resync import LDDGoalResyncProtocol
 
         # Create instances
-        goal_context = GoalContext(
-            original_goal="Test goal",
+        goal_context = GoalContext.create(
+            goal="Test goal",
             session_id="test-123",
             tenant_id="default",
         )
@@ -167,8 +167,8 @@ class TestE2EReachabilityProof:
         from core.session_manager.goal_context import GoalContext
         from core.session_manager.ldd_goal_resync import LDDGoalResyncProtocol
 
-        goal_context = GoalContext(
-            original_goal="Fix the bug",
+        goal_context = GoalContext.create(
+            goal="Fix the bug",
             session_id="test-123",
             tenant_id="default",
         )
@@ -188,8 +188,8 @@ class TestE2EReachabilityProof:
         from core.session_manager.goal_context import GoalContext
         from core.session_manager.ldd_goal_resync import LDDGoalResyncProtocol
 
-        goal_context = GoalContext(
-            original_goal="Test",
+        goal_context = GoalContext.create(
+            goal="Test",
             session_id="test-123",
             tenant_id="default",
         )
@@ -220,8 +220,8 @@ class TestAuditTrailCompliance:
         from core.learning.loss_driven_development import LDDOuterLoop
 
         audit_logger = MockAuditLogger(events=[])
-        goal_context = GoalContext(
-            original_goal="Test goal",
+        goal_context = GoalContext.create(
+            goal="Test goal",
             session_id="test-123",
             tenant_id="default",
         )
@@ -251,8 +251,8 @@ class TestAuditTrailCompliance:
         from core.learning.loss_driven_development import LDDOuterLoop
 
         audit_logger = MockAuditLogger(events=[])
-        goal_context = GoalContext(
-            original_goal="Test goal",
+        goal_context = GoalContext.create(
+            goal="Test goal",
             session_id="test-123",
             tenant_id="default",
         )

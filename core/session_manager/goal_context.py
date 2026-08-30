@@ -22,21 +22,31 @@ class GoalContext:
     """Immutable goal context with SHA256 integrity hash.
 
     Attributes:
-        goal: The task goal text
+        original_goal: The original task goal text
         goal_hash: SHA256 hash of goal (for integrity verification)
         created_at: Timestamp when goal was created
+        session_id: Session ID where goal was created
+        tenant_id: Tenant ID for multi-tenant isolation
+        last_validated_at: Timestamp of last validation
+        validation_confidence: Confidence score from last validation (0.0-1.0)
     """
 
-    goal: str
+    original_goal: str
     goal_hash: str
     created_at: str  # ISO 8601 timestamp
+    session_id: str = ""
+    tenant_id: str = "default"
+    last_validated_at: Optional[str] = None
+    validation_confidence: float = 1.0
 
     @classmethod
-    def create(cls, goal: str) -> "GoalContext":
+    def create(cls, goal: str, session_id: str = "", tenant_id: str = "default") -> "GoalContext":
         """Create new GoalContext with SHA256 hash.
 
         Args:
             goal: The task goal text
+            session_id: Session ID (optional)
+            tenant_id: Tenant ID (default: 'default')
 
         Returns:
             GoalContext with computed hash
@@ -53,7 +63,15 @@ class GoalContext:
         created_at = datetime.utcnow().isoformat() + "Z"
 
         logger.debug(f"Created GoalContext: hash={goal_hash[:16]}...")
-        return cls(goal=goal, goal_hash=goal_hash, created_at=created_at)
+        return cls(
+            original_goal=goal,
+            goal_hash=goal_hash,
+            created_at=created_at,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            last_validated_at=None,
+            validation_confidence=1.0,
+        )
 
     def verify_integrity(self) -> bool:
         """Verify goal hash integrity (GDPR Art. 32).
@@ -64,7 +82,7 @@ class GoalContext:
         Raises:
             AssertionError: If hash does not match (fail-closed)
         """
-        computed_hash = hashlib.sha256(self.goal.encode("utf-8")).hexdigest()
+        computed_hash = hashlib.sha256(self.original_goal.encode("utf-8")).hexdigest()
         if computed_hash != self.goal_hash:
             raise AssertionError(
                 f"Goal integrity check failed: expected {self.goal_hash[:16]}..., "
@@ -76,12 +94,16 @@ class GoalContext:
         """Convert to JSON-serializable dict.
 
         Returns:
-            Dictionary with goal, goal_hash, created_at
+            Dictionary with original_goal, goal_hash, created_at, session_id, tenant_id
         """
         return {
-            "goal": self.goal,
+            "original_goal": self.original_goal,
             "goal_hash": self.goal_hash,
             "created_at": self.created_at,
+            "session_id": self.session_id,
+            "tenant_id": self.tenant_id,
+            "last_validated_at": self.last_validated_at,
+            "validation_confidence": self.validation_confidence,
         }
 
     @classmethod
@@ -89,7 +111,7 @@ class GoalContext:
         """Reconstruct GoalContext from dict.
 
         Args:
-            data: Dictionary with goal, goal_hash, created_at
+            data: Dictionary with original_goal, goal_hash, created_at
 
         Returns:
             GoalContext instance
@@ -98,17 +120,21 @@ class GoalContext:
             ValueError: If required fields missing
             AssertionError: If hash verification fails
         """
-        if not data.get("goal"):
-            raise ValueError("goal field is required")
+        if not data.get("original_goal"):
+            raise ValueError("original_goal field is required")
         if not data.get("goal_hash"):
             raise ValueError("goal_hash field is required")
         if not data.get("created_at"):
             raise ValueError("created_at field is required")
 
         goal_ctx = cls(
-            goal=data["goal"],
+            original_goal=data["original_goal"],
             goal_hash=data["goal_hash"],
             created_at=data["created_at"],
+            session_id=data.get("session_id", ""),
+            tenant_id=data.get("tenant_id", "default"),
+            last_validated_at=data.get("last_validated_at"),
+            validation_confidence=data.get("validation_confidence", 1.0),
         )
 
         # Verify integrity on restoration (GDPR Art. 32)
@@ -125,4 +151,6 @@ class GoalContext:
             "event_type": "goal_context.created",
             "goal_hash": self.goal_hash,
             "created_at": self.created_at,
+            "session_id": self.session_id,
+            "tenant_id": self.tenant_id,
         }

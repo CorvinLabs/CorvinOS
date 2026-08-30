@@ -12,8 +12,7 @@ Test categories:
 
 import pytest
 from dataclasses import FrozenInstanceError
-from typing import Mock
-from unittest.mock import MagicMock
+from unittest.mock import Mock, MagicMock
 
 from core.session_manager.ldd_goal_resync import (
     GoalAlignmentCheckpoint,
@@ -203,15 +202,19 @@ class TestSimilarityAndCompletenessScoring:
         """_compute_similarity returns a float in [0.0, 1.0]."""
         score = protocol._compute_similarity("Goal A", "Strategy A")
         assert isinstance(score, float)
-        # Placeholder returns 0.0 for now
-        assert score == 0.0
+        # Real implementation: Jaccard similarity
+        assert 0.0 <= score <= 1.0
+        # "Goal A" and "Strategy A" have 1 common word, union is 3 → Jaccard = 1/3 ≈ 0.333
+        assert abs(score - (1.0/3.0)) < 0.01
 
     def test_completeness_returns_float(self, protocol):
         """_compute_completeness returns a float in [0.0, 1.0]."""
         score = protocol._compute_completeness("Goal A", "Strategy A")
         assert isinstance(score, float)
-        # Placeholder returns 0.0 for now
-        assert score == 0.0
+        # Real implementation: keyword coverage
+        assert 0.0 <= score <= 1.0
+        # "Goal A" has 2 terms, "Strategy A" contains "A" (1 match) → 1/2 = 0.5
+        assert score == 0.5
 
 
 class TestIntegrationWithLDDOuterLoop:
