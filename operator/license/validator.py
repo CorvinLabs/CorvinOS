@@ -56,8 +56,10 @@ try:
     # limit defaulted to free-tier even on a paid licence. Fall back to the
     # absolute import (limits.py is on sys.path in the top-level case).
     from .limits import FREE_TIER, TIER_RESOURCE_LIMITS, LicenseLimitError
+    from .monotonic_time import check_clock_rollback
 except ImportError:
     from limits import FREE_TIER, TIER_RESOURCE_LIMITS, LicenseLimitError  # type: ignore[no-redef]
+    from monotonic_time import check_clock_rollback  # type: ignore[no-redef]
 
 log = logging.getLogger("corvin.license")
 
@@ -803,6 +805,12 @@ def _validate_claims(claims: dict[str, Any]) -> dict[str, Any] | None:
         _audit("license.invalid_token", reason="wrong_type")
         return None
     now = time.time()
+
+    # ADR-0144 MED-1: Guard against clock rollback (expiry bypass via system clock reset)
+    if not check_clock_rollback(int(now)):
+        _audit("license.clock_rollback_detected", tier=claims.get("tier", ""))
+        return None
+
     exp = claims.get("exp")
     if exp is None:
         # All validly-minted tokens carry an exp claim.  A missing exp is a
