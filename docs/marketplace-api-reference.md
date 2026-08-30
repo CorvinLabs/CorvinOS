@@ -2,7 +2,14 @@
 
 ## Base URL
 
-All endpoints are relative to `https://your-corvin-instance/api/v1/marketplace`
+All endpoints are relative to `https://your-corvin-instance/v1/console/api/v1/marketplace`.
+
+The `/v1/console` segment is the console mount — the gateway includes the console
+router under it, so a path written without it does not exist. The console SPA
+builds these URLs from `BASE` (`src/lib/api/client.ts`) for exactly that reason.
+
+Authentication is the console session cookie; every endpoint resolves the tenant
+from that session, never from an environment variable.
 
 ## Endpoints
 
@@ -85,12 +92,19 @@ Validate a repository URL (without adding it).
 }
 ```
 
+**A malformed URL is a `200` with `valid: false`, not a `4xx`.** The form
+revalidates on every typing pause, so a status code per character would be noise
+rather than signal:
+
+```json
+{ "valid": false, "error": "Invalid GitHub repository URL: ..." }
+```
+
 **Status codes:**
-- `200`: URL is valid
-- `400`: Invalid URL format or server error
-- `401`: Token authentication failed
-- `404`: Repository not found
-- `429`: GitHub API rate limited
+- `200`: Validation ran — read `valid` for the verdict
+- `400`: `repo_url` missing from the request
+- `500`: Validation could not run
+- `503`: Custom repository backend unavailable
 
 ---
 
@@ -259,7 +273,7 @@ No cross-tenant access is possible.
 ### Add a private repository with token
 
 ```bash
-curl -X POST https://your-corvin/api/v1/marketplace/custom-repositories \
+curl -X POST https://your-corvin/v1/console/api/v1/marketplace/custom-repositories \
   -H "Content-Type: application/json" \
   -H "Cookie: session=..." \
   -d '{
@@ -271,14 +285,14 @@ curl -X POST https://your-corvin/api/v1/marketplace/custom-repositories \
 ### List repositories
 
 ```bash
-curl https://your-corvin/api/v1/marketplace/custom-repositories \
+curl https://your-corvin/v1/console/api/v1/marketplace/custom-repositories \
   -H "Cookie: session=..."
 ```
 
 ### Refresh a repository
 
 ```bash
-curl -X POST https://your-corvin/api/v1/marketplace/custom-repositories/refresh \
+curl -X POST https://your-corvin/v1/console/api/v1/marketplace/custom-repositories/refresh \
   -H "Content-Type: application/json" \
   -H "Cookie: session=..." \
   -d '{

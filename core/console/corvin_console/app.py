@@ -100,6 +100,7 @@ from .routes import (
     mcp_plugins as mcp_plugins_route,
     plugins as plugins_route,
     marketplace as marketplace_route,
+    marketplace_custom_repos as marketplace_custom_repos_route,
     learning as learning_route,
     admin as admin_route,
     data_sources as data_sources_route,
@@ -255,6 +256,8 @@ router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
 router.include_router(plugins_route.router, tags=["console-plugins"])
 # CONCEPT-0023 — Console Marketplace Panel (Phase 1-2). Discovery, search, install workflow.
 router.include_router(marketplace_route.router, tags=["console-marketplace"])
+router.include_router(marketplace_custom_repos_route.router,
+                      tags=["console-marketplace-custom-repos"])
 # ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
 # packages_route.router already has prefix="/packages", so mount without additional prefix
 router.include_router(packages_route.router, tags=["console-packages"])

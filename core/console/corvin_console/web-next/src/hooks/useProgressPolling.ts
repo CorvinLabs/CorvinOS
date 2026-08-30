@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react'
+import { BASE } from '@/lib/api/client'
 
 export interface ProgressStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -33,7 +34,7 @@ export const useProgressPolling = (
     if (!jobId) return
 
     try {
-      const response = await fetch(`/api/v2/marketplace/install/${jobId}/progress`)
+      const response = await fetch(`${BASE}/api/v2/marketplace/install/${jobId}/progress`)
       if (!response.ok) {
         throw new Error(`Failed to fetch progress: ${response.statusText}`)
       }

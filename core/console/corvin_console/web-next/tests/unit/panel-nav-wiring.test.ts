@@ -78,3 +78,67 @@ describe("panel wiring: registry route <-> sidebar nav", () => {
     expect(dangling).toEqual([]);
   });
 });
+
+/**
+ * A gated panel needs a THIRD registration, in the backend.
+ *
+ *   3. GATED_FLAGS (core/console/corvin_console/routes/capabilities.py)
+ *
+ * The capability manifest only carries the flags listed there. gateNavGroups()
+ * hides an item whose `requiredFlag` is falsy in `manifest.flags`, and a key the
+ * manifest never carries is `undefined` — so a requiredFlag missing from
+ * GATED_FLAGS hides its panel FOREVER, no matter how the operator sets the flag.
+ * That is exactly how the Marketplace panel shipped invisible: registered in
+ * PANELS and in NAV_GROUPS, absent from GATED_FLAGS (and from the flag registry).
+ */
+const capabilitiesSrc = readFileSync(
+  resolve(here, "../../../routes/capabilities.py"),
+  "utf8",
+);
+const flagRegistrySrc = readFileSync(
+  resolve(here, "../../../../corvin_core/feature_flags.py"),
+  "utf8",
+);
+
+describe("panel wiring: requiredFlag <-> backend capability manifest", () => {
+  const gatedBlock = capabilitiesSrc.match(
+    /GATED_FLAGS:\s*tuple\[str, \.\.\.\]\s*=\s*\(([\s\S]*?)\n\)/,
+  );
+  const gatedFlags = new Set(
+    [...(gatedBlock?.[1] ?? "").matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]),
+  );
+  const registryFlags = new Set(
+    [...flagRegistrySrc.matchAll(/id="([a-z0-9_]+)"/g)].map((m) => m[1]),
+  );
+
+  const registrySrc = readFileSync(
+    resolve(here, "../../src/panels/registry.tsx"),
+    "utf8",
+  );
+  const declared = new Set([
+    ...[...registrySrc.matchAll(/requiredFlag:\s*"([a-z0-9_]+)"/g)].map((m) => m[1]),
+    ...[...layoutSrc.matchAll(/requiredFlag:\s*"([a-z0-9_]+)"/g)].map((m) => m[1]),
+  ]);
+
+  it("parsed GATED_FLAGS out of capabilities.py", () => {
+    expect(gatedFlags.size).toBeGreaterThan(0);
+  });
+
+  it("parsed the feature-flag registry", () => {
+    expect(registryFlags.size).toBeGreaterThan(0);
+  });
+
+  it.each([...declared])(
+    "requiredFlag %s is listed in GATED_FLAGS",
+    (flag) => {
+      expect([...gatedFlags]).toContain(flag);
+    },
+  );
+
+  it.each([...declared])(
+    "requiredFlag %s is a registered feature flag",
+    (flag) => {
+      expect([...registryFlags]).toContain(flag);
+    },
+  );
+});

@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/marketplace", tags=["marketplace"])
 
+# `PluginMarketplace.list_plugins` paginates with a default limit of 20. Both the
+# index and the search route want the whole catalogue (search filters afterwards,
+# in this module), so they pass an explicit ceiling — a bare call would silently
+# truncate the marketplace to the 20 highest-rated entries.
+_CATALOG_LIMIT = 1000
+
 # Global cache instance
 _cache_manager = None
 
@@ -100,7 +106,7 @@ async def marketplace_index() -> Dict[str, Any]:
 
         # Cache miss or no cache manager: fetch from backend
         marketplace = PluginMarketplace()
-        plugins = marketplace.list_all()
+        plugins = marketplace.list_plugins(limit=_CATALOG_LIMIT)
         serialized = [serialize_plugin(p) for p in plugins]
 
         # Update cache
@@ -162,7 +168,7 @@ async def marketplace_search(
     try:
         # Fetch from backend
         marketplace = PluginMarketplace()
-        plugins = marketplace.list_all()
+        plugins = marketplace.list_plugins(limit=_CATALOG_LIMIT)
 
         # Client-side filtering
         filtered = plugins

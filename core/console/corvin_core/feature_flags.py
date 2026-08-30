@@ -637,6 +637,22 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("console", "packages"),
     ),
     FeatureFlag(
+        id="console_marketplace_panel",
+        label="Console Marketplace panel",
+        description=(
+            "Show the Console → Marketplace panel (CONCEPT-0023): browse, "
+            "search, preview and install extensions from the Corvin "
+            "Marketplace index, manage installed extensions, and register "
+            "custom GitHub repositories as additional sources (ADR-0450..0454). "
+            "Off (default) means the sidebar entry and the /app/marketplace "
+            "route are hidden; the /api/v2/marketplace endpoints stay mounted "
+            "but nothing in the UI calls them."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("console", "plugins", "marketplace"),
+    ),
+    FeatureFlag(
         id="model_catalog_auto_refresh",
         label="Auto-refresh the live model catalogue",
         description=(

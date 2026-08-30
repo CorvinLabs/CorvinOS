@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { BASE } from '@/lib/api/client'
 
 export interface CustomRepository {
   repo_url: string
@@ -65,7 +66,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
     if (isMountedRef.current) setLoading(true)
 
     try {
-      const response = await fetch('/api/v1/marketplace/custom-repositories')
+      const response = await fetch(`${BASE}/api/v1/marketplace/custom-repositories`)
       if (!isMountedRef.current) return
 
       if (response.ok) {
@@ -113,7 +114,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
   const refresh = useCallback(async (repoUrl: string) => {
     try {
       const response = await fetch(
-        `/api/v1/marketplace/custom-repositories/refresh`,
+        `${BASE}/api/v1/marketplace/custom-repositories/refresh`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -140,7 +141,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
   const toggle = useCallback(async (repoUrl: string) => {
     try {
       const response = await fetch(
-        `/api/v1/marketplace/custom-repositories`,
+        `${BASE}/api/v1/marketplace/custom-repositories`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -170,7 +171,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
   const remove = useCallback(async (repoUrl: string) => {
     try {
       const response = await fetch(
-        `/api/v1/marketplace/custom-repositories`,
+        `${BASE}/api/v1/marketplace/custom-repositories`,
         {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },

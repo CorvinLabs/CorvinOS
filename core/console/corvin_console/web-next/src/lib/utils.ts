@@ -29,3 +29,24 @@ export function formatBytes(n: number | null | undefined): string {
   }
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
+
+/** "3 minutes ago" / "in 2 hours" — the one relative-time formatter the console
+ *  needs (CustomRepositoryCard's "Last checked"). Kept local instead of pulling
+ *  in date-fns for a single call site. */
+export function formatRelativeToNow(value: string | number | Date | null | undefined): string {
+  if (value == null) return "—";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  const deltaSec = (d.getTime() - Date.now()) / 1000;
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["year", 31536000], ["month", 2592000], ["day", 86400],
+    ["hour", 3600], ["minute", 60], ["second", 1],
+  ];
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  for (const [unit, sec] of units) {
+    if (Math.abs(deltaSec) >= sec || unit === "second") {
+      return rtf.format(Math.round(deltaSec / sec), unit);
+    }
+  }
+  return "—";
+}

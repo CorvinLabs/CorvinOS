@@ -20,7 +20,9 @@ describe('CustomRepositoryCard', () => {
     render(<CustomRepositoryCard {...defaultProps} />)
 
     expect(screen.getByText('owner/repo')).toBeInTheDocument()
-    expect(screen.getByText(/5 extensions/)).toBeInTheDocument()
+    // The count sits in its own <strong>, so the string spans two nodes.
+    expect(screen.getByText((_, el) => el?.textContent === '5 extensions'))
+      .toBeInTheDocument()
     expect(screen.getByRole('link', { name: /owner\/repo/i })).toHaveAttribute(
       'href',
       'https://github.com/owner/repo'

@@ -4,18 +4,30 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
-import { useCustomRepositories } from '@/hooks/useCustomRepositories'
-
-global.fetch = vi.fn()
+import { renderHook, waitFor, act } from '@testing-library/react'
+import { BASE } from '@/lib/api/client'
+// The hook keeps its 30s cache in MODULE scope, shared by every instance. Left
+// alone it also survives across tests: the first test fills it, and every later
+// test then hits the cache and never calls the mocked fetch at all. Re-import
+// the module per test so each starts with an empty cache.
+type UseCustomRepositories =
+  typeof import('@/hooks/useCustomRepositories')['useCustomRepositories']
+let useCustomRepositories: UseCustomRepositories
 
 describe('useCustomRepositories', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules()
     vi.clearAllMocks()
+    // `global.fetch = vi.fn()` does NOT take under happy-dom — fetch is defined
+    // on the window with a descriptor a plain assignment does not replace, so
+    // vi.mocked() handed back the real implementation. stubGlobal does replace it.
+    vi.stubGlobal('fetch', vi.fn())
+    ;({ useCustomRepositories } = await import('@/hooks/useCustomRepositories'))
   })
 
   afterEach(() => {
     vi.clearAllTimers()
+    vi.unstubAllGlobals()
   })
 
   it('fetches and returns repositories on initial mount', async () => {
@@ -127,7 +139,11 @@ describe('useCustomRepositories', () => {
       )
     )
 
-    await result.current.refetch()
+    await act(async () => {
+
+      await result.current.refetch()
+
+    })
 
     expect(result.current.repositories[0].repo_url).toBe('https://github.com/owner/repo2')
   })
@@ -152,10 +168,14 @@ describe('useCustomRepositories', () => {
       expect(result.current.loading).toBe(false)
     })
 
-    await result.current.refresh(repoUrl)
+    await act(async () => {
+
+      await result.current.refresh(repoUrl)
+
+    })
 
     expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
-      '/api/v1/marketplace/custom-repositories/refresh',
+      `${BASE}/api/v1/marketplace/custom-repositories/refresh`,
       expect.objectContaining({ method: 'POST' })
     )
   })
@@ -180,10 +200,14 @@ describe('useCustomRepositories', () => {
       expect(result.current.loading).toBe(false)
     })
 
-    await result.current.toggle(repoUrl)
+    await act(async () => {
+
+      await result.current.toggle(repoUrl)
+
+    })
 
     expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
-      '/api/v1/marketplace/custom-repositories',
+      `${BASE}/api/v1/marketplace/custom-repositories`,
       expect.objectContaining({ method: 'PATCH' })
     )
   })
@@ -208,10 +232,14 @@ describe('useCustomRepositories', () => {
       expect(result.current.loading).toBe(false)
     })
 
-    await result.current.remove(repoUrl)
+    await act(async () => {
+
+      await result.current.remove(repoUrl)
+
+    })
 
     expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
-      '/api/v1/marketplace/custom-repositories',
+      `${BASE}/api/v1/marketplace/custom-repositories`,
       expect.objectContaining({ method: 'DELETE' })
     )
   })

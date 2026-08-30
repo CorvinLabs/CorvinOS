@@ -11,6 +11,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { InstallProgress } from '@/components/install-progress'
 import { CustomRepositoriesSection } from '@/components/CustomRepositoriesSection'
 import { useProgressPolling } from '@/hooks/useProgressPolling'
+import { BASE } from '@/lib/api/client'
 
 interface Extension {
   plugin_id: string
@@ -87,7 +88,7 @@ export const MarketplacePanel: React.FC = () => {
     try {
       setLoading(true)
       setError(null)
-      const response = await fetch('/api/v2/marketplace/index')
+      const response = await fetch(`${BASE}/api/v2/marketplace/index`)
       if (!response.ok) throw new Error(`Failed: ${response.statusText}`)
       const data: IndexResponse = await response.json()
       if (isMountedRef.current) {
@@ -116,7 +117,7 @@ export const MarketplacePanel: React.FC = () => {
       }))
 
       // Real API call: POST /api/v2/marketplace/install
-      const response = await fetch('/api/v2/marketplace/install', {
+      const response = await fetch(`${BASE}/api/v2/marketplace/install`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

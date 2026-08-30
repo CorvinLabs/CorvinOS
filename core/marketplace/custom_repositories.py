@@ -33,6 +33,10 @@ class CustomRepository:
     error_message: Optional[str] = None
     last_checked: Optional[str] = None  # ISO timestamp
     cached_extensions: Optional[List[Dict[str, Any]]] = None
+    # A disabled repository stays registered (with its token) but contributes no
+    # extensions to discovery — the console's per-repo toggle. Absent from an
+    # older cache file it reads back as True, so existing entries keep working.
+    enabled: bool = True
 
 
 class RepositoryValidationError(Exception):
@@ -140,8 +144,14 @@ class RepositoryManager:
 
         Args:
             repo_url: Repository URL to remove
+
+        Raises:
+            RepositoryValidationError: if the repository is not registered for
+                this tenant — deleting by path alone would let one tenant drop
+                another's record whenever they share a cache directory.
         """
         repo_url = self._normalize_url(repo_url)
+        self.get_repository(repo_url)  # tenant-checked existence probe
 
         # Remove token if stored
         try:
@@ -178,6 +188,13 @@ class RepositoryManager:
         with open(cache_file, "r") as f:
             data = json.load(f)
 
+        # A record belonging to another tenant reads as "not registered" — the
+        # same answer an unknown URL gets, so nothing leaks through the error.
+        if data.get("tenant_id") != self.tenant_id:
+            raise RepositoryValidationError(
+                f"Repository {repo_url} not registered for tenant {self.tenant_id}"
+            )
+
         return CustomRepository(
             repo_url=data["repo_url"],
             tenant_id=data["tenant_id"],
@@ -186,6 +203,7 @@ class RepositoryManager:
             error_message=data.get("error_message"),
             last_checked=data.get("last_checked"),
             cached_extensions=data.get("cached_extensions"),
+            enabled=data.get("enabled", True),
         )
 
     def list_repositories(self) -> List[CustomRepository]:
@@ -201,6 +219,13 @@ class RepositoryManager:
                 with open(cache_file, "r") as f:
                     data = json.load(f)
 
+                # Isolation is enforced on the RECORD, not only on the path.
+                # The default cache_dir already ends in the tenant id, but an
+                # explicit shared directory (and a future flat layout) would
+                # otherwise hand one tenant another's repositories.
+                if data.get("tenant_id") != self.tenant_id:
+                    continue
+
                 repos.append(CustomRepository(
                     repo_url=data["repo_url"],
                     tenant_id=data["tenant_id"],
@@ -209,6 +234,7 @@ class RepositoryManager:
                     error_message=data.get("error_message"),
                     last_checked=data.get("last_checked"),
                     cached_extensions=data.get("cached_extensions"),
+                    enabled=data.get("enabled", True),
                 ))
             except Exception:
                 pass  # Skip corrupted cache files
@@ -253,6 +279,7 @@ class RepositoryManager:
             "error_message": repo.error_message,
             "last_checked": repo.last_checked,
             "cached_extensions": repo.cached_extensions or [],
+            "enabled": repo.enabled,
         }
 
         with open(cache_file, "w") as f:
@@ -285,5 +312,23 @@ class RepositoryManager:
         repo.last_checked = datetime.now(timezone.utc).isoformat()
         repo.cached_extensions = extensions or []
 
+        self._save_repository_metadata(repo)
+        return repo
+
+    def set_enabled(self, repo_url: str, enabled: bool) -> CustomRepository:
+        """Enable or disable a repository without unregistering it.
+
+        Args:
+            repo_url: Repository URL
+            enabled: New state
+
+        Returns:
+            Updated CustomRepository
+
+        Raises:
+            RepositoryValidationError: if the repository is not registered
+        """
+        repo = self.get_repository(repo_url)
+        repo.enabled = enabled
         self._save_repository_metadata(repo)
         return repo

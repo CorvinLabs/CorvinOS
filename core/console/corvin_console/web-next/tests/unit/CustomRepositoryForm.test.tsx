@@ -3,24 +3,28 @@
  * Tests validation, submission, error handling
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CustomRepositoryForm } from '@/components/CustomRepositoryForm'
-
-// Mock fetch globally
-global.fetch = vi.fn()
+import { BASE } from '@/lib/api/client'
 
 describe('CustomRepositoryForm', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Plain assignment to global.fetch does not take under happy-dom.
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('renders form with URL and token inputs', () => {
     render(<CustomRepositoryForm />)
 
-    expect(screen.getByLabelText('Repository URL')).toBeInTheDocument()
-    expect(screen.getByLabelText('Optional GitHub Personal Access Token')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Repository URL/)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Personal Access Token/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /add repository/i })).toBeInTheDocument()
   })
 
@@ -33,7 +37,7 @@ describe('CustomRepositoryForm', () => {
     const user = userEvent.setup()
     render(<CustomRepositoryForm />)
 
-    const input = screen.getByLabelText('Repository URL')
+    const input = screen.getByLabelText(/Repository URL/)
 
     // Type invalid URL
     await user.type(input, 'not-a-url')
@@ -48,7 +52,7 @@ describe('CustomRepositoryForm', () => {
     // Wait for debounce + fetch
     await waitFor(() => {
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/marketplace/custom-repositories/validate',
+        `${BASE}/api/v1/marketplace/custom-repositories/validate`,
         expect.objectContaining({ method: 'POST' })
       )
     }, { timeout: 400 })
@@ -61,7 +65,7 @@ describe('CustomRepositoryForm', () => {
     const submitBtn = screen.getByRole('button', { name: /add repository/i })
     expect(submitBtn).toBeDisabled()
 
-    const input = screen.getByLabelText('Repository URL')
+    const input = screen.getByLabelText(/Repository URL/)
     await user.type(input, 'https://github.com/owner/repo')
 
     // Note: This assumes the mock fetch resolves successfully
@@ -86,8 +90,8 @@ describe('CustomRepositoryForm', () => {
 
     render(<CustomRepositoryForm onRepositoryAdded={onRepositoryAdded} />)
 
-    const urlInput = screen.getByLabelText('Repository URL')
-    const tokenInput = screen.getByLabelText('Optional GitHub Personal Access Token')
+    const urlInput = screen.getByLabelText(/Repository URL/)
+    const tokenInput = screen.getByLabelText(/Personal Access Token/)
     const submitBtn = screen.getByRole('button', { name: /add repository/i })
 
     await user.type(urlInput, 'https://github.com/owner/repo')
@@ -96,7 +100,7 @@ describe('CustomRepositoryForm', () => {
     // Wait for validation to pass
     await waitFor(() => {
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/marketplace/custom-repositories/validate',
+        `${BASE}/api/v1/marketplace/custom-repositories/validate`,
         expect.anything()
       )
     }, { timeout: 400 })
@@ -107,7 +111,7 @@ describe('CustomRepositoryForm', () => {
 
     await waitFor(() => {
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/marketplace/custom-repositories',
+        `${BASE}/api/v1/marketplace/custom-repositories`,
         expect.objectContaining({
           method: 'POST',
           body: expect.stringContaining('ghp_xxxxxxxxxxxx')
@@ -149,8 +153,8 @@ describe('CustomRepositoryForm', () => {
 
     render(<CustomRepositoryForm onRepositoryAdded={onRepositoryAdded} />)
 
-    const urlInput = screen.getByLabelText('Repository URL') as HTMLInputElement
-    const tokenInput = screen.getByLabelText('Optional GitHub Personal Access Token') as HTMLInputElement
+    const urlInput = screen.getByLabelText(/Repository URL/) as HTMLInputElement
+    const tokenInput = screen.getByLabelText(/Personal Access Token/) as HTMLInputElement
 
     await user.type(urlInput, 'https://github.com/owner/repo')
     await user.type(tokenInput, 'ghp_token')

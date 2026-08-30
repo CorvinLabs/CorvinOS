@@ -1,4 +1,12 @@
-"""Flask routes for custom repository management (ADR-0451).
+"""SUPERSEDED — dead Flask blueprint, kept only for reference.
+
+The console is a FastAPI app and registers no Flask blueprints (there is no
+``register_blueprint`` call anywhere in this repo), so every route below 404'd
+from the day it was written. The live implementation of this contract is
+``core/console/corvin_console/routes/marketplace_custom_repos.py``, mounted by
+``corvin_console.app``. Do not add endpoints here; they cannot be reached.
+
+Flask routes for custom repository management (ADR-0451).
 
 Endpoints:
 - GET /v1/marketplace/custom-repositories — List custom repos

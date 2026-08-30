@@ -5,15 +5,9 @@
  * Live-sync ensures settings in Marketplace match PluginsPage settings
  */
 
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Save, X } from 'lucide-react'
-
-interface PluginSettings {
-  plugin_id: string
-  settings: Record<string, unknown>
-  schema?: Record<string, unknown>
-}
 
 interface SettingsPanelProps {
   pluginId: string
@@ -31,7 +25,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onClose,
 }) => {
   const queryClient = useQueryClient()
-  const [settings, setSettings] = useState<Record<string, unknown>>(initialSettings)
+  // The schema-driven form is a Phase 3 stub (see the placeholder below), so
+  // nothing mutates this yet — the setter returns with the form.
+  const [settings] = useState<Record<string, unknown>>(initialSettings)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)

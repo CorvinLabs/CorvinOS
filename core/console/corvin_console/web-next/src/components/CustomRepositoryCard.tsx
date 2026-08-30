@@ -10,10 +10,9 @@
  * - Accessible card design
  */
 
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { AlertCircle, CheckCircle2, RotateCw, Trash2, Eye, EyeOff, ExternalLink } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { formatDistanceToNow } from 'date-fns'
+import { cn, formatRelativeToNow } from '@/lib/utils'
 
 interface CustomRepositoryCardProps {
   repoUrl: string
@@ -87,14 +86,13 @@ export function CustomRepositoryCard({
   const repoOwner = repoUrl.split('/').slice(-2).join('/')
 
   return (
-    <div
+    <article
       className={cn(
         'border rounded-lg p-4 bg-card',
         status === 'error' && 'border-destructive/50',
         !enabled && 'opacity-60',
         className
       )}
-      role="article"
       aria-label={`Repository: ${repoUrl}`}
     >
       {/* Header */}
@@ -150,7 +148,7 @@ export function CustomRepositoryCard({
       {/* Last Checked */}
       {lastChecked && (
         <p className="text-xs text-muted-foreground mb-3">
-          Last checked {formatDistanceToNow(new Date(lastChecked), { addSuffix: true })}
+          Last checked {formatRelativeToNow(lastChecked)}
         </p>
       )}
 
@@ -221,6 +219,6 @@ export function CustomRepositoryCard({
           </button>
         )}
       </div>
-    </div>
+    </article>
   )
 }

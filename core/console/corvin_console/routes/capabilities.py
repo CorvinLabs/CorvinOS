@@ -62,6 +62,11 @@ GATED_FLAGS: tuple[str, ...] = (
     # Read by useBuildFreshness in the SPA shell; without it here the flag
     # resolves to False in the manifest and auto-reload can never turn on.
     "console_auto_reload",
+    # Gates the Marketplace panel's route + sidebar entry (registry.tsx,
+    # layout.tsx both declare it as requiredFlag). Missing here, the manifest
+    # never carries the key, `flags[flag]` is undefined, and the panel stays
+    # hidden forever no matter how the operator sets the flag.
+    "console_marketplace_panel",
 )
 
 

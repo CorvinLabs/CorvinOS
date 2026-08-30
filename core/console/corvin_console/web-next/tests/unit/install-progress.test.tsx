@@ -1,3 +1,4 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 /**
  * Unit Tests: InstallProgress Component
  * Phase 2 Week 2 — Task #6
@@ -7,11 +8,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { InstallProgress } from '@/components/install-progress'
 
 describe('InstallProgress Component', () => {
-  const mockOnClose = jest.fn()
-  const mockOnComplete = jest.fn()
+  const mockOnClose = vi.fn()
+  const mockOnComplete = vi.fn()
 
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   test('renders with extension name in title', () => {

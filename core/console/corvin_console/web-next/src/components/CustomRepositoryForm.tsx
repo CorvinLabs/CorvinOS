@@ -12,6 +12,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { AlertCircle, CheckCircle2, Loader } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { BASE } from '@/lib/api/client'
 
 interface CustomRepositoryFormProps {
   onRepositoryAdded?: (url: string) => void
@@ -64,7 +65,7 @@ export function CustomRepositoryForm({
     setValidation({ status: 'validating' })
 
     try {
-      const response = await fetch('/api/v1/marketplace/custom-repositories/validate', {
+      const response = await fetch(`${BASE}/api/v1/marketplace/custom-repositories/validate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -120,7 +121,7 @@ export function CustomRepositoryForm({
     setSubmitError(null)
 
     try {
-      const response = await fetch('/api/v1/marketplace/custom-repositories', {
+      const response = await fetch(`${BASE}/api/v1/marketplace/custom-repositories`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
