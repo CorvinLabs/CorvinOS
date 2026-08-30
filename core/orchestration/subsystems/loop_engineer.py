@@ -124,7 +124,11 @@ class LoopEngineer(Subsystem):
         await self._escalate_if_needed(event_data)
 
     async def _apply_strategy(self, event_data: Dict[str, Any]) -> None:
-        """Apply next strategy from adaptive ranking or ladder via ContextAPI."""
+        """Apply next strategy from adaptive ranking or ladder via ContextAPI.
+
+        Integration: Consult BtwAdvisor for pending /btw guidance (Proposal 1).
+        Safety (VIB-005): Only apply guidance to NEXT strategy, never retroactively.
+        """
         task_id = event_data.get("task_id", "unknown")
         error = event_data.get("error")
 
@@ -154,11 +158,62 @@ class LoopEngineer(Subsystem):
                 logger.debug("Context not initialized; decision not recorded")
             return
 
+        # Check for pending /btw guidance (Proposal 1: BtwAdvisor integration)
+        # VIB-005: Only affects NEXT strategy, not current file (non-retroactive)
+        # K1-004 Fix: Defensive check that hub is initialized
+        btw_guidance = None
+        if hasattr(self, 'hub') and self.hub:
+            try:
+                btw_response = await self.hub.request_from_subsystem(
+                    "btw_advisor",
+                    "get_pending_guidance",
+                    task_id=task_id
+                )
+                if btw_response and btw_response.get("instruction"):
+                    btw_guidance = btw_response["instruction"]
+                    logger.info(
+                        f"Applying /btw guidance: {btw_guidance.get('guidance_type')} "
+                        f"({btw_guidance.get('parsed_value', 'N/A')})"
+                    )
+            except Exception as e:
+                # K1-008 Fix: Non-blocking BtwAdvisor query with proper logging
+                logger.debug(f"BtwAdvisor query failed (non-blocking, continuing): {type(e).__name__}: {e}")
+        else:
+            logger.debug("Hub not initialized; skipping BtwAdvisor guidance check")
+
         # Try adaptive strategy selection via StrategyAdvisor.get_strategy() (E2E wiring)
         strategy = None
         used_adaptive = False
+        used_btw_guidance = False
 
-        if self.strategy_advisor:
+        # If /btw guidance specifies a strategy, use it (non-blocking override)
+        if btw_guidance:
+            guidance_type = btw_guidance.get("guidance_type")
+            parsed_value = btw_guidance.get("parsed_value")
+
+            # Map /btw guidance to strategy
+            # Example: /btw use Opus → affect cost_controller or model_selector (not direct strategy)
+            # For now: /btw decompose → force "decompose" strategy
+            if guidance_type == "decompose":
+                strategy = "decompose"
+                used_btw_guidance = True
+                logger.info(f"/btw guidance applied: strategy={strategy}")
+
+            elif guidance_type == "skip_phase":
+                # /btw skip tests → This is a phase-level control, not a strategy
+                # Record for downstream handlers (e.g., test_runner can observe this)
+                logger.info(f"/btw guidance received: skip phase={parsed_value}")
+                # Don't override strategy; let downstream handle phase skipping
+
+            elif guidance_type == "stop":
+                # /btw stop → Stop the task
+                strategy = "escalate"  # Treat as escalation/stop
+                used_btw_guidance = True
+                logger.warning("/btw guidance: STOP received; escalating")
+
+            # Note: USE_MODEL guidance affects model_selector, not strategy; handled elsewhere
+
+        if not strategy and self.strategy_advisor:
             try:
                 # Build available strategies with REAL empirical data from StrategyAdvisor
                 available_strategies = self.strategy_advisor.build_strategy_options(
@@ -198,7 +253,7 @@ class LoopEngineer(Subsystem):
                 )
                 used_adaptive = False
 
-        # Fallback to static ladder if adaptive selection failed
+        # Fallback to static ladder if adaptive selection AND /btw guidance failed
         if not strategy:
             strategy_idx = min(
                 self.retry_count[task_id], len(self.strategy_ladder) - 1
@@ -214,7 +269,13 @@ class LoopEngineer(Subsystem):
             )
 
             # Record strategy decision in audit trail
-            selection_mode = "adaptive" if used_adaptive else "static_ladder"
+            if used_btw_guidance:
+                selection_mode = "btw_guidance"
+            elif used_adaptive:
+                selection_mode = "adaptive"
+            else:
+                selection_mode = "static_ladder"
+
             self.context_api.record_decision(
                 decision_type="strategy_selection",
                 value=strategy,
