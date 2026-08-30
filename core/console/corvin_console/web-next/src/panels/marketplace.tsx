@@ -6,9 +6,10 @@
  */
 
 import React, { useState, useEffect } from 'react'
-import { Search, Package, ExternalLink, Download, AlertCircle, Check, Loader } from 'lucide-react'
+import { Search, Package, ExternalLink, Download, AlertCircle, Check, Loader, Github } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { InstallProgress } from '@/components/install-progress'
+import { CustomRepositoriesSection } from '@/components/CustomRepositoriesSection'
 import { useProgressPolling } from '@/hooks/useProgressPolling'
 
 interface Extension {
@@ -38,7 +39,7 @@ interface InstallProgress {
 
 export const MarketplacePanel: React.FC = () => {
   const queryClient = useQueryClient()
-  const [view, setView] = useState<'browse' | 'installed'>('browse')
+  const [view, setView] = useState<'browse' | 'installed' | 'custom'>('browse')
   const [extensions, setExtensions] = useState<Extension[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -229,6 +230,17 @@ export const MarketplacePanel: React.FC = () => {
             >
               Installed
             </button>
+            <button
+              onClick={() => setView('custom')}
+              className={`px-4 py-2 font-medium transition flex items-center gap-2 ${
+                view === 'custom'
+                  ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600'
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              <Github className="w-4 h-4" />
+              Custom Repos
+            </button>
           </div>
         </div>
       </div>
@@ -336,6 +348,13 @@ export const MarketplacePanel: React.FC = () => {
             <Check className="w-12 h-12 text-green-600 mx-auto mb-3" />
             <p className="text-slate-600 dark:text-slate-400">Installed extensions will appear here (Phase 4)</p>
           </div>
+        </div>
+      )}
+
+      {/* Custom Repositories View */}
+      {view === 'custom' && (
+        <div className="max-w-6xl mx-auto px-6 py-8">
+          <CustomRepositoriesSection />
         </div>
       )}
 
