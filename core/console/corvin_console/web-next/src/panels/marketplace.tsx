@@ -9,7 +9,7 @@ import React, { useState, useEffect } from 'react'
 import { Search, Package, ExternalLink, Download, AlertCircle, Check, Loader } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { InstallProgress } from '@/components/install-progress'
-// Phase 3: useProgressPolling hook will be wired for real job status polling
+import { useProgressPolling } from '@/hooks/useProgressPolling'
 
 interface Extension {
   plugin_id: string
@@ -47,7 +47,31 @@ export const MarketplacePanel: React.FC = () => {
   const [category, setCategory] = useState('')
   const [installProgress, setInstallProgress] = useState<Record<string, InstallProgress>>({})
   const [installingExtensionId, setInstallingExtensionId] = useState<string | null>(null)
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null)
   const isMountedRef = React.useRef(true)
+
+  // Phase 3: Real job API polling
+  const { stopPolling } = useProgressPolling(currentJobId, {
+    interval: 500,
+    onComplete: (status) => {
+      if (installingExtensionId) {
+        handleInstallComplete(installingExtensionId, status)
+      }
+    },
+    onError: (error) => {
+      console.error('Install polling error:', error)
+      if (installingExtensionId) {
+        setInstallProgress(prev => ({
+          ...prev,
+          [installingExtensionId]: {
+            extension_id: installingExtensionId,
+            status: 'error',
+            message: error.message
+          }
+        }))
+      }
+    },
+  })
 
   useEffect(() => {
     isMountedRef.current = true
@@ -77,23 +101,71 @@ export const MarketplacePanel: React.FC = () => {
     }
   }
 
-  const handleInstall = (extension: Extension) => {
-    // Show progress modal (Phase 2 Week 2)
-    setInstallingExtensionId(extension.plugin_id)
+  const handleInstall = async (extension: Extension) => {
+    // Phase 3 Task #7: Real job API wiring
+    // 1. POST to queue install
+    // 2. Get job_id
+    // 3. Start polling with useProgressPolling hook
+    try {
+      const extensionId = extension.plugin_id
+      setInstallingExtensionId(extensionId)
+      setInstallProgress(prev => ({
+        ...prev,
+        [extensionId]: { extension_id: extensionId, status: 'installing' }
+      }))
+
+      // Real API call: POST /api/v2/marketplace/install
+      const response = await fetch('/api/v2/marketplace/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          extension_id: extensionId,
+          version: extension.version,
+          tenant_id: 'default'
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to queue install: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      const jobId = data.job_id
+
+      if (!jobId) {
+        throw new Error('No job_id returned from install endpoint')
+      }
+
+      // Start polling with hook
+      setCurrentJobId(jobId)
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to start install'
+      if (installingExtensionId) {
+        setInstallProgress(prev => ({
+          ...prev,
+          [installingExtensionId]: {
+            extension_id: installingExtensionId,
+            status: 'error',
+            message: errorMsg
+          }
+        }))
+      }
+    }
   }
 
-  const handleInstallComplete = async (extensionId: string) => {
-    // Phase 3: Wire real API call here (POST /api/v2/marketplace/install)
-    // For now, just close the modal and mark as installed
+  const handleInstallComplete = async (extensionId: string, _pollStatus?: any) => {
+    // Called when polling completes (from useProgressPolling onComplete)
     try {
+      stopPolling()
+      setCurrentJobId(null)
       queryClient.invalidateQueries({ queryKey: ['plugins'] })
-      setInstallingExtensionId(null)
       setInstallProgress(prev => ({
         ...prev,
         [extensionId]: {
           extension_id: extensionId,
           status: 'success',
-          message: 'Installation completed'
+          message: 'Installation completed',
+          job_id: currentJobId || undefined
         }
       }))
     } catch (err) {
@@ -102,6 +174,8 @@ export const MarketplacePanel: React.FC = () => {
   }
 
   const handleInstallClose = () => {
+    stopPolling()
+    setCurrentJobId(null)
     setInstallingExtensionId(null)
   }
 
