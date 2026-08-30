@@ -429,4 +429,28 @@ markers = [
     "asyncio: async test using pytest-asyncio",
     "e2e: Playwright end-to-end browser tests",
     "full_pipeline: full task orchestration pipeline tests",
+    # ADR-0464: Plugin E2E Verification Framework — Four-Tier Model
+    # TIER-level markers
+    "plugin_unit: TIER-1 plugin unit tests (individual components)",
+    "plugin_integration: TIER-2 plugin integration tests (subsystem interactions)",
+    "plugin_feature_e2e: TIER-3 plugin feature-level E2E tests (plugin workflows)",
+    "plugin_system_health: TIER-4 plugin system-health tests (platform integrity)",
+    # Error-class detection markers
+    "plugin_validation: Plugin manifest + schema validation (error class: init failures)",
+    "plugin_init: Plugin initialization failures early detection",
+    "plugin_conflict: Plugin hook conflicts and interference detection",
+    "plugin_isolation: Cross-tenant isolation + state corruption detection",
+    "plugin_dependency: Plugin dependency conflict resolution",
+    "plugin_drift: Configuration drift detection and recovery",
+    "plugin_load_order: Load-order dependency verification (high-risk plugins)",
+    "plugin_hot_reload: Runtime reload consistency scenarios (high-risk plugins)",
+    "plugin_cleanup: Plugin unload and resource cleanup verification",
+    "plugin_crash: Plugin crash recovery and state rollback",
+    "plugin_resources: Resource limit enforcement (community plugins)",
+    "plugin_sandbox: Plugin sandboxing (community plugins)",
+    "plugin_audit: Audit trail isolation and integrity verification",
+    "plugin_edge_cases: Edge case handling and boundary condition tests",
+    "plugin_performance: Performance profiling and regression tests",
+    "plugin_security: Security-specific tests (encryption, auth, sandboxing)",
+    "plugin_compliance: Regulatory compliance tests (GDPR, EU AI Act, CLA)",
 ]
