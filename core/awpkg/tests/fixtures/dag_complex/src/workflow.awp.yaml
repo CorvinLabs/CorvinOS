@@ -1,0 +1,71 @@
+awp: "1.0.0"
+
+workflow:
+  name: market_research_suite
+  description: >
+    Parallel multi-source market research pipeline. Level-0 fetchers
+    (news, Reddit, SEC filings) run in parallel; level-1 merges context;
+    level-2 produces a structured research brief. Demonstrates fan-out /
+    fan-in DAG topology with Forge tools for data retrieval.
+
+inputs:
+  ticker:
+    type: string
+    required: true
+  window_days:
+    type: integer
+    default: 14
+  audience:
+    type: string
+    default: "intermediate"
+
+orchestration:
+  engine: dag
+  graph:
+    # --- Level 0 (parallel) ---
+    - id: fetch_news
+      type: agent
+      agent: researcher
+      instructions: >
+        Use the code_fetch_news tool to retrieve the latest ${inputs.window_days}
+        days of news for ${inputs.ticker}. Return structured JSON.
+      depends_on: []
+      share_output: [news_raw]
+
+    - id: fetch_reddit
+      type: agent
+      agent: researcher
+      instructions: >
+        Use the code_fetch_social tool to pull top posts mentioning
+        ${inputs.ticker} from r/wallstreetbets, r/stocks, r/investing.
+      depends_on: []
+      share_output: [reddit_raw]
+
+    - id: fetch_filings
+      type: agent
+      agent: researcher
+      instructions: >
+        Use the code_fetch_news tool to pull the most recent SEC filings
+        (8-K, 10-Q) for ${inputs.ticker} from EDGAR.
+      depends_on: []
+      share_output: [filings_raw]
+
+    # --- Level 1: merge context ---
+    - id: merge_context
+      type: agent
+      agent: researcher
+      instructions: >
+        Merge news_raw, reddit_raw, and filings_raw into a unified
+        context document. De-duplicate stories. Flag contradictions.
+      depends_on: [fetch_news, fetch_reddit, fetch_filings]
+      share_output: [merged_context]
+
+    # --- Level 2: research brief ---
+    - id: write_brief
+      type: agent
+      agent: researcher
+      instructions: >
+        Write a structured research brief from merged_context. Audience:
+        ${inputs.audience}. Include: bull/bear thesis, key risks, catalyst
+        calendar, confidence score 0-100.
+      depends_on: [merge_context]

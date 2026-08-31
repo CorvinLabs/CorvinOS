@@ -1,0 +1,82 @@
+{
+  "suite_version": "v2-nontrivial",
+  "n_per_arm": 1,
+  "tenant": "_bench_pilot",
+  "run_id": "pilot",
+  "model": "claude-opus-5",
+  "cost_available": false,
+  "input_captured": true,
+  "components_per_arm": {
+    "A_cel_off": {
+      "fresh_input": 2.0,
+      "cache_creation": 38556.4,
+      "cache_read": 24433.0,
+      "output": 424.2,
+      "tokens_total": 63415.6,
+      "cost_usd": null
+    },
+    "B_cel_on": {
+      "fresh_input": 2.0,
+      "cache_creation": 38911.4,
+      "cache_read": 24433.0,
+      "output": 477.6,
+      "tokens_total": 63824.0,
+      "cost_usd": null
+    }
+  },
+  "note": "tokens_total = fresh_input + cache_creation + cache_read + output (all 4 classes). Savings (raw count) = (median A \u2212 median B)/median A, quality-gated, bootstrap 95% CI, Mann-Whitney-U (B<A). RAW COUNT \u2260 COST: cache-read ~0.1x, cache-creation ~1.25x, output ~5x \u2014 apply your model's prices to components_per_arm for a cost figure. suite-v1 is single-turn: it measures CEL's per-task COLD cost (always pays cache_creation, never amortized) \u2014 CEL's best case (warm reuse over a session) needs multi-turn tasks, not yet in the suite.",
+  "overall": {
+    "task_type": "overall",
+    "n_pairs": 5,
+    "a_median": 63327.0,
+    "b_median": 63659.0,
+    "savings_point": -0.005242629526110505,
+    "ci_low": -0.02016517441217806,
+    "ci_high": 0.00342841040733899,
+    "p_value": 0.9127373297157084,
+    "significant": false,
+    "quality_ok_frac": 1.0,
+    "dropped_quality": 0
+  },
+  "per_type": {
+    "coding": {
+      "task_type": "coding",
+      "n_pairs": 2,
+      "a_median": 63160.5,
+      "b_median": 63506.5,
+      "savings_point": -0.005478107361404676,
+      "ci_low": -0.005826564701784385,
+      "ci_high": -0.005129666571672842,
+      "p_value": 0.9393323748207589,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "qa": {
+      "task_type": "qa",
+      "n_pairs": 1,
+      "a_median": 63552.0,
+      "b_median": 63844.0,
+      "savings_point": -0.004594662638469285,
+      "ci_low": -0.004594662638469285,
+      "ci_high": -0.004594662638469285,
+      "p_value": 0.8413447460685429,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "reasoning": {
+      "task_type": "reasoning",
+      "n_pairs": 2,
+      "a_median": 63602.5,
+      "b_median": 64131.5,
+      "savings_point": -0.0083172831256633,
+      "ci_low": -0.02016517441217806,
+      "ci_high": 0.00342841040733899,
+      "p_value": 0.7807109869595,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "_NOTE": "WhatsApp bridge via Baileys. Default: all chats are OFF. Toggle them per chat from inside WhatsApp itself with /on (and /off, /status). Only messages with fromMe=true (from the paired account itself) can toggle. The enabled_chats list is maintained by the daemon automatically.",
+  "_NOTE_chat_profiles": "Default is MAXIMUM OPEN (--dangerously-skip-permissions, all tools). To RESTRICT bot behaviour in individual chats (e.g. only Read in a group chat), add a 'chat_profiles' object. Hot-reload applies immediately. Schema and examples: see CLAUDE.md.",
+  "_NOTE_read_only": "OPTIONAL — phone-JIDs in `read_only` may sit in the chat but CANNOT trigger the bot. Whitelist beats read_only on collisions. First drop per (chat, user) sends a polite '🔒 read-only' ACK; subsequent drops are silent. Every drop is audited as bridge.read_only_drop.",
+  "_NOTE_observer_visibility": "OPTIONAL chat_profiles[<id>].observer_visibility = 'off' (default — read-only senders are dropped, LLM blind) | 'transcript' (read-only sender messages buffered per-chat, prepended as a framed CONTEXT block on the next OWNER turn). Observers still cannot trigger inference; transcript mode just makes them visible. Buffer cap: 20 lines / 4 KiB, oldest first.",
+  "whitelist": [],
+  "read_only": [],
+  "enabled_chats": [],
+  "rate_limit_per_hour": 30,
+  "always_voice": false,
+  "voice_threshold_chars": 200,
+  "_NOTE_stream_idle_timeout_seconds": "OPTIONAL (default 300 s = 5 min). Increase for long-running tasks (Deep Research, complex Workflows). Example: 3600 s = 1 hour. Prevents 'Stream-Idle-Watchdog' timeouts on slow operations.",
+  "stream_idle_timeout_seconds": 3600,
+  "pin": null
+}

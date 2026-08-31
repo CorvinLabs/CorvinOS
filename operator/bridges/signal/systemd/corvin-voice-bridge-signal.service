@@ -1,0 +1,24 @@
+[Unit]
+Description=corvin-voice Signal bridge daemon
+After=network-online.target signal-cli-rest-api.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__/operator/bridges/signal
+ExecStart=__NODE_BIN__ daemon.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corvin-signal
+EnvironmentFile=-%h/.config/corvin-voice/service.env
+Environment=SIGNAL_API_URL=http://localhost:8080
+Environment=SIGNAL_HEALTH_PORT=7896
+Environment=SIGNAL_POLL_MS=500
+
+[Install]
+WantedBy=default.target

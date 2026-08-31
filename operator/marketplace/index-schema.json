@@ -1,0 +1,169 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Corvin-Marketplace Extension Index",
+  "description": "Catalog of all available plugins, skills, and extension layers from Corvin-Marketplace",
+  "type": "object",
+  "required": ["version", "last_updated", "extensions"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Index schema version (e.g., '1.0')",
+      "examples": ["1.0"]
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when index was last generated",
+      "examples": ["2026-08-29T14:00:00Z"]
+    },
+    "extensions": {
+      "type": "array",
+      "description": "List of all available extensions",
+      "items": {
+        "$ref": "#/definitions/Extension"
+      },
+      "minItems": 1
+    }
+  },
+  "definitions": {
+    "Extension": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "name",
+        "version",
+        "author",
+        "description",
+        "tags",
+        "readme_url",
+        "install_url",
+        "repo_url"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(plugin|skill|extension_layer):[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+          "description": "Unique extension ID (format: type:slug)",
+          "examples": ["plugin:example-plugin", "skill:test-skill"]
+        },
+        "type": {
+          "type": "string",
+          "enum": ["plugin", "skill", "extension_layer"],
+          "description": "Extension type"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Human-readable extension name",
+          "examples": ["Example Plugin", "Test Skill"]
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+          "description": "Semantic version (e.g., 0.1.0, 1.2.3-alpha)",
+          "examples": ["0.1.0", "1.2.3"]
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Extension author name",
+          "examples": ["Jane Doe"]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500,
+          "description": "Brief description of what the extension does",
+          "examples": ["A plugin that automates task processing"]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "automation",
+              "utilities",
+              "learning",
+              "integration",
+              "observability",
+              "security",
+              "performance",
+              "experimental"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 5,
+          "description": "Predefined tags for categorization"
+        },
+        "readme_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to README.md (must be publicly accessible)",
+          "examples": ["https://raw.githubusercontent.com/anthropics/Corvin-Marketplace/main/plugins/example-plugin/README.md"]
+        },
+        "install_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to downloadable .whl or distribution package",
+          "examples": ["https://github.com/anthropics/Corvin-Marketplace/releases/download/plugin-example-plugin-0.1.0/example-plugin.whl"]
+        },
+        "repo_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to source repository",
+          "examples": ["https://github.com/anthropics/Corvin-Marketplace/tree/main/plugins/example-plugin"]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(plugin|skill|extension_layer):[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+          },
+          "description": "List of extension IDs this depends on",
+          "default": [],
+          "examples": [["plugin:dependency-1", "skill:helper-skill"]]
+        },
+        "requires_version": {
+          "type": "string",
+          "pattern": "^(>=|>|<=|<|~|\\^)?\\d+\\.\\d+\\.\\d+.*$",
+          "description": "CorvinOS version requirement (semver range)",
+          "default": ">=1.0.0",
+          "examples": [">=1.0.0", "^1.2.3"]
+        },
+        "latest_version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+          "description": "Latest available version",
+          "examples": ["0.1.0", "1.2.3"]
+        },
+        "update_available": {
+          "type": "boolean",
+          "description": "Whether a newer version exists than current installed",
+          "default": false
+        },
+        "conflicts_with": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(plugin|skill|extension_layer):[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+          },
+          "description": "List of extension IDs this conflicts with",
+          "default": [],
+          "examples": [["plugin:incompatible-plugin"]]
+        },
+        "maintainer_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Contact URL for maintainer (email or support page)",
+          "default": "mailto:support@corvin.os",
+          "examples": ["mailto:author@example.com", "https://example.com/support"]
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

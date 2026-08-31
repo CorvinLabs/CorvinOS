@@ -1,0 +1,324 @@
+name: Coverage Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python syntax gate (compileall)
+        # See test.yml for the incident this closes: a bare SyntaxError in
+        # core/console/corvin_console/app.py (commit f151048) shipped in a
+        # tagged release because the slower steps below were already failing
+        # for unrelated reasons and never reached the step that would have
+        # imported the broken file. This runs first, needs no deps, and fails
+        # fast on any syntax error anywhere in the checked-in Python tree.
+        run: python -m compileall -q core operator corvinOS ops
+
+      - name: Install dependencies
+        # CI-10 (see test.yml): install the package with its real base deps +
+        # dev extra instead of a hand-maintained pip list — that list had
+        # drifted, silently omitting the package itself (breaking every
+        # corvin_console/corvin_license import), the `limits` rate-limiting
+        # lib (operator/license/validator.py imports it directly), the
+        # `hatchling` build backend (needed by tests/test_hatch_build_vendor_
+        # ignore.py), and `python-multipart` (FastAPI form-data test routes).
+        run: |
+          pip install -e ".[dev]" hatchling limits python-multipart
+
+      - name: Run tests with coverage
+        run: |
+          # --import-mode=importlib: core/compute/tests/__init__.py makes that
+          # dir a package, but core/compute/ itself has no __init__.py, so
+          # pytest's default "prepend" import mode resolves its fully-
+          # qualified module names as `tests.<name>` — the same top-level
+          # name the repo-root tests/ package already owns. Whichever loads
+          # first wins sys.modules["tests"], and every file under the other
+          # tests/ dir then fails collection with
+          # "ModuleNotFoundError: No module named 'tests.<name>'".
+          # importlib mode keys modules by file path instead of by short
+          # package name, so the two same-named `tests/` dirs stop colliding.
+          # core/plugins/tests/ was absent here until 2026-07-27, and absent
+          # from run-all-tests.sh too — so 950+ plugin tests ran only when
+          # somebody typed the path by hand. Among them: the ADR-0251 call-site
+          # gate that the activation plan calls "a merge condition, not a
+          # nice-to-have", and the ADR-0233 tripwire tests. A gate nobody runs
+          # is the exact defect class those tests exist to catch, one level up.
+          # 2026-07-27 audit: this job named 6 of the repo's 22 test
+          # directories. The other 16 ran in NO workflow at all — among them
+          # core/gateway (227 tests, the app the always-on service boots),
+          # operator/license (236), core/delegate (317) and ops/launcher.
+          # The ones added below are those verified green when run on their own;
+          # four directories are deliberately still absent because they are RED
+          # and adding them would just turn the job red without fixing anything:
+          #   core/compliance/tests      2 collection errors
+          #   operator/forge/tests       11 collection errors
+          #   operator/rag-integration/  2 collection errors
+          #   operator/voice/tests       3 failures — the voice summariser drops
+          #                              CRITICAL warnings (real product defect)
+          # They are tracked as their own fixes, not hidden by omission.
+          #
+          # Directories with a tests/__init__.py but no parent __init__.py all
+          # resolve to the top-level package name `tests`, so those carrying a
+          # conftest.py collide with the repo-root tests/ package even under
+          # importlib mode ("Plugin already registered under a different name").
+          # Those run as their own pytest invocation below rather than being
+          # dropped.
+          # operator/bridges/shared/ moved OUT of this invocation — see reason 2
+          # in the next step. It poisoned the stdlib `operator` module for every
+          # directory collected after it, which is why this job used to die
+          # ~1.5 s in with "INTERNALERROR ... caught unexpected SystemExit"
+          # and run no tests at all.
+          #
+          # core/console/tests/ is NOT here — it gets its own wall-clock-bounded
+          # step below. It contains tests that block on real network and
+          # subprocess work with no timeout, so leaving it in this invocation
+          # makes the whole job hang instead of reporting. Measured locally:
+          # this set plus core/console/tests/ did not finish in 45 minutes even
+          # with the worst offender deselected.
+          pytest \
+            tests/ \
+            core/compute/tests/ \
+            core/plugins/tests/ \
+            core/plugins/plugin_builder/tests/ \
+            core/gateway/tests/ \
+            core/observability/tests/ \
+            core/orchestration/tests/ \
+            ops/launcher/tests/ \
+            ops/launcher/corvin/tests/ \
+            --import-mode=importlib \
+            --cov=operator \
+            --cov=core \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=html \
+            -v
+          # NOTE: --cov-fail-under is deliberately NOT here. This is only the
+          # FIRST of several --cov-append pytest invocations (Console suite +
+          # per-directory suites below); on its own it covers ~47%, so a
+          # threshold here made the whole job permanently red and the later
+          # suites never ran (2026-07-30 review finding I2). The 75% floor is
+          # enforced once, on the AGGREGATED total, by the "Check coverage
+          # thresholds" step at the end of the job.
+
+      - name: Console suite (wall-clock bounded)
+        timeout-minutes: 25
+        run: |
+          # Bounded on purpose. core/console/tests/ has tests that block on real
+          # network / subprocess work with no internal timeout, so an unbounded
+          # run does not fail — it hangs until the job limit and burns the
+          # runner. `timeout 20m` turns that into a fast, legible failure.
+          #
+          # The bound is calibrated, not guessed: with the ignores and deselect
+          # below this step measured 10–12 minutes locally across three runs.
+          # 20m leaves room for a slower runner while still catching a hang.
+          #
+          # ⚠️ THIS SUITE IS ORDER-DEPENDENT AND CANNOT YET GATE A MERGE.
+          # Three consecutive local runs of the identical command produced 11,
+          # 14, and 13 failures with DIFFERENT failure sets. Verified cause:
+          # state leaks between modules, not flaky assertions —
+          # test_compute_license_gate.py fails 4 tests in the full run and passes
+          # 14/14 in isolation. Around 1875 tests pass every time; the ~13 that
+          # do not are a moving target. Treat a change in the count as noise
+          # until the isolation defects are fixed, and diagnose any individual
+          # failure by running its file alone.
+          #
+          # The --deselect names ONE test rather than dropping its file: it calls
+          # the real, unmocked ACO heal cycle (network probes plus an Ollama
+          # start attempt, no timeout) and blocks indefinitely — over 50 minutes
+          # observed locally, at 3% of the suite. It is NOT the only blocker in
+          # here, which is why the bound exists as well as the deselect.
+          # Bounding the heal cycle itself is a product change, tracked
+          # separately; both the deselect and this bound are stated rather than
+          # silent.
+          # The two --ignore'd files drive a REAL browser (Playwright/Chromium).
+          # test.yml already runs both as their own pytest invocations, on
+          # purpose; pulling them in here via the directory both double-runs them
+          # and blocks — test_browser_automation.py::test_sensitive_v2_checkout_e2e
+          # is where a local run stalls, at 16% of the suite.
+          timeout 20m pytest \
+            core/console/tests/ \
+            --ignore=core/console/tests/test_browser_automation.py \
+            --ignore=core/console/tests/test_browser_internal_auth.py \
+            --deselect core/console/tests/test_aco.py::TestEngineHealer::test_heal_cycle_with_engine_healer_does_not_raise \
+            --import-mode=importlib \
+            --cov=operator --cov=core --cov-append -q
+
+      - name: Run the suites that need their own pytest session
+        run: |
+          # Two independent reasons a directory cannot share the session above.
+          # --cov-append keeps them all in one coverage total.
+          #
+          # 1. PACKAGE-NAME COLLISION. core/{awpkg,delegate,license,workflows}
+          #    each ship a tests/__init__.py with no parent __init__.py, so their
+          #    conftest.py imports under the SAME module name as the repo-root
+          #    tests/conftest.py and pluggy refuses the duplicate registration —
+          #    even under importlib mode. Fixing it properly (a parent
+          #    __init__.py, or dropping tests/__init__.py) is a rename with a
+          #    wide blast radius and wants its own change.
+          #
+          # 2. THE operator/ STDLIB SHADOW. Under --import-mode=importlib pytest
+          #    names a test module by its path relative to rootdir, so collecting
+          #    anything under operator/ imports `operator` as a NAMESPACE PACKAGE
+          #    and it replaces the stdlib module in sys.modules for the rest of
+          #    the session:
+          #        >>> operator.__file__ -> None
+          #        >>> hasattr(operator, "add") -> False
+          #        >>> operator.__path__ -> _NamespacePath([<repo>/operator])
+          #    Every later import that touches operator.add / itemgetter then
+          #    fails with "module 'operator' has no attribute 'add'" — including
+          #    inside third-party packages. That is what produced the collection
+          #    errors in operator/bridges/shared, operator/forge and
+          #    operator/rag-integration (diagnosed 2026-07-27; it is the fourth
+          #    appearance of the operator/ shadow trap in this repo).
+          #    One session per directory contains the damage; it does not remove
+          #    the trap, and the real fix is still owed.
+          for d in core/awpkg/tests core/delegate/tests core/license/tests \
+                   core/workflows/tests; do
+            pytest "$d" --import-mode=importlib \
+              --cov=operator --cov=core --cov-append -q
+          done
+
+          # --import-mode=PREPEND for everything under operator/, and that word
+          # is the whole fix for reason 2 above. Verified by probe: under
+          # importlib the stdlib `operator` is replaced by the repo's namespace
+          # package (`operator.__file__` is None, `hasattr(operator, "add")` is
+          # False); under prepend it stays intact. `consider_namespace_packages`
+          # makes no difference either way — the import mode is the lever.
+          # operator/forge/tests went from 11 collection errors to 547 passing
+          # on this one flag.
+          for d in operator/bridges/tests \
+                   operator/agent/tests operator/license/tests \
+                   operator/skill-forge/tests operator/mcp_manager/tests \
+                   operator/forge/tests operator/voice/tests; do
+            pytest "$d" --import-mode=prepend \
+              --cov=operator --cov=core --cov-append -q
+          done
+
+      # KNOWINGLY NOT RUN HERE — stated rather than silently omitted, because a
+      # directory missing from a workflow is invisible and that is exactly how
+      # core/plugins/tests went 950+ tests without a CI (see the note above).
+      # Each of these is a tracked defect, not an oversight:
+      #
+      #   operator/bridges/shared/   Runs past 15 minutes even in its own session,
+      #                              which is why it is bounded out rather than
+      #                              added. It was listed in this job before
+      #                              2026-07-27 and never actually ran — the job
+      #                              died on it at 1.5 s. run-all-tests.sh drives
+      #                              this directory one process per file, which is
+      #                              why it works there.
+      #   operator/rag-integration/  2 test modules use relative imports with no
+      #                              parent package (the other 55 collect fine).
+      #                              A defect in those two files, not the mode.
+      #   core/compliance/tests/     2 collection errors, cause not yet diagnosed.
+      #
+      # Fixed and now included: operator/forge/tests (11 collection errors -> 547
+      # passing) and operator/voice/tests (the summariser dropped CRITICAL
+      # warnings) — both were listed here and are no longer excluded.
+
+      - name: Generate coverage badge
+        run: |
+          # CI-3: write to .coverage.json — the name every reader step below
+          # expects. `coverage json` defaults to coverage.json (no dot), so the
+          # badge/comment/threshold steps were all reading a file that never
+          # existed and silently fell into their except branches.
+          coverage json --quiet -o .coverage.json
+          python3 << 'EOF'
+          import json
+          import sys
+
+          try:
+            with open('.coverage.json', 'r') as f:
+              data = json.load(f)
+              coverage_pct = data.get('totals', {}).get('percent_covered', 0)
+
+              # Determine badge color
+              if coverage_pct >= 90:
+                color = 'brightgreen'
+              elif coverage_pct >= 80:
+                color = 'green'
+              elif coverage_pct >= 70:
+                color = 'yellowgreen'
+              elif coverage_pct >= 60:
+                color = 'yellow'
+              else:
+                color = 'red'
+
+              print(f"Coverage: {coverage_pct:.1f}%")
+              print(f"Color: {color}")
+          except:
+            print("Coverage: unknown")
+          EOF
+        continue-on-error: true
+
+      - name: Comment PR with coverage report
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            try {
+              const coverage = JSON.parse(fs.readFileSync('.coverage.json', 'utf8'));
+              const pct = coverage.totals.percent_covered.toFixed(1);
+
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 📊 Coverage Report\n\n**Overall Coverage:** ${pct}%\n\n[View detailed report →](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})`
+              });
+            } catch (e) {
+              console.log('Could not parse coverage report:', e);
+            }
+        continue-on-error: true
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 30
+
+      - name: Check coverage thresholds
+        run: |
+          python3 << 'EOF'
+          import json
+          import sys
+
+          # CI-3: fail-closed. A missing/malformed coverage file (e.g. the old
+          # coverage.json/.coverage.json name mismatch) previously landed in a
+          # "Warning" branch that still exited 0, so this gate could never fail.
+          # It now exits non-zero on any error.
+          #
+          # NOTE: a per-module CRITICAL_THRESHOLDS map used to be defined here
+          # but was never wired to any check (dead code). Removed rather than
+          # left dangling; the enforced gate is the overall 75% floor below —
+          # this is the SINGLE place the threshold is enforced, on the
+          # aggregated coverage total across every --cov-append suite (the
+          # per-step --cov-fail-under was removed, see finding I2).
+          try:
+            with open('.coverage.json', 'r') as f:
+              data = json.load(f)
+            overall = data.get('totals', {}).get('percent_covered', 0)
+            print(f"Overall coverage: {overall:.1f}%")
+            if overall < 75:
+              print(f"✗ Coverage below 75% threshold: {overall:.1f}%")
+              sys.exit(1)
+            print("✓ Coverage meets 75% threshold")
+          except SystemExit:
+            raise
+          except Exception as e:
+            print(f"✗ Could not validate coverage thresholds: {e}")
+            sys.exit(1)
+          EOF

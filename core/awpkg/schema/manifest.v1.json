@@ -1,0 +1,201 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://corvin.dev/schemas/awpkg/manifest.v1.json",
+  "title": "AWPKG Manifest v1",
+  "description": "Schema for manifest.yaml in an Corvin Workflow Package (.awpkg)",
+  "type": "object",
+  "required": ["awpkg", "id", "name", "version", "description", "components"],
+  "additionalProperties": false,
+  "properties": {
+    "awpkg": {
+      "type": "string",
+      "description": "Format version. Must be '1.0'.",
+      "enum": ["1.0"]
+    },
+    "id": {
+      "type": "string",
+      "description": "Globally unique reverse-domain identifier.",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+      "maxLength": 128
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable display name.",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "version": {
+      "type": "string",
+      "description": "SemVer string.",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?(\\+[a-zA-Z0-9.]+)?$"
+    },
+    "description": {
+      "type": "string",
+      "description": "One-paragraph description shown by 'corvin pkg inspect'.",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "author": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "license": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "homepage": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "min_corvin_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "max_corvin_version": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        {"type": "null"}
+      ]
+    },
+    "components": {
+      "type": "object",
+      "description": "Map of component types to lists of relative archive paths.",
+      "additionalProperties": false,
+      "properties": {
+        "workflows": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "forge_tools": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "skills": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "personas": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "data": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      },
+      "minProperties": 1
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "type": "boolean",
+          "description": "Whether forge tools in this package may access the network.",
+          "default": false
+        },
+        "compute": {
+          "type": "boolean",
+          "description": "Whether workflows may schedule compute runs.",
+          "default": false
+        },
+        "secrets": {
+          "type": "array",
+          "description": "Secret names (not values) required by tools in this package.",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+          },
+          "version": {
+            "type": "string",
+            "description": "SemVer range (>=, ^, ~, exact).",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "workflow_description": {
+      "type": "string",
+      "description": "Long-form description of the workflow's purpose, stages, and expected output. Rendered by 'corvin pkg inspect' and included in the package README.",
+      "maxLength": 4000
+    },
+    "ascii_chart": {
+      "type": "string",
+      "description": "ASCII art DAG diagram showing the workflow topology, per-node agent assignments, and data flow between nodes.",
+      "maxLength": 3000
+    },
+    "agents": {
+      "type": "object",
+      "description": "Per-agent declarations binding Forge tools, SkillForge skills, and instruction blocks to each workflow node. Keys are agent IDs matching workflow graph node 'agent' fields.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description", "instructions"],
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "One-sentence description of this agent's role.",
+            "maxLength": 500
+          },
+          "tools": {
+            "type": "array",
+            "description": "Archive paths (subset of components.forge_tools) assigned to this agent.",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          },
+          "skills": {
+            "type": "array",
+            "description": "Archive paths (subset of components.skills) assigned to this agent.",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          },
+          "instructions": {
+            "type": "string",
+            "description": "System prompt / instruction block injected when this agent runs.",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "public_key", "value"],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["ed25519"]
+        },
+        "public_key": {
+          "type": "string",
+          "description": "Base64url-encoded DER public key."
+        },
+        "value": {
+          "type": "string",
+          "description": "Base64url-encoded signature over the manifest SHA-256 digest."
+        }
+      }
+    }
+  }
+}

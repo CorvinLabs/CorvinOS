@@ -1,0 +1,210 @@
+name: Compliance Manifest Check
+
+# ADR-0056: CI gate that validates every PR against the Corvin compliance
+# manifest (compliance/*.yaml).  Haiku reviews the diff against affected
+# rules and blocks merge on critical findings.
+
+on:
+  pull_request:
+    paths:
+      # Compliance-relevant code paths — add new entries when a new layer lands
+      - "operator/bridges/shared/**"
+      - "operator/voice/hooks/**"
+      - "operator/voice/scripts/stt/**"
+      - "core/compliance/**"
+      - "compliance/**"
+      - "CLAUDE.md"
+      - "docs/decisions/**"
+
+jobs:
+  compliance-review:
+    name: Compliance manifest review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write   # for PR annotation comments
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install pyyaml anthropic
+
+      - name: Verify manifest signature
+        id: sig_check
+        run: |
+          if [ -f compliance/manifest.sig ]; then
+            bash compliance/sign.sh verify && echo "sig_status=valid" >> "$GITHUB_OUTPUT" \
+              || echo "sig_status=invalid" >> "$GITHUB_OUTPUT"
+          else
+            echo "sig_status=missing" >> "$GITHUB_OUTPUT"
+            echo "::warning::compliance/manifest.sig not found — run compliance/sign.sh sign"
+          fi
+
+      - name: Fail on invalid signature
+        if: steps.sig_check.outputs.sig_status == 'invalid'
+        run: |
+          echo "::error::Compliance manifest signature is INVALID. \
+          The manifest may have been tampered with. \
+          Run compliance/sign.sh sign to regenerate."
+          exit 1
+
+      - name: Get PR diff and changed files
+        id: diff
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+          git diff --name-only origin/${{ github.base_ref }}...HEAD > /tmp/changed.txt
+          echo "changed_files=$(cat /tmp/changed.txt | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Run Haiku compliance review
+        id: review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_DIFF: ${{ '' }}         # passed via file below
+          CHANGED_FILES: ${{ steps.diff.outputs.changed_files }}
+        # CI-5/M2: continue-on-error removed, but ci_review.py returns 1 on a
+        # critical finding — so this step must TOLERATE a non-zero rc (`|| rc=$?`)
+        # to keep the pipeline flowing to the parse + annotate + decision steps.
+        # Otherwise `set -eo pipefail` aborts this step on a critical finding,
+        # which (via the implicit success() guard on later steps) SKIPS the
+        # "Annotate PR with findings" step and drops the inline feedback.
+        # Fail-closed stays intact downstream: "Parse findings" fails closed on
+        # unreadable/error output, and "Fail on critical findings" fails the job
+        # on any critical — those two are the decision points, not this step.
+        run: |
+          export PR_DIFF="$(cat /tmp/pr.diff)"
+          rc=0
+          python3 compliance/ci_review.py > /tmp/findings.json || rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Parse findings
+        id: findings
+        # Always run so findings render even if the review step reported a
+        # non-zero code (annotation + fail-closed handling live here).
+        if: always()
+        run: |
+          python3 - << 'EOF'
+          import json, os, sys
+
+          # CI-5 fail-closed: a missing/empty/malformed report, or a report
+          # carrying an "error" key (ANTHROPIC_API_KEY unset, PR_DIFF unset,
+          # manifest missing, or the Haiku call raising), must BLOCK — never be
+          # silently treated as "no findings".
+          try:
+              with open("/tmp/findings.json") as f:
+                  raw = f.read().strip()
+              if not raw:
+                  raise ValueError("compliance review produced no output")
+              data = json.loads(raw)
+          except Exception as exc:
+              print(f"::error::Compliance review output unreadable ({exc}) — failing closed.")
+              sys.exit(1)
+
+          if data.get("error"):
+              print(f"::error::Compliance review errored: {data['error']} — failing closed.")
+              sys.exit(1)
+
+          findings = data.get("findings", [])
+          critical = [x for x in findings if x.get("severity") == "critical"]
+          warnings = [x for x in findings if x.get("severity") == "warning"]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
+              gh.write(f"critical_count={len(critical)}\n")
+              gh.write(f"warning_count={len(warnings)}\n")
+              gh.write(f"total_count={len(findings)}\n")
+
+          print(f"Critical: {len(critical)}, Warnings: {len(warnings)}")
+          if critical:
+              for f in critical:
+                  print(f"  CRITICAL [{f.get('rule_id')}] {f.get('location', '')}: {f.get('rationale', '')}")
+          EOF
+
+      - name: Annotate PR with findings
+        if: steps.findings.outputs.total_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('/tmp/findings.json', 'utf8'));
+            const findings = data.findings || [];
+
+            if (findings.length === 0) return;
+
+            const lines = findings.map(f => {
+              const sev = f.severity === 'critical' ? '🔴 CRITICAL' : '🟡 WARNING';
+              return [
+                `### ${sev} — \`${f.rule_id}\``,
+                f.location ? `**Location:** \`${f.location}\`` : '',
+                `**Finding:** ${f.rationale}`,
+                `**Suggestion:** ${f.suggestion}`,
+              ].filter(Boolean).join('\n');
+            }).join('\n\n---\n\n');
+
+            const body = [
+              '## Compliance Manifest Review (ADR-0056)',
+              '',
+              `Checked by Haiku against **${data.rules_evaluated || '?'} rules** ` +
+              `in layers: ${(data.layers_checked || []).join(', ')}.`,
+              '',
+              lines,
+              '',
+              '> This review is advisory for `warning` findings and **blocking** ' +
+              'for `critical` findings. See ADR-0056 for the rule catalogue.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail on critical findings
+        if: steps.findings.outputs.critical_count != '0'
+        run: |
+          echo "::error::${{ steps.findings.outputs.critical_count }} critical \
+          compliance finding(s) detected. See PR comments for details. \
+          Merge is blocked until findings are resolved or the maintainer \
+          explicitly overrides (requires ADR companion)."
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Compliance check result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f /tmp/findings.json ]; then
+            python3 - << 'EOF'
+          import json, os
+          try:
+              with open("/tmp/findings.json") as f:
+                  data = json.loads(f.read() or "{}")
+          except Exception as exc:
+              data = {"error": f"unreadable report ({exc})"}
+          summary_file = os.environ["GITHUB_STEP_SUMMARY"]
+          findings = data.get("findings", [])
+          critical = sum(1 for x in findings if x.get("severity") == "critical")
+          warnings = sum(1 for x in findings if x.get("severity") == "warning")
+          with open(summary_file, "a") as s:
+              if data.get("error"):
+                  s.write(f"❌ Review errored: {data['error']} — failing closed.\n")
+              elif not findings:
+                  s.write("✅ No compliance findings.\n")
+              elif critical:
+                  s.write(f"❌ {critical} critical, {warnings} warning(s) — merge blocked.\n")
+              else:
+                  s.write(f"⚠️ {warnings} warning(s) — human review recommended.\n")
+          EOF
+          else
+            echo "⚠️ Review did not produce output (possible setup error)." >> "$GITHUB_STEP_SUMMARY"
+          fi

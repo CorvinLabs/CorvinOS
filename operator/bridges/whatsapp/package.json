@@ -1,0 +1,19 @@
+{
+  "name": "corvin-voice-whatsapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WhatsApp bridge daemon for the corvin-voice plugin. Receives messages via Baileys, hands them off to a Python adapter that calls the Claude CLI, and sends responses (text + optional voice notes) back.",
+  "main": "daemon.js",
+  "scripts": {
+    "start": "node daemon.js",
+    "pair": "node daemon.js --pair-only",
+    "mock": "node daemon.js --mock"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.21",
+    "node-telegram-bot-api": "^0.67.0",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

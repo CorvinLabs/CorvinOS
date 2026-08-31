@@ -1,0 +1,125 @@
+apiVersion: rag.corvin.io/v1alpha1
+kind: RAGProvider
+metadata:
+  name: google-drive-docs
+  namespace: production
+  description: Google Drive document search with OCR support
+  version: "1.0"
+  author: docs-team@example.com
+
+spec:
+  # ── Retrieval Configuration ────────────────────────────────
+  retrieval:
+    endpoint: https://www.googleapis.com/drive/v3/files/search
+    method: GET
+    timeout_ms: 10000
+    auth:
+      type: oauth2-service-account
+      credentials_env_var: GOOGLE_DRIVE_CREDENTIALS_JSON
+
+    # Google Drive query building
+    query_format:
+      type: google-drive-query
+      sample: |
+        {
+          "q": "fullText contains '{query}' and mimeType='application/vnd.google-apps.document'",
+          "pageSize": {limit},
+          "fields": "files(id,name,webViewLink,modifiedTime,owners(displayName))",
+          "orderBy": "modifiedTime desc"
+        }
+
+  # ── Response Format ────────────────────────────────────────
+  response_format:
+    content_path: files[].name
+    score_path: files[].relevance_score  # Computed by retriever
+    metadata_path: files[]
+    source_url_path: files[].webViewLink
+
+  # ── Classification & Zone ──────────────────────────────────
+  dataClassification: INTERNAL
+  complianceZone: EU
+  compliance_data_residency:
+    required: true
+    allowed_regions:
+      - EU-WEST-1
+      - EU-CENTRAL-1
+
+  # ── Capabilities ───────────────────────────────────────────
+  capabilities:
+    - full-text-search
+    - ocr-enabled
+    - collaborative-document-support
+    - sharing-aware-search
+    - file-type-filtering
+
+  # ── Resilience Configuration ───────────────────────────────
+  resilience:
+    circuit_breaker:
+      failure_threshold: 3
+      timeout_seconds: 60
+      half_open_requests: 2
+
+    retry_strategy: exponential
+    max_retries: 2
+    backoff_ms: 200
+
+    # Google Drive API is sometimes rate-limited
+    quota:
+      requests_per_second: 10
+      concurrent_requests: 3
+
+  # ── Data Retention & Deletion ──────────────────────────────
+  dataRetention:
+    # Google Drive retention is user-managed
+    # This setting controls RAG cache lifetime
+    default_ttl_days: 7  # Search results cache
+    archive_after_days: 30
+    delete_after_days: 90
+
+  # ── Erasure Handler (GDPR Art. 17) ─────────────────────────
+  erasureHandler:
+    type: http-api-callback
+    endpoint: https://example.com/rag/erasure/google-drive
+    auth:
+      type: api-key
+      token_env_var: GOOGLE_DRIVE_RAG_API_KEY
+    query_template: |
+      {
+        "subject_id": "{subject_id}",
+        "action": "revoke_shared_documents",
+        "reason": "{reason}"
+      }
+    # Note: Google Drive owns the actual data
+    # Erasure means revoking RAG index + removing from shared drives
+
+  # ── Health Check Configuration ─────────────────────────────
+  healthCheck:
+    # Check Google Drive API availability
+    endpoint: https://www.googleapis.com/drive/v3/about?fields=user(displayName)
+    interval_seconds: 300  # Check every 5 minutes (quota-conscious)
+    timeout_seconds: 5
+    success_http_codes: [200]
+
+  # ── Performance Tuning ─────────────────────────────────────
+  performance:
+    batch_size: 10  # Google Drive has quota limits
+    cache_ttl_seconds: 300
+    enable_ocr: true
+    ocr_languages:
+      - en
+      - de
+      - fr
+
+  # ── Metadata ───────────────────────────────────────────────
+  labels:
+    environment: production
+    data-source: cloud-storage
+    owner: docs-team
+    cost-center: content-ops
+
+  annotations:
+    supported_mime_types: "application/vnd.google-apps.document,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    max_file_size_mb: "100"
+    ocr_enabled: "true"
+    sharing_aware: "true"
+    quota_reset_time: "daily"

@@ -1,0 +1,36 @@
+{
+  "suite_version": "multiturn-v1",
+  "note": "Multi-turn tasks: each `turns` list runs sequentially in ONE session; tokens are summed over the whole task. This is the ONLY structure that can show CEL SAVING (fewer turns / less re-derivation across a conversation), because single-turn tasks only expose CEL's per-turn injection overhead. IMPORTANT: to test CEL fairly, run on a tenant with REAL memory/ADRs/skills (e.g. _default) — on an empty tenant CEL injects nothing extra and will still look slightly costlier. The quality check runs on the FINAL turn's answer.",
+  "tasks": [
+    {
+      "id": "mt-primes-build",
+      "type": "coding",
+      "turns": [
+        "Write a Python function is_prime(n) that returns True for primes. Just the function.",
+        "Using that function, which numbers under 30 are prime? List them.",
+        "Now sum exactly those primes under 30 and give ONLY the final integer."
+      ],
+      "check": { "kind": "contains_all", "expect": ["129"], "case_insensitive": true }
+    },
+    {
+      "id": "mt-budget-plan",
+      "type": "reasoning",
+      "turns": [
+        "I have a monthly budget of 2000 euros. Rent is 40% of it. How much is rent?",
+        "Of the remaining money after rent, I save one quarter. How much do I save per month?",
+        "Over a full year, how much do I save in total? Give ONLY the final euro amount."
+      ],
+      "check": { "kind": "contains_all", "expect": ["3600"], "case_insensitive": true }
+    },
+    {
+      "id": "mt-refactor",
+      "type": "coding",
+      "turns": [
+        "Here is a function:\n\ndef total(items):\n    t = 0\n    for i in range(len(items)):\n        t = t + items[i]['price'] * items[i]['qty']\n    return t\n\nExplain in one sentence what it computes.",
+        "Rewrite it more idiomatically using sum() and a generator expression.",
+        "For items = [{'price':3,'qty':2},{'price':5,'qty':4}], what does it return? Give ONLY the number."
+      ],
+      "check": { "kind": "contains_all", "expect": ["26"], "case_insensitive": true }
+    }
+  ]
+}

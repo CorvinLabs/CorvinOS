@@ -1,0 +1,21 @@
+awpkg: "1.0"
+id: "com.corvin.daily-news-briefing"
+name: "Daily News Briefing"
+version: "1.0.0"
+description: "Linear DAG workflow: fetch → summarize → format. Delivers a spoken morning briefing via Discord or Telegram."
+author: "Corvin Team"
+license: "Apache-2.0"
+min_corvin_version: "0.9.0"
+
+components:
+  workflows:
+    - workflows/briefing.awp.yaml
+  skills:
+    - skills/news_analyst/SKILL.md
+
+permissions:
+  network: false
+  compute: false
+  secrets: []
+
+dependencies: []

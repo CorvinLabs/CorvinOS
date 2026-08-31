@@ -1,0 +1,16 @@
+{
+  "name": "voice",
+  "description": "Voice mode for Claude Code — speaks assistant replies aloud via TTS, detects German/English automatically, optional summarization for long responses.",
+  "version": "0.3.0",
+  "author": {
+    "name": "silvio",
+    "email": "silvio.jurk@googlemail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "voice",
+    "tts",
+    "audio",
+    "multilingual"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "fetch",
+  "name": "Fetch",
+  "description": "Fetch web pages and convert them to Markdown. Useful for reading documentation and web content.",
+  "source": "npm:@modelcontextprotocol/server-fetch",
+  "tags": ["fetch", "web", "http", "markdown", "scrape", "read"],
+  "compliance": {"locality": "unknown", "network_egress": "required"},
+  "secrets": [],
+  "install_hint": "corvin-mcp install npm:@modelcontextprotocol/server-fetch@latest"
+}

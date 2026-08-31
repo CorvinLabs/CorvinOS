@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers: []
+
+rule_files: []
+
+scrape_configs:
+  - job_name: 'stats-dashboard'
+    static_configs:
+      - targets: ['localhost:80']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'mock-api'
+    static_configs:
+      - targets: ['localhost:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s

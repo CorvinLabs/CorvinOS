@@ -1,0 +1,10 @@
+{
+  "id": "filesystem",
+  "name": "Filesystem",
+  "description": "Read and write local files within allowed directories. Useful for file management tasks.",
+  "source": "npm:@modelcontextprotocol/server-filesystem",
+  "tags": ["filesystem", "files", "read", "write", "local"],
+  "compliance": {"locality": "local", "network_egress": "none"},
+  "secrets": [],
+  "install_hint": "corvin-mcp install npm:@modelcontextprotocol/server-filesystem@latest"
+}

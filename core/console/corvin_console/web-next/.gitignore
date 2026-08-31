@@ -1,0 +1,26 @@
+node_modules
+dist
+dist-ssr
+.vite
+*.local
+*.log
+.DS_Store
+.env
+.env.local
+.env.*.local
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Playwright
+test-results
+playwright-report
+blob-report
+playwright/.cache
+tests/e2e/auth-state.json
+
+# console-deploy.sh staging + rollback copies (see scripts/console-deploy.sh)
+dist.next/
+dist.prev/

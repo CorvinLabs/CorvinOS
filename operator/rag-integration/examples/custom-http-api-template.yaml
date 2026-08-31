@@ -1,0 +1,221 @@
+apiVersion: rag.corvin.io/v1alpha1
+kind: RAGProvider
+metadata:
+  name: custom-api-template
+  namespace: production
+  description: Template for integrating custom HTTP RAG APIs
+  version: "1.0"
+  author: integration-team@example.com
+
+spec:
+  # ── INSTRUCTIONS FOR CUSTOMERS ──────────────────────────────
+  # This is a TEMPLATE. To integrate your custom RAG API:
+  #
+  # 1. Copy this file: cp custom-http-api-template.yaml my-custom-rag.yaml
+  # 2. Replace PLACEHOLDERS marked with [YOUR_*]
+  # 3. Run: corvin-rag register my-custom-rag.yaml
+  # 4. Test: corvin-rag health my-custom-rag
+  #
+  # ─────────────────────────────────────────────────────────────
+
+  # ── Retrieval Configuration ────────────────────────────────
+  retrieval:
+    # [YOUR_ENDPOINT]: Replace with your API's base URL
+    endpoint: https://api.example.com/rag/search
+    method: POST  # or GET if preferred
+    timeout_ms: 5000
+
+    # [YOUR_AUTH_TYPE]: Choose one:
+    # - bearer-token (for JWT/OAuth tokens)
+    # - api-key (for X-API-Key headers)
+    # - basic (for username:password)
+    # - oauth2-client-credentials (for service accounts)
+    auth:
+      type: bearer-token
+      # [YOUR_TOKEN_ENV]: Name of the env var containing your token
+      # Example: MY_RAG_API_TOKEN, CUSTOM_API_SECRET_KEY, etc.
+      token_env_var: YOUR_RAG_API_TOKEN
+
+    # ── CRITICAL: Define your API's request/response contract ────
+    # This section tells the orchestrator how to transform queries
+    # into your API format and parse responses.
+
+    # Query template: Use {query} and {limit} as placeholders
+    # The orchestrator will substitute these at runtime.
+    query_format:
+      type: custom-http
+      sample: |
+        {
+          "search": "{query}",
+          "max_results": {limit},
+          "filter": {
+            "date_from": "2025-01-01"
+          },
+          "language": "en"
+        }
+
+  # ── Response Format ────────────────────────────────────────
+  # Define JSON path selectors to extract results from your API response
+  # Format: JSONPath expressions (e.g., results[].content)
+  #
+  # Example response structure:
+  # {
+  #   "status": "success",
+  #   "results": [
+  #     {
+  #       "title": "...",
+  #       "body": "...",
+  #       "relevance": 0.95,
+  #       "url": "https://..."
+  #     }
+  #   ]
+  # }
+
+  response_format:
+    # [YOUR_CONTENT_PATH]: Path to the actual content text
+    content_path: results[].body
+    # [YOUR_SCORE_PATH]: Path to the relevance score (0-1)
+    score_path: results[].relevance
+    # [YOUR_METADATA_PATH]: Path to metadata object
+    metadata_path: results[]
+    # [YOUR_URL_PATH]: Path to source URL (optional)
+    source_url_path: results[].url
+
+  # ── Classification & Zone ──────────────────────────────────
+  # GDPR Compliance: Where is your data physically stored?
+  # Options: EU, US, APAC, HYBRID
+  dataClassification: INTERNAL
+  complianceZone: EU  # [YOUR_COMPLIANCE_ZONE]
+
+  compliance_data_residency:
+    required: true
+    # Only allow queries to CorvinOS engines in these regions
+    allowed_regions:
+      - EU-WEST-1
+      - EU-CENTRAL-1
+    forbidden_regions:
+      - US-EAST-1
+      - AP-SOUTHEAST-1
+
+  # ── Capabilities ───────────────────────────────────────────
+  # List what your API supports
+  # This helps users understand what queries are possible
+  capabilities:
+    - keyword-search
+    - boolean-operators       # AND, OR, NOT in search
+    - filtering-by-metadata   # date ranges, categories, etc.
+    - sorting                 # by relevance, date, etc.
+    - pagination             # offset/limit support
+
+  # ── Resilience Configuration ───────────────────────────────
+  # Fail-safe mechanisms when your API is down
+  resilience:
+    circuit_breaker:
+      # After 5 failures, stop sending requests for 60s
+      failure_threshold: 5
+      timeout_seconds: 60
+      # Send 1 test request to check if it recovered
+      half_open_requests: 1
+
+    # Retry strategy: exponential backoff with jitter
+    retry_strategy: exponential
+    max_retries: 3
+    backoff_ms: 100
+
+    timeouts:
+      connection_timeout_ms: 2000  # How long to wait for TCP connection
+      read_timeout_ms: 5000        # How long to wait for response
+      write_timeout_ms: 3000       # How long to wait to send request
+
+  # ── Quotas & Rate Limiting ─────────────────────────────────
+  # Protect both your API and CorvinOS from rate-limit issues
+  quotas:
+    # [YOUR_RPS]: Requests per second your API can handle
+    requests_per_second: 100
+    # [YOUR_CONCURRENT]: Max parallel requests
+    concurrent_requests: 10
+    # Daily/monthly limits (optional, 0 = unlimited)
+    daily_limit: 1000000
+    monthly_limit: 20000000
+
+  # ── Data Retention & Deletion ──────────────────────────────
+  # How long to cache results and when to delete them
+  dataRetention:
+    default_ttl_days: 90
+    archive_after_days: 365
+    delete_after_days: 2555  # ~7 years
+
+  # ── Erasure Handler (GDPR Art. 17) ─────────────────────────
+  # Right-to-deletion support
+  # When users request "corvin-erasure <user_id>", how should
+  # your API be notified?
+  erasureHandler:
+    type: http-delete
+    # [YOUR_ERASURE_ENDPOINT]: Your API's erasure endpoint
+    endpoint: https://api.example.com/rag/erase
+    auth:
+      type: bearer-token
+      token_env_var: YOUR_RAG_API_TOKEN
+    # Query template for erasure
+    query_template: |
+      {
+        "user_id": "{subject_id}",
+        "reason": "GDPR Art. 17 Right to Deletion"
+      }
+
+  # ── Health Check Configuration ─────────────────────────────
+  healthCheck:
+    # [YOUR_HEALTH_ENDPOINT]: A lightweight endpoint to check if API is alive
+    endpoint: https://api.example.com/health
+    interval_seconds: 30     # Check health every 30 seconds
+    timeout_seconds: 5
+    success_http_codes: [200, 204]  # What counts as "healthy"
+
+  # ── Performance Tuning ─────────────────────────────────────
+  performance:
+    batch_size: 32           # Batch queries if your API supports it
+    cache_ttl_seconds: 300   # Cache results for 5 minutes
+    prefetch_count: 100      # Pre-fetch next results
+
+  # ── Metadata & Operational Info ────────────────────────────
+  labels:
+    environment: production
+    owner: [YOUR_TEAM]       # Who maintains this integration
+    cost-center: [YOUR_CC]   # For billing purposes
+
+  annotations:
+    # Document any special requirements or gotchas
+    implementation_notes: |
+      This API requires:
+      - OAuth2 token refresh every 60 minutes
+      - Rate limit: 100 RPS max
+      - Response time: typically 200-500ms
+      - Supports 20+ languages
+    support_url: "https://docs.example.com/api"
+    slack_channel: "#rag-integrations"
+    last_tested: "2026-06-04"
+
+  # ── OPTIONAL: Advanced Features ────────────────────────────
+  # Uncomment and configure if your API supports these:
+
+  # filters:
+  #   # Help users understand what filters are available
+  #   available_filters:
+  #     - name: date_from
+  #       type: date
+  #       description: "Filter results after this date"
+  #     - name: category
+  #       type: enum
+  #       values: ["tech", "business", "research"]
+
+  # hybrid_search:
+  #   # Support both keyword AND vector similarity
+  #   semantic_search_endpoint: https://api.example.com/rag/semantic-search
+  #   embedding_model: text-embedding-3-large
+  #   embedding_dimensions: 1536
+
+  # pagination:
+  #   # If your API uses cursor-based pagination instead of offset/limit
+  #   type: cursor
+  #   cursor_field: next_cursor
+  #   max_page_size: 1000

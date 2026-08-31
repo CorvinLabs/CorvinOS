@@ -1,0 +1,10 @@
+{
+  "name": "corvin-bridge-signal",
+  "version": "0.1.0",
+  "private": true,
+  "main": "daemon.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}

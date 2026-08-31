@@ -1,0 +1,106 @@
+# Corvin production compose stack
+#
+# Usage:
+#   cp ops/.env.template /opt/corvin/.env  # then fill in
+#   docker compose -f ops/docker-compose.yml --env-file /opt/corvin/.env up -d
+#
+# Two services: corvin (the application) + caddy (TLS reverse proxy).
+# Both share an external network so caddy can route to corvin by name.
+
+name: corvin
+
+services:
+  corvin:
+    image: ${CORVIN_IMAGE:-ghcr.io/veegee82/corvinos:latest}
+    container_name: corvin
+    restart: unless-stopped
+    # Container runs as root, supervisord drops each program to uid 1000 via
+    # the user= directive. The entrypoint chowns the bind-mount on first run.
+    init: false
+    environment:
+      # ── tenant identity ──
+      CORVIN_TENANT_ID: ${CORVIN_TENANT_ID:-_default}
+      CORVIN_HOME: /home/corvin/.corvin
+      HOME: /home/corvin
+
+      # ── auth (load from .env, never hardcoded) ──
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
+
+      # ── bridge toggles (default off — opt-in) ──
+      CORVIN_BRIDGE_TELEGRAM: ${CORVIN_BRIDGE_TELEGRAM:-false}
+      CORVIN_BRIDGE_DISCORD:  ${CORVIN_BRIDGE_DISCORD:-false}
+      CORVIN_BRIDGE_WHATSAPP: ${CORVIN_BRIDGE_WHATSAPP:-false}
+      CORVIN_BRIDGE_SLACK:    ${CORVIN_BRIDGE_SLACK:-false}
+      CORVIN_BRIDGE_EMAIL:    ${CORVIN_BRIDGE_EMAIL:-false}
+      CORVIN_GATEWAY_ENABLED: ${CORVIN_GATEWAY_ENABLED:-false}
+
+      # ── observability ──
+      CORVIN_DEBUG:     ${CORVIN_DEBUG:-0}
+      CORVIN_LOG_LEVEL: ${CORVIN_LOG_LEVEL:-INFO}
+
+    volumes:
+      # Persistent state: claude-code config, voice secrets, corvin tenant tree.
+      # Single bind-mount root keeps backup/restore trivial.
+      - ${CORVIN_DATA_DIR:-/opt/corvin/home}:/home/corvin
+      # Bridge settings.json files — operator-supplied, hot-reloaded by daemons.
+      # Each one is bind-mounted into the in-image bridge directory so the
+      # daemon reads it as if it were repo-local.
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/discord.json:/opt/corvin-repo/operator/bridges/discord/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/email.json:/opt/corvin-repo/operator/bridges/email/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/whatsapp.json:/opt/corvin-repo/operator/bridges/whatsapp/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/telegram.json:/opt/corvin-repo/operator/bridges/telegram/settings.json:ro
+      - ${CORVIN_BRIDGE_SETTINGS_DIR:-/opt/corvin/bridge-settings}/slack.json:/opt/corvin-repo/operator/bridges/slack/settings.json:ro
+      # Optional: bind-mount the entire repo for live development. In
+      # production leave commented — image ships a tag-pinned clone.
+      # - ../:/opt/corvin-repo:ro
+    networks: [edge]
+
+    # Internal ports only — caddy is the public entrypoint
+    expose:
+      - "8000"   # gateway (REST API + console UI mount)
+      - "9090"   # prometheus metrics
+
+    # Resource limits — adjust per host. 2 GB is the comfortable floor.
+    deploy:
+      resources:
+        limits:
+          memory: ${CORVIN_MEM_LIMIT:-4G}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: corvin-caddy
+    restart: unless-stopped
+    depends_on: [corvin]
+    ports:
+      - "80:80"     # ACME HTTP-01 challenge + redirect
+      - "443:443"   # public TLS
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Operator-supplied TLS cert (self-signed or Let's Encrypt-issued).
+      # Generate self-signed:
+      #   openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+      #     -keyout cert.key -out cert.pem \
+      #     -subj "/CN=<your.host>" \
+      #     -addext "subjectAltName=IP:<ip>,DNS:<host>,DNS:localhost"
+      - ${CORVIN_TLS_DIR:-/opt/corvin/tls}:/etc/caddy/tls:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      CORVIN_DOMAIN: ${CORVIN_DOMAIN:-localhost}
+      CORVIN_ACME_EMAIL: ${CORVIN_ACME_EMAIL:-}
+    networks: [edge]
+
+networks:
+  edge:
+    name: corvin-edge
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,40 @@
+# CorvinOS Caddy config
+#
+# CORVIN_DOMAIN  empty/localhost → tls internal (self-signed)
+# CORVIN_DOMAIN  real FQDN       → ACME auto-cert via Let's Encrypt
+#
+# To switch from self-signed to Let's Encrypt later: edit /opt/corvin/.env,
+# set CORVIN_DOMAIN=your.host, then `systemctl restart corvin-compose`.
+
+{
+    email {$CORVIN_ACME_EMAIL}
+    admin off
+}
+
+# Catch-all on :443 with operator-supplied cert (self-signed default).
+# Replace cert.pem/cert.key with a Let's Encrypt-issued pair to upgrade.
+:443 {
+    encode gzip zstd
+
+    # Single backend: gateway serves REST API + console UI under /v1/console
+    # and /console (ADR-0015 mount). Caddy proxies everything to it.
+    reverse_proxy corvin:8000 {
+        header_up X-Forwarded-Proto https
+        header_up X-Real-IP {remote_host}
+    }
+
+    tls /etc/caddy/tls/cert.pem /etc/caddy/tls/cert.key
+
+    log {
+        output file /data/access.log {
+            roll_size 50mb
+            roll_keep 5
+        }
+        format json
+    }
+}
+
+# Plain-HTTP redirect to HTTPS.
+:80 {
+    redir https://{host}{uri} permanent
+}

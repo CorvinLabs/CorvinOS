@@ -1,0 +1,87 @@
+# TEMPLATE — __REPO_ROOT__ is substituted by bridge.sh install_units().
+# Do NOT copy this file directly to a systemd directory; the placeholders will
+# remain literal and the service will fail. Use: bridge.sh up (or bridge.sh install-units)
+[Unit]
+Description=Corvin WebUI — gateway + console (uvicorn)
+After=network-online.target
+Wants=network-online.target
+# Wider budget than the old 60s/5 — see the ExecStartPre port-wait below for
+# why: a bind failure right after a restart is usually the PREVIOUS instance
+# not having released the port 8765 socket yet (bug report 2026-07-12: 5
+# rapid retries at RestartSec=5 exhausted the old budget in ~40s, tripping
+# systemd's "start request repeated too quickly" — a PERMANENT failed state
+# with no further auto-retry, needing a manual `systemctl reset-failed`).
+StartLimitIntervalSec=120
+StartLimitBurst=8
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__
+# ADR-0007: pin the runtime root EXPLICITLY so corvin_home() is deterministic and
+# never cwd-walk-resolved. Without this the console (reader) and the adapter / ACS
+# (writers) can resolve different homes from their respective cwds, and ACS runs /
+# worker-audit land in a home the console never reads → empty WDAT worker graph.
+# (service.env, loaded below, may override this with the operator's chosen home;
+# both must agree across ALL units.)
+Environment=CORVIN_HOME=__REPO_ROOT__/.corvin
+# core/plugins (the parent dir) makes bare `import plugin_builder` find
+# core/plugins/plugin_builder/__init__.py — mirroring the wheel build's path
+# remap of that directory to top-level plugin_builder/ (2026-07-29).
+Environment=PYTHONPATH=__REPO_ROOT__/core/console:__REPO_ROOT__/core/gateway:__REPO_ROOT__/core/license:__REPO_ROOT__/core/compliance:__REPO_ROOT__/operator/forge:__REPO_ROOT__/operator/skill-forge:__REPO_ROOT__/operator/bridges/shared:__REPO_ROOT__/core/plugins
+# Hot-reload is DELIBERATELY OFF for the systemd (always-on) deployment.
+# The console is the operator command-centre: chat turns routinely edit repo
+# code under core/console / core/gateway, and uvicorn --reload closes every
+# live WebSocket with code 1012 (Service Restart) on each such change — which
+# the chat client surfaces as "Connection error — reconnecting…" after a task.
+# Keeping reload OFF here makes the command-centre WebSocket stable. Developers
+# who want auto-reload run the foreground host instead:
+#   CORVIN_CONSOLE_RELOAD=1 bridge.sh console
+# After deploying new console/gateway code, apply it with:  systemctl --user restart corvin-webui
+# Auto-bootstrap the console venv when it is absent (e.g. fresh clone, git
+# clean, or first boot after install). Skipped instantly when the venv already
+# exists, so the normal reboot path has zero overhead.
+ExecStartPre=/bin/bash -c 'test -x __REPO_ROOT__/core/console/.venv/bin/python || bash __REPO_ROOT__/core/console/bootstrap.sh'
+# Root-cause fix (bug report 2026-07-12): TimeoutStopSec gives the OUTGOING
+# instance up to 15s to shut down, but RestartSec=5 let the INCOMING instance
+# try to bind port 8765 again after only 5s -- if the previous process (or
+# the kernel releasing its socket) took longer than that, every retry hit
+# [Errno 98] address already in use until the burst limit tripped. Actively
+# wait for the port to be free (bounded to 15s; TimeoutStopSec is 45s now, but
+# the port is released as soon as the process exits, which the graceful path
+# reaches well inside 15s)
+# instead of hoping the fixed RestartSec gap happens to be long enough.
+# /dev/tcp is a bash builtin (no ss/lsof/fuser/nc dependency): a successful
+# connect means something is still listening: on failure (connection
+# refused) the port is free and we proceed immediately, so the common case
+# (previous instance already gone) adds no startup delay at all.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 15); do if ! timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/8765" 2>/dev/null; then exit 0; fi; sleep 1; done; exit 0'
+# --timeout-graceful-shutdown is LOAD-BEARING, not tuning. Without it uvicorn
+# waits UNBOUNDED for open connections to close, and the console holds long-lived
+# SSE/WebSocket streams that never close on their own. Measured 2026-07-26: every
+# restart logged "Waiting for connections to close", sat there until systemd's
+# TimeoutStopSec, and got SIGKILLed -- so the ASGI lifespan shutdown never ran at
+# all. That silently skipped the audit fan-out flush, every plugin's on_unload(),
+# and the dispatcher drain that exists to stop half-runs being left in `running`
+# state. A streaming client reconnects; holding shutdown open for it does not.
+ExecStart=__REPO_ROOT__/core/console/.venv/bin/python -m uvicorn corvin_gateway.app:app --host 127.0.0.1 --port 8765 --log-level info --timeout-graceful-shutdown 10
+Restart=always
+# Exponential backoff (systemd >=254): 5s, 10s, 20s, ... capped at 60s.
+# Ignored gracefully (unit still loads, just without backoff) on older
+# systemd -- the ExecStartPre wait above is the primary fix and needs no
+# minimum systemd version.
+RestartSec=5
+RestartSteps=4
+RestartMaxDelaySec=60
+TimeoutStartSec=300
+# Must exceed the SUM of the shutdown budget, or the graceful path can never
+# finish and systemd SIGKILLs mid-cleanup: uvicorn's graceful wait (10s) + the
+# lifespan's own bounded steps (fan-out flush 5s + dispatcher drain 15s) = 30s.
+# It was 15s while the lifespan alone asked for 35s, so the cleanup was
+# unreachable by construction. Keep this >= that sum whenever either changes.
+TimeoutStopSec=45
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,96 @@
+{
+  "suite_version": "v4-memory-grounded",
+  "n_per_arm": 3,
+  "tenant": "_default",
+  "run_id": "memgrounded-n3",
+  "arms": "cel",
+  "tainted_reps_dropped": 0,
+  "measurement_isolation": [
+    "outcome_feedback_loop",
+    "tde_shadow_measurement",
+    "vibe_engineering_active"
+  ],
+  "model": "claude-haiku-4-5-20251001",
+  "cost_available": true,
+  "input_captured": true,
+  "components_per_arm": {
+    "A_cel_off": {
+      "fresh_input": 30.8,
+      "cache_creation": 26627.0,
+      "cache_read": 135402.9,
+      "output": 803.3,
+      "tokens_total": 162864.1,
+      "cost_usd": 0.070842
+    },
+    "B_cel_on": {
+      "fresh_input": 26.2,
+      "cache_creation": 30583.8,
+      "cache_read": 109452.0,
+      "output": 740.9,
+      "tokens_total": 140802.8,
+      "cost_usd": 0.075843
+    }
+  },
+  "dimensions": {
+    "_status": "ADVISORY / exploratory \u2014 deterministic from raw fields; NOT a calibrated decision gate (define-metric: advisory_only until n>=5 and MAE<=0.15).",
+    "better_for": {
+      "quality_mean": "higher",
+      "quality_stdev": "lower",
+      "quality_per_1k_tokens": "higher",
+      "cost_per_correct_usd": "lower",
+      "output_tokens_mean": "lower",
+      "tokens_to_correct_mean": "lower",
+      "turn_to_correct_mean": "lower",
+      "reached_rate": "higher"
+    },
+    "A_cel_off": {
+      "quality_mean": 0.1667,
+      "quality_stdev": 0.3727,
+      "quality_per_1k_tokens": 0.001,
+      "cost_per_correct_usd": 0.425051,
+      "output_tokens_mean": 803.3,
+      "tokens_to_correct_mean": 346086.2,
+      "turn_to_correct_mean": 1.25,
+      "reached_rate": 0.167
+    },
+    "B_cel_on": {
+      "quality_mean": 0.375,
+      "quality_stdev": 0.4841,
+      "quality_per_1k_tokens": 0.0027,
+      "cost_per_correct_usd": 0.202249,
+      "output_tokens_mean": 740.9,
+      "tokens_to_correct_mean": 277661.7,
+      "turn_to_correct_mean": 1.22,
+      "reached_rate": 0.375
+    }
+  },
+  "note": "tokens_total = fresh_input + cache_creation + cache_read + output (all 4 classes). Savings (raw count) = (median A \u2212 median B)/median A, quality-gated, bootstrap 95% CI, Mann-Whitney-U (B<A). RAW COUNT \u2260 COST: cache-read ~0.1x, cache-creation ~1.25x, output ~5x \u2014 apply your model's prices to components_per_arm for a cost figure. suite-v1 is single-turn: it measures CEL's per-task COLD cost (always pays cache_creation, never amortized) \u2014 CEL's best case (warm reuse over a session) needs multi-turn tasks, not yet in the suite.",
+  "overall": {
+    "task_type": "overall",
+    "n_pairs": 23,
+    "a_median": 43168.0,
+    "b_median": 87289.0,
+    "savings_point": -1.022076538176427,
+    "ci_low": -2.551395143692836,
+    "ci_high": 0.49647436267325246,
+    "p_value": 0.9847664547000656,
+    "significant": false,
+    "quality_ok_frac": 0.9583333333333334,
+    "dropped_quality": 1
+  },
+  "per_type": {
+    "recall": {
+      "task_type": "recall",
+      "n_pairs": 23,
+      "a_median": 43168.0,
+      "b_median": 87289.0,
+      "savings_point": -1.022076538176427,
+      "ci_low": -2.551395143692836,
+      "ci_high": 0.49647436267325246,
+      "p_value": 0.9847664547000656,
+      "significant": false,
+      "quality_ok_frac": 0.9583333333333334,
+      "dropped_quality": 1
+    }
+  }
+}

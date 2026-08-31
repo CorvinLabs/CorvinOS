@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# corvin-instance-id — show or label the local Corvin instance UUID.
+# Pattern mirrors corvin-erasure / voice-audit.
+#
+# Usage:
+#   corvin-instance-id              # print the UUID
+#   corvin-instance-id show         # print JSON record (uuid + created_at + label)
+#   corvin-instance-id label NAME   # update human-readable label
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/corvin_instance_id.py" "$@"

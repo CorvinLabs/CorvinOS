@@ -1,0 +1,28 @@
+{
+  "name": "copilot-worker",
+  "description": "GitHub Copilot CLI worker (ADR-0071). Uses the github/copilot-cli binary (`copilot -p`) for general AI coding assistance: shell/git/gh command generation, code questions, GitHub workflow help. Zero incremental cost for GitHub Copilot Business/Enterprise licensees.",
+  "engine": "copilot",
+  "engine_config": {
+    "task_type": null,
+    "timeout_s": 60
+  },
+  "permission_mode": "default",
+  "ldd_preset": "off",
+  "delegate_enabled": true,
+  "memory_recall_enabled": false,
+  "skill_forge_enabled": false,
+  "forge_enabled": false,
+  "inject_skills": false,
+  "outcome_grading": false,
+  "zero_config": false,
+  "routing_anchors": [
+    "github copilot",
+    "gh copilot",
+    "copilot",
+    "shell command",
+    "git command",
+    "gh command",
+    "give me the command",
+    "what is the command"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "inbox",
+  "description": "Inbox triage agent: reads Gmail, schedules via Google Calendar, suggests replies. Needs Google OAuth \u2014 not zero-config.",
+  "forge_default_scope": "user",
+  "permission_mode": "bypassPermissions",
+  "allowed_tools": [],
+  "disallowed_tools": [],
+  "append_system": "You are an inbox triage agent. Answer questions about emails and calendar, suggest replies (only send when explicitly confirmed). Calendar suggestions should include time, duration, and attendees.\n\nEmail tooling:\n- Read/search: mcp__claude_ai_Gmail__search_threads + get_thread.\n- Compose without attachments: mcp__claude_ai_Gmail__create_draft (text or HTML body).\n- Compose WITH attachments: shell out to `gmail-helper draft --to ... --subject ... --body ... --attach FILE` (real MIME attachments via the local Gmail-API helper). Use `gmail-helper send ...` only when the user explicitly says \"send now\".\n- Calendar: mcp__claude_ai_Google_Calendar__list_events / create_event / suggest_time. Use timeZone Europe/Berlin unless told otherwise.\n- Drive: mcp__claude_ai_Google_Drive__* for file operations and as a fallback link-target when the helper is not configured.",
+  "mcp_servers": {},
+  "add_dirs": [
+    "~/cowork/inbox"
+  ],
+  "needs_keys": [],
+  "needs_oauth": [
+    "google"
+  ],
+  "zero_config": false,
+  "forge_enabled": true,
+  "skill_forge_enabled": true,
+  "tool_namespace": "inbox",
+  "ldd_preset": "off",
+  "setup_hint": "Uses the claude.ai Gmail + Google Calendar + Google Drive connectors (no local MCP server needed). For sending/drafting with attachments, also configure the local helper \u2014 run `gmail-helper setup` for instructions.",
+  "routing_anchors": [
+    "any emails today I should reply to",
+    "what's on my calendar this afternoon",
+    "schedule a meeting with Maria for next week",
+    "draft a polite reply to the email from Bob",
+    "did anything important arrive in my inbox",
+    "was hab ich heute Nachmittag noch im Kalender",
+    "schreib eine Antwortmail an Bob"
+  ]
+}

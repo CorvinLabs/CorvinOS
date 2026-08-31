@@ -1,0 +1,12 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "description": "Interact with GitHub repositories: search code, read files, list issues and pull requests.",
+  "source": "npm:@modelcontextprotocol/server-github",
+  "tags": ["github", "git", "code", "issues", "pull-requests", "repositories"],
+  "compliance": {"locality": "us_cloud", "network_egress": "required"},
+  "secrets": [
+    {"name": "GITHUB_PERSONAL_ACCESS_TOKEN", "vault_key": "github_pat", "required": true}
+  ],
+  "install_hint": "corvin-mcp install npm:@modelcontextprotocol/server-github@latest"
+}

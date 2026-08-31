@@ -1,0 +1,21 @@
+{
+  "name": "code.csv_stats",
+  "description": "Parse CSV data and compute per-column descriptive statistics (count, mean, min, max, total). Returns only numeric columns with full stats; string columns get a type+unique count.",
+  "input_schema": {
+    "type": "object",
+    "required": ["csv_data"],
+    "properties": {
+      "csv_data": {
+        "type": "string",
+        "description": "Raw CSV text including header row."
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "deterministic": true,
+    "version": "1.0.0"
+  },
+  "code": "import json, sys, csv, io, statistics\nargs = json.load(sys.stdin)\ncsv_data = args.get('csv_data', '')\nreader = csv.DictReader(io.StringIO(csv_data.strip()))\nrows = list(reader)\nstats = {}\nif rows:\n    for col in rows[0].keys():\n        vals_raw = [r[col].strip() for r in rows if r.get(col, '').strip()]\n        try:\n            vals = [float(v) for v in vals_raw]\n            stats[col] = {\n                'count': len(vals),\n                'mean': round(statistics.mean(vals), 4),\n                'min': min(vals),\n                'max': max(vals),\n                'total': round(sum(vals), 4)\n            }\n        except (ValueError, TypeError):\n            stats[col] = {'type': 'string', 'unique': len(set(vals_raw))}\nprint(json.dumps({'ok': True, 'data': {'stats': stats, 'row_count': len(rows)}}))\n"
+}

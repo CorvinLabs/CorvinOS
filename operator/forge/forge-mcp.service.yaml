@@ -1,0 +1,19 @@
+# Layer-19 service manifest for the forge MCP server.
+#
+# Read by core/init/init.py via discover_services. The
+# bridge.sh migration to call into init is a separate step; until
+# then this file is documentation-as-code that describes how the
+# service WOULD be supervised once init.py replaces bridge.sh.
+#
+# Per CLAUDE.md path-gate rules: forge MCP server is the only
+# writable path to forge workspaces. Everything goes through MCP,
+# never direct Write/Edit/Bash.
+name: forge-mcp
+type: daemon
+exec_start: "exec python3 operator/forge/forge.py mcp"
+restart: on-failure
+restart_sec: 2
+backoff: exponential
+max_restarts: 5
+journal: "<corvin_home>/run/log/forge-mcp.log"
+hot_reload: SIGHUP

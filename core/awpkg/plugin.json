@@ -1,0 +1,18 @@
+{
+  "name": "awpkg",
+  "version": "0.1.0",
+  "description": "AWPKG — portable workflow package format for Corvin (ADR-0032). Install, remove, build and inspect .awpkg bundles containing Forge tools, SkillForge skills, Cowork personas and AWP workflow DAGs.",
+  "skill": null,
+  "cli": {
+    "command": "python3",
+    "args": ["awpkg.py"]
+  },
+  "workspace": {
+    "default_root": "~/.corvin/packages",
+    "env_override": "AWPKG_ROOT"
+  },
+  "test": {
+    "command": "python3",
+    "args": ["-m", "pytest", "tests/", "-v"]
+  }
+}

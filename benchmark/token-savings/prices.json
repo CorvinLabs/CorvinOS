@@ -1,0 +1,16 @@
+{
+  "_README": "base_input_per_mtok / base_output_per_mtok = official Anthropic list prices ($ per 1,000,000 tokens), verified 2026-08-18 from https://platform.claude.com/docs/en/about-claude/pricing. The benchmark applies the official cache multipliers itself (fresh 1x, cache-write-5m 1.25x, cache-write-1h 2x, cache-read 0.1x — these match the docs table exactly). The benchmark measures the WORKER turn, so the worker model's prices are the ones used for cost.",
+  "_source": "https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-08-18)",
+  "models": {
+    "claude-opus-5": {
+      "base_input_per_mtok": 5,
+      "base_output_per_mtok": 25,
+      "_note": "worker model on this tenant; official list price $5 in / $25 out per MTok"
+    },
+    "claude-haiku-4-5-20251001": {
+      "base_input_per_mtok": 1,
+      "base_output_per_mtok": 5,
+      "_note": "OS model; official list price $1 in / $5 out per MTok"
+    }
+  }
+}

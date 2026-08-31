@@ -1,0 +1,56 @@
+awp: "1.0.0"
+
+workflow:
+  name: daily_news_briefing
+  description: >
+    Fetch top tech + AI news headlines and deliver a spoken briefing.
+    Linear DAG: fetch → summarize → format. Demonstrates a simple
+    single-agent pipeline with no parallel branches.
+
+inputs:
+  topics:
+    type: string
+    default: "tech,ai,eu-regulation"
+  max_articles:
+    type: integer
+    default: 8
+
+orchestration:
+  engine: dag
+  graph:
+    - id: fetch_news
+      type: agent
+      agent: researcher
+      instructions: >
+        Fetch the most recent English-language news articles for the
+        topics: ${inputs.topics}. Return up to ${inputs.max_articles}
+        articles with title, source and one-sentence summary.
+      depends_on: []
+      share_output: [articles]
+
+    - id: summarize
+      type: agent
+      agent: researcher
+      instructions: >
+        Summarise the fetched articles into a 3-paragraph briefing
+        suitable for a 2-minute voice note. Focus on novelty and impact.
+      depends_on: [fetch_news]
+      share_output: [briefing]
+
+    - id: format_delivery
+      type: agent
+      agent: assistant
+      instructions: >
+        Format the briefing as a Discord message. Add a one-line
+        "TL;DR:" header, then the three paragraphs. Keep total under
+        1800 characters.
+      depends_on: [summarize]
+
+  triggers:
+    schedule:
+      cron: "0 8 * * 1-5"
+      timezone: "Europe/Berlin"
+    slash:
+      command: /news
+      aliases: [/briefing]
+      visibility: "owner|admin"

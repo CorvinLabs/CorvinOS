@@ -1,0 +1,134 @@
+awpkg: "1.0"
+id: "com.corvin.sales-report-generator"
+name: "Sales Report Generator"
+version: "1.0.0"
+description: "Three-agent linear pipeline that analyzes CSV sales data, formats a Markdown report, and quality-checks the result. Demonstrates per-agent tools, skills, and instructions bundled in a single self-contained AWPKG."
+author: "Corvin Team"
+license: "Apache-2.0"
+min_corvin_version: "0.9.0"
+
+workflow_description: |
+  The Sales Report Generator is a three-stage pipeline for automated sales reporting.
+
+  Stage 1 — Data Analysis (data_analyst agent):
+    Reads raw CSV sales data and computes per-column statistics (count, mean, min,
+    max, total). Uses the code.csv_stats Forge tool and the data_analysis skill
+    to apply best-practice analysis patterns.
+
+  Stage 2 — Report Writing (report_writer agent):
+    Receives the statistics dict from Stage 1 and formats a structured Markdown
+    report with title, summary table, and narrative section. Uses the code.md_report
+    Forge tool and the report_writing skill.
+
+  Stage 3 — Quality Assessment (quality_checker agent):
+    Evaluates the Markdown report against quality criteria (structure, completeness,
+    length) and produces a score (0-100) plus itemised feedback. Uses the
+    code.score_report Forge tool and the quality_assessment skill.
+
+  Expected output: {"score": int, "feedback": [...], "passed": bool, "markdown": str}
+  The pipeline is fully deterministic: same CSV input → same score every time.
+
+ascii_chart: |
+  ┌─────────────────────────────────────────────────────────┐
+  │              Sales Report Generator v1.0.0              │
+  │            com.corvin.sales-report-generator           │
+  └─────────────────────────────────────────────────────────┘
+
+  [INPUT: csv_data (string)]
+           │
+           ▼
+  ┌─────────────────────┐   Tools:   code.csv_stats
+  │    data_analyst     │   Skills:  data_analysis
+  │  (Stage 1: Analyze) │   Instr:   Analyze CSV → stats dict
+  └──────────┬──────────┘
+             │  {stats: {col: {count,mean,min,max,total}}, row_count: N}
+             ▼
+  ┌─────────────────────┐   Tools:   code.md_report
+  │    report_writer    │   Skills:  report_writing
+  │  (Stage 2: Format)  │   Instr:   Format stats → Markdown
+  └──────────┬──────────┘
+             │  {markdown: "# Sales Report\n..."}
+             ▼
+  ┌─────────────────────┐   Tools:   code.score_report
+  │   quality_checker   │   Skills:  quality_assessment
+  │  (Stage 3: Assess)  │   Instr:   Score Markdown report
+  └──────────┬──────────┘
+             │  {score: 0-100, feedback: [...], passed: bool}
+             ▼
+  [OUTPUT: quality_report]
+
+components:
+  workflows:
+    - workflows/sales_report.awp.yaml
+  forge_tools:
+    - tools/code_csv_stats.json
+    - tools/code_md_report.json
+    - tools/code_score_report.json
+  skills:
+    - skills/data_analysis/SKILL.md
+    - skills/report_writing/SKILL.md
+    - skills/quality_assessment/SKILL.md
+  personas:
+    - personas/data_analyst.yaml
+    - personas/report_writer.yaml
+    - personas/quality_checker.yaml
+
+agents:
+  data_analyst:
+    description: "Analyzes raw CSV sales data and computes per-column statistics."
+    tools:
+      - tools/code_csv_stats.json
+    skills:
+      - skills/data_analysis/SKILL.md
+    instructions: |
+      You are a data analyst agent. Your task is to analyze raw CSV sales data.
+
+      Steps:
+      1. Call code.csv_stats with the provided csv_data input.
+      2. Review the returned statistics for each numeric column.
+      3. Return the full stats dict and row_count to the next stage.
+
+      Always validate that the CSV has at least one numeric column before proceeding.
+      If the data is empty or malformed, return {"error": "invalid_input"}.
+
+  report_writer:
+    description: "Formats a statistics dict into a professional Markdown sales report."
+    tools:
+      - tools/code_md_report.json
+    skills:
+      - skills/report_writing/SKILL.md
+    instructions: |
+      You are a report writing agent. Your task is to format sales statistics into
+      a clear, professional Markdown report.
+
+      Steps:
+      1. Receive the stats dict and row_count from data_analyst.
+      2. Call code.md_report with stats and row_count as inputs.
+      3. Return the markdown string to the next stage.
+
+      The report must have: a title (# heading), a summary table, and a narrative
+      Summary section. Do not add commentary beyond what the data supports.
+
+  quality_checker:
+    description: "Evaluates a Markdown report and produces a quality score with feedback."
+    tools:
+      - tools/code_score_report.json
+    skills:
+      - skills/quality_assessment/SKILL.md
+    instructions: |
+      You are a quality assurance agent. Your task is to evaluate a Markdown report.
+
+      Steps:
+      1. Receive the markdown string from report_writer.
+      2. Call code.score_report with the markdown as input.
+      3. Return the score (0-100), feedback list, and passed boolean.
+
+      A report passes quality (passed: true) when score >= 70. Always include
+      specific, actionable feedback items regardless of the score.
+
+permissions:
+  network: false
+  compute: false
+  secrets: []
+
+dependencies: []

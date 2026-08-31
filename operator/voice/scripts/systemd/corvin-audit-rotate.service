@@ -1,0 +1,9 @@
+[Unit]
+Description=Corvin-OS audit-log rotation + sealing + retention (ADR-0044 / Layer 37)
+
+[Service]
+Type=oneshot
+ExecStart=__PYTHON_BIN__ __PLUGIN_ROOT__/scripts/audit_rotate.py
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env

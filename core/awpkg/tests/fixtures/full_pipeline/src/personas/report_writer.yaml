@@ -1,0 +1,10 @@
+name: report_writer
+description: "Report formatting agent for the Sales Report Generator pipeline."
+permission_mode: bypassPermissions
+forge_enabled: true
+skill_forge_enabled: false
+ldd_preset: "off"
+tools:
+  - code.md_report
+skills:
+  - report_writing

@@ -1,0 +1,95 @@
+name: corvinOS
+version: "0.9.45"
+description: "GDPR-compliant AI assistant framework for Discord, WhatsApp, Telegram, Slack, and Email — EU AI Act 2026 ready, multi-tenant, self-hosted"
+homepage: "https://corvin-labs.com"
+repository: "https://github.com/CorvinLabs/CorvinOS"
+license: "Apache-2.0"
+
+# Package metadata
+package:
+  type: python
+  entry_point: "corvinOS.installer:main_install"
+  python_version: ">=3.10"
+  platforms:
+    - linux
+    - darwin
+    - windows
+
+# Installation environment
+installation:
+  auto_start: true
+  isolate_venv: true
+  detect_platform: true
+  auto_update: true   # pip install --upgrade corvinos runs on every start
+
+# Bridge support
+bridges:
+  - discord
+  - whatsapp
+  - telegram
+  - slack
+  - email
+
+# Features
+features:
+  cross_platform: true
+  multi_tenant: true
+  systemd_support: true
+  launchd_support: true
+  task_scheduler_support: true
+  isolated_venvs: true
+  audit_logging: true
+  gdpr_compliant: true
+  eu_ai_act_compliant: true
+  license_gating: true
+  a2a_protocol: true
+  rag_integration: true
+  voice_stt: true
+
+# Compliance
+compliance:
+  standards:
+    - "EU AI Act 2026 Art. 50 (bot-disclosure)"
+    - "GDPR Art. 5 (Data Minimisation)"
+    - "GDPR Art. 17 (Right to Deletion / Erasure)"
+    - "GDPR Art. 30, 32 (hash-chained audit log)"
+    - "Apache 2.0 CLA §3"
+
+# Hooks (Ollama-specific)
+hooks:
+  post_install: |
+    #!/bin/bash
+    echo "✓ CorvinOS installed successfully!"
+    echo ""
+    echo "Next step: Run 'corvin-serve' to start the console, then 'corvin-install' for bridge setup."
+    echo "  corvin-serve          # Start the web console"
+    echo "  corvin-install        # Interactive bridge setup"
+    echo "  corvin-install --yes  # Non-interactive"
+  pre_uninstall: |
+    #!/bin/bash
+    echo "⚠ Uninstalling CorvinOS..."
+    echo "Your configuration in ~/.corvin/ will be preserved unless you choose to delete it."
+
+# Ollama metadata
+ollama:
+  category: "bots-messaging"
+  tags:
+    - assistant
+    - multi-messenger
+    - discord
+    - telegram
+    - whatsapp
+    - slack
+    - gdpr
+    - eu-ai-act
+    - multi-tenant
+    - self-hosted
+  supported_ollama_versions: ">=0.1.0"
+  install_mode: "package"
+
+# Community
+community:
+  issues: "https://github.com/CorvinLabs/CorvinOS/issues"
+  discussions: "https://github.com/CorvinLabs/CorvinOS/discussions"
+  security_policy: "https://github.com/CorvinLabs/CorvinOS/security/policy"
+  pricing: "https://corvin-labs.com/pricing"

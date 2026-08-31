@@ -1,0 +1,177 @@
+name: E2E Nightly Tests
+
+# Run nightly tests for deeper regression detection
+on:
+  schedule:
+    # Run every night at 2 AM UTC (adjust to your timezone)
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  e2e-nightly:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test-suite:
+          - comprehensive-ui-integration
+          - complete-feature-coverage
+          - edge-cases-and-failures
+          - security-session-auth
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: core/console/corvin_console/web-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: core/console/corvin_console/web-next
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+        working-directory: core/console/corvin_console/web-next
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: core/console/corvin_console/web-next
+
+      - name: Run E2E tests with all browsers - ${{ matrix.test-suite }}
+        id: nightly-test
+        run: |
+          npm run test:e2e -- tests/e2e/${{ matrix.test-suite }}.spec.ts \
+            --reporter=html \
+            --reporter=json \
+            --reporter=github \
+            --retries=2 \
+            --timeout=60000
+        working-directory: core/console/corvin_console/web-next
+        # CI-4: no continue-on-error — a failing nightly run must mark the job
+        # red so the summary/notify steps below (and branch health) reflect it.
+        timeout-minutes: 45
+        env:
+          CI: true
+
+      - name: Upload detailed report - ${{ matrix.test-suite }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-report-${{ matrix.test-suite }}-${{ github.run_number }}
+          path: core/console/corvin_console/web-next/playwright-report/
+          retention-days: 60
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          # CI-4: this workflow runs on `schedule`/`workflow_dispatch`, where
+          # there is NO PR/issue context — `context.issue.number` is undefined,
+          # so the old createComment() threw every time (masked by
+          # continue-on-error). Open a tracking issue instead.
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `❌ E2E Nightly failed: ${{ matrix.test-suite }} (run ${context.runId})`,
+              body: `The nightly E2E suite \`${{ matrix.test-suite }}\` failed.\n\n[View run →](${runUrl})`,
+              labels: ['e2e-nightly', 'ci-failure'],
+            });
+
+  nightly-summary:
+    runs-on: ubuntu-latest
+    needs: e2e-nightly
+    if: always()
+    steps:
+      - name: Prepare summary
+        id: summary
+        run: |
+          # CI-12: gate on "not success" so a cancelled/timed-out/errored matrix
+          # (result 'cancelled'/'skipped') is not reported as passed.
+          if [ "${{ needs.e2e-nightly.result }}" != "success" ]; then
+            echo "status=${{ needs.e2e-nightly.result }}" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+          else
+            echo "status=passed" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create workflow summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          # 🌙 E2E Nightly Test Results
+
+          **Status:** ${{ steps.summary.outputs.emoji }} ${{ steps.summary.outputs.status }}
+
+          ## Test Suites Executed
+          - comprehensive-ui-integration (64 tests)
+          - complete-feature-coverage (28 tests)
+          - edge-cases-and-failures (70 tests)
+          - security-session-auth (88 tests)
+
+          **Total: 250+ tests**
+
+          ## Coverage Areas
+          - Full UI workflow testing
+          - Multi-step feature dependencies
+          - Security & authentication
+          - Session management
+          - Edge cases & error scenarios
+          - Performance under stress
+          - Offline/reconnection handling
+
+          [View artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+
+  e2e-performance-report:
+    runs-on: ubuntu-latest
+    needs: e2e-nightly
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download test results
+        uses: actions/download-artifact@v4
+        with:
+          path: test-results
+          pattern: nightly-report-*
+        continue-on-error: true
+
+      - name: Generate performance report
+        # CI-4: the old report hardcoded "All test suites passing / No
+        # performance regressions detected" regardless of the actual run, and
+        # its `$(date)` sat inside a quoted heredoc so it never even expanded.
+        # Render the REAL aggregate result of the e2e-nightly matrix instead.
+        env:
+          NIGHTLY_RESULT: ${{ needs.e2e-nightly.result }}
+        run: |
+          if [ "$NIGHTLY_RESULT" = "success" ]; then
+            OVERALL="✅ passed"
+          else
+            OVERALL="❌ ${NIGHTLY_RESULT}"
+          fi
+          {
+            echo "# 📊 E2E Nightly Result"
+            echo ""
+            echo "Generated: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo "**Aggregate matrix result:** ${OVERALL}"
+            echo ""
+            echo "Suites executed: comprehensive-ui-integration, complete-feature-coverage,"
+            echo "edge-cases-and-failures, security-session-auth."
+            echo ""
+            echo "Per-suite pass/fail detail and any performance data are in the"
+            echo "uploaded Playwright HTML reports (nightly-report-* artifacts)."
+          } > performance-report.md
+
+      - name: Upload performance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report
+          path: performance-report.md
+          retention-days: 90
+        continue-on-error: true

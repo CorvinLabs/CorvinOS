@@ -1,0 +1,9 @@
+[Unit]
+Description=Corvin-OS session-timeout sweep (purge sessions inactive >TTL days)
+
+[Service]
+Type=oneshot
+ExecStart=__PYTHON_BIN__ __PLUGIN_ROOT__/scripts/session_timeout_sweep.py
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env

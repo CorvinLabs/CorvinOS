@@ -1,0 +1,22 @@
+[Unit]
+Description=Corvin — docker compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10s
+EnvironmentFile=/opt/corvin/.env
+WorkingDirectory=/opt/corvin
+ExecStart=/usr/bin/docker compose --env-file /opt/corvin/.env -f /opt/corvin/docker-compose.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file /opt/corvin/.env -f /opt/corvin/docker-compose.yml down
+ExecReload=/usr/bin/docker compose --env-file /opt/corvin/.env -f /opt/corvin/docker-compose.yml up -d --force-recreate
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

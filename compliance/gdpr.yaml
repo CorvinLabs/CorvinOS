@@ -1,0 +1,226 @@
+# GDPR — Compliance Manifest
+#
+# Machine-readable rule catalogue for Corvin CI gate (ADR-0056).
+# Each rule maps a GDPR obligation to the Corvin layer that implements
+# it, names the structural invariants that must hold, and lists forbidden
+# patterns that CI must flag if seen in a PR diff.
+#
+# Maintained by: Corvin maintainer (signer fingerprint in tenant config)
+# Regulation:    Regulation (EU) 2016/679
+# Last reviewed: 2026-05-26
+#
+# DO NOT use this file as a runtime compliance oracle.  Enforcement is
+# structural; this file drives CI and bridge.sh doctor only (ADR-0056).
+
+version: "1.0.0"
+regulation: "GDPR — Regulation (EU) 2016/679"
+oj_reference: "OJ L 119, 4.5.2016, p. 1"
+last_reviewed: "2026-05-26"
+
+rules:
+
+  # ── Art. 6 + 7 — Lawful basis: explicit consent ──────────────────────────
+
+  - id: "gdpr.art6.7.consent"
+    article: "Art. 6(1)(a) + Art. 7"
+    summary: >
+      Processing requires a lawful basis.  Corvin uses explicit consent
+      (Art. 6(1)(a)).  Consent must be freely given, specific, informed,
+      and unambiguous.  It must be as easy to withdraw as to give.
+    severity: critical
+    implemented_by:
+      - layer: L16
+        file: "operator/bridges/shared/consent.py"
+        test: "operator/bridges/shared/test_consent_gate.py"
+    invariants:
+      - "consent gate is deny-by-default — no processing without prior consent"
+      - "consent is per-uid, TTL-capped; expired consent = no processing"
+      - "consent is re-validated at each message consume, not only at grant"
+      - "/consent on|off|<ttl> are the only grant/revoke paths"
+      - "single-shot /share path is audited and cannot be batched"
+    forbidden_patterns:
+      - "auto-grant consent without user action"
+      - "owner grants consent on behalf of another user"
+      - "trusted-observer allowlist that bypasses consent check"
+      - "processing after consent withdrawal before TTL refresh"
+      - "is_granted() bypass from any code path"
+    last_verified: "2026-05-26"
+
+  # ── Art. 30 + 32 — Records of processing / audit integrity ───────────────
+
+  - id: "gdpr.art30.32.audit_chain"
+    article: "Art. 30 + Art. 32"
+    summary: >
+      Controllers must maintain records of processing activities (Art. 30)
+      and implement appropriate technical measures to ensure security (Art. 32).
+      Corvin implements this via a hash-chained tamper-evident audit log.
+    severity: critical
+    implemented_by:
+      - layer: L16
+        file: "operator/bridges/shared/audit.py"
+        test: "operator/bridges/shared/test_audit_unified.py"
+    invariants:
+      - "every auditable event is written to audit.jsonl with a hash-chain link"
+      - "voice-audit verify must exit 0; any gap is CRITICAL"
+      - "audit-first invariant: chain write precedes any side effect"
+      - "daily audit-verify timer runs and silencing its exit-1 is forbidden"
+    forbidden_patterns:
+      - "skip audit chain for any event type"
+      - "write to audit.jsonl with schema different from the canonical event format"
+      - "silence voice-audit verify exit-1"
+      - "add a compliance-off env var that disables audit"
+    last_verified: "2026-05-26"
+
+  # ── Art. 32 — Security: secret vault ─────────────────────────────────────
+
+  - id: "gdpr.art32.secrets"
+    article: "Art. 32"
+    summary: >
+      Technical measures must protect personal data against unauthorised
+      access.  Corvin separates secrets from LLM context: vault stores
+      secret values, bwrap injects them as env vars at spawn time.
+      Secret values never appear in the hash chain or LLM prompt.
+    severity: critical
+    implemented_by:
+      - layer: L16
+        file: "operator/bridges/shared/vault.py"
+        test: "operator/bridges/shared/test_vault.py"
+    invariants:
+      - "vault file mode is 0600 — world-readable vault is CRITICAL self-test failure"
+      - "secret values are injected into bwrap env, never passed as tool args"
+      - "meta.secrets in forge tool declarations contains key names only, never values"
+      - "no secret value appears in audit chain details"
+    forbidden_patterns:
+      - "pass secret value as a tool argument or in the prompt"
+      - "store secret value in meta.secrets (key names only are allowed)"
+      - "weaken vault file permissions below 0600"
+      - "add 'secret' field to any audit event details"
+    last_verified: "2026-05-26"
+
+  # ── Art. 32 — Security: path-gate write protection ───────────────────────
+
+  - id: "gdpr.art32.path_gate"
+    article: "Art. 32"
+    summary: >
+      Write access to security-critical paths (forge/skill-forge workspaces,
+      audit.jsonl, policy.json, slot-mirror, license/memory trees) must be
+      denied by default and enforced at the filesystem level.
+    severity: critical
+    implemented_by:
+      - layer: L10
+        file: "operator/voice/hooks/path_gate.py"
+        test: "operator/voice/hooks/test_path_gate.py"
+    invariants:
+      - "path-gate hook is registered for Write/Edit/MultiEdit/NotebookEdit/Bash/WebFetch"
+      - "path-gate runs at PreToolUse, never PostToolUse"
+      - "fail-closed: any eval/exec/backtick in Bash detection blocks"
+      - "path_gate.self_test_failed is CRITICAL on any self-test miss"
+      - "every block emits path_gate.denied to the audit chain"
+    forbidden_patterns:
+      - "fail-open path gate"
+      - "add trusted-persona Bash bypass"
+      - "add new write-tool without updating hooks/hooks.json and test_path_gate.py"
+      - "suppress path_gate.denied audit event"
+    last_verified: "2026-05-26"
+
+  # ── Art. 5(1)(a) — Voice transcription: metadata only ────────────────────
+
+  - id: "gdpr.art5.voice_transcription"
+    article: "Art. 5(1)(a) — lawfulness, fairness, transparency"
+    summary: >
+      Voice transcription events must emit metadata only.  The transcript
+      text itself is personal data and must never appear in the audit chain,
+      log lines, or Prometheus labels.
+    severity: critical
+    implemented_by:
+      - layer: L23
+        file: "operator/voice/scripts/stt/"
+        test: "operator/voice/scripts/test_stt.py"
+    invariants:
+      - "voice.transcribed audit event contains metadata only (duration, provider, language)"
+      - "transcript text is never written to audit.jsonl"
+      - "transcript text is never written to any log file"
+      - "transcript text is never added to Prometheus labels"
+    forbidden_patterns:
+      - "put transcript content in any audit field"
+      - "log transcript text at any severity level"
+      - "add transcript text to a metric label"
+    last_verified: "2026-05-26"
+
+  # ── Art. 17 — Right to erasure ────────────────────────────────────────────
+
+  - id: "gdpr.art17.erasure"
+    article: "Art. 17"
+    summary: >
+      Data subjects have the right to erasure ("right to be forgotten").
+      Corvin implements cross-layer erasure via the erasure orchestrator.
+      The audit chain is not erased but pseudonymised — Art. 17 vs L16
+      tamper-evidence is resolved via pseudonymous subject_id.
+    severity: critical
+    implemented_by:
+      - layer: L36
+        file: "operator/bridges/shared/erasure_orchestrator.py"
+        test: "operator/bridges/shared/test_erasure_orchestrator.py"
+    invariants:
+      - "corvin-erasure <subject_id> walks all registered ErasureHandlers"
+      - "subject_id matches ^[A-Za-z0-9.:_\\-]{1,128}$ — raw email/name rejected"
+      - "erasure trail file at <tenant>/global/erasure/<request_id>.json mode 0600"
+      - "erasure.failed events are never silently ignored (DPO decides retry)"
+      - "erasure runs within the owning tenant only, never cross-tenant"
+    forbidden_patterns:
+      - "accept raw email or full name as subject_id (must be pseudonymous)"
+      - "redact sealed audit segments (pseudonymisation is the mechanism)"
+      - "put erasure notes in audit chain details"
+      - "make erasure.failed advisory rather than action-required"
+      - "auto-retry FAILED erasure (DPO must decide)"
+    last_verified: "2026-05-26"
+
+  # ── Art. 5(1)(b)+(c) — Data minimisation / anonymisation ─────────────────
+
+  - id: "gdpr.art5.anonymisation"
+    article: "Art. 5(1)(b) + (c)"
+    summary: >
+      Data collected must be adequate, relevant, and limited to what is
+      necessary.  Corvin implements strict anonymisation (k=5 k-Anonymity,
+      Laplace noise, post-projection PII scan) for data snapshots.
+    severity: warning
+    implemented_by:
+      - layer: L32
+        file: "operator/bridges/shared/data_classification.py"
+        test: "core/gateway/tests/"
+    invariants:
+      - "strict_anonymization: true activates k=5 k-Anonymity + Laplace noise"
+      - "post-projection PII scan runs before snapshot is surfaced"
+      - "snapshot content and matched PII are never written to audit chain"
+    forbidden_patterns:
+      - "put snapshot content in audit chain"
+      - "put matched PII strings in audit event details"
+      - "lower k below 5 without operator explicit config + ADR"
+    last_verified: "2026-05-26"
+    notes: >
+      Warning severity: strict_anonymisation is opt-in.  Operators who enable
+      data snapshots and do NOT enable strict_anonymisation should be flagged
+      for review, but CI cannot block (legitimate use cases exist).
+
+  # ── Art. 5(1)(f) — Accountability — PII in labels/logs ───────────────────
+
+  - id: "gdpr.art5.pii_labels"
+    article: "Art. 5(1)(f)"
+    summary: >
+      Personal data must be protected against unauthorised access.  PII must
+      never appear in Prometheus labels, audit event details, or log lines
+      where it could be scraped or retained beyond its lawful period.
+    severity: critical
+    implemented_by:
+      - layer: L16
+        file: "operator/bridges/shared/audit.py"
+        test: "operator/bridges/shared/test_audit_unified.py"
+    invariants:
+      - "no uid, email, or name in Prometheus label values"
+      - "audit event allow-list explicitly names every permitted detail key"
+      - "no free-form string that could contain PII in audit details"
+    forbidden_patterns:
+      - "add uid or email to any Prometheus label"
+      - "log a user identifier beyond the pseudonymous subject_id"
+      - "add a free-form 'message' or 'text' field to an audit event"
+    last_verified: "2026-05-26"

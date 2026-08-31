@@ -1,0 +1,21 @@
+[Unit]
+Description=Corvin Task Worker Pool (tenant %i)
+After=default.target
+Documentation=docs/claude-ref/adr-0081.md
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/CorvinOS/core/console
+Environment=PYTHONPATH=%h/projects/CorvinOS/core/console:%h/projects/CorvinOS/operator/forge
+Environment=CORVIN_HOME=%h/.corvin
+Environment=CORVIN_TASK_MAX_WORKERS=5
+ExecStart=%h/projects/CorvinOS/core/console/.venv/bin/python -m corvin_console.task_worker_pool
+Restart=on-failure
+RestartSec=5s
+PrivateTmp=yes
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

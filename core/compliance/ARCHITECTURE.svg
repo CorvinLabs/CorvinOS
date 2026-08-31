@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" width="1200" height="900">
+  <!-- Define gradients -->
+  <defs>
+    <linearGradient id="grad_core" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#2E5090;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a2f4d;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="grad_compliance" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#2d6a4f;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1b4332;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="grad_report" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#9d4edd;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#5a189a;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="grad_template" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#e76f51;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#c1440d;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="grad_audit" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f77f00;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#d46a2e;stop-opacity:1" />
+    </linearGradient>
+
+    <style>
+      .box { fill-opacity: 1; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: white; }
+      .subtitle { font-size: 12px; fill: white; }
+      .label { font-size: 11px; fill: #333; }
+      .arrow { stroke: #333; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-label { font-size: 10px; fill: #555; }
+      .data-flow { stroke: #e74c3c; stroke-width: 2; stroke-dasharray: 5,5; fill: none; marker-end: url(#arrowhead_red); }
+    </style>
+
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#333" />
+    </marker>
+    <marker id="arrowhead_red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#e74c3c" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="35" style="font-size: 28px; font-weight: bold; text-anchor: middle; fill: #1a1a1a;">
+    Corvin Compliance Layer Architecture
+  </text>
+
+  <!-- ===== Layer 1: Core Runtime ===== -->
+  <rect x="100" y="60" width="1000" height="120" class="box" fill="url(#grad_core)" stroke="#1a2f4d"/>
+  <text x="600" y="85" style="font-size: 14px; font-weight: bold; text-anchor: middle; fill: white;">
+    Corvin Core Runtime — Audit Chain
+  </text>
+
+  <g style="font-size: 11px; fill: white; text-anchor: middle;">
+    <rect x="120" y="100" width="140" height="60" fill="#355693" stroke="white" stroke-width="1"/>
+    <text x="190" y="120">License</text>
+    <text x="190" y="135">Events</text>
+
+    <rect x="280" y="100" width="140" height="60" fill="#355693" stroke="white" stroke-width="1"/>
+    <text x="350" y="120">Console</text>
+    <text x="350" y="135">Audit</text>
+
+    <rect x="440" y="100" width="140" height="60" fill="#355693" stroke="white" stroke-width="1"/>
+    <text x="510" y="120">Compute</text>
+    <text x="510" y="135">Events</text>
+
+    <rect x="600" y="100" width="140" height="60" fill="#355693" stroke="white" stroke-width="1"/>
+    <text x="670" y="120">Gateway</text>
+    <text x="670" y="135">Requests</text>
+
+    <rect x="760" y="100" width="140" height="60" fill="#355693" stroke="white" stroke-width="1"/>
+    <text x="830" y="120">Delegate</text>
+    <text x="830" y="135">Events</text>
+
+    <rect x="920" y="100" width="160" height="60" fill="#355693" stroke="white" stroke-width="1"/>
+    <text x="1000" y="120">Other</text>
+    <text x="1000" y="135">Sources</text>
+  </g>
+
+  <!-- ===== Data Flow Arrow ===== -->
+  <path d="M 600 180 L 600 230" class="data-flow"/>
+  <text x="630" y="210" class="arrow-label">[audit events]</text>
+
+  <!-- ===== Layer 2: Compliance Layer ===== -->
+  <rect x="100" y="230" width="1000" height="480" class="box" fill="url(#grad_compliance)" stroke="#1b4332" stroke-dasharray="0"/>
+  <text x="600" y="255" style="font-size: 14px; font-weight: bold; text-anchor: middle; fill: white;">
+    Compliance Layer — corvin_compliance_reports
+  </text>
+
+  <!-- ===== Subsystem 1: CLI ===== -->
+  <rect x="120" y="280" width="220" height="100" class="box" fill="url(#grad_report)" stroke="#5a189a"/>
+  <text x="230" y="305" style="font-size: 12px; font-weight: bold; text-anchor: middle; fill: white;">CLI Entry Point</text>
+  <g style="font-size: 10px; fill: white; text-anchor: middle;">
+    <text x="230" y="325">$ python -m</text>
+    <text x="230" y="340">corvin_compliance</text>
+    <text x="230" y="355">_reports.cli</text>
+    <text x="230" y="370">generate [type]</text>
+  </g>
+
+  <!-- ===== Subsystem 2: Dispatch ===== -->
+  <rect x="380" y="280" width="220" height="100" class="box" fill="url(#grad_report)" stroke="#5a189a"/>
+  <text x="490" y="305" style="font-size: 12px; font-weight: bold; text-anchor: middle; fill: white;">Report Dispatcher</text>
+  <g style="font-size: 10px; fill: white; text-anchor: middle;">
+    <text x="490" y="325">ai-act-50</text>
+    <text x="490" y="340">gdpr-30</text>
+    <text x="490" y="355">audit-</text>
+    <text x="490" y="370">attestation</text>
+  </g>
+
+  <!-- ===== Subsystem 3: Query ===== -->
+  <rect x="640" y="280" width="220" height="100" class="box" fill="url(#grad_report)" stroke="#5a189a"/>
+  <text x="750" y="305" style="font-size: 12px; font-weight: bold; text-anchor: middle; fill: white;">Audit Query</text>
+  <g style="font-size: 10px; fill: white; text-anchor: middle;">
+    <text x="750" y="325">• Time-window</text>
+    <text x="750" y="340">  filtering</text>
+    <text x="750" y="355">• Tenant isolation</text>
+    <text x="750" y="370">• Chain validation</text>
+  </g>
+
+  <!-- ===== Subsystem 4: Template ===== -->
+  <rect x="900" y="280" width="180" height="100" class="box" fill="url(#grad_template)" stroke="#c1440d"/>
+  <text x="990" y="305" style="font-size: 12px; font-weight: bold; text-anchor: middle; fill: white;">Template</text>
+  <text x="990" y="320" style="font-size: 12px; font-weight: bold; text-anchor: middle; fill: white;">Engine</text>
+  <g style="font-size: 10px; fill: white; text-anchor: middle;">
+    <text x="990" y="345">Markdown →</text>
+    <text x="990" y="360">PDF</text>
+    <text x="990" y="375">Metadata</text>
+  </g>
+
+  <!-- ===== Report Generators (Row 2) ===== -->
+  <rect x="120" y="410" width="160" height="120" class="box" fill="#c1440d" stroke="#8b2e00"/>
+  <text x="200" y="435" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: white;">AI Act Article 50</text>
+  <text x="200" y="450" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: white;">Evidence Report</text>
+  <g style="font-size: 9px; fill: white; text-anchor: middle;">
+    <text x="200" y="470">Transparency</text>
+    <text x="200" y="483">Risk assessment</text>
+    <text x="200" y="496">Human oversight</text>
+    <text x="200" y="509">Training data</text>
+  </g>
+
+  <rect x="320" y="410" width="160" height="120" class="box" fill="#c1440d" stroke="#8b2e00"/>
+  <text x="400" y="435" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: white;">GDPR Article 30</text>
+  <text x="400" y="450" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: white;">Records of</text>
+  <text x="400" y="463" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: white;">Processing (RoPA)</text>
+  <g style="font-size: 9px; fill: white; text-anchor: middle;">
+    <text x="400" y="483">Controller/Processor</text>
+    <text x="400" y="496">Lawful basis</text>
+    <text x="400" y="509">Data subjects</text>
+  </g>
+
+  <rect x="520" y="410" width="160" height="120" class="box" fill="#c1440d" stroke="#8b2e00"/>
+  <text x="600" y="435" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: white;">Audit Chain</text>
+  <text x="600" y="450" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: white;">Integrity</text>
+  <text x="600" y="463" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: white;">Attestation</text>
+  <g style="font-size: 9px; fill: white; text-anchor: middle;">
+    <text x="600" y="483">Anchor hash</text>
+    <text x="600" y="496">Chain validation</text>
+    <text x="600" y="509">Tamper detection</text>
+  </g>
+
+  <!-- ===== Audit Emitter (Row 3) ===== -->
+  <rect x="120" y="560" width="560" height="100" class="box" fill="url(#grad_audit)" stroke="#d46a2e"/>
+  <text x="400" y="585" style="font-size: 12px; font-weight: bold; text-anchor: middle; fill: white;">Audit Emitter (Best-Effort Only)</text>
+
+  <g style="font-size: 10px; fill: white;">
+    <rect x="140" y="600" width="240" height="50" fill="#c85a0c" stroke="white" stroke-width="1"/>
+    <text x="260" y="618" style="text-anchor: middle;">compliance.report_generated</text>
+    <text x="260" y="633" style="text-anchor: middle; font-size: 9px;">(INFO level)</text>
+    <text x="260" y="643" style="text-anchor: middle; font-size: 9px;">Fields: type, tenant, period, hash</text>
+
+    <rect x="410" y="600" width="240" height="50" fill="#c85a0c" stroke="white" stroke-width="1"/>
+    <text x="530" y="618" style="text-anchor: middle;">compliance.report_failed</text>
+    <text x="530" y="633" style="text-anchor: middle; font-size: 9px;">(WARNING level)</text>
+    <text x="530" y="643" style="text-anchor: middle; font-size: 9px;">Fields: type, tenant, reason</text>
+  </g>
+
+  <!-- ===== Output ===== -->
+  <path d="M 400 660 L 400 710" class="data-flow"/>
+  <text x="430" y="690" class="arrow-label">[PDF output]</text>
+
+  <!-- ===== Layer 3: Output ===== -->
+  <rect x="200" y="710" width="400" height="80" class="box" fill="#34495e" stroke="#2c3e50"/>
+  <text x="400" y="735" style="font-size: 12px; font-weight: bold; text-anchor: middle; fill: white;">Operator Artifact Store</text>
+  <g style="font-size: 11px; fill: white; text-anchor: middle;">
+    <text x="400" y="760">{tenant}-{report_type}-{epoch}.pdf</text>
+    <text x="400" y="778">Location: operator-side, never logged</text>
+  </g>
+
+  <!-- ===== Info Boxes ===== -->
+  <!-- License Box -->
+  <rect x="750" y="410" width="330" height="150" fill="none" stroke="#2ecc71" stroke-width="2" stroke-dasharray="5,5"/>
+  <text x="915" y="430" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: #27ae60;">
+    License Policy (ADR-0017)
+  </text>
+  <g style="font-size: 10px; fill: #27ae60;">
+    <text x="765" y="450">✓ All three baseline reports</text>
+    <text x="765" y="465">  are Apache-2.0 FREE</text>
+    <text x="765" y="480">✓ Never gated on trial/free/paid</text>
+    <text x="765" y="495">✓ Operators can always generate</text>
+    <text x="765" y="510">✓ Enterprise Phase V adds premium</text>
+    <text x="765" y="525">  variants (scheduling, templates,</text>
+    <text x="765" y="540">  WORM archival)</text>
+  </g>
+
+  <!-- Query Integration Box -->
+  <rect x="750" y="580" width="330" height="90" fill="none" stroke="#3498db" stroke-width="2"/>
+  <text x="915" y="600" style="font-size: 11px; font-weight: bold; text-anchor: middle; fill: #2980b9;">
+    Query Boundaries
+  </text>
+  <g style="font-size: 10px; fill: #2980b9;">
+    <text x="765" y="620">Time window: [start_ts, end_ts)</text>
+    <text x="765" y="635">Tenant isolation enforced</text>
+    <text x="765" y="650">Never exposes sensitive paths</text>
+  </g>
+
+  <!-- ===== Legend ===== -->
+  <g style="font-size: 10px;">
+    <text x="100" y="835" style="font-weight: bold;">Legend:</text>
+    <line x1="100" y1="850" x2="150" y2="850" class="arrow"/>
+    <text x="160" y="855">Control flow</text>
+
+    <line x1="300" y1="850" x2="350" y2="850" class="data-flow"/>
+    <text x="360" y="855">Data flow (audit events, PDF output)</text>
+  </g>
+
+  <!-- ===== Footer ===== -->
+  <text x="600" y="890" style="font-size: 9px; text-anchor: middle; fill: #7f8c8d;">
+    Corvin v0.1.0 | ADR-0017 Phase II | Never gate compliance reporting on license
+  </text>
+</svg>

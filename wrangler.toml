@@ -1,0 +1,19 @@
+name = "corvinos-stats"
+main = "src/index.ts"
+type = "javascript"
+account_id = "80502fbc19db6c284a8c04faabc93f68"
+
+[env.production]
+name = "corvinos-stats-production"
+route = "https://corvin-labs.com/stats*"
+zone_id = "4ff10c82200aa21e9ca2fa78427bae42"
+
+[build]
+command = "npm run build"
+
+[[env.production.routes]]
+pattern = "corvin-labs.com/stats"
+zone_name = "corvin-labs.com"
+
+[triggers]
+crons = ["0 */6 * * *"]

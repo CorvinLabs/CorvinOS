@@ -1,0 +1,11 @@
+{
+  "name": "corvin-bridge-email",
+  "version": "0.1.0",
+  "private": true,
+  "main": "daemon.js",
+  "dependencies": {
+    "imapflow": "^1.4.2",
+    "mailparser": "^3.9.11",
+    "nodemailer": "^9.0.1"
+  }
+}

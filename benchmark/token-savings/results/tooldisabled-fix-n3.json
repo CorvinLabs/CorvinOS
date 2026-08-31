@@ -1,0 +1,527 @@
+{
+  "report": {
+    "experiment": "exp-001",
+    "measurement": "tool-disabled",
+    "model": "claude-haiku-4-5-20251001",
+    "n_per_task": 3,
+    "n_single_tasks": 6,
+    "arm_quality": {
+      "none": 0.0,
+      "cel": 0.0,
+      "cel_content": 0.833,
+      "oracle": 1.0
+    },
+    "interpretation": {
+      "none": "no context, no tools -> the model cannot know the fact (floor)",
+      "cel": "real deterministic CEL brief (pointers/titles) -> tests if a pointer is answerable without agentic pull",
+      "cel_content": "the PROTOTYPE fix (render_brief_to_text include_content=True): CEL brief now injects memory BODIES, not just titles",
+      "oracle": "the memory CONTENT injected -> proves the fact IS answerable when actually injected (ceiling)"
+    }
+  },
+  "raw": [
+    {
+      "arm": "none",
+      "task": "mem-staging-cluster",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-staging-cluster",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-staging-cluster",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-token-rotation",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-token-rotation",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "I need to search the project for build-token rotation configuration. Let me look for this information.\n\nSearching the re"
+    },
+    {
+      "arm": "none",
+      "task": "mem-token-rotation",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-retry-limit",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "I need to search the codebase for the ingestion pipeline retry configuration.\n\nLooking at the modified files listed in g"
+    },
+    {
+      "arm": "none",
+      "task": "mem-retry-limit",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "I need to search the codebase for the ingestion pipeline's retry limit configuration.\n\nLooking at the pipeline.py file a"
+    },
+    {
+      "arm": "none",
+      "task": "mem-retry-limit",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "Ich werde die Pipeline-Datei \u00fcberpr\u00fcfen, um die maximale Retry-Limit zu finden.\n\nReading the pipeline configuration to f"
+    },
+    {
+      "arm": "none",
+      "task": "mem-mascot",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-mascot",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-mascot",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-analytics-port",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-analytics-port",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-analytics-port",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-residency-region",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-residency-region",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "none",
+      "task": "mem-residency-region",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-staging-cluster",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "Reading the staging cluster memory file.\n\ncel"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-staging-cluster",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "bench-cel"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-staging-cluster",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "CEL"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-token-rotation",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "Ich suche nach der Build-Token-Rotationsinterval im Projekt.\n\nLesen Sie bitte die Projektdateien und das Memory:\n\nIch ka"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-token-rotation",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-token-rotation",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-retry-limit",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "I need to find the retry limit value. Let me check the relevant memory file.\n\nI'll read the memory file for bench-cel-re"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-retry-limit",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "Let me check the memory about this.\n<function_calls>\n<invoke name=\"Read\">\n<parameter name=\"path\">/home/shumway/.claude/p"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-retry-limit",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "I need to check the memory and code for this information. Let me read the relevant files.\n\nReading memory and code to fi"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-mascot",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-mascot",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-mascot",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-analytics-port",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-analytics-port",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-analytics-port",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-residency-region",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-residency-region",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "Gelesen wird die Speicherdatei bench-cel-residency-region.md:\n\n<read>\n<path>/home/shumway/.claude/projects/-home-shumway"
+    },
+    {
+      "arm": "cel",
+      "task": "mem-residency-region",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "I need to check the memory file to answer this accurately.\n\nLet me read the relevant memory entry.\n\nLooking at the memor"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-staging-cluster",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-staging-cluster",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-staging-cluster",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-token-rotation",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-token-rotation",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-token-rotation",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-retry-limit",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "29"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-retry-limit",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "29"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-retry-limit",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "29"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-mascot",
+      "rep": 0,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-mascot",
+      "rep": 1,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-mascot",
+      "rep": 2,
+      "quality": 0.0,
+      "resp_head": "unknown"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-analytics-port",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-analytics-port",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-analytics-port",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-residency-region",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-residency-region",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    },
+    {
+      "arm": "cel_content",
+      "task": "mem-residency-region",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-staging-cluster",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-staging-cluster",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-staging-cluster",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "Halberd-9"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-token-rotation",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-token-rotation",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-token-rotation",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "47"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-retry-limit",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "29"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-retry-limit",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "29"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-retry-limit",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "29"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-mascot",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "Quill-7"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-mascot",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "Quill-7"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-mascot",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "Quill-7"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-analytics-port",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-analytics-port",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-analytics-port",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "8813"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-residency-region",
+      "rep": 0,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-residency-region",
+      "rep": 1,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    },
+    {
+      "arm": "oracle",
+      "task": "mem-residency-region",
+      "rep": 2,
+      "quality": 1.0,
+      "resp_head": "eu-fra-3"
+    }
+  ]
+}

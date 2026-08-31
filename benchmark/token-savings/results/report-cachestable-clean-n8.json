@@ -1,0 +1,75 @@
+{
+  "suite_version": "multiturn-v1",
+  "n_per_arm": 8,
+  "tenant": "_default",
+  "run_id": "cachestable-clean-n8",
+  "arms": "cachestable",
+  "measurement_isolation": [
+    "outcome_feedback_loop",
+    "tde_shadow_measurement",
+    "vibe_engineering_active"
+  ],
+  "model": "claude-haiku-4-5-20251001",
+  "cost_available": true,
+  "input_captured": true,
+  "components_per_arm": {
+    "A_fix_off": {
+      "fresh_input": 30.0,
+      "cache_creation": 75955.0,
+      "cache_read": 54417.0,
+      "output": 840.5,
+      "tokens_total": 131242.5,
+      "cost_usd": 0.161584
+    },
+    "B_fix_on": {
+      "fresh_input": 30.0,
+      "cache_creation": 28390.5,
+      "cache_read": 102866.0,
+      "output": 859.8,
+      "tokens_total": 132146.3,
+      "cost_usd": 0.071396
+    }
+  },
+  "note": "tokens_total = fresh_input + cache_creation + cache_read + output (all 4 classes). Savings (raw count) = (median A \u2212 median B)/median A, quality-gated, bootstrap 95% CI, Mann-Whitney-U (B<A). RAW COUNT \u2260 COST: cache-read ~0.1x, cache-creation ~1.25x, output ~5x \u2014 apply your model's prices to components_per_arm for a cost figure. suite-v1 is single-turn: it measures CEL's per-task COLD cost (always pays cache_creation, never amortized) \u2014 CEL's best case (warm reuse over a session) needs multi-turn tasks, not yet in the suite.",
+  "overall": {
+    "task_type": "overall",
+    "n_pairs": 23,
+    "a_median": 131145.0,
+    "b_median": 131849.0,
+    "savings_point": -0.005368104007015136,
+    "ci_low": -0.008195345288057994,
+    "ci_high": -0.002877281653904121,
+    "p_value": 0.9999019121485169,
+    "significant": false,
+    "quality_ok_frac": 0.9583333333333334,
+    "dropped_quality": 1
+  },
+  "per_type": {
+    "coding": {
+      "task_type": "coding",
+      "n_pairs": 16,
+      "a_median": 131334.5,
+      "b_median": 132003.5,
+      "savings_point": -0.0050938633793862235,
+      "ci_low": -0.014501088724531092,
+      "ci_high": -0.0012871723216184199,
+      "p_value": 0.9993212966084257,
+      "significant": false,
+      "quality_ok_frac": 1.0,
+      "dropped_quality": 0
+    },
+    "reasoning": {
+      "task_type": "reasoning",
+      "n_pairs": 7,
+      "a_median": 130510.0,
+      "b_median": 131400.0,
+      "savings_point": -0.006819400812198299,
+      "ci_low": -0.01029836897760124,
+      "ci_high": -0.00235748291015625,
+      "p_value": 0.9970219921027546,
+      "significant": false,
+      "quality_ok_frac": 0.875,
+      "dropped_quality": 1
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "_NOTE": "Teams bridge via Bot Framework SDK (Multi-Tenant Azure App). Whitelist: UPN / e-mail addresses (user@company.com). Hosting: Caddy reverse-proxy → https://teams.corvin.ai → localhost:3978.",
+  "_NOTE_credentials": "Get microsoft_app_id + microsoft_app_password from Azure Portal → App Registrations → your app → Certificates & Secrets. Keep microsoft_app_tenant 'common' for multi-tenant (all companies can install).",
+  "_NOTE_read_only": "OPTIONAL — users in read_only may sit in the chat but CANNOT trigger the bot. Whitelist beats read_only on collisions. Every drop is audited as bridge.read_only_drop.",
+  "microsoft_app_id":       "YOUR_AZURE_APP_ID",
+  "microsoft_app_password": "YOUR_CLIENT_SECRET",
+  "microsoft_app_tenant":   "common",
+  "whitelist":              ["admin@yourcompany.com"],
+  "read_only":              [],
+  "rate_limit_per_hour":    60,
+  "pin":                    null
+}

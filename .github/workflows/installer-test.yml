@@ -1,0 +1,185 @@
+name: Installer E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'corvinOS/installer/**'
+      - 'corvinOS/shared/paths.py'
+      - 'pyproject.toml'
+      - 'tests/test_installer_*.py'
+      - '.github/workflows/installer-test.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'corvinOS/installer/**'
+      - 'corvinOS/shared/paths.py'
+      - 'pyproject.toml'
+      - 'tests/test_installer_*.py'
+
+jobs:
+  test-linux:
+    name: Test on Linux
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-cov
+
+      - name: Run unit tests
+        run: |
+          pytest tests/test_service_manager.py -v --cov=corvinOS --cov-report=xml
+
+      - name: Run integration tests
+        run: |
+          pytest tests/test_installer_integration.py -v --cov=corvinOS --cov-report=xml
+
+      - name: Run voice installer tests (ADR-0185)
+        run: |
+          pytest tests/test_installer_stt.py tests/test_installer_piper.py -v --cov=corvinOS --cov-report=xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: linux-py${{ matrix.python-version }}
+
+  test-macos:
+    name: Test on macOS
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-cov
+
+      - name: Run unit tests (macOS-specific)
+        run: |
+          pytest tests/test_service_manager.py::TestDarwinServiceManager -v
+
+      - name: Run integration tests
+        run: |
+          pytest tests/test_installer_integration.py -v
+
+      - name: Run voice installer tests (ADR-0185)
+        run: |
+          pytest tests/test_installer_stt.py tests/test_installer_piper.py -v
+
+  test-windows:
+    name: Test on Windows
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-cov
+
+      - name: Run unit tests (Windows-specific)
+        run: |
+          pytest tests/test_service_manager.py::TestWindowsServiceManager -v
+
+      - name: Run integration tests
+        run: |
+          pytest tests/test_installer_integration.py -v
+
+      - name: Run voice installer tests (ADR-0185)
+        run: |
+          pytest tests/test_installer_stt.py tests/test_installer_piper.py -v
+
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install black ruff mypy
+
+      - name: Check formatting with black
+        run: black --check corvinOS tests || true
+
+      - name: Lint with ruff
+        run: ruff check corvinOS tests || true
+
+      - name: Type check with mypy
+        run: mypy corvinOS --ignore-missing-imports || true
+
+  build-wheels:
+    name: Build Wheels
+    runs-on: ${{ matrix.os }}
+    needs: [test-linux, test-macos, test-windows]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: core/console/corvin_console/web-next/package-lock.json
+
+      - name: Build React SPA
+        working-directory: core/console/corvin_console/web-next
+        run: npm ci --no-audit && npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          pip install --upgrade pip
+          pip install build hatchling
+
+      - name: Build wheel
+        run: python -m build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/

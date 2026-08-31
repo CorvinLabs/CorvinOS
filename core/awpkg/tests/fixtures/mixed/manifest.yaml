@@ -1,0 +1,31 @@
+awpkg: "1.0"
+id: "com.corvin.trading-strategy-pack"
+name: "Trading Strategy Pack"
+version: "3.0.0"
+description: "Mixed DAG-plus-delegation trading package. Includes a live signal pipeline (parallel fetch → delegation loop → risk filter) and a companion backtest workflow. Ships three Forge tools, two skills and a quant_trader persona."
+author: "Corvin Team"
+license: "Apache-2.0"
+min_corvin_version: "0.9.0"
+
+components:
+  workflows:
+    - workflows/signal_pipeline.awp.yaml
+    - workflows/backtest.awp.yaml
+  forge_tools:
+    - tools/code_ohlcv_fetch.json
+    - tools/code_orderbook_snap.json
+    - tools/code_compute_indicators.json
+  skills:
+    - skills/quant_trading/SKILL.md
+    - skills/risk_management/SKILL.md
+  personas:
+    - personas/quant_trader.yaml
+
+permissions:
+  network: false
+  compute: true
+  secrets: []
+
+dependencies:
+  - id: "com.corvin.market-research-suite"
+    version: ">=2.0.0"

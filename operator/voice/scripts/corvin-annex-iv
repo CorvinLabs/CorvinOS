@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# corvin-annex-iv — Annex IV Technical Documentation generator (ADR-0057).
+# Generates EU AI Act Annex IV Technical Documentation from existing sources.
+#
+# Symlink onto $PATH:
+#   ln -s "$PWD/operator/voice/scripts/corvin-annex-iv" ~/.local/bin/corvin-annex-iv
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/corvin_annex_iv.py" "$@"

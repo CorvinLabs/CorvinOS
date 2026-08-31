@@ -1,0 +1,388 @@
+"""Per-plugin circuit breaker — contain a sick plugin, don't cascade (ADR-0233).
+
+A plugin that fails slowly is worse than one that fails fast: every call site pays
+its timeout, and the platform degrades everywhere at once.  The breaker gives each
+``plugin_id`` three states:
+
+* **closed** — calls pass through.  Consecutive failures are counted.
+* **open** — calls are refused immediately with the caller's fallback.  No plugin
+  code runs.  After ``cooldown_s`` the breaker allows one probe.
+* **half_open** — exactly one probe call is admitted.  Success closes the breaker,
+  failure re-opens it (and the cooldown applies again).
+
+Deliberate properties:
+
+* **Time is monotonic.** Cooldowns use ``time.monotonic()``, so a wall-clock jump
+  (NTP step, suspend/resume) cannot leave a breaker stuck open or pop it early.
+* **A timeout is a failure.** ``call()`` measures wall time and trips on a slow
+  success too — a plugin that takes 30 s to answer correctly is still an outage.
+* **Fail-closed is the caller's choice, not the breaker's.** ``call()`` returns the
+  fallback the caller passes. For an audit sink the fallback is "drop the copy"; for
+  an auth backend the caller passes ``None``, which its own contract reads as deny.
+  The breaker never invents a permissive default.
+* **No global kill switch.** Per-plugin state only; there is no "disable all
+  breakers" flag, because that would be an availability foot-gun.
+"""
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Dict
+
+log = logging.getLogger("corvin.plugins.breaker")
+
+
+class BreakerState(str, Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
+#: Consecutive failures before the breaker opens.
+DEFAULT_FAILURE_THRESHOLD = 3
+#: How long an open breaker refuses calls before admitting one probe.
+DEFAULT_COOLDOWN_S = 30.0
+#: A call slower than this counts as a failure even if it returns.
+DEFAULT_SLOW_CALL_S = 5.0
+
+
+class CircuitOpen(RuntimeError):
+    """Raised by :meth:`CircuitBreaker.guard` when the breaker is open."""
+
+    def __init__(self, plugin_id: str, retry_in_s: float):
+        super().__init__(f"circuit open for {plugin_id!r}, retry in {retry_in_s:.1f}s")
+        self.plugin_id = plugin_id
+        self.retry_in_s = retry_in_s
+
+
+@dataclass
+class BreakerStats:
+    """Observable state of one breaker.  Contains no exception messages."""
+
+    plugin_id: str
+    state: BreakerState = BreakerState.CLOSED
+    consecutive_failures: int = 0
+    total_failures: int = 0
+    total_calls: int = 0
+    total_refused: int = 0
+    #: Exception CLASS name of the most recent failure, never its message.
+    last_failure_type: str | None = None
+    #: False when this plugin's boot layer forbids containment (compliance).
+    containable: bool = True
+    opened_at: float | None = field(default=None, repr=False)
+    #: When the single half-open probe was claimed. Without a claim slot, every
+    #: caller queued behind an open breaker was admitted the moment the cooldown
+    #: elapsed — a thundering herd onto a plugin still presumed sick. The slot
+    #: carries a TIMESTAMP rather than a bool so an ABANDONED probe (a caller
+    #: killed by BaseException, or a future call site that forgets to report)
+    #: expires instead of wedging the breaker shut forever — which would be worse
+    #: than the herd it prevents.
+    probe_claimed_at: float | None = field(default=None, repr=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "plugin_id": self.plugin_id,
+            "state": self.state.value,
+            "consecutive_failures": self.consecutive_failures,
+            "total_failures": self.total_failures,
+            "total_calls": self.total_calls,
+            "total_refused": self.total_refused,
+            "last_failure_type": self.last_failure_type,
+            # Whether containment applies at all. Without it the Console shows
+            # `state: "closed"` for a plugin whose breaker is structurally
+            # unable to open, which reads as "healthy" and is not the same
+            # thing at all.
+            "containable": self.containable,
+        }
+
+
+class CircuitBreaker:
+    """One breaker for one plugin.  Thread-safe."""
+
+    def __init__(
+        self,
+        plugin_id: str,
+        *,
+        failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
+        cooldown_s: float = DEFAULT_COOLDOWN_S,
+        slow_call_s: float = DEFAULT_SLOW_CALL_S,
+        probe_ttl_s: float | None = None,
+    ):
+        if failure_threshold < 1:
+            raise ValueError("failure_threshold must be >= 1")
+        self.plugin_id = plugin_id
+        #: May this plugin be contained (stopped from being called) when it
+        #: keeps failing?  ``get_breaker()`` sets it to False for the compliance
+        #: boot layer; failures are still counted and reported, the breaker just
+        #: never opens.  Default True so a breaker built directly — tests, other
+        #: subsystems — behaves exactly as it always did.
+        self.containable = True
+        self.failure_threshold = failure_threshold
+        self.cooldown_s = cooldown_s
+        self.slow_call_s = slow_call_s
+        #: How long a claimed half-open probe stays claimed before it is treated
+        #: as abandoned. Defaults to the wider of cooldown/slow-call so a genuinely
+        #: slow probe is never stolen, while an abandoned one always expires.
+        self.probe_ttl_s = (
+            probe_ttl_s if probe_ttl_s is not None else max(cooldown_s, slow_call_s)
+        )
+        self._lock = threading.Lock()
+        self._stats = BreakerStats(plugin_id=plugin_id)
+
+    # ── State ────────────────────────────────────────────────────────────────
+
+    @property
+    def state(self) -> BreakerState:
+        """Current state, accounting for an elapsed cooldown."""
+        with self._lock:
+            return self._state_locked()
+
+    def _probe_held_locked(self) -> bool:
+        """True when a half-open probe is claimed AND has not expired.
+
+        An expired claim is released here, so an abandoned probe costs at most
+        ``probe_ttl_s`` of extra refusal instead of jamming the breaker for good.
+        """
+        claimed = self._stats.probe_claimed_at
+        if claimed is None:
+            return False
+        if time.monotonic() - claimed >= self.probe_ttl_s:
+            log.warning(
+                "circuit %r: half-open probe abandoned after %.1fs — releasing slot",
+                self.plugin_id,
+                self.probe_ttl_s,
+            )
+            self._stats.probe_claimed_at = None
+            return False
+        return True
+
+    def _state_locked(self) -> BreakerState:
+        st = self._stats
+        if st.state is BreakerState.OPEN and st.opened_at is not None:
+            if time.monotonic() - st.opened_at >= self.cooldown_s:
+                st.state = BreakerState.HALF_OPEN
+        return st.state
+
+    def stats(self) -> BreakerStats:
+        with self._lock:
+            self._state_locked()
+            # Copy so a caller cannot mutate breaker state through the dataclass.
+            snapshot = BreakerStats(**vars(self._stats))
+            snapshot.containable = getattr(self, "containable", True)
+            return snapshot
+
+    def reset(self) -> None:
+        """Force the breaker closed (operator re-enable, plugin reload)."""
+        with self._lock:
+            self._stats.state = BreakerState.CLOSED
+            self._stats.consecutive_failures = 0
+            self._stats.opened_at = None
+            self._stats.probe_claimed_at = None
+
+    # ── Recording ────────────────────────────────────────────────────────────
+
+    def record_success(self) -> None:
+        with self._lock:
+            st = self._stats
+            st.consecutive_failures = 0
+            if st.state is not BreakerState.CLOSED:
+                log.info("circuit closed for %r after a successful probe", self.plugin_id)
+            st.state = BreakerState.CLOSED
+            st.opened_at = None
+            st.probe_claimed_at = None
+
+    def record_failure(self, exc: BaseException | None = None) -> None:
+        with self._lock:
+            st = self._stats
+            st.consecutive_failures += 1
+            st.total_failures += 1
+            if exc is not None:
+                # Class name only. str(exc) routinely carries hostnames, paths,
+                # bind DNs or record fragments.
+                st.last_failure_type = type(exc).__name__
+            was = st.state
+            if not getattr(self, "containable", True):
+                # Compliance boot layer: the failure is counted and visible in
+                # stats(), but the breaker never opens. Opening it would stop
+                # the mechanism being called at all, which is the automatic off
+                # switch that layer may not have. Set centrally by get_breaker()
+                # so every call site inherits it — the previous approach gated
+                # one call site at a time and missed two.
+                return
+            if (
+                st.state is BreakerState.HALF_OPEN
+                or st.consecutive_failures >= self.failure_threshold
+            ):
+                st.state = BreakerState.OPEN
+                st.opened_at = time.monotonic()
+                st.probe_claimed_at = None
+                if was is not BreakerState.OPEN:
+                    log.error(
+                        "circuit OPEN for %r after %d consecutive failures (last: %s)",
+                        self.plugin_id,
+                        st.consecutive_failures,
+                        st.last_failure_type,
+                    )
+
+    # ── Invocation ───────────────────────────────────────────────────────────
+
+    def guard(self) -> None:
+        """Raise :class:`CircuitOpen` when the breaker is refusing calls.
+
+        In HALF_OPEN exactly ONE probe is admitted; concurrent callers are
+        refused until that probe reports back through ``record_success`` /
+        ``record_failure``.
+
+        A breaker marked non-containable never refuses, whatever state it is in.
+        ``record_failure`` already honoured that, and ``guard`` did not — which
+        left a real hole with no attacker in it: unload a compliance audit sink
+        and its breaker is forgotten, but the drain thread keeps running and
+        rebuilds one through ``get_breaker`` while the plugin is NOT registered.
+        ``_is_containable`` then cannot see a boot layer, defaults to
+        containable, and three failures open it. Re-registering restores
+        ``containable=False`` but not the state, so the sink stayed refused for
+        the cooldown — an automatic off switch on a compliance mechanism,
+        reached by an ordinary hot reload.
+        """
+        with self._lock:
+            if not getattr(self, "containable", True):
+                self._stats.total_calls += 1
+                return
+            state = self._state_locked()
+            probe_held = self._probe_held_locked()
+            if state is BreakerState.OPEN or (
+                state is BreakerState.HALF_OPEN and probe_held
+            ):
+                self._stats.total_refused += 1
+                retry_in = self.cooldown_s
+                if self._stats.opened_at is not None:
+                    retry_in = max(
+                        0.0, self.cooldown_s - (time.monotonic() - self._stats.opened_at)
+                    )
+                raise CircuitOpen(self.plugin_id, retry_in)
+            if state is BreakerState.HALF_OPEN:
+                self._stats.probe_claimed_at = time.monotonic()
+            self._stats.total_calls += 1
+
+    def call(self, fn: Callable[..., Any], *args: Any, fallback: Any = None, **kwargs: Any) -> Any:
+        """Run ``fn`` under the breaker, returning ``fallback`` when it cannot.
+
+        Returns ``fallback`` both when the breaker is open and when the call
+        fails — the caller's own contract decides what that fallback means.
+        """
+        try:
+            self.guard()
+        except CircuitOpen:
+            return fallback
+
+        started = time.monotonic()
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — containment is the whole point
+            self.record_failure(exc)
+            return fallback
+
+        elapsed = time.monotonic() - started
+        if elapsed > self.slow_call_s:
+            # A correct-but-glacial answer is still an outage for every caller.
+            log.warning(
+                "plugin %r answered in %.1fs (slow-call threshold %.1fs)",
+                self.plugin_id,
+                elapsed,
+                self.slow_call_s,
+            )
+            self.record_failure(TimeoutError())
+            return fallback
+
+        self.record_success()
+        return result
+
+
+class BreakerRegistry:
+    """Holds one breaker per plugin_id.  Thread-safe."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._breakers: Dict[str, CircuitBreaker] = {}
+
+    def get(self, plugin_id: str, **kwargs: Any) -> CircuitBreaker:
+        """Return (creating on first use) the breaker for a plugin."""
+        with self._lock:
+            breaker = self._breakers.get(plugin_id)
+            if breaker is None:
+                breaker = CircuitBreaker(plugin_id, **kwargs)
+                self._breakers[plugin_id] = breaker
+            return breaker
+
+    def forget(self, plugin_id: str) -> None:
+        """Drop a breaker entirely (plugin uninstalled)."""
+        with self._lock:
+            self._breakers.pop(plugin_id, None)
+
+    def snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """Breaker state for every known plugin — for health_check_all()."""
+        with self._lock:
+            breakers = list(self._breakers.values())
+        return {b.plugin_id: b.stats().to_dict() for b in breakers}
+
+    def reset_all(self) -> None:
+        with self._lock:
+            breakers = list(self._breakers.values())
+        for b in breakers:
+            b.reset()
+
+
+_registry = BreakerRegistry()
+
+
+def _is_containable(plugin_id: str) -> bool:
+    """False for the compliance boot layer, True for everything else.
+
+    An open breaker means "stop calling it", which for a compliance mechanism is
+    an automatic off switch — the thing CLAUDE.md rules out for that layer.
+    The decision lives HERE, at the one place every caller goes through, rather
+    than at each call site: gating them one at a time is what let the same
+    invariant be violated twice from ``audit_backend._deliver_inner`` and
+    ``healing._circuit_break`` after ``health_check_all`` had been fixed.
+
+    Imported lazily and failing OPEN-to-containment: if the registry cannot be
+    consulted, the plugin is treated as ordinary. That is the safe direction
+    here — a compliance plugin the registry does not know about is not a
+    compliance plugin.
+    """
+    try:
+        from .manifest import BootLayer
+        from .registry import get_registry
+
+        return get_registry().boot_layer_of(plugin_id) is not BootLayer.COMPLIANCE
+    except Exception:  # noqa: BLE001 — unknown plugin, no registry, import cycle
+        return True
+
+
+def get_breaker(plugin_id: str, **kwargs: Any) -> CircuitBreaker:
+    """The breaker for ``plugin_id``.
+
+    A compliance-boot-layer plugin gets a breaker that counts but never opens,
+    so every existing call site — ``guard()``, ``record_failure()``, the health
+    aggregate, the audit fan-out, the healing orchestrator — keeps working
+    unchanged while containment stops being reachable for that layer.
+    """
+    breaker = _registry.get(plugin_id, **kwargs)
+    if not _is_containable(plugin_id):
+        breaker.containable = False
+    return breaker
+
+
+def forget(plugin_id: str) -> None:
+    _registry.forget(plugin_id)
+
+
+def snapshot() -> Dict[str, Dict[str, Any]]:
+    return _registry.snapshot()
+
+
+def reset_all() -> None:
+    _registry.reset_all()

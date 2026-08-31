@@ -1,0 +1,6 @@
+# Phase 13.8 — Bayesian strategy backend.
+# Phase 13.1 ships stdlib-only; sklearn + numpy land here for q-EI / GP.
+scikit-learn>=1.4
+numpy>=1.26
+# fabric_config.py uses Pydantic v2 for tenant schema validation (ADR-0026).
+pydantic>=2.6

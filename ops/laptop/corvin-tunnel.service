@@ -1,0 +1,44 @@
+[Unit]
+Description=Corvin SSH tunnel — localhost:9000 → Corvin server:8000
+Documentation=https://github.com/veegee82/Corvin
+# Wait until the host has network — without this the unit can race
+# the network coming up during boot and immediately ExitOnForwardFailure.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# -N        : don't run a remote command, only forward
+# ServerAliveInterval/CountMax : drop the tunnel within ~90s of true silence
+# ExitOnForwardFailure         : if port 9000 is already taken, exit instead of running blind
+# StrictHostKeyChecking=accept-new : auto-trust the host key first time
+# Set CORVIN_TUNNEL_HOST in the environment drop-in (e.g. /etc/systemd/system/corvin-tunnel.service.d/host.conf)
+ExecStart=/usr/bin/ssh -N \
+  -L 9000:127.0.0.1:8000 \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o ExitOnForwardFailure=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -o ConnectTimeout=10 \
+  -o BatchMode=yes \
+  ${CORVIN_TUNNEL_HOST:-root@178.105.220.226}
+Restart=always
+RestartSec=10s
+# Bound start-rate so a perpetually-failing tunnel doesn't burn CPU.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Resource hygiene — single ssh process, never need more than this.
+MemoryMax=64M
+TasksMax=8
+
+# Hardening — least-privilege ssh client doesn't need much.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target

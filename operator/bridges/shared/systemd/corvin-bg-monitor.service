@@ -1,0 +1,24 @@
+[Unit]
+Description=corvin background-task supervisor + notification poller
+After=default.target
+
+[Service]
+Type=oneshot
+# bg_monitor.py lives in .../bridges/shared, NOT .../bridges. The old
+# ExecStart=__BRIDGES_DIR__/bg_monitor.py resolved to a non-existent path and
+# the timer exited status=2 (ENOENT) on every tick, so the durable-completion
+# backup poller never ran. Run from shared/ like the adapter unit, and share
+# the adapter's service.env so CORVIN_HOME matches the writer (else the poller
+# reads a different ~/.corvin tree than the one completions are queued in).
+#
+# This tick now does three things (see bg_monitor.run_once): it SUPERVISES
+# long-running tasks — relaunching a worker that was killed, OOMed or wedged,
+# within its attempt and wall-clock budgets — and delivers both the completion
+# queue and the intermediate-progress queue. It is the only thing that heals a
+# stopped run while the adapter is idle or restarting, which is exactly when a
+# long autonomous run is most likely to be stranded.
+WorkingDirectory=__BRIDGES_DIR__/shared
+ExecStart=/usr/bin/env python3 bg_monitor.py
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env

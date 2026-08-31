@@ -1,0 +1,9 @@
+[Unit]
+Description=Corvin-OS weekly supply-chain CVE digest (ADR-0021 Phase 31.3)
+
+[Service]
+Type=oneshot
+ExecStart=__PYTHON_BIN__ __PLUGIN_ROOT__/scripts/supply_chain_verify.py weekly --quiet
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env

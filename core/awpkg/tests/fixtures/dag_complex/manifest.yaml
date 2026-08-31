@@ -1,0 +1,26 @@
+awpkg: "1.0"
+id: "com.corvin.market-research-suite"
+name: "Market Research Suite"
+version: "2.1.0"
+description: "Parallel multi-source market research pipeline (news + Reddit + SEC filings). Fan-out / fan-in DAG with two Forge data-fetch tools."
+author: "Corvin Team"
+license: "Apache-2.0"
+min_corvin_version: "0.9.0"
+
+components:
+  workflows:
+    - workflows/market_research.awp.yaml
+  forge_tools:
+    - tools/code_fetch_news.json
+    - tools/code_fetch_social.json
+  skills:
+    - skills/market_analyst/SKILL.md
+  personas:
+    - personas/quant_researcher.yaml
+
+permissions:
+  network: false
+  compute: false
+  secrets: []
+
+dependencies: []

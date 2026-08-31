@@ -1,0 +1,35 @@
+# Multi-stage build for CorvinOS Stats Dashboard
+
+# Stage 1: Build (if needed)
+FROM node:18-alpine as builder
+WORKDIR /app
+# Copy any build artifacts
+COPY docs/stats.html .
+RUN echo "Stats dashboard ready"
+
+# Stage 2: Runtime (lightweight)
+FROM nginx:alpine
+LABEL maintainer="CorvinOS" \
+      description="CorvinOS Stats Dashboard" \
+      version="1.0"
+
+# Copy stats HTML
+COPY docs/stats.html /usr/share/nginx/html/stats/index.html
+
+# Copy nginx config
+COPY deploy/nginx-stats.conf /etc/nginx/conf.d/default.conf
+
+# Add health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost/stats || exit 1
+
+# Security: run as non-root
+RUN chown -R nginx:nginx /usr/share/nginx/html && \
+    chmod -R 755 /usr/share/nginx/html && \
+    rm -f /etc/nginx/conf.d/default.conf.orig
+
+# Expose port
+EXPOSE 80
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]

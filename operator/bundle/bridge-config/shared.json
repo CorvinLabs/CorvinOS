@@ -1,0 +1,15 @@
+{
+  "_INSTALL_NOTE": "Cross-channel adapter settings. Install to <corvin_home>/bridges/shared/settings.json or keep in operator/bridges/shared/settings.json.",
+  "always_voice": false,
+  "voice_threshold_chars": 200,
+  "voice_summary_mode": "always",
+  "local_announce_inbound": "off",
+  "local_announce_outbound": "off",
+  "routing": {
+    "mode": "embedding",
+    "model": "claude-sonnet-5",
+    "fallback_persona": "assistant",
+    "min_confidence": 0.5,
+    "show_prefix": true
+  }
+}

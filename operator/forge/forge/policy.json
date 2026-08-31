@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "_comment": "Bundle default policy. Workspace-level <workspace>/policy.json overrides any field set there. The persona_namespaces map is the namespace gate for cross-persona forge access — every standard persona may only register tool / skill names beginning with the prefix it owns. Empty string or persona missing from the map = wildcard (no gate, legacy behaviour). The dedicated `forge` and `skill-forge` personas are intentionally absent so they keep specialist open-access for ops + advanced workflows.",
+  "persona_namespaces": {
+    "assistant":     "assistant",
+    "coder":         "code",
+    "browser":       "web",
+    "research":      "research",
+    "inbox":         "inbox",
+    "homeassistant": "ha"
+  },
+  "_comment_sandbox": "persona_sandbox_overrides relaxes the strict default sandbox per persona. Today only the `network` axis is configurable: 'allow' lets a persona's forged tools share the host network namespace (loopback + outbound). Default for every persona without an entry: deny (no shared net). Only browser+research are listed because their entire purpose is web access; other personas keep the strict default and can opt in via workspace-level policy.json if needed.",
+  "persona_sandbox_overrides": {
+    "browser":  {"network": "allow"},
+    "research": {"network": "allow"},
+    "compute-datasource": {"network": "allow", "loopback": "allow"}
+  }
+}

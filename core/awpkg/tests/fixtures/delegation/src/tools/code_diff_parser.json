@@ -1,0 +1,26 @@
+{
+  "name": "code.diff_parser",
+  "description": "Parse a unified diff into structured changed-hunk objects for analysis.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "diff"
+    ],
+    "properties": {
+      "diff": {
+        "type": "string",
+        "description": "Unified diff text"
+      },
+      "context_lines": {
+        "type": "integer",
+        "default": 3
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "version": "0.1.0"
+  },
+  "code": "import json, sys\nargs = json.load(sys.stdin)\ndiff = args.get('diff', '')\nprint(json.dumps({'hunks': [], 'files_changed': diff.count('--- a/'), 'note': 'stub'}))\n"
+}

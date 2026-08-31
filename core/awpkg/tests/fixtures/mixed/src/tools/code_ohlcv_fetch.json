@@ -1,0 +1,35 @@
+{
+  "name": "code.ohlcv_fetch",
+  "description": "Fetch OHLCV candlestick data for a trading symbol over a time range.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "symbol"
+    ],
+    "properties": {
+      "symbol": {
+        "type": "string"
+      },
+      "interval": {
+        "type": "string",
+        "default": "1h"
+      },
+      "lookback_hours": {
+        "type": "integer",
+        "default": 48
+      },
+      "start_date": {
+        "type": "string"
+      },
+      "end_date": {
+        "type": "string"
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "version": "0.1.0"
+  },
+  "code": "import json, sys\nargs = json.load(sys.stdin)\nprint(json.dumps({'symbol': args['symbol'], 'candles': [], 'note': 'stub'}))\n"
+}

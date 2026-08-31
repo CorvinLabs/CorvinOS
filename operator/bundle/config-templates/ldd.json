@@ -1,0 +1,19 @@
+{
+  "_NOTE": "LDD layer toggles. Install to: <corvin_home>/global/ldd.json. All layers default off — opt in per chat via /ldd-on or per persona via ldd_preset.",
+  "_INSTALL_PATH": "<corvin_home>/global/ldd.json",
+  "enabled": false,
+  "layers": {
+    "loop_driven_engineering":  false,
+    "e2e_driven_iteration":     false,
+    "dialectical_reasoning":    false,
+    "dialectical_cot":          false,
+    "root_cause_by_layer":      false,
+    "docs_as_dod":              false,
+    "reproducibility_first":    false,
+    "loss_backprop_lens":       false,
+    "method_evolution":         false,
+    "drift_detection":          false,
+    "iterative_refinement":     false,
+    "per_subtask_e2e":          false
+  }
+}

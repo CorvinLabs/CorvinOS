@@ -1,0 +1,234 @@
+# tenant.corvin.yaml — Operator tenant configuration template
+# Install to: <corvin_home>/tenants/_default/global/tenant.corvin.yaml
+# Hot-reloads on mtime change (no restart needed for most fields).
+#
+# Full schema: docs/claude-ref/adr-0007.md
+
+apiVersion: corvin/v1
+kind: Tenant
+metadata:
+  id: _default
+  display_name: "Single-Operator Default"
+  created_at: "2026-05-17T00:00:00Z"
+
+spec:
+  # ── Compliance zone (EU AI Act Art. 14) ─────────────────────────────────────
+  data_residency:
+    zone: null                 # null = no zone restriction
+    allowed_engines: []        # [] = all engines allowed
+    forbid_engines: []         # [] = none forbidden
+
+  # ── Data classification matrix (Layer 34 / ADR-0042) ────────────────────────
+  # Orthogonal to data_residency: data_residency answers "which engine_id
+  # is allowed at all?", data_classification answers "how sensitive can the
+  # task be before this engine becomes unacceptable?".
+  #
+  # Localities: local | eu_cloud | us_cloud | unknown
+  # network_egress: none | local | external
+  # SECRET requires network_egress=="none" in addition to the matrix.
+  #
+  # Data-residency restriction is OPT-IN. Defaults are permissive so a
+  # zero-config install runs frictionless on its cloud engine — a normal
+  # message with a name/e-mail is classified CONFIDENTIAL and must not be
+  # blocked by default:
+  #   PUBLIC / INTERNAL / CONFIDENTIAL : {local, eu_cloud, us_cloud}
+  #   SECRET                           : {local} (+ egress=none)  <- security floor
+  # SECRET (literal API keys / private keys / passwords) is the only row kept
+  # local-only by default; it fires rarely and stops credentials from egressing.
+  # To enforce EU/local data residency, TIGHTEN the matrix below (see the
+  # tenant.corvin.eu-production-ollama.yaml preset). The matrix and
+  # engine_compliance entries override entry-by-entry — leave commented out
+  # to keep the permissive module defaults.
+  data_classification:
+    matrix: {}
+    # Example TIGHTENING (uncomment + adjust for a residency-restricted tenant):
+    #   PUBLIC:       [local, eu_cloud]
+    #   INTERNAL:     [local, eu_cloud]
+    #   CONFIDENTIAL: [local]
+    #   SECRET:       [local]
+    engine_compliance: []
+    # - engine_id: opencode_ollama
+    #   locality: local
+    #   network_egress: local
+    #   notes: "qwen3:8b via local Ollama"
+    # - engine_id: opencode
+    #   locality: local
+    #   network_egress: local
+    #   notes: "pinned to --provider ollama in this tenant"
+
+  # ── Primary OS engine (ADR-0159 M1) ─────────────────────────────────────────
+  # Controls which engine handles the OS turn (the main conversation).
+  # Auto-detect ladder (applied when this field is absent):
+  #   1. CORVIN_OS_ENGINE env var
+  #   2. claude CLI on PATH  → claude_code
+  #   3. fallback            → hermes  (local Ollama, fully offline)
+  #
+  # Set explicitly to override auto-detect:
+  #   default_engine: hermes       # local Ollama (platform-independent, offline)
+  #   default_engine: claude_code  # Anthropic Claude (requires API key + claude CLI)
+  #   default_engine: opencode     # OpenCode (any provider, requires config)
+  #
+  # hermes_model: only used when default_engine is "hermes" or hermes is
+  # selected by auto-detect.  Defaults to the model set in Ollama at runtime.
+  # default_engine: hermes
+  # hermes_model: qwen3:8b
+
+  # ── Sandbox tier (ADR-0159 M2) ───────────────────────────────────────────────
+  # Controls Forge tool isolation.  Auto-detected at boot (bwrap → docker → none).
+  # Override with CORVIN_SANDBOX=bwrap|docker|none env var.
+  # Omit to use auto-detect (recommended).
+  # forge:
+  #   require_sandbox: false   # set true to CRITICAL-fail when sandbox unavailable
+
+  # ── Timer backend (ADR-0159 M3) ──────────────────────────────────────────────
+  # Auto-selected: systemd on Linux, ThreadTimerProvider elsewhere.
+  # Override with CORVIN_TIMER_PROVIDER=systemd|thread env var.
+
+  # ── Budget caps ──────────────────────────────────────────────────────────────
+  budget:
+    max_runs_per_day: null     # null = unlimited
+    max_tokens_per_day: null
+    max_wall_clock_per_run_s: null
+
+  # ── Compute worker (ADR-0013) ─────────────────────────────────────────────────
+  compute:
+    enabled: true
+    max_parallel_iterations: 4   # concurrent parameter-sweep iterations
+    max_concurrent_runs: 2       # concurrent compute jobs across chats
+    max_iterations_per_run: 200  # hard cap per job
+    max_wall_clock_per_run_s: 600  # 10 min per job
+    top_k_size: 5                # best-N results kept
+    disallow_llm_strategies: false
+    strategies_allowed:
+      - grid
+      - random
+      - bayesian
+    # Advanced compute fabric (ADR-0026) — leave defaults unless you run
+    # multi-node setups:
+    # fabric_enabled: false
+    # max_parallel_workers: 4
+    # max_artifact_size_mb: 500
+    # oracle_enabled: false
+    # oracle_model: null
+
+  # ── Compliance Manifest (ADR-0056) ───────────────────────────────────────────
+  # Controls how bridge.sh doctor and corvin-compliance-check validate the
+  # compliance rule manifest at compliance/*.yaml.
+  #
+  # min_version:          Minimum manifest version the system will accept.
+  #                       boot doctor fails CRITICAL if the on-disk manifest
+  #                       is older than this.
+  # require_signature:    When true, a missing manifest.sig is CRITICAL instead
+  #                       of WARNING.  Enable once you have generated the initial
+  #                       signature with compliance/sign.sh.
+  # signer_fingerprint:   GPG key fingerprint of the authorised manifest signer.
+  #                       Set this to the maintainer's long-form fingerprint
+  #                       (16 hex chars).  Leave empty to accept any valid sig.
+  compliance_manifest:
+    min_version: "1.0.0"
+    require_signature: true
+    signer_fingerprint: "72C1D704E30D83E5F547020E83A025CE5EBB2493"
+
+  # ── Web chat (ADR-0037 + ADR-0114) ──────────────────────────────────────────
+  # Controls the Console "Chat" tab — worker engine, delegation, budget, history.
+  # delegation_enabled must be true for the WDAT Worker Graph (Audit tab)
+  # to show runs.  Deny-by-default per ADR-0114; set true here so a
+  # fresh install can see the graph immediately.
+  web_chat:
+    delegation_enabled: true     # allow fan-out at all (see worker_engine below)
+    # Which engine performs a turn — Console → Settings → Worker Engine writes
+    # this too (via features.json, which overrides this file).
+    #   native (DEFAULT) — Claude Code does the work in-process. The only
+    #                      auto-delegation left is big-data-shaped work → ACS.
+    #   acs              — delegate qualifying turns to the ACS manager/worker
+    #                      fan-out.
+    #   tde              — delegate qualifying turns to the Tiered Delegation
+    #                      Engine. Off unless selected; degrades to native when
+    #                      TDE is unavailable or the compute pool is exhausted.
+    # An explicit /delegate and big-data-shaped work go to ACS in every mode.
+    worker_engine: native
+    # budget overrides (defaults shown):
+    # max_workers: 4
+    # max_iterations: 6
+
+  # ── Feature flags (Whitelist Strategy) ──────────────────────────────────────
+  # ADR-0XXX: Whitelist strategy allows operator to declare verified features.
+  #
+  # Two modes:
+  #   1. Whitelist mode (RECOMMENDED): spec.features_whitelist = [list of enabled features]
+  #      Only whitelisted features are ON; all others are OFF (deny-all-else).
+  #      Console → Settings → Features can toggle individual features on/off.
+  #
+  #   2. Legacy mode: spec.features = {flag_id: bool}
+  #      Individual flags are ON/OFF; absent = OFF.
+  #      Security/compliance mechanisms are NOT listed here — they stay always-on.
+  #
+  # Default (fresh install): whitelist mode with Vibe Engineering enabled.
+  # Ship dark by default: add to whitelist only after testing.
+  # Console → Settings → Features writes to features.json (overrides this file).
+
+  # Enable whitelist strategy with all stable features
+  features_whitelist:
+    - vibe_engineering              # CEL brief on live turns (deterministic)
+    - vibe_engineering_active       # CEL ACTIVE brain (LLM + Toolforge + SkillForge)
+    - tree_of_thoughts              # Learning dashboard (Phase 1-7)
+    - learning_objectives           # User-defined learning objectives
+    - token_metrics                 # Token usage + cost visualization
+    - outcome_feedback_loop         # Auto-grade CEL stages post-turn
+    - cross_device_sync             # Sync learning state across instances
+    # Learning Integration Gaps (ADR-0321-0327):
+    - learning_gap_1_tool_execution_telemetry  # Tool execution → event emission → EventStore
+    - learning_gap_2_tool_ranking              # Tool ranking & reuse decision
+    - learning_gap_3_skill_attribution         # Skill attribution (EQUAL/WEIGHTED models)
+    - learning_gap_4_performance_aggregation   # Hourly metrics aggregation pipeline
+    - learning_gap_5_context_coherence         # Cross-session context inheritance
+    - learning_gap_6_cost_learning             # Cost multiplier learning (budget refinement)
+    - learning_gap_7_operator_feedback         # Operator feedback loop integration
+    # Context Engineering Optimization (Phase 1-3, ADR-0387/0388/0391):
+    - memory_confidence_gate_enabled  # Filter low-confidence memory matches (Phase 1)
+    - per_stage_token_budgeting       # Cascade-based allocation (Phase 2)
+    - adaptive_context_routing        # Route simple tasks fast, rebalance budgets (Phase 3)
+    # Console Quality Subsystem (Skill-Creator & ADR-Gate):
+    - skill_creator_enabled         # Autonomous 6-phase skill builder (default ON)
+    - adr_gate_enabled              # Architectural Decision Record enforcement
+    - concept_gate_enabled          # Concept archiving for reusable patterns
+    # Phase 8-12 features (proactive learning):
+    # - learning_anomaly_detection   # Detect confidence drops
+    # - learning_pattern_discovery   # Auto-discover patterns from failures
+    # - learning_predictive_alerts   # Warn before failures occur
+    # - learning_strategy_synthesis  # Combine patterns into workflows
+    # - learning_causal_analysis     # Explain why confidence changed
+
+  # Legacy mode (commented-out; uncomment to disable whitelist):
+  # features: {}
+  #   # ccc_command_routing: true    # entity extraction on every turn
+  #   # acs_context_sync: true       # ADR-0213 transcript replay after delegation
+  #   # browser_automation: true     # /browser — launches a real Chrome
+  #   # adaptive_context_routing: true # Phase 3 adaptive routing (ADR-0391)
+
+  # ── User-Defined Learning Objectives (ADR-0163) ────────────────────────────────
+  # Deny-by-default: ULO is inactive unless a tenant explicitly opts in.
+  # Set enabled: true to let users personalise assistant behaviour via
+  # /objective add|pause|resume|delete. The shipped template leaves it OFF so a
+  # fresh install starts with a stable core (CLAUDE.md § Feature Flags); the
+  # code side has always been deny-by-default.
+  ulo:
+    enabled: false
+
+  # ── ACS default worker model (ADR-0112 / ADR-0119) ───────────────────────────
+  # When delegation_enabled=true the orchestrator spawns worker agents.
+  # On a Hermes/local install the worker model should also be local so
+  # no Anthropic API key is required.  Set hermes to use Ollama workers
+  # or leave unset to inherit the OS-engine model automatically.
+  #
+  # acs:
+  #   default_worker_model: hermes   # ← set this if default_engine is hermes
+
+  # ── Plugin list (ADR-0030 + ADR-0033) ────────────────────────────────────────
+  plugins:
+    installed: []
+    # Example: custom notification backend
+    # - id: "com.acme.pagerduty"
+    #   class_path: "acme_plugins.pagerduty:PagerDutyNotifier"
+    #   config:
+    #     routing_key: "..."    # put API keys in vault, never here

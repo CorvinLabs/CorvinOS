@@ -1,0 +1,30 @@
+awpkg: "1.0"
+id: "com.shumway.operator"
+name: "Shumway Operator Bundle"
+version: "1.3.0"
+description: >
+  Complete operator stack for Corvin: 8 Cowork personas, 12 LDD skills,
+  3 trading forge tools, Discord/shared bridge config, AWP workflow slot,
+  and config templates for compute, voice, forge policy, data privacy, and LDD.
+license: "proprietary"
+author: "shumway"
+
+components:
+  personas:         ["personas/*.json"]
+  skills:           ["skills/ldd/*"]
+  tools:            ["tools/*.json"]
+  workflows:        ["workflows/*.awp.yaml"]
+  bridge_config:    ["bridge-config/*.json"]
+  config_templates: ["config-templates/*"]
+
+permissions:
+  network: true
+  compute: true
+  secrets:
+    - DISCORD_TOKEN
+    - TELEGRAM_TOKEN
+    - SLACK_BOT_TOKEN
+    - SLACK_APP_TOKEN
+    - EMAIL_IMAP_USER
+    - EMAIL_IMAP_PASS
+    - OPENAI_API_KEY

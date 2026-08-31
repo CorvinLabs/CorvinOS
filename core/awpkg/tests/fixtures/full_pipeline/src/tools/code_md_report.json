@@ -1,0 +1,25 @@
+{
+  "name": "code.md_report",
+  "description": "Format a statistics dict into a structured Markdown sales report with title, summary table, and narrative section.",
+  "input_schema": {
+    "type": "object",
+    "required": ["stats", "row_count"],
+    "properties": {
+      "stats": {
+        "type": "object",
+        "description": "Per-column stats dict as produced by code.csv_stats."
+      },
+      "row_count": {
+        "type": "integer",
+        "description": "Total number of data rows."
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "deterministic": true,
+    "version": "1.0.0"
+  },
+  "code": "import json, sys\nargs = json.load(sys.stdin)\nstats = args.get('stats', {})\nrow_count = args.get('row_count', 0)\nlines = ['# Sales Report', '', f'**Total Records Analyzed:** {row_count}', '', '## Column Statistics', '']\nnum_cols = {c: s for c, s in stats.items() if 'mean' in s}\nstr_cols = {c: s for c, s in stats.items() if 'type' in s}\nif num_cols:\n    lines.append('| Column | Count | Mean | Min | Max | Total |')\n    lines.append('|--------|------:|-----:|----:|----:|------:|')\n    for col, s in sorted(num_cols.items()):\n        lines.append(f'| {col} | {s[\"count\"]} | {s[\"mean\"]} | {s[\"min\"]} | {s[\"max\"]} | {s[\"total\"]} |')\n    lines.append('')\nif str_cols:\n    lines.append('## Categorical Columns')\n    lines.append('')\n    lines.append('| Column | Unique Values |')\n    lines.append('|--------|-------------:|')\n    for col, s in sorted(str_cols.items()):\n        lines.append(f'| {col} | {s[\"unique\"]} |')\n    lines.append('')\nlines.extend(['## Summary', '', f'This report covers {row_count} sales records across {len(stats)} column(s). ' + (f'Numeric columns: {list(num_cols.keys())}. ' if num_cols else '') + (f'Categorical columns: {list(str_cols.keys())}.' if str_cols else '')])\nmarkdown = '\\n'.join(lines)\nprint(json.dumps({'ok': True, 'data': {'markdown': markdown}}))\n"
+}

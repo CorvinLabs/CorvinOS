@@ -1,0 +1,422 @@
+{
+  "metadata": {
+    "analysis_timestamp": "2026-07-24T13:26:24.631303",
+    "version": "1.1",
+    "mode": "simulation",
+    "honesty_note": "All token numbers are outputs of a deterministic simulation (harness._simulate_tokens) encoding assumed savings ratios \u2014 not measured LLM usage."
+  },
+  "aggregate": {
+    "total_tokens_cc": 93018,
+    "total_tokens_tde": 47596,
+    "total_savings": 45422,
+    "savings_pct": 48.83,
+    "tasks_improved": 6,
+    "tasks_regressed": 5,
+    "tasks_neutral": 0,
+    "total_tasks": 11
+  },
+  "by_category": {
+    "big_data": {
+      "category": "big_data",
+      "n_tasks": 1,
+      "tokens_cc_mean": 15640,
+      "tokens_cc_stdev": 0,
+      "tokens_tde_mean": 2442,
+      "tokens_tde_stdev": 0,
+      "delta_mean": 13198,
+      "delta_pct_mean": 84.39,
+      "ci_lower": 13198.0,
+      "ci_upper": 13198.0,
+      "tasks_improved": 1,
+      "tasks_regressed": 0
+    },
+    "complex": {
+      "category": "complex",
+      "n_tasks": 1,
+      "tokens_cc_mean": 20538,
+      "tokens_cc_stdev": 0,
+      "tokens_tde_mean": 13120,
+      "tokens_tde_stdev": 0,
+      "delta_mean": 7418,
+      "delta_pct_mean": 36.12,
+      "ci_lower": 7418.0,
+      "ci_upper": 7418.0,
+      "tasks_improved": 1,
+      "tasks_regressed": 0
+    },
+    "moderate": {
+      "category": "moderate",
+      "n_tasks": 2,
+      "tokens_cc_mean": 10665.5,
+      "tokens_cc_stdev": 1676.6,
+      "tokens_tde_mean": 7810.5,
+      "tokens_tde_stdev": 782.8,
+      "delta_mean": 2855,
+      "delta_pct_mean": 26.77,
+      "ci_lower": 2223.0,
+      "ci_upper": 3487.0,
+      "tasks_improved": 2,
+      "tasks_regressed": 0
+    },
+    "parallel": {
+      "category": "parallel",
+      "n_tasks": 2,
+      "tokens_cc_mean": 15218,
+      "tokens_cc_stdev": 4024.9,
+      "tokens_tde_mean": 5545,
+      "tokens_tde_stdev": 1588.2,
+      "delta_mean": 9673,
+      "delta_pct_mean": 63.56,
+      "ci_lower": 7950.0,
+      "ci_upper": 11396.0,
+      "tasks_improved": 2,
+      "tasks_regressed": 0
+    },
+    "simple": {
+      "category": "simple",
+      "n_tasks": 2,
+      "tokens_cc_mean": 1708.5,
+      "tokens_cc_stdev": 289.2,
+      "tokens_tde_mean": 1798,
+      "tokens_tde_stdev": 261.6,
+      "delta_mean": -89.5,
+      "delta_pct_mean": -5.24,
+      "ci_lower": -109.0,
+      "ci_upper": -70.0,
+      "tasks_improved": 0,
+      "tasks_regressed": 2
+    },
+    "trivial": {
+      "category": "trivial",
+      "n_tasks": 3,
+      "tokens_cc_mean": 552,
+      "tokens_cc_stdev": 56.7,
+      "tokens_tde_mean": 575.7,
+      "tokens_tde_stdev": 57.0,
+      "delta_mean": -23.7,
+      "delta_pct_mean": -4.29,
+      "ci_lower": -36.0,
+      "ci_upper": -16.0,
+      "tasks_improved": 0,
+      "tasks_regressed": 3
+    }
+  },
+  "confidence_intervals": {
+    "big_data": {
+      "n_samples": 1,
+      "mean_delta_tokens": 13198,
+      "stdev_tokens": 0,
+      "range_tokens": [
+        13198,
+        13198
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
+      "mean_delta_pct": 84.39,
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta 84.4% over n=1 samples \u2014 too few for a confidence interval; observed range reported instead"
+    },
+    "complex": {
+      "n_samples": 1,
+      "mean_delta_tokens": 7418,
+      "stdev_tokens": 0,
+      "range_tokens": [
+        7418,
+        7418
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
+      "mean_delta_pct": 36.12,
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta 36.1% over n=1 samples \u2014 too few for a confidence interval; observed range reported instead"
+    },
+    "moderate": {
+      "n_samples": 2,
+      "mean_delta_tokens": 2855,
+      "stdev_tokens": 893.8,
+      "range_tokens": [
+        2223,
+        3487
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
+      "mean_delta_pct": 26.77,
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta 26.8% over n=2 samples \u2014 too few for a confidence interval; observed range reported instead"
+    },
+    "parallel": {
+      "n_samples": 2,
+      "mean_delta_tokens": 9673,
+      "stdev_tokens": 2436.7,
+      "range_tokens": [
+        7950,
+        11396
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
+      "mean_delta_pct": 63.56,
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta 63.6% over n=2 samples \u2014 too few for a confidence interval; observed range reported instead"
+    },
+    "simple": {
+      "n_samples": 2,
+      "mean_delta_tokens": -89.5,
+      "stdev_tokens": 27.6,
+      "range_tokens": [
+        -109,
+        -70
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
+      "mean_delta_pct": -5.24,
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta -5.2% over n=2 samples \u2014 too few for a confidence interval; observed range reported instead"
+    },
+    "trivial": {
+      "n_samples": 3,
+      "mean_delta_tokens": -23.7,
+      "stdev_tokens": 10.8,
+      "range_tokens": [
+        -36,
+        -16
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
+      "mean_delta_pct": -4.29,
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta -4.3% over n=3 samples \u2014 too few for a confidence interval; observed range reported instead"
+    }
+  },
+  "statistical_tests": {
+    "test": "descriptive_only",
+    "n_samples": 11,
+    "mean_delta_tokens": 4129.3,
+    "stdev_delta": 5018.4,
+    "t_statistic_descriptive": 2.729,
+    "p_value": null,
+    "significant_at_05": false,
+    "interpretation": "SIMULATION \u2014 deltas follow directly from the model's assumed per-category savings ratios; no statistical significance can be or is claimed. Use tde.bench for measured numbers."
+  },
+  "per_task_results": [
+    {
+      "task_id": "big_data_001",
+      "category": "big_data",
+      "prompt": "Analyze a 500MB Parquet file with 1M rows.\nCompute:\n1. Row count per user_id (top 10)\n2. Average transaction amount by category\n3. Identify outliers (>3\u03c3 from mean)\nOutput summary statistics.",
+      "tokens_cc": 15640,
+      "tokens_cc_trials": [
+        16223,
+        15240,
+        15640
+      ],
+      "tokens_tde": 2442,
+      "tokens_tde_trials": [
+        2333,
+        2456,
+        2442
+      ],
+      "engine": "acs",
+      "delta_tokens": 13198,
+      "delta_pct": 84.38618925831202
+    },
+    {
+      "task_id": "complex_001",
+      "category": "complex",
+      "prompt": "Design and implement a caching layer for this data pipeline.\nThe pipeline reads 3 CSV files, transforms each with 4 steps, and aggregates results.\nAdd caching at appropriate boundaries, invalidation strategy, and monitoring.\nTest with repeated runs and verify cache hits increase over time.",
+      "tokens_cc": 20538,
+      "tokens_cc_trials": [
+        21511,
+        19844,
+        20538
+      ],
+      "tokens_tde": 13120,
+      "tokens_tde_trials": [
+        12865,
+        13120,
+        13507
+      ],
+      "engine": "tiered_delegation",
+      "delta_tokens": 7418,
+      "delta_pct": 36.118414646022
+    },
+    {
+      "task_id": "moderate_001",
+      "category": "moderate",
+      "prompt": "Refactor this calculator.py to extract magic numbers into named constants.\nThe file has 4 magic numbers that should become: TAX_RATE, DISCOUNT_THRESHOLD,\nMIN_PURCHASE, MAX_PURCHASE. After refactoring, run tests to verify all still pass.\nIf any tests fail, fix the issues and iterate.",
+      "tokens_cc": 9480,
+      "tokens_cc_trials": [
+        9312,
+        9480,
+        9921
+      ],
+      "tokens_tde": 7257,
+      "tokens_tde_trials": [
+        7257,
+        7023,
+        7289
+      ],
+      "engine": "tiered_delegation",
+      "delta_tokens": 2223,
+      "delta_pct": 23.449367088607595
+    },
+    {
+      "task_id": "moderate_002",
+      "category": "moderate",
+      "prompt": "Review this API handler and suggest improvements:\n1. Add request validation\n2. Add error handling\n3. Add logging\n4. Update docstring\nImplement all suggestions and test with 3 different inputs (valid, missing field, invalid type).",
+      "tokens_cc": 11851,
+      "tokens_cc_trials": [
+        11855,
+        10932,
+        11851
+      ],
+      "tokens_tde": 8364,
+      "tokens_tde_trials": [
+        8668,
+        8364,
+        8207
+      ],
+      "engine": "tiered_delegation",
+      "delta_tokens": 3487,
+      "delta_pct": 29.423677326807862
+    },
+    {
+      "task_id": "parallel_001",
+      "category": "parallel",
+      "prompt": "Process 50 CSV files (each 1MB, ~500 rows).\nFor each file: read \u2192 extract column 'sales' \u2192 compute sum.\nThen aggregate all sums into one final total.\nThis should parallelize well across the 50 files.",
+      "tokens_cc": 18064,
+      "tokens_cc_trials": [
+        18846,
+        18064,
+        17756
+      ],
+      "tokens_tde": 6668,
+      "tokens_tde_trials": [
+        6333,
+        6829,
+        6668
+      ],
+      "engine": "acs",
+      "delta_tokens": 11396,
+      "delta_pct": 63.08680248007086
+    },
+    {
+      "task_id": "parallel_002",
+      "category": "parallel",
+      "prompt": "Transform 100 JSON records through a 3-step pipeline:\n1. Extract key fields\n2. Validate schema\n3. Normalize values\nAll records are independent; this should parallelize fully.",
+      "tokens_cc": 12372,
+      "tokens_cc_trials": [
+        12437,
+        12372,
+        12210
+      ],
+      "tokens_tde": 4422,
+      "tokens_tde_trials": [
+        4608,
+        4346,
+        4422
+      ],
+      "engine": "acs",
+      "delta_tokens": 7950,
+      "delta_pct": 64.2580019398642
+    },
+    {
+      "task_id": "simple_001",
+      "category": "simple",
+      "prompt": "Rename the function 'compute_avg' to 'calculate_average' and update all 3 callers",
+      "tokens_cc": 1913,
+      "tokens_cc_trials": [
+        1913,
+        1875,
+        1919
+      ],
+      "tokens_tde": 1983,
+      "tokens_tde_trials": [
+        1983,
+        2000,
+        1911
+      ],
+      "engine": "claude_code",
+      "delta_tokens": -70,
+      "delta_pct": -3.659174072138003
+    },
+    {
+      "task_id": "simple_002",
+      "category": "simple",
+      "prompt": "Add type hints to this function: def greet(name, age): return f'Hello {name}, you are {age}'",
+      "tokens_cc": 1504,
+      "tokens_cc_trials": [
+        1504,
+        1513,
+        1481
+      ],
+      "tokens_tde": 1613,
+      "tokens_tde_trials": [
+        1613,
+        1599,
+        1619
+      ],
+      "engine": "claude_code",
+      "delta_tokens": -109,
+      "delta_pct": -7.247340425531915
+    },
+    {
+      "task_id": "trivial_001",
+      "category": "trivial",
+      "prompt": "Fix the typo in line 5 of this README: change 'CorvinOS Quickstart' to 'CorvinOS Quick Start'",
+      "tokens_cc": 493,
+      "tokens_cc_trials": [
+        506,
+        493,
+        493
+      ],
+      "tokens_tde": 512,
+      "tokens_tde_trials": [
+        509,
+        512,
+        547
+      ],
+      "engine": "claude_code",
+      "delta_tokens": -19,
+      "delta_pct": -3.8539553752535496
+    },
+    {
+      "task_id": "trivial_002",
+      "category": "trivial",
+      "prompt": "Add the missing return statement to this function",
+      "tokens_cc": 606,
+      "tokens_cc_trials": [
+        608,
+        606,
+        580
+      ],
+      "tokens_tde": 622,
+      "tokens_tde_trials": [
+        644,
+        608,
+        622
+      ],
+      "engine": "claude_code",
+      "delta_tokens": -16,
+      "delta_pct": -2.6402640264026402
+    },
+    {
+      "task_id": "trivial_003",
+      "category": "trivial",
+      "prompt": "Update this import statement from 'from x import y' to 'import x.y'",
+      "tokens_cc": 557,
+      "tokens_cc_trials": [
+        576,
+        557,
+        553
+      ],
+      "tokens_tde": 593,
+      "tokens_tde_trials": [
+        588,
+        597,
+        593
+      ],
+      "engine": "claude_code",
+      "delta_tokens": -36,
+      "delta_pct": -6.463195691202872
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+# Layer-19 service manifest for the Discord bridge daemon.
+# 'requires voice-adapter' because the daemon writes inbox files
+# the adapter consumes; without the adapter, messages would queue
+# up unprocessed.
+name: discord-daemon
+type: daemon
+exec_start: "exec node operator/bridges/discord/daemon.js"
+restart: on-failure
+restart_sec: 3
+backoff: exponential
+max_restarts: 10
+requires:
+  - voice-adapter
+journal: "<corvin_home>/run/log/discord-daemon.log"

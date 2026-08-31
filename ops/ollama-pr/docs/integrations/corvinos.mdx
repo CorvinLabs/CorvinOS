@@ -1,0 +1,147 @@
+---
+title: CorvinOS
+---
+
+CorvinOS is a privacy-first AI assistant gateway that bridges messaging platforms
+(Discord, Telegram, Slack, WhatsApp, and Email) to local and cloud AI models through
+a GDPR-compliant, EU AI Act-ready layer.
+
+## Quick start
+
+```bash
+ollama launch corvinos
+```
+
+Ollama handles everything automatically:
+
+1. **Install** — If CorvinOS isn't installed, Ollama installs it via pip
+2. **Update** — Checks PyPI for a newer version and upgrades silently before each launch (on by default)
+3. **Security** — On first launch, a disclosure card explains AI-generated responses (EU AI Act Art. 50)
+4. **Model** — Pick a model from the selector (local or cloud)
+5. **Onboarding** — Ollama configures the Ollama provider and sets your model as primary
+6. **Gateway** — Starts in the background and opens the CorvinOS console in your browser
+
+<Note>CorvinOS requires Docker. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or Docker Engine before running `ollama launch corvinos`.</Note>
+
+The console opens automatically at `http://localhost:8000/console/` once the gateway is running.
+
+## Connect messaging apps
+
+```bash
+corvin gateway setup
+```
+
+Link Discord, Telegram, Slack, WhatsApp, or Email to chat with your local models from anywhere.
+
+## Recommended models
+
+**Cloud models:**
+
+- `kimi-k2.5:cloud` — Multimodal reasoning with subagents
+- `qwen3.5:cloud` — Reasoning, coding, and agentic tool use with vision
+- `glm-5.1:cloud` — Reasoning and code generation
+
+**Local models:**
+
+- `qwen3:8b` — Fast reasoning and instruction-following locally (~5 GB VRAM)
+- `gemma4:27b` — Strong general assistant locally (~18 GB VRAM)
+
+More models at [ollama.com/search](https://ollama.com/search).
+
+## Auto-update
+
+CorvinOS checks PyPI for a newer version on every `ollama launch corvinos` call and upgrades silently. Auto-update is **on by default**.
+
+To disable it, create or edit `~/.config/corvin-launcher/config.json`:
+
+```json
+{
+  "auto_update": false
+}
+```
+
+You can also toggle this from the CorvinOS web console under **Settings → corvin-launcher.json**.
+
+## EU compliance mode
+
+CorvinOS ships with a built-in GDPR + EU AI Act compliance layer. To run in
+strict local-only mode with no cloud egress:
+
+```bash
+corvin setup --profile eu-production
+```
+
+This configures the Ollama-only tenant preset, disables all cloud engine routes,
+and enables the hash-chained tamper-evident audit log.
+
+## Reconfigure
+
+Re-run the full setup wizard at any time:
+
+```bash
+corvin setup
+```
+
+## Troubleshooting
+
+**`corvin` not found after install**
+
+```bash
+pip install --upgrade corvinos
+which corvin          # must return a path
+```
+
+If `which corvin` fails, your pip scripts directory is not in `PATH`. Add it:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+**Ollama connection refused**
+
+CorvinOS looks for Ollama at `http://127.0.0.1:11434` by default. Make sure Ollama is running:
+
+```bash
+ollama serve          # or: systemctl start ollama
+```
+
+Override the endpoint:
+
+```bash
+corvin config set ollama-url http://192.168.1.10:11434
+```
+
+**Docker not found**
+
+CorvinOS requires Docker for the gateway container. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+or Docker Engine, then retry.
+
+**`voice-audit verify` fails on boot**
+
+The audit chain may be corrupted. Check with:
+
+```bash
+bridge.sh doctor --strict
+```
+
+Never delete `audit.jsonl` to "fix" a chain error — contact support instead.
+
+---
+
+## Manual setup (without `ollama launch`)
+
+```bash
+pip install corvinos
+corvin setup
+```
+
+During setup, select **Ollama** as the provider and confirm the endpoint
+(default: `http://127.0.0.1:11434`).
+
+---
+
+## Further reading
+
+- [Configuration reference](/docs/integrations/corvinos-configuration) — all config files and environment variables
+- [Gateway API reference](/docs/integrations/corvinos-api) — REST API for automation and integrations
+- [EU compliance mode](/docs/integrations/corvinos-configuration#eu-production-preset) — GDPR + EU AI Act setup

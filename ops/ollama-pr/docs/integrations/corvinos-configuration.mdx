@@ -1,0 +1,148 @@
+---
+title: CorvinOS Configuration Reference
+---
+
+Complete reference for all configuration options available in CorvinOS when launched via `ollama launch corvinos`.
+
+## Launcher config
+
+The file `~/.config/corvin-launcher/config.json` controls how the Ollama launcher behaves before CorvinOS starts.
+
+```json
+{
+  "auto_update": true
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `auto_update` | boolean | `true` | Upgrade the `corvinos` pip package before each launch |
+
+You can toggle this from the web console under **Settings → corvin-launcher.json**.
+
+---
+
+## Tenant config
+
+The main per-instance config lives at `~/.corvin/tenants/_default/global/tenant.corvin.yaml`.
+
+```yaml
+spec:
+  # Engine routing
+  default_engine: claude_code        # claude_code | hermes | codex | opencode | copilot
+  allowed_engines:
+    - claude_code
+    - hermes
+
+  # Data residency (Layer 35 egress + Layer 34 classification)
+  data_residency: eu                 # eu | us | any
+
+  # Compute worker
+  compute:
+    enabled: true
+
+  # Network egress lockdown (Layer 35)
+  egress:
+    enabled: false
+    default_action: allow
+    allowed_hosts: []
+    forbidden_hosts: []
+```
+
+### Engine options
+
+| Value | Description | Cloud egress |
+|---|---|---|
+| `claude_code` | Full Claude Code (default) — hooks, skills, MCP, streaming | Yes |
+| `hermes` | Local Ollama via HermesEngine — CONFIDENTIAL-capable | None |
+| `opencode` | Provider-agnostic OpenCode engine | Depends on model |
+| `copilot` | GitHub Copilot CLI (worker-only, Copilot Business/Enterprise) | US cloud |
+
+### EU production preset
+
+For strict GDPR / EU AI Act compliance with no cloud egress:
+
+```bash
+corvin setup --profile eu-production
+```
+
+This sets `default_engine: hermes`, restricts `allowed_engines` to `[hermes]`, and enables
+the hash-chained tamper-evident audit log.
+
+---
+
+## LDD layer toggles
+
+`~/.corvin/tenants/_default/global/ldd.json` — twelve binary toggles for Loss-Driven Development layers.
+
+```json
+{
+  "layers": {
+    "dialectical_reasoning":   true,
+    "e2e_driven_iteration":    true,
+    "root_cause_by_layer":     true,
+    "docs_as_dod":             true,
+    "reproducibility_first":   true,
+    "drift_detection":         true,
+    "iterative_refinement":    true,
+    "loss_backprop_lens":      true,
+    "method_evolution":        true,
+    "per_subtask_e2e":         true,
+    "dialectical_cot":         true,
+    "loop_driven_engineering": true
+  }
+}
+```
+
+---
+
+## Voice config
+
+`~/.config/corvin-voice/.env` (mode 0600) — holds the TTS API key and STT provider settings.
+
+```bash
+CORVIN_STT_PROVIDER=openai_whisper   # openai_whisper | local_whisper
+CORVIN_TTS_API_KEY=sk-...
+CORVIN_OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+---
+
+## Environment variables
+
+All `CORVIN_*` variables can be set in your shell or in `~/.config/corvin-voice/.env`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `CORVIN_TENANT_ID` | `_default` | Active tenant namespace |
+| `CORVIN_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint for HermesEngine |
+| `CORVIN_HERMES_MODEL` | `qwen3:8b` | Default Ollama model for HermesEngine |
+| `CORVIN_STT_PROVIDER` | — | Pin STT provider (`openai_whisper` / `local_whisper`) |
+| `CORVIN_SESSION_TTL_DAYS` | `7` | Session data retention (days) |
+| `CORVIN_USE_ENGINE_LAYER` | `1` | Engine dispatch layer (keep at `1`) |
+| `ADAPTER_STREAM_IDLE_TIMEOUT` | `300` | Seconds before stream watchdog fires |
+| `ADAPTER_HEARTBEAT_INTERVAL` | `90` | Heartbeat status interval (seconds) |
+
+---
+
+## Messaging bridge config
+
+Each bridge is configured under `operator/bridges/<channel>/settings.json`. Changes hot-reload immediately — no restart needed.
+
+```json
+{
+  "whitelist": ["123456789"],
+  "rate_limit": { "messages_per_minute": 20 },
+  "voice_summary_mode": "auto",
+  "chat_profiles": {}
+}
+```
+
+| Key | Description |
+|---|---|
+| `whitelist` | User IDs allowed to interact (empty = deny all) |
+| `rate_limit` | Per-user message rate limiting |
+| `voice_summary_mode` | `auto` \| `always` \| `never` — when to synthesize voice notes |
+| `chat_profiles` | Per-chat overrides (persona, engine, LDD layers) |
+
+Only `tokens`, HTTP ports, and structural daemon changes require `bridge.sh restart`.

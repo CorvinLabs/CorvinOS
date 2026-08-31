@@ -1,0 +1,10 @@
+{
+  "name": "corvin-bridge-teams",
+  "version": "0.1.0",
+  "private": true,
+  "main": "daemon.js",
+  "dependencies": {
+    "botbuilder": "^4.23.1",
+    "express": "^4.21.2"
+  }
+}

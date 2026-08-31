@@ -1,0 +1,26 @@
+{
+  "name": "hermes-worker",
+  "description": "Hermes local-LLM worker (ADR-0066). Runs fully on-device via Ollama — zero network egress, CONFIDENTIAL-capable, no API key required. Use for privacy-sensitive tasks, air-gapped environments, or cost-free local inference.",
+  "default_engine": "hermes",
+  "engine": "hermes",
+  "permission_mode": "default",
+  "ldd_preset": "off",
+  "delegate_enabled": true,
+  "memory_recall_enabled": false,
+  "skill_forge_enabled": false,
+  "forge_enabled": false,
+  "inject_skills": false,
+  "outcome_grading": false,
+  "zero_config": true,
+  "routing_anchors": [
+    "local only",
+    "hermes",
+    "confidential",
+    "no egress",
+    "air-gapped",
+    "offline",
+    "privacy sensitive",
+    "on-device",
+    "ollama"
+  ]
+}

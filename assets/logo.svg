@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="12 12 96 96">
+  <style>
+    .s  { stroke: #11161D; fill: #11161D; }
+    .sr { stroke: #11161D; }
+    @media (prefers-color-scheme: dark) {
+      .s  { stroke: #EEF1F5; fill: #EEF1F5; }
+      .sr { stroke: #EEF1F5; }
+    }
+  </style>
+  <path class="s" fill="none" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M28 40 L56 60 L28 80"/>
+  <rect class="s" x="66" y="72" width="30" height="9" rx="2"/>
+  <circle cx="80" cy="50" r="10" fill="#C9A227"/>
+  <circle class="sr" cx="80" cy="50" r="10" fill="none" stroke-width="2"/>
+</svg>

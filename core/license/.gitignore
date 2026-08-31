@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# corvin_license/pubkey.pem is INTENTIONALLY committed — see ADR-0017 §III.
+# It is the embedded pinned trust anchor; the entire license-gate security
+# model depends on it living in the source tree. Only the corresponding
+# private key (~/.corvin/maintainer-keys/maintainer-priv.pem) stays off-tree.

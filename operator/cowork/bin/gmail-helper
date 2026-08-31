@@ -1,0 +1,600 @@
+#!/usr/bin/env python3
+"""gmail-helper — local helper for sending/drafting Gmail with real MIME
+attachments, accessible from any cowork persona.
+
+Default verb is `draft` (a Gmail Draft is created via OAuth, the user reviews
+it in Gmail before sending). `send` skips the draft step and sends via SMTP.
+
+Quick-start
+  gmail-helper status                 # what is configured?
+  gmail-helper wizard                 # interactive setup (recommended)
+  gmail-helper draft  --to a@b.de --subject Hi --body Yo --attach file.pdf
+  gmail-helper send   --to a@b.de --subject Hi --body Yo --attach file.pdf
+  gmail-helper dry-run --to a@b.de --subject Hi --body Yo --attach file.pdf
+
+Subcommands
+  draft / send / dry-run    compose; --to (repeatable), --cc, --bcc,
+                            --subject, --body, --body-file, --html,
+                            --attach FILE (repeatable), --sender FROM
+  wizard                    interactive setup; --status for read-only check
+  status                    same as `wizard --status`
+  auth                      run OAuth flow (writes token.json)
+  install-libs              pip-install Google API client libraries
+  setup                     print plain-text setup instructions
+
+Config
+  ~/.config/corvin-voice/service.env
+      GMAIL_USER=you@gmail.com
+      GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx     # for SMTP send
+  ~/.config/corvin-voice/google/credentials.json # for OAuth draft
+  ~/.config/corvin-voice/google/token.json       # written by `auth`
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import mimetypes
+import os
+import re
+import smtplib
+import ssl
+import subprocess
+import sys
+from email.message import EmailMessage
+from pathlib import Path
+
+CFG_DIR = Path(os.path.expanduser("~/.config/corvin-voice"))
+SERVICE_ENV = CFG_DIR / "service.env"
+GOOGLE_DIR = CFG_DIR / "google"
+VENV_DIR = GOOGLE_DIR / "venv"
+CREDENTIALS_PATH = GOOGLE_DIR / "credentials.json"
+TOKEN_PATH = GOOGLE_DIR / "token.json"
+SCOPES = ["https://www.googleapis.com/auth/gmail.compose"]
+
+OAUTH_PKGS = [
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-api-python-client",
+]
+
+
+def _venv_site_packages() -> Path | None:
+    """Return the site-packages dir of the OAuth venv (or None)."""
+    libdir = VENV_DIR / "lib"
+    if not libdir.is_dir():
+        return None
+    for p in libdir.iterdir():
+        sp = p / "site-packages"
+        if sp.is_dir():
+            return sp
+    return None
+
+
+def _activate_oauth_libs() -> None:
+    """Prepend the venv site-packages to sys.path so the libs import."""
+    sp = _venv_site_packages()
+    if sp and str(sp) not in sys.path:
+        sys.path.insert(0, str(sp))
+
+
+# --------------------------------------------------------------------- env / status
+
+def load_env() -> dict[str, str]:
+    out: dict[str, str] = dict(os.environ)
+    if SERVICE_ENV.is_file():
+        for raw in SERVICE_ENV.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            out.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    return out
+
+
+def write_env_keys(updates: dict[str, str]) -> None:
+    """Idempotent upsert of KEY=VALUE lines into service.env (mode 600)."""
+    SERVICE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if SERVICE_ENV.is_file():
+        for raw in SERVICE_ENV.read_text(encoding="utf-8").splitlines():
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                existing.append(raw)
+                continue
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                continue
+            existing.append(raw)
+    for k, v in updates.items():
+        existing.append(f"{k}={v}")
+    SERVICE_ENV.write_text("\n".join(existing) + "\n", encoding="utf-8")
+    SERVICE_ENV.chmod(0o600)
+
+
+def have_oauth_libs() -> bool:
+    _activate_oauth_libs()
+    try:
+        import google.oauth2.credentials  # noqa: F401
+        import google_auth_oauthlib.flow  # noqa: F401
+        import googleapiclient.discovery  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def status_dict() -> dict[str, object]:
+    env = load_env()
+    return {
+        "smtp": {
+            "user": env.get("GMAIL_USER"),
+            "app_password_set": bool(env.get("GMAIL_APP_PASSWORD")),
+            "ready": bool(env.get("GMAIL_USER") and env.get("GMAIL_APP_PASSWORD")),
+        },
+        "oauth": {
+            "libs_installed": have_oauth_libs(),
+            "credentials_json": CREDENTIALS_PATH.is_file(),
+            "token_json": TOKEN_PATH.is_file(),
+            "ready": (
+                have_oauth_libs()
+                and CREDENTIALS_PATH.is_file()
+                and TOKEN_PATH.is_file()
+            ),
+        },
+        "paths": {
+            "service_env": str(SERVICE_ENV),
+            "credentials_json": str(CREDENTIALS_PATH),
+            "token_json": str(TOKEN_PATH),
+        },
+    }
+
+
+def print_status() -> None:
+    s = status_dict()
+    smtp = s["smtp"]; oauth = s["oauth"]
+    smtp_ok = "OK " if smtp["ready"] else "-- "
+    oauth_ok = "OK " if oauth["ready"] else "-- "
+    print("gmail-helper status")
+    print()
+    print(f"  [{smtp_ok}] SMTP send     (App password)")
+    print(f"           user                  : {smtp['user'] or '(unset)'}")
+    print(f"           GMAIL_APP_PASSWORD    : "
+          f"{'set' if smtp['app_password_set'] else 'missing'}")
+    print()
+    print(f"  [{oauth_ok}] OAuth draft   (Gmail API)")
+    print(f"           Python libs           : "
+          f"{'installed' if oauth['libs_installed'] else 'missing'}")
+    print(f"           credentials.json      : "
+          f"{'present' if oauth['credentials_json'] else 'missing'}")
+    print(f"           token.json            : "
+          f"{'present' if oauth['token_json'] else 'missing'}")
+    print()
+    if not (smtp["ready"] or oauth["ready"]):
+        print("Nothing is configured yet. Run:  gmail-helper wizard")
+    elif not oauth["ready"]:
+        print("SMTP send works. To enable Drafts (recommended), run:")
+        print("    gmail-helper wizard")
+    elif not smtp["ready"]:
+        print("Drafts work. SMTP send is optional.")
+    else:
+        print("Both modes are ready.")
+
+
+# --------------------------------------------------------------------- MIME build
+
+def build_message(args: argparse.Namespace, sender: str | None) -> EmailMessage:
+    msg = EmailMessage()
+    if sender:
+        msg["From"] = sender
+    msg["To"] = ", ".join(args.to)
+    if args.cc:
+        msg["Cc"] = ", ".join(args.cc)
+    if args.bcc:
+        msg["Bcc"] = ", ".join(args.bcc)
+    msg["Subject"] = args.subject or ""
+    body = args.body or ""
+    if args.body_file:
+        body = Path(args.body_file).read_text(encoding="utf-8")
+    if args.html:
+        msg.set_content(body or "")
+        msg.add_alternative(args.html, subtype="html")
+    else:
+        msg.set_content(body or "")
+    for path_str in args.attach or []:
+        p = Path(path_str).expanduser()
+        if not p.is_file():
+            print(f"gmail-helper: attachment not found: {p}", file=sys.stderr)
+            sys.exit(2)
+        ctype, _ = mimetypes.guess_type(p.name)
+        if ctype is None:
+            ctype = "application/octet-stream"
+        maintype, subtype = ctype.split("/", 1)
+        msg.add_attachment(
+            p.read_bytes(), maintype=maintype, subtype=subtype, filename=p.name
+        )
+    return msg
+
+
+def cmd_dry_run(args: argparse.Namespace) -> int:
+    env = load_env()
+    sender = args.sender or env.get("GMAIL_USER") or "you@example.com"
+    sys.stdout.buffer.write(bytes(build_message(args, sender)))
+    sys.stdout.flush()
+    return 0
+
+
+# --------------------------------------------------------------------- send (SMTP)
+
+def cmd_send(args: argparse.Namespace) -> int:
+    env = load_env()
+    user = args.sender or env.get("GMAIL_USER")
+    password = env.get("GMAIL_APP_PASSWORD")
+    if not user or not password:
+        print(
+            "gmail-helper: SMTP send needs GMAIL_USER + GMAIL_APP_PASSWORD.\n"
+            f"  Run:  gmail-helper wizard\n  ...or edit {SERVICE_ENV}",
+            file=sys.stderr,
+        )
+        return 2
+    msg = build_message(args, user)
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as s:
+        s.login(user, password)
+        s.send_message(msg)
+    print(f"sent: to={','.join(args.to)} subject={args.subject!r} "
+          f"attachments={len(args.attach or [])}")
+    return 0
+
+
+# --------------------------------------------------------------------- draft (Gmail API)
+
+def _ensure_oauth_libs(interactive: bool) -> None:
+    if have_oauth_libs():
+        return
+    if not interactive:
+        print(
+            "gmail-helper: Gmail API libs missing. Run:\n"
+            "  gmail-helper install-libs\n"
+            "or:  gmail-helper wizard",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+    ans = input("Install google-auth + google-api-python-client now? [Y/n] ")
+    if ans.strip().lower() in ("", "y", "yes"):
+        do_install_libs()
+    else:
+        sys.exit(3)
+
+
+def do_install_libs() -> None:
+    """Create a private venv under ~/.config/corvin-voice/google/venv/
+    and install the Google API client libs into it. Idempotent."""
+    GOOGLE_DIR.mkdir(parents=True, exist_ok=True)
+    if not (VENV_DIR / "bin" / "pip").is_file():
+        cmd = [sys.executable, "-m", "venv", str(VENV_DIR)]
+        print("$ " + " ".join(cmd))
+        res = subprocess.run(cmd)
+        if res.returncode != 0:
+            print("venv creation failed. On Debian/Ubuntu: "
+                  "sudo apt install python3-venv", file=sys.stderr)
+            sys.exit(res.returncode)
+    pip = VENV_DIR / "bin" / "pip"
+    cmd = [str(pip), "install", "--upgrade", *OAUTH_PKGS]
+    print("$ " + " ".join(cmd))
+    res = subprocess.run(cmd)
+    if res.returncode != 0:
+        print("pip install failed.", file=sys.stderr)
+        sys.exit(res.returncode)
+
+
+def cmd_install_libs(_args: argparse.Namespace) -> int:
+    do_install_libs()
+    return 0
+
+
+def _gmail_service(interactive: bool):
+    _ensure_oauth_libs(interactive)
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+
+    creds = None
+    if TOKEN_PATH.is_file():
+        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            if not CREDENTIALS_PATH.is_file():
+                print(
+                    f"gmail-helper: {CREDENTIALS_PATH} missing.\n"
+                    "  Run:  gmail-helper wizard",
+                    file=sys.stderr,
+                )
+                sys.exit(4)
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(CREDENTIALS_PATH), SCOPES
+            )
+            creds = flow.run_local_server(port=0)
+        GOOGLE_DIR.mkdir(parents=True, exist_ok=True)
+        TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+        TOKEN_PATH.chmod(0o600)
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def cmd_draft(args: argparse.Namespace) -> int:
+    interactive = sys.stdin.isatty()
+    svc = _gmail_service(interactive)
+    env = load_env()
+    sender = args.sender or env.get("GMAIL_USER")
+    msg = build_message(args, sender)
+    raw = base64.urlsafe_b64encode(bytes(msg)).decode("ascii")
+    result = svc.users().drafts().create(
+        userId="me", body={"message": {"raw": raw}}
+    ).execute()
+    print(f"draft created: id={result.get('id')} "
+          f"messageId={result.get('message', {}).get('id')} "
+          f"attachments={len(args.attach or [])}")
+    return 0
+
+
+def cmd_auth(_args: argparse.Namespace) -> int:
+    GOOGLE_DIR.mkdir(parents=True, exist_ok=True)
+    if not CREDENTIALS_PATH.is_file():
+        print(
+            f"Place your OAuth client JSON at:\n  {CREDENTIALS_PATH}\n"
+            "Then re-run: gmail-helper auth",
+            file=sys.stderr,
+        )
+        return 4
+    _gmail_service(interactive=True)
+    print(f"OAuth ok. Token at {TOKEN_PATH}")
+    return 0
+
+
+# --------------------------------------------------------------------- wizard
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _ask(prompt: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    val = input(f"{prompt}{suffix}: ").strip()
+    return val or default
+
+
+def _ask_yn(prompt: str, default: bool = True) -> bool:
+    d = "Y/n" if default else "y/N"
+    val = input(f"{prompt} [{d}]: ").strip().lower()
+    if not val:
+        return default
+    return val in ("y", "yes", "j", "ja")
+
+
+def _wizard_smtp() -> bool:
+    print()
+    print("=== SMTP send setup (App password) ===")
+    print("1. Enable 2-Step Verification:")
+    print("     https://myaccount.google.com/security")
+    print("2. Create an App Password:")
+    print("     https://myaccount.google.com/apppasswords")
+    print("   (name it e.g. 'gmail-helper'; you'll get 16 chars in 4 groups)")
+    if not _ask_yn("\nDo you have the App Password ready?", True):
+        print("OK — re-run `gmail-helper wizard` once you do.")
+        return False
+    env = load_env()
+    user = _ask("Your Gmail address",
+                env.get("GMAIL_USER", ""))
+    if not EMAIL_RE.match(user):
+        print(f"warn: '{user}' does not look like an email address.")
+    pw = _ask("App Password (spaces ok)",
+              "" if env.get("GMAIL_APP_PASSWORD") else "")
+    pw = pw.replace(" ", "")
+    if not pw:
+        print("aborted: empty password.")
+        return False
+    write_env_keys({"GMAIL_USER": user, "GMAIL_APP_PASSWORD": pw})
+    print(f"saved to {SERVICE_ENV} (mode 600).")
+    if _ask_yn("Send a test mail to yourself now?", True):
+        return _wizard_test_send(user)
+    return True
+
+
+def _wizard_test_send(user: str) -> bool:
+    import tempfile
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", delete=False
+    ) as f:
+        f.write("This is the gmail-helper test attachment.\n")
+        attach = f.name
+    args = argparse.Namespace(
+        to=[user], cc=None, bcc=None, sender=None,
+        subject="[gmail-helper] wizard test", body="Wizard test mail.",
+        body_file=None, html=None, attach=[attach],
+    )
+    rc = cmd_send(args)
+    os.unlink(attach)
+    return rc == 0
+
+
+def _wizard_oauth() -> bool:
+    print()
+    print("=== OAuth draft setup (Gmail API) ===")
+    if not have_oauth_libs():
+        print("Python libs are missing.")
+        if _ask_yn("Install them now via pip --user?", True):
+            do_install_libs()
+        else:
+            return False
+    print()
+    print("Now you need an OAuth client ID:")
+    print("  1. Go to https://console.cloud.google.com/")
+    print("  2. Create (or pick) a project.")
+    print("  3. APIs & Services -> Library -> enable 'Gmail API'.")
+    print("  4. APIs & Services -> Credentials -> Create credentials")
+    print("     -> OAuth client ID -> Application type: 'Desktop app'.")
+    print("  5. Download the JSON.")
+    print(f"  6. Save it as: {CREDENTIALS_PATH}")
+    print()
+    if not _ask_yn("Did you save credentials.json to the path above?", False):
+        print(
+            "OK — copy the file to that location, then re-run "
+            "`gmail-helper wizard`."
+        )
+        return False
+    if not CREDENTIALS_PATH.is_file():
+        print(f"error: {CREDENTIALS_PATH} not found.")
+        return False
+    GOOGLE_DIR.mkdir(parents=True, exist_ok=True)
+    print("\nStarting OAuth flow — a browser window will open.")
+    try:
+        _gmail_service(interactive=True)
+    except SystemExit as e:
+        print(f"OAuth flow failed: exit {e.code}")
+        return False
+    print(f"saved token to {TOKEN_PATH}")
+    if _ask_yn("Create a test Draft to yourself now?", True):
+        env = load_env()
+        return _wizard_test_draft(env.get("GMAIL_USER"))
+    return True
+
+
+def _wizard_test_draft(user: str | None) -> bool:
+    if not user:
+        user = _ask("Your Gmail address (for the test Draft)", "")
+    if not user:
+        return False
+    import tempfile
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", delete=False
+    ) as f:
+        f.write("This is the gmail-helper draft test attachment.\n")
+        attach = f.name
+    args = argparse.Namespace(
+        to=[user], cc=None, bcc=None, sender=None,
+        subject="[gmail-helper] wizard draft test",
+        body="Wizard draft test.", body_file=None, html=None,
+        attach=[attach],
+    )
+    rc = cmd_draft(args)
+    os.unlink(attach)
+    return rc == 0
+
+
+def cmd_wizard(args: argparse.Namespace) -> int:
+    if args.status_only:
+        print_status()
+        return 0
+    if not sys.stdin.isatty():
+        print(
+            "gmail-helper: wizard needs an interactive terminal.\n"
+            "Run it from a regular shell, or use these non-interactive "
+            "subcommands:\n"
+            "  install-libs   pip-install Google API client libraries\n"
+            "  auth           run OAuth flow once credentials.json is in place\n"
+            "  status         show what is configured",
+            file=sys.stderr,
+        )
+        print_status()
+        return 1
+    print("gmail-helper — interactive setup")
+    print_status()
+    print()
+    print("Pick the path you want to set up:")
+    print("  1) OAuth Drafts  (recommended — review + edit before sending)")
+    print("  2) SMTP Send     (faster, but no review step)")
+    print("  3) Both")
+    print("  q) Quit")
+    choice = _ask("Choice", "1")
+    ok_oauth = ok_smtp = True
+    if choice in ("1", "3"):
+        ok_oauth = _wizard_oauth()
+    if choice in ("2", "3"):
+        ok_smtp = _wizard_smtp()
+    if choice == "q":
+        return 0
+    print()
+    print_status()
+    return 0 if (ok_oauth and ok_smtp) else 1
+
+
+# --------------------------------------------------------------------- setup text
+
+SETUP_TEXT = f"""\
+gmail-helper setup (non-interactive summary)
+
+Run `gmail-helper wizard` from a normal shell for an interactive walkthrough.
+
+(A) SMTP send (fast)
+  1. Enable 2-Step Verification: https://myaccount.google.com/security
+  2. Create an App Password:     https://myaccount.google.com/apppasswords
+  3. Append to {SERVICE_ENV}:
+       GMAIL_USER=you@gmail.com
+       GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+  4. Test:  gmail-helper send --to you@gmail.com --subject Hi --body Yo
+
+(B) OAuth draft (recommended — Drafts with attachments)
+  1. gmail-helper install-libs
+  2. https://console.cloud.google.com/  -> project -> enable Gmail API
+  3. Create OAuth client (Desktop app) -> download JSON
+  4. Save as {CREDENTIALS_PATH}
+  5. gmail-helper auth   (browser opens; writes token.json)
+  6. gmail-helper draft --to you@gmail.com --subject Hi --body Yo --attach file.pdf
+"""
+
+
+def cmd_setup(_args: argparse.Namespace) -> int:
+    print(SETUP_TEXT)
+    return 0
+
+
+def cmd_status(_args: argparse.Namespace) -> int:
+    print_status()
+    return 0
+
+
+# --------------------------------------------------------------------- argparse
+
+def add_message_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--to", action="append", required=True,
+                   help="primary recipient (repeatable)")
+    p.add_argument("--cc", action="append")
+    p.add_argument("--bcc", action="append")
+    p.add_argument("--subject", default="")
+    p.add_argument("--body", default="")
+    p.add_argument("--body-file", help="read body from file instead of --body")
+    p.add_argument("--html", help="HTML body (added as alternative part)")
+    p.add_argument("--attach", action="append",
+                   help="path to a file to attach (repeatable)")
+    p.add_argument("--sender",
+                   help="From address (default: GMAIL_USER from service.env)")
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="gmail-helper",
+                                     description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    for name, fn in [("draft", cmd_draft), ("send", cmd_send),
+                     ("dry-run", cmd_dry_run)]:
+        sp = sub.add_parser(name, help=f"{name} an email")
+        add_message_args(sp)
+        sp.set_defaults(func=fn)
+    sp_w = sub.add_parser("wizard", help="interactive setup")
+    sp_w.add_argument("--status", dest="status_only", action="store_true",
+                      help="show status and exit (non-interactive)")
+    sp_w.set_defaults(func=cmd_wizard)
+    sub.add_parser("status", help="show configuration status").set_defaults(
+        func=cmd_status)
+    sub.add_parser("auth", help="run OAuth flow").set_defaults(func=cmd_auth)
+    sub.add_parser("install-libs",
+                   help="pip install Google API libraries"
+                   ).set_defaults(func=cmd_install_libs)
+    sub.add_parser("setup", help="print setup instructions"
+                   ).set_defaults(func=cmd_setup)
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

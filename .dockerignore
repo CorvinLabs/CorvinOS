@@ -1,0 +1,51 @@
+# Build context excludes — keep the image lean and free of operator state.
+# Used implicitly by docker build when this file is at the build-context root,
+# but since we build from repo-root, we also need a copy at repo-root.
+
+.git
+.github
+
+# per-checkout state directories
+.corvin
+.corvin_repo
+.claude
+.CorvinOS
+.claude-plugin
+.idea
+.ldd
+
+# python build artifacts
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.pytest_cache
+outputs
+
+# node build artifacts
+**/node_modules
+
+# python venvs (each sub-module has its own local .venv for dev)
+**/.venv
+**/.tox
+**/*.egg-info
+
+# secrets — never enter the image
+.env
+.env.local
+*.local.env
+
+# operator bridge runtime + tokens
+operator/bridges/*/inbox
+operator/bridges/*/outbox
+operator/bridges/*/processed
+operator/bridges/*/attachments
+operator/bridges/*/settings.json
+operator/bridges/whatsapp/auth
+operator/bridges/shared/inbox
+operator/bridges/shared/outbox
+operator/bridges/shared/processed
+operator/bridges/shared/attachments
+
+# Local installation test data — never enters the production image
+ops/local-test-data/
+ops/.env.local-test

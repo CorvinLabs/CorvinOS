@@ -1,0 +1,102 @@
+# Corvin — local sandbox / installation test
+#
+# Builds the image from the current local source tree and runs a fully
+# isolated Corvin instance alongside a live installation WITHOUT touching
+# ~/.corvin or the production corvin-edge network.
+#
+# Usage:
+#   cp ops/.env.local-test.template ops/.env.local-test
+#   # fill in ANTHROPIC_API_KEY, Discord sandbox bot token, etc.
+#   docker compose -f ops/docker-compose.local-test.yml \
+#                  --env-file ops/.env.local-test \
+#                  up --build
+#
+# Ports (never conflict with the live instance):
+#   http://localhost:18000  → Gateway REST API + Console UI
+#   http://localhost:19090  → Prometheus metrics
+#
+# All test state lives under ops/local-test-data/ (gitignored).
+# Delete that directory to simulate a completely clean install.
+#
+# For a live-edit test (Python changes without rebuild), uncomment the
+# source bind-mount in the volumes section below.
+
+name: corvin-local-test
+
+services:
+  corvin-test:
+    build:
+      context: ..          # repo root — same build context as production
+      dockerfile: ops/Dockerfile
+    image: corvin-local-test:dev
+    container_name: corvin-local-test
+    # Never auto-restart in a test — let failures surface immediately.
+    restart: "no"
+
+    environment:
+      # ── tenant identity ──
+      CORVIN_TENANT_ID: ${CORVIN_TENANT_ID:-_default}
+      CORVIN_HOME: /home/corvin/.corvin
+      HOME: /home/corvin
+
+      # ── auth — load from .env.local-test, never hardcode ──
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
+
+      # ── bridge toggles — default off; enable what you want to test ──
+      CORVIN_BRIDGE_DISCORD:  ${CORVIN_BRIDGE_DISCORD:-false}
+      CORVIN_BRIDGE_TELEGRAM: ${CORVIN_BRIDGE_TELEGRAM:-false}
+      CORVIN_BRIDGE_WHATSAPP: ${CORVIN_BRIDGE_WHATSAPP:-false}
+      CORVIN_BRIDGE_SLACK:    ${CORVIN_BRIDGE_SLACK:-false}
+      CORVIN_BRIDGE_EMAIL:    ${CORVIN_BRIDGE_EMAIL:-false}
+
+      # Gateway on by default in test — gives access to the console UI.
+      CORVIN_GATEWAY_ENABLED: ${CORVIN_GATEWAY_ENABLED:-true}
+
+      # Debug on by default in test for fuller log output.
+      CORVIN_DEBUG:     ${CORVIN_DEBUG:-1}
+      CORVIN_LOG_LEVEL: ${CORVIN_LOG_LEVEL:-DEBUG}
+
+    volumes:
+      # ── persistent test state ────────────────────────────────────────────
+      # Isolated from ~/.corvin on the host — completely separate directory.
+      # Delete ops/local-test-data/home/ to test a fresh-install code path.
+      - ./local-test-data/home:/home/corvin
+
+      # ── bridge settings (sandbox tokens, not production) ─────────────────
+      # Copy from ops/bridge-settings-templates/ and fill in sandbox tokens.
+      - ./local-test-data/bridge-settings/discord.json:/opt/corvin-repo/operator/bridges/discord/settings.json:ro
+      - ./local-test-data/bridge-settings/email.json:/opt/corvin-repo/operator/bridges/email/settings.json:ro
+      - ./local-test-data/bridge-settings/whatsapp.json:/opt/corvin-repo/operator/bridges/whatsapp/settings.json:ro
+      - ./local-test-data/bridge-settings/telegram.json:/opt/corvin-repo/operator/bridges/telegram/settings.json:ro
+      - ./local-test-data/bridge-settings/slack.json:/opt/corvin-repo/operator/bridges/slack/settings.json:ro
+
+      # ── live source mount (optional) ──────────────────────────────────────
+      # Uncomment to reflect Python changes in operator/ without a full rebuild.
+      # Leave commented for a clean image-only installation test.
+      # JS bridge changes (daemon.js) still require a rebuild even with this mount.
+      # - ../:/opt/corvin-repo:ro
+
+    ports:
+      # Bound to 127.0.0.1 only — not exposed beyond the local machine.
+      # Different host ports from production so both can run simultaneously.
+      - "127.0.0.1:18000:8000"   # Gateway REST API + Console UI
+      - "127.0.0.1:19090:9090"   # Prometheus metrics
+
+    networks: [test]
+
+    deploy:
+      resources:
+        limits:
+          memory: ${CORVIN_MEM_LIMIT:-2G}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  test:
+    # Isolated bridge network — never touches the production corvin-edge network.
+    name: corvin-local-test

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# corvin-incident — L39 Incident Tracker CLI (ADR-0057).
+# Manages EU AI Act Art. 73 serious incident records.
+#
+# Symlink onto $PATH:
+#   ln -s "$PWD/operator/voice/scripts/corvin-incident" ~/.local/bin/corvin-incident
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/corvin_incident.py" "$@"

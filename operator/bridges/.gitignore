@@ -1,0 +1,3 @@
+# Temporary test channel directories created by test_adapter_stream_idle.py.
+# Pattern matches any _test_*/ directory created under operator/bridges/.
+_test_*/

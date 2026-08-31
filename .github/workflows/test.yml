@@ -1,0 +1,206 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python (syntax gate)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python syntax gate (compileall)
+        # Fast, dependency-free, always-runs-first check. Catches a bare
+        # SyntaxError (e.g. a stray trailing paren) in ~1-2s, before any
+        # slow/flaky downstream step can mask it by failing first for an
+        # unrelated reason. 2026-07-28 incident: commit f151048 introduced a
+        # SyntaxError in core/console/corvin_console/app.py that broke the
+        # ENTIRE console app import; it shipped in a tagged release because
+        # the "Run tests" step below was already failing for other reasons
+        # and never reached the step that would have imported the broken file.
+        run: python -m compileall -q core operator corvinOS ops
+      - name: Install ffmpeg
+        # run-all-tests.sh's "corvin-voice doctor (ADR-0185 M5)" suite runs a
+        # real, non-mocked TTS round-trip via edge-tts, which shells out to
+        # ffmpeg — without it that suite fails with "no audio produced" on
+        # every run regardless of network/API-key availability.
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Python deps
+        # CI-10: install the package with its real base deps + dev extra instead
+        # of a hand-maintained pip list that drifted (it hardcoded matplotlib/
+        # itsdangerous but omitted base deps jsonschema/uvicorn/edge-tts/
+        # pywhispercpp/qrcode). matplotlib (compute E2E) and itsdangerous
+        # (Starlette session middleware) are not in [dev], so add them explicitly.
+        run: pip install -e ".[dev]" matplotlib itsdangerous
+      - name: Install Node deps (all bridges)
+        run: |
+          for d in operator/bridges/*/; do
+            if [ -f "$d/package.json" ]; then
+              npm install --prefix "$d" --silent
+            fi
+          done
+      - name: Run test suite
+        run: |
+          bash operator/bridges/run-all-tests.sh 2>&1 | tee /tmp/test-output.log
+          exit ${PIPESTATUS[0]}
+        env:
+          CORVIN_AGENTS_SKIP_LIVE: "1"
+          # Dual-env test bypass (FND-LIC-01): the delegate/engine standalone
+          # scripts in run-all-tests.sh are run via `python3` (no pytest conftest),
+          # so the intended mock-engine license bypass must come from the runner.
+          # BOTH vars together = the sanctioned test config; SKIP_LIVE alone is
+          # treated as an attempted bypass (license.gate_bypassed CRITICAL) and
+          # makes run_delegate fail-closed. Never set in production.
+          CORVIN_INTEGRATION_TEST: "1"
+          CORVIN_SKIP_SLOW_TESTS: "1"
+      - name: Show failed suites on error
+        if: failure()
+        run: grep -E "FAIL|failed|ERROR" /tmp/test-output.log | grep -v "^2026\|fail-open\|fail-closed\|_failed\|FakeProc\|write failed\|register failed\|streaming returned\|falling back" || true
+
+  browser-cross-platform:
+    name: Browser automation (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CorvinOS (dev + browser extras)
+        shell: bash
+        run: pip install -e ".[dev,browser]"
+      - name: Install Playwright Chromium (+ system deps on Linux)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            playwright install --with-deps chromium
+          else
+            playwright install chromium
+          fi
+      - name: Run browser automation tests
+        shell: bash
+        run: |
+          # test_browser_automation.py runs as its own pytest invocation —
+          # combining it with another async-heavy suite pollutes a shared
+          # asyncio event-loop fixture (pre-existing test-isolation issue,
+          # unrelated to platform). test_browser_internal_auth.py (ADR-0193)
+          # is pure sync unit tests with no such risk, but kept as its own
+          # step too for the same reason.
+          python -m pytest core/console/tests/test_browser_automation.py -v
+          python -m pytest core/console/tests/test_browser_internal_auth.py -v
+
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test-suite:
+          - comprehensive-ui-integration
+          - complete-feature-coverage
+          - edge-cases-and-failures
+          - security-session-auth
+          # NOTE: custom-provider E2E tests require running console on http://127.0.0.1:8765
+          # They are designed for local interactive testing, not headless CI.
+          # Run locally with: BASE_URL=http://127.0.0.1:8765 npx playwright test tests/e2e/custom-provider.spec.ts
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CorvinOS backend
+        run: pip install -e .
+      - name: Start isolated gateway backend
+        # The E2E global-setup logs in against http://localhost:5173/v1/console/auth/*,
+        # which vite proxies to 127.0.0.1:8765 (playwright.config.ts's default target).
+        # Nothing ever started that backend here, so every run failed at global-setup
+        # with ECONNREFUSED — the frontend-only steps below never had anything to talk
+        # to. A throwaway CORVIN_HOME is enough: local-login creates an owner session
+        # with no seed data required (verified locally).
+        run: |
+          export CORVIN_HOME="${RUNNER_TEMP}/corvin-e2e-home"
+          mkdir -p "$CORVIN_HOME"
+          nohup python -m uvicorn corvin_gateway.app:app --host 127.0.0.1 --port 8765 \
+            --log-level info > "${RUNNER_TEMP}/gateway.log" 2>&1 &
+          echo "GATEWAY_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8765/healthz > /dev/null && { echo "gateway up after ${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "gateway did not become healthy in time"; cat "${RUNNER_TEMP}/gateway.log"; exit 1
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check Node and npm versions
+        run: |
+          echo "Node version: $(node --version)"
+          echo "npm version: $(npm --version)"
+          echo "package-lock.json exists: $([ -f package-lock.json ] && echo 'YES' || echo 'NO')"
+        working-directory: core/console/corvin_console/web-next
+
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit 2>&1 | tail -20
+        working-directory: core/console/corvin_console/web-next
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+        working-directory: core/console/corvin_console/web-next
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: core/console/corvin_console/web-next
+
+      - name: Run E2E tests - ${{ matrix.test-suite }}
+        run: |
+          if [ -f "tests/e2e/${{ matrix.test-suite }}.spec.ts" ]; then
+            npm run test:e2e -- tests/e2e/${{ matrix.test-suite }}.spec.ts \
+              --reporter=list \
+              --project=chromium \
+              --project=firefox
+          else
+            # CI-9: a missing spec is a matrix/rename bug, not a pass. The old
+            # "skipping" branch let a renamed/deleted suite go silently green.
+            echo "::error::E2E spec tests/e2e/${{ matrix.test-suite }}.spec.ts not found"
+            exit 1
+          fi
+        working-directory: core/console/corvin_console/web-next
+        timeout-minutes: 30
+        env:
+          CI: true
+
+      - name: Show gateway log on failure
+        if: failure()
+        run: cat "${RUNNER_TEMP}/gateway.log" || true
+
+  e2e-summary:
+    runs-on: ubuntu-latest
+    needs: e2e
+    if: always()
+    steps:
+      - name: Check E2E test status
+        run: |
+          # CI-12: gate on "not success" — a cancelled/timed-out/errored e2e job
+          # has result 'cancelled'/'skipped', which the old '== failure' check
+          # treated as a pass. Anything other than success blocks.
+          if [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "❌ E2E job did not succeed (result: ${{ needs.e2e.result }})"
+            exit 1
+          else
+            echo "✅ All E2E tests passed"
+          fi

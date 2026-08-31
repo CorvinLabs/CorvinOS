@@ -1,0 +1,104 @@
+awp: "1.0.0"
+
+workflow:
+  name: trading_signal_pipeline
+  description: >
+    Mixed DAG-plus-delegation trading signal pipeline. Outer DAG orchestrates
+    data ingestion (parallel), signal generation (delegation_loop), and
+    risk filtering (static agent). Inner delegation node adaptively spawns
+    strategy workers until quorum or budget exhausted.
+    Demonstrates ADR-0032 mixed topology.
+
+inputs:
+  symbols:
+    type: array
+    items:
+      type: string
+    default: ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+  lookback_hours:
+    type: integer
+    default: 48
+  risk_budget_pct:
+    type: number
+    default: 0.02
+
+orchestration:
+  engine: dag
+  graph:
+    # --- Level 0: parallel data fetchers ---
+    - id: fetch_ohlcv
+      type: agent
+      agent: quant_trader
+      instructions: >
+        Use code_ohlcv_fetch to pull hourly OHLCV candles for each symbol
+        in ${inputs.symbols} over the past ${inputs.lookback_hours} hours.
+      depends_on: []
+      share_output: [ohlcv]
+
+    - id: fetch_orderbook
+      type: agent
+      agent: quant_trader
+      instructions: >
+        Use code_orderbook_snap to capture current L2 order book depth
+        (±2% from mid) for each symbol in ${inputs.symbols}.
+      depends_on: []
+      share_output: [orderbook]
+
+    - id: fetch_funding
+      type: agent
+      agent: quant_trader
+      instructions: >
+        Use code_ohlcv_fetch to retrieve current funding rates and open
+        interest for perpetual contracts on ${inputs.symbols}.
+      depends_on: []
+      share_output: [funding]
+
+    # --- Level 1: signal generation via delegation loop ---
+    - id: generate_signals
+      type: delegation_loop
+      depends_on: [fetch_ohlcv, fetch_orderbook, fetch_funding]
+      share_output: [signals, confidence_map]
+      instructions: >
+        Generate trading signals using multiple strategy workers. Spawn
+        workers for momentum, mean-reversion, and order-flow strategies.
+        COMPLETE when all three have voted or max_loops reached. Signals
+        require quorum (≥2 agreeing workers) to be included.
+      config:
+        manager: signal_manager
+        budget:
+          max_loops: 5
+          max_total_workers: 9
+        workers:
+          - id: momentum_worker
+            instructions: >
+              Compute momentum signals using code_compute_indicators
+              (RSI-14, MACD-12-26-9, ADX-14). Vote LONG/SHORT/FLAT per symbol.
+          - id: mean_reversion_worker
+            instructions: >
+              Compute mean-reversion signals (Bollinger Bands ±2σ, Z-score
+              vs 20-period MA). Vote LONG/SHORT/FLAT per symbol.
+          - id: order_flow_worker
+            instructions: >
+              Analyse orderbook imbalance and funding rate. Vote LONG/SHORT/FLAT
+              based on bid/ask ratio and funding direction.
+        termination:
+          enabled: true
+          window: 2
+          min_confidence_delta: 0.03
+
+    # --- Level 2: risk filter ---
+    - id: risk_filter
+      type: agent
+      agent: quant_trader
+      instructions: >
+        Filter signals through position-sizing rules. Max risk per trade:
+        ${inputs.risk_budget_pct} of portfolio. Use Kelly criterion halved.
+        Reject signals with confidence < 0.6. Output final order list.
+      depends_on: [generate_signals]
+
+  triggers:
+    schedule:
+      cron: "0 * * * *"
+      timezone: "UTC"
+    api:
+      enabled: true

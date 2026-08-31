@@ -1,0 +1,92 @@
+// ADR-0007 Phase 7.3 — gRPC parity for the Gateway REST surface.
+//
+// The proto file is the contract. Operators who want gRPC compile
+// with protoc + grpcio-tools and wire the generated stubs to the
+// `CorvinGateway` service stub in `grpc_server.py`. The default
+// build doesn't include grpcio; the REST surface in `app.py` stays
+// authoritative.
+//
+// Compile:
+//   python -m grpc_tools.protoc \
+//     --python_out=. --grpc_python_out=. -I=. corvin.proto
+
+syntax = "proto3";
+
+package corvin.gateway.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// ── Run lifecycle ───────────────────────────────────────────────────
+
+message Run {
+  string apiVersion = 1;   // always "corvin/v1"
+  string kind       = 2;   // always "Run"
+  RunSpec spec      = 3;
+}
+
+message RunSpec {
+  string persona = 1;
+  string input   = 2;
+  WebhookSpec webhook = 3;
+  BudgetOverride budget_override = 4;
+}
+
+message WebhookSpec {
+  string url        = 1;
+  string secret_ref = 2;
+}
+
+message BudgetOverride {
+  int32 max_wall_clock_s = 1;
+  int32 max_tokens       = 2;
+}
+
+message SubmitRunRequest {
+  string tenant_id = 1;
+  Run    run       = 2;
+}
+
+message SubmitRunResponse {
+  string run_id = 1;
+  string status = 2;   // always "accepted" on success
+}
+
+message GetRunRequest {
+  string tenant_id = 1;
+  string run_id    = 2;
+}
+
+message RunRecord {
+  string run_id     = 1;
+  string tenant_id  = 2;
+  string status     = 3;   // accepted | running | completed | failed | budget_exceeded
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Struct request      = 6;
+  google.protobuf.Struct result       = 7;
+  string error = 8;
+}
+
+// ── Streaming events (SSE parity) ───────────────────────────────────
+
+message StreamEventsRequest {
+  string tenant_id = 1;
+  string run_id    = 2;
+}
+
+message StreamEvent {
+  string event_type = 1;   // text_delta | tool_call | turn_completed | error | run.<terminal>
+  string text       = 2;
+  google.protobuf.Struct usage  = 3;
+  string error      = 4;
+  google.protobuf.Timestamp ts  = 5;
+}
+
+// ── Service ─────────────────────────────────────────────────────────
+
+service CorvinGateway {
+  rpc SubmitRun   (SubmitRunRequest)   returns (SubmitRunResponse);
+  rpc GetRun      (GetRunRequest)      returns (RunRecord);
+  rpc StreamEvents(StreamEventsRequest) returns (stream StreamEvent);
+}

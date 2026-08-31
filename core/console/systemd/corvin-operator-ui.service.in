@@ -1,0 +1,60 @@
+[Unit]
+Description=CorvinOS Operator UI — gateway + console + admin (ADR-0037)
+Documentation=https://github.com/anthropics/corvinos
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_GROUP__
+WorkingDirectory=__REPO_ROOT__
+EnvironmentFile=-/etc/corvin/operator-ui.env
+EnvironmentFile=-__REPO_ROOT__/.corvin/operator-ui.env
+Environment=PYTHONPATH=__REPO_ROOT__/core/console:__REPO_ROOT__/core/gateway:__REPO_ROOT__/core/license:__REPO_ROOT__/core/compliance:__REPO_ROOT__/operator/forge:__REPO_ROOT__/operator/skill-forge
+Environment=CORVIN_CONSOLE_UI=auto
+
+# Production: NO --reload, NO --log-level=debug. Service-user has a
+# stable venv under __REPO_ROOT__/core/console/.venv created by
+# bootstrap.sh (or symlinked to /opt/corvin/venv by install-systemd.sh).
+ExecStart=__REPO_ROOT__/core/console/.venv/bin/python -m uvicorn \
+  corvin_gateway.app:app \
+  --host 127.0.0.1 --port 8765 \
+  --log-level info \
+  --no-access-log
+
+# Liveness — systemd nudges /healthz via a sidecar timer (see
+# corvin-operator-ui-watchdog.timer). Uvicorn itself doesn't drive
+# sd_notify, so we use WatchdogSec=0 and rely on Restart=always +
+# StartLimit gating instead.
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+# Hardening — least-privilege, no shell needed, no /home access required
+# because everything writes under __REPO_ROOT__ or /etc/corvin.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=__REPO_ROOT__/core /var/log/corvin
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corvin-operator-ui
+
+[Install]
+WantedBy=multi-user.target

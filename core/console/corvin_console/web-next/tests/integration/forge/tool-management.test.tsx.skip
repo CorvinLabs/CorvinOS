@@ -1,0 +1,239 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { server } from '../../fixtures/server';
+import { http, HttpResponse } from 'msw';
+import { renderWithProviders } from '../../utils/test-utils';
+import ForgePage from '@/pages/forge';
+
+describe('Forge Tool Management Integration', () => {
+  beforeEach(() => {
+    localStorage.setItem('auth_token', 'jwt-test-token-abc123');
+  });
+
+  it('displays list of existing tools', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/code.example_tool/i)).toBeInTheDocument();
+      expect(screen.getByText(/Example tool for testing/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows tool details when selected', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/code.example_tool/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText(/code.example_tool/i));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Example tool for testing/i)).toBeInTheDocument();
+    });
+  });
+
+  it('allows creating a new tool', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    const createButton = screen.getByRole('button', { name: /create tool|new tool/i });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /name|tool name/i })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: /name|tool name/i }), {
+      target: { value: 'code.my_new_tool' },
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: /description/i }), {
+      target: { value: 'A new test tool' },
+    });
+
+    const submitButton = screen.getByRole('button', { name: /create|submit/i });
+    fireEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/created successfully|code.my_new_tool/i)).toBeInTheDocument();
+    });
+  });
+
+  it('validates tool name format', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    const createButton = screen.getByRole('button', { name: /create tool|new tool/i });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /name|tool name/i })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: /name|tool name/i }), {
+      target: { value: 'invalid_tool_name' }, // Should start with "code."
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/must start with code\.|invalid format/i)
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('allows editing a tool', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/code.example_tool/i)).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+
+    await waitFor(() => {
+      const descriptionInput = screen.getByRole('textbox', { name: /description/i });
+      fireEvent.change(descriptionInput, {
+        target: { value: 'Updated description' },
+      });
+    });
+
+    const saveButton = screen.getByRole('button', { name: /save|update/i });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/updated successfully|Updated description/i)).toBeInTheDocument();
+    });
+  });
+
+  it('allows executing a tool', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/code.example_tool/i)).toBeInTheDocument();
+    });
+
+    const executeButton = screen.getByRole('button', { name: /execute|test/i });
+    fireEvent.click(executeButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /input|data/i })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: /input|data/i }), {
+      target: { value: JSON.stringify({ test: 'data' }) },
+    });
+
+    const runButton = screen.getByRole('button', { name: /run|execute/i });
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/output|result|success/i)).toBeInTheDocument();
+    });
+  });
+
+  it('displays execution results correctly', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/code.example_tool/i)).toBeInTheDocument();
+    });
+
+    const executeButton = screen.getByRole('button', { name: /execute|test/i });
+    fireEvent.click(executeButton);
+
+    await waitFor(() => {
+      fireEvent.change(screen.getByRole('textbox', { name: /input|data/i }), {
+        target: { value: JSON.stringify({ input: 'test' }) },
+      });
+    });
+
+    const runButton = screen.getByRole('button', { name: /run|execute/i });
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/success|input_echo/i)).toBeInTheDocument();
+    });
+  });
+
+  it('allows deleting a tool', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/code.example_tool/i)).toBeInTheDocument();
+    });
+
+    const deleteButton = screen.getByRole('button', { name: /delete/i });
+    fireEvent.click(deleteButton);
+
+    // Confirm deletion if there's a confirmation dialog
+    await waitFor(() => {
+      const confirmButton = screen.queryByRole('button', { name: /confirm|delete|yes/i });
+      if (confirmButton) {
+        fireEvent.click(confirmButton);
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/deleted successfully|removed/i)).toBeInTheDocument();
+    });
+  });
+
+  it('handles tool creation error', async () => {
+    server.use(
+      http.post('/api/forge/tools', () =>
+        HttpResponse.json({ error: 'Tool name already exists' }, { status: 409 })
+      )
+    );
+
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    const createButton = screen.getByRole('button', { name: /create tool|new tool/i });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      fireEvent.change(screen.getByRole('textbox', { name: /name|tool name/i }), {
+        target: { value: 'code.existing_tool' },
+      });
+      fireEvent.change(screen.getByRole('textbox', { name: /description/i }), {
+        target: { value: 'A tool' },
+      });
+    });
+
+    const submitButton = screen.getByRole('button', { name: /create|submit/i });
+    fireEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/already exists|error/i)).toBeInTheDocument();
+    });
+  });
+
+  it('filters tools by name', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/code.example_tool/i)).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByRole('textbox', { name: /search|filter/i });
+    fireEvent.change(searchInput, { target: { value: 'data_processor' } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/code.data_processor/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows tool metadata (created date, scope)', async () => {
+    renderWithProviders(<ForgePage />, { route: '/forge' });
+
+    await waitFor(() => {
+      const toolElement = screen.getByText(/code.example_tool/i);
+      expect(toolElement.closest('[data-testid*="tool"]')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText(/code.example_tool/i));
+
+    await waitFor(() => {
+      expect(screen.getByText(/session|created|scope/i)).toBeInTheDocument();
+    });
+  });
+});

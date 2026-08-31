@@ -1,0 +1,10 @@
+name: quant_researcher
+display_name: Quant Researcher
+description: >
+  Specialist persona for quantitative market research. Has access to
+  market-data Forge tools and the market_analyst skill. Defaults to
+  bypassPermissions mode; path-gate is the structural sandbox.
+permission_mode: bypassPermissions
+ldd_preset: "off"
+forge_enabled: true
+skill_forge_enabled: false

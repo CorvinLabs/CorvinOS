@@ -1,0 +1,21 @@
+{
+  "name": "code.score_report",
+  "description": "Evaluate a Markdown report against quality criteria and return a score (0-100) with itemised feedback. Score >= 70 means passed.",
+  "input_schema": {
+    "type": "object",
+    "required": ["markdown"],
+    "properties": {
+      "markdown": {
+        "type": "string",
+        "description": "The Markdown report text to evaluate."
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "deterministic": true,
+    "version": "1.0.0"
+  },
+  "code": "import json, sys\nargs = json.load(sys.stdin)\nmd = args.get('markdown', '')\nscore = 0\nfeedback = []\ncriteria = [\n    (20, '# ' in md,          'Has a top-level title (# heading)'),\n    (20, '## ' in md,         'Has section headings (## headings)'),\n    (25, '|' in md,           'Contains a data table'),\n    (20, 'Summary' in md,     'Has a Summary section'),\n    (15, len(md.strip()) > 200, 'Report is sufficiently detailed (>200 chars)'),\n]\nfor pts, passed, msg in criteria:\n    if passed:\n        score += pts\n        feedback.append(f'[PASS +{pts}] {msg}')\n    else:\n        feedback.append(f'[FAIL  +0] {msg}')\nresult = {'score': score, 'feedback': feedback, 'passed': score >= 70}\nprint(json.dumps({'ok': True, 'data': result}))\n"
+}

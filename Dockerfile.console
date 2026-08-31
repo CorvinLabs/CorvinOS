@@ -1,0 +1,53 @@
+# Multi-stage Dockerfile for CorvinOS Console (Production)
+FROM python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+
+# Copy only requirements first (cache dependencies)
+COPY core/console/requirements.txt .
+COPY core/gateway/requirements.txt requirements-gateway.txt
+COPY core/vibe_engineering/requirements-test.txt requirements-vibe.txt
+
+# Combine and deduplicate requirements
+RUN cat *.txt | sort | uniq > combined-requirements.txt && \
+    pip install --user --no-warn-script-location -r combined-requirements.txt
+
+# Runtime stage
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    CORVIN_HOME=/var/lib/corvin
+
+WORKDIR /app
+
+# Non-root user
+RUN groupadd --system --gid 4711 corvin && \
+    useradd --system --uid 4711 --gid 4711 --home /var/lib/corvin corvin && \
+    mkdir -p /var/lib/corvin/tenants/_default/global && \
+    chown -R corvin:corvin /var/lib/corvin
+
+# Copy installed Python packages from builder
+COPY --from=builder /root/.local /home/corvin/.local
+
+# Copy entire source tree (all core modules)
+COPY --chown=corvin:corvin core/ /app/core/
+COPY --chown=corvin:corvin operator/ /app/operator/
+
+# Ensure venv/pip are in PATH
+ENV PATH=/home/corvin/.local/bin:$PATH
+
+EXPOSE 8765
+
+USER corvin
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/v1/console/api/tasks/health')" || exit 1
+
+# Start console
+ENTRYPOINT ["uvicorn", "core.console.corvin_console.app:app", \
+            "--host", "0.0.0.0", "--port", "8765", "--log-level", "info"]

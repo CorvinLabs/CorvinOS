@@ -1,0 +1,81 @@
+{
+  "discovered_at": "2026-08-31T12:00:00Z",
+  "plugin_count": 4,
+  "plugins": {
+    "console_plugin": {
+      "plugin_id": "console_plugin",
+      "version": "1.0.0",
+      "plugin_type": "console_panel",
+      "display_name": "Console UI Extension",
+      "description": "Adds custom panels and routes to the Corvin Console",
+      "entry_point": "console_plugin.ConsolePanel",
+      "dependencies": ["corvin_core"],
+      "requires_api_version": "1.0.0",
+      "boot_layer": "bundled",
+      "origin": "buildin",
+      "manifest_path": "core/plugins/console_plugin/manifest.json",
+      "plugin_dir": "core/plugins/console_plugin",
+      "features": ["panel_registration", "route_mounting", "state_management"],
+      "hooks": ["on_load", "on_unload", "on_panel_render"],
+      "test_categories": ["init_lifecycle", "features", "hooks", "integration", "cleanup"]
+    },
+    "marketplace_plugin": {
+      "plugin_id": "marketplace_plugin",
+      "version": "1.0.0",
+      "plugin_type": "marketplace_extension",
+      "display_name": "Marketplace Manager",
+      "description": "Manages plugin discovery, installation, and configuration",
+      "entry_point": "marketplace_plugin.MarketplaceManager",
+      "dependencies": ["corvin_core", "console_plugin"],
+      "requires_api_version": "1.0.0",
+      "boot_layer": "bundled",
+      "origin": "buildin",
+      "manifest_path": "operator/marketplace/plugins/buildin/marketplace_plugin/manifest.json",
+      "plugin_dir": "operator/marketplace/plugins/buildin/marketplace_plugin",
+      "features": ["plugin_discovery", "install", "uninstall", "update_check"],
+      "hooks": ["on_load", "on_unload", "on_registry_change"],
+      "test_categories": ["init_lifecycle", "features", "hooks", "integration", "cleanup"]
+    },
+    "hook_plugin": {
+      "plugin_id": "hook_plugin",
+      "version": "1.0.0",
+      "plugin_type": "hook_provider",
+      "display_name": "Hook Provider System",
+      "description": "Registers and manages plugin hooks",
+      "entry_point": "hook_plugin.HookProvider",
+      "dependencies": ["corvin_core"],
+      "requires_api_version": "1.0.0",
+      "boot_layer": "core",
+      "origin": "buildin",
+      "manifest_path": "core/plugins/hook_plugin/manifest.json",
+      "plugin_dir": "core/plugins/hook_plugin",
+      "features": ["hook_registration", "hook_execution", "hook_ordering", "error_isolation"],
+      "hooks": ["on_load", "on_unload", "on_hook_register", "on_hook_execute"],
+      "test_categories": ["init_lifecycle", "features", "hooks", "integration", "cleanup"]
+    },
+    "data_plugin": {
+      "plugin_id": "data_plugin",
+      "version": "1.0.0",
+      "plugin_type": "data_processor",
+      "display_name": "Data Processing Extension",
+      "description": "Adds data processing and transformation capabilities",
+      "entry_point": "data_plugin.DataProcessor",
+      "dependencies": ["corvin_core"],
+      "requires_api_version": "1.0.0",
+      "boot_layer": "bundled",
+      "origin": "vetted",
+      "manifest_path": "operator/marketplace/plugins/contributor/data_plugin/manifest.json",
+      "plugin_dir": "operator/marketplace/plugins/contributor/data_plugin",
+      "features": ["data_transform", "format_conversion", "validation"],
+      "hooks": ["on_load", "on_unload", "on_data_received"],
+      "test_categories": ["init_lifecycle", "features", "hooks", "integration", "cleanup"]
+    }
+  },
+  "gaps": {
+    "console_plugin": [],
+    "marketplace_plugin": [],
+    "hook_plugin": [],
+    "data_plugin": []
+  },
+  "total_coverage": 100.0
+}

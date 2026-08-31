@@ -1,0 +1,55 @@
+version: '3.9'
+
+services:
+  # CorvinOS Telemetry API Server
+  telemetry-api:
+    image: python:3.11-slim
+    container_name: corvinOS-telemetry-api
+    working_dir: /app
+    environment:
+      - FLASK_ENV=production
+      - TELEMETRY_HOST=0.0.0.0
+      - TELEMETRY_PORT=8080
+      - CORVIN_TENANT_ID=_default
+    command: >
+      bash -c "pip install -q flask flask-cors &&
+               python3 -c 'import sys; sys.path.insert(0, \".\");
+               from core.telemetry.central_aggregator import TelemetryAggregator;
+               from core.telemetry.api_server import TelemetryAPIServer;
+               from pathlib import Path;
+               agg = TelemetryAggregator();
+               srv = TelemetryAPIServer(agg, Path(\"docs/stats.html\"), \"0.0.0.0\", 8080);
+               srv.run(debug=False)'"
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+    networks:
+      - corvinOS-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Redis Cache (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: corvinOS-telemetry-cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - telemetry-cache:/data
+    networks:
+      - corvinOS-net
+    restart: unless-stopped
+
+networks:
+  corvinOS-net:
+    driver: bridge
+
+volumes:
+  telemetry-cache:
+    driver: local

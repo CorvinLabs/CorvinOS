@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-08-24T15:47:52.357478",
+  "status": "NEEDS_PYTEST",
+  "estimated_coverage_pct": 78,
+  "target_coverage_pct": 80,
+  "total_tests": 113,
+  "modules": {
+    "session_lifecycle_manager.py": 26,
+    "checkpoint_manager.py": 27,
+    "context_reducer.py": 22,
+    "recovery_engine.py": 20,
+    "checkpoint_fallback.py": 9,
+    "feature_flags.py": 9
+  },
+  "note": "Coverage is estimated; use pytest-cov for actual measurement"
+}

@@ -1,0 +1,6 @@
+[console_scripts]
+pwcpp = pywhispercpp.examples.main:main
+pwcpp-assistant = pywhispercpp.examples.assistant:_main
+pwcpp-gui = pywhispercpp.examples.gui:_main
+pwcpp-livestream = pywhispercpp.examples.livestream:_main
+pwcpp-recording = pywhispercpp.examples.recording:_main

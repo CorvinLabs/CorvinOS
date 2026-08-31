@@ -1,0 +1,100 @@
+# tenant.corvin.eu-production-http.yaml — EU_PRODUCTION preset (self-hosted HTTP).
+# Install to: <corvin_home>/tenants/_default/global/tenant.corvin.yaml
+#
+# Alternative EU-compliant profile per ADR-0041 / ADR-0043 for operators
+# who run an in-house OpenCode HTTP server (the ADR-0041 § 1.2 Dockerfile
+# approach) on the tenant LAN. The engine runs on a dedicated host
+# reachable via a private DNS name; the L35 egress gate refuses anything
+# outside the LAN allowlist.
+#
+# Operator responsibilities outside this file (see ADR-0041 GAP-ANALYSIS):
+#   * GPU host + ~15 GB model download.
+#   * Perimeter firewall / iptables rules.
+#   * DPIA, DSB sign-off, pentest, soak.
+#
+# The opencode_http engine_id requires the corresponding worker
+# registration in operator/bridges/shared/agents/ — see ADR-0043 §
+# "OpenCodeHttpEngine" for the engine builder.
+
+apiVersion: corvin/v1
+kind: Tenant
+metadata:
+  id: _default
+  display_name: "EU Production (self-hosted HTTP OpenCode)"
+  created_at: "2026-05-19T00:00:00Z"
+  preset: eu-production-http
+
+spec:
+  # ── Compliance zone (EU AI Act Art. 14) ─────────────────────────────────────
+  data_residency:
+    zone: EU
+    allowed_engines:
+      - opencode_http
+    forbid_engines:
+      - claude_code
+      - codex_cli
+      - opencode
+      - opencode_ollama     # this preset picks the HTTP variant exclusively
+
+  # ── Data classification matrix (Layer 34 / ADR-0042) ────────────────────────
+  data_classification:
+    matrix:
+      PUBLIC:       [local]
+      INTERNAL:     [local]
+      CONFIDENTIAL: [local]
+      SECRET:       [local]
+    engine_compliance:
+      - engine_id: opencode_http
+        locality: local
+        network_egress: local
+        notes: "self-hosted OpenCode HTTP server on tenant LAN"
+
+  # ── Network egress lockdown (Layer 35 / ADR-0043) ───────────────────────────
+  # Add the actual hostname / IP of the OpenCode HTTP host to allowed_hosts.
+  # The default below assumes docker-compose service name "opencode-llm".
+  egress:
+    enabled: true
+    default_action: deny
+    allowed_hosts:
+      - localhost
+      - 127.0.0.1
+      - opencode-llm        # docker-compose service name
+    forbidden_hosts:
+      - api.anthropic.com
+      - api.openai.com
+      - api.mistral.ai
+      - generativelanguage.googleapis.com
+
+  # ── Budget caps ──────────────────────────────────────────────────────────────
+  budget:
+    max_runs_per_day: null
+    max_tokens_per_day: null
+    max_wall_clock_per_run_s: null
+
+  # ── Compute worker (ADR-0013) ─────────────────────────────────────────────────
+  compute:
+    enabled: true
+    max_parallel_iterations: 4
+    max_concurrent_runs: 2
+    max_iterations_per_run: 200
+    max_wall_clock_per_run_s: 600
+    top_k_size: 5
+    disallow_llm_strategies: false
+    strategies_allowed:
+      - grid
+      - random
+      - bayesian
+
+  # ── Audit retention (Layer 37 / ADR-0044) ───────────────────────────────────
+  audit:
+    retention_years: 7
+    encryption_at_rest:
+      enabled: false
+      recipient: null
+    rotation:
+      max_size_mb: 100
+      max_age_days: 30
+
+  # ── Plugin list (ADR-0030 + ADR-0033) ────────────────────────────────────────
+  plugins:
+    installed: []

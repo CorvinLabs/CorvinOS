@@ -1,0 +1,30 @@
+apiVersion: corvin/v1
+kind: EngineTrust
+metadata:
+  engine_id: opencode
+  trust_tier: low
+  evaluated_at: "2026-05-15T00:00:00Z"
+  evaluated_against: "opencode-2025-q4 + ollama/qwen3-1.7b"
+  valid_until: "2026-08-15T00:00:00Z"
+spec:
+  binary_sha256: null
+  jailbreak_resistance: 0.65
+  system_prompt_respect: 0.70
+  tool_call_fidelity: 0.80
+  tested_refusal_classes:
+    - harmful_content
+  notes: |
+    OpenCode ist provider-agnostisch — Refusal-Verhalten hängt
+    am gewählten Backend. Lokale Ollama-Modelle (qwen3:1.7b /
+    qwen3:8b) haben deutlich schwächere Refusal-Trainings als
+    Claude/GPT-4. Trust-Tier "low" ist die ehrliche Default-
+    Einstufung.
+
+    Operator, der OpenCode mit Cloud-Backend (ollama-cloud,
+    OpenRouter) fährt, kann lokale Override-Datei in
+    <corvin_home>/global/engine_trust/opencode.yaml anlegen
+    mit höherem Tier — die per-tenant config überschreibt
+    bundle defaults.
+
+    Kürzere valid_until (3 Monate statt 6), weil OpenCode +
+    Backend-Modell-Combo häufiger updatet.

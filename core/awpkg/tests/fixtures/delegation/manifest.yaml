@@ -1,0 +1,23 @@
+awpkg: "1.0"
+id: "com.corvin.code-review-bot"
+name: "Code Review Bot"
+version: "0.9.0"
+description: "Automated multi-perspective code review via delegation graph. Orchestrator spawns security, performance and style reviewer workers in parallel."
+author: "Corvin Team"
+license: "Apache-2.0"
+min_corvin_version: "0.9.0"
+
+components:
+  workflows:
+    - workflows/code_review.awp.yaml
+  forge_tools:
+    - tools/code_diff_parser.json
+  skills:
+    - skills/code_reviewer/SKILL.md
+
+permissions:
+  network: false
+  compute: false
+  secrets: []
+
+dependencies: []

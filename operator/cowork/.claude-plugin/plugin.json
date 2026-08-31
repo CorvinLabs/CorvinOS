@@ -1,0 +1,17 @@
+{
+  "name": "cowork",
+  "description": "Multi-Persona-Layer for Claude Code. Per-chat agent roles (Coder, Browser, Inbox, Research) — each with its own tools, MCP servers, and system prompt. Optional, usable on top of voice or standalone.",
+  "version": "0.3.0",
+  "author": {
+    "name": "silvio",
+    "email": "silvio.jurk@googlemail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "agent",
+    "personas",
+    "mcp",
+    "multi-agent",
+    "router"
+  ]
+}
