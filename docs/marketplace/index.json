@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2026-08-31T13:42:24.355338",
+  "total_plugins": 10,
+  "plugins": [
+    {
+      "id": "memory-plugin",
+      "name": "Memory System",
+      "category": "Memory",
+      "version": "1.0.0",
+      "author": "CorvinOS Core",
+      "tier": "buildin",
+      "boot_layer": "bundled",
+      "rating": 4.8,
+      "installs": 5234
+    },
+    {
+      "id": "security-compliance",
+      "name": "Security & Compliance",
+      "category": "Security",
+      "version": "1.0.0",
+      "author": "CorvinOS Core",
+      "tier": "buildin",
+      "boot_layer": "bundled",
+      "rating": 4.9,
+      "installs": 4891
+    },
+    {
+      "id": "data-processing",
+      "name": "Data Processing",
+      "category": "Data",
+      "version": "1.0.0",
+      "author": "CorvinOS Core",
+      "tier": "buildin",
+      "boot_layer": "bundled",
+      "rating": 4.7,
+      "installs": 3456
+    },
+    {
+      "id": "observability",
+      "name": "Observability",
+      "category": "Observability",
+      "version": "1.0.0",
+      "author": "CorvinOS Core",
+      "tier": "buildin",
+      "boot_layer": "bundled",
+      "rating": 4.6,
+      "installs": 2789
+    },
+    {
+      "id": "integration-hub",
+      "name": "Integration Hub",
+      "category": "Integration",
+      "version": "1.0.0",
+      "author": "CorvinOS Core",
+      "tier": "buildin",
+      "boot_layer": "bundled",
+      "rating": 4.5,
+      "installs": 2123
+    }
+  ]
+}
