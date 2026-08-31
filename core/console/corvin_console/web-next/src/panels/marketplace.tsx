@@ -13,22 +13,25 @@ import { CustomRepositoriesSection } from '@/components/CustomRepositoriesSectio
 import { useProgressPolling } from '@/hooks/useProgressPolling'
 import { BASE } from '@/lib/api/client'
 
-interface Extension {
-  plugin_id: string
+interface Plugin {
+  id: string
   name: string
   version: string
   category: string
   description: string
-  author_id: string
-  rating_average: number
-  download_count: number
-  cached?: boolean
+  tier: 'buildin' | 'contributor'
+  author: string
+  rating?: number
+  installs?: number
 }
 
-interface IndexResponse {
-  version: string
-  extensions: Extension[]
-  cached?: boolean
+interface PluginListResponse {
+  plugins: Plugin[]
+  count: number
+  filtered_by?: {
+    category?: string
+    tier?: string
+  }
 }
 
 interface InstallProgress {
@@ -41,11 +44,11 @@ interface InstallProgress {
 export const MarketplacePanel: React.FC = () => {
   const queryClient = useQueryClient()
   const [view, setView] = useState<'browse' | 'installed' | 'custom'>('browse')
-  const [extensions, setExtensions] = useState<Extension[]>([])
+  const [plugins, setPlugins] = useState<Plugin[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
-  const [selectedExtension, setSelectedExtension] = useState<Extension | null>(null)
+  const [selectedPlugin, setSelectedPlugin] = useState<Plugin | null>(null)
   const [category, setCategory] = useState('')
   const [installProgress, setInstallProgress] = useState<Record<string, InstallProgress>>({})
   const [installingExtensionId, setInstallingExtensionId] = useState<string | null>(null)
@@ -95,15 +98,19 @@ export const MarketplacePanel: React.FC = () => {
     try {
       setLoading(true)
       setError(null)
-      const response = await fetch(`${BASE}/api/v2/marketplace/index`)
+      // New ADR-0511 API: /api/v1/marketplace/plugins (with optional category/tier filters)
+      const url = new URL(`${BASE}/api/v1/marketplace/plugins`)
+      if (category) url.searchParams.append('category', category)
+
+      const response = await fetch(url.toString())
       if (!response.ok) throw new Error(`Failed: ${response.statusText}`)
-      const data: IndexResponse = await response.json()
+      const data: PluginListResponse = await response.json()
       if (isMountedRef.current) {
-        setExtensions(data.extensions || [])
+        setPlugins(data.plugins || [])
       }
     } catch (err) {
       if (isMountedRef.current) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch marketplace')
+        setError(err instanceof Error ? err.message : 'Failed to fetch marketplace plugins')
       }
     } finally {
       if (isMountedRef.current) setLoading(false)
@@ -129,26 +136,26 @@ export const MarketplacePanel: React.FC = () => {
     }
   }
 
-  const handleInstall = async (extension: Extension) => {
+  const handleInstall = async (plugin: Plugin) => {
     // Phase 3 Task #7: Real job API wiring
     // 1. POST to queue install
     // 2. Get job_id
     // 3. Start polling with useProgressPolling hook
     try {
-      const extensionId = extension.plugin_id
+      const extensionId = plugin.id
       setInstallingExtensionId(extensionId)
       setInstallProgress(prev => ({
         ...prev,
         [extensionId]: { extension_id: extensionId, status: 'installing' }
       }))
 
-      // Real API call: POST /api/v2/marketplace/install
-      const response = await fetch(`${BASE}/api/v2/marketplace/install`, {
+      // Real API call: POST /api/v1/marketplace/plugins/{id}/install (future phase 4)
+      // For now, this is a placeholder; Phase 4 will wire the install API
+      const response = await fetch(`${BASE}/api/v1/marketplace/plugins/${extensionId}/install`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          extension_id: extensionId,
-          version: extension.version,
+          version: plugin.version,
           tenant_id: 'default'
         })
       })
@@ -207,15 +214,15 @@ export const MarketplacePanel: React.FC = () => {
     setInstallingExtensionId(null)
   }
 
-  const filteredExtensions = extensions.filter(ext => {
+  const filteredPlugins = plugins.filter(plugin => {
     const matchesSearch = searchTerm === '' ||
-      ext.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      ext.description.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesCategory = category === '' || ext.category === category
+      plugin.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      plugin.description.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesCategory = category === '' || plugin.category === category
     return matchesSearch && matchesCategory
   })
 
-  const categories = [...new Set(extensions.map(e => e.category))]
+  const categories = [...new Set(plugins.map(p => p.category))]
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -332,7 +339,7 @@ export const MarketplacePanel: React.FC = () => {
           {/* Grid */}
           {!loading && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredExtensions.map(ext => (
+              {filteredPlugins.map(ext => (
                 <div
                   key={ext.plugin_id}
                   onClick={() => setSelectedExtension(ext)}
@@ -359,7 +366,7 @@ export const MarketplacePanel: React.FC = () => {
             </div>
           )}
 
-          {!loading && filteredExtensions.length === 0 && (
+          {!loading && filteredPlugins.length === 0 && (
             <div className="text-center py-12">
               <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
               <p className="text-slate-600 dark:text-slate-400">No extensions found</p>
