@@ -412,6 +412,37 @@ def install_plugin(
         print(f"Error: Failed to save tenant config: {e}", file=sys.stderr)
         return 1
 
+    # Step 9a: Update registry.yaml with plugin record (FIX for GitHub#XXXX)
+    # Installation writes to tenant.corvin.yaml but ALSO must update registry.yaml
+    # so that Console listing queries can find the installed plugin.
+    try:
+        from core.plugins.corvin_plugins.state import TenantRegistry
+        from core.plugins.corvin_plugins.manifest import PluginRecord, PluginOrigin
+
+        registry = TenantRegistry.load(tenant_id)
+
+        # Convert metadata to PluginRecord and install via registry
+        record = PluginRecord(
+            plugin_id=metadata.plugin_id,
+            name=metadata.name,
+            version=metadata.version,
+            description=metadata.description or "",
+            origin=PluginOrigin(metadata.origin) if isinstance(metadata.origin, str) else metadata.origin,
+            boot_layer=metadata.boot_layer,
+            plugin_type=metadata.plugin_type,
+            class_path=metadata.class_path,
+            config=metadata.config,
+            pii_risk=metadata.pii_risk,
+            settings_schema=metadata.settings_schema,
+            settings=metadata.config,
+        )
+
+        registry.install(record, installed_by="cli")
+    except Exception as e:
+        print(f"Warning: Failed to update registry.yaml: {e}", file=sys.stderr)
+        # Don't fail the installation if registry update fails—plugin is still installed
+        # in tenant.corvin.yaml, just not visible in Console listing until restart
+
     # Step 10: Emit audit event
     emit_audit_event(
         "plugin.installed",

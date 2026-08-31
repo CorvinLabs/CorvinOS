@@ -368,11 +368,56 @@ def _load_registry(tenant_id: str) -> Any:
 
 
 def _entries(tenant_id: str) -> dict[str, _Entry]:
-    """Merge the tenant's registry records with the process-wide runtime view."""
+    """Merge the tenant's registry records with the process-wide runtime view.
+
+    Also includes plugins from tenant.corvin.yaml that haven't yet been synced
+    to registry.yaml (defensive fallback for installation state sync).
+    """
     merged: dict[str, _Entry] = {}
     registry = _load_registry(tenant_id)
     for plugin_id, record in registry.records.items():
         merged[plugin_id] = _Entry(plugin_id=plugin_id, record=record)
+
+    # DEFENSIVE: Also check tenant.corvin.yaml for installed plugins
+    # in case registry.yaml is out of sync (e.g., installation in progress)
+    try:
+        from core.plugins.corvin_plugins.manifest import PluginRecord, PluginOrigin
+        from forge import tenants
+
+        tenant_home = tenants.tenant_home(tenant_id)
+        tenant_config_path = tenant_home / "global" / "tenant.corvin.yaml"
+
+        if tenant_config_path.exists():
+            import yaml
+            with open(tenant_config_path) as f:
+                config = yaml.safe_load(f) or {}
+
+            # Check for installed plugins in tenant config
+            installed = config.get("spec", {}).get("plugins", {}).get("installed", [])
+            for plugin_data in installed:
+                plugin_id = plugin_data.get("id")
+                if plugin_id and plugin_id not in merged:
+                    # Create a minimal record from tenant config data
+                    try:
+                        record = PluginRecord(
+                            plugin_id=plugin_id,
+                            name=plugin_data.get("name", plugin_id),
+                            version=plugin_data.get("version", "unknown"),
+                            description="",
+                            origin=PluginOrigin(plugin_data.get("origin", "unknown")),
+                            boot_layer=plugin_data.get("boot_layer"),
+                            plugin_type="unknown",
+                            class_path=plugin_data.get("class_path"),
+                            config=plugin_data.get("config"),
+                        )
+                        merged[plugin_id] = _Entry(plugin_id=plugin_id, record=record)
+                    except Exception:
+                        # If we can't create a valid record, skip it
+                        # (it will show up once registry.yaml is updated)
+                        pass
+    except Exception:
+        # Defensive: if reading tenant.corvin.yaml fails, just use registry
+        pass
 
     for plugin_id, runtime in _runtime_entries().items():
         is_global = runtime.get("boot_layer") in _GLOBAL_BOOT_LAYERS
