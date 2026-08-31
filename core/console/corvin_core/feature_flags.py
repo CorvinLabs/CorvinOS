@@ -941,6 +941,25 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         release_tier="alpha",
     ),
     FeatureFlag(
+        id="cel_load_bearing_anchor",
+        label="CEL Session Load-Bearing-Fact Anchor (truncation-safe re-injection)",
+        description=(
+            "Re-inject load-bearing facts (constraints / ids / decisions / goal) at the TOP of "
+            "the deterministic CEL brief every turn, UNCAPPED, so a within-session context-drift "
+            "cannot silently drop them (ADR-0407 amendment). Off (default, ship-dark) = today's "
+            "behaviour: render_brief_to_text caps memory matches at [:5] and scan_blockers caps "
+            "blockers at [:5], so a load-bearing fact at rank 6+ or with low confidence falls out "
+            "SILENTLY with no keep-list and no re-injection. On = build_brief persists the turn's "
+            "load-bearing facts to a per-(tenant, session) anchor store and re-injects the "
+            "accumulated set at the head of the brief, truncation-safe, every turn. Move-2 signal: "
+            "anchor.INJECTED_FACTS_TOTAL goes positive + a log line fires when facts are injected."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("vibe-engineering", "context-engineering", "learning"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
         id="cross_device_sync",
         label="Cross-device tenant sync",
         description=(

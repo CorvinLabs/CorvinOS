@@ -32,7 +32,65 @@ def build_brief(task: str, tenant: str = "_default", session: Any = None,
     ContextBundle (incl. the P-B binding channels) for callers that provision the
     worker with tools/skills, not just text."""
     bundle, trace = build_context(task, tenant, session, meter)
-    return (bundle.brief if bundle is not None else None), trace
+    brief = bundle.brief if bundle is not None else None
+    _maybe_apply_anchor(task, tenant, session, brief, trace)
+    return brief, trace
+
+
+def _anchor_enabled(tenant: str) -> bool:
+    """Resolve the ship-dark ``cel_load_bearing_anchor`` flag (default OFF). A
+    broken flag subsystem degrades to OFF — never raises mid-turn."""
+    try:
+        from corvin_core import feature_flags as _ff  # noqa: PLC0415
+        return bool(_ff.is_enabled("cel_load_bearing_anchor", tenant))
+    except Exception:  # noqa: BLE001 — no flag subsystem → off (ship-dark)
+        return False
+
+
+def _session_key_of(session: Any, task: str) -> str:
+    """Derive a stable per-session key for the anchor store from the live session
+    object (``sid`` / ``workdir`` basename). No env-var fallback."""
+    if session is not None:
+        sid = getattr(session, "sid", "") or ""
+        if sid:
+            return str(sid)
+        wd = getattr(session, "workdir", "") or ""
+        if wd:
+            from pathlib import Path as _P  # noqa: PLC0415
+            return _P(str(wd)).name
+    return ""  # → "_nosession" bucket in the store
+
+
+def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
+                        trace: dict) -> None:
+    """Auto-populate the Session Load-Bearing-Fact Anchor (ADR-0407 amendment).
+
+    Flag OFF (default, ship-dark) ⇒ no store write, ``brief.anchor_facts`` stays
+    empty, the render is byte-identical to today. Flag ON ⇒ persist this turn's
+    load-bearing facts (blockers + recovered rank-6+ constraints + the original
+    session goal) and hand the accumulated set back on ``brief.anchor_facts`` so
+    the render re-injects them uncapped, truncation-safe, every turn."""
+    if brief is None or not _anchor_enabled(tenant):
+        return
+    try:
+        from . import anchor  # noqa: PLC0415
+        session_key = _session_key_of(session, task)
+        for kind, text in anchor.collect_load_bearing(brief):
+            anchor.add_fact(tenant, session_key, kind, text)
+        # The ORIGINAL session goal is added once and then persists — re-adding a
+        # fresh per-turn task would evict the real constraints under the cap.
+        existing = anchor.load_facts(tenant, session_key)
+        goal = (getattr(brief, "raw_input", "") or task or "").strip()
+        if goal and not any(f.get("kind") == "goal" for f in existing):
+            anchor.add_fact(tenant, session_key, "goal", goal)
+        facts = anchor.load_facts(tenant, session_key)
+        try:
+            brief.anchor_facts = facts
+        except Exception:  # noqa: BLE001 — a frozen/odd brief just skips the attach
+            pass
+        trace["anchor_facts"] = len(facts)
+    except Exception:  # noqa: BLE001 — the anchor never breaks a turn
+        pass
 
 
 def build_context(task: str, tenant: str = "_default", session: Any = None,
@@ -402,6 +460,18 @@ def render_brief_to_text(brief: Any, *, include_content: bool = False) -> str:
     if brief is None:
         return ""
     lines: list[str] = []
+    # Session Load-Bearing-Fact Anchor (ADR-0407 amendment) — GANZ OBEN, UNCAPPED.
+    # Only ever non-empty when build_brief populated it under the ship-dark
+    # `cel_load_bearing_anchor` flag; empty (default) ⇒ byte-identical to pre-anchor
+    # output (I5: off is a quiet path). Rendered before every other section so a
+    # load-bearing fact survives truncation at the head of the prompt.
+    _anchor_facts = getattr(brief, "anchor_facts", None) or []
+    if _anchor_facts:
+        from . import anchor as _anchor  # noqa: PLC0415
+        lines.extend(_anchor.render_lines(_anchor_facts))
+        # Move-2: loud, not silent — bump the watchdog-readable counter + log the
+        # injection. Muting this call is the mutation the Move-2 test catches.
+        _anchor.record_injection(len(_anchor_facts))
     mc = getattr(brief, "memory_context", None)
     matches = getattr(mc, "matches", []) if mc else []
     if matches:
