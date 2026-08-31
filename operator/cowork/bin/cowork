@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""cowork — CLI für Personas. Standalone (kein voice nötig) und gleichzeitig
+die Implementation hinter den Slash-Commands.
+
+Subcommands:
+    cowork list                          Alle bekannten Personas
+    cowork show <persona>                JSON-Detail einer Persona
+    cowork run  <persona> [-- <args>...] Startet `claude` mit der Persona
+                                         (Rest-Args werden an claude durchgereicht;
+                                          ohne Args wird `claude -p <stdin>` gestartet,
+                                          wenn stdin nicht-tty ist)
+    cowork bind <channel> <chat> <persona>
+                                         Schreibt chat_profiles[chat].persona = <persona>
+                                         in plugins/voice/bridges/<channel>/settings.json
+    cowork unbind <channel> <chat>       Entfernt persona-Key (Profil bleibt erhalten)
+    cowork add <persona>                 Kopiert Bundle-Persona in User-Dir zum Editieren
+    cowork rm  <persona>                 Löscht User-Persona (Bundle bleibt)
+
+Exit-Codes: 0 ok, 1 user-error, 2 missing persona, 3 IO-error.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "lib"))
+
+import resolver  # type: ignore
+
+
+REPO_ROOT = HERE.parent.parent.parent  # plugins/cowork/bin/.. = plugins/cowork
+                                        # plugins/cowork/.. = plugins
+                                        # plugins/.. = repo
+VOICE_BRIDGES_DIR = REPO_ROOT / "plugins" / "voice" / "bridges"
+
+
+def _print_err(msg: str) -> None:
+    print(f"cowork: {msg}", file=sys.stderr)
+
+
+def cmd_list(_args) -> int:
+    items = resolver.list_available()
+    if not items:
+        print("(keine Personas installiert)")
+        return 0
+    width = max(len(p["name"]) for p in items)
+    for p in items:
+        zc = " " if p.get("zero_config") else "*"
+        oa = ",".join(p.get("needs_oauth") or []) or "-"
+        keys = ",".join(p.get("needs_keys") or []) or "-"
+        desc = (p.get("description") or "").splitlines()[0]
+        print(f"  {zc} {p['name']:<{width}}  oauth={oa}  keys={keys}  {desc}")
+    print("\n  ' ' = zero-config, '*' = braucht extra Setup")
+    return 0
+
+
+def cmd_show(args) -> int:
+    p = resolver.load(args.persona)
+    if p is None:
+        _print_err(f"persona {args.persona!r} not found")
+        return 2
+    json.dump(p, sys.stdout, indent=2, ensure_ascii=False)
+    print()
+    return 0
+
+
+def cmd_run(args) -> int:
+    persona = resolver.load(args.persona)
+    if persona is None:
+        _print_err(f"persona {args.persona!r} not found")
+        return 2
+    profile = resolver.resolve(args.persona, overrides={})
+    cmd = ["claude"]
+
+    pm = profile.get("permission_mode")
+    if pm == "bypassPermissions":
+        cmd.append("--dangerously-skip-permissions")
+    elif pm:
+        cmd += ["--permission-mode", pm]
+
+    if profile.get("append_system"):
+        cmd += ["--append-system-prompt", profile["append_system"]]
+
+    if profile.get("model"):
+        cmd += ["--model", profile["model"]]
+
+    allowed = profile.get("allowed_tools") or []
+    if allowed:
+        cmd += ["--allowedTools", " ".join(str(t) for t in allowed)]
+    disallowed = profile.get("disallowed_tools") or []
+    if disallowed:
+        cmd += ["--disallowedTools", " ".join(str(t) for t in disallowed)]
+
+    mcp_path = resolver.materialize_mcp(profile)
+    if mcp_path:
+        cmd += ["--mcp-config", mcp_path]
+
+    for d in resolver.expand_dirs(profile):
+        cmd += ["--add-dir", d]
+
+    extra = list(args.extra or [])
+    if args.prompt:
+        cmd += ["-p", args.prompt]
+    cmd += extra
+
+    if args.dry_run:
+        print(json.dumps(cmd, ensure_ascii=False))
+        return 0
+
+    try:
+        return subprocess.call(cmd)
+    except FileNotFoundError:
+        _print_err("`claude` CLI nicht im PATH")
+        return 3
+
+
+def _settings_path(channel: str) -> Path:
+    safe = "".join(c for c in channel if c.isalnum() or c in "-_")
+    return VOICE_BRIDGES_DIR / safe / "settings.json"
+
+
+def _load_settings(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        _print_err(f"settings.json defekt ({path}): {e}")
+        sys.exit(3)
+
+
+def _save_settings(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+
+
+def cmd_bind(args) -> int:
+    if resolver.load(args.persona) is None:
+        _print_err(f"persona {args.persona!r} not found — `cowork list` zeigt verfügbare")
+        return 2
+    sp = _settings_path(args.channel)
+    if not sp.parent.is_dir():
+        _print_err(f"channel {args.channel!r} existiert nicht ({sp.parent})")
+        return 1
+    data = _load_settings(sp)
+    profiles = data.setdefault("chat_profiles", {})
+    entry = profiles.setdefault(args.chat, {})
+    entry["persona"] = args.persona
+    _save_settings(sp, data)
+    print(f"✓ {args.channel}/{args.chat} → persona={args.persona}")
+    print(f"  ({sp})")
+    print("  Hot-Reload greift bei der nächsten Inbox-Message — kein Restart nötig.")
+    return 0
+
+
+def cmd_unbind(args) -> int:
+    sp = _settings_path(args.channel)
+    if not sp.is_file():
+        _print_err(f"settings.json nicht gefunden: {sp}")
+        return 1
+    data = _load_settings(sp)
+    profiles = data.get("chat_profiles") or {}
+    entry = profiles.get(args.chat)
+    if not isinstance(entry, dict) or "persona" not in entry:
+        print(f"  {args.channel}/{args.chat} hatte keine Persona — nichts zu tun")
+        return 0
+    removed = entry.pop("persona")
+    if not entry:
+        # leeres Profil komplett entfernen
+        profiles.pop(args.chat, None)
+    _save_settings(sp, data)
+    print(f"✓ {args.channel}/{args.chat}: persona={removed} entfernt")
+    return 0
+
+
+def cmd_add(args) -> int:
+    persona = resolver.load(args.persona)
+    if persona is None:
+        _print_err(f"persona {args.persona!r} not im Bundle — was installierst du?")
+        return 2
+    src = Path(persona["_source"])
+    dst_dir = resolver.USER_PERSONAS_DIR
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / f"{args.persona}.json"
+    if dst.exists() and not args.force:
+        _print_err(f"existiert schon: {dst} (--force zum Überschreiben)")
+        return 1
+    shutil.copy2(src, dst)
+    print(f"✓ {args.persona} → {dst}")
+    hint = persona.get("setup_hint")
+    if hint:
+        print(f"\n  Setup-Hinweis: {hint}")
+    if persona.get("needs_oauth") or persona.get("needs_keys"):
+        print("  Diese Persona braucht weitere Konfiguration — siehe README.")
+    return 0
+
+
+def cmd_rm(args) -> int:
+    p = resolver.USER_PERSONAS_DIR / f"{args.persona}.json"
+    if not p.is_file():
+        _print_err(f"keine User-Persona {args.persona!r} (Bundle bleibt unangetastet)")
+        return 2
+    p.unlink()
+    print(f"✓ entfernt: {p}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="cowork",
+        description="Multi-Persona-Layer für Claude Code (on top von voice oder standalone).",
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("list", help="Alle bekannten Personas anzeigen") \
+        .set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("show", help="Eine Persona als JSON ausgeben")
+    sp.add_argument("persona")
+    sp.set_defaults(func=cmd_show)
+
+    rp = sub.add_parser("run", help="claude in der Persona starten")
+    rp.add_argument("persona")
+    rp.add_argument("-p", "--prompt", help="Prompt für claude -p")
+    rp.add_argument("--dry-run", action="store_true",
+                    help="Nur die fertige claude-Argumentliste ausgeben")
+    rp.set_defaults(func=cmd_run, extra=[])
+
+    bp = sub.add_parser("bind", help="Chat einer Persona zuweisen")
+    bp.add_argument("channel", help="z. B. whatsapp, telegram, discord, slack")
+    bp.add_argument("chat", help="chat_id / sender-JID — siehe debug-Logs der Bridge")
+    bp.add_argument("persona")
+    bp.set_defaults(func=cmd_bind)
+
+    up = sub.add_parser("unbind", help="Persona-Bindung eines Chats entfernen")
+    up.add_argument("channel")
+    up.add_argument("chat")
+    up.set_defaults(func=cmd_unbind)
+
+    ap_ = sub.add_parser("add", help="Bundle-Persona ins User-Dir kopieren (zum Editieren)")
+    ap_.add_argument("persona")
+    ap_.add_argument("--force", action="store_true")
+    ap_.set_defaults(func=cmd_add)
+
+    rmp = sub.add_parser("rm", help="User-Persona löschen (Bundle bleibt)")
+    rmp.add_argument("persona")
+    rmp.set_defaults(func=cmd_rm)
+
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # Manuelles `--`-Splitting: alles nach `--` geht 1:1 an claude weiter.
+    extra: list[str] = []
+    if "--" in raw:
+        i = raw.index("--")
+        extra = raw[i + 1 :]
+        raw = raw[:i]
+    ap = build_parser()
+    args = ap.parse_args(raw)
+    if extra:
+        args.extra = extra
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

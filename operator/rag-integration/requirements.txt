@@ -1,0 +1,15 @@
+# RAG Integration — Phases 1–3 Dependencies
+
+# Core
+jsonschema>=4.17.0        # JSON Schema validation (Draft 7)
+pyyaml>=6.0               # YAML parsing
+httpx>=0.23.0             # Async HTTP client (Phase 3)
+
+# Testing
+pytest>=7.0               # Test framework
+pytest-asyncio>=0.21.0    # Async test support
+pytest-cov>=4.0           # Code coverage
+
+# Optional (for future phases)
+redis>=4.3.0              # Distributed caching (Phase 3+)
+aioredis>=2.0             # Async Redis (Phase 3+)

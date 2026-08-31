@@ -1,0 +1,7 @@
+python: /home/shumway/projects/CorvinOS/core/console/.venv/bin/python
+CORVIN_HOME: /home/shumway/projects/CorvinOS/.corvin
+2026-08-19T17:27:02 [INFO] [corvin.license] license: loaded — tier=member jti=5400aba3
+[helper_model] site=house_rules_adjudicator model=claude-haiku-4-5-20251001
+2026-08-19T17:27:39 [INFO] [corvin.bridge-adapter] logger online level=INFO file=/home/shumway/projects/CorvinOS/.corvin/logs/corvin.log
+Beendet
+BENCH_EXIT=143

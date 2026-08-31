@@ -1,0 +1,9 @@
+[Unit]
+Description=Corvin-OS daily audit-chain integrity verification (Roadmap L)
+
+[Service]
+Type=oneshot
+ExecStart=__PYTHON_BIN__ __PLUGIN_ROOT__/scripts/voice_audit.py verify --notify-bridge
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env

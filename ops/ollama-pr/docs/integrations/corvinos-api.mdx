@@ -1,0 +1,216 @@
+---
+title: CorvinOS Gateway API
+---
+
+The CorvinOS gateway exposes a REST API on `http://localhost:8000` (default). All endpoints
+require a session token issued by the console login flow.
+
+## Authentication
+
+```bash
+# Login and store token
+TOKEN=$(corvin token issue --scope owner)
+
+# Use in requests
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/v1/...
+```
+
+---
+
+## Bridges
+
+### List bridges
+
+```http
+GET /v1/console/bridges
+```
+
+Returns all configured bridges with their current status.
+
+**Response**
+
+```json
+{
+  "bridges": [
+    {
+      "channel": "discord",
+      "status": "online",
+      "engine": "hermes",
+      "active_chats": 2,
+      "uptime_s": 18342
+    }
+  ]
+}
+```
+
+### Restart a bridge
+
+```http
+POST /v1/console/bridges/{channel}/restart
+```
+
+---
+
+## Engine control
+
+### Get current engine settings
+
+```http
+GET /v1/console/settings/engine
+```
+
+```json
+{
+  "default_engine": "hermes",
+  "allowed_engines": ["hermes", "claude_code"],
+  "capabilities": {
+    "hermes": { "btw": "stdin_json", "locality": "local", "network_egress": "none" },
+    "claude_code": { "btw": "stdin_json", "locality": "any", "network_egress": "api.anthropic.com" }
+  }
+}
+```
+
+### Change default engine
+
+```http
+PUT /v1/console/settings/engine
+Content-Type: application/json
+
+{ "default_engine": "hermes" }
+```
+
+### Engine capabilities
+
+```http
+GET /v1/console/settings/engine/capabilities
+```
+
+---
+
+## Settings files
+
+### List config files
+
+```http
+GET /v1/console/settings
+```
+
+Returns all known config files (tenant policy, LDD, dialectic, etc.) with their current content.
+
+### Update a config file
+
+```http
+PUT /v1/console/settings/{label}
+Content-Type: application/json
+
+{
+  "body": "{ \"auto_update\": false }",
+  "re_auth_token": "<owner-reauth-token>"
+}
+```
+
+`label` is one of: `tenant.corvin.yaml`, `ldd.json`, `dialectic.json`,
+`relay.json`, `branding.yaml`, `data_policy.yaml`, `corvin-launcher.json`.
+
+Requires Re-Auth (owner token). Returns 400 on invalid JSON/YAML structure.
+
+---
+
+## Remote trigger (A2A)
+
+### Send a task to a remote CorvinOS instance
+
+```http
+POST /v1/a2a/receive
+```
+
+Used by `corvin-a2a send` — see [Layer 38 A2A docs](/docs/layer-38-a2a) for the full
+envelope format and HMAC-SHA256 authentication requirements.
+
+### View A2A event log
+
+```http
+GET /v1/console/remote-trigger/log?limit=50&per_peer=10
+```
+
+---
+
+## Audit log
+
+### Tail the audit chain
+
+```http
+GET /v1/console/audit/tail?n=100
+```
+
+Returns the last *n* hash-chained audit events. Each event includes:
+
+```json
+{
+  "ts": 1748784000.0,
+  "event": "bridge.message_received",
+  "prev_hash": "a3f8...",
+  "hash": "bc12...",
+  "details": { "channel": "discord", "chat_key": "123:456" }
+}
+```
+
+### Verify chain integrity
+
+```http
+POST /v1/console/audit/verify
+```
+
+Equivalent to `voice-audit verify` — returns `{ "ok": true }` or `{ "ok": false, "error": "..." }`.
+Exit-1 on failure propagates to the HEALTHCHECK.
+
+---
+
+## Sessions
+
+### List active sessions
+
+```http
+GET /v1/console/sessions
+```
+
+### Reset a session
+
+```http
+DELETE /v1/console/sessions/{bridge}/{chat_key}
+```
+
+Equivalent to `/reset` in chat. Purges session skills, forge tools, and voice state.
+Writes `session.reset` to the audit chain before any deletion.
+
+---
+
+## User management
+
+### List roles
+
+```http
+GET /v1/console/roles/{channel}
+```
+
+### Grant a role
+
+```http
+POST /v1/console/roles
+Content-Type: application/json
+
+{ "channel": "discord", "chat": "456", "uid": "789", "role": "member", "ttl_days": 7 }
+```
+
+Roles: `owner > admin > member > observer`. TTL defaults to 7 days. Admin cannot self-promote (kerze rule).
+
+---
+
+## Health
+
+```http
+GET /readyz
+GET /healthz
+```
+
+Returns 200 when the gateway and all CRITICAL self-test checks pass. Used by Docker `HEALTHCHECK` and `bridge.sh doctor`.

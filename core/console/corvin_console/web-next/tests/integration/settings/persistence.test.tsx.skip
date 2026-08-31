@@ -1,0 +1,180 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { renderWithProviders } from '../../utils/test-utils';
+import SettingsPage from '@/pages/settings';
+
+describe('Settings Persistence Integration', () => {
+  beforeEach(() => {
+    localStorage.setItem('auth_token', 'jwt-test-token-abc123');
+    localStorage.clear();
+  });
+
+  it('displays current settings on load', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/theme|settings/i)).toBeInTheDocument();
+    });
+  });
+
+  it('allows changing theme setting', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      const themeSelect = screen.getByRole('combobox', { name: /theme/i });
+      expect(themeSelect).toBeInTheDocument();
+    });
+
+    const themeSelect = screen.getByRole('combobox', { name: /theme/i });
+    fireEvent.selectOption(themeSelect, 'dark');
+
+    await waitFor(() => {
+      const value = (themeSelect as HTMLSelectElement).value;
+      expect(value).toBe('dark');
+    });
+  });
+
+  it('persists settings to backend', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: /theme/i })).toBeInTheDocument();
+    });
+
+    fireEvent.selectOption(screen.getByRole('combobox', { name: /theme/i }), 'dark');
+
+    const saveButton = screen.getByRole('button', { name: /save|apply/i });
+    if (saveButton) {
+      fireEvent.click(saveButton);
+    }
+
+    await waitFor(() => {
+      expect(screen.getByText(/saved|updated/i)).toBeInTheDocument();
+    });
+  });
+
+  it('loads persisted settings on page reload', async () => {
+    const { rerender } = renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      fireEvent.selectOption(screen.getByRole('combobox', { name: /theme/i }), 'dark');
+    });
+
+    const saveButton = screen.queryByRole('button', { name: /save|apply/i });
+    if (saveButton) {
+      fireEvent.click(saveButton);
+    }
+
+    await waitFor(() => {
+      expect(screen.getByText(/saved|updated/i)).toBeInTheDocument();
+    });
+
+    // Simulate reload
+    rerender(<SettingsPage />);
+
+    await waitFor(() => {
+      const themeSelect = screen.getByRole('combobox', { name: /theme/i }) as HTMLSelectElement;
+      expect(themeSelect.value).toBe('dark');
+    });
+  });
+
+  it('allows toggling notification settings', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: /notification/i })).toBeInTheDocument();
+    });
+
+    const notificationCheckbox = screen.getByRole('checkbox', { name: /notification/i });
+    fireEvent.click(notificationCheckbox);
+
+    expect(notificationCheckbox).toBeChecked();
+  });
+
+  it('validates timeout value', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      const timeoutInput = screen.getByRole('spinbutton', { name: /timeout/i });
+      expect(timeoutInput).toBeInTheDocument();
+    });
+
+    const timeoutInput = screen.getByRole('spinbutton', { name: /timeout/i });
+
+    // Try invalid value
+    fireEvent.change(timeoutInput, { target: { value: '-1' } });
+
+    const saveButton = screen.getByRole('button', { name: /save|apply/i });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/must be positive|invalid/i)).toBeInTheDocument();
+    });
+  });
+
+  it('allows resetting to default settings', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      fireEvent.selectOption(screen.getByRole('combobox', { name: /theme/i }), 'dark');
+    });
+
+    const resetButton = screen.getByRole('button', { name: /reset|default/i });
+    fireEvent.click(resetButton);
+
+    // Confirm reset if there's a confirmation
+    await waitFor(() => {
+      const confirmButton = screen.queryByRole('button', { name: /confirm|reset|yes/i });
+      if (confirmButton && confirmButton !== resetButton) {
+        fireEvent.click(confirmButton);
+      }
+    });
+
+    await waitFor(() => {
+      const themeSelect = screen.getByRole('combobox', { name: /theme/i }) as HTMLSelectElement;
+      expect(themeSelect.value).toBe('light');
+    });
+  });
+
+  it('handles save error gracefully', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      fireEvent.selectOption(screen.getByRole('combobox', { name: /theme/i }), 'dark');
+    });
+
+    const saveButton = screen.getByRole('button', { name: /save|apply/i });
+    fireEvent.click(saveButton);
+
+    // Should show error or retry option
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/error|failed|could not save/i) ||
+        screen.queryByText(/retry/i)
+      ).toBeTruthy();
+    });
+  });
+
+  it('shows multiple settings sections', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/appearance|theme/i)).toBeInTheDocument();
+      expect(screen.getByText(/notification/i)).toBeInTheDocument();
+    });
+  });
+
+  it('indicates unsaved changes', async () => {
+    renderWithProviders(<SettingsPage />, { route: '/settings' });
+
+    await waitFor(() => {
+      fireEvent.selectOption(screen.getByRole('combobox', { name: /theme/i }), 'dark');
+    });
+
+    // Look for unsaved indicator
+    expect(
+      screen.queryByText(/unsaved|modified|changed/i) ||
+      screen.queryByRole('button', { name: /save/i })
+    ).toBeTruthy();
+  });
+});

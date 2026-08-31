@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 560" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <!-- Arrow marker -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="470" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">
+    How Corvin works
+  </text>
+  <text x="470" y="50" text-anchor="middle" font-size="12" fill="#475569">
+    A Claude Code agent reachable from any messenger — voice in, voice out, runtime-forged tools, audit log over everything.
+  </text>
+
+  <!-- ─────────────────  LEFT: User devices  ───────────────── -->
+  <g>
+    <rect x="20" y="80" width="220" height="400" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <text x="130" y="105" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">YOUR DEVICES</text>
+    <text x="130" y="122" text-anchor="middle" font-size="10" fill="#64748b">phone · laptop · anywhere</text>
+
+    <!-- Phone -->
+    <rect x="55" y="145" width="150" height="240" rx="20" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+    <rect x="65" y="160" width="130" height="200" rx="6" fill="#0f172a"/>
+    <text x="130" y="180" text-anchor="middle" font-size="9" fill="#94a3b8">Send: text · voice note ·</text>
+    <text x="130" y="192" text-anchor="middle" font-size="9" fill="#94a3b8">photo · PDF · file</text>
+
+    <!-- 6 Messenger logos (2 columns) -->
+    <g>
+      <rect x="68" y="205" width="82" height="24" rx="5" fill="#25d366"/>
+      <text x="109" y="221" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">WhatsApp</text>
+    </g>
+    <g>
+      <rect x="158" y="205" width="72" height="24" rx="5" fill="#0088cc"/>
+      <text x="194" y="221" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">Telegram</text>
+    </g>
+    <g>
+      <rect x="68" y="236" width="82" height="24" rx="5" fill="#5865f2"/>
+      <text x="109" y="252" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">Discord</text>
+    </g>
+    <g>
+      <rect x="158" y="236" width="72" height="24" rx="5" fill="#4a154b"/>
+      <text x="194" y="252" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">Slack</text>
+    </g>
+    <g>
+      <rect x="68" y="267" width="82" height="24" rx="5" fill="#0078d4"/>
+      <text x="109" y="283" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">Teams</text>
+    </g>
+    <g>
+      <rect x="158" y="267" width="72" height="24" rx="5" fill="#3a76f0"/>
+      <text x="194" y="283" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">Signal</text>
+    </g>
+
+    <text x="130" y="408" text-anchor="middle" font-size="10" font-style="italic" fill="#475569">
+      + local read-aloud at the desk
+    </text>
+    <text x="130" y="424" text-anchor="middle" font-size="10" font-style="italic" fill="#475569">
+      via the voice plugin's Stop hook
+    </text>
+
+    <text x="130" y="455" text-anchor="middle" font-size="10" fill="#94a3b8">/on  /off  /status</text>
+    <text x="130" y="468" text-anchor="middle" font-size="10" fill="#94a3b8">per chat (WhatsApp)</text>
+  </g>
+
+  <!-- Arrow:  Devices → Bridge -->
+  <path d="M 240 220 Q 280 220 320 220" stroke="#2563eb" stroke-width="2.2" fill="none" marker-end="url(#arrow-blue)"/>
+  <text x="280" y="210" text-anchor="middle" font-size="10" font-weight="600" fill="#2563eb">request</text>
+
+  <!-- Arrow:  Bridge → Devices -->
+  <path d="M 320 350 Q 280 350 240 350" stroke="#16a34a" stroke-width="2.2" fill="none" marker-end="url(#arrow-green)"/>
+  <text x="280" y="370" text-anchor="middle" font-size="10" font-weight="600" fill="#16a34a">reply (text + voice + files)</text>
+
+  <!-- ─────────────────  CENTER: Always-on box  ───────────────── -->
+  <g>
+    <rect x="320" y="80" width="380" height="400" rx="14" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="510" y="105" text-anchor="middle" font-size="13" font-weight="700" fill="#1e40af">
+      YOUR ALWAYS-ON BOX
+    </text>
+    <text x="510" y="122" text-anchor="middle" font-size="10" fill="#1e40af">
+      Linux · macOS · WSL2 — runs 24/7
+    </text>
+
+    <!-- Bridges row -->
+    <rect x="340" y="145" width="340" height="62" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="510" y="162" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">Bridge daemons (Node)</text>
+    <text x="510" y="176" text-anchor="middle" font-size="9" fill="#475569">one per messenger — own auth, own port</text>
+    <g font-size="9" fill="#475569">
+      <rect x="354" y="184" width="74" height="16" rx="3" fill="#ecfccb"/>
+      <text x="391" y="195" text-anchor="middle">whatsapp:7891</text>
+      <rect x="436" y="184" width="74" height="16" rx="3" fill="#ecfccb"/>
+      <text x="473" y="195" text-anchor="middle">telegram:7892</text>
+      <rect x="518" y="184" width="74" height="16" rx="3" fill="#ecfccb"/>
+      <text x="555" y="195" text-anchor="middle">discord:7893</text>
+      <rect x="600" y="184" width="68" height="16" rx="3" fill="#ecfccb"/>
+      <text x="634" y="195" text-anchor="middle">slack:7894</text>
+    </g>
+
+    <!-- arrow down to inbox -->
+    <path d="M 510 207 L 510 230" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="540" y="222" font-size="9" fill="#64748b">JSON envelope</text>
+
+    <!-- Adapter -->
+    <rect x="340" y="234" width="340" height="78" rx="8" fill="#ffffff" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="510" y="252" text-anchor="middle" font-size="11" font-weight="700" fill="#15803d">Adapter (Python, single)</text>
+    <text x="510" y="267" text-anchor="middle" font-size="9" fill="#475569">poll inbox  →  Whisper STT  →  call Claude  →  TTS  →  outbox</text>
+    <g font-size="8.5" fill="#475569">
+      <text x="358" y="285">• per-chat workdir</text>
+      <text x="358" y="297">• ⏳ heartbeat</text>
+      <text x="500" y="285">• image / PDF / doc extract</text>
+      <text x="500" y="297">• OGG-Opus voice notes</text>
+    </g>
+
+    <!-- arrow down to claude -->
+    <path d="M 510 313 L 510 335" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="535" y="328" font-size="9" fill="#64748b">claude -p ...</text>
+
+    <!-- Claude -->
+    <rect x="340" y="338" width="340" height="62" rx="8" fill="#fef2f2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="510" y="358" text-anchor="middle" font-size="12" font-weight="700" fill="#b91c1c">Claude Code (CLI)</text>
+    <text x="510" y="375" text-anchor="middle" font-size="10" fill="#7f1d1d">full tool access — Read · Edit · Bash · Web · MCPs</text>
+    <text x="510" y="390" text-anchor="middle" font-size="9" font-style="italic" fill="#7f1d1d">--continue per chat → conversation memory across messages</text>
+
+    <!-- voice/tts back arrow -->
+    <path d="M 660 369 C 700 369 700 220 680 196" stroke="#16a34a" stroke-width="1.6" fill="none" marker-end="url(#arrow-green)"/>
+    <text x="715" y="290" font-size="9" font-weight="600" fill="#15803d">reply</text>
+    <text x="715" y="304" font-size="8" fill="#15803d">+ TTS + files</text>
+
+    <!-- Footer info row -->
+    <rect x="340" y="420" width="340" height="46" rx="8" fill="#fffbeb" stroke="#f59e0b" stroke-width="1"/>
+    <text x="510" y="437" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">2 run modes:</text>
+    <text x="510" y="450" text-anchor="middle" font-size="9" fill="#78350f">
+      <tspan font-weight="600">bridge.sh up</tspan> — systemd, persistent
+      <tspan dx="6" font-weight="600">·  bridge.sh fg</tspan> — foreground (macOS)
+    </text>
+    <text x="510" y="461" text-anchor="middle" font-size="9" fill="#78350f">whitelist + rate-limit per channel · per-chat /on /off</text>
+  </g>
+
+  <!-- ─────────────────  RIGHT: Repos / tools  ───────────────── -->
+  <g>
+    <rect x="720" y="80" width="200" height="400" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <text x="820" y="105" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">YOUR CODE</text>
+    <text x="820" y="122" text-anchor="middle" font-size="10" fill="#64748b">where Claude works</text>
+
+    <!-- Repos -->
+    <rect x="740" y="145" width="160" height="80" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="820" y="165" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">Repositories</text>
+    <text x="820" y="183" text-anchor="middle" font-size="9" fill="#475569">~/projects/...</text>
+    <text x="820" y="198" text-anchor="middle" font-size="9" fill="#475569">~/code/...</text>
+    <text x="820" y="213" text-anchor="middle" font-size="9" fill="#475569">whatever you check out</text>
+
+    <!-- Tools -->
+    <rect x="740" y="240" width="160" height="98" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="820" y="260" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">Tools Claude can use</text>
+    <g font-size="9" fill="#475569">
+      <text x="752" y="278">• shell · git · grep</text>
+      <text x="752" y="293">• read / edit / write files</text>
+      <text x="752" y="308">• web fetch · web search</text>
+      <text x="752" y="323">• MCPs (Gmail · GCal · Drive)</text>
+    </g>
+
+    <!-- Output dir -->
+    <rect x="740" y="353" width="160" height="80" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="820" y="373" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">outputs/ folder</text>
+    <text x="820" y="389" text-anchor="middle" font-size="9" fill="#475569">anything Claude drops here</text>
+    <text x="820" y="402" text-anchor="middle" font-size="9" fill="#475569">comes back to you as a</text>
+    <text x="820" y="415" text-anchor="middle" font-size="9" font-weight="600" fill="#475569">file attachment</text>
+    <text x="820" y="428" text-anchor="middle" font-size="9" fill="#475569">on the same channel</text>
+
+    <text x="820" y="458" text-anchor="middle" font-size="9" fill="#94a3b8">diagrams · patches · CSVs</text>
+    <text x="820" y="471" text-anchor="middle" font-size="9" fill="#94a3b8">screenshots · generated docs</text>
+  </g>
+
+  <!-- arrows: Claude ↔ Code -->
+  <path d="M 680 369 L 740 270" stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 740 393 L 700 369" stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- Footer -->
+  <text x="470" y="528" text-anchor="middle" font-size="10" fill="#64748b">
+    bash setup.sh   →   the wizard installs Claude Code, asks for keys, picks bridges, and starts it all.
+  </text>
+  <text x="470" y="544" text-anchor="middle" font-size="9" fill="#94a3b8">
+    re-run safe · idempotent · works on Linux, macOS, and Windows via WSL2
+  </text>
+</svg>

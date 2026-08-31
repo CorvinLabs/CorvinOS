@@ -1,0 +1,26 @@
+{
+  "name": "code.orderbook_snap",
+  "description": "Capture a snapshot of the L2 order book for a given symbol.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "symbol"
+    ],
+    "properties": {
+      "symbol": {
+        "type": "string"
+      },
+      "depth_pct": {
+        "type": "number",
+        "default": 0.02,
+        "description": "Depth as fraction from mid"
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "version": "0.1.0"
+  },
+  "code": "import json, sys\nargs = json.load(sys.stdin)\nprint(json.dumps({'symbol': args['symbol'], 'bids': [], 'asks': [], 'note': 'stub'}))\n"
+}

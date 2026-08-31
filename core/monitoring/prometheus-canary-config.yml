@@ -1,0 +1,194 @@
+# Prometheus Configuration for Week 2 Canary Deployment (ADR-0461)
+#
+# Metrics collection and alerting for autonomous canary rollout:
+# - 10% traffic (Stage 1, Days 1-2)
+# - 50% traffic (Stage 2, Days 3-4)
+# - 100% traffic (Stage 3, Days 5+)
+#
+# Updated: 2026-08-30
+# Status: Production-Ready
+
+global:
+  scrape_interval: 15s       # Collect metrics every 15 seconds
+  evaluation_interval: 15s   # Evaluate rules every 15 seconds
+  external_labels:
+    deployment: "canary-week2"
+    version: "0.461"
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "localhost:9093"  # Alertmanager instance
+
+# Alert rules for canary deployment
+rule_files:
+  - /etc/prometheus/rules/canary-alerts.yml
+  - /etc/prometheus/rules/canary-slos.yml
+
+scrape_configs:
+  ##########################################################################
+  # Core CorvinOS Metrics
+  ##########################################################################
+  - job_name: "corvinOS-gateway"
+    static_configs:
+      - targets: ["localhost:8765"]
+    scrape_interval: 15s
+    metrics_path: "/metrics"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [__scheme__]
+        target_label: scheme
+    # Only collect canary-related metrics
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "canary_.*|corvin_turn_.*|audit_chain_.*"
+        action: keep
+
+  ##########################################################################
+  # Audit Chain Metrics (Integrity, Throughput, Latency)
+  ##########################################################################
+  - job_name: "audit-chain"
+    static_configs:
+      - targets: ["localhost:8765"]
+    scrape_interval: 30s
+    metrics_path: "/metrics/audit"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "audit_.*|chain_.*"
+        action: keep
+
+  ##########################################################################
+  # Context Engine Metrics
+  ##########################################################################
+  - job_name: "context-engine"
+    static_configs:
+      - targets: ["localhost:8765"]
+    scrape_interval: 30s
+    metrics_path: "/metrics/context"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "context_.*|unified_.*"
+        action: keep
+
+  ##########################################################################
+  # ContextBus Event Metrics (Throughput)
+  ##########################################################################
+  - job_name: "contextbus"
+    static_configs:
+      - targets: ["localhost:8765"]
+    scrape_interval: 15s
+    metrics_path: "/metrics/contextbus"
+    # High-precision scrape for throughput (events/sec)
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "contextbus_.*|event_.*"
+        action: keep
+
+  ##########################################################################
+  # Error & Exception Tracking
+  ##########################################################################
+  - job_name: "errors"
+    static_configs:
+      - targets: ["localhost:8765"]
+    scrape_interval: 15s
+    metrics_path: "/metrics/errors"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "errors_.*|exceptions_.*|failures_.*"
+        action: keep
+
+  ##########################################################################
+  # Latency Histograms (P99 Extraction)
+  ##########################################################################
+  - job_name: "latency"
+    static_configs:
+      - targets: ["localhost:8765"]
+    scrape_interval: 15s
+    metrics_path: "/metrics/latency"
+    # Histogram buckets for latency quantiles
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: ".*_latency_.*|.*_duration_.*"
+        action: keep
+
+  ##########################################################################
+  # Vibe Engineering Metrics (Phase 3.1)
+  ##########################################################################
+  - job_name: "vibe-engineering"
+    static_configs:
+      - targets: ["localhost:8765"]
+    scrape_interval: 30s
+    metrics_path: "/metrics/vibe"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "vibe_.*|status_snapshot_.*|task_.*"
+        action: keep
+
+  ##########################################################################
+  # Brain Subsystems (ExecutionContext + 13 subsystems)
+  ##########################################################################
+  - job_name: "brain-subsystems"
+    static_configs:
+      - targets: ["localhost:8765"]
+    scrape_interval: 30s
+    metrics_path: "/metrics/brain"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "brain_.*|execution_context_.*|subsystem_.*"
+        action: keep
+
+  ##########################################################################
+  # Prometheus Internal Metrics (for observability)
+  ##########################################################################
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+    scrape_interval: 15s
+
+  ##########################################################################
+  # Node Exporter (System Metrics: CPU, Memory, Disk)
+  ##########################################################################
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["localhost:9100"]
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "node_cpu.*|node_memory.*|node_disk.*|node_network.*|node_load.*"
+        action: keep
+
+  ##########################################################################
+  # PostgreSQL / Database Metrics (if used)
+  ##########################################################################
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["localhost:9187"]  # postgres_exporter default port
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "pg_.*"
+        action: keep
+
+  ##########################################################################
+  # Custom SLO Metrics (aggregated from multiple sources)
+  ##########################################################################
+  - job_name: "canary-slos"
+    # This scrape config pulls pre-computed SLO metrics
+    # that are generated by the canary orchestrator
+    static_configs:
+      - targets: ["localhost:9091"]  # SLO exporter port
+    scrape_interval: 15s
+    metrics_path: "/metrics/slo"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "canary_slo_.*|stage_.*"
+        action: keep
+
+# Alert and SLO rules are defined in separate files:
+# - /etc/prometheus/rules/canary-alerts.yml
+# - /etc/prometheus/rules/canary-slos.yml
+#
+# See docs/CANARY_DEPLOYMENT_PLAYBOOK.md for rule definitions.

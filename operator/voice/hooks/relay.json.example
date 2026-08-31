@@ -1,0 +1,8 @@
+{
+  "_HINWEIS": "Datei nach ~/.config/corvin-voice/relay.json kopieren und enabled=true setzen. Dann werden Notification-Hooks vom Desktop-Claude automatisch über die gewählte Bridge ans Phone weitergeleitet. Voraussetzung: die gewählte Bridge (whatsapp/telegram/discord/slack) läuft. Siehe CLAUDE.md.",
+  "enabled": false,
+  "channel": "telegram",
+  "to": "DEINE_CHAT_ID_ODER_JID",
+  "events": ["Notification", "SessionStart"],
+  "prefix": "🔔 Desktop:"
+}

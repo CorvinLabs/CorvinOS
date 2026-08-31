@@ -1,0 +1,35 @@
+{
+  "name": "code.compute_indicators",
+  "description": "Compute standard technical indicators (RSI, MACD, Bollinger Bands, etc.) on OHLCV data.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "candles",
+      "indicators"
+    ],
+    "properties": {
+      "candles": {
+        "type": "array",
+        "description": "List of OHLCV dicts with keys: ts, open, high, low, close, volume"
+      },
+      "indicators": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of indicators to compute: RSI, MACD, BB, ADX, EMA, SMA"
+      },
+      "params": {
+        "type": "object",
+        "description": "Optional indicator parameter overrides",
+        "default": {}
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "version": "0.1.0"
+  },
+  "code": "import json, sys\nargs = json.load(sys.stdin)\nprint(json.dumps({'indicators': {i: [] for i in args.get('indicators', [])}, 'note': 'stub'}))\n"
+}

@@ -1,0 +1,47 @@
+# ADR-0215 Wiring Manifest — operator/orchestration/ root (ADR-0210,
+# Batch LM Call Optimization). See operator/orchestration/tde/WIRING.yaml
+# for the sibling TDE package manifest and operator/orchestration/
+# wiring_gate.py for the CI check that enforces this file.
+#
+# Backfilled 2026-07-23 by ADR-0215. Corrects ADR-0210's own stale status
+# header, which (until ADR-0215) claimed zero integration for all four
+# phases — Phase 1 and Phase 3 are genuinely live, Phase 2 and 4 are not.
+
+components:
+  - name: wiring_gate
+    module: wiring_gate
+    status: live
+    entry_point: "wiring_gate:check_all"
+    reason: "ADR-0215 Phase 1 — this gate itself; run via CI / pytest (tests/test_wiring_gate.py)"
+
+  - name: initial_analysis
+    module: initial_analysis
+    status: live
+    entry_point: "initial_analysis:make_task_analysis_prompt"
+    reason: "ADR-0210 Phase 1, imported and called by tde.analysis_runner"
+
+  - name: parallel_executor
+    module: parallel_executor
+    status: live
+    entry_point: "parallel_executor:ParallelExecutor"
+    reason: "ADR-0210 Phase 3, instantiated by tde.adaptive_delegation_executor"
+
+  - name: decision_cache
+    module: decision_cache
+    status: deferred
+    reason: >
+      ADR-0210 Phase 2 (Decision Cache Layer). Green unit suite
+      (tests/test_adr0210_phase2.py) but no caller outside its own tests —
+      TDE's analysis_runner does not cache InitialAnalysis results across
+      calls. Real integration work, not a wiring oversight; do not fake-wire.
+    target_adr: "0210"
+
+  - name: scoped_step_execution
+    module: scoped_step_execution
+    status: deferred
+    reason: >
+      ADR-0210 Phase 4 (Scoped Step Execution). Green unit suite
+      (tests/test_adr0210_phase4.py) but no caller outside its own tests —
+      TDE's AdaptiveDelegationExecutor uses its own step-execution path, not
+      this module. Real integration work, not a wiring oversight.
+    target_adr: "0210"

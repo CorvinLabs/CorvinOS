@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Corvin-OS supply-chain CVE digest (Mon 05:00 local, ADR-0021 Phase 31.3)
+
+[Timer]
+OnCalendar=Mon *-*-* 05:00:00
+AccuracySec=30min
+Persistent=true
+Unit=corvin-supply-chain-weekly.service
+
+[Install]
+WantedBy=timers.target

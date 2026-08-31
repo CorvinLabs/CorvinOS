@@ -1,0 +1,231 @@
+# Engine Model Registry — ADR-0119
+#
+# This file is the extensible template for per-engine model configuration.
+# It defines the available model choices for OS-turn and worker-turn per engine.
+# Adding a new engine: add an entry here; the console UI renders it automatically.
+#
+# Fields per engine:
+#   label                   — human-readable display name
+#   supports_os_turn        — engine can host the Corvin OS-turn (main conversation)
+#   supports_worker_turn    — engine can run as an ACS delegation worker
+#   supports_task_type_steering — engine uses the model field as a task-type hint
+#                                 (e.g. GitHub Copilot: shell/git/gh)
+#   os_models / worker_models — list of selectable model entries:
+#     id      — model identifier passed to the engine (empty string = engine default)
+#     label   — display label shown in the console
+#     default — true on the entry that is the registry default for that role
+#
+# Empty os_models / worker_models → no model selection for that role.
+# Hermes models are Ollama aliases; actual model IDs can be set as free-text.
+#
+# ADR-0181 — Providers: a model source + how to reach it. Each engine lists the
+# providers it can drive (supported_providers); the console offers those, merges
+# the curated os_models/worker_models above with live-fetched + free-text models.
+#   base_url       — provider API base (must be on the L35 egress allowlist for cloud)
+#   model_source   — static | ollama | openrouter (how the live list is fetched)
+#   credential_env — env-var NAME for the API key (value lives in the L16 vault; never here)
+#   kind           — local | cloud (cloud = network egress → L34/L35 re-evaluated on assign)
+# supported_providers per engine: {provider, native, note}. native=false means the
+# engine reaches the provider via a proxy/redirect (labelled as such in the UI).
+
+providers:
+  anthropic:
+    label: "Anthropic (Claude)"
+    base_url: "https://api.anthropic.com"
+    # LIVE, not static. `static` means "the curated list below is the whole
+    # truth", which freezes the model picker until the next CorvinOS release —
+    # the day Anthropic ships a new model, every install shows a list that does
+    # not contain it. `anthropic` makes engine_providers.fetch_models walk
+    # GET /v1/models and cache the result; engine_models merges it into the
+    # curated lists at read time. An install with no ANTHROPIC_API_KEY (a Claude
+    # Code subscription login has none) simply keeps the curated list.
+    model_source: "anthropic"
+    credential_env: "ANTHROPIC_API_KEY"
+    kind: "cloud"
+  openai:
+    label: "OpenAI"
+    base_url: "https://api.openai.com/v1"
+    model_source: "static"
+    credential_env: "OPENAI_API_KEY"
+    kind: "cloud"
+  ollama_local:
+    label: "Ollama (local)"
+    base_url: "http://localhost:11434"
+    model_source: "ollama"
+    credential_env: ""
+    kind: "local"
+  ollama_cloud:
+    label: "Ollama Cloud"
+    base_url: "https://ollama.com"
+    model_source: "ollama"
+    credential_env: "OLLAMA_API_KEY"
+    kind: "cloud"
+  openrouter:
+    label: "OpenRouter"
+    base_url: "https://openrouter.ai/api/v1"
+    model_source: "openrouter"
+    credential_env: "OPENROUTER_API_KEY"
+    kind: "cloud"
+
+engines:
+  claude_code:
+    label: "Claude Code"
+    supports_os_turn: true
+    supports_worker_turn: true
+    supports_task_type_steering: false
+    # Models fetched from this provider are ADDED to the curated lists below.
+    # `prefix` is how THIS engine addresses a model id: Claude Code takes the
+    # bare id, OpenCode wants "<provider>/<id>". A role whose curated list is
+    # empty stays empty — merging into it would invent a picker the engine
+    # cannot honour.
+    live_models:
+      provider: "anthropic"
+      prefix: ""
+    supported_providers:
+      - provider: "anthropic"
+        native: true
+        note: ""
+      - provider: "ollama_local"
+        native: false
+        note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
+      - provider: "ollama_cloud"
+        native: false
+        note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
+      - provider: "openrouter"
+        native: false
+        note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
+    os_models:
+      - id: ""
+        label: "Adaptive — Haiku ≤60K chars, Sonnet above (default)"
+        default: true
+      - id: "claude-haiku-4-5-20251001"
+        label: "Haiku 4.5 — fast, economical"
+      - id: "claude-sonnet-5"
+        label: "Sonnet 5 — balanced"
+      - id: "claude-opus-5"
+        label: "Opus 5 — max capability"
+      - id: "claude-fable-5"
+        label: "Fable 5 — creative reasoning"
+    worker_models:
+      - id: "claude-haiku-4-5-20251001"
+        label: "Haiku 4.5 — fast, economical"
+      - id: "claude-sonnet-5"
+        label: "Sonnet 5 — balanced"
+      - id: "claude-opus-5"
+        label: "Opus 5 — max capability (default)"
+        default: true
+      - id: "claude-fable-5"
+        label: "Fable 5 — creative reasoning"
+
+  opencode:
+    label: "OpenCode"
+    supports_os_turn: true
+    supports_worker_turn: true
+    supports_task_type_steering: false
+    live_models:
+      provider: "anthropic"
+      prefix: "anthropic/"
+    supported_providers:
+      - provider: "anthropic"
+        native: true
+        note: ""
+      - provider: "openai"
+        native: true
+        note: ""
+      - provider: "ollama_local"
+        native: true
+        note: ""
+      - provider: "ollama_cloud"
+        native: true
+        note: ""
+      - provider: "openrouter"
+        native: true
+        note: ""
+    os_models:
+      - id: ""
+        label: "Provider default"
+        default: true
+      - id: "anthropic/claude-sonnet-5"
+        label: "Claude Sonnet 5 (Anthropic)"
+      - id: "anthropic/claude-opus-5"
+        label: "Claude Opus 5 (Anthropic)"
+      - id: "ollama/qwen3:8b"
+        label: "Qwen3 8B (local Ollama)"
+      - id: "ollama/qwen3:14b"
+        label: "Qwen3 14B (local Ollama)"
+    worker_models:
+      - id: ""
+        label: "Provider default"
+        default: true
+      - id: "anthropic/claude-sonnet-5"
+        label: "Claude Sonnet 5 (Anthropic)"
+      - id: "anthropic/claude-haiku-4-5-20251001"
+        label: "Claude Haiku 4.5 (Anthropic)"
+      - id: "ollama/qwen3:8b"
+        label: "Qwen3 8B (local Ollama)"
+
+  hermes:
+    label: "Hermes (Ollama)"
+    supports_os_turn: true
+    supports_worker_turn: true
+    supports_task_type_steering: false
+    supported_providers:
+      - provider: "ollama_local"
+        native: true
+        note: ""
+      - provider: "ollama_cloud"
+        native: true
+        note: ""
+    os_models:
+      - id: "hermes-balanced"
+        label: "hermes-balanced (default)"
+        default: true
+      - id: "hermes-fast"
+        label: "hermes-fast — small model, quick"
+      - id: "hermes-capable"
+        label: "hermes-capable — larger context"
+      - id: "hermes-large"
+        label: "hermes-large — maximum local"
+    worker_models:
+      - id: "hermes-balanced"
+        label: "hermes-balanced (default)"
+        default: true
+      - id: "hermes-fast"
+        label: "hermes-fast"
+      - id: "hermes-capable"
+        label: "hermes-capable"
+      - id: "hermes-large"
+        label: "hermes-large"
+
+  codex_cli:
+    label: "Codex CLI"
+    supports_os_turn: false
+    supports_worker_turn: true
+    supports_task_type_steering: false
+    supported_providers:
+      - provider: "openai"
+        native: true
+        note: ""
+    os_models: []
+    worker_models:
+      - id: ""
+        label: "Codex default"
+        default: true
+
+  copilot:
+    label: "GitHub Copilot"
+    supports_os_turn: false
+    supports_worker_turn: true
+    supports_task_type_steering: true
+    supported_providers: []
+    os_models: []
+    worker_models:
+      - id: ""
+        label: "Auto — Copilot decides (default)"
+        default: true
+      - id: "shell"
+        label: "shell — terminal / shell tasks"
+      - id: "git"
+        label: "git — git operations"
+      - id: "gh"
+        label: "gh — GitHub CLI tasks"

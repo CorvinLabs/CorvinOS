@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Corvin-OS audit-chain integrity check at 04:30 local
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+AccuracySec=10min
+Persistent=true
+Unit=corvin-audit-verify.service
+
+[Install]
+WantedBy=timers.target

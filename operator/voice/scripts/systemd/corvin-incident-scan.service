@@ -1,0 +1,10 @@
+[Unit]
+Description=Corvin-OS daily incident scan (Art. 73 EU AI Act — consent-bypass, disclosure-failure, PII in audit chain)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=__PYTHON_BIN__ __PLUGIN_ROOT__/scripts/corvin_incident.py scan --since 30
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env

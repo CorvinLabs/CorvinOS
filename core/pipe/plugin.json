@@ -1,0 +1,10 @@
+{
+  "name": "corvin-pipe",
+  "version": "0.1.0",
+  "description": "Layer 18 — inter-session pipes. Named / anonymous / broadcast pipe registry exposed as MCP tools so personas can compose: research output flows into coder input.",
+  "mcp": {
+    "transport": "stdio",
+    "command": "python3",
+    "args": ["mcp_server.py"]
+  }
+}

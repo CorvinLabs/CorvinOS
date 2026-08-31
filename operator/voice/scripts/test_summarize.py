@@ -1,0 +1,1363 @@
+#!/usr/bin/env python3
+"""Tests for the LLM-free paths of summarize.py.
+
+We can't test the LLM backends without a real API key / CLI, but we can
+guarantee that:
+  - The system prompt template still resolves with {max_chars}.
+  - The faithfulness rule is present in every prompt variant.
+  - adaptive_target sizing follows the documented formula.
+  - naive_truncate (offline fallback) keeps every list item AND any outro
+    after the last list item — critical for closing pick-one questions.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import summarize  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Prompt templates: faithfulness rule must be load-bearing in every variant.
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_resolves_with_placeholder() -> None:
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            s = summarize._system_for(lang, 800, has_task=has_task)
+            assert "{max_chars}" not in s, f"{lang} task={has_task}: placeholder unresolved"
+            assert "800" in s, f"{lang} task={has_task}: max_chars not interpolated"
+
+
+def test_faithfulness_rule_present_in_every_prompt_variant() -> None:
+    """The whole point of the recent rewrite: prompts forbid invention.
+
+    A regression here would silently re-enable hallucinated content in
+    voice output, which is the user-reported bug.
+    """
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            s = summarize._system_for(lang, 800, has_task=has_task)
+            keyword = "TREUE" if lang == "de" else "FAITHFULNESS"
+            assert keyword in s, f"{lang} task={has_task}: faithfulness rule missing"
+
+
+def test_old_invention_inducing_phrases_are_gone() -> None:
+    """The pre-fix prompts told Haiku to add 'mechanism or rationale' per
+    point — which produced the user-reported hallucinations. Make sure
+    these phrases stay out."""
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            s = summarize._system_for(lang, 800, has_task=has_task)
+            forbidden = [
+                "mechanism or rationale",
+                "Mechanismus oder Begründung",
+                "warum er drin ist, oder welche Konsequenz",
+                "what consequence it has",
+            ]
+            for phrase in forbidden:
+                assert phrase not in s, (
+                    f"{lang} task={has_task}: invention-inducing phrase reintroduced: {phrase!r}"
+                )
+
+
+def test_audience_block_optional_backward_compat() -> None:
+    """No audience → prompt MUST be byte-identical to the pre-layer-12 path.
+    This is the backward-compatibility contract for users who never touch
+    /voice-user-set."""
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            without = summarize._system_for(lang, 800, has_task=has_task)
+            with_empty = summarize._system_for(lang, 800, has_task=has_task,
+                                                audience="")
+            assert without == with_empty, (
+                f"{lang} task={has_task}: empty audience must produce "
+                "byte-identical prompt vs no audience"
+            )
+
+
+def test_audience_block_appended_after_persona() -> None:
+    """When both persona and audience are set, audience must come AFTER
+    persona in the prompt — speaker first, listener second. This is what
+    `_system_for`'s contract claims and what stop_hook.sh relies on."""
+    s = summarize._system_for(
+        "de", 800, has_task=False,
+        persona="coder",
+        audience="HÖRER-PROFIL — test marker",
+    )
+    p_idx = s.find("Persona-Stil")
+    a_idx = s.find("HÖRER-PROFIL — test marker")
+    assert p_idx > 0, "persona block missing"
+    assert a_idx > p_idx, (
+        "audience block must come AFTER persona block in the system prompt"
+    )
+
+
+def test_audience_block_does_not_remove_faithfulness_rule() -> None:
+    """The audience block is allowed to re-affirm faithfulness, but it
+    must NEVER replace or weaken the base prompt's TREUE / FAITHFULNESS
+    rule. This guards against a future refactor that accidentally swaps
+    the base prompt for an audience-only variant."""
+    audience_de = (
+        "HÖRER-PROFIL — Profil: Verständnis-Niveau Anfänger. "
+        "Nichts weglassen."
+    )
+    audience_en = (
+        "AUDIENCE — Listener profile: comprehension level novice. "
+        "Don't drop content."
+    )
+    for lang, audience in (("de", audience_de), ("en", audience_en)):
+        for has_task in (False, True):
+            s = summarize._system_for(lang, 800, has_task=has_task,
+                                       audience=audience)
+            keyword = "TREUE" if lang == "de" else "FAITHFULNESS"
+            assert keyword in s, (
+                f"{lang} task={has_task}: audience block must not remove "
+                "the base-prompt faithfulness rule"
+            )
+
+
+def test_audience_does_not_double_render_when_called_twice() -> None:
+    """`_system_for` is pure — repeated calls with identical args produce
+    identical output. Trip-wires a future bug where someone caches the
+    addendum mutably."""
+    audience = "AUDIENCE — Listener profile: jargon tolerance 4/5."
+    a = summarize._system_for("en", 800, has_task=False, audience=audience)
+    b = summarize._system_for("en", 800, has_task=False, audience=audience)
+    assert a == b
+    assert a.count("AUDIENCE — Listener profile") == 1
+
+
+def test_speaking_style_clause_present() -> None:
+    """Spoken text must sound like a human telling the answer, not a
+    recited list — this is the user-visible 'don't sound like a robot'
+    requirement. Regression-locks both:
+      - the SPRECHSTIL / SPEAKING STYLE header in every prompt variant
+      - the explicit warning against 'Erstens / firstly' enumerations
+    """
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            s = summarize._system_for(lang, 800, has_task=has_task)
+            header = "SPRECHSTIL" if lang == "de" else "SPEAKING STYLE"
+            assert header in s, f"{lang} task={has_task}: {header} block missing"
+
+            # Must explicitly discourage the schoolbook 'Erstens, zweitens,
+            # drittens' / 'firstly, secondly, thirdly' pattern that gives
+            # voice output its robotic feel.
+            anti_recited = ("Erstens" if lang == "de" else "firstly")
+            assert anti_recited in s, (
+                f"{lang} task={has_task}: must explicitly call out "
+                f"the recited '{anti_recited}…' pattern to forbid it"
+            )
+
+            # Faithfulness must be re-asserted INSIDE the style block so
+            # the LLM can't trade content fidelity for natural flow.
+            # Tolerate the multi-space artefact from Python string-line
+            # continuation by collapsing whitespace before matching.
+            normalized = " ".join(s.split())
+            tradeoff_marker = (
+                "ändert nur das Wie, niemals das Was" if lang == "de"
+                else "touches only the how, never the what"
+            )
+            assert tradeoff_marker in normalized, (
+                f"{lang} task={has_task}: style block must reaffirm that "
+                f"flow does not buy omissions"
+            )
+
+
+def test_understandability_block_present_in_every_variant() -> None:
+    """The voice-summary must be more than a recited list of facts.
+
+    The user-visible bug was: voice output sounded robotic — like a
+    data sheet read aloud, with no sense of WHY/HOW/EFFECT. The fix
+    adds a load-bearing UNDERSTANDABILITY (de: VERSTÄNDLICHKEIT) block
+    that:
+      - tells the LLM to surface existing rationale / why / effect
+      - explicitly permits common metaphors as bridges to existing
+        concepts
+      - frames the goal as "listener walks away with a model, not a
+        data sheet"
+
+    The block sits NEXT TO faithfulness — it is a peer rule, not a
+    replacement. Removing it would silently revert voice output to
+    fact-recital mode, which is the regression we are guarding.
+    """
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            s = summarize._system_for(lang, 800, has_task=has_task)
+            header = "VERSTÄNDLICHKEIT" if lang == "de" else "UNDERSTANDABILITY"
+            assert header in s, f"{lang} task={has_task}: {header} block missing"
+
+            # Must explicitly invite metaphors so spoken output gets
+            # mental-model traction beyond bare labels.
+            metaphor_marker = "Metapher" if lang == "de" else "metaphor"
+            assert metaphor_marker in s, (
+                f"{lang} task={has_task}: must explicitly permit metaphors"
+            )
+
+            # Must explicitly frame the goal as model-not-datasheet.
+            datasheet_marker = "Datenblatt" if lang == "de" else "data sheet"
+            assert datasheet_marker in s, (
+                f"{lang} task={has_task}: must contrast 'model' against "
+                f"'{datasheet_marker}' so the LLM knows to wrap facts in "
+                f"a frame, not just chain them"
+            )
+
+            # Outcome-first lead must be in the OUTPUT SHAPE block — since
+            # the outcome-first rework, the user-effect leads the summary
+            # rather than closing it ("the test passes now" first, "I
+            # edited X.py" never). Phrased loosely so future wording
+            # tweaks don't break the lock.
+            normalized = " ".join(s.split())
+            effect_marker = (
+                "was ist jetzt möglich" if lang == "de"
+                else "what is now possible"
+            )
+            assert effect_marker in normalized, (
+                f"{lang} task={has_task}: output shape must include a "
+                f"'what is now possible' lead so the listener gets the "
+                f"user-facing effect first, not the code-mental-model"
+            )
+
+
+def test_faithfulness_still_forbids_invention_after_understandability_added() -> None:
+    """Regression-lock for the pair (UNDERSTANDABILITY, FAITHFULNESS).
+
+    The understandability block introduces room for metaphors and
+    explanatory framing — which is exactly the hole that previously
+    let hallucinations through. Faithfulness must therefore explicitly
+    say 'metaphors are bridges to what is there, not doors to what
+    isn't' so the LLM cannot trade fidelity for flow.
+    """
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            s = summarize._system_for(lang, 800, has_task=has_task)
+            normalized = " ".join(s.split())
+            guard = (
+                "Brücken zu Vorhandenem, nicht Türen zu Neuem" if lang == "de"
+                else "bridges to what is there, not doors to what isn't"
+            )
+            assert guard in normalized, (
+                f"{lang} task={has_task}: faithfulness must explicitly "
+                f"close the metaphor-loophole opened by understandability"
+            )
+
+
+def test_persona_addendum_attached_for_known_personas() -> None:
+    """When the active cowork persona is known, a one-line tone addendum
+    is appended to the system prompt — every Bundle persona except the
+    neutral 'assistant' must surface a recognizable marker.
+    """
+    # browser + jarvis removed from bundle in f1e3246
+    known = ["coder", "research", "inbox", "forge", "skill-forge", "homeassistant"]
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            for persona in known:
+                s = summarize._system_for(lang, 800, has_task=has_task, persona=persona)
+                marker = "Persona-Stil" if lang == "de" else "Persona style"
+                assert marker in s, (
+                    f"{lang} task={has_task} persona={persona}: addendum missing"
+                )
+
+
+def test_persona_addendum_silent_for_unknown_persona() -> None:
+    """Typo or new-persona-not-yet-mapped → silent no-op. Voice never
+    breaks because of an unknown persona name."""
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            base = summarize._system_for(lang, 800, has_task=has_task)
+            tinted = summarize._system_for(
+                lang, 800, has_task=has_task, persona="totally-made-up-persona-9000"
+            )
+            assert tinted == base, (
+                f"{lang} task={has_task}: unknown persona must be a no-op, "
+                f"got a different prompt back"
+            )
+
+
+def test_persona_addendum_neutral_for_assistant_baseline() -> None:
+    """The default fallback persona 'assistant' is the neutral baseline —
+    no tone override, prompt identical to no-persona."""
+    for lang in ("de", "en"):
+        for has_task in (False, True):
+            base = summarize._system_for(lang, 800, has_task=has_task)
+            tinted = summarize._system_for(
+                lang, 800, has_task=has_task, persona="assistant"
+            )
+            assert tinted == base, (
+                f"{lang} task={has_task}: 'assistant' is the neutral baseline; "
+                f"prompt must be identical to no-persona variant"
+            )
+
+
+def test_persona_addendum_does_not_dislodge_faithfulness() -> None:
+    """Tone modulation must not trade content fidelity. Even with the
+    addendum, the faithfulness keyword AND the metaphor-loophole guard
+    stay present so a future addendum-edit can't silently remove them."""
+    for lang in ("de", "en"):
+        for persona in ("coder", "research", "inbox"):
+            s = summarize._system_for(lang, 800, has_task=False, persona=persona)
+            normalized = " ".join(s.split())
+            faith_kw = "TREUE" if lang == "de" else "FAITHFULNESS"
+            assert faith_kw in s, (
+                f"{lang} persona={persona}: faithfulness keyword vanished"
+            )
+            guard = (
+                "Brücken zu Vorhandenem, nicht Türen zu Neuem" if lang == "de"
+                else "bridges to what is there, not doors to what isn't"
+            )
+            assert guard in normalized, (
+                f"{lang} persona={persona}: metaphor-loophole guard vanished"
+            )
+
+
+def test_persona_addendum_case_and_whitespace_insensitive() -> None:
+    """CORVIN_CALLER_PERSONA may arrive with surrounding whitespace
+    or odd casing; lookup must normalize both."""
+    base = summarize._system_for("de", 800, has_task=False, persona="coder")
+    for variant in ("CODER", "  coder  ", "Coder"):
+        same = summarize._system_for("de", 800, has_task=False, persona=variant)
+        assert same == base, f"persona={variant!r}: addendum lookup not normalized"
+
+
+def test_with_task_uses_natural_lead_in_not_rigid_marker() -> None:
+    """The two-part read-aloud (task reminder + answer) must not mandate
+    a rigid 'Antwort:' / 'Answer:' marker — the user reported that the
+    fixed marker style sounded robotic. The new prompts list options as
+    a *suggestion*, not a requirement."""
+    for lang in ("de", "en"):
+        s = summarize._system_for(lang, 800, has_task=True)
+        # Old hard-marker wording — must be gone:
+        assert "starren 'Antwort:'-Marker" in s or "rigid 'Answer:' label" in s, (
+            f"{lang}: prompt must explicitly say the Answer: marker is NOT mandatory"
+        )
+
+
+# ---------------------------------------------------------------------------
+# adaptive_target: hint floor + 0.85 of input, no per-item multiplier.
+# ---------------------------------------------------------------------------
+
+
+def test_adaptive_target_uses_hint_as_floor() -> None:
+    assert summarize.adaptive_target("short", 400) == 400
+
+
+def test_adaptive_target_scales_with_input() -> None:
+    assert summarize.adaptive_target("x" * 1000, 400) == 850  # int(1000 * 0.85)
+
+
+def test_adaptive_target_no_per_item_inflation() -> None:
+    """Old behaviour added 220 chars per list item; new behaviour does not.
+
+    Padding budget invited the LLM to fill extra space with invented
+    content, so we removed the multiplier.
+    """
+    list_text = "\n".join(f"- item {i}" for i in range(10))  # 10 items
+    target = summarize.adaptive_target(list_text, 100)
+    # Without multiplier, target tracks length, not item count.
+    assert target == max(100, int(len(list_text) * 0.85))
+
+
+# ---------------------------------------------------------------------------
+# naive_truncate: every list item AND any outro after the last item must
+# survive. Outro often holds the closing pick-one question.
+# ---------------------------------------------------------------------------
+
+
+def test_naive_truncate_keeps_every_list_item() -> None:
+    txt = "Plan:\n1. Code-Review\n2. Tests\n3. Deployment"
+    out = summarize.naive_truncate(txt, 800)
+    for must in ("Code-Review", "Tests", "Deployment"):
+        assert must in out, f"naive_truncate dropped: {must!r}"
+
+
+def test_naive_truncate_keeps_outro_after_list() -> None:
+    """Regression test for the 'closing question is lost' bug.
+
+    Before the fix, naive_truncate stopped after the last item, so
+    a pick-one question right after the list was silently dropped.
+    """
+    txt = (
+        "Hier ist mein Vorschlag:\n"
+        "1. Code-Review machen\n"
+        "2. Tests laufen lassen\n"
+        "3. Deployment vorbereiten\n"
+        "\n"
+        "Welchen Schritt willst du zuerst?"
+    )
+    out = summarize.naive_truncate(txt, 800)
+    assert "Welchen Schritt willst du zuerst?" in out, f"outro lost: {out!r}"
+
+
+def test_naive_truncate_plain_prose_unchanged() -> None:
+    prose = "Eine einfache Antwort ohne Listen."
+    assert summarize.naive_truncate(prose, 800) == prose
+
+
+def test_naive_truncate_dash_bullets_recognised() -> None:
+    txt = "Optionen:\n- erste Wahl\n- zweite Wahl\n- dritte Wahl\n\nWelche willst du?"
+    out = summarize.naive_truncate(txt, 800)
+    for must in ("erste Wahl", "zweite Wahl", "dritte Wahl", "Welche willst du"):
+        assert must in out, f"lost: {must!r}"
+
+
+def test_hermes_backend_tried_when_cli_unavailable() -> None:
+    """M3 regression: on a Hermes-only install (no claude CLI) summarize() must
+    try the Hermes backend BEFORE falling through to structural truncation, so a
+    long voice reply gets a real summary instead of being cut mid-sentence."""
+    from unittest.mock import patch
+    long_text = "This is a genuinely long spoken answer that must be summarised. " * 30
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value=None) as cli,
+        patch.object(summarize, "_summarize_via_hermes",
+                     return_value="A concise Hermes summary.") as herm,
+    ):
+        out = summarize.summarize(long_text, "en", 200, "claude-haiku-4-5")
+    cli.assert_called_once()
+    herm.assert_called_once()
+    assert out == "A concise Hermes summary."
+
+
+def test_short_reply_with_persona_still_gets_llm_styling(monkeypatch) -> None:
+    """A short reply with a persona configured still gets the LLM pass — no
+    length-based bypass exists (removed 2026-07-24, see summarize()'s own
+    docstring), so persona tone-modulation is never silently dropped."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    short_text = "Erledigt, alles gut."
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="Arr, all done, matey!") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5", persona="pirate")
+    cli.assert_called_once()
+    herm.assert_not_called()
+    assert out == "Arr, all done, matey!"
+
+
+def test_short_reply_with_audience_still_gets_llm_styling(monkeypatch) -> None:
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    short_text = "HTTP 429."
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="Rate limited, try again soon.") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(
+            short_text, "en", 400, "claude-haiku-4-5", audience="child, low jargon-tolerance",
+        )
+    cli.assert_called_once()
+    assert out == "Rate limited, try again soon."
+
+
+def test_short_circuit_falls_through_to_llm_when_task_prefix_overruns_budget(monkeypatch) -> None:
+    """Regression: the short-circuit checked only the reply body against
+    max_chars, then unconditionally prepended a task-prefix (up to ~140
+    chars) with no re-check — silently exceeding the caller's spoken-length
+    budget. A prefixed text that overruns the budget must fall through to a
+    real (budget-enforcing) summary pass instead."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    # Body alone fits max_chars, but task + body together would exceed it.
+    max_chars = 40
+    body = "x" * max_chars
+    task = "a fairly long question that pushes the prefixed text over budget"
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="a properly shortened summary") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(body, "en", max_chars, "claude-haiku-4-5", task=task)
+    cli.assert_called_once()
+    assert out == "a properly shortened summary"
+
+
+def test_short_reply_with_non_de_en_output_language_still_goes_through_llm(monkeypatch) -> None:
+    """Regression (found 2026-07-17): the short-circuit returned text
+    verbatim while IGNORING output_language — summarize("Der Bug ist
+    behoben", "de", ..., output_language="fr") handed back German that was
+    then spoken with a French TTS voice. A non-de/en target locale needs
+    the LLM pass (which carries the OUTPUT LANGUAGE directive), short or
+    not."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    short_text = "Der Bug ist behoben."
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="Le bug est corrigé.") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5",
+                                  output_language="fr")
+    cli.assert_called_once()
+    herm.assert_not_called()
+    assert out == "Le bug est corrigé."
+    # Region variants of a non-de/en locale must take the LLM path too —
+    # the primary-subtag gate relaxes de/en only.
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="Le bug est corrigé.") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5",
+                                  output_language="fr-FR")
+    cli.assert_called_once()
+    assert out == "Le bug est corrigé."
+
+
+def test_system_prompt_emits_no_language_directive_for_de_en_region_variants() -> None:
+    """_system_for had the same exact-match trap: normalise("de-DE") stays
+    "de-DE", so a plain German region locale got a full OUTPUT LANGUAGE
+    sandwich the bare "de" never gets (adversarial round, 2026-07-17)."""
+    for lang, ol in (("de", "de-DE"), ("en", "en-US"), ("en", "en-GB")):
+        bare = summarize._system_for(lang, 800, has_task=False)
+        with_region = summarize._system_for(lang, 800, has_task=False,
+                                            output_language=ol)
+        assert bare == with_region, (
+            f"{ol}: de/en region variant must not trigger a translation directive"
+        )
+    # Sanity: a genuinely foreign region variant still gets the directive.
+    assert summarize._system_for("de", 800, has_task=False,
+                                 output_language="fr-FR") != \
+        summarize._system_for("de", 800, has_task=False)
+
+
+def test_summarize_via_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
+    """Regression (found 2026-07-17): the CLI spawn path caught only
+    CalledProcessError/TimeoutExpired — an OSError (e.g. E2BIG when the
+    payload blows the ~128KiB argv limit) crashed main() with rc=1 and
+    SKIPPED the Hermes fallback entirely."""
+    from unittest.mock import patch
+    monkeypatch.setenv("VOICE_SUMMARIZE_BACKEND", "auto")
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
+
+    def _spawn_boom(*args, **kwargs):
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr(summarize.subprocess, "run", _spawn_boom)
+    long_text = "This is a genuinely long spoken answer that must be summarised. " * 30
+    with patch.object(summarize, "_summarize_via_hermes",
+                      return_value="A concise Hermes summary.") as herm:
+        out = summarize.summarize(long_text, "en", 200, "claude-haiku-4-5")
+    herm.assert_called_once()
+    assert out == "A concise Hermes summary."
+
+
+def test_session_recap_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
+    """Same OSError gap on the session-recap CLI path — the transcript is
+    the payload MOST likely to hit E2BIG (whole-session argv)."""
+    from unittest.mock import patch
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
+
+    def _spawn_boom(*args, **kwargs):
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr(summarize.subprocess, "run", _spawn_boom)
+    with patch.object(summarize, "_session_recap_via_hermes",
+                      return_value="A spoken recap.") as herm:
+        out = summarize.generate_session_recap("User: hi\nAssistant: hello", "en")
+    herm.assert_called_once()
+    assert out == "A spoken recap."
+
+
+def test_cli_failure_stderr_is_content_free(monkeypatch, capsys) -> None:
+    """PII invariant (found 2026-07-17): CalledProcessError's str() embeds
+    the full argv — i.e. the user's text/transcript. The failure log line
+    may carry the exception TYPE and returncode, never the payload."""
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
+    secret = "GEHEIMER-BEFUND-VOM-PATIENTEN"
+
+    def _spawn_fail(cmd, **kwargs):
+        raise summarize.subprocess.CalledProcessError(returncode=1, cmd=cmd)
+
+    monkeypatch.setattr(summarize.subprocess, "run", _spawn_fail)
+    out = summarize._summarize_via_cli(secret, "", "de", 200, "claude-haiku-4-5")
+    assert out is None
+    err = capsys.readouterr().err
+    assert "[summarize] CLI call failed:" in err
+    assert secret not in err, "user text leaked into the stderr failure log"
+    assert "rc=1" in err
+
+    out = summarize._session_recap_via_cli(secret, "de", "claude-haiku-4-5",
+                                           "angle", 700)
+    assert out is None
+    err = capsys.readouterr().err
+    assert secret not in err, "transcript leaked into the stderr failure log"
+
+
+def test_resolve_base_lang_dead_code_is_gone() -> None:
+    """_resolve_base_lang had no caller repo-wide and documented an EN-pivot
+    that _system_for never implemented — removed 2026-07-17. This guards
+    against the misleading contract being reintroduced."""
+    assert not hasattr(summarize, "_resolve_base_lang")
+
+
+def test_structural_fallback_prints_degraded_sentinel_to_stderr(monkeypatch, capsys) -> None:
+    """Regression (2026-07-14): when both LLM backends fail, summarize()
+    silently fell through to naive_truncate (near-verbatim passthrough) with
+    NO signal distinguishing it from a real summary -- exit 0, non-empty
+    stdout either way. adapter.py can't log a useful warning about a
+    degraded voice summary if summarize.py never says so. The sentinel MUST
+    go to stderr, never stdout -- stdout is the text that gets spoken."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    long_text = "Dies ist ein langer Text. " * 50
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value=None),
+        patch.object(summarize, "_summarize_via_hermes", return_value=None),
+    ):
+        out = summarize.summarize(long_text, "de", 200, "claude-haiku-4-5")
+    captured = capsys.readouterr()
+    assert "[summarize] degraded:" in captured.err
+    assert "[summarize] degraded:" not in out, "sentinel must never leak into the spoken text"
+    assert out  # still produces SOME output (the structural fallback itself)
+
+
+def test_hermes_backend_strips_think_block() -> None:
+    """qwen3 emits <think>…</think> reasoning — it must never be spoken."""
+    from unittest.mock import patch
+
+    class _Resp:
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return b'{"response": "<think>plan the reply</think>Final spoken answer."}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    with patch("urllib.request.urlopen", return_value=_Resp()):
+        out = summarize._summarize_via_hermes("some long text", "", "en", 200, "m")
+    assert out == "Final spoken answer."
+    assert "<think>" not in (out or "")
+
+
+def test_hermes_payloads_disable_thinking() -> None:
+    """Both Hermes calls (summary + annex) MUST set think=False.
+
+    qwen3-style reasoning models otherwise spend the whole latency budget
+    emitting <think>…</think> BEFORE the answer, blowing the 60s/30s timeout —
+    on a fresh install (cold Ollama) this made the summary fall back to the
+    verbatim un-summarized text AND dropped the LERN-ZUGABE / METAPHER annex
+    entirely (marker never produced in time). Verified end-to-end: qwen3:8b
+    dropped from >60s/>30s timeouts to ~10s with a real summary + marker.
+    """
+    from unittest.mock import patch
+    import json as _j
+
+    captured: dict = {}
+
+    class _Resp:
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return b'{"response": "Und zur Einordnung, ok."}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, *a, **k):
+        captured["data"] = req.data
+        return _Resp()
+
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        summarize._summarize_via_hermes("some long text to summarize", "", "de", 200, "m")
+    body = _j.loads(captured["data"].decode("utf-8"))
+    assert body.get("think") is False, f"summary payload must disable thinking: {body}"
+
+    captured.clear()
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        summarize._ollama_generate("system prompt", "user input")
+    body2 = _j.loads(captured["data"].decode("utf-8"))
+    assert body2.get("think") is False, f"annex payload must disable thinking: {body2}"
+
+
+def test_hermes_payloads_set_keep_alive() -> None:
+    """Both real Hermes calls (summary + annex) must set keep_alive.
+
+    Regression (2026-07-14): only the installer's one-off prewarm set
+    keep_alive — the actual runtime calls never did, so a model that had
+    gone cold between install time and the user's first real chat (a very
+    common gap: bridge setup, Discord/WhatsApp linking, etc. all happen
+    first) paid a ~22s cold-load on top of real generation time, which
+    could blow _SUMMARY_HERMES_TIMEOUT_S and silently degrade the voice
+    summary to a near-verbatim passthrough of the raw answer.
+    """
+    from unittest.mock import patch
+    import json as _j
+
+    captured: dict = {}
+
+    class _Resp:
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return b'{"response": "ok"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, *a, **k):
+        captured["data"] = req.data
+        return _Resp()
+
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        summarize._summarize_via_hermes("some long text to summarize", "", "de", 200, "m")
+    body = _j.loads(captured["data"].decode("utf-8"))
+    assert body.get("keep_alive"), f"summary payload must set keep_alive: {body}"
+
+    captured.clear()
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        summarize._ollama_generate("system prompt", "user input")
+    body2 = _j.loads(captured["data"].decode("utf-8"))
+    assert body2.get("keep_alive"), f"annex payload must set keep_alive: {body2}"
+
+
+def test_claude_authenticated_true_with_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
+    assert summarize._claude_authenticated() is True
+
+
+def test_claude_authenticated_false_without_creds(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    assert summarize._claude_authenticated() is False
+
+
+def test_claude_authenticated_true_with_oauth_creds(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    creds_dir = tmp_path / ".claude"
+    creds_dir.mkdir()
+    (creds_dir / ".credentials.json").write_text('{"claudeAiOauth": {"x": "y"}}')
+    assert summarize._claude_authenticated() is True
+
+
+def test_summarize_via_cli_skips_when_unauthenticated(monkeypatch) -> None:
+    """M4-mirror regression: an unauthenticated-but-installed `claude` CLI must
+    not be invoked — the 90s subprocess timeout would otherwise fire on every
+    voice summary on a fresh, not-yet-logged-in install."""
+    from unittest.mock import patch
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: False)
+    with patch.object(summarize.subprocess, "run") as run:
+        out = summarize._summarize_via_cli("hello", "", "en", 200, "claude-haiku-4-5")
+    run.assert_not_called()
+    assert out is None
+
+
+def test_appendix_falls_back_to_hermes_when_cli_unavailable() -> None:
+    """The LERN-ZUGABE annex generator previously had no fallback at all — a
+    Hermes-only install (no Claude login, ever) could never produce an annex.
+    generate_appendix must now try Hermes when the CLI backend returns None."""
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_appendix_via_cli", return_value=None) as cli,
+        patch.object(summarize, "_appendix_via_hermes",
+                     return_value="Und zur Einordnung, das ist ein Beispiel.") as herm,
+    ):
+        out = summarize.generate_appendix("some source text", lang="de")
+    cli.assert_called_once()
+    herm.assert_called_once()
+    assert out == "Und zur Einordnung, das ist ein Beispiel."
+
+
+def test_metapher_falls_back_to_hermes_when_cli_unavailable() -> None:
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_metapher_via_cli", return_value=None) as cli,
+        patch.object(summarize, "_metapher_via_hermes",
+                     return_value="Bildlich gesprochen, das ist wie ein Beispiel.") as herm,
+    ):
+        out = summarize.generate_metapher("some source text", lang="de")
+    cli.assert_called_once()
+    herm.assert_called_once()
+    assert out == "Bildlich gesprochen, das ist wie ein Beispiel."
+
+
+# ---------------------------------------------------------------------------
+# VOICE-F7: child timeout budgets must fit inside the adapter's parent caps.
+# ---------------------------------------------------------------------------
+
+
+def test_voice_summary_timeout_budgets_fit_parent_caps() -> None:
+    """The CLI backend and the Hermes fallback run SEQUENTIALLY inside the
+    adapter's subprocess cap. If CLI + Hermes >= the parent cap, the adapter
+    kills the child mid-Hermes and the 41c174e Hermes fallback is unreachable
+    in the hang case it exists for. Require a >=10s margin for spawn+extract.
+
+    Old (broken) budgets:
+      main : CLI 90 + Hermes 60 = 150 > 120  → Hermes killed at 120
+      annex: CLI 45 + Hermes 45 =  90 >  60  → Hermes killed at 60
+    """
+    main_sum = summarize._SUMMARY_CLI_TIMEOUT_S + summarize._SUMMARY_HERMES_TIMEOUT_S
+    assert main_sum + 10 <= summarize._PARENT_CAP_MAIN_S, (
+        f"main ladder {main_sum}s + margin overflows the "
+        f"{summarize._PARENT_CAP_MAIN_S}s parent cap"
+    )
+    annex_sum = summarize._ANNEX_CLI_TIMEOUT_S + summarize._ANNEX_HERMES_TIMEOUT_S
+    assert annex_sum + 10 <= summarize._PARENT_CAP_ANNEX_S, (
+        f"annex ladder {annex_sum}s + margin overflows the "
+        f"{summarize._PARENT_CAP_ANNEX_S}s parent cap"
+    )
+    # Hermes must get a FULL turn even when the CLI burns its entire budget.
+    assert summarize._SUMMARY_CLI_TIMEOUT_S + summarize._SUMMARY_HERMES_TIMEOUT_S <= summarize._PARENT_CAP_MAIN_S
+    assert summarize._ANNEX_CLI_TIMEOUT_S + summarize._ANNEX_HERMES_TIMEOUT_S <= summarize._PARENT_CAP_ANNEX_S
+
+
+def test_cli_budget_covers_measured_latency() -> None:
+    """VOICE-F8 — the budget must fit the BACKEND, not just the parent cap.
+
+    The fit-the-cap test above stayed green while the CLI backend was dead on
+    arrival: VOICE-F7 shrank the CLI budget to 45s to fit a 120s cap, but a
+    real summary call measures ~50s median (23s/27s/75s/>180s over five runs),
+    so 23 of 23 field summaries degraded to the near-verbatim fallback — the
+    one thing a voice summary must never do. Summing to less than the cap is
+    necessary, not sufficient; a budget under the measured median silently
+    disables a backend without failing anything.
+
+    If this test fails, RE-MEASURE and update `_MEASURED_CLI_P50_S` — do not
+    lower the budget to make it pass.
+    """
+    assert summarize._SUMMARY_CLI_TIMEOUT_S > summarize._MEASURED_CLI_P50_S, (
+        f"CLI budget {summarize._SUMMARY_CLI_TIMEOUT_S}s is at or below the "
+        f"measured median {summarize._MEASURED_CLI_P50_S}s — the backend would "
+        "lose more often than it wins and every summary degrades"
+    )
+    # The session recap is one CLI call over a LONGER transcript, so it can
+    # never be cheaper than a per-turn summary.
+    assert summarize._SESSION_RECAP_CLI_TIMEOUT_S >= summarize._SUMMARY_CLI_TIMEOUT_S, (
+        "session-recap CLI budget must not be tighter than the summary budget"
+    )
+    # Hermes is the OUTAGE fallback: it only needs to cover a warm local
+    # generate (~30s measured), but must not be so tight it never completes.
+    assert summarize._SUMMARY_HERMES_TIMEOUT_S >= 40, (
+        "Hermes budget below 40s cannot complete a warm local generate"
+    )
+
+
+def test_console_route_parent_cap_matches_the_ladder() -> None:
+    """routes/voice.py wraps the SAME child ladder in its own cap constant.
+    It drifted once (adapter 150s / console 120s would kill the child mid-CLI),
+    so pin them together — bridge/console parity."""
+    import re
+
+    voice_route = (
+        Path(summarize.__file__).resolve().parents[3]
+        / "core" / "console" / "corvin_console" / "routes" / "voice.py"
+    )
+    if not voice_route.is_file():  # console package not in this checkout
+        return
+    src = voice_route.read_text(encoding="utf-8")
+    m = re.search(r'_TTS_SUMMARIZE_TIMEOUT_S = float\(os\.environ\.get\(\s*"[^"]+",\s*"(\d+)"\s*\)\)', src)
+    assert m, "could not read _TTS_SUMMARIZE_TIMEOUT_S default from routes/voice.py"
+    assert int(m.group(1)) >= summarize._PARENT_CAP_MAIN_S, (
+        f"console cap {m.group(1)}s is below the {summarize._PARENT_CAP_MAIN_S}s "
+        "ladder — the console would kill the child before Hermes gets a turn"
+    )
+
+
+def test_session_recap_timeout_budgets_fit_the_console_route_parent_cap() -> None:
+    """routes/voice.py's session-summary endpoint wraps this ladder in a 150s
+    subprocess.run timeout (_TTS_SUMMARIZE_TIMEOUT_S, same constant the
+    per-turn summarizer already fits inside) — same reasoning as
+    test_voice_summary_timeout_budgets_fit_parent_caps above: CLI + Hermes
+    must sum to comfortably under that cap or Hermes is unreachable in
+    exactly the hang case it exists for."""
+    recap_sum = summarize._SESSION_RECAP_CLI_TIMEOUT_S + summarize._SESSION_RECAP_HERMES_TIMEOUT_S
+    assert recap_sum + 10 <= summarize._PARENT_CAP_MAIN_S, (
+        f"session-recap ladder {recap_sum}s + margin overflows the "
+        f"{summarize._PARENT_CAP_MAIN_S}s parent cap"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Session-recap mode: whole-session recap, deliberately non-deterministic.
+# ---------------------------------------------------------------------------
+
+
+def test_session_recap_falls_back_to_hermes_when_cli_unavailable() -> None:
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_session_recap_via_cli", return_value=None) as cli,
+        patch.object(summarize, "_session_recap_via_hermes",
+                     return_value="Kurzer Recap-Text.") as herm,
+    ):
+        out = summarize.generate_session_recap("User: X\n\nAssistant: Y", lang="de",
+                                                angle="Beginne mit dem Ziel.")
+    cli.assert_called_once()
+    herm.assert_called_once()
+    assert out == "Kurzer Recap-Text."
+
+
+def test_session_recap_returns_empty_string_when_both_backends_fail() -> None:
+    """Unlike summarize()'s naive_truncate fallback, a raw User:/Assistant:
+    transcript read aloud verbatim would be unlistenable — there is no sane
+    structural fallback here, so both backends failing must return "" (the
+    console route then degrades to its usual 204, never a truncated
+    transcript played as if it were a recap)."""
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_session_recap_via_cli", return_value=None),
+        patch.object(summarize, "_session_recap_via_hermes", return_value=None),
+    ):
+        out = summarize.generate_session_recap("User: X\n\nAssistant: Y", lang="de")
+    assert out == ""
+
+
+def test_session_recap_empty_transcript_short_circuits_without_any_backend_call() -> None:
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_session_recap_via_cli") as cli,
+        patch.object(summarize, "_session_recap_via_hermes") as herm,
+    ):
+        out = summarize.generate_session_recap("   ", lang="de")
+    cli.assert_not_called()
+    herm.assert_not_called()
+    assert out == ""
+
+
+def test_session_recap_defaults_to_a_fallback_angle_when_none_given() -> None:
+    """--angle is optional on the CLI; an empty angle must not format-crash
+    the {angle} placeholder in the system prompt template."""
+    from unittest.mock import patch
+    with patch.object(summarize, "_session_recap_via_cli") as cli:
+        cli.return_value = "recap"
+        summarize.generate_session_recap("User: X\n\nAssistant: Y", lang="de", angle="")
+    called_angle = cli.call_args[0][3]  # (transcript, lang, model, angle, max_chars)
+    assert called_angle  # non-empty — the fallback kicked in
+
+
+def test_session_recap_threads_output_language_into_the_cli_backend() -> None:
+    """Regression (2026-07-16): generate_session_recap()/_session_recap_via_cli()
+    never accepted output_language at all, unlike summarize()'s _system_for()
+    (which has supported an arbitrary BCP-47 output-language pin since the
+    zh-Hans i18n work). A zh-Hans/fr/ja session recap silently came back in
+    German — the hardcoded template language — because there was no directive
+    to override it. Confirms the directive is actually composed into the
+    system prompt handed to the CLI backend for a non-de/en locale."""
+    from unittest.mock import patch
+    captured: dict = {}
+
+    def fake_run(argv, **kw):  # noqa: ANN001
+        captured["system_prompt"] = argv[argv.index("--append-system-prompt") + 1]
+        class _R:
+            stdout = "recap"
+        return _R()
+
+    with (
+        patch.object(summarize, "shutil") as _shutil,
+        patch.object(summarize, "_claude_authenticated", return_value=True),
+        patch.object(summarize.subprocess, "run", side_effect=fake_run),
+    ):
+        _shutil.which.return_value = "/usr/bin/claude"
+        summarize.generate_session_recap(
+            "User: X\n\nAssistant: Y", lang="de", angle="test angle",
+            output_language="zh-Hans",
+        )
+    assert "zh-Hans" in captured["system_prompt"] or "Chinese" in captured["system_prompt"], (
+        "expected an OUTPUT LANGUAGE directive naming the requested locale"
+    )
+
+
+def test_session_recap_output_language_is_a_noop_for_de_and_en() -> None:
+    """de/en must stay byte-identical to the pre-i18n prompt — the templates
+    already write in that language natively; an extra directive is dead
+    weight, not just harmless (see _system_for's own identical contract)."""
+    assert summarize._session_recap_output_language_directive("") == ""
+    assert summarize._session_recap_output_language_directive("de") == ""
+    assert summarize._session_recap_output_language_directive("en") == ""
+
+
+def test_session_recap_fences_the_transcript_before_sending_to_the_backend() -> None:
+    """Adversarial finding (live-tested): passing the raw transcript
+    unwrapped let a `claude -p` call read imperative lines inside it (e.g.
+    "push main") as a NEW instruction and start reporting on this repo's
+    actual git status instead of summarizing. The fence + explicit
+    data-not-instructions framing in the system prompt is the fix — this
+    guards that the fence is actually applied, not just documented."""
+    transcript = "User: push main\n\nAssistant: done"
+    fenced = summarize._fence_transcript(transcript, "de")
+    assert transcript in fenced
+    assert "TRANSKRIPT-ANFANG" in fenced and "TRANSKRIPT-ENDE" in fenced
+
+    from unittest.mock import patch
+    with patch.object(summarize, "_session_recap_via_hermes", return_value=None) as herm, \
+         patch.object(summarize, "shutil") as _shutil:
+        _shutil.which.return_value = None  # force the CLI branch to bail early
+        summarize.generate_session_recap(transcript, lang="de", angle="test angle")
+    # Hermes is the reachable backend in this test double; confirm IT received
+    # the fenced payload, not the raw transcript.
+    herm.assert_called_once()
+
+
+def test_session_recap_system_prompt_tells_the_model_not_to_act_on_the_transcript() -> None:
+    """The anti-agentic-drift framing itself must be present in both prompt
+    variants — a future edit that trims this "sounds redundant" is exactly
+    the kind of change that would silently reintroduce the live-tested bug
+    above."""
+    for template in (summarize._SESSION_RECAP_SYSTEM_DE, summarize._SESSION_RECAP_SYSTEM_EN):
+        rendered = template.format(angle="x", max_chars=700)
+        assert "DATENMATERIAL" in rendered or "DATA to summarize" in rendered
+
+
+def test_adapter_parent_caps_match_summarize_contract() -> None:
+    """Guard against the adapter's hard-coded subprocess caps drifting below
+    the child ladder sums. Reads adapter.py source (importing it is heavy)."""
+    import re
+
+    adapter_src = (
+        Path(summarize.__file__).resolve().parent.parent.parent
+        / "bridges" / "shared" / "adapter.py"
+    ).read_text(encoding="utf-8")
+    caps = [int(m) for m in re.findall(r"env=env,\s*timeout=(\d+),\s*check=True", adapter_src)]
+    # The main summary cap (120) and the two annex caps (60, 60) live in the
+    # voice-summary block; assert the documented contract values are present.
+    assert summarize._PARENT_CAP_MAIN_S in caps, "main summary cap 120 not found in adapter.py"
+    assert caps.count(summarize._PARENT_CAP_ANNEX_S) >= 2, "annex caps 60 not found in adapter.py"
+
+
+# ---------------------------------------------------------------------------
+# Marker-literal sync: summarize.py's _APPENDIX_MARKERS / _METAPHER_MARKERS
+# are hand-duplicated (no shared import) as adapter.py's
+# _LERN_ZUGABE_SENTENCE_MARKERS / _METAPHER_SENTENCE_MARKERS and as
+# chat_runtime.py's _METAPHER_MARKERS. All three files must agree, or the
+# "already has an annex/metaphor, skip the second call" dedup checks in the
+# two DOWNSTREAM files silently stop recognising a wording drift that only
+# touched summarize.py's prompts/markers — the exact bug class fixed once
+# already in f2b6584 ("LERN-ZUGABE / METAPHER annex spoken twice").
+# ---------------------------------------------------------------------------
+
+
+def _extract_str_tuple_const(source: str, name: str) -> tuple[str, ...]:
+    """Statically pull a top-level ``NAME = (...)`` string-tuple constant out
+    of *source* without importing the module.
+
+    Mirrors test_adapter_parent_caps_match_summarize_contract's "read the
+    source text instead of importing the (heavy) module" approach, but uses
+    the `ast` module instead of a regex so quoting/formatting drift in the
+    defining file can't silently break the extraction.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id == name:
+                value = ast.literal_eval(node.value)
+                assert isinstance(value, tuple), (
+                    f"{name} is not a tuple literal: {value!r}"
+                )
+                return value
+    raise AssertionError(f"top-level constant {name!r} not found in source")
+
+
+def _adapter_source() -> str:
+    return (
+        Path(summarize.__file__).resolve().parent.parent.parent
+        / "bridges" / "shared" / "adapter.py"
+    ).read_text(encoding="utf-8")
+
+
+def _chat_runtime_source() -> str:
+    return (
+        Path(summarize.__file__).resolve().parent.parent.parent.parent
+        / "core" / "console" / "corvin_console" / "chat_runtime.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_metapher_markers_agree_across_summarize_adapter_chat_runtime() -> None:
+    """summarize._METAPHER_MARKERS is the literal the METAPHER prompt is told
+    to emit. adapter._METAPHER_SENTENCE_MARKERS and chat_runtime._METAPHER_MARKERS
+    are independent hand-copies used to detect it. All three must be set-equal."""
+    adapter_markers = _extract_str_tuple_const(_adapter_source(), "_METAPHER_SENTENCE_MARKERS")
+    chat_runtime_markers = _extract_str_tuple_const(_chat_runtime_source(), "_METAPHER_MARKERS")
+
+    assert set(adapter_markers) == set(summarize._METAPHER_MARKERS), (
+        "adapter.py::_METAPHER_SENTENCE_MARKERS drifted from "
+        "summarize.py::_METAPHER_MARKERS — adapter's _has_metapher_suffix "
+        "dedup check will stop recognising a wording change made only in "
+        "summarize.py's METAPHER prompt/marker list"
+    )
+    assert set(chat_runtime_markers) == set(summarize._METAPHER_MARKERS), (
+        "chat_runtime.py::_METAPHER_MARKERS drifted from "
+        "summarize.py::_METAPHER_MARKERS — the console web-chat annotation "
+        "dedup check will stop recognising a wording change made only in "
+        "summarize.py's METAPHER prompt/marker list"
+    )
+
+
+def test_appendix_markers_agree_between_summarize_and_adapter_lern_zugabe() -> None:
+    """summarize._APPENDIX_MARKERS is the literal the LERN-ZUGABE appendix
+    prompt is told to emit. adapter._LERN_ZUGABE_SENTENCE_MARKERS is a
+    hand-copy (its own comment says 'kept in sync ... by hand') used to
+    detect it. The two must be set-equal."""
+    adapter_markers = _extract_str_tuple_const(_adapter_source(), "_LERN_ZUGABE_SENTENCE_MARKERS")
+
+    assert set(adapter_markers) == set(summarize._APPENDIX_MARKERS), (
+        "adapter.py::_LERN_ZUGABE_SENTENCE_MARKERS drifted from "
+        "summarize.py::_APPENDIX_MARKERS — adapter's _has_lern_zugabe_suffix "
+        "dedup check will stop recognising a wording change made only in "
+        "summarize.py's appendix prompt/marker list"
+    )
+
+
+def _load_adapter_module():
+    """Import operator/bridges/shared/adapter.py by path, mirroring the
+    isolation pattern used by test_adapter_voice_annex_dedup.py in that same
+    directory (pop cached module first so re-imports pick up any monkeypatch
+    of sys.path)."""
+    import sys as _sys
+
+    shared_dir = str(
+        Path(summarize.__file__).resolve().parent.parent.parent / "bridges" / "shared"
+    )
+    if shared_dir not in _sys.path:
+        _sys.path.insert(0, shared_dir)
+    _sys.modules.pop("adapter", None)
+    import adapter  # type: ignore
+    return adapter
+
+
+def test_adapter_metapher_dedup_recognizes_summarize_actual_marker() -> None:
+    """End-to-end: run a synthetic METAPHER-CLI response through summarize's
+    REAL extraction (_extract_metapher), then feed the resulting text into
+    adapter's REAL detection function (_has_metapher_suffix). This proves the
+    emit -> detect chain agrees today, not just that the two literal tuples
+    happen to look alike."""
+    adapter = _load_adapter_module()
+    raw = "Bildlich gesprochen, das ist wie ein gut sortiertes Regal."
+    extracted = summarize._extract_metapher(raw)
+    assert extracted, "summarize._extract_metapher rejected its own marker output"
+    assert adapter._has_metapher_suffix(extracted) is True
+
+
+def test_marker_wording_drift_in_summarize_breaks_adapter_dedup_silently() -> None:
+    """Regression-class demonstration for the bug fixed once in f2b6584
+    ("LERN-ZUGABE / METAPHER annex spoken twice"): if summarize.py's METAPHER
+    marker list is ever changed WITHOUT updating adapter.py's hand-copied
+    _METAPHER_SENTENCE_MARKERS in lockstep, adapter's "already has a metaphor,
+    skip the second call" check silently stops firing — even though
+    summarize.py itself still recognises its own (new) marker fine. This test
+    simulates exactly that one-sided drift via monkeypatch and asserts the
+    downstream dedup check goes blind, to make the coupling concrete rather
+    than hypothetical."""
+    from unittest.mock import patch
+
+    adapter = _load_adapter_module()
+    drifted_marker = "Um es bildlich auszudrücken,"
+    assert drifted_marker not in summarize._METAPHER_MARKERS
+    assert drifted_marker not in adapter._METAPHER_SENTENCE_MARKERS
+
+    with patch.object(summarize, "_METAPHER_MARKERS", (drifted_marker,)):
+        raw = f"{drifted_marker} das ist wie ein gut sortiertes Regal."
+        extracted = summarize._extract_metapher(raw)
+        # summarize.py itself, updated, still recognises its own new phrasing.
+        assert extracted, "summarize.py's own (updated) marker check should still match"
+
+    # adapter.py was NOT updated (no import relationship exists) — its
+    # detection of the drifted phrasing silently fails, which is exactly the
+    # double-annex bug class: adapter thinks no metaphor is present yet and
+    # appends a second one.
+    assert adapter._has_metapher_suffix(extracted) is False, (
+        "adapter.py detected the drifted marker even though its own literal "
+        "tuple was never updated — this test's premise (independent, "
+        "unsynced copies) no longer holds and should be re-checked"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+
+# ── 2026-07-24: always-a-summary-in-the-profile-language guarantees ──────────
+
+def test_language_directive_now_pinned_for_de() -> None:
+    """The OUTPUT-LANGUAGE directive is emitted for de too (was omitted).
+
+    This is what stops a German-pinned voice note drifting to English when the
+    answer text is English: the pin is now an explicit prompt instruction, not
+    just the base prompt's native prose."""
+    sysp = summarize._system_for("de", 400, has_task=False)
+    assert "OUTPUT LANGUAGE" in sysp, "de must carry an explicit output-language pin"
+
+
+def test_language_directive_now_pinned_for_en() -> None:
+    sysp = summarize._system_for("en", 400, has_task=False)
+    assert "OUTPUT LANGUAGE" in sysp, "en must carry an explicit output-language pin"
+
+
+def test_cap_to_budget_bounds_long_prose() -> None:
+    """The degraded (no-LLM) fallback must never return the whole answer."""
+    para = ("The pipeline builds the wheel, runs the suite, and uploads. "
+            "It verifies the hash, tags the commit, and publishes notes. ") * 12
+    out = summarize._cap_to_budget(para, 400)
+    assert len(out) <= 400, f"cap must hold the budget, got {len(out)}"
+    assert len(out) < len(para), "must drop content, not return the whole thing"
+
+
+def test_cap_to_budget_keeps_in_budget_text() -> None:
+    short = "Alles erledigt, der Release ist live."
+    assert summarize._cap_to_budget(short, 400) == short
+
+
+def test_cap_to_budget_returns_at_least_one_unit_when_first_sentence_overruns() -> None:
+    one_long = "word " * 200  # a single 1000-char "sentence", no terminator
+    out = summarize._cap_to_budget(one_long, 120)
+    assert 0 < len(out) <= 121, f"must hard-cut a single overrunning unit, got {len(out)}"
+    assert out.endswith("…")
+
+
+def test_prewarm_is_fail_soft_when_no_backend() -> None:
+    """Prewarm must never raise — a Claude-CLI-only / cloud install has no
+    Ollama, and the bridge fires this at boot in a daemon thread."""
+    import os as _os
+    saved = _os.environ.get("OLLAMA_HOST")
+    _os.environ["OLLAMA_HOST"] = "http://127.0.0.1:1"  # nothing listens here
+    try:
+        assert summarize.prewarm_summary_model(timeout_s=2.0) is False
+    finally:
+        if saved is None:
+            _os.environ.pop("OLLAMA_HOST", None)
+        else:
+            _os.environ["OLLAMA_HOST"] = saved
+
+
+def test_hermes_base_url_adds_scheme_for_bare_hostport() -> None:
+    import os as _os
+    saved = _os.environ.get("OLLAMA_HOST")
+    _os.environ["OLLAMA_HOST"] = "127.0.0.1:11434"
+    try:
+        assert summarize._hermes_base_url() == "http://127.0.0.1:11434"
+    finally:
+        if saved is None:
+            _os.environ.pop("OLLAMA_HOST", None)
+        else:
+            _os.environ["OLLAMA_HOST"] = saved
+
+
+def main() -> int:
+    tests = [
+        test_prewarm_is_fail_soft_when_no_backend,
+        test_hermes_base_url_adds_scheme_for_bare_hostport,
+        test_language_directive_now_pinned_for_de,
+        test_language_directive_now_pinned_for_en,
+        test_cap_to_budget_bounds_long_prose,
+        test_cap_to_budget_keeps_in_budget_text,
+        test_cap_to_budget_returns_at_least_one_unit_when_first_sentence_overruns,
+        test_system_prompt_resolves_with_placeholder,
+        test_faithfulness_rule_present_in_every_prompt_variant,
+        test_old_invention_inducing_phrases_are_gone,
+        test_speaking_style_clause_present,
+        test_understandability_block_present_in_every_variant,
+        test_faithfulness_still_forbids_invention_after_understandability_added,
+        test_persona_addendum_attached_for_known_personas,
+        test_persona_addendum_silent_for_unknown_persona,
+        test_persona_addendum_neutral_for_assistant_baseline,
+        test_persona_addendum_does_not_dislodge_faithfulness,
+        test_persona_addendum_case_and_whitespace_insensitive,
+        test_with_task_uses_natural_lead_in_not_rigid_marker,
+        test_adaptive_target_uses_hint_as_floor,
+        test_adaptive_target_scales_with_input,
+        test_adaptive_target_no_per_item_inflation,
+        test_naive_truncate_keeps_every_list_item,
+        test_naive_truncate_keeps_outro_after_list,
+        test_naive_truncate_plain_prose_unchanged,
+        test_naive_truncate_dash_bullets_recognised,
+        test_audience_block_optional_backward_compat,
+        test_audience_block_appended_after_persona,
+        test_audience_block_does_not_remove_faithfulness_rule,
+        test_audience_does_not_double_render_when_called_twice,
+        test_voice_summary_timeout_budgets_fit_parent_caps,
+        test_adapter_parent_caps_match_summarize_contract,
+        test_metapher_markers_agree_across_summarize_adapter_chat_runtime,
+        test_appendix_markers_agree_between_summarize_and_adapter_lern_zugabe,
+        test_adapter_metapher_dedup_recognizes_summarize_actual_marker,
+        test_marker_wording_drift_in_summarize_breaks_adapter_dedup_silently,
+    ]
+    failed = 0
+    for t in tests:
+        try:
+            t()
+            print(f"PASS  {t.__name__}")
+        except AssertionError as exc:
+            failed += 1
+            print(f"FAIL  {t.__name__}: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            print(f"ERROR {t.__name__}: {type(exc).__name__}: {exc}")
+    if failed:
+        print(f"\n{failed} test(s) failed")
+        return 1
+    print(f"\nAll {len(tests)} tests passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
+def test_every_marker_profile_mandates_is_actually_detectable() -> None:
+    """profile.py's audience block is what TELLS the model which marker to emit.
+
+    The sibling test above only compares adapter <-> summarize — two hand-copies
+    of each other. Neither is compared against profile.py, the file that
+    actually mandates the wording, so a marker could be (and was) demanded of
+    the model while being unknown to both detectors: the English block mandates
+    "And to give you context," which appeared in neither tuple. When the model
+    obeyed and picked it, _has_lern_zugabe_suffix returned False and a SECOND
+    annex was appended — the exact defect the dedup exists to prevent.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    src = _Path(__file__).resolve().parents[2] / "bridges" / "shared" / "profile.py"
+    text = src.read_text(encoding="utf-8")
+
+    # The block mandates markers as: begins with exactly one of these markers:
+    # "X," or "Y,". Pull every double-quoted marker out of the learning clauses.
+    clauses = _re.findall(r"(?:LERN-ZUGABE|LEARNING ANNEX).{0,600}", text, _re.S)
+    assert clauses, "could not locate the learning clause in profile.py"
+
+    mandated: set[str] = set()
+    for clause in clauses:
+        # Markers are rendered inside escaped quotes in the prompt string and are
+        # split across adjacent literals, so normalise the source concatenation first.
+        flat = _re.sub(r'"\s*\n\s*"', "", clause)
+        mandated |= {m.strip() for m in _re.findall(r'\\"([^"\\]{4,60}?,)\\"', flat)}
+
+    assert mandated, "no mandated markers parsed out of profile.py"
+
+    # profile.py mandates markers for BOTH annexes (learning + metaphor) and the
+    # clauses sit next to each other, so check against the union of the two
+    # detectors: every marker the model is TOLD to emit must be recognised by
+    # whichever detector owns it, or that annex gets appended a second time.
+    adapter_src = _adapter_source()
+    known = (
+        set(summarize._APPENDIX_MARKERS)
+        | set(_extract_str_tuple_const(adapter_src, "_LERN_ZUGABE_SENTENCE_MARKERS"))
+        | set(_extract_str_tuple_const(adapter_src, "_METAPHER_SENTENCE_MARKERS"))
+    )
+    missing = {m for m in mandated if m not in known}
+    assert not missing, (
+        f"profile.py tells the model to emit {sorted(missing)}, but no detector "
+        "knows that marker -> _has_lern_zugabe_suffix/_has_metapher_suffix will "
+        "miss the annex and a SECOND one gets appended"
+    )

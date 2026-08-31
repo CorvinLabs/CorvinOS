@@ -1,0 +1,156 @@
+name: ADR-Code Sync Check
+
+# Trigger: Auf jedem Push zu main + Pull Request
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'core/**'
+      - '!core/**/tests/**'
+      - '!core/**/*.pyc'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'core/**'
+      - '!core/**/tests/**'
+      - '!core/**/*.pyc'
+
+jobs:
+  adr-sync-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Detect code changes vs ADR changes
+        id: detect
+        run: |
+          # Determine base for comparison
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.ref }}"
+          else
+            BASE_REF="origin/main~1"
+          fi
+
+          # Get list of changed files
+          CHANGED_FILES=$(git diff $BASE_REF..HEAD --name-only || true)
+          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Filter core code changes (exclude tests)
+          CORE_CHANGES=$(echo "$CHANGED_FILES" | grep '^core/' | grep -v '/tests/' | grep -v '\.pyc$' || true)
+          echo "core_changes<<EOF" >> $GITHUB_OUTPUT
+          echo "$CORE_CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Filter ADR changes
+          ADR_CHANGES=$(echo "$CHANGED_FILES" | grep -E '^Corvin-ADR/decisions/ADR-[0-9]{4}' || true)
+          echo "adr_changes<<EOF" >> $GITHUB_OUTPUT
+          echo "$ADR_CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Validate ADR documentation
+        id: validate
+        run: |
+          CORE_CHANGES="${{ steps.detect.outputs.core_changes }}"
+          ADR_CHANGES="${{ steps.detect.outputs.adr_changes }}"
+
+          # Wenn kein core code geändert, pass
+          if [ -z "$CORE_CHANGES" ]; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Wenn core code UND ADR geändert, pass
+          if [ -n "$ADR_CHANGES" ]; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Core code OHNE ADR — check ob es eine Ausnahme ist
+          # Ausnahme: Nur Tests/Docs/Refactors geändert
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+
+          if echo "$COMMIT_MSG" | grep -qE "(skip-adr-check|test-only|docs-only|refactor:)"; then
+            echo "status=pass_with_exception" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # FAIL: Core code ohne ADR und keine Ausnahme
+          echo "status=fail" >> $GITHUB_OUTPUT
+          exit 1
+
+      - name: Report results
+        if: always()
+        run: |
+          STATUS="${{ steps.validate.outputs.status }}"
+          CORE_CHANGES="${{ steps.detect.outputs.core_changes }}"
+          ADR_CHANGES="${{ steps.detect.outputs.adr_changes }}"
+
+          case "$STATUS" in
+            pass)
+              echo "✓ ADR-Sync Check: PASS (ADR dokumentiert oder kein Code geändert)"
+              ;;
+            pass_with_exception)
+              echo "⚠ ADR-Sync Check: PASS (Ausnahme-Fall)"
+              echo "  Commits enthalten: skip-adr-check | test-only | docs-only | refactor:"
+              ;;
+            fail)
+              echo "✗ ADR-Sync Check: FAIL"
+              echo ""
+              echo "Geänderte Core-Module:"
+              echo "$CORE_CHANGES" | sed 's/^/  • /'
+              echo ""
+              echo "Geänderte ADRs:"
+              if [ -z "$ADR_CHANGES" ]; then
+                echo "  (keine)"
+              else
+                echo "$ADR_CHANGES" | sed 's/^/  • /'
+              fi
+              exit 1
+              ;;
+          esac
+
+      - name: Add PR comment (if fail)
+        if: |
+          failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `
+            ❌ **ADR-Sync Check Failed**
+
+            Deine Code-Änderungen benötigen entsprechende ADR-Dokumentation.
+
+            ### Aktion erforderlich:
+            1. Erstelle eine ADR in \`Corvin-ADR/decisions/ADR-XXXX-<slug>.md\`
+            2. Update die Felder: \`paths\`, \`commits\`, \`status\`
+            3. Push die ADR zusammen mit dem Code
+
+            ### Ausnahmen:
+            - Test-only Änderungen: Ergänze \`test-only\` in der Commit-Message
+            - Docs-only Änderungen: Ergänze \`docs-only\` in der Commit-Message
+            - Reine Refactors: Beginne die Commit-Message mit \`refactor:\`
+
+            → [ADR-Anforderungen](https://github.com/CorvinLabs/CorvinOS/blob/main/docs/claude-ref/adr-gate.md)
+            → [ADR-Beispiele](https://github.com/CorvinLabs/Corvin-ADR/tree/main/decisions)
+              `
+            })

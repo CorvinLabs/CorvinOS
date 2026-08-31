@@ -1,0 +1,102 @@
+awp: "1.1.0"
+
+workflow:
+  name: expense_approval_pipeline
+  description: >
+    Second ADR-0188 worked example, deliberately NOT a chatflow — proves
+    code/merge/retry work standalone in a plain batch `dag` workflow, not
+    only inside the chat-engine ticket agent. Two independent LLM passes
+    extract vendor/category and policy flags in parallel; a deterministic
+    merge node combines them (no LLM re-summarizing); a deterministic code
+    node applies the approval policy; a currency-conversion code node
+    carries a retry policy for its (simulated) flaky upstream call.
+
+inputs:
+  receipt_text:
+    type: string
+    required: true
+  amount_usd:
+    type: number
+    required: true
+
+orchestration:
+  engine: dag
+  graph:
+    # ---- Level 0: two independent LLM extraction passes, run in sequence
+    #      (same-level nodes are sequential in this MVP — see runner.py) ----
+    - id: extract_vendor
+      type: agent
+      agent: vendor_extractor
+      depends_on: []
+      instructions: >
+        Read the receipt text and extract the vendor name and a spend
+        category (one of: travel, entertainment, meals, office, other).
+        Respond as JSON {"vendor": "<name>", "category": "<category>"}.
+      share_output: [vendor, category]
+
+    - id: extract_policy_flags
+      type: agent
+      agent: policy_flagger
+      depends_on: []
+      instructions: >
+        Read the receipt text and flag whether it looks like it contains
+        alcohol. Respond as JSON {"alcohol_flag": <bool>}.
+      share_output: [alcohol_flag]
+
+    # ---- Level 1: deterministic merge — no LLM re-summarizes the two
+    #      upstream outputs, they are combined by a fixed strategy ----
+    - id: combined_context
+      type: merge
+      depends_on: [extract_vendor, extract_policy_flags]
+      strategy: dict_union
+      inputs: [extract_vendor, extract_policy_flags]
+      output: context
+
+    # ---- Level 0 (independent branch): currency conversion, with retry ----
+    - id: convert_currency
+      type: code
+      depends_on: []
+      retry:
+        max_retries: 2
+        retry_interval_s: 0
+        error_strategy: fail_branch
+      language: python3
+      inputs:
+        amount: amount_usd
+      source: |
+        def main(amount: float) -> dict:
+            return {"amount_eur": round(amount * 0.92, 2)}
+      outputs: [amount_eur]
+
+    # ---- Level 2: deterministic policy decision — no LLM judgment call,
+    #      the threshold logic is exact and auditable ----
+    - id: decide
+      type: code
+      depends_on: [combined_context, convert_currency]
+      language: python3
+      inputs:
+        category: combined_context.context.category
+        alcohol_flag: combined_context.context.alcohol_flag
+        amount: amount_usd
+      source: |
+        def main(category: str, alcohol_flag: bool, amount: float) -> dict:
+            thresholds = {"travel": 2000.0, "entertainment": 300.0, "meals": 150.0, "office": 500.0}
+            threshold = thresholds.get(category, 200.0)
+            approved = (amount <= threshold) and not alcohol_flag
+            reason = (
+                "alcohol spend requires manual review" if alcohol_flag
+                else "within category threshold" if approved
+                else f"exceeds {category} threshold of {threshold}"
+            )
+            return {"approved": approved, "threshold": threshold, "reason": reason}
+      outputs: [approved, threshold, reason]
+
+    # ---- Level 3: format the final report ----
+    - id: report
+      type: agent
+      agent: reporter
+      depends_on: [decide, convert_currency]
+      instructions: >
+        Write a one-paragraph approval summary using the upstream decide and
+        convert_currency context. Respond as JSON {"summary": "<paragraph>"}.
+      share_output: [summary]

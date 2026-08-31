@@ -1,0 +1,166 @@
+# ✅ VALID EXAMPLE: Elasticsearch RAG Provider Manifest
+#
+# Usage:
+#   corvin-rag register elasticsearch-docs.yaml
+#
+# This manifest declares an Elasticsearch instance as a RAG provider.
+# Provider MUST respect the contract defined in:
+# - response_schema: Must return matching JSON structure
+# - auth: Bearer token from env var RAG_ELASTICSEARCH_TOKEN (in vault)
+# - compliance_zone: Can only be queried from EU tenants
+
+api_version: rag.corvin.io/v1
+kind: RAGProvider
+
+metadata:
+  id: elasticsearch-docs
+  name: Elasticsearch Knowledge Base
+  description: Full-text search over internal documentation (wikis, runbooks, FAQs)
+  provider: acme-corp
+  version: 1.0.0
+  contact:
+    email: rag-team@acme.com
+    support_url: https://rag-support.acme.com
+  documentation_url: https://docs.company.internal/rag/elasticsearch
+
+spec:
+  retrieval:
+    type: http-api
+    endpoint: https://search.company.internal/api/v1/search
+    method: POST
+    timeout_ms: 5000
+
+    # Rate limiting
+    rate_limit:
+      requests_per_minute: 100
+      burst_size: 10
+
+    # Authentication (from vault, never hardcoded!)
+    auth:
+      type: bearer-token
+      token_env_var: RAG_ELASTICSEARCH_TOKEN
+
+    # Query contract: what CorvinOS sends to Elasticsearch
+    query_schema:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: object
+          properties:
+            multi_match:
+              type: object
+              required: [query, fields]
+              properties:
+                query:
+                  type: string
+                  description: User's search query
+                fields:
+                  type: array
+                  items: { type: string }
+                  default: [title, body, tags]
+          description: Elasticsearch query DSL
+        size:
+          type: integer
+          default: 5
+          minimum: 1
+          maximum: 50
+
+    # Response contract: what Elasticsearch returns, and how CorvinOS interprets it
+    response_schema:
+      type: object
+      required: [hits]
+      properties:
+        hits:
+          type: object
+          required: [hits]
+          properties:
+            hits:
+              type: array
+              items:
+                type: object
+                required: [_score, _source]
+                properties:
+                  _score:
+                    type: number
+                    description: Relevance score (0.0-1.0 range expected)
+                  _source:
+                    type: object
+                    required: [body]
+                    properties:
+                      title:
+                        type: string
+                        description: Document title
+                      body:
+                        type: string
+                        description: Main content
+                      source:
+                        type: string
+                        description: Source/category (wiki, runbook, faq)
+                      url:
+                        type: string
+                        format: uri
+                        description: Link to original document
+                      updated_at:
+                        type: string
+                        format: date-time
+                        description: Last update timestamp
+
+  # Data classification (Layer 34)
+  classification:
+    data_type: INTERNAL          # Not public, not secret
+    pii_risk: low                # Low risk of PII in results
+    requires_approval: false     # Can be used by any tenant
+
+  # Data residency gate (EU AI Act Art. 14)
+  compliance_zone:
+    required: true               # Enforce zone restrictions
+    allowed_regions:
+      - EU                       # Full EU
+      - DE                       # Or specific countries
+      - FR
+      - CH
+
+  # Advertised capabilities
+  capabilities:
+    - full-text-search          # Keyword matching
+    - filtering                  # Metadata filters
+    - multi-language: [en, de, fr]
+
+  # Resilience & fallback
+  resilience:
+    fallback_enabled: true       # If this fails, try next provider
+    fallback_to:
+      - vector-db-semantic       # Fallback to vector search
+    circuit_breaker:
+      failure_threshold: 5       # Fail after 5 errors
+      timeout_seconds: 30        # Try to recover after 30s
+    cache_ttl_seconds: 300       # Cache results for 5 minutes
+
+  # GDPR Art. 17 — Right to be Forgotten
+  erasure_handler:
+    type: http-api
+    endpoint: https://search.company.internal/api/v1/delete
+    request_schema:
+      type: object
+      required: [subject_id]
+      properties:
+        subject_id:
+          type: string
+          pattern: "^[A-Za-z0-9.:_\\-]{1,128}$"
+          description: User ID to delete
+        reason:
+          type: string
+          description: Deletion reason (optional)
+
+  # Quotas & costs
+  quotas:
+    daily_queries: 10000
+    monthly_cost_usd: null       # Internal, no cost
+    free_tier: true
+
+# Status fields (set by CorvinOS, not by provider)
+status:
+  registered_at: null
+  last_health_check: null
+  health_status: healthy

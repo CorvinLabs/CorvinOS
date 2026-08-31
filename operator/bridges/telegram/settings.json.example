@@ -1,0 +1,11 @@
+{
+  "_NOTE": "Telegram bot token from @BotFather (/newbot). Whitelist contains numeric Telegram user-ids as strings.",
+  "_NOTE_chat_profiles": "Default is MAXIMUM OPEN (--dangerously-skip-permissions, all tools). To RESTRICT bot behaviour in individual chats (e.g. only Read in a shared group), add a 'chat_profiles' object. Hot-reload applies immediately. Schema and examples: see CLAUDE.md.",
+  "telegram_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+  "_NOTE_read_only": "OPTIONAL — user-ids in `read_only` may sit in the chat but CANNOT trigger the bot. Whitelist beats read_only on collisions. First drop per (chat, user) sends a polite '🔒 read-only' ACK; subsequent drops are silent. Every drop is audited as bridge.read_only_drop.",
+  "_NOTE_observer_visibility": "OPTIONAL chat_profiles[<id>].observer_visibility = 'off' (default — read-only senders are dropped, LLM blind) | 'transcript' (read-only sender messages buffered per-chat, prepended as a framed CONTEXT block on the next OWNER turn). Observers still cannot trigger inference; transcript mode just makes them visible. Buffer cap: 20 lines / 4 KiB, oldest first.",
+  "whitelist": [],
+  "read_only": [],
+  "rate_limit_per_hour": 30,
+  "pin": null
+}

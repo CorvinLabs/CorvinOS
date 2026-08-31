@@ -1,0 +1,10 @@
+[Unit]
+Description=CorvinOS Operator UI — health probe (one-shot)
+After=corvin-operator-ui.service
+Requires=corvin-operator-ui.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/curl --fail --silent --max-time 5 http://127.0.0.1:8765/healthz
+# If curl fails (non-zero exit), the unit goes to "failed" state which
+# is visible in `systemctl status` and via journal alerts.

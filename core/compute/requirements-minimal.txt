@@ -1,0 +1,2 @@
+# Minimal install — stdlib-only. Bayesian strategy unavailable.
+# Used when CORVIN_COMPUTE_MINIMAL=1 is passed to bootstrap.sh.

@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Corvin — self-hosted runtime for Claude, Codex, and OpenCode with EU AI Act 2026 + GDPR compliance built in. Seven bridges, runtime tool generation, hash-chained audit.">
+  <title>Corvin — EU-Compliant AI Agent Runtime</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+
+  <!-- Open Graph (LinkedIn, Slack, WhatsApp, …) -->
+  <meta property="og:type"        content="website">
+  <meta property="og:url"         content="https://corvin-labs.com/">
+  <meta property="og:title"       content="Corvin — EU AI Act Compliant Multi-Agent OS">
+  <meta property="og:description" content="Self-hosted runtime for Claude, Codex &amp; OpenCode with GDPR + EU AI Act 2026 compliance built in. Hash-chained audit, runtime tool generation, seven bridges.">
+  <meta property="og:image"       content="https://corvin-labs.com/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale"      content="en_US">
+  <meta property="og:site_name"   content="Corvin">
+
+  <!-- Twitter / X card -->
+  <meta name="twitter:card"        content="summary_large_image">
+  <meta name="twitter:title"       content="Corvin — EU AI Act Compliant Multi-Agent OS">
+  <meta name="twitter:description" content="Self-hosted AI agent runtime with GDPR + EU AI Act compliance built in.">
+  <meta name="twitter:image"       content="https://corvin-labs.com/og-image.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-primary:    #0d1117;
+      --bg-secondary:  #161b22;
+      --bg-card:       #1c2230;
+      --bg-card-hover: #212938;
+      --border:        #2d3748;
+      --border-accent: #3d4f66;
+      --gold:          #f0b429;
+      --gold-dim:      #c9952a;
+      --gold-glow:     rgba(240, 180, 41, 0.15);
+      --blue:          #3b82f6;
+      --blue-dim:      #2563eb;
+      --blue-glow:     rgba(59, 130, 246, 0.15);
+      --green:         #34d399;
+      --text-primary:  #e6edf3;
+      --text-secondary:#8b949e;
+      --text-muted:    #586069;
+      --code-bg:       #0d1117;
+      --radius-sm:     6px;
+      --radius-md:     10px;
+      --radius-lg:     16px;
+      --shadow-card:   0 4px 24px rgba(0, 0, 0, 0.4);
+      --transition:    0.2s ease;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a {
+      color: var(--gold);
+      text-decoration: none;
+      transition: color var(--transition);
+    }
+
+    a:hover { color: var(--gold-dim); }
+
+    /* ─── NAVIGATION ─────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(13, 17, 23, 0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-inner {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 0 24px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-logo {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: var(--gold);
+      letter-spacing: -0.02em;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      transition: color var(--transition), background var(--transition);
+    }
+
+    .nav-links a:hover {
+      color: var(--text-primary);
+      background: var(--bg-secondary);
+    }
+
+    .nav-links .btn-nav {
+      color: var(--bg-primary);
+      background: var(--gold);
+      padding: 7px 18px;
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+    }
+
+    .nav-links .btn-nav:hover {
+      background: var(--gold-dim);
+      color: var(--bg-primary);
+    }
+
+    /* ─── HERO ───────────────────────────────────────────── */
+    .hero {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 100px 24px 80px;
+      text-align: center;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-accent);
+      border-radius: 999px;
+      padding: 6px 16px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 28px;
+    }
+
+    .hero-badge-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.6rem);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      margin-bottom: 20px;
+    }
+
+    .hero h1 .accent-gold { color: var(--gold); }
+    .hero h1 .accent-blue { color: var(--blue); }
+
+    .hero-sub {
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      color: var(--text-secondary);
+      max-width: 620px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+
+    .hero-ctas {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--gold);
+      color: var(--bg-primary);
+      font-weight: 700;
+      font-size: 0.95rem;
+      padding: 12px 28px;
+      border-radius: var(--radius-md);
+      transition: background var(--transition), transform var(--transition), box-shadow var(--transition);
+      box-shadow: 0 0 0 0 var(--gold-glow);
+    }
+
+    .btn-primary:hover {
+      background: var(--gold-dim);
+      color: var(--bg-primary);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px rgba(240, 180, 41, 0.3);
+    }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: transparent;
+      color: var(--text-primary);
+      font-weight: 600;
+      font-size: 0.95rem;
+      padding: 11px 28px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-accent);
+      transition: border-color var(--transition), background var(--transition), transform var(--transition);
+    }
+
+    .btn-secondary:hover {
+      color: var(--text-primary);
+      background: var(--bg-secondary);
+      border-color: var(--text-muted);
+      transform: translateY(-1px);
+    }
+
+    /* ─── SECTION COMMONS ────────────────────────────────── */
+    section {
+      padding: 80px 24px;
+    }
+
+    .section-inner {
+      max-width: 1160px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 12px;
+    }
+
+    .section-label.gold { color: var(--gold); }
+
+    .section-title {
+      font-size: clamp(1.6rem, 3vw, 2.2rem);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 14px;
+      line-height: 1.25;
+    }
+
+    .section-desc {
+      color: var(--text-secondary);
+      font-size: 1.05rem;
+      max-width: 620px;
+      line-height: 1.7;
+    }
+
+    .section-header { margin-bottom: 48px; }
+
+    /* ─── COMPLIANCE ─────────────────────────────────────── */
+    .compliance-section {
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .compliance-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 20px;
+    }
+
+    .compliance-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px 24px;
+      transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .compliance-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--blue), transparent);
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    }
+
+    .compliance-card:hover {
+      border-color: var(--blue);
+      transform: translateY(-3px);
+      box-shadow: 0 8px 32px var(--blue-glow);
+    }
+
+    .compliance-icon {
+      width: 44px;
+      height: 44px;
+      background: var(--blue-glow);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.3rem;
+      margin-bottom: 16px;
+    }
+
+    .compliance-card h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: var(--text-primary);
+    }
+
+    .compliance-card .regulation-tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--blue);
+      background: var(--blue-glow);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 4px;
+      padding: 2px 8px;
+      margin-bottom: 10px;
+      letter-spacing: 0.03em;
+    }
+
+    .compliance-card p {
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* ─── FEATURES GRID ──────────────────────────────────── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px 24px;
+      transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--gold), transparent);
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    }
+
+    .feature-card:hover {
+      border-color: var(--gold);
+      transform: translateY(-3px);
+      box-shadow: 0 8px 32px var(--gold-glow);
+    }
+
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--gold-glow);
+      border: 1px solid rgba(240, 180, 41, 0.25);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      margin-bottom: 16px;
+    }
+
+    .feature-card h3 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: var(--text-primary);
+    }
+
+    .feature-card p {
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      line-height: 1.65;
+    }
+
+    /* ─── BRIDGES ────────────────────────────────────────── */
+    .bridges-section {
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .bridges-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 40px;
+    }
+
+    .bridge-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px 20px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      transition: border-color var(--transition), background var(--transition);
+    }
+
+    .bridge-badge:hover {
+      border-color: var(--border-accent);
+      background: var(--bg-card-hover);
+    }
+
+    .bridge-badge .bridge-icon {
+      font-size: 1.25rem;
+      line-height: 1;
+    }
+
+    /* ─── QUICK START ────────────────────────────────────── */
+    .quickstart-section {
+      background: var(--bg-primary);
+    }
+
+    .quickstart-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      align-items: center;
+    }
+
+    @media (max-width: 768px) {
+      .quickstart-inner { grid-template-columns: 1fr; }
+    }
+
+    .quickstart-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 28px;
+    }
+
+    .step {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      background: var(--gold-glow);
+      border: 1px solid rgba(240, 180, 41, 0.3);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--gold);
+    }
+
+    .step-text {
+      padding-top: 4px;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .step-text strong {
+      color: var(--text-primary);
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .code-block {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: rgba(255,255,255,0.03);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .code-dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .code-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+    }
+
+    .code-dot.red    { background: #ff5f57; }
+    .code-dot.yellow { background: #febc2e; }
+    .code-dot.green  { background: #28c840; }
+
+    .code-title {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    pre {
+      padding: 24px;
+      overflow-x: auto;
+    }
+
+    code {
+      font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 0.85rem;
+      line-height: 1.75;
+      color: var(--text-primary);
+    }
+
+    .code-comment { color: var(--text-muted); }
+    .code-cmd     { color: var(--green); }
+    .code-arg     { color: var(--gold); }
+    .code-sep     { color: var(--border-accent); display: block; margin: 6px 0; }
+
+    /* ─── FOOTER ─────────────────────────────────────────── */
+    footer {
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      padding: 36px 24px;
+    }
+
+    .footer-inner {
+      max-width: 1160px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .footer-left {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .footer-logo {
+      font-size: 1.1rem;
+      font-weight: 800;
+      color: var(--gold);
+    }
+
+    .footer-copy {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .footer-links a {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      transition: color var(--transition);
+    }
+
+    .footer-links a:hover { color: var(--text-primary); }
+
+    /* ─── DIVIDER ────────────────────────────────────────── */
+    .gradient-divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-accent), transparent);
+      margin: 0;
+    }
+
+    /* ─── RESPONSIVE TWEAKS ──────────────────────────────── */
+    @media (max-width: 640px) {
+      .nav-links .btn-nav { display: none; }
+      section { padding: 56px 20px; }
+      .hero { padding: 72px 20px 56px; }
+      .footer-inner { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── NAVIGATION ─────────────────────────────────────── -->
+  <nav>
+    <div class="nav-inner">
+      <a href="/" class="nav-logo">Corvin</a>
+      <ul class="nav-links">
+        <li><a href="https://github.com/veegee82/Corvin/tree/main/docs">Docs</a></li>
+        <li><a href="https://github.com/veegee82/Corvin">GitHub</a></li>
+        <li><a href="#quickstart" class="btn-nav">Quick Start</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- ── HERO ───────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="hero-badge">
+      <span class="hero-badge-dot"></span>
+      Apache 2.0 &mdash; v1.0 Release Candidate
+    </div>
+    <h1>
+      Your AI agents.<br>
+      <span class="accent-gold">Your infrastructure.</span><br>
+      <span class="accent-blue">EU-compliant by construction.</span>
+    </h1>
+    <p class="hero-sub">
+      Self-hosted runtime for Claude, Codex, and OpenCode &mdash; seven bridges,
+      runtime tool generation, hash-chained audit. Compliance is a structural
+      property, not a checkbox.
+    </p>
+    <div class="hero-ctas">
+      <a href="#quickstart" class="btn-primary">Get Started &rarr;</a>
+      <a href="https://github.com/veegee82/Corvin" class="btn-secondary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        View on GitHub
+      </a>
+    </div>
+  </section>
+
+  <div class="gradient-divider"></div>
+
+  <!-- ── COMPLIANCE ─────────────────────────────────────── -->
+  <section class="compliance-section">
+    <div class="section-inner">
+      <div class="section-header">
+        <span class="section-label">Regulatory compliance</span>
+        <h2 class="section-title">EU AI Act 2026 + GDPR:<br>Built In, Not Bolted On</h2>
+        <p class="section-desc">
+          Every compliance mechanism is a structural design constraint.
+          There is no "compliance mode" you can accidentally leave off.
+        </p>
+      </div>
+      <div class="compliance-grid">
+        <div class="compliance-card">
+          <div class="compliance-icon">&#128220;</div>
+          <h3>Bot Disclosure</h3>
+          <span class="regulation-tag">EU AI Act Art. 50</span>
+          <p>One-time AI-nature disclosure card per user, structurally locked. Cannot be disabled via configuration. Users receive the card on first interaction; opt-out via <code>/leave</code> or <code>/pass</code>.</p>
+        </div>
+        <div class="compliance-card">
+          <div class="compliance-icon">&#128274;</div>
+          <h3>Consent Gate</h3>
+          <span class="regulation-tag">GDPR Art. 6 &amp; 7</span>
+          <p>Deny-by-default consent gate for observer-transcript sharing. Per-user, TTL-capped, re-validated at consume time. No auto-admit shortcut exists in the codebase.</p>
+        </div>
+        <div class="compliance-card">
+          <div class="compliance-icon">&#128203;</div>
+          <h3>Hash-Chained Audit</h3>
+          <span class="regulation-tag">GDPR Art. 30 &amp; 32</span>
+          <p>Every security-relevant event is appended to a SHA-256-linked <code>audit.jsonl</code> chain. Tampering with any entry invalidates the chain. Offline-verifiable via <code>voice-audit verify</code>.</p>
+        </div>
+        <div class="compliance-card">
+          <div class="compliance-icon">&#127757;</div>
+          <h3>Data Residency</h3>
+          <span class="regulation-tag">EU AI Act Art. 14</span>
+          <p>Compliance-zone routing and engine allowlists are enforced per tenant. L34 Data Classification + L35 Egress Lockdown structurally prevent data from leaving the permitted zone.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FEATURES ───────────────────────────────────────── -->
+  <section>
+    <div class="section-inner">
+      <div class="section-header">
+        <span class="section-label gold">Platform features</span>
+        <h2 class="section-title">Everything you need<br>for production AI agents</h2>
+        <p class="section-desc">
+          From multi-channel messaging to runtime tool generation,
+          Corvin ships production-grade infrastructure out of the box.
+        </p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128279;</div>
+          <h3>Seven Bridges</h3>
+          <p>Native daemons for Discord, Telegram, WhatsApp, Slack, Email, Microsoft Teams, and Signal. Hot-reload settings, per-chat profiles, and rate limiting built in to every bridge.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#9881;</div>
+          <h3>Runtime Tool Generation (Forge)</h3>
+          <p>Generate schema-bound, sandboxed tools at runtime via MCP. Four-scope workspace hierarchy (task / session / project / user), operator-controlled policy, bwrap network isolation.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128218;</div>
+          <h3>Runtime Skill Learning (SkillForge)</h3>
+          <p>Prompt-inject markdown skills into future session turns. Automatic grading, promotion gates (3 positive grades to reach project scope), and a linter that blocks prompt-injection attempts.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128260;</div>
+          <h3>Multi-Engine Support</h3>
+          <p>Swap between Claude Code, Codex CLI, and OpenCode without changing your bridge config. Adaptive cost-split automatically routes to Haiku for helper tasks and Sonnet for primary turns.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#129504;</div>
+          <h3>Conversation Memory</h3>
+          <p>FTS5 SQLite recall with PII-redacted indexing. Distilled per-user model injected as context. GDPR Art. 17 erasure via <code>/forget</code> and the cross-layer <code>corvin-erasure</code> CLI.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128202;</div>
+          <h3>Big-Data Compute (L25)</h3>
+          <p>Out-of-LLM-loop iterative compute worker with grid, random, and Bayesian optimisation strategies. Hermetic per-spawn tempdir, per-engine env allowlist, output capped at 64 KB.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="gradient-divider"></div>
+
+  <!-- ── BRIDGES ────────────────────────────────────────── -->
+  <section class="bridges-section">
+    <div class="section-inner">
+      <span class="section-label">Messaging bridges</span>
+      <h2 class="section-title">Meet your users where they are</h2>
+      <p class="section-desc">
+        Seven production bridges ship with the core distribution.
+        Each daemon is independently configurable with per-chat profiles,
+        whitelists, and rate limits.
+      </p>
+      <div class="bridges-grid">
+        <div class="bridge-badge">
+          <span class="bridge-icon">&#128172;</span>
+          Discord
+        </div>
+        <div class="bridge-badge">
+          <span class="bridge-icon">&#9992;&#65039;</span>
+          Telegram
+        </div>
+        <div class="bridge-badge">
+          <span class="bridge-icon">&#128241;</span>
+          WhatsApp
+        </div>
+        <div class="bridge-badge">
+          <span class="bridge-icon">&#128483;&#65039;</span>
+          Slack
+        </div>
+        <div class="bridge-badge">
+          <span class="bridge-icon">&#128140;</span>
+          Email
+        </div>
+        <div class="bridge-badge">
+          <span class="bridge-icon">&#128187;</span>
+          Microsoft Teams
+        </div>
+        <div class="bridge-badge">
+          <span class="bridge-icon">&#128274;</span>
+          Signal
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── QUICK START ────────────────────────────────────── -->
+  <section class="quickstart-section" id="quickstart">
+    <div class="section-inner">
+      <div class="quickstart-inner">
+        <div>
+          <span class="section-label gold">Quick start</span>
+          <h2 class="section-title">Up and running<br>in three commands</h2>
+          <div class="quickstart-steps">
+            <div class="step">
+              <div class="step-num">1</div>
+              <div class="step-text">
+                <strong>Clone the repository</strong>
+                Requires Git, Python 3.12+, and Node.js 20+.
+              </div>
+            </div>
+            <div class="step">
+              <div class="step-num">2</div>
+              <div class="step-text">
+                <strong>Run setup</strong>
+                Installs Python dependencies, npm packages, and systemd units.
+              </div>
+            </div>
+            <div class="step">
+              <div class="step-num">3</div>
+              <div class="step-text">
+                <strong>Start the bridges</strong>
+                <code>bridge.sh up</code> starts all configured daemons.
+                Edit <code>operator/bridges/&lt;channel&gt;/settings.json</code> to
+                add your tokens and whitelist.
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="code-block">
+            <div class="code-header">
+              <div class="code-dots">
+                <div class="code-dot red"></div>
+                <div class="code-dot yellow"></div>
+                <div class="code-dot green"></div>
+              </div>
+              <span class="code-title">bash</span>
+            </div>
+            <pre><code><span class="code-comment"># 1. Clone</span>
+<span class="code-cmd">git</span> <span class="code-arg">clone</span> https://github.com/veegee82/Corvin.git
+<span class="code-cmd">cd</span> Corvin
+<span class="code-sep"></span><span class="code-comment"># 2. Setup</span>
+<span class="code-cmd">bash</span> setup.sh
+<span class="code-sep"></span><span class="code-comment"># 3. Start all bridges</span>
+<span class="code-cmd">bash</span> operator/bridges/bridge.sh up</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="gradient-divider"></div>
+
+  <!-- ── FOOTER ─────────────────────────────────────────── -->
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-left">
+        <span class="footer-logo">Corvin</span>
+        <span class="footer-copy">&copy; 2026 Corvin Contributors &mdash; Released under the Apache 2.0 License</span>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/veegee82/Corvin/tree/main/docs">Docs</a>
+        <a href="https://github.com/veegee82/Corvin">GitHub</a>
+        <a href="https://github.com/veegee82/Corvin/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/veegee82/Corvin/blob/main/LICENSE">Apache 2.0</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

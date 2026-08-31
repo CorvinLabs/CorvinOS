@@ -1,0 +1,30 @@
+{
+  "lang": {
+    "set_ok": "语言已设置为 {name}（{code}）。从现在起，回复、语音摘要、欢迎卡片和听众提示都会使用这种语言。",
+    "cleared": "语言设置已清除。将恢复自动检测（默认英语）。",
+    "current": "当前语言：{name}（{code}）。",
+    "current_unset": "尚未设置语言。默认使用 {name}（{code}）。",
+    "unknown": "无法识别的语言代码 '{raw}'。请尝试 BCP-47 代码，例如 de、en、zh-Hans、ja、fr、es。输入 /lang list 查看已知代码。",
+    "usage": "用法：/lang <code|list|clear|show>。例如：/lang zh-Hans、/lang ja、/lang clear。",
+    "list_header": "已注册的语言代码（也可以使用其他有效的 BCP-47 代码，只是没有本地名称）："
+  },
+  "consent": {
+    "ack_durable": "已同意。在你输入 /consent off 之前，你在此对话中的消息对助手可见。",
+    "ack_off": "已撤回同意。从现在起，你的消息将不会发送给助手。",
+    "drop_first": "提示：此对话处于只读模式。你的消息不会发送给助手。输入 /consent on 以开启共享。"
+  },
+  "welcome": {
+    "intro": "你好，我是 Corvin。",
+    "checks_intro": "你的安装已经完成，我刚刚进行了一次自我检查：",
+    "check_stt_ok": "语音输入正常。",
+    "check_stt_bad": "语音输入目前受限。",
+    "check_tts_ok": "语音输出正常。",
+    "check_tts_bad": "语音输出目前受限——这就是你现在读到这条消息而不是听到它的原因。",
+    "check_engine_ok": "与我的 AI 模型的连接正常。",
+    "check_engine_bad": "与我的 AI 模型的连接目前中断——请检查一下你的引擎设置。",
+    "control": "从现在起，你可以在这里的网页聊天中跟我说话或打字——设置好之后，在 Discord、WhatsApp 或 Telegram 上也同样可以。",
+    "voice_to_action": "这就是所谓的“语音即行动”：你说出你想要的，我就把它变成真正的操作——我可以访问你的电脑、浏览互联网，还能像亲自握着鼠标一样操作你的浏览器。这意味着，原则上你的整个数字生活都可以只靠声音来控制。",
+    "capabilities": "我可以为你编写和修改代码、在网上搜索资料、操作你的浏览器、生成图片、管理邮件和日程，还能自动化重复性任务。用平常说话的方式告诉我你需要什么就行——比如“查看我的收件箱”或“生成一张森林里的狐狸的图片”——我会帮你处理好。",
+    "closing": "告诉我你需要什么就行。"
+  }
+}

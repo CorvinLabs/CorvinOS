@@ -1,0 +1,61 @@
+awp: "1.0.0"
+
+workflow:
+  name: strategy_backtest
+  description: >
+    Evidence-based backtest runner. Linear DAG: load historical data →
+    run backtest → compute performance metrics → generate report.
+    Companion to trading_signal_pipeline; uses the same Forge tools.
+
+inputs:
+  symbol:
+    type: string
+    default: "BTCUSDT"
+  start_date:
+    type: string
+    default: "2024-01-01"
+  end_date:
+    type: string
+    default: "2024-12-31"
+  initial_capital:
+    type: number
+    default: 10000.0
+
+orchestration:
+  engine: dag
+  graph:
+    - id: load_history
+      type: agent
+      agent: quant_trader
+      instructions: >
+        Use code_ohlcv_fetch to load daily OHLCV candles for ${inputs.symbol}
+        from ${inputs.start_date} to ${inputs.end_date}.
+      depends_on: []
+      share_output: [history]
+
+    - id: run_backtest
+      type: agent
+      agent: quant_trader
+      instructions: >
+        Use code_compute_indicators to apply the momentum + mean-reversion
+        strategy logic on the history. Simulate trades with slippage 0.05%
+        and initial capital ${inputs.initial_capital}. Return equity curve.
+      depends_on: [load_history]
+      share_output: [equity_curve, trades]
+
+    - id: metrics
+      type: agent
+      agent: quant_trader
+      instructions: >
+        Compute: CAGR, max drawdown, Sharpe ratio (rf=0.05), Sortino ratio,
+        win rate, profit factor from the equity curve and trades list.
+      depends_on: [run_backtest]
+      share_output: [perf_metrics]
+
+    - id: report
+      type: agent
+      agent: assistant
+      instructions: >
+        Format the backtest results as a Markdown report with a summary
+        table of perf_metrics and a plain-text ASCII equity curve plot.
+      depends_on: [metrics]

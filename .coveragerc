@@ -1,0 +1,31 @@
+[run]
+branch = True
+source = core/vibe_engineering
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+
+[report]
+# Exclude specific patterns
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+    @abc.abstractmethod
+    @property
+
+precision = 2
+show_missing = True
+skip_covered = False
+skip_empty = True
+
+[html]
+directory = htmlcov
+
+[xml]
+output = coverage.xml

@@ -1,0 +1,529 @@
+/* Vibe Engineering Dashboard Styles */
+
+.vibe-engineering-dashboard {
+  background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+  color: #e6edf3;
+  padding: 2rem;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.vibe-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 2px solid #30363d;
+}
+
+.header-content h1 {
+  font-size: 2.2rem;
+  color: #79c0ff;
+  margin-bottom: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.subtitle {
+  color: #8b949e;
+  font-size: 0.95rem;
+}
+
+.time-range-selector {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.range-btn {
+  padding: 0.5rem 1rem;
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.range-btn:hover {
+  border-color: #58a6ff;
+  color: #79c0ff;
+}
+
+.range-btn.active {
+  background: #79c0ff;
+  border-color: #79c0ff;
+  color: #0d1117;
+}
+
+/* KPI Cards */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.kpi-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+
+.kpi-card:hover {
+  border-color: #58a6ff;
+  box-shadow: 0 0 16px rgba(88, 166, 255, 0.15);
+  transform: translateY(-2px);
+}
+
+.kpi-card.primary {
+  border-color: #79c0ff;
+  background: linear-gradient(135deg, rgba(121, 192, 255, 0.05), rgba(88, 166, 255, 0.02));
+}
+
+.kpi-card.success {
+  border-color: #3fb950;
+  background: linear-gradient(135deg, rgba(63, 185, 80, 0.05), rgba(63, 185, 80, 0.02));
+}
+
+.kpi-card.confidence {
+  border-color: #f85149;
+}
+
+.kpi-card.confidence.significant {
+  border-color: #3fb950;
+  background: linear-gradient(135deg, rgba(63, 185, 80, 0.05), rgba(63, 185, 80, 0.02));
+}
+
+.kpi-icon {
+  font-size: 2rem;
+  min-width: 3rem;
+  text-align: center;
+}
+
+.kpi-content {
+  flex: 1;
+}
+
+.kpi-label {
+  font-size: 0.85rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+
+.kpi-value {
+  font-size: 1.8rem;
+  font-weight: bold;
+  color: #e6edf3;
+  margin-bottom: 0.25rem;
+}
+
+.kpi-detail {
+  font-size: 0.85rem;
+  color: #8b949e;
+}
+
+/* Cost Comparison */
+.comparison-section {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.comparison-section h2 {
+  margin-bottom: 1.5rem;
+  color: #79c0ff;
+}
+
+.cost-comparison {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.cost-bar {
+  flex: 1;
+  min-width: 250px;
+}
+
+.cost-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.cost-item label {
+  color: #8b949e;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.cost-value {
+  font-size: 1.3rem;
+  font-weight: bold;
+  color: #79c0ff;
+}
+
+.cost-bar-visual {
+  position: relative;
+  height: 40px;
+  background: #0d1117;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bar {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 0.75rem;
+  font-size: 0.85rem;
+  font-weight: bold;
+  color: #e6edf3;
+}
+
+.bar.baseline {
+  width: 100%;
+  background: linear-gradient(90deg, #f85149, #d29922);
+}
+
+.bar.vibe {
+  width: 65%;
+  background: linear-gradient(90deg, #3fb950, #79c0ff);
+}
+
+.bar-label {
+  font-size: 0.85rem;
+}
+
+.savings-arrow {
+  align-self: center;
+  color: #3fb950;
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+/* Subsystems Section */
+.subsystems-section {
+  margin-bottom: 2rem;
+}
+
+.subsystems-section h2 {
+  margin-bottom: 1.5rem;
+  color: #79c0ff;
+}
+
+.subsystems-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.5rem;
+}
+
+.subsystem-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 1.5rem;
+  transition: all 0.2s ease;
+}
+
+.subsystem-card:hover {
+  border-color: #58a6ff;
+  box-shadow: 0 0 12px rgba(88, 166, 255, 0.1);
+}
+
+.subsystem-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.subsystem-header h3 {
+  font-size: 1rem;
+  color: #e6edf3;
+  margin: 0;
+}
+
+.subsystem-percentage {
+  background: #79c0ff;
+  color: #0d1117;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-weight: bold;
+  font-size: 0.85rem;
+}
+
+.subsystem-metric {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.subsystem-metric .label {
+  color: #8b949e;
+}
+
+.subsystem-metric .value {
+  color: #79c0ff;
+  font-weight: bold;
+}
+
+.subsystem-bar {
+  height: 6px;
+  background: #0d1117;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 0.5rem;
+}
+
+.subsystem-progress {
+  height: 100%;
+  background: linear-gradient(90deg, #3fb950, #79c0ff);
+  transition: width 0.3s ease;
+}
+
+/* Task Breakdown */
+.task-breakdown-section {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.task-breakdown-section h2 {
+  margin-bottom: 1.5rem;
+  color: #79c0ff;
+}
+
+.task-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.task-item {
+  padding: 1rem;
+  background: #0d1117;
+  border-radius: 8px;
+  border-left: 3px solid #30363d;
+}
+
+.task-item:hover {
+  border-left-color: #79c0ff;
+}
+
+.task-name {
+  font-weight: 600;
+  color: #79c0ff;
+  margin-bottom: 0.5rem;
+  text-transform: capitalize;
+}
+
+.task-stats {
+  font-size: 0.85rem;
+  color: #8b949e;
+  margin-bottom: 0.75rem;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.task-bar {
+  height: 8px;
+  background: #161b22;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.task-progress {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+/* ROI Section */
+.roi-section {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.roi-section h2 {
+  margin-bottom: 1.5rem;
+  color: #79c0ff;
+}
+
+.roi-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+}
+
+.roi-item {
+  background: #0d1117;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.roi-item.success {
+  border-color: #3fb950;
+  background: rgba(63, 185, 80, 0.05);
+}
+
+.roi-item.highlight {
+  border-color: #79c0ff;
+  background: rgba(121, 192, 255, 0.05);
+}
+
+.roi-item label {
+  font-size: 0.85rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.roi-item value {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #3fb950;
+}
+
+.roi-item.highlight value {
+  color: #79c0ff;
+}
+
+/* Footer */
+.vibe-footer {
+  text-align: center;
+  padding-top: 1.5rem;
+  border-top: 1px solid #30363d;
+  color: #8b949e;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.vibe-loading,
+.vibe-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: #8b949e;
+  font-size: 1rem;
+  background: #161b22;
+  border-radius: 12px;
+  border: 1px solid #30363d;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .vibe-engineering-dashboard {
+    padding: 1rem;
+  }
+
+  .vibe-header {
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .header-content h1 {
+    font-size: 1.8rem;
+  }
+
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cost-comparison {
+    flex-direction: column;
+  }
+
+  .subsystems-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .roi-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Light mode support */
+@media (prefers-color-scheme: light) {
+  .vibe-engineering-dashboard {
+    background: linear-gradient(135deg, #ffffff 0%, #f6f8fa 100%);
+    color: #24292e;
+  }
+
+  .kpi-card,
+  .subsystem-card,
+  .comparison-section,
+  .task-breakdown-section,
+  .roi-section {
+    background: #ffffff;
+    border-color: #e1e4e8;
+  }
+
+  .kpi-card.primary,
+  .kpi-card.success {
+    background: #f6f8fa;
+  }
+
+  .cost-bar-visual,
+  .subsystem-bar,
+  .task-bar {
+    background: #f6f8fa;
+  }
+
+  .subsystem-card:hover {
+    border-color: #0366d6;
+  }
+
+  .task-item,
+  .roi-item {
+    background: #f6f8fa;
+    border-color: #e1e4e8;
+  }
+
+  .vibe-header,
+  .vibe-footer {
+    border-color: #e1e4e8;
+  }
+
+  .kpi-value,
+  .cost-value,
+  .task-name,
+  .subsystem-header h3 {
+    color: #0366d6;
+  }
+
+  .kpi-label,
+  .cost-item label,
+  .task-stats,
+  .roi-item label,
+  .subtitle {
+    color: #6a737d;
+  }
+}

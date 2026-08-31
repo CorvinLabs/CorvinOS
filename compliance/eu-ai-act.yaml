@@ -1,0 +1,229 @@
+# EU AI Act 2026 — Compliance Manifest
+#
+# Machine-readable rule catalogue for Corvin CI gate (ADR-0056).
+# Each rule maps an EU AI Act obligation to the Corvin layer that
+# implements it, names the structural invariants that must hold, and
+# lists forbidden patterns that CI must flag if seen in a PR diff.
+#
+# Maintained by: Corvin maintainer (signer fingerprint in tenant config)
+# OJ reference:  OJ L 2024/1689
+# Last reviewed: 2026-05-26
+#
+# DO NOT use this file as a runtime compliance oracle.  Enforcement is
+# structural (L10, L16, L19, L34, L35); this file drives CI and bridge.sh
+# doctor only (see ADR-0056 §"What the manifest is NOT").
+
+version: "1.0.0"
+regulation: "EU AI Act 2026"
+oj_reference: "OJ L 2024/1689"
+effective_date: "2026-08-02"
+last_reviewed: "2026-05-26"
+
+rules:
+
+  # ── Art. 50 §1 — Disclosure of AI-system nature ──────────────────────────
+
+  - id: "eua.art50.1.disclosure"
+    article: "Art. 50 §1"
+    summary: >
+      Deployers of AI systems interacting directly with natural persons must
+      ensure those persons are informed they are interacting with an AI system,
+      except where this is obvious from context.
+    severity: critical
+    implemented_by:
+      - layer: L19
+        file: "operator/bridges/shared/disclosure.py"
+        test: "operator/bridges/shared/test_disclosure.py"
+    invariants:
+      - "disclosure card fires exactly once per (channel, chat, uid)"
+      - "disclosure cannot be disabled by operator config or env var"
+      - "bot-disclosure card contains the required AI-nature statement"
+      - "card character length must be <= 1500"
+      - "/join, /pass, /leave commands trigger the disclosure path"
+    forbidden_patterns:
+      - "auto-admit user without prior disclosure"
+      - "trusted-observer bypass for disclosure"
+      - "compliance-off mode that skips disclosure"
+      - "shortcut that creates session without calling disclosure"
+    last_verified: "2026-05-26"
+    notes: >
+      The /join command is the canonical entry point.  Any new code path that
+      introduces a user to the system must route through
+      disclosure.ensure_disclosed() before creating a session.
+
+  # ── Art. 50 §4 — AI-generated content marking ────────────────────────────
+
+  - id: "eua.art50.4.marking"
+    article: "Art. 50 §4"
+    summary: >
+      AI-generated content intended for the public must be marked in a
+      machine-readable format as artificially generated or manipulated.
+    severity: critical
+    implemented_by:
+      - layer: L19
+        file: "operator/bridges/shared/disclosure.py"
+        test: "operator/bridges/shared/test_disclosure.py"
+    invariants:
+      - "every outbound message carries provenance metadata in the adapter envelope"
+      - "provenance header is not stripped before delivery to the bridge"
+    forbidden_patterns:
+      - "strip provenance or origin header from outbound message"
+      - "delivery path that bypasses envelope metadata"
+    last_verified: "2026-05-26"
+
+  # ── Art. 14 — Human oversight (compliance-zone routing) ──────────────────
+
+  - id: "eua.art14.compliance_zone"
+    article: "Art. 14"
+    summary: >
+      High-risk AI systems must be designed to allow effective human oversight.
+      Corvin implements this via compliance-zone routing that restricts
+      which engines may process tasks in each deployment zone.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0007
+        file: "operator/bridges/shared/compliance_zone_classifier.py"
+        test: "core/gateway/tests/test_zone_policy.py"
+    invariants:
+      - "tenant.corvin.yaml::data_residency.zone constrains engine selection"
+      - "engine not in allowed_engines list is rejected before spawn"
+      - "engine in forbid_engines list is rejected before spawn"
+      - "zone gate runs before WorkerEngine spawn, never after"
+    forbidden_patterns:
+      - "bypass zone check for any engine including local engines"
+      - "add compliance-off mode via env var or config flag"
+      - "widen default engine reach past tenant allowed_engines without ADR"
+    last_verified: "2026-05-26"
+
+  # ── Art. 14 — Engine-policy allowlist ────────────────────────────────────
+
+  - id: "eua.art14.engine_policy"
+    article: "Art. 14"
+    summary: >
+      Operators must maintain control over which AI models process tasks.
+      Corvin enforces this via the engine-policy allowlist that gates
+      every model invocation.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0007
+        file: "operator/bridges/shared/engine_policy.py"
+        test: "core/gateway/tests/test_zone_policy.py"
+    invariants:
+      - "engine_policy.check() runs at every WorkerEngine spawn callsite"
+      - "fail-closed: unknown engine is denied, not allowed"
+      - "policy file hot-reloads per call, never cached across calls"
+    forbidden_patterns:
+      - "skip engine_policy.check() for any spawn path"
+      - "cache engine policy across calls"
+      - "add trusted-engine shortcut that bypasses policy"
+    last_verified: "2026-05-26"
+
+  # ── Art. 50 §4 — Machine-readable content marking (ADR-0057 M1) ─────────
+
+  - id: "eua.art50.4.content_marking_format"
+    article: "Art. 50 §4"
+    summary: >
+      AI-generated content must carry a machine-readable provenance block.
+      Corvin injects a structured ``provenance`` field into every final
+      outbound envelope specifying ai_generated=true, generator_id, persona,
+      session_id, and timestamp_utc.
+    severity: critical
+    implemented_by:
+      - layer: L19
+        file: "operator/bridges/shared/adapter.py"
+        test: "operator/bridges/shared/test_content_marking.py"
+    invariants:
+      - "provenance block is injected in _envelope() for all _final=True messages"
+      - "ai_generated is always true — never false or absent"
+      - "provenance is never stripped from the outbound envelope"
+      - "progress and heartbeat envelopes do not carry provenance (not AI-generated content)"
+    forbidden_patterns:
+      - "set ai_generated to false in any outbound envelope"
+      - "strip provenance field before delivery to bridge transport"
+      - "inject provenance into _progress or _heartbeat envelopes"
+    last_verified: "2026-05-26"
+    notes: >
+      Format specified in ADR-0057 § Component 1.  Each bridge adapter maps
+      provenance to its transport's native mechanism (Discord: embed footer,
+      WhatsApp: referral context, CLI: JSON comment line).
+
+  # ── Art. 73 — Serious Incident Tracking (ADR-0057 L39) ──────────────────
+
+  - id: "eua.art73.incident_tracker"
+    article: "Art. 73"
+    summary: >
+      Deployers must notify supervisory authorities of serious incidents within
+      15 days of detection.  Corvin provides Layer 39 (IncidentTracker)
+      which auto-detects CRITICAL audit events, stores structured incident
+      records, and generates notification drafts.
+    severity: critical
+    implemented_by:
+      - layer: L39
+        file: "operator/bridges/shared/incident_tracker.py"
+        test: "operator/bridges/shared/test_incident_tracker.py"
+    invariants:
+      - "TRIGGER_EVENTS audit events auto-open incident records via IncidentAutoDetector"
+      - "incident records stored at <tenant>/global/incidents/<id>.json mode 0600"
+      - "description field is NEVER written to the L16 audit chain"
+      - "incident.opened emits to audit chain with allow-listed fields only"
+      - "notify_draft generates Art. 73 §2 notification; never auto-submits"
+      - "severity=serious triggers the 15-day Art. 73 notification clock"
+    forbidden_patterns:
+      - "put incident description or DPO contact in audit chain"
+      - "auto-submit notification to supervisory authority"
+      - "close incident without notified_at or explicit below-threshold decision"
+      - "import anthropic from incident_tracker.py"
+    last_verified: "2026-05-26"
+
+  # ── Art. 28-30 — Operator Declaration Gate (ADR-0057 M7) ─────────────────
+
+  - id: "eua.art28_30.operator_declaration"
+    article: "Art. 28 + 29 + 30"
+    summary: >
+      Deployers of AI systems must complete a DPIA, designate a DPO where
+      required, and understand permitted and prohibited use cases before
+      production deployment.  Corvin enforces this via a boot-time
+      CRITICAL check on eu_production profiles.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0057
+        file: "operator/bridges/shared/operator_declaration.py"
+        test: "operator/bridges/shared/test_operator_declaration.py"
+    invariants:
+      - "eu_production and eu_production_ollama profiles require operator_declaration in tenant.corvin.yaml"
+      - "dpia_completed must be true for eu_production boot to proceed"
+      - "dpia_date must be present"
+      - "declared_by (DPO name) is NEVER written to the audit chain"
+      - "operator.declaration_verified audit event follows allow-list only"
+    forbidden_patterns:
+      - "allow eu_production boot without operator_declaration"
+      - "accept dpia_completed=false for eu_production profile"
+      - "put declared_by or permitted_use in audit event details"
+    last_verified: "2026-05-26"
+
+  # ── Art. 13 — Transparency of high-risk AI systems ───────────────────────
+
+  - id: "eua.art13.transparency"
+    article: "Art. 13"
+    summary: >
+      High-risk AI systems must be designed and developed to ensure sufficient
+      transparency for deployers to understand the system's outputs and use
+      them appropriately.  Corvin provides PDF-based transparency reports
+      from the audit chain.
+    severity: warning
+    implemented_by:
+      - layer: compliance-reports
+        file: "core/compliance/corvin_compliance_reports/ai_act_evidence.py"
+        test: "core/compliance/tests/"
+    invariants:
+      - "Art. 50 evidence report is available at no license gate"
+      - "report is generated from the live audit chain, not a static template"
+      - "report covers the time window requested, not a fixed snapshot"
+    forbidden_patterns:
+      - "gate baseline compliance reports behind enterprise license"
+      - "generate report from static data that bypasses the audit chain"
+    last_verified: "2026-05-26"
+    notes: >
+      Warning severity: Art. 13 full compliance is an ongoing process, not
+      a single binary check.  CI flags deviations; legal review required for
+      final sign-off.

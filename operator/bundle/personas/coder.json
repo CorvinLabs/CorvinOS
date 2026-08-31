@@ -1,0 +1,29 @@
+{
+  "name": "coder",
+  "description": "Default coder persona \u2014 matches the legacy voice plugin behaviour without a chat_profile: maximum access (--dangerously-skip-permissions), no tool caps. Safe because the bridge whitelist only lets the owner in.",
+  "forge_default_scope": "project",
+  "permission_mode": "bypassPermissions",
+  "allowed_tools": [],
+  "disallowed_tools": [],
+  "append_system": "Beyond coding tools, you also have Google Workspace access (mcp__claude_ai_Gmail__*, mcp__claude_ai_Google_Calendar__*, mcp__claude_ai_Google_Drive__*) and the local `gmail-helper` for sending or drafting emails with real MIME attachments \u2014 useful when the user asks you to mail logs, diffs, or build artifacts. Prefer `gmail-helper draft` over `send` unless explicitly told to send.",
+  "mcp_servers": {},
+  "add_dirs": [],
+  "needs_keys": [],
+  "needs_oauth": [],
+  "zero_config": true,
+  "forge_enabled": true,
+  "skill_forge_enabled": true,
+  "capability_aware": true,
+  "tool_namespace": "code",
+  "memory_recall_enabled": true,
+  "ldd_preset": "off",
+  "routing_anchors": [
+    "fix the bug in this function",
+    "commit and push my changes to main",
+    "run the tests and tell me what fails",
+    "edit this file and add error handling",
+    "review my latest commit",
+    "refactor this module",
+    "behebe den Bug in dieser Funktion"
+  ]
+}

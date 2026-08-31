@@ -1,0 +1,23 @@
+[Unit]
+Description=corvin-voice Teams bridge daemon
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__/operator/bridges/teams
+ExecStart=__NODE_BIN__ daemon.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corvin-teams
+EnvironmentFile=-%h/.config/corvin-voice/service.env
+Environment=TEAMS_HTTP_PORT=3978
+Environment=TEAMS_HEALTH_PORT=7897
+
+[Install]
+WantedBy=default.target

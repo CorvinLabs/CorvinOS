@@ -1,0 +1,46 @@
+# Keycloak smoke for ADR-0007 Phase 3.6 — operator-side, opt-in.
+#
+# Brings up a single Keycloak instance configured for the ACME and
+# GLOBEX demo tenants. NOT auto-started in CI; run it locally when
+# you want to validate the gateway against a real OIDC issuer.
+#
+# Usage:
+#
+#   cd core/gateway/scripts
+#   docker compose -f docker-compose.keycloak.yml up -d
+#   # ... wait ~30 s for Keycloak to finish bootstrapping ...
+#   ./keycloak_smoke.py
+#   docker compose -f docker-compose.keycloak.yml down
+#
+# Realms:
+#
+#   * acme   — issuer http://localhost:8080/realms/acme
+#   * globex — issuer http://localhost:8080/realms/globex
+#
+# Each realm has one client (corvin-acme / corvin-globex) and one
+# service account whose JWT carries `sub` matching the realm name.
+# The corvin gateway, configured with the realm's JWKS URI, must
+# accept the JWT for its tenant and reject it for the other tenant
+# (cross-tenant defence-in-depth).
+#
+# Both ports are bound to 127.0.0.1 by default so a stray external
+# scanner cannot reach the dev IdP.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: corvin-gateway-keycloak
+    command: ["start-dev", "--http-port=8080"]
+    environment:
+      KEYCLOAK_ADMIN:          admin
+      KEYCLOAK_ADMIN_PASSWORD: admin-only-for-smoke
+      KC_HEALTH_ENABLED:       "true"
+      KC_METRICS_ENABLED:      "false"
+      KC_HTTP_RELAXED_HOSTNAME_CHECK: "true"
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health/ready || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 24

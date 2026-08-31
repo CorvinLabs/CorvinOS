@@ -1,0 +1,30 @@
+{
+  "suite_version": "v1",
+  "note": "Versioned task suite. Each task has an OBJECTIVE, automatic quality check (fact presence) so token savings can never be won by a worse answer. Inputs are fixed; add tasks over time and bump suite_version. No LLM output is stored here — only the fixed inputs + the check.",
+  "tasks": [
+    {
+      "id": "qa-http-status",
+      "type": "qa",
+      "prompt": "Answer in one short paragraph: what HTTP status code means 'Not Found', and what does 401 mean? Name both numbers explicitly.",
+      "check": { "kind": "contains_all", "expect": ["404", "401"], "case_insensitive": true }
+    },
+    {
+      "id": "qa-python-list",
+      "type": "qa",
+      "prompt": "In Python, which method appends a single element to the end of a list, and which one concatenates another list onto it? Name both method names.",
+      "check": { "kind": "contains_all", "expect": ["append", "extend"], "case_insensitive": true }
+    },
+    {
+      "id": "reason-primes",
+      "type": "reasoning",
+      "prompt": "List every prime number strictly between 10 and 20. Give just the numbers.",
+      "check": { "kind": "contains_all", "expect": ["11", "13", "17", "19"], "forbid": ["12", "14", "15", "16", "18"], "case_insensitive": true }
+    },
+    {
+      "id": "reason-units",
+      "type": "reasoning",
+      "prompt": "How many minutes are in 2.5 hours, and how many seconds are in one hour? Give both numbers.",
+      "check": { "kind": "contains_all", "expect": ["150", "3600"], "case_insensitive": true }
+    }
+  ]
+}

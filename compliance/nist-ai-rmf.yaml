@@ -1,0 +1,799 @@
+# NIST AI Risk Management Framework 1.0 — Compliance Manifest
+#
+# Machine-readable rule catalogue for Corvin CI gate (ADR-0056 + ADR-0060).
+# Each rule maps a NIST AI RMF 1.0 subcategory to the Corvin layer that
+# implements it, names the structural invariants that must hold, and lists
+# forbidden patterns that CI must flag if seen in a PR diff.
+#
+# Maintained by: Corvin maintainer (signer fingerprint in tenant config)
+# Standard body: NIST
+# Reference:     NIST AI Risk Management Framework 1.0 (NIST AI 100-1)
+#                January 2023
+# Last reviewed: 2026-05-26
+#
+# DO NOT use this file as a runtime compliance oracle.  Enforcement is
+# structural (L10, L16, L19, L34, L35, L36, L37, L38, L39); this file
+# drives CI and bridge.sh doctor only (ADR-0056 §"What the manifest is NOT").
+#
+# IMPORTANT: NIST AI RMF is a voluntary framework; there is no NIST
+# certification body.  This manifest is an evidence artefact, not a
+# compliance certification claim.  See ADR-0060 §NIST note.
+#
+# cross_references: link back to eu-ai-act.yaml and iso-42001.yaml rules.
+# The corvin-annex-iv cross-reference command reads all manifests and builds
+# the full bidirectional evidence graph.
+
+version: "1.0.0"
+regulation: "NIST AI RMF 1.0"
+standard_body: "NIST"
+publication_date: "2023-01-26"
+last_reviewed: "2026-05-26"
+
+rules:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # GOVERN — Policies, processes, procedures, and practices
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── GOVERN GV-1.1 — Policies for AI risk management ──────────────────────
+
+  - id: "nist.govern.gv-1.1"
+    nist_function: "GOVERN"
+    nist_category: "GV-1.1"
+    article: "NIST AI RMF 1.0 — GOVERN GV-1.1"
+    summary: >
+      Policies, processes, procedures, and practices across the organisation
+      address AI risk.  Corvin implements this via the compliance manifest
+      (ADR-0056): machine-readable rules with forbidden patterns and CI
+      enforcement provide a deterministic, auditable policy layer.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0056
+        file: "operator/bridges/shared/compliance_manifest.py"
+        test: "operator/bridges/shared/test_eu_compliance.py"
+    cross_references:
+      - framework: "EU AI Act"
+        rule_id: "eua.art14.engine_policy"
+      - framework: "ISO 42001"
+        rule_id: "iso42001.6.2.objectives"
+    invariants:
+      - "compliance manifest is GPG-signed; modified manifest without re-sign fails verification"
+      - "corvin-compliance-check --all-frameworks covers every mapped rule"
+      - "CI runs compliance check on every PR touching manifest-mapped files"
+    forbidden_patterns:
+      - "weaken a severity: critical rule without MAJOR version bump and companion ADR"
+      - "use the manifest as a runtime request-validation gate"
+      - "gate corvin-compliance-check behind enterprise license"
+    last_verified: "2026-05-26"
+
+  # ── GOVERN GV-1.2 — Accountability structures ────────────────────────────
+
+  - id: "nist.govern.gv-1.2"
+    nist_function: "GOVERN"
+    nist_category: "GV-1.2"
+    article: "NIST AI RMF 1.0 — GOVERN GV-1.2"
+    summary: >
+      Accountability structures are in place so that AI risks can be properly
+      managed.  Corvin enforces accountability via the L18 role hierarchy
+      (owner/admin/member/observer) and the Operator Declaration Gate, which
+      requires a named responsible party before eu_production deployment.
+    severity: critical
+    implemented_by:
+      - layer: L18
+        file: "operator/bridges/shared/roles.py"
+        test: "operator/bridges/shared/test_roles.py"
+      - layer: ADR-0057
+        file: "operator/bridges/shared/operator_declaration.py"
+        test: "operator/bridges/shared/test_operator_declaration.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.5.1.leadership"
+    invariants:
+      - "role hierarchy enforced: owner > admin > member > observer"
+      - "admin cannot self-promote beyond own role (kerze rule)"
+      - "eu_production boot requires operator_declaration with named declared_by"
+      - "declared_by is NEVER written to the L16 audit chain"
+    forbidden_patterns:
+      - "reverse whitelist-beats-read_only precedence in role resolution"
+      - "allow eu_production boot without named declared_by in operator_declaration"
+      - "put declared_by in audit event details"
+    last_verified: "2026-05-26"
+
+  # ── GOVERN GV-1.3 — Organisational risk tolerance ────────────────────────
+
+  - id: "nist.govern.gv-1.3"
+    nist_function: "GOVERN"
+    nist_category: "GV-1.3"
+    article: "NIST AI RMF 1.0 — GOVERN GV-1.3"
+    summary: >
+      Organisational risk tolerance for AI is established and communicated.
+      Corvin operationalises risk tolerance via the Layer 34 data
+      classification matrix: the four-level PUBLIC/INTERNAL/CONFIDENTIAL/SECRET
+      hierarchy defines precisely which data may reach which engine class,
+      providing a deterministic expression of acceptable risk.
+    severity: critical
+    implemented_by:
+      - layer: L34
+        file: "operator/bridges/shared/data_classification.py"
+        test: "operator/bridges/shared/test_data_classification.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.6.1.risk_assessment"
+    invariants:
+      - "DataClassification enum has four levels: PUBLIC < INTERNAL < CONFIDENTIAL < SECRET"
+      - "matrix check runs at every engine-spawn callsite before spawn"
+      - "fail-closed: unknown classification is denied, not allowed"
+      - "default matrix: PUBLIC→any · INTERNAL→{local,eu_cloud} · CONFIDENTIAL→{local} · SECRET→{local}+egress=none"
+    forbidden_patterns:
+      - "widen default matrix without ADR"
+      - "make data_flow.blocked advisory"
+      - "fold data_classification into compliance_zone (orthogonal axes)"
+      - "import anthropic from data_classification.py"
+    last_verified: "2026-05-26"
+
+  # ── GOVERN GV-2.1 — Risk awareness ───────────────────────────────────────
+
+  - id: "nist.govern.gv-2.1"
+    nist_function: "GOVERN"
+    nist_category: "GV-2.1"
+    article: "NIST AI RMF 1.0 — GOVERN GV-2.1"
+    summary: >
+      Organisational teams are committed to the awareness and transparency
+      of AI risks.  Corvin provides structural user-facing risk communication
+      via the L19 bot-disclosure card (one-time AI-nature statement per uid)
+      and the L16 consent gate (deny-by-default, TTL-capped, audited).
+    severity: critical
+    implemented_by:
+      - layer: L19
+        file: "operator/bridges/shared/disclosure.py"
+        test: "operator/bridges/shared/test_disclosure.py"
+      - layer: L16
+        file: "operator/bridges/shared/consent.py"
+        test: "operator/bridges/shared/test_consent_gate.py"
+    cross_references:
+      - framework: "EU AI Act"
+        rule_id: "eua.art50.1.disclosure"
+      - framework: "ISO 42001"
+        rule_id: "iso42001.7.3.awareness"
+    invariants:
+      - "disclosure card fires exactly once per (channel, chat, uid)"
+      - "disclosure cannot be disabled by operator config or env var"
+      - "consent is deny-by-default — no processing without prior grant"
+      - "consent is re-validated at each message consume, not only at grant"
+    forbidden_patterns:
+      - "auto-admit user without prior disclosure"
+      - "trusted-observer bypass for disclosure"
+      - "auto-grant consent without user action"
+      - "compliance-off mode that skips disclosure"
+    last_verified: "2026-05-26"
+
+  # ── GOVERN GV-3.1 — Feedback mechanisms for AI risk ──────────────────────
+
+  - id: "nist.govern.gv-3.1"
+    nist_function: "GOVERN"
+    nist_category: "GV-3.1"
+    article: "NIST AI RMF 1.0 — GOVERN GV-3.1"
+    summary: >
+      Feedback mechanisms are established for teams and individuals to report
+      AI risk concerns.  Corvin implements the organisational feedback loop
+      via the L39 incident tracker: CRITICAL audit events auto-open incident
+      records with a structured lifecycle; corvin-incident scan provides
+      on-demand review.
+    severity: critical
+    implemented_by:
+      - layer: L39
+        file: "operator/bridges/shared/incident_tracker.py"
+        test: "operator/bridges/shared/test_incident_tracker.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.10.1.nonconformity"
+    invariants:
+      - "TRIGGER_EVENTS audit events auto-open incident records via IncidentAutoDetector"
+      - "incident records stored at <tenant>/global/incidents/<id>.json mode 0600"
+      - "incident.opened emits to audit chain with allow-listed fields only"
+      - "description field is NEVER written to the L16 audit chain"
+    forbidden_patterns:
+      - "skip TRIGGER_EVENTS auto-detection in IncidentAutoDetector"
+      - "put incident description or DPO contact in audit chain"
+      - "import anthropic from incident_tracker.py"
+    last_verified: "2026-05-26"
+
+  # ── GOVERN GV-4.1 — Regulatory requirements ──────────────────────────────
+
+  - id: "nist.govern.gv-4.1"
+    nist_function: "GOVERN"
+    nist_category: "GV-4.1"
+    article: "NIST AI RMF 1.0 — GOVERN GV-4.1"
+    summary: >
+      Organisational teams are committed to regulatory compliance.  Corvin
+      structurally enforces EU AI Act and GDPR obligations through the
+      compliance-zone routing, audit chain, disclosure gate, and CI manifest
+      checks — compliance is a runtime property, not a periodic review.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0056
+        file: "operator/bridges/shared/compliance_manifest.py"
+        test: "operator/bridges/shared/test_eu_compliance.py"
+      - layer: L16
+        file: "operator/bridges/shared/audit.py"
+        test: "operator/bridges/shared/test_audit.py"
+    cross_references:
+      - framework: "EU AI Act"
+        rule_id: "eua.art14.compliance_zone"
+      - framework: "ISO 42001"
+        rule_id: "iso42001.7.4.communication"
+    invariants:
+      - "compliance manifest is verified at every boot via bridge.sh doctor"
+      - "disclosure fires before any session processes a user message"
+      - "audit chain is hash-linked — every event is traceable"
+    forbidden_patterns:
+      - "add a compliance-off mode via any env var or flag"
+      - "skip compliance check in CI for any PR class"
+      - "silence audit-verify exit-1"
+    last_verified: "2026-05-26"
+
+  # ── GOVERN GV-6.1 — Policies for third-party AI ──────────────────────────
+
+  - id: "nist.govern.gv-6.1"
+    nist_function: "GOVERN"
+    nist_category: "GV-6.1"
+    article: "NIST AI RMF 1.0 — GOVERN GV-6.1"
+    summary: >
+      Policies are in place for AI risk posed by third-party entities.
+      Corvin governs third-party AI model use via two interlocking controls:
+      the engine-policy allowlist (ADR-0007), which permits only explicitly
+      approved engines, and the L35 egress lockdown, which restricts which
+      external hosts AI-processed traffic may reach.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0007
+        file: "operator/bridges/shared/engine_policy.py"
+        test: "operator/bridges/shared/test_engine_policy.py"
+      - layer: L35
+        file: "operator/bridges/shared/egress_gate.py"
+        test: "operator/bridges/shared/test_egress_gate.py"
+    cross_references:
+      - framework: "EU AI Act"
+        rule_id: "eua.art14.engine_policy"
+    invariants:
+      - "engine_policy.check() runs at every WorkerEngine spawn callsite"
+      - "fail-closed: unknown engine is denied, not allowed"
+      - "policy file hot-reloads per call, never cached across calls"
+      - "EU_PRODUCTION preset does NOT include api.anthropic.com or api.openai.com in allowed_hosts"
+    forbidden_patterns:
+      - "skip engine_policy.check() for any spawn path"
+      - "cache engine policy across calls"
+      - "add trusted-engine shortcut that bypasses policy"
+      - "add api.anthropic.com to EU_PRODUCTION allowed_hosts"
+      - "make egress.blocked advisory"
+    last_verified: "2026-05-26"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # MAP — Categorise AI risk context
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── MAP MP-1.1 — Intended use defined ────────────────────────────────────
+
+  - id: "nist.map.mp-1.1"
+    nist_function: "MAP"
+    nist_category: "MP-1.1"
+    article: "NIST AI RMF 1.0 — MAP MP-1.1"
+    summary: >
+      Context is established for the AI system's intended use.  Corvin
+      enforces that operators explicitly declare the intended use before
+      deployment via the spec.operator_declaration.permitted_use field in
+      tenant.corvin.yaml, gated by the boot-time CRITICAL check.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0057
+        file: "operator/bridges/shared/operator_declaration.py"
+        test: "operator/bridges/shared/test_operator_declaration.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.4.3.scope"
+    invariants:
+      - "permitted_use must be non-empty for eu_production boot"
+      - "prohibited_use may be declared; absent means no explicit exclusions"
+      - "permitted_use content is NEVER written to the L16 audit chain"
+      - "operator.declaration_verified follows allow-list only"
+    forbidden_patterns:
+      - "allow eu_production boot without permitted_use"
+      - "put permitted_use or prohibited_use content in audit event details"
+    last_verified: "2026-05-26"
+
+  # ── MAP MP-1.5 — Organisational risk tolerance mapped ────────────────────
+
+  - id: "nist.map.mp-1.5"
+    nist_function: "MAP"
+    nist_category: "MP-1.5"
+    article: "NIST AI RMF 1.0 — MAP MP-1.5"
+    summary: >
+      Organisational risk tolerance is applied to specific AI use cases.
+      Corvin maps risk tolerance to concrete engine and egress constraints
+      via the L34 data classification matrix, ensuring risk tolerance is
+      enforced at the data-flow level rather than as a policy document.
+    severity: critical
+    implemented_by:
+      - layer: L34
+        file: "operator/bridges/shared/data_classification.py"
+        test: "operator/bridges/shared/test_data_classification.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.6.1.risk_assessment"
+    invariants:
+      - "classification check runs before every engine spawn"
+      - "tenant.corvin.yaml::spec.data_classification.matrix overrides defaults"
+      - "fail-closed: unknown classification → denied"
+    forbidden_patterns:
+      - "make data_flow.blocked advisory"
+      - "widen default matrix without ADR"
+      - "import anthropic from data_classification.py"
+    last_verified: "2026-05-26"
+
+  # ── MAP MP-2.3 — AI system impacts assessed ──────────────────────────────
+
+  - id: "nist.map.mp-2.3"
+    nist_function: "MAP"
+    nist_category: "MP-2.3"
+    article: "NIST AI RMF 1.0 — MAP MP-2.3"
+    summary: >
+      Scientific grounding, human oversight, and impact assessment are
+      documented for the AI system.  Corvin provides the DPIA framework
+      via the operator_declaration gate and the Annex IV generator (ADR-0057
+      Component 4), which produces a structured impact document.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0057
+        file: "operator/bridges/shared/operator_declaration.py"
+        test: "operator/bridges/shared/test_operator_declaration.py"
+      - layer: ADR-0057
+        file: "operator/voice/scripts/corvin_annex_iv.py"
+        test: "operator/voice/scripts/test_corvin_annex_iv.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.8.4.impact_assessment"
+    invariants:
+      - "dpia_completed must be true for eu_production boot to proceed"
+      - "dpia_date must be present and parseable"
+      - "Annex IV §7 documents human oversight mechanisms"
+      - "DPIA content is NEVER written to the L16 audit chain"
+    forbidden_patterns:
+      - "accept dpia_completed=false for eu_production profile"
+      - "put DPIA content in audit event details"
+      - "gate Annex IV generator behind enterprise license"
+    last_verified: "2026-05-26"
+
+  # ── MAP MP-3.1 — Risks of the AI system catalogued ───────────────────────
+
+  - id: "nist.map.mp-3.1"
+    nist_function: "MAP"
+    nist_category: "MP-3.1"
+    article: "NIST AI RMF 1.0 — MAP MP-3.1"
+    summary: >
+      Risks of the AI system are catalogued with severity levels and
+      treatment options.  Corvin implements this via the compliance
+      manifest severity table: each rule has an explicit severity
+      (critical/warning) linked to a CI gate action, and every forbidden
+      pattern is a named risk treatment.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0056
+        file: "compliance/eu-ai-act.yaml"
+        test: "operator/bridges/shared/test_eu_compliance.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.8.2.risk_assessment_process"
+    invariants:
+      - "every rule has severity: critical or severity: warning"
+      - "severity: critical failure exits non-zero from corvin-compliance-check"
+      - "forbidden_patterns list is non-empty for every critical rule"
+    forbidden_patterns:
+      - "add a rule without an explicit severity"
+      - "add a critical rule with an empty forbidden_patterns list"
+    last_verified: "2026-05-26"
+
+  # ── MAP MP-5.1 — Likelihood and impact catalogued ────────────────────────
+
+  - id: "nist.map.mp-5.1"
+    nist_function: "MAP"
+    nist_category: "MP-5.1"
+    article: "NIST AI RMF 1.0 — MAP MP-5.1"
+    summary: >
+      Likelihood and magnitude of each identified AI risk are documented.
+      Corvin operationalises this via the six structural incident trigger
+      categories in the L39 incident tracker: each category represents a
+      probability-weighted consequence class derived from CRITICAL audit events.
+    severity: critical
+    implemented_by:
+      - layer: L39
+        file: "operator/bridges/shared/incident_tracker.py"
+        test: "operator/bridges/shared/test_incident_tracker.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.10.1.nonconformity"
+    invariants:
+      - "incident severity levels map to the TRIGGER_EVENTS audit event taxonomy"
+      - "severity=serious triggers the Art. 73 15-day notification clock"
+      - "incident records at mode 0600 — only tenant-owner-accessible"
+    forbidden_patterns:
+      - "add new TRIGGER_EVENTS category without updating incident severity mapping"
+      - "import anthropic from incident_tracker.py"
+    last_verified: "2026-05-26"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # MEASURE — Analyse and assess AI risk
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── MEASURE MS-1.1 — AI risk metrics established ─────────────────────────
+
+  - id: "nist.measure.ms-1.1"
+    nist_function: "MEASURE"
+    nist_category: "MS-1.1"
+    article: "NIST AI RMF 1.0 — MEASURE MS-1.1"
+    summary: >
+      Metrics for measuring and tracking AI risk are established.  Corvin
+      provides rules_passed/rules_failed as the primary compliance metrics,
+      reported by corvin-compliance-check; these are machine-readable and
+      CI-integrated, providing per-commit risk tracking.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0056
+        file: "operator/bridges/shared/compliance_manifest.py"
+        test: "operator/bridges/shared/test_eu_compliance.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.9.2.internal_audit"
+    invariants:
+      - "corvin-compliance-check reports rules_passed/rules_failed counts per framework"
+      - "corvin-compliance-check --json output is machine-readable (CI artifact)"
+      - "metrics include per-framework breakdown when --all-frameworks is passed"
+    forbidden_patterns:
+      - "omit rules_failed count from compliance check output"
+      - "gate compliance check JSON output behind enterprise license"
+    last_verified: "2026-05-26"
+
+  # ── MEASURE MS-2.1 — AI risk tracking mechanisms ─────────────────────────
+
+  - id: "nist.measure.ms-2.1"
+    nist_function: "MEASURE"
+    nist_category: "MS-2.1"
+    article: "NIST AI RMF 1.0 — MEASURE MS-2.1"
+    summary: >
+      AI risk is tracked over time through documented, systematic mechanisms.
+      Corvin provides the hash-chained L16 audit log as the primary tracking
+      record, with L37 audit-at-rest encryption and retention for long-term
+      tamper-evident storage; the daily integrity verify timer detects any
+      disruption.
+    severity: critical
+    implemented_by:
+      - layer: L16
+        file: "operator/bridges/shared/audit.py"
+        test: "operator/bridges/shared/test_audit.py"
+      - layer: L37
+        file: "operator/bridges/shared/audit_sealer.py"
+        test: "operator/bridges/shared/test_audit_sealer.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.7.5.documented_information"
+      - framework: "ISO 42001"
+        rule_id: "iso42001.9.1.monitoring"
+    invariants:
+      - "audit chain is hash-linked — no entry can be deleted without breaking verification"
+      - "voice-audit verify exits 0 on an intact chain"
+      - "daily verify timer (corvin-session-timeout.timer) notifies bridge on chain break"
+      - "rotation emits audit.rotation_link; prev_hash = rotated tail hash"
+      - "encrypted segments retain chain continuity via rotation_link"
+    forbidden_patterns:
+      - "skip hash-chain link for any event type"
+      - "silence audit-verify exit-1"
+      - "store encryption key alongside sealed segments"
+      - "break voice-audit verify across rotation boundaries"
+      - "make audit.rotation_failed advisory"
+    last_verified: "2026-05-26"
+
+  # ── MEASURE MS-2.2 — Human oversight mechanisms measured ─────────────────
+
+  - id: "nist.measure.ms-2.2"
+    nist_function: "MEASURE"
+    nist_category: "MS-2.2"
+    article: "NIST AI RMF 1.0 — MEASURE MS-2.2"
+    summary: >
+      Human oversight mechanisms are tested and evaluated.  Corvin
+      implements measurable human oversight via L18 roles (who may approve
+      what), L21 proposals (/propose → stack → /go steering), and the
+      LDD-Toggle system (L14), which allows per-layer governance controls
+      to be monitored and verified.
+    severity: critical
+    implemented_by:
+      - layer: L18
+        file: "operator/bridges/shared/roles.py"
+        test: "operator/bridges/shared/test_roles.py"
+      - layer: L21
+        file: "operator/bridges/shared/proposals.py"
+        test: "operator/bridges/shared/test_proposal.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.8.3.risk_treatment"
+    invariants:
+      - "role hierarchy enforced: owner > admin > member > observer"
+      - "proposal stack has MAX 50 entries; /go requires explicit steering"
+      - "proposal consume is atomic before inbox write"
+      - "LDD layer state is persisted in <scope_root>/global/ldd.json (mtime hot-reload)"
+    forbidden_patterns:
+      - "merge quota check+record in a single operation"
+      - "add auto-TTL to proposals"
+      - "allow /go without human steering confirmation"
+    last_verified: "2026-05-26"
+
+  # ── MEASURE MS-2.5 — Testing and evaluation performed ────────────────────
+
+  - id: "nist.measure.ms-2.5"
+    nist_function: "MEASURE"
+    nist_category: "MS-2.5"
+    article: "NIST AI RMF 1.0 — MEASURE MS-2.5"
+    summary: >
+      AI system testing and evaluation is performed to assess risk.
+      Corvin requires run-all-tests.sh to pass before committing to
+      compliance-relevant files; per-subtask E2E is mandatory for
+      security-touching changes (forge, policy, audit).
+    severity: critical
+    implemented_by:
+      - layer: "test-suite"
+        file: "operator/bridges/run-all-tests.sh"
+        test: "operator/bridges/run-all-tests.sh"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.9.1.monitoring"
+    invariants:
+      - "run-all-tests.sh must pass before committing to adapter.py, daemon.js, or shared/js/"
+      - "per-subtask E2E is mandatory for forge, policy, audit, and path-gate changes"
+      - "E2E for security-touching changes must use real subprocess, real filesystem, real bwrap"
+    forbidden_patterns:
+      - "skip run-all-tests.sh for compliance-relevant file changes"
+      - "mark security-touching E2E as xfail without structural root cause"
+    last_verified: "2026-05-26"
+
+  # ── MEASURE MS-2.7 — Effectiveness of controls assessed ──────────────────
+
+  - id: "nist.measure.ms-2.7"
+    nist_function: "MEASURE"
+    nist_category: "MS-2.7"
+    article: "NIST AI RMF 1.0 — MEASURE MS-2.7"
+    summary: >
+      Effectiveness of AI risk controls is regularly assessed.  Corvin
+      implements continuous control verification via the boot self-test
+      (self_test.py) and the bridge.sh doctor command, which runs CRITICAL
+      checks including audit chain integrity, vault permissions, and MCP
+      server importability.
+    severity: critical
+    implemented_by:
+      - layer: "self-test"
+        file: "operator/bridges/shared/self_test.py"
+        test: "operator/bridges/shared/self_test.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.9.2.internal_audit"
+    invariants:
+      - "self_test.py runs at adapter boot, on bridge.sh doctor, and on Docker HEALTHCHECK"
+      - "CRITICAL check failure: container unhealthy; doctor exits 1; boot.self_test_failed to hash chain"
+      - "recall.db and vault at mode 0600 are CRITICAL checks"
+      - "audit verify rc==0 is a CRITICAL check"
+    forbidden_patterns:
+      - "add self-test checks with side-effects"
+      - "downgrade CRITICAL check to WARNING to make CI pass"
+      - "add an env-flag kill switch to self-test"
+      - "import anthropic from self_test.py"
+    last_verified: "2026-05-26"
+
+  # ── MEASURE MS-4.1 — Deployment monitoring ───────────────────────────────
+
+  - id: "nist.measure.ms-4.1"
+    nist_function: "MEASURE"
+    nist_category: "MS-4.1"
+    article: "NIST AI RMF 1.0 — MEASURE MS-4.1"
+    summary: >
+      AI systems deployed in production are monitored for risk.  Corvin
+      implements continuous deployment monitoring via the L16 hash-chained
+      audit log: every agent interaction emits structured audit events that
+      are immediately verifiable and trigger the L39 incident auto-detector
+      on CRITICAL events.
+    severity: critical
+    implemented_by:
+      - layer: L16
+        file: "operator/bridges/shared/audit.py"
+        test: "operator/bridges/shared/test_audit.py"
+    cross_references: []
+    invariants:
+      - "every WorkerEngine spawn emits an audit event before the spawn completes"
+      - "CRITICAL audit events trigger IncidentAutoDetector in the same request cycle"
+      - "audit chain integrity is monitored continuously via daily verify timer"
+    forbidden_patterns:
+      - "skip audit event for any WorkerEngine spawn"
+      - "emit audit event after spawn completes (audit-first invariant)"
+      - "put task text or prompt in audit event details"
+    last_verified: "2026-05-26"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # MANAGE — Prioritise and address AI risk
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── MANAGE MG-1.1 — Risk treatment plans implemented ─────────────────────
+
+  - id: "nist.manage.mg-1.1"
+    nist_function: "MANAGE"
+    nist_category: "MG-1.1"
+    article: "NIST AI RMF 1.0 — MANAGE MG-1.1"
+    summary: >
+      Risk treatment plans are implemented according to documented priorities.
+      Corvin implements a layered defence-in-depth treatment stack: L10
+      path-gate (filesystem), L34 data-classification (data flow), and L35
+      egress lockdown (network), each operating independently so that a
+      bypass of one layer does not compromise the others.
+    severity: critical
+    implemented_by:
+      - layer: L10
+        file: "operator/voice/hooks/path_gate.py"
+        test: "operator/bridges/shared/test_path_gate_ast.py"
+      - layer: L34
+        file: "operator/bridges/shared/data_classification.py"
+        test: "operator/bridges/shared/test_data_classification.py"
+      - layer: L35
+        file: "operator/bridges/shared/egress_gate.py"
+        test: "operator/bridges/shared/test_egress_gate.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.8.3.risk_treatment"
+    invariants:
+      - "path-gate is fail-closed: any eval/exec/$()/backtick pattern is denied"
+      - "path-gate boot self-test runs on every adapter start"
+      - "data_flow.blocked is never advisory"
+      - "egress.blocked is never advisory"
+      - "all three controls run independently — no shared bypass"
+    forbidden_patterns:
+      - "add trusted-persona Bash bypass to path-gate"
+      - "add new write-tool without updating hooks/hooks.json AND test_path_gate.py"
+      - "make any of the three controls advisory"
+      - "add a combined bypass that disables multiple controls simultaneously"
+    last_verified: "2026-05-26"
+
+  # ── MANAGE MG-2.2 — Incident response ────────────────────────────────────
+
+  - id: "nist.manage.mg-2.2"
+    nist_function: "MANAGE"
+    nist_category: "MG-2.2"
+    article: "NIST AI RMF 1.0 — MANAGE MG-2.2"
+    summary: >
+      Procedures and plans to respond to AI incidents are developed and
+      practised.  Corvin implements a structured incident response lifecycle
+      via the L39 incident tracker: CRITICAL auto-detection, the corvin-incident
+      CLI for lifecycle management, and Art. 73 notification draft generation
+      for serious incidents requiring supervisory authority notification.
+    severity: critical
+    implemented_by:
+      - layer: L39
+        file: "operator/bridges/shared/incident_tracker.py"
+        test: "operator/bridges/shared/test_incident_tracker.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.10.1.nonconformity"
+      - framework: "EU AI Act"
+        rule_id: "eua.art73.incident_tracker"
+    invariants:
+      - "TRIGGER_EVENTS auto-open incident records via IncidentAutoDetector"
+      - "incident records stored at <tenant>/global/incidents/<id>.json mode 0600"
+      - "notify_draft generates Art. 73 §2 notification; never auto-submits"
+      - "severity=serious triggers the 15-day Art. 73 notification clock"
+      - "description field is NEVER written to the L16 audit chain"
+    forbidden_patterns:
+      - "auto-submit notification to supervisory authority"
+      - "close incident without notified_at or explicit below-threshold decision"
+      - "put incident description or DPO contact in audit chain"
+      - "import anthropic from incident_tracker.py"
+    last_verified: "2026-05-26"
+
+  # ── MANAGE MG-2.4 — Residual risk managed ────────────────────────────────
+
+  - id: "nist.manage.mg-2.4"
+    nist_function: "MANAGE"
+    nist_category: "MG-2.4"
+    article: "NIST AI RMF 1.0 — MANAGE MG-2.4"
+    summary: >
+      Residual negative impacts and likelihood of AI risk are managed.
+      Corvin addresses residual risk via two complementary mechanisms:
+      the L36 erasure orchestrator (GDPR Art. 17 right-to-deletion) removes
+      personal data from all content stores while preserving pseudonymised
+      audit chain integrity; the L37 audit sealer enforces retention limits
+      and ensures data does not persist beyond its authorised lifetime.
+    severity: critical
+    implemented_by:
+      - layer: L36
+        file: "operator/bridges/shared/erasure_orchestrator.py"
+        test: "operator/bridges/shared/test_erasure_orchestrator.py"
+      - layer: L37
+        file: "operator/bridges/shared/audit_sealer.py"
+        test: "operator/bridges/shared/test_audit_sealer.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.8.4.impact_assessment"
+    invariants:
+      - "erasure subject_id must match ^[A-Za-z0-9.:_\\-]{1,128}$ (rejects raw email/name)"
+      - "erasure trail file at <tenant>/global/erasure/<request_id>.json mode 0600"
+      - "erasure does NOT redact sealed audit segments (pseudonymisation is the mechanism)"
+      - "audit retention defaults to 7 years; rotation defaults to 100 MB / 30 days"
+      - "erasure.failed is never advisory"
+    forbidden_patterns:
+      - "accept raw email or name as subject_id"
+      - "run erasure handler across tenants"
+      - "make trail file world-readable"
+      - "auto-retry on FAILED erasure without DPO decision"
+      - "make erasure.failed advisory"
+      - "import anthropic from erasure_orchestrator.py"
+    last_verified: "2026-05-26"
+
+  # ── MANAGE MG-3.1 — Corrective actions and notification ──────────────────
+
+  - id: "nist.manage.mg-3.1"
+    nist_function: "MANAGE"
+    nist_category: "MG-3.1"
+    article: "NIST AI RMF 1.0 — MANAGE MG-3.1"
+    summary: >
+      Responses to identified AI risks are communicated to relevant parties.
+      Corvin implements corrective action notification via the incident
+      tracker's status lifecycle: the incident.status_changed → notified
+      flow records when supervisory authorities or affected parties have been
+      informed; the 15-day Art. 73 clock is tracked against dpia_date and
+      notified_at fields.
+    severity: critical
+    implemented_by:
+      - layer: L39
+        file: "operator/bridges/shared/incident_tracker.py"
+        test: "operator/bridges/shared/test_incident_tracker.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.10.1.nonconformity"
+    invariants:
+      - "incident.status_changed emits to audit chain when status transitions to notified"
+      - "notified_at timestamp is required to close a serious incident"
+      - "notify_draft never auto-submits — operator confirmation is required"
+      - "notification fields follow the audit allow-list: no description, no DPO contact"
+    forbidden_patterns:
+      - "auto-submit notification to supervisory authority"
+      - "close serious incident without setting notified_at"
+      - "put notification recipient or message content in audit chain"
+    last_verified: "2026-05-26"
+
+  # ── MANAGE MG-4.1 — Risk communication artefacts ─────────────────────────
+
+  - id: "nist.manage.mg-4.1"
+    nist_function: "MANAGE"
+    nist_category: "MG-4.1"
+    article: "NIST AI RMF 1.0 — MANAGE MG-4.1"
+    summary: >
+      Risk management artefacts are generated and shared with relevant
+      stakeholders.  Corvin generates a full certification package via
+      corvin-annex-iv export-package, which includes the multi-framework
+      evidence table, Annex IV document, Statement of Applicability, and
+      compliance check reports — GPG-signed as a whole for verifiable delivery.
+    severity: warning
+    implemented_by:
+      - layer: ADR-0057
+        file: "operator/voice/scripts/corvin_annex_iv.py"
+        test: "operator/voice/scripts/test_corvin_annex_iv.py"
+    cross_references:
+      - framework: "ISO 42001"
+        rule_id: "iso42001.9.3.management_review"
+    invariants:
+      - "export package is GPG-signed as a whole"
+      - "package includes compliance/eu-ai-act.yaml, compliance/iso-42001.yaml, compliance/nist-ai-rmf.yaml"
+      - "package includes CROSS-FRAMEWORK-MAP.md (multi-framework evidence table)"
+      - "package is reproducible: same inputs produce same outputs modulo timestamps"
+    forbidden_patterns:
+      - "gate corvin-annex-iv export-package behind enterprise license"
+      - "generate export package from static data that bypasses the live audit chain"
+      - "omit any signed framework manifest from the export package"
+    last_verified: "2026-05-26"
+    notes: >
+      Warning severity: the cadence and distribution of risk communication
+      artefacts are operator obligations.  Corvin provides the generation
+      and signing tooling; the operator must determine the appropriate
+      stakeholder distribution schedule.

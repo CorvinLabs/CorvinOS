@@ -1,0 +1,12 @@
+[Unit]
+Description=Corvin — nightly audit hash-chain verify
+After=corvin-compose.service
+Requires=corvin-compose.service
+OnFailure=corvin-audit-verify-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec corvin /opt/corvin-venv/bin/python \
+    /opt/corvin-repo/operator/voice/scripts/voice_audit.py verify --all
+StandardOutput=journal
+StandardError=journal

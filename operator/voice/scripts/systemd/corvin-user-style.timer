@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Corvin-OS user-style learner sweep at 04:45 local
+
+[Timer]
+OnCalendar=*-*-* 04:45:00
+AccuracySec=10min
+Persistent=true
+Unit=corvin-user-style.service
+
+[Install]
+WantedBy=timers.target

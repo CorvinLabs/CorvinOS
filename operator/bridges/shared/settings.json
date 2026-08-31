@@ -1,0 +1,16 @@
+{
+  "_HINWEIS": "Channel-übergreifende Adapter-Einstellungen. Pro-Channel Auth/Whitelist liegt im jeweiligen channel/settings.json.",
+  "always_voice": false,
+  "voice_threshold_chars": 200,
+  "voice_summary_mode": "always",
+  "local_announce_inbound": "off",
+  "local_announce_outbound": "off",
+  "routing": {
+    "mode": "embedding",
+    "model": "claude-sonnet-5",
+    "fallback_persona": "assistant",
+    "min_confidence": 0.5,
+    "show_prefix": true,
+    "_NOTE": "Auto-routing — modes: 'off' (never route), 'heuristic' (regex keyword matcher, 0 ms, no API key), 'embedding' (heuristic first, then OpenAI text-embedding-3-small for semantic match — uses the OPENAI_API_KEY already loaded for TTS/Whisper, ~150 ms latency, ~$0.0000006 per request, multilingual), 'auto' (embedding first, then Haiku LLM via ANTHROPIC_API_KEY for hard edge cases). Default 'embedding' is the right pick for Max-subscription users without an Anthropic key. Anchors per persona live in operator/cowork/personas/*.json under routing_anchors."
+  }
+}

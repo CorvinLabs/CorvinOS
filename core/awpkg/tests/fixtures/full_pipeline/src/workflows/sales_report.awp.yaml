@@ -1,0 +1,35 @@
+awp: "1.0.0"
+
+workflow:
+  name: sales_report_generator
+  description: "Three-agent linear pipeline: analyze CSV → format report → assess quality."
+
+orchestration:
+  engine: dag
+  graph:
+    - id: analyze_data
+      type: agent
+      agent: data_analyst
+      instructions: "Analyze the input CSV data and produce a statistics summary."
+      depends_on: []
+      inputs:
+        csv_data: "{{workflow.input.csv_data}}"
+
+    - id: write_report
+      type: agent
+      agent: report_writer
+      instructions: "Format the statistics into a professional Markdown report."
+      depends_on:
+        - analyze_data
+      inputs:
+        stats: "{{analyze_data.output.stats}}"
+        row_count: "{{analyze_data.output.row_count}}"
+
+    - id: check_quality
+      type: agent
+      agent: quality_checker
+      instructions: "Evaluate the report quality and provide a score with feedback."
+      depends_on:
+        - write_report
+      inputs:
+        markdown: "{{write_report.output.markdown}}"

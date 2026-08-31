@@ -1,0 +1,102 @@
+name: Build & publish corvin image
+
+# Pushes the production image to GHCR so the ops/* compose templates
+# can pull `ghcr.io/<owner>/corvinos:latest` (or a pinned tag).
+#
+# Triggers:
+#   * push to main         → :latest + :sha-<short>
+#   * push of a v* tag     → :<tag> + :latest + :sha-<short>
+#   * manual run           → operator can rebuild on demand
+#
+# Multi-arch is out of scope for v1 (amd64 only). Add linux/arm64 to
+# `platforms:` below once an arm64 runner is available — the buildx
+# step is already prepared.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "ops/Dockerfile"
+      - "ops/entrypoint.sh"
+      - "ops/healthcheck.sh"
+      - "ops/supervisord.conf"
+      - "ops/.dockerignore"
+      - "core/**"
+      - "operator/**"
+      - "pyproject.toml"
+      - ".github/workflows/build-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          # Use repository_owner (org name) not actor — GITHUB_TOKEN scoped to
+          # org-level packages requires the org name as the registry username.
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Extract tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/corvinos
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.title=Corvin
+            org.opencontainers.image.description=Multi-tenant voice/chat agent OS
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ops/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Image published 🎉" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Tags:**" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pull with:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "docker pull ghcr.io/${{ github.repository_owner }}/corvinos:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,182 @@
+[
+  {
+    "id": "task-001",
+    "raw_task": "Fix crash in voice module when processing long audio files longer than 5 minutes",
+    "expected_type": "bug_fix",
+    "expected_severity": "high",
+    "expected_target": "native",
+    "expected_model": "opus",
+    "notes": "Production issue affecting 100+ users, high severity"
+  },
+  {
+    "id": "task-002",
+    "raw_task": "Process 10GB of customer data from data warehouse and aggregate into summary statistics",
+    "expected_type": "analysis",
+    "expected_severity": "medium",
+    "expected_target": "acs",
+    "expected_model": "haiku",
+    "notes": "Big-data carve-out, Rule 1 (vocabulary: warehouse, aggregate)"
+  },
+  {
+    "id": "task-003",
+    "raw_task": "Add user authentication feature to the web application with login and signup forms",
+    "expected_type": "feature",
+    "expected_severity": "medium",
+    "expected_target": "native",
+    "expected_model": "haiku",
+    "notes": "New feature, medium complexity"
+  },
+  {
+    "id": "task-004",
+    "raw_task": "Refactor entire system architecture to improve scalability and maintainability across all layers",
+    "expected_type": "refactor",
+    "expected_severity": "low",
+    "expected_target": "tde",
+    "expected_model": "opus",
+    "notes": "High complexity refactor, should use TDE + Opus"
+  },
+  {
+    "id": "task-005",
+    "raw_task": "Production incident: system is down and not responding to user requests, investigate immediately",
+    "expected_type": "incident",
+    "expected_severity": "critical",
+    "expected_target": "native",
+    "expected_model": "opus",
+    "notes": "CRITICAL severity incident, needs high-capability model"
+  },
+  {
+    "id": "task-006",
+    "raw_task": "Document API endpoints with examples and usage instructions",
+    "expected_type": "docs",
+    "expected_severity": "low",
+    "expected_target": "native",
+    "expected_model": "haiku",
+    "notes": "Documentation task, low complexity"
+  },
+  {
+    "id": "task-007",
+    "raw_task": "Fix typo and formatting issues in readme file",
+    "expected_type": "bug_fix",
+    "expected_severity": "low",
+    "expected_target": "native",
+    "expected_model": "haiku",
+    "notes": "Simple bug fix, low severity"
+  },
+  {
+    "id": "task-008",
+    "raw_task": "Optimize query performance by rewriting SQL queries to use better indexes",
+    "expected_type": "refactor",
+    "expected_severity": "medium",
+    "expected_target": "native",
+    "expected_model": "haiku",
+    "notes": "Performance optimization, medium complexity"
+  },
+  {
+    "id": "task-009",
+    "raw_task": "Analyze database queries against million-row tables and generate performance report",
+    "expected_type": "analysis",
+    "expected_severity": "medium",
+    "expected_target": "acs",
+    "expected_model": "haiku",
+    "notes": "Big-data: million rows, table paste equivalent"
+  },
+  {
+    "id": "task-010",
+    "raw_task": "Add unit tests to core voice module to improve code coverage",
+    "expected_type": "test",
+    "expected_severity": "low",
+    "expected_target": "native",
+    "expected_model": "haiku",
+    "notes": "Testing task, low complexity"
+  },
+  {
+    "id": "task-011",
+    "raw_task": "Fix security vulnerability in authentication layer that allows unauthorized access",
+    "expected_type": "bug_fix",
+    "expected_severity": "critical",
+    "expected_target": "native",
+    "expected_model": "opus",
+    "notes": "Security issue, CRITICAL severity"
+  },
+  {
+    "id": "task-012",
+    "raw_task": "Import CSV file with 500k customer records into database table and validate data integrity",
+    "expected_type": "analysis",
+    "expected_severity": "medium",
+    "expected_target": "acs",
+    "expected_model": "haiku",
+    "notes": "Big-data Rule 2: CSV table paste > 10 rows"
+  },
+  {
+    "id": "task-013",
+    "raw_task": "Implement caching layer to reduce database load and improve response times",
+    "expected_type": "feature",
+    "expected_severity": "medium",
+    "expected_target": "native",
+    "expected_model": "haiku",
+    "notes": "New feature, moderate complexity"
+  },
+  {
+    "id": "task-014",
+    "raw_task": "Complete rewrite of authentication middleware with new security framework",
+    "expected_type": "refactor",
+    "expected_severity": "high",
+    "expected_target": "tde",
+    "expected_model": "opus",
+    "notes": "Complex refactor with security implications"
+  },
+  {
+    "id": "task-015",
+    "raw_task": "Update dependencies to latest versions and resolve breaking changes",
+    "expected_type": "refactor",
+    "expected_severity": "medium",
+    "expected_target": "native",
+    "expected_model": "haiku",
+    "notes": "Dependency updates, low-moderate complexity"
+  },
+  {
+    "id": "task-016",
+    "raw_task": "Fix memory leak in background worker process that causes gradual resource exhaustion",
+    "expected_type": "bug_fix",
+    "expected_severity": "high",
+    "expected_target": "native",
+    "expected_model": "opus",
+    "notes": "High severity bug, memory issue"
+  },
+  {
+    "id": "task-017",
+    "raw_task": "Implement real-time notification system for user events",
+    "expected_type": "feature",
+    "expected_severity": "medium",
+    "expected_target": "native",
+    "expected_model": "opus",
+    "notes": "Complex feature, should use Opus"
+  },
+  {
+    "id": "task-018",
+    "raw_task": "Migrate database from MySQL to PostgreSQL with zero downtime",
+    "expected_type": "refactor",
+    "expected_severity": "high",
+    "expected_target": "tde",
+    "expected_model": "opus",
+    "notes": "High-risk refactor, needs TDE for complex orchestration"
+  },
+  {
+    "id": "task-019",
+    "raw_task": "Extract and analyze 5 years of historical transaction data for business intelligence",
+    "expected_type": "analysis",
+    "expected_severity": "medium",
+    "expected_target": "acs",
+    "expected_model": "haiku",
+    "notes": "Big-data: time series 5 years, analytical query"
+  },
+  {
+    "id": "task-020",
+    "raw_task": "Add dark mode theme to web application UI",
+    "expected_type": "feature",
+    "expected_severity": "low",
+    "expected_target": "native",
+    "expected_model": "haiku",
+    "notes": "UI feature, low priority"
+  }
+]

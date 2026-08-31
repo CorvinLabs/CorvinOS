@@ -1,0 +1,183 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { server } from '../../fixtures/server';
+import { http, HttpResponse } from 'msw';
+import { renderWithProviders } from '../../utils/test-utils';
+import ComputePage from '@/pages/compute';
+
+describe('Compute Job Submission Integration', () => {
+  beforeEach(() => {
+    localStorage.setItem('auth_token', 'jwt-test-token-abc123');
+  });
+
+  it('displays list of existing jobs', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/job-1/i)).toBeInTheDocument();
+      expect(screen.getByText(/SELECT COUNT/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows completed job status', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/completed/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows running job with progress', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    await waitFor(() => {
+      const runningStatus = screen.queryAllByText(/running/i);
+      expect(runningStatus.length).toBeGreaterThan(0);
+    });
+  });
+
+  it('submits a new compute job', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    const createButton = screen.getByRole('button', { name: /new job|create job/i });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /query/i })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: /query/i }), {
+      target: { value: 'SELECT COUNT(*) FROM events' },
+    });
+
+    if (screen.queryByRole('combobox', { name: /engine/i })) {
+      fireEvent.selectOption(screen.getByRole('combobox', { name: /engine/i }), 'claude');
+    }
+
+    const submitButton = screen.getByRole('button', { name: /submit|run/i });
+    fireEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/pending|running|submitted/i)).toBeInTheDocument();
+    });
+  });
+
+  it('displays job details when job is selected', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/job-1/i)).toBeInTheDocument();
+    });
+
+    const jobLink = screen.getByText(/job-1/i);
+    fireEvent.click(jobLink);
+
+    await waitFor(() => {
+      expect(screen.getByText(/SELECT COUNT/i)).toBeInTheDocument();
+    });
+  });
+
+  it('allows cancelling a running job', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/running/i)).toBeInTheDocument();
+    });
+
+    const cancelButton = screen.getByRole('button', { name: /cancel/i });
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/cancelled/i)).toBeInTheDocument();
+    });
+  });
+
+  it('handles job submission timeout', async () => {
+    server.use(
+      http.post('/api/compute/jobs', () =>
+        HttpResponse.json({ error: 'Timeout' }, { status: 408 })
+      )
+    );
+
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    const createButton = screen.getByRole('button', { name: /new job|create job/i });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      fireEvent.change(screen.getByRole('textbox', { name: /query/i }), {
+        target: { value: 'SELECT 1' },
+      });
+    });
+
+    const submitButton = screen.getByRole('button', { name: /submit|run/i });
+    fireEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/timeout|timed out/i)).toBeInTheDocument();
+    });
+  });
+
+  it('displays job results when job completes', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/job-1/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText(/job-1/i));
+
+    await waitFor(() => {
+      expect(screen.getByText(/150|result/i)).toBeInTheDocument();
+    });
+  });
+
+  it('validates query field before submission', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    const createButton = screen.getByRole('button', { name: /new job|create job/i });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /query/i })).toBeInTheDocument();
+    });
+
+    // Try to submit without query
+    const submitButton = screen.getByRole('button', { name: /submit|run/i });
+
+    // Button should be disabled or show error
+    expect(submitButton).toBeDisabled();
+  });
+
+  it('exports job results as CSV', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/job-1/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText(/job-1/i));
+
+    await waitFor(() => {
+      const exportButton = screen.getByRole('button', { name: /export|download/i });
+      expect(exportButton).toBeInTheDocument();
+    });
+  });
+
+  it('polls job status while running', async () => {
+    renderWithProviders(<ComputePage />, { route: '/compute' });
+
+    await waitFor(() => {
+      expect(screen.getByText(/running/i)).toBeInTheDocument();
+    });
+
+    // Wait for status update
+    await waitFor(
+      () => {
+        const status = screen.getByText(/running|pending|completed/i);
+        expect(status).toBeInTheDocument();
+      },
+      { timeout: 5000 }
+    );
+  });
+});

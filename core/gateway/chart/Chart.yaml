@@ -1,0 +1,17 @@
+apiVersion: v2
+name: corvin-gateway
+description: |
+  Corvin Gateway — multi-tenant REST API (ADR-0007).
+  Opt-in deployment artefact; single-operator setups never enable it.
+type: application
+version: 0.1.0
+appVersion: "0.1.0-phase-4"
+keywords:
+  - corvin
+  - gateway
+  - multi-tenant
+  - rest-api
+home: https://github.com/veegee82/Corvin
+maintainers:
+  - name: Corvin
+    url: https://github.com/veegee82/Corvin

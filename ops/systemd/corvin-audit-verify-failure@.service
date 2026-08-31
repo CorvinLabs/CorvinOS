@@ -1,0 +1,9 @@
+[Unit]
+Description=Alert — corvin-audit-verify failed (broken hash-chain detected)
+After=corvin-compose.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "ALERT: corvin-audit-verify FAILED on $(hostname) at $(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ). Audit hash-chain integrity check returned non-zero. Inspect with: journalctl -u corvin-audit-verify" | /usr/bin/logger -t corvin-audit-alert -p daemon.crit'
+StandardOutput=journal
+StandardError=journal

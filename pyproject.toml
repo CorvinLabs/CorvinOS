@@ -1,0 +1,456 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "corvinos"
+version = "1.0.0"
+description = "CorvinOS — universal, self-contained, cross-platform AI assistant framework"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Shumway", email = "silvio.jurk@googlemail.com" }
+]
+keywords = [
+    "ai",
+    "agent",
+    "multi-platform",
+    "installer",
+    "cross-platform",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Shells",
+    "Topic :: System :: Systems Administration",
+]
+requires-python = ">=3.10"
+dependencies = [
+    # ML/Learning subsystem (Phase 4): classifier training and inference
+    "numpy >= 1.20",
+    "scikit-learn >= 1.3",
+    # Web console (always included — no extras needed)
+    "fastapi >= 0.110",
+    "uvicorn[standard] >= 0.27",
+    "pyyaml >= 6.0",
+    "pydantic >= 2.4",
+    "httpx >= 0.27",
+    "PyJWT[crypto] >= 2.8",
+    "cryptography >= 42",
+    "anthropic >= 0.25",
+    "python-multipart >= 0.0.6",
+    # Voice subsystem (ADR-0185): zero-config STT+TTS on every platform, no API
+    # key required. TTS Tier 0 = edge-tts (free, no key, needs internet); TTS
+    # Tier 0b = piper-tts, an automatic offline fallback when edge-tts is
+    # unreachable (no internet / blocked endpoint). Both are pure-Python wheels
+    # with genuine Windows/macOS/Linux coverage (piper-tts's cp39-abi3 wheel is
+    # forward-compatible with 3.9-3.14; it is NOT limited to Python 3.9 despite
+    # older comments in this file — verified via PyPI wheel metadata 2026-07-07).
+    "edge-tts >= 6.1.8",
+    "piper-tts >= 1.4.1",
+    # Bundled static ffmpeg binary (pure-Python wheel, prebuilt for
+    # Windows/Linux/macOS) — edge-tts/Piper need ffmpeg to convert their
+    # MP3/WAV output to OGG-Opus, but the installer explicitly skips
+    # installing system ffmpeg on Windows (installer/steps/dependencies.py).
+    # This makes TTS work out of the box there too; system ffmpeg (PATH or
+    # FFMPEG_BIN) still takes priority when present.
+    "imageio-ffmpeg >= 0.5.1",
+    # Local STT (ADR-0185 M1) — pywhispercpp (whisper.cpp binding) replaces
+    # faster-whisper as the canonical, cross-platform local STT engine. Unlike
+    # faster-whisper, it has NO dependency on `av`/PyAV (which historically
+    # lacked Windows wheels, and even now only covers Python >=3.11) and no
+    # `ctranslate2`/`torch`-adjacent footprint — same Whisper model family and
+    # accuracy class, genuine wheels for cp39-cp314 on win32/macOS/linux.
+    "pywhispercpp >= 1.5.0",
+    # OpenAI SDK — TTS fallback, Whisper STT provider, and ImageGen MCP (standard
+    # feature). Pure-Python; installs cleanly on every platform.
+    "openai >= 1.0",
+    # Official MCP Python SDK (ADR-0191): the zero-config image-generation
+    # tool (Tier 0 = Pollinations.ai, no key; Tier 1 = the existing OpenAI
+    # BYOK path) is a hand-written stdio MCP server using this SDK directly,
+    # rather than a third-party npm package fetched on first use — keeps the
+    # dependency footprint auditable and installer-time, matching the
+    # zero-config philosophy already established for voice.
+    # Floor 1.2: main.py imports mcp.server.fastmcp, which first shipped in
+    # 1.2.0 — a 1.0/1.1 resolution would install fine and crash at runtime.
+    "mcp >= 1.2",
+    # Forge (L6): JSON-Schema validation of generated tool I/O — a core safety
+    # gate, not optional. corvin-a2a pair emits a QR code for the friendship token.
+    "jsonschema >= 4.0",
+    "qrcode >= 7.0",
+    "flask>=3.1.3",
+    "flask-cors>=6.0.5",
+    # Console release manager (release_manager.py) parses and orders version
+    # strings with semver.VersionInfo. It was imported at module level without
+    # ever being declared, so importing that module raised ModuleNotFoundError
+    # on every install.
+    "semver >= 3.0",
+]
+
+[project.optional-dependencies]
+# console is now part of the base install — kept as empty alias for backward compat
+console = []
+bridges = [
+    "whatsapp-web.py >= 0.1",
+    "python-telegram-bot >= 20.0",
+    "discord.py >= 2.0",
+    "slack-bolt >= 1.18",
+]
+dev = [
+    "pytest >= 7.0",
+    "pytest-cov >= 4.0",
+    "pytest-asyncio >= 0.24",
+    "pytest-forked >= 1.6",
+    "black >= 23.0",
+    "ruff >= 0.1.0",
+    "mypy >= 1.0",
+]
+# Compute/data subsystem (L24/L25, A2A compute engine): CSV->PNG, external DBs.
+compute = [
+    "matplotlib >= 3.7",
+    "duckdb >= 0.9",
+    # routes/compute.py's artifact-preview uses duckdb's fetchdf(), which
+    # needs pandas at runtime — it was missing here, so the endpoint 500'd
+    # with "'pandas' is required" on every install (found 2026-07-17 via
+    # test_compute_security_e2e).
+    "pandas >= 2.0",
+    "psycopg2-binary >= 2.9",
+]
+# Prometheus metrics export (engine/voice metrics).
+metrics = [
+    "prometheus-client >= 0.19",
+]
+# Optional, non-default accelerated local STT (ADR-0185 "Must NOT do" #1): for
+# power users who already have a working `av`/ctranslate2 install and want
+# faster-whisper's CTranslate2-accelerated inference instead of the
+# pywhispercpp base-dependency default. Never required — kept opt-in only.
+voice = [
+    "faster-whisper >= 1.0.0",
+]
+# Browser automation (ADR-0182): agent-driven browser. Playwright is imported
+# lazily (only when a browser session is created), so the console runs fine
+# without it — this extra + `playwright install chromium` enables the feature.
+browser = [
+    "playwright >= 1.40",
+]
+all = [
+    "whatsapp-web.py >= 0.1",
+    "python-telegram-bot >= 20.0",
+    "discord.py >= 2.0",
+    "slack-bolt >= 1.18",
+    "matplotlib >= 3.7",
+    "duckdb >= 0.9",
+    "pandas >= 2.0",
+    "psycopg2-binary >= 2.9",
+    "prometheus-client >= 0.19",
+    "faster-whisper >= 1.0.0",
+    "playwright >= 1.40",
+]
+
+[project.urls]
+Homepage = "https://corvin.ai"
+Documentation = "https://corvin.ai/docs"
+Repository = "https://github.com/CorvinLabs/CorvinOS"
+Issues = "https://github.com/CorvinLabs/CorvinOS/issues"
+
+# ── Nervous System Entry Points (ADR-0177) ───────────────────────────────────
+# Third-party packages and extensions register additional Nerve Fibers here.
+#
+# CorvinOS ENUMERATES them at boot but does NOT import them unless the operator
+# opted in — importing an entry point runs the third party's module, and "it is
+# installed somewhere on this machine" is not consent. Opt in per name with
+#   spec.nerve.fibers: [my_connector]
+# or wholesale with
+#   spec.nerve.auto_discover_entry_points: true
+# in tenant.corvin.yaml. Without one of those the fiber is listed at debug level
+# and never loaded.
+#
+# Format: <name> = "<module>:<FiberClass>"
+# Example for a custom connector:
+#   [project.entry-points."corvinOS.nerve_fibers"]
+#   my_connector = "my_package.nerve:MyConnectorFiber"
+[project.entry-points."corvinOS.nerve_fibers"]
+# Built-in fibers are Tier-0 (hardcoded) and do NOT need entry points.
+# This section is intentionally empty in the core package — it is the
+# extension point for operators and third-party packages.
+
+[project.scripts]
+# Main CLI entry points
+corvin-install = "corvinOS.installer:main_install"
+corvin-uninstall = "corvinOS.installer:main_uninstall"
+corvin-restore = "corvinOS.installer:main_restore"
+corvin = "ops.launcher.corvin.cli:main"
+# Package-name aliases: `corvinos` / `corvinos-serve` match the PyPI distribution
+# name so a new user who runs `pip install corvinos` can discover the command by
+# name. These are exact aliases of `corvin` / `corvin-serve`.
+corvinos = "ops.launcher.corvin.cli:main"
+# Shortcut for native (no-Docker) mode: `corvin-serve` == `corvin serve`
+corvin-serve = "ops.launcher.corvin.serve_entry:main"
+corvinos-serve = "ops.launcher.corvin.serve_entry:main"
+# ADR-0352 P2.3b: headless launch — OS + API + bridges, NO browser console.
+corvin-run = "ops.launcher.corvin.run_entry:main"
+corvinos-run = "ops.launcher.corvin.run_entry:main"
+# ADR-0109: WDAT compliance report generator
+# Shim needed because operator/ conflicts with Python stdlib 'operator' module name.
+corvin-wdat-report = "ops.launcher.wdat_report_entry:main"
+# ADR-0121: CorvinFlow declarative multi-node workflow CLI
+corvin-flow = "ops.launcher.flow_entry:main"
+# ADR-0142: Layer Extension API — manage user-managed layer extensions.
+corvin-layer = "ops.launcher.layer_entry:main"
+# L38 A2A: agent-to-agent pairing/send CLI + local instance identity.
+# Shims needed because operator/ shadows the Python stdlib 'operator' module.
+corvin-a2a = "ops.launcher.a2a_entry:main"
+corvin-instance-id = "ops.launcher.instance_id_entry:main"
+# ADR-0153 M4: CorvinID instance certificate management CLI.
+corvin-id = "ops.launcher.corvin_id_entry:main"
+# ADR-0154 M6: OTA license diagnostics (operator-only MSLI shard check).
+corvin-license-debug = "ops.launcher.license_debug_entry:main"
+# ADR-0178: Tier-CONTRIBUTOR maintainer CLI (keygen/issue/verify/run the L6 loop).
+corvin-maintainer = "ops.launcher.maintainer_entry:main"
+# ADR-0184 Stufe 2: opt-in always-on system-service registration (admin/root).
+corvin-service = "ops.launcher.service_entry:main"
+# ADR-0185 M5: real, non-mocked STT+TTS round-trip self-test ("corvin-voice doctor").
+# Shim needed because operator/ shadows the Python stdlib 'operator' module.
+corvin-voice = "ops.launcher.voice_entry:main"
+# Phase 6.5: Installation preset setup — configure tenant after install
+corvin-preset-setup = "ops.launcher.corvin.preset_setup:main"
+
+[tool.hatch.build.targets.sdist.force-include]
+# Ship the PRE-BUILT SPA in the sdist so a wheel built FROM the sdist (the
+# `python -m build` sdist→wheel pipeline, and any `pip install` that falls back
+# to the sdist) finds web-next/dist already present and skips the npm build —
+# no Node.js required to install from source. Without this the build hook tries
+# `npm ci` in the isolated sdist dir (no node_modules, no lockfile) and the
+# build hard-fails. dist/ is gitignored, so it must be built before packaging.
+"core/console/corvin_console/web-next/dist" = "core/console/corvin_console/web-next/dist"
+
+# Git-tracked-only file selection: without a build hook, hatchling's sdist
+# target is built straight from the raw working tree (gitignore-pattern
+# pruning only -- see hatch_build.py's module docstring), so any UNTRACKED
+# file sitting in the tree at build time (scratch/test files, a stray
+# credential-bearing settings.json) ships in the sdist just because it was on
+# disk. Reuses the SAME hatch_build.py / VendorOperatorHook as the wheel
+# target (see its `initialize()`): for the sdist target it installs the
+# git-tracked filter and creates the dist/ placeholder if needed, but never
+# reaches the vendor-copy staging below (that section is gated on
+# `is_real_wheel`, which is always False for the sdist target).
+[tool.hatch.build.targets.sdist.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["corvinOS", "core", "ops"]
+# Exclude the SPA dist from auto-package globbing: it is shipped via the
+# force-include below, and letting both rules match the same files raises a
+# "second file added at the same path" collision when dist exists at build
+# time. force-include bypasses this exclude, so dist still ships exactly once.
+exclude = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    # Ship ONLY the pre-built SPA (force-included below as web-next/dist), never
+    # the frontend source tree, CI test artifacts, or build config. `sources`
+    # maps core/console to the wheel root, which would otherwise glob the whole
+    # web-next/ tree (TS src, playwright-report/, test-results/, *.config.*) —
+    # ~2.8 MB of source + gitignored E2E screenshots — into a PUBLIC wheel. The
+    # force-include of web-next/dist bypasses this exclude, so dist still ships
+    # exactly once.
+    "**/web-next/**",
+    # core/console and core/license both map to wheel root via sources "".
+    # Any file at the same relative path in both dirs collides. Strip all
+    # non-package content (dev files, tests, dotfiles, docs).
+    "**/.gitignore",
+    "**/.pytest_cache/**",
+    "**/.venv/**",
+    "**/*.md",
+    # The plugin templates ship exactly once, at corvin_plugins/templates/ via
+    # the force-include below. Without this line the `core` package mapping ALSO
+    # dropped a second copy at core/plugins/templates/ — a path that is not on
+    # sys.path, so it was pure dead weight in every wheel.
+    "core/plugins/templates/**",
+    "**/requirements.txt",
+    "**/bootstrap.sh",
+    "**/install-systemd.sh",
+    # Internal test suites must never ship in the wheel. Several subtrees
+    # (core/gateway, core/console, core/license) map to the wheel root via
+    # [tool.hatch.build.targets.wheel.sources], so an un-excluded core/<x>/tests/
+    # would pollute a top-level `tests` namespace in site-packages. Exclude all
+    # test content generically rather than enumerating each subtree.
+    "**/tests/**",
+    "**/test_*.py",
+    "**/conftest.py",
+    "core/console/tests/**",
+    "core/license/tests/**",
+    "core/console/systemd/**",
+    # ops/ ships only the launcher Python package; strip its build artifacts,
+    # nested pyproject, shell installers, and the Go-based ollama-pr subtree.
+    "ops/launcher/dist/**",
+    "ops/launcher/build/**",
+    "ops/launcher/pyproject.toml",
+    "ops/ollama-pr/**",
+    "**/*.go",
+    "**/install.sh",
+    "**/install.ps1",
+]
+
+# Custom build hook that vendors pruned operator subtrees into the wheel
+# (see hatch_build.py / VendorOperatorHook).
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.wheel.sources]
+"core/console" = ""
+"core/gateway" = ""
+# corvin_license plugin (RS256 JWT gate) is imported as top-level `corvin_license`
+# throughout the codebase — remap so it lands at the wheel root rather than
+# core/license/corvin_license/ (which would break `from corvin_license.verifier import …`).
+"core/license" = ""
+
+# ── Every other core/<area>/<pkg> that is imported as a TOP-LEVEL module ──────
+# Without these the package files ship (they are under `packages = [... "core" ...]`)
+# but land at `core/<area>/<pkg>/` in site-packages, which is not on sys.path — so
+# `import corvin_plugins` fails on every fresh install while working fine in a git
+# checkout. Verified 2026-07-26 against a wheel built from this tree: EIGHT packages
+# were unimportable, and the console logged "corvin_plugins not importable —
+# /plugins routes will report 503". The plugin system, the compute worker, workflows,
+# AWPKG bundles and the ADR-0232 compliance tripwires were all dead in the shipped
+# product. Nothing was broken in the repo, so no test caught it.
+#
+# Mapped per PACKAGE, not per parent directory: `"core/compute" = ""` would also lift
+# that directory's README.md / LICENSE / requirements.txt / bootstrap.sh to the wheel
+# root, where they collide with the identically-named files from the other core areas
+# ("second file added at the same path"), and would drop core/awpkg/awpkg.py next to
+# the awpkg/ package.
+"core/plugins/corvin_plugins" = "corvin_plugins"
+# Plugin-Builder (ADR-0253) — a sibling package next to corvin_plugins, same
+# remap reason as the line above: without it the package ships at
+# core/plugins/plugin_builder/ in site-packages, which is off sys.path.
+"core/plugins/plugin_builder" = "plugin_builder"
+"core/observability/corvin_logging" = "corvin_logging"
+"core/compliance/corvin_compliance_reports" = "corvin_compliance_reports"
+"core/compute/corvin_compute" = "corvin_compute"
+"core/workflows/corvin_workflows" = "corvin_workflows"
+"core/delegate/corvin_delegate" = "corvin_delegate"
+"core/orchestration/corvin_orchestration" = "corvin_orchestration"
+"core/awpkg/awpkg" = "awpkg"
+
+[tool.hatch.build.targets.wheel.force-include]
+# Windows PATH auto-fix: placed at wheel root → lands in site-packages as
+# corvinOS_path_fix.pth.  Python processes it on startup via the .pth mechanism,
+# which calls corvinOS._win_path_fix._ensure_scripts_on_path() and adds the
+# Scripts directory containing corvin-serve.exe to the Windows user PATH (registry)
+# on first run.  No-op on Linux/macOS.  (fixes "corvin-serve not found" on Store Python)
+"corvinOS_path_fix.pth" = "corvinOS_path_fix.pth"
+# Plugin templates (ADR-0246). They live beside corvin_plugins rather than inside
+# it, so the package mapping above does NOT pick them up — without this line
+# `corvin plugin new` works in the source tree and fails on every pip install with
+# "template not found in this install". Same shape as the AWPKG/tripwire breakage
+# described above: nothing wrong in the repo, nothing red in CI, dead in the wheel.
+# `plugin_cmd._template_path` looks here second, after the source-tree location.
+"core/plugins/templates" = "corvin_plugins/templates"
+# Plugin-Builder's own scaffold template for a SKILL plugin (ADR-0253). Its
+# siblings are .py and ride along with the `core/plugins/plugin_builder`
+# package mapping; this one is .md and the generic `**/*.md` exclude above ate
+# it, so `/plugin-builder` raised FileNotFoundError the moment the classifier
+# said "skill" — on every pip install, never in a checkout. Verified against a
+# built wheel 2026-07-28. Named as a single file rather than the directory so
+# it cannot collide with the .py siblings the package mapping already ships.
+"core/plugins/plugin_builder/templates/skill_plugin.md" = "plugin_builder/templates/skill_plugin.md"
+# Ship the pre-built React SPA so `pip install corvinOS` works
+# without requiring npm on the target machine. The wheel builder must run
+# `npm run build` in core/console/corvin_console/web-next/ before packaging.
+"core/console/corvin_console/web-next/dist" = "corvin_console/web-next/dist"
+# ADR-0125: include engine detection + bootstrap helpers so the
+# /detect and /bootstrap endpoints work in a pure wheel install
+# (source-tree mode uses the sys.path injection in engine.py as before).
+"operator/bridges/shared/engine_detection.py" = "corvin_console/engine_detection.py"
+"operator/bridges/shared/hermes_bootstrap.py" = "corvin_console/hermes_bootstrap.py"
+# First-run language propagation (install-time Piper language -> profile
+# display_language): installer needs profile.set_value() in a pure wheel
+# install, same shim pattern as the two entries above.
+"operator/bridges/shared/profile.py" = "corvin_console/profile.py"
+# Operator runtime-dependency vendoring (wheel-only) is performed by the
+# custom build hook in hatch_build.py (VendorOperatorHook). 56 console modules
+# reach into operator/* via repo-relative sys.path injection, which resolves
+# into a non-existent operator/ inside site-packages on a wheel install
+# (ModuleNotFoundError: No module named 'forge'). The hook stages PRUNED copies
+# (tests stripped — force-include ignores `exclude`, so pruning must happen in
+# the hook) of the needed subtrees into corvin_core/_vendor/operator/<same-
+# relative-layout>; _operator_bootstrap.py then prepends them onto sys.path at
+# import time. Source-tree mode never gains a _vendor/ dir, so the bootstrap
+# stays a no-op there and the existing per-module injection keeps working.
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312", "py313"]
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # Black handles long lines
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--verbose"
+asyncio_mode = "auto"
+markers = [
+    "live: real-LLM end-to-end tests (opt-in via CLAUDE_LIVE_E2E=1)",
+    "integration: integration tests for subsystems",
+    "high_risk: critical path tests",
+    "asyncio: async test using pytest-asyncio",
+    "e2e: Playwright end-to-end browser tests",
+    "full_pipeline: full task orchestration pipeline tests",
+    # ADR-0464: Plugin E2E Verification Framework — Four-Tier Model
+    # TIER-level markers
+    "plugin_unit: TIER-1 plugin unit tests (individual components)",
+    "plugin_integration: TIER-2 plugin integration tests (subsystem interactions)",
+    "plugin_feature_e2e: TIER-3 plugin feature-level E2E tests (plugin workflows)",
+    "plugin_system_health: TIER-4 plugin system-health tests (platform integrity)",
+    # Error-class detection markers
+    "plugin_validation: Plugin manifest + schema validation (error class: init failures)",
+    "plugin_init: Plugin initialization failures early detection",
+    "plugin_conflict: Plugin hook conflicts and interference detection",
+    "plugin_isolation: Cross-tenant isolation + state corruption detection",
+    "plugin_dependency: Plugin dependency conflict resolution",
+    "plugin_drift: Configuration drift detection and recovery",
+    "plugin_load_order: Load-order dependency verification (high-risk plugins)",
+    "plugin_hot_reload: Runtime reload consistency scenarios (high-risk plugins)",
+    "plugin_cleanup: Plugin unload and resource cleanup verification",
+    "plugin_crash: Plugin crash recovery and state rollback",
+    "plugin_resources: Resource limit enforcement (community plugins)",
+    "plugin_sandbox: Plugin sandboxing (community plugins)",
+    "plugin_audit: Audit trail isolation and integrity verification",
+    "plugin_edge_cases: Edge case handling and boundary condition tests",
+    "plugin_performance: Performance profiling and regression tests",
+    "plugin_security: Security-specific tests (encryption, auth, sandboxing)",
+    "plugin_compliance: Regulatory compliance tests (GDPR, EU AI Act, CLA)",
+]

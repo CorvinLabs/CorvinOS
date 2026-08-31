@@ -1,0 +1,172 @@
+# ADR-0215 Wiring Manifest — operator/orchestration/tde/ (ADR-0214, TDE)
+#
+# Every production module in this package must have exactly one entry here,
+# declared `live` (reachable from a real production entry point — the
+# wiring_gate CI check verifies this) or `deferred` (known, ADR-tracked
+# future work with no caller yet — checked into git on purpose, not a silent
+# gap). A module with neither is a build failure: see
+# operator/orchestration/wiring_gate.py.
+#
+# Backfilled 2026-07-23 by ADR-0215 from a full adversarial review of this
+# package's actual call graph (chat_runtime.py -> SendIntegration ->
+# EngineRegistry -> TieredDelegationEngine -> AdaptiveDelegationExecutor).
+
+components:
+  - name: __init__
+    module: tde
+    status: live
+    entry_point: "tde:EngineRegistry"
+    reason: "package re-export surface, imported by every other entry"
+
+  - name: analysis_runner
+    module: tde.analysis_runner
+    status: live
+    entry_point: "tde.analysis_runner:run_initial_analysis_sync"
+    reason: "called from chat_runtime._stream_tde_turn (Phase 1 InitialAnalysis)"
+
+  - name: engine_registry
+    module: tde.engine_registry
+    status: live
+    entry_point: "tde.engine_registry:EngineRegistry"
+    reason: "constructed in chat_runtime._stream_tde_turn; central engine dispatch"
+
+  - name: send_integration
+    module: tde.send_integration
+    status: live
+    entry_point: "tde.send_integration:SendIntegration"
+    reason: "L22 send() hookpoint per ADR-0214, called from chat_runtime._stream_tde_turn"
+
+  - name: tde_engine
+    module: tde.tde_engine
+    status: live
+    entry_point: "tde.tde_engine:TieredDelegationEngine"
+    reason: "registered in EngineRegistry as the tiered_delegation engine"
+
+  - name: adaptive_delegation_executor
+    module: tde.adaptive_delegation_executor
+    status: live
+    entry_point: "tde.adaptive_delegation_executor:AdaptiveDelegationExecutor"
+    reason: "instantiated by TieredDelegationEngine.execute() for every TDE run"
+
+  - name: l34_delegation_gate
+    module: tde.l34_delegation_gate
+    status: live
+    entry_point: "tde.l34_delegation_gate:L34DelegationGate"
+    reason: "data-safety gate used by both send_integration and the executor"
+
+  - name: loss_profile_tracker
+    module: tde.loss_profile_tracker
+    status: live
+    entry_point: "tde.loss_profile_tracker:get_session_tracker"
+    reason: "loss-gate evidence store, session/tenant-keyed since ADR-0215 F4"
+
+  - name: robust_engine_detector
+    module: tde.robust_engine_detector
+    status: live
+    entry_point: "tde.robust_engine_detector:RobustEngineDetector"
+    reason: "engine auto-detection; called from send_integration and /debug-engine"
+
+  - name: slash_command_parser
+    module: tde.slash_command_parser
+    status: live
+    entry_point: "tde.slash_command_parser:SlashCommandParser"
+    reason: "single source of truth for /use-engine, /engine-auto, /debug-engine (ADR-0215 F3)"
+
+  - name: tde_audit
+    module: tde.tde_audit
+    status: live
+    entry_point: "tde.tde_audit:emit"
+    reason: "hash-chained tde.* audit event emission, used throughout the package"
+
+  - name: worker_ipc
+    module: tde.worker_ipc
+    status: live
+    entry_point: "tde.worker_ipc:ProcHolder"
+    reason: "subprocess lifecycle + kill-on-cancel, used by analysis_runner and the executor"
+
+  - name: contextual_worker_ipc
+    module: tde.contextual_worker_ipc
+    status: deferred
+    reason: >
+      Gap #1 Context Carryover (Task #10, LDD k=1 COMPLETE). Implementation
+      finished and unit-tested (13 tests green). Depends on verdrahtung in
+      worker_ipc.get_worker_ipc() to wire the ContextualSubprocessWorkerIPC
+      into the real execution path. Wiring happens in Task #13 E2E integration.
+    target_adr: "0214"
+
+  - name: loss_judge
+    module: tde.loss_judge
+    status: live
+    entry_point: "tde.loss_judge:judge_loss_sync"
+    reason: "semantic-judge fallback path, called from adaptive_delegation_executor._record_outcome"
+
+  - name: bench
+    module: tde.bench
+    status: live
+    entry_point: "tde.bench:run_default_suite"
+    reason: "ADR-0215 Phase 3 — extensible token/latency benchmark harness, run via CLI/cron, not per-turn"
+
+  - name: streaming_executor
+    module: tde.streaming_executor
+    status: deferred
+    reason: >
+      ADR-0214 Phase 2 (big-data >1GB streaming path). Adaptive-chunking
+      logic is correct and unit-tested (test_tde_streaming_executor.py) but
+      has zero production callers — no streaming-capable WorkerIPC exists
+      yet to delegate a chunked stream to (see tde/README.md). Found unwired
+      for the 4th consecutive review round by ADR-0215; do not wire this in
+      speculatively — wire it when a real remote-streaming IPC lands.
+    target_adr: "0214"
+
+  - name: detector_plugin_registry
+    module: tde.detector_plugin_registry
+    status: deferred
+    reason: >
+      ADR-0214 Phase 3 (Marketplace detector plugins, CLS-tier-gated).
+      Plugin-loading logic is correct and unit-tested
+      (test_adr_0214_phase3_plugins.py, test_adr_0214_phase4_discovery.py)
+      but RobustEngineDetector remains the only detector reachable from the
+      real send() path — no marketplace plugin has ever been installed to
+      exercise this. Do not wire in without a real plugin to load.
+    target_adr: "0214"
+
+  - name: tde_measurement
+    module: tde.tde_measurement
+    status: live
+    entry_point: "tde.tde_measurement:RealTdeOrchestrator"
+    reason: >
+      ADR-0222 Phase 2 (k=5) — measurement-week sampler. Reached from
+      chat_runtime._run_tde_measurement, which _stream_tde_turn starts as a
+      detached task after the answer is streamed. Live but DEFAULT-OFF: gated
+      behind TDE_MEASUREMENT_ENABLED=1 plus TDE_MEASUREMENT_SAMPLE_RATE, since
+      a measured turn costs ~3x the tokens of an unmeasured one (TDE + direct +
+      tier baselines, plus two judge calls).
+    target_adr: "0222"
+
+  - name: decision_gate
+    module: tde.decision_gate
+    # The symbol the live consumer actually imports (`ops/launcher/corvin/
+    # tde_cmd.py:74` — `from tde.decision_gate import evaluate_tde_verdict`).
+    # This was MISSING while `status: live`, which is exactly what the
+    # WiringIntegrityFiber flags: the manifest claimed reachability in prose but
+    # gave the runtime check nothing to verify, so `aco.wiring_integrity` — the
+    # repo's own reachability gate — has been reporting HIGH ever since the
+    # status flipped to live (found in the R6/R7 reachability review).
+    entry_point: "tde.decision_gate:evaluate_tde_verdict"
+    status: live
+    reason: >
+      ADR-0222 Phase 2 decision logic. Its BandEvidence dataclass IS reached in
+      production (tde_measurement imports it to shape recorded samples). Since
+      2026-08-07 (TDE_ROBUST_USABLE_PLAN Step 2) the verdict functions
+      evaluate_band / evaluate_tde_verdict have a LIVE production caller:
+      `corvin tde gate` (ops/launcher/corvin/tde_cmd.py). That consumer honours
+      the honesty invariant structurally — it can only ARM (flip worker_engine
+      to tde via feature_flags.set_worker_engine_mode) when the verdict is
+      decided on MEASURED data, TDE wins ≥1 band, and NO measured band loses;
+      otherwise it fails DARK (reports, writes nothing). Without measured
+      evidence (the default state — the measurement week has not run) it can only
+      read INSUFFICIENT_DATA, so no assumption-sourced number can flip a routing
+      default. Arming is GLOBAL (there is no per-band routing yet), so a mixed
+      verdict deliberately refuses — per-band arming is a tracked follow-up.
+      Fully unit-tested (test_tde_decision_gate*.py) + E2E (test_tde_gate_cli.py).
+    target_adr: "0222"

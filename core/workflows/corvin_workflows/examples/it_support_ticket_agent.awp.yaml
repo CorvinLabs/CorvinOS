@@ -1,0 +1,157 @@
+awp: "1.1.0"
+
+workflow:
+  name: it_support_ticket_agent
+  description: >
+    Conversational IT support bot (ADR-0188's worked example, now runnable):
+    classifies the incoming request (route/classify), looks up a fix in a
+    tiny in-graph knowledge base (code — deterministic, no LLM), drafts an
+    answer, and for anything the model can't resolve on its own asks the
+    user for explicit confirmation before "creating a ticket" — itself a
+    deterministic code node — demonstrating chatflow (engine: chat),
+    human-in-the-loop (ask_human), and non-LLM execution (code) together in
+    one workflow, closing the Dify-parity gap identified in ADR-0188.
+
+inputs:
+  chat_id:
+    type: string
+    required: true
+  query:
+    type: string
+    required: true
+
+orchestration:
+  engine: chat
+
+  graph:
+    # ---- Step 1: classify the request (route/classify — LLM, engine-native branching) ----
+    - id: triage
+      type: route
+      mode: classify
+      depends_on: []
+      agent: triage_classifier
+      instructions: >
+        You are an IT support triage assistant. Read the user's request and
+        classify it into exactly one category.
+      classes: [password_account, hardware, software, network, other]
+      input: query
+
+    # ---- Step 2: deterministic knowledge-base lookup (code — NEVER an LLM call) ----
+    - id: lookup_kb
+      type: code
+      depends_on: [triage]
+      language: python3
+      inputs:
+        category: triage.case
+      source: |
+        def main(category: str) -> dict:
+            KB = {
+                "password_account": "Reset your password at https://sso.example.internal/reset — it takes effect immediately, no ticket needed.",
+                "hardware": "Please note your asset tag; a technician will be assigned once you confirm below.",
+                "software": "Try reinstalling the application from the Software Center first — that resolves most cases.",
+                "network": "VPN issues are usually fixed by a full reconnect: disconnect, wait 10 seconds, reconnect.",
+            }
+            fix = KB.get(category, "")
+            return {"kb_fix": fix, "kb_hit": bool(fix)}
+      outputs: [kb_fix, kb_hit]
+
+    # ---- Step 3: draft a response, and decide whether human confirmation is needed ----
+    - id: draft_answer
+      type: agent
+      agent: assistant
+      depends_on: [lookup_kb]
+      instructions: >
+        Look at lookup_kb in the upstream context. If kb_hit is true, write a
+        short, friendly answer (2-3 sentences) that gives the user the exact
+        fix from kb_fix, and set needs_confirmation to false. If kb_hit is
+        false, or the category is "hardware" (asset reassignment is a
+        real-world action that should not happen without asking first), write
+        a short answer saying you'd like to take an action on their behalf,
+        and set needs_confirmation to true, with a one-sentence description
+        of exactly what you'd do in confirm_action_text. Respond as JSON:
+        {"text": "<answer>", "needs_confirmation": <bool>, "confirm_action_text": "<sentence or empty string>"}.
+      share_output: [text, needs_confirmation, confirm_action_text]
+
+    # ---- Step 4: branch — resolved vs needs a human's OK (route/condition) ----
+    - id: gate
+      type: route
+      mode: condition
+      depends_on: [draft_answer]
+      cases:
+        - id: resolved
+          when: {selector: draft_answer.needs_confirmation, op: "==", value: false}
+        - id: needs_confirmation
+          when: default
+
+    # ---- Branch A: resolved — answer and end the turn (no pause) ----
+    - id: answer_resolved
+      type: answer
+      depends_on: [gate]
+      branch: resolved
+      channel: discord
+      chat_id_from: chat_id
+      text_from: draft_answer.text
+
+    # ---- Branch B: needs confirmation — pause and wait for the human (ask_human) ----
+    - id: confirm_action
+      type: ask_human
+      depends_on: [gate]
+      branch: needs_confirmation
+      channel: discord
+      chat_id_from: chat_id
+      prompt_from: draft_answer.text
+      expect: {field: confirmed, type: boolean}
+      timeout_minutes: 30
+      on_timeout: {branch: escalate_human_agent}
+
+    - id: confirmation_gate
+      type: route
+      mode: condition
+      depends_on: [confirm_action]
+      cases:
+        - id: confirmed
+          when: {selector: confirm_action.confirmed, op: "==", value: true}
+        - id: declined
+          when: default
+
+    # ---- Branch B1: confirmed — build the ticket payload deterministically, "create" it ----
+    - id: build_ticket_payload
+      type: code
+      depends_on: [confirmation_gate]
+      branch: confirmed
+      language: python3
+      inputs:
+        category: triage.case
+        summary: draft_answer.confirm_action_text
+      source: |
+        def main(category: str, summary: str) -> dict:
+            priority = {"hardware": "medium", "other": "low"}.get(category, "low")
+            ticket_id = "TCK-" + category[:3].upper() + "-0001"
+            return {"payload": {"ticket_id": ticket_id, "category": category, "summary": summary, "priority": priority}}
+      outputs: [payload]
+
+    - id: answer_ticket_created
+      type: answer
+      depends_on: [build_ticket_payload]
+      channel: discord
+      chat_id_from: chat_id
+      text_from: build_ticket_payload.payload
+
+    # ---- Branch B2: declined — acknowledge, no action taken ----
+    - id: answer_declined
+      type: answer
+      depends_on: [confirmation_gate]
+      branch: declined
+      channel: discord
+      chat_id_from: chat_id
+      text: "Understood — I haven't made any changes. Let me know if you'd like a ticket opened without taking action."
+
+    # NOTE (ADR-0188 open question, intentionally not wired yet): on_timeout
+    # above declares the INTENDED branch label for a future active-timeout
+    # firing mechanism (see ADR-0188 §Open Questions — needs an "wake a
+    # paused run after N minutes" trigger, e.g. a finished Task-Engine M2).
+    # No such trigger exists today, so there is deliberately no
+    # "escalate_human_agent" node in this graph — adding one without a real
+    # firing mechanism would either never run or run unconditionally on
+    # every confirm_action, which is wrong. Documented here rather than
+    # silently omitted.

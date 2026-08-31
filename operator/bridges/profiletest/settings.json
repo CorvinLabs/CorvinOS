@@ -1,0 +1,27 @@
+{
+  "chat_profiles": {
+    "default": {
+      "permission_mode": "plan",
+      "allowed_tools": [
+        "Read",
+        "Grep"
+      ]
+    },
+    "trusted-user": {
+      "permission_mode": "bypassPermissions",
+      "model": "claude-haiku-4-5"
+    },
+    "readonly-chat": {
+      "permission_mode": "default",
+      "allowed_tools": [
+        "Read"
+      ],
+      "disallowed_tools": [
+        "Bash",
+        "Write",
+        "Edit"
+      ],
+      "append_system": "replye especially knapp."
+    }
+  }
+}

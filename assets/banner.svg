@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" role="img" aria-labelledby="title desc">
+  <title id="title">Corvin — EU AI Act compliant · Self-improving · Agentic Compute</title>
+  <desc id="desc">Dark banner showing the Corvin logo mark (chevron, cursor underline) on the left, the CorvinOS wordmark in off-white with OS in gold, a feature strip with key pillars, and a tagline.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="55%"  stop-color="#111820"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <!-- Brass / gold accent gradient -->
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#f0b429"/>
+      <stop offset="100%" stop-color="#c97800"/>
+    </linearGradient>
+    <!-- Layer bar palette — same as docs/assets/banner.svg for consistency -->
+    <linearGradient id="layer1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1c2840"/> <stop offset="100%" stop-color="#141e30"/>
+    </linearGradient>
+    <linearGradient id="layer2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e3a5f"/> <stop offset="100%" stop-color="#152d4a"/>
+    </linearGradient>
+    <linearGradient id="layer3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2563eb"/> <stop offset="100%" stop-color="#1d55c5"/>
+    </linearGradient>
+    <linearGradient id="layer4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f0b429"/> <stop offset="100%" stop-color="#c97800"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#f0b429" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#f0b429" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Subtle grid texture -->
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M 28 0 L 0 0 0 28" fill="none" stroke="#ffffff" stroke-width="0.3" opacity="0.04"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <rect width="1280" height="320" fill="url(#grid)"/>
+  <!-- Warm glow behind the logo mark -->
+  <ellipse cx="178" cy="160" rx="260" ry="180" fill="url(#glow)"/>
+
+  <!-- Subtle voice waveform stripe (brass tint, very low opacity) -->
+  <g opacity="0.05" stroke="#f0b429" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M0 182 Q 70 142 140 182 T 280 182 T 420 182 T 560 182 T 700 182 T 840 182 T 980 182 T 1120 182 T 1260 182 T 1400 182"/>
+    <path d="M0 204 Q 70 172 140 204 T 280 204 T 420 204 T 560 204 T 700 204 T 840 204 T 980 204 T 1120 204 T 1260 204 T 1400 204"/>
+  </g>
+
+  <!-- ─── Logo mark — aligned to wordmark centre ─── -->
+  <g transform="translate(82 46) scale(1.6)">
+    <path fill="none" stroke="#EEF1F5" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M28 40 L56 60 L28 80"/>
+    <rect fill="#EEF1F5" x="66" y="72" width="30" height="9" rx="2"/>
+    <circle cx="80" cy="50" r="10" fill="#C9A227"/>
+    <circle cx="80" cy="50" r="10" fill="none" stroke="#EEF1F5" stroke-width="2"/>
+  </g>
+
+  <!-- ─── Wordmark ─── -->
+  <text x="308" y="176"
+        font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="96" font-weight="800" letter-spacing="-3.5">
+    <tspan fill="#e6edf3">Corvin</tspan><tspan fill="#f0b429">OS</tspan>
+  </text>
+
+  <!-- Feature strip — small caps, brass accent -->
+  <text x="308" y="216"
+        font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="17" font-weight="600" letter-spacing="3.6" fill="#f0b429">
+    EU AI ACT  ·  SELF-IMPROVING  ·  AGENTIC COMPUTE  ·  GDPR
+  </text>
+
+  <!-- Separator rule -->
+  <line x1="308" y1="236" x2="960" y2="236" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Tagline -->
+  <text x="308" y="260"
+        font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="20" font-weight="400" fill="#8b949e">
+    Compliant by design. Self-improving at runtime. Agentic Compute for LLM workloads.
+  </text>
+
+  <!-- Accent hairline beneath tagline -->
+  <rect x="308" y="278" width="240" height="2" rx="1" fill="url(#accent)" opacity="0.65"/>
+</svg>

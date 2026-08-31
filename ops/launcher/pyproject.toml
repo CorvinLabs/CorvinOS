@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "corvinos"
+version = "0.1.0"
+description = "Corvin launcher — one-command setup and run your local AI assistant with Ollama"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["ai", "assistant", "ollama", "llm", "discord", "telegram", "local-ai", "corvin"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Environment :: Console",
+  "Topic :: Communications :: Chat",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://corvin-labs.com"
+Repository = "https://github.com/veegee82/CorvinOS"
+Documentation = "https://corvin-labs.com/docs"
+"Bug Tracker" = "https://github.com/veegee82/CorvinOS/issues"
+
+[project.scripts]
+corvin = "corvin.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["corvin"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/corvin", "/README.md", "/LICENSE"]

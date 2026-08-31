@@ -1,0 +1,16 @@
+[Unit]
+Description=Corvin — sync claude OAuth credentials to remote container
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/corvin-sync-claude-creds.sh
+# Keep the journal lean — this fires every 30 min.
+StandardOutput=null
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=

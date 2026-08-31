@@ -1,0 +1,11 @@
+[Unit]
+Description=Corvin — nightly audit-verify trigger
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=corvin-audit-verify.service
+
+[Install]
+WantedBy=timers.target

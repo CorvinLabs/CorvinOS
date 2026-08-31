@@ -1,0 +1,11 @@
+name: quant_trader
+display_name: Quant Trader
+description: >
+  Specialist persona for quantitative trading workflows. Has access to
+  OHLCV, order-book and indicator Forge tools plus quant_trading and
+  risk_management skills. Operates in bypassPermissions mode; path-gate
+  enforces the sandbox boundary.
+permission_mode: bypassPermissions
+ldd_preset: "off"
+forge_enabled: true
+skill_forge_enabled: false

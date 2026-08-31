@@ -1,0 +1,62 @@
+
+TDE BENCHMARK SIMULATION SUMMARY
+================================
+NOTE: all numbers below are SIMULATED (deterministic model of assumed
+savings ratios) — no real TDE execution or token measurement occurred.
+
+Overall Results:
+  Total Tasks: 11
+  Control (CC) Total: 93,018 tokens
+  Treatment (TDE) Total: 47,596 tokens
+  Savings: 45,422 tokens (48.8%)
+
+  Tasks Improved: 6
+  Tasks Regressed: 5
+  Tasks Neutral: 0
+
+Statistics (descriptive only — no significance claimed):
+  SIMULATION — deltas follow directly from the model's assumed per-category savings ratios; no statistical significance can be or is claimed. Use tde.bench for measured numbers.
+
+Results by Category:
+
+  BIG_DATA:
+    Tasks: 1
+    CC avg: 15,640 ± 0 tokens
+    TDE avg: 2,442 ± 0 tokens
+    Savings (simulated): 84.4% (observed delta range: 13198 to 13198 tokens)
+    Improved: 1/1
+
+  COMPLEX:
+    Tasks: 1
+    CC avg: 20,538 ± 0 tokens
+    TDE avg: 13,120 ± 0 tokens
+    Savings (simulated): 36.1% (observed delta range: 7418 to 7418 tokens)
+    Improved: 1/1
+
+  MODERATE:
+    Tasks: 2
+    CC avg: 10,666 ± 1,677 tokens
+    TDE avg: 7,810 ± 783 tokens
+    Savings (simulated): 26.8% (observed delta range: 2223 to 3487 tokens)
+    Improved: 2/2
+
+  PARALLEL:
+    Tasks: 2
+    CC avg: 15,218 ± 4,025 tokens
+    TDE avg: 5,545 ± 1,588 tokens
+    Savings (simulated): 63.6% (observed delta range: 7950 to 11396 tokens)
+    Improved: 2/2
+
+  SIMPLE:
+    Tasks: 2
+    CC avg: 1,708 ± 289 tokens
+    TDE avg: 1,798 ± 262 tokens
+    Savings (simulated): -5.2% (observed delta range: -109 to -70 tokens)
+    Improved: 0/2
+
+  TRIVIAL:
+    Tasks: 3
+    CC avg: 552 ± 57 tokens
+    TDE avg: 576 ± 57 tokens
+    Savings (simulated): -4.3% (observed delta range: -36 to -16 tokens)
+    Improved: 0/3

@@ -1,0 +1,99 @@
+# Corvin — private deployment via Tailscale (ADR-0038).
+#
+# Pairs the corvin container with a Tailscale sidecar so the console
+# is reachable from the operator's own tailnet (laptop, phone) without
+# publishing any port to the public internet.
+#
+# Usage:
+#   cp ops/tailscale/.env.template ops/tailscale/.env   # then fill in
+#   docker compose -f ops/tailscale/docker-compose.yml --env-file ops/tailscale/.env up -d
+#
+# Then on your laptop (also tailscale-connected):
+#   open http://corvin:8000/console/
+#   # or the full FQDN: http://corvin.tail-XXXX.ts.net:8000/console/
+
+name: corvin-tailscale
+
+services:
+
+  # ── Tailscale sidecar ──────────────────────────────────────────────
+  # Joins the tailnet using the auth-key from .env. The corvin service
+  # below shares this container's network namespace, so its :8000 port
+  # is visible to the tailnet as `corvin:8000` (via MagicDNS) without
+  # being published to the host.
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: corvin-tailscale
+    hostname: ${CORVIN_TS_HOSTNAME:-corvin}
+    restart: unless-stopped
+    environment:
+      # Auth-key from the Tailscale admin console. Use a *non-reusable*,
+      # *tagged*, *non-ephemeral* key for production. See README.
+      TS_AUTHKEY: ${TS_AUTHKEY?TS_AUTHKEY is required — generate at https://login.tailscale.com/admin/settings/keys}
+      TS_STATE_DIR: /var/lib/tailscale
+      # Use the kernel WireGuard implementation via /dev/net/tun for
+      # better throughput; falls back to userspace if the device is
+      # unavailable.
+      TS_USERSPACE: "false"
+      TS_EXTRA_ARGS: "--accept-routes ${TS_EXTRA_ARGS:-}"
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+      - sys_module
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ── Corvin application ────────────────────────────────────────────
+  # network_mode joins the tailscale sidecar's namespace. This means:
+  #   * the container has no IP of its own
+  #   * `ports:` and `expose:` are ignored — the sidecar's interface
+  #     is what the tailnet sees
+  #   * outbound traffic also exits via tailscale (subnet routes /
+  #     exit-nodes can be used if configured tailnet-side)
+  corvin:
+    image: ${CORVIN_IMAGE:-ghcr.io/veegee82/corvinos:latest}
+    container_name: corvin
+    restart: unless-stopped
+    depends_on:
+      - tailscale
+    network_mode: "service:tailscale"
+    environment:
+      # ── tenant identity ──
+      CORVIN_TENANT_ID: ${CORVIN_TENANT_ID:-_default}
+      CORVIN_HOME: /home/corvin/.corvin
+      CORVIN_HOME: /home/corvin/.corvin
+      HOME: /home/corvin
+
+      # ── auth (load from .env, never hardcoded) ──
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
+
+      # ── bridge toggles (default off — opt-in) ──
+      CORVIN_BRIDGE_TELEGRAM: ${CORVIN_BRIDGE_TELEGRAM:-false}
+      CORVIN_BRIDGE_DISCORD:  ${CORVIN_BRIDGE_DISCORD:-false}
+      CORVIN_BRIDGE_WHATSAPP: ${CORVIN_BRIDGE_WHATSAPP:-false}
+      CORVIN_BRIDGE_SLACK:    ${CORVIN_BRIDGE_SLACK:-false}
+      CORVIN_BRIDGE_EMAIL:    ${CORVIN_BRIDGE_EMAIL:-false}
+
+      # ── observability ──
+      CORVIN_LOG_LEVEL: ${CORVIN_LOG_LEVEL:-INFO}
+    volumes:
+      # Persistent state — claude-code config, voice secrets, corvin
+      # tenant tree, audit chain. Same volume layout as the Caddy
+      # variant so an operator can switch between deployments without
+      # touching state.
+      - ${CORVIN_DATA_DIR:-./data/home}:/home/corvin
+    deploy:
+      resources:
+        limits:
+          memory: ${CORVIN_MEM_LIMIT:-4G}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

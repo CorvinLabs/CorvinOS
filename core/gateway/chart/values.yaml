@@ -1,0 +1,75 @@
+# Default values for corvin-gateway.
+# These keep the chart shippable; operators override per environment.
+
+image:
+  repository: corvin-gateway
+  tag: "0.1.0-phase-4"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# CORVIN_HOME is mounted from a PersistentVolumeClaim so tenant
+# state (tokens, runs, webhooks, oidc, scim, audit chains) survives
+# pod restarts. Default uses a 10 GiB RWO claim; operators that
+# need RWX across replicas adjust storageClass + accessModes.
+persistence:
+  enabled: true
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  mountPath: /var/lib/corvin
+
+# Resources scaled for the Phase 2 traffic envelope (≤ 1k req/s).
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Non-root runtime user matches the image's `corvin` user (uid 4711).
+# Operators on restrictive PSPs may need to relax fsGroup if their
+# storage class returns volumes the gateway user can't write to.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 4711
+  runAsGroup: 4711
+  fsGroup: 4711
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false  # uvicorn needs /tmp for connect-streams
+  capabilities:
+    drop: [ALL]
+
+# Probes target /healthz which the gateway serves unauthenticated.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 15
+  timeoutSeconds: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: 8000
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  timeoutSeconds: 2
+
+# Extra env vars injected into the deployment.
+env: []
+# - name: CORVIN_DEBUG
+#   value: "1"
+
+# Operator-supplied secret(s) for gateway tokens / webhook secrets.
+# The chart does NOT generate tokens; the operator runs the CLI
+# (`python -m corvin_gateway.cli token issue …`) once a pod is up.
+extraVolumes: []
+extraVolumeMounts: []

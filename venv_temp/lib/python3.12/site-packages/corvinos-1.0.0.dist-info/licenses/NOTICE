@@ -1,0 +1,74 @@
+Corvin
+Copyright 2026 Silvio Jurk
+
+This product includes software developed by Silvio Jurk.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+────────────────────────────────────────────────────────────────────────
+
+Trademark notice
+────────────────
+
+"Corvin" is the project name used by the copyright holder to identify
+this software. The Apache License does not grant permission to use the
+trade names, trademarks, service marks, or product names of the licensor,
+except as required for describing the origin of the Work and reproducing
+the content of this NOTICE file (see License § 6).
+
+Forks intended for redistribution under a different name remain permitted
+by the License; the trademark restriction only prevents unauthorized use
+of the "Corvin" identifier to brand derivative or third-party products.
+
+────────────────────────────────────────────────────────────────────────
+
+Licensing
+─────────
+
+Most components of this release are licensed under the Apache License,
+Version 2.0 (see LICENSE).
+
+Exception — Compute plugin:
+
+  The Compute plugin (core/compute/) is licensed under the Business
+  Source License 1.1 (BSL-1.1). Production use of the Compute Worker
+  or Compute Fabric requires a commercial license. Trial use (up to
+  500 iterations, grid/random strategies, single worker) is free
+  without restriction. The BSL terms automatically convert to
+  Apache-2.0 four years after each version's release date.
+  For the current shipping version the pinned Change Date is
+  2030-06-16 (see core/compute/LICENSE).
+
+  See core/compute/LICENSE for the full BSL-1.1 text.
+
+Future relicense right (CLA § 3):
+
+  The Maintainer (Silvio Jurk) retains a perpetual, irrevocable right
+  to release future versions of CorvinOS — including all Apache-2.0
+  components — under a different license. This includes source-available
+  licenses such as the Business Source License (BSL), Functional Source
+  License, or Elastic License v2, as well as commercial licenses.
+
+  This right is granted by every contributor as a binding condition of
+  the Contributor License Agreement (CLA.md § 3) and does not require
+  the consent of individual contributors for future releases. Already-
+  published Apache-2.0 releases are not affected and remain Apache-2.0
+  in perpetuity.
+
+  In other words: this release is Apache-2.0. A future release may
+  carry a different license. The maintainer's option to make that
+  change is a structural part of the project's licensing baseline.
+
+For commercial licensing (Compute production use, SLA, compliance
+attestation, enterprise support) contact the maintainer at the address
+in SECURITY.md or see docs/licensing/ for current licensing information.
+
+────────────────────────────────────────────────────────────────────────
+
+Third-party components
+──────────────────────
+
+This software depends on third-party components distributed under their
+own licenses. See requirements.txt (Python) and the package.json files
+under operator/bridges/*/ (Node.js) for the dependency list; each
+package retains its upstream license.

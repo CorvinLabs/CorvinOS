@@ -1,0 +1,9 @@
+[Unit]
+Description=Corvin-OS daily engine-trust refusal-canary loop (ADR-0020 Phase 30.2)
+
+[Service]
+Type=oneshot
+ExecStart=__PYTHON_BIN__ __PLUGIN_ROOT__/scripts/engine_canary.py run --quiet
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env

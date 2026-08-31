@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Corvin theme tokens — see ADR-0037 § Visual identity.
+ *
+ *   light → off-white "bone" canvas, deep-navy ink, brass accent.
+ *   dark  → deep-navy canvas, bone ink, brass accent kept warm.
+ *
+ * All tokens are HSL triplets (no `hsl(...)` wrapper) so Tailwind can
+ * apply the `<alpha-value>` slot.
+ */
+
+@layer base {
+  :root,
+  [data-theme="light"] {
+    --background: 36 38% 96%;
+    --foreground: 222 38% 9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 38% 9%;
+    --muted: 36 26% 90%;
+    --muted-foreground: 222 14% 35%;
+    --border: 222 14% 86%;
+    --input: 222 14% 86%;
+    --ring: 38 52% 53%;
+    --primary: 222 38% 12%;
+    --primary-foreground: 36 38% 96%;
+    --secondary: 36 26% 90%;
+    --secondary-foreground: 222 38% 12%;
+    --accent: 38 52% 53%;
+    --accent-foreground: 222 38% 9%;
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 36 38% 96%;
+    --radius: 0.75rem;
+  }
+
+  [data-theme="dark"] {
+    --background: 222 44% 6%;
+    --foreground: 36 38% 96%;
+    --card: 222 38% 9%;
+    --card-foreground: 36 38% 96%;
+    --muted: 222 30% 14%;
+    --muted-foreground: 36 20% 70%;
+    --border: 222 24% 18%;
+    --input: 222 24% 18%;
+    --ring: 38 52% 53%;
+    --primary: 36 38% 96%;
+    --primary-foreground: 222 38% 9%;
+    --secondary: 222 30% 14%;
+    --secondary-foreground: 36 38% 96%;
+    --accent: 38 60% 56%;
+    --accent-foreground: 222 44% 6%;
+    --destructive: 0 65% 55%;
+    --destructive-foreground: 36 38% 96%;
+    --voice-accent: 201 100% 50%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "ss01", "cv11", "kern";
+  }
+
+  /* Corvin-styled scrollbars — the OS/browser default (bright, chunky) broke
+     the dark canvas everywhere it appeared (sidebar nav, chat log, any
+     overflow panel). Thin track in --muted, brass --accent thumb, same
+     radius language as the rest of the UI. Applies globally in both themes
+     via the existing theme tokens, so it never needs its own light/dark
+     branch. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--accent) / 0.6) hsl(var(--muted) / 0.4);
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: hsl(var(--muted) / 0.4);
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--accent) / 0.6);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--accent) / 0.85);
+  }
+
+  /* Subtle texture for the landing — gradient + soft grain. */
+  .corvin-hero {
+    background:
+      radial-gradient(60% 100% at 50% 0%, hsl(38 70% 75% / 0.12), transparent 70%),
+      radial-gradient(50% 80% at 10% 20%, hsl(38 52% 53% / 0.08), transparent 60%),
+      radial-gradient(50% 80% at 90% 30%, hsl(222 38% 30% / 0.18), transparent 70%);
+  }
+
+  [data-theme="dark"] .corvin-hero {
+    background:
+      radial-gradient(60% 100% at 50% 0%, hsl(38 60% 40% / 0.16), transparent 70%),
+      radial-gradient(50% 80% at 10% 20%, hsl(38 52% 53% / 0.10), transparent 60%),
+      radial-gradient(50% 80% at 90% 30%, hsl(222 40% 18% / 0.6), transparent 70%);
+  }
+
+  /* Audio player theme-aware styling */
+  audio {
+    accent-color: hsl(var(--accent));
+    color-scheme: light;
+  }
+
+  [data-theme="dark"] audio {
+    color-scheme: dark;
+    accent-color: hsl(var(--accent));
+    background-color: hsl(var(--card)) !important;
+    color: hsl(var(--foreground)) !important;
+  }
+
+  /* Dark mode wrapper for audio player */
+  [data-theme="dark"] div:has(> audio) {
+    background: hsl(var(--card)) !important;
+  }
+
+  /* AudioPlayer range inputs — `appearance: none` (needed for the inline
+     progress-gradient track) strips the native rendering INCLUDING the
+     `accent-color` styling, which left an invisible/UA-default thumb. Thumb
+     and track are therefore drawn explicitly for both engines (webkit + moz).
+     Colors ride the theme tokens, so light and dark are both covered without
+     a separate branch. */
+  .audio-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    /* Filled-track gradient comes from the component's inline style. */
+  }
+
+  .audio-slider::-webkit-slider-runnable-track {
+    height: 0.25rem;
+    border-radius: 999px;
+    background: transparent; /* element background (gradient) is the track */
+  }
+
+  .audio-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 0.75rem;
+    height: 0.75rem;
+    margin-top: -0.25rem; /* center 12px thumb on the 4px track */
+    border: none;
+    border-radius: 999px;
+    background: hsl(var(--accent));
+    box-shadow: 0 0 0 1px hsl(var(--card));
+    cursor: pointer;
+  }
+
+  .audio-slider::-moz-range-track {
+    height: 0.25rem;
+    border-radius: 999px;
+    background: transparent; /* element background (gradient) is the track */
+  }
+
+  .audio-slider::-moz-range-thumb {
+    width: 0.75rem;
+    height: 0.75rem;
+    border: none;
+    border-radius: 999px;
+    background: hsl(var(--accent));
+    box-shadow: 0 0 0 1px hsl(var(--card));
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  .focus-ring {
+    @apply outline-none ring-offset-2 ring-offset-background focus-visible:ring-2 focus-visible:ring-ring;
+  }
+}
+
+/* Reduced-motion respect — disable shimmer + animation tilts. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* React Flow's own stylesheet (reactflow/dist/style.css) hardcodes the edge
+   label background to `fill: white` — the ComputeGraphView edge builder's
+   `labelBgStyle: { fill: "transparent" }` targets a different element and
+   never overrode it, so every edge label (e.g. the "#<iter> <loss>" callout
+   on the Agentic Compute run graph) showed as a solid white box regardless
+   of theme. Reactflow's own stylesheet is a lazy-loaded, page-specific chunk
+   injected into <head> AFTER this global stylesheet, so a same-specificity
+   override here loses on source order alone — the extra `.react-flow`
+   ancestor selector gives this rule higher specificity so it always wins. */
+.react-flow .react-flow__edge-textbg {
+  fill: var(--card);
+}

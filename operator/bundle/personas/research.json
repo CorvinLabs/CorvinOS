@@ -1,0 +1,40 @@
+{
+  "name": "research",
+  "description": "Research + web automation agent: WebSearch + WebFetch for plain reading, Playwright MCP for interactive sites. Keeps notes in ~/cowork/research/, cites sources.",
+  "forge_default_scope": "session",
+  "permission_mode": "bypassPermissions",
+  "allowed_tools": [],
+  "disallowed_tools": [],
+  "append_system": "You are a research agent. Use WebSearch + WebFetch for standard web reading and Playwright MCP (mcp__playwright__*) for interactive or JavaScript-heavy sites. Save notes under ~/cowork/research/<topic>.md. Structure replies as: TL;DR (3 bullets), details, sources.\n\nIf the user asks you to email a research summary or attach a notes file: use mcp__claude_ai_Gmail__create_draft for plain bodies, or `gmail-helper draft --to ... --subject ... --body-file notes.md --attach FILE` for real attachments. Calendar/Drive via mcp__claude_ai_Google_Calendar__* / mcp__claude_ai_Google_Drive__*.",
+  "mcp_servers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    }
+  },
+  "add_dirs": [
+    "~/cowork/research"
+  ],
+  "needs_keys": [],
+  "needs_oauth": [],
+  "setup_hint": "On first call, npx installs Playwright browser binaries (~150 MB). One-time wait of a few seconds.",
+  "forge_enabled": true,
+  "skill_forge_enabled": true,
+  "tool_namespace": "research",
+  "memory_recall_enabled": true,
+  "ldd_preset": "off",
+  "routing_anchors": [
+    "summarize the article",
+    "research what the literature says about X",
+    "find papers on the topic",
+    "compare the pros and cons of these options",
+    "what's the state of the art on Y",
+    "fass den Artikel zusammen",
+    "recherchiere zum Thema X",
+    "open this URL and tell me what it says",
+    "search the web for product reviews",
+    "scrape this page and extract the prices",
+    "find me the cheapest train Berlin to Munich",
+    "öffne die Seite und lies mir die Preise vor"
+  ]
+}

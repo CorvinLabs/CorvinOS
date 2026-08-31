@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=CorvinOS Console
+GenericName=CorvinOS Operator Console
+Comment=Open the CorvinOS operator console in the default browser
+Exec=sh -c '[ -n "$CORVIN_NO_AUTOSTART" ] || xdg-open http://127.0.0.1:8765/console/'
+Terminal=false
+Categories=Network;WebBrowser;
+Keywords=CorvinOS;Operator;Console;Corvin;
+StartupNotify=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=4
+X-KDE-autostart-after=panel
+Icon=applications-internet

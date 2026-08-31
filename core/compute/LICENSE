@@ -1,0 +1,51 @@
+Business Source License 1.1
+
+Licensor:           Silvio Jurk
+Licensed Work:      CorvinOS Compute Plugin
+                    The Licensed Work is (c) 2024-2026 Silvio Jurk.
+Additional Use Grant: Trial use (up to 500 iterations, grid/random strategies,
+                    single worker) is permitted without restriction.
+Change Date:        2030-06-16
+Change License:     Apache License, Version 2.0
+
+For information about alternative licensing arrangements for the Licensed Work,
+please contact silvio.jurk@gmail.com.
+
+────────────────────────────────────────────────────────────────────────────────
+
+Business Source License 1.1
+
+Parameters
+
+Licensor:             The individual or entity that is making the work available.
+Licensed Work:        The work made available under this license.
+Additional Use Grant: Uses listed here are permitted in addition to those
+                      otherwise allowed by this license.
+Change Date:          The date specified above.
+Change License:       The Open Source license designated above.
+
+For all purposes in this License, "this version of the Licensed Work" means
+the version of the Licensed Work with the release date on or before the Change
+Date above.
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited production
+use.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, whichever comes first, the Licensor hereby grants you rights under the
+terms of the Change License, and these rights take effect on the later of
+the Change Date or the publication of this License document.
+
+Notice of License Copyright:
+
+The Licensor must prominently display this Business Source License on all copies
+of the Licensed Work.
+
+Business Source License 1.1 was first published in 2013.
+A copy of the Business Source License 1.1 is available at
+https://spdx.org/licenses/BUSL-1.1.html

@@ -1,0 +1,36 @@
+{
+  "name": "code.fetch_social",
+  "description": "Fetch social media posts mentioning a ticker from configured subreddits.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "ticker"
+    ],
+    "properties": {
+      "ticker": {
+        "type": "string"
+      },
+      "subreddits": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [
+          "wallstreetbets",
+          "stocks",
+          "investing"
+        ]
+      },
+      "limit": {
+        "type": "integer",
+        "default": 50
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "version": "0.1.0"
+  },
+  "code": "import json, sys\nargs = json.load(sys.stdin)\nprint(json.dumps({'posts': [], 'ticker': args['ticker'], 'note': 'stub'}))\n"
+}

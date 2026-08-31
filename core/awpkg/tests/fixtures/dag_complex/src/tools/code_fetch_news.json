@@ -1,0 +1,31 @@
+{
+  "name": "code.fetch_news",
+  "description": "Fetch recent news articles for a given ticker or topic from multiple sources.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "query"
+    ],
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Ticker symbol or search phrase"
+      },
+      "days": {
+        "type": "integer",
+        "default": 7,
+        "description": "Lookback window in days"
+      },
+      "max_results": {
+        "type": "integer",
+        "default": 20
+      }
+    }
+  },
+  "meta": {
+    "language": "python",
+    "network": "deny",
+    "version": "0.1.0"
+  },
+  "code": "import json, sys\nargs = json.load(sys.stdin)\nprint(json.dumps({'articles': [], 'query': args['query'], 'note': 'stub'}))\n"
+}

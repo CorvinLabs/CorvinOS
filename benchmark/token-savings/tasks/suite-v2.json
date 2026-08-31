@@ -1,0 +1,36 @@
+{
+  "suite_version": "v2-nontrivial",
+  "note": "Non-trivial single-turn tasks (multi-step reasoning / code / synthesis) with objective fact-presence checks, answerable by BOTH arms so the A/B measures token cost, not knowledge. NOTE: single-turn tasks structurally favour NO context injection — CEL adds ~constant input overhead here. CEL's real value (fewer turns / less rework) needs the multi-turn suite. Run on a tenant with REAL memory/ADRs (e.g. _default) so CEL-on actually injects context.",
+  "tasks": [
+    {
+      "id": "reason-word-problem",
+      "type": "reasoning",
+      "prompt": "A train leaves city A at 09:00 travelling 80 km/h toward city B, 300 km away. A second train leaves city B at 10:00 travelling 100 km/h toward city A on the same line. At what clock time do they meet, and how far from city A? Show the key steps and give the final time and distance.",
+      "check": { "kind": "contains_all", "expect": ["11", "160"], "case_insensitive": true }
+    },
+    {
+      "id": "code-trace",
+      "type": "coding",
+      "prompt": "What does this Python print?\n\ndef f(xs):\n    out = []\n    for i, x in enumerate(xs):\n        if x % 2 == 0:\n            out.append(x * i)\n    return sum(out)\n\nprint(f([4, 3, 6, 1, 8]))\n\nGive just the final number and one line of reasoning.",
+      "check": { "kind": "contains_all", "expect": ["44"], "case_insensitive": true }
+    },
+    {
+      "id": "synthesis-rest",
+      "type": "qa",
+      "prompt": "Explain the difference between HTTP PUT and PATCH, and between 401 and 403 status codes. Name PUT, PATCH, 401 and 403 explicitly and state which of PUT/PATCH is idempotent.",
+      "check": { "kind": "contains_all", "expect": ["put", "patch", "401", "403", "idempotent"], "case_insensitive": true }
+    },
+    {
+      "id": "reason-scheduling",
+      "type": "reasoning",
+      "prompt": "Three tasks take 4, 2 and 6 hours. Two identical workers run them in parallel, each worker doing whole tasks (no splitting). What is the minimum makespan (finish time of the last task), and which assignment achieves it? Give the number of hours and the split.",
+      "check": { "kind": "contains_all", "expect": ["6"], "case_insensitive": true }
+    },
+    {
+      "id": "code-bug",
+      "type": "coding",
+      "prompt": "This function should return the maximum of a list but has a bug:\n\ndef mx(xs):\n    m = 0\n    for x in xs:\n        if x > m:\n            m = x\n    return m\n\nName the bug in one sentence and give the input list of all-negative numbers where it returns a wrong value; state what it wrongly returns for [-5, -2, -9].",
+      "check": { "kind": "contains_all", "expect": ["0"], "case_insensitive": true }
+    }
+  ]
+}

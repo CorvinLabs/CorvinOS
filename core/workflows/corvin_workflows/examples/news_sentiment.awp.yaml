@@ -1,0 +1,69 @@
+awp: "1.0.0"
+
+workflow:
+  name: news_sentiment_research
+  description: >
+    Aggregate sentiment for a stock ticker from news, Reddit, and earnings
+    transcripts. The two fetchers run in parallel at level 1, a delegation-loop
+    node runs scoring at level 2, and a static reporter formats the result at
+    level 3. Demonstrates Corvin L26 composed orchestration: a DAG outer
+    pipeline with one adaptive (Pattern-4) inner node.
+
+inputs:
+  ticker:
+    type: string
+    required: true
+  window_days:
+    type: integer
+    default: 7
+
+orchestration:
+  engine: dag
+
+  graph:
+    # ---- Level 0: two independent fetchers (run in parallel after Phase 2)
+    - id: news_fetcher
+      type: agent
+      agent: news_fetcher
+      instructions: >
+        Fetch the most relevant English-language news articles for the input
+        ticker over the past window_days days. Return up to 8 articles.
+      depends_on: []
+      share_output: [articles]
+
+    - id: reddit_fetcher
+      type: agent
+      agent: reddit_fetcher
+      instructions: >
+        Fetch the top posts mentioning the ticker from r/wallstreetbets,
+        r/stocks, and r/investing over the past window_days days.
+      depends_on: []
+      share_output: [posts]
+
+    # ---- Level 1: delegation-loop inner node (Pattern 4 — composed)
+    - id: sentiment_analysis
+      type: delegation_loop
+      depends_on: [news_fetcher, reddit_fetcher]
+      share_output: [score, confidence, news, reddit, contradiction]
+      instructions: >
+        Score the aggregated sentiment of the news+reddit corpus for the
+        ticker. Manager dynamically decides whether to spawn per-source
+        scorers, a contradiction-checker, or to COMPLETE.
+      config:
+        manager: sentiment_manager
+        budget:
+          max_loops: 3
+          max_total_workers: 5
+        termination:
+          enabled: true
+          window: 2
+          min_confidence_delta: 0.05
+
+    # ---- Level 2: static reporter
+    - id: reporter
+      type: agent
+      agent: reporter
+      instructions: >
+        Format the final report: one-paragraph summary, scalar score 0..1,
+        top 5 quotes with attribution.
+      depends_on: [sentiment_analysis]

@@ -1,0 +1,634 @@
+# ISO/IEC 42001:2023 — Compliance Manifest
+#
+# Machine-readable rule catalogue for Corvin CI gate (ADR-0056 + ADR-0060).
+# Each rule maps an ISO/IEC 42001:2023 clause to the Corvin layer that
+# implements it, names the structural invariants that must hold, and lists
+# forbidden patterns that CI must flag if seen in a PR diff.
+#
+# Maintained by: Corvin maintainer (signer fingerprint in tenant config)
+# Standard body: ISO/TC 42
+# Reference:     ISO/IEC 42001:2023 — Information technology — Artificial
+#                intelligence — Management system
+# Effective:     2023-12-18
+# Last reviewed: 2026-05-26
+#
+# DO NOT use this file as a runtime compliance oracle.  Enforcement is
+# structural (L10, L16, L19, L34, L35, L36, L37, L38); this file drives CI
+# and bridge.sh doctor only (ADR-0056 §"What the manifest is NOT").
+#
+# Operator-only clauses (7.1, 7.2) are flagged severity: warning and
+# implemented_by: operator.  They generate [OPERATOR: FILL IN] placeholders
+# in the Statement of Applicability and do NOT contribute to the
+# corvin-compliance-check pass/fail result.
+
+version: "1.0.0"
+regulation: "ISO/IEC 42001:2023"
+standard_body: "ISO"
+effective_date: "2023-12-18"
+last_reviewed: "2026-05-26"
+
+rules:
+
+  # ── Clause 4.1 — Understanding the organisation and its context ───────────
+
+  - id: "iso42001.4.1.context"
+    iso_clause: "4.1"
+    article: "ISO/IEC 42001:2023 — Clause 4.1 — Organisational context"
+    summary: >
+      The organisation must determine internal and external issues relevant to
+      its AI management system.  Corvin scopes this through the five-axis
+      tenant model (task, session, project, user, tenant_id) declared in
+      tenant.corvin.yaml, which fixes the AIMS boundary for each deployment.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0007
+        file: "operator/bridges/shared/compliance_zone_classifier.py"
+        test: "core/gateway/tests/test_zone_policy.py"
+    invariants:
+      - "tenant.corvin.yaml::data_residency.zone is the canonical context boundary"
+      - "validate_tenant_id() is called before any resolver produces a tenant path"
+      - "current_tenant() resolves CORVIN_TENANT_ID → validates → returns tenant home"
+    forbidden_patterns:
+      - "fold tenant_id into positional args (must be keyword-only)"
+      - "add mkdir to any tenant resolver (tenant_migrate.py is the sole owner)"
+      - "bypass validate_tenant_id() from any code path"
+    last_verified: "2026-05-26"
+
+  # ── Clause 4.2 — Understanding interested parties ─────────────────────────
+
+  - id: "iso42001.4.2.stakeholders"
+    iso_clause: "4.2"
+    article: "ISO/IEC 42001:2023 — Clause 4.2 — Interested parties"
+    summary: >
+      The organisation must determine interested parties and their requirements.
+      Corvin addresses this via the role hierarchy (owner/admin/member/observer),
+      the per-uid consent gate (deny-by-default), and the bot-disclosure card
+      that informs users of AI-system interaction before any processing begins.
+    severity: critical
+    implemented_by:
+      - layer: L18
+        file: "operator/bridges/shared/roles.py"
+        test: "operator/bridges/shared/test_roles.py"
+      - layer: L16
+        file: "operator/bridges/shared/consent.py"
+        test: "operator/bridges/shared/test_consent_gate.py"
+      - layer: L19
+        file: "operator/bridges/shared/disclosure.py"
+        test: "operator/bridges/shared/test_disclosure.py"
+    invariants:
+      - "role hierarchy enforced: owner > admin > member > observer"
+      - "admin cannot self-promote beyond own role (kerze rule)"
+      - "consent is deny-by-default — no processing without prior grant"
+      - "disclosure card fires once per (channel, chat, uid) before any session"
+    forbidden_patterns:
+      - "reverse whitelist-beats-read_only precedence in role resolution"
+      - "enable /join beyond observer role"
+      - "auto-grant consent without user action"
+      - "is_granted() bypass from any code path"
+    last_verified: "2026-05-26"
+
+  # ── Clause 4.3 — Determining the scope of the AIMS ───────────────────────
+
+  - id: "iso42001.4.3.scope"
+    iso_clause: "4.3"
+    article: "ISO/IEC 42001:2023 — Clause 4.3 — AIMS scope"
+    summary: >
+      The organisation must determine the boundaries and applicability of its
+      AI management system.  Corvin formalises this via the Operator
+      Declaration Gate (ADR-0057 Component 3): the permitted_use field in
+      tenant.corvin.yaml defines what the deployment may and may not do, and
+      eu_production boot requires this declaration to be present and complete.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0057
+        file: "operator/bridges/shared/operator_declaration.py"
+        test: "operator/bridges/shared/test_operator_declaration.py"
+    invariants:
+      - "eu_production and eu_production_ollama profiles require operator_declaration in tenant.corvin.yaml"
+      - "dpia_completed must be true for eu_production boot to proceed"
+      - "dpia_date must be present"
+      - "declared_by (DPO name) is NEVER written to the audit chain"
+      - "operator.declaration_verified audit event follows allow-list only"
+    forbidden_patterns:
+      - "allow eu_production boot without operator_declaration"
+      - "accept dpia_completed=false for eu_production profile"
+      - "put declared_by or permitted_use in audit event details"
+    last_verified: "2026-05-26"
+
+  # ── Clause 5.1 — Leadership and commitment ────────────────────────────────
+
+  - id: "iso42001.5.1.leadership"
+    iso_clause: "5.1"
+    article: "ISO/IEC 42001:2023 — Clause 5.1 — Leadership commitment"
+    summary: >
+      Top management must demonstrate commitment to the AIMS.  Corvin
+      enforces this via the Operator Declaration Gate: the boot-time CRITICAL
+      check on eu_production profiles requires a signed operator declaration
+      before any user traffic is processed.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0057
+        file: "operator/bridges/shared/operator_declaration.py"
+        test: "operator/bridges/shared/test_operator_declaration.py"
+    invariants:
+      - "declaration_verified emits to the L16 audit chain before first user session"
+      - "boot fails with CRITICAL severity if declaration is absent on eu_production"
+      - "declaration check runs at every adapter boot, not only on first deploy"
+    forbidden_patterns:
+      - "add env-var or config flag that skips the declaration gate"
+      - "allow eu_production boot without signed operator declaration"
+      - "downgrade boot CRITICAL to WARNING to make CI pass"
+    last_verified: "2026-05-26"
+
+  # ── Clause 5.2 — AI policy ────────────────────────────────────────────────
+
+  - id: "iso42001.5.2.policy"
+    iso_clause: "5.2"
+    article: "ISO/IEC 42001:2023 — Clause 5.2 — AI policy"
+    summary: >
+      Top management must establish an AI policy covering objectives,
+      commitment to legal compliance, and improvement.  Corvin provides
+      the structural policy template in docs/OPERATOR-OBLIGATIONS.md; the
+      operator must complete and maintain it as a condition of eu_production
+      deployment.
+    severity: warning
+    implemented_by:
+      - layer: "operator"
+        file: "docs/compliance/OPERATOR-OBLIGATIONS.md"
+        test: "docs/compliance/OPERATOR-OBLIGATIONS.md"
+    invariants:
+      - "docs/compliance/OPERATOR-OBLIGATIONS.md documents permitted and prohibited use cases"
+      - "operator must update OPERATOR-OBLIGATIONS.md before eu_production deploy"
+    forbidden_patterns:
+      - "deploy eu_production without a completed OPERATOR-OBLIGATIONS.md"
+      - "remove OPERATOR-OBLIGATIONS.md from the repo"
+    last_verified: "2026-05-26"
+    notes: >
+      Warning severity: this clause is partially operator-fulfilled.
+      Corvin provides the template and the boot-gate; the operator must
+      complete the substance.  The [OPERATOR: FILL IN] markers in
+      OPERATOR-OBLIGATIONS.md are validated by corvin-annex-iv validate.
+
+  # ── Clause 6.1 — Risk and opportunity assessment ─────────────────────────
+
+  - id: "iso42001.6.1.risk_assessment"
+    iso_clause: "6.1"
+    article: "ISO/IEC 42001:2023 — Clause 6.1 — Risk and opportunity"
+    summary: >
+      The organisation must identify AI-related risks and opportunities and
+      plan actions to address them.  Corvin implements this via the Layer 34
+      data classification matrix, which assigns each data class a permitted
+      engine set and egress policy, providing a deterministic risk treatment
+      at the runtime level.
+    severity: critical
+    implemented_by:
+      - layer: L34
+        file: "operator/bridges/shared/data_classification.py"
+        test: "operator/bridges/shared/test_data_classification.py"
+    invariants:
+      - "DataClassification enum has four levels: PUBLIC < INTERNAL < CONFIDENTIAL < SECRET"
+      - "matrix entry is checked at every engine-spawn callsite before spawn"
+      - "fail-closed: unknown classification is denied, not allowed"
+      - "default matrix: PUBLIC→any · INTERNAL→{local,eu_cloud} · CONFIDENTIAL→{local} · SECRET→{local}+egress=none"
+    forbidden_patterns:
+      - "fold data_classification into compliance_zone (orthogonal axes)"
+      - "make data_flow.blocked advisory"
+      - "widen default matrix without ADR"
+      - "import anthropic from data_classification.py"
+    last_verified: "2026-05-26"
+
+  # ── Clause 6.2 — AI management objectives ────────────────────────────────
+
+  - id: "iso42001.6.2.objectives"
+    iso_clause: "6.2"
+    article: "ISO/IEC 42001:2023 — Clause 6.2 — AI management objectives"
+    summary: >
+      The organisation must establish measurable AI management objectives.
+      Corvin operationalises objectives as compliance manifest rules with
+      pass/fail outcomes reported by corvin-compliance-check; every rule has
+      an explicit severity level that determines CI gate behaviour.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0056
+        file: "operator/bridges/shared/compliance_manifest.py"
+        test: "operator/bridges/shared/test_eu_compliance.py"
+    invariants:
+      - "corvin-compliance-check reports rules_passed/rules_failed counts"
+      - "severity: critical rule failure exits non-zero from corvin-compliance-check"
+      - "manifest is signed; modified manifest without re-sign fails verification"
+    forbidden_patterns:
+      - "gate baseline compliance reports behind enterprise license"
+      - "weaken a severity: critical rule without a MAJOR version bump and companion ADR"
+      - "use the manifest as a runtime request-validation gate"
+    last_verified: "2026-05-26"
+
+  # ── Clause 7.1 — Resources (operator obligation) ─────────────────────────
+
+  - id: "iso42001.7.1.resources"
+    iso_clause: "7.1"
+    article: "ISO/IEC 42001:2023 — Clause 7.1 — Resources"
+    summary: >
+      The organisation must determine and provide adequate resources for
+      establishing, implementing, maintaining, and continually improving
+      the AIMS.  This is an organisational obligation that Corvin cannot
+      fulfil on the operator's behalf.
+    severity: warning
+    implemented_by:
+      - layer: "operator"
+        file: "docs/compliance/OPERATOR-OBLIGATIONS.md"
+        test: "docs/compliance/OPERATOR-OBLIGATIONS.md"
+    invariants:
+      - "operator must document resource allocation in OPERATOR-OBLIGATIONS.md"
+    forbidden_patterns: []
+    last_verified: "2026-05-26"
+    notes: >
+      Operator-only clause.  Corvin generates an [OPERATOR: FILL IN]
+      placeholder in the Statement of Applicability.  Does not contribute to
+      corvin-compliance-check pass/fail.
+
+  # ── Clause 7.2 — Competence (operator obligation) ─────────────────────────
+
+  - id: "iso42001.7.2.competence"
+    iso_clause: "7.2"
+    article: "ISO/IEC 42001:2023 — Clause 7.2 — Competence"
+    summary: >
+      The organisation must ensure persons working with AI systems are
+      competent.  This is an organisational obligation that Corvin
+      cannot fulfil on the operator's behalf.
+    severity: warning
+    implemented_by:
+      - layer: "operator"
+        file: "docs/compliance/OPERATOR-OBLIGATIONS.md"
+        test: "docs/compliance/OPERATOR-OBLIGATIONS.md"
+    invariants:
+      - "operator must document competence requirements in OPERATOR-OBLIGATIONS.md"
+    forbidden_patterns: []
+    last_verified: "2026-05-26"
+    notes: >
+      Operator-only clause.  Corvin generates an [OPERATOR: FILL IN]
+      placeholder in the Statement of Applicability.  Does not contribute to
+      corvin-compliance-check pass/fail.
+
+  # ── Clause 7.3 — Awareness ────────────────────────────────────────────────
+
+  - id: "iso42001.7.3.awareness"
+    iso_clause: "7.3"
+    article: "ISO/IEC 42001:2023 — Clause 7.3 — Awareness"
+    summary: >
+      Persons performing work affecting AI system outputs must be aware of
+      the AI policy, their contribution to AIMS effectiveness, and the
+      implications of non-conformity.  Corvin addresses the user-facing
+      dimension via the bot-disclosure card (L19) and the consent gate (L16).
+    severity: critical
+    implemented_by:
+      - layer: L19
+        file: "operator/bridges/shared/disclosure.py"
+        test: "operator/bridges/shared/test_disclosure.py"
+      - layer: L16
+        file: "operator/bridges/shared/consent.py"
+        test: "operator/bridges/shared/test_consent_gate.py"
+    invariants:
+      - "disclosure card fires exactly once per (channel, chat, uid)"
+      - "disclosure cannot be disabled by operator config or env var"
+      - "bot-disclosure card contains the required AI-nature statement"
+      - "card character length must be <= 1500"
+    forbidden_patterns:
+      - "auto-admit user without prior disclosure"
+      - "trusted-observer bypass for disclosure"
+      - "compliance-off mode that skips disclosure"
+    last_verified: "2026-05-26"
+
+  # ── Clause 7.4 — Communication ────────────────────────────────────────────
+
+  - id: "iso42001.7.4.communication"
+    iso_clause: "7.4"
+    article: "ISO/IEC 42001:2023 — Clause 7.4 — Communication"
+    summary: >
+      The organisation must determine what, when, with whom, and how to
+      communicate about AI systems.  Corvin implements the user-facing
+      communication layer via the /join flow and bot-disclosure card;
+      operator-facing communication via the OPERATOR-OBLIGATIONS.md template
+      and the operator declaration gate.
+    severity: critical
+    implemented_by:
+      - layer: L19
+        file: "operator/bridges/shared/disclosure.py"
+        test: "operator/bridges/shared/test_disclosure.py"
+    invariants:
+      - "/join, /pass, /leave commands trigger the disclosure path"
+      - "disclosure card contains opt-out commands"
+      - "any new code path introducing a user must route through disclosure.ensure_disclosed()"
+    forbidden_patterns:
+      - "shortcut that creates session without calling disclosure"
+      - "remove /join, /pass, or /leave opt-out commands"
+    last_verified: "2026-05-26"
+
+  # ── Clause 7.5 — Documented information ──────────────────────────────────
+
+  - id: "iso42001.7.5.documented_information"
+    iso_clause: "7.5"
+    article: "ISO/IEC 42001:2023 — Clause 7.5 — Documented information"
+    summary: >
+      The organisation must create, update, and control documented information
+      required by the AIMS.  Corvin implements tamper-evident document
+      control via the hash-chained audit log (L16), encrypted at-rest via
+      L37, with daily integrity verification and rotation tracking.
+    severity: critical
+    implemented_by:
+      - layer: L16
+        file: "operator/bridges/shared/audit.py"
+        test: "operator/bridges/shared/test_audit.py"
+      - layer: L37
+        file: "operator/bridges/shared/audit_sealer.py"
+        test: "operator/bridges/shared/test_audit_sealer.py"
+    invariants:
+      - "audit chain is hash-linked — no entry can be deleted without breaking verification"
+      - "voice-audit verify exits 0 on an intact chain"
+      - "daily verify timer notifies bridge on chain break"
+      - "rotation emits audit.rotation_link as first entry of each new live file"
+      - "prev_hash in rotation_link equals the rotated tail hash"
+    forbidden_patterns:
+      - "skip hash-chain link for any event type"
+      - "silence audit-verify exit-1"
+      - "store encryption key alongside sealed segments"
+      - "auto-decrypt sealed segments on read"
+      - "make audit.rotation_failed advisory"
+    last_verified: "2026-05-26"
+
+  # ── Clause 8.1 — Operational planning and control ─────────────────────────
+
+  - id: "iso42001.8.1.operational_planning"
+    iso_clause: "8.1"
+    article: "ISO/IEC 42001:2023 — Clause 8.1 — Operational planning and control"
+    summary: >
+      The organisation must plan, implement, and control processes to meet
+      AI management requirements.  Corvin provides three interlocking
+      controls: the engine-policy allowlist (ADR-0007) gates which models may
+      be invoked; the data-classification matrix (L34) gates which data may
+      reach which engine; and the egress lockdown (L35) gates which hosts may
+      receive AI-processed traffic.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0007
+        file: "operator/bridges/shared/engine_policy.py"
+        test: "operator/bridges/shared/test_engine_policy.py"
+      - layer: L34
+        file: "operator/bridges/shared/data_classification.py"
+        test: "operator/bridges/shared/test_data_classification.py"
+      - layer: L35
+        file: "operator/bridges/shared/egress_gate.py"
+        test: "operator/bridges/shared/test_egress_gate.py"
+    invariants:
+      - "engine_policy.check() runs at every WorkerEngine spawn callsite"
+      - "data classification check runs before every engine spawn"
+      - "egress gate runs before any outbound network call on egress-enabled tenants"
+      - "fail-closed on all three controls: unknown input is denied, not allowed"
+      - "policy files hot-reload per call, never cached across calls"
+    forbidden_patterns:
+      - "skip engine_policy.check() for any spawn path"
+      - "bypass egress gate for A2A spawns"
+      - "cache engine policy or egress policy across calls"
+      - "add trusted-engine shortcut that bypasses policy"
+      - "enable default_action=deny without listing legitimate hosts"
+    last_verified: "2026-05-26"
+
+  # ── Clause 8.2 — AI risk assessment process ──────────────────────────────
+
+  - id: "iso42001.8.2.risk_assessment_process"
+    iso_clause: "8.2"
+    article: "ISO/IEC 42001:2023 — Clause 8.2 — AI risk assessment"
+    summary: >
+      The organisation must define a documented AI risk assessment process and
+      apply it consistently.  Corvin implements this via the compliance
+      manifest severity table: each rule carries a severity (critical/warning)
+      that drives CI gate behaviour, and the ci_review.py checker applies the
+      assessment consistently across every PR.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0056
+        file: "compliance/ci_review.py"
+        test: "operator/bridges/shared/test_eu_compliance.py"
+    invariants:
+      - "severity: critical rule failure blocks CI merge gate"
+      - "severity: warning rule failure logs but does not block"
+      - "ci_review.py runs on every PR touching compliance-mapped files"
+      - "risk assessment is re-run on every manifest change"
+    forbidden_patterns:
+      - "downgrade severity: critical to warning without MAJOR version bump and companion ADR"
+      - "skip ci_review.py on PRs touching manifest-mapped files"
+    last_verified: "2026-05-26"
+
+  # ── Clause 8.3 — AI risk treatment ───────────────────────────────────────
+
+  - id: "iso42001.8.3.risk_treatment"
+    iso_clause: "8.3"
+    article: "ISO/IEC 42001:2023 — Clause 8.3 — AI risk treatment"
+    summary: >
+      The organisation must select and apply controls to treat identified
+      AI risks.  Corvin implements a defence-in-depth stack: L10
+      path-gate (filesystem write protection), L34 data-classification
+      (data-flow guard), L35 egress-lockdown (network control), L36
+      erasure-orchestrator (right-to-deletion), L37 audit-at-rest
+      (tamper-evident retention), and L38 A2A attestation (inter-agent
+      integrity).
+    severity: critical
+    implemented_by:
+      - layer: L10
+        file: "operator/voice/hooks/path_gate.py"
+        test: "operator/bridges/shared/test_path_gate_ast.py"
+      - layer: L34
+        file: "operator/bridges/shared/data_classification.py"
+        test: "operator/bridges/shared/test_data_classification.py"
+      - layer: L35
+        file: "operator/bridges/shared/egress_gate.py"
+        test: "operator/bridges/shared/test_egress_gate.py"
+      - layer: L36
+        file: "operator/bridges/shared/erasure_orchestrator.py"
+        test: "operator/bridges/shared/test_erasure_orchestrator.py"
+      - layer: L37
+        file: "operator/bridges/shared/audit_sealer.py"
+        test: "operator/bridges/shared/test_audit_sealer.py"
+    invariants:
+      - "path-gate fails closed on all eval/exec/$()/backtick patterns"
+      - "path-gate boot self-test runs on every adapter start"
+      - "data_flow.blocked is never advisory"
+      - "egress.blocked is never advisory"
+      - "erasure trail file is written at mode 0600, atomic+flock"
+      - "erasure does NOT redact sealed audit segments (pseudonymisation is the Art. 17 mechanism)"
+    forbidden_patterns:
+      - "add trusted-persona Bash bypass to path-gate"
+      - "add new write-tool without updating hooks/hooks.json AND test_path_gate.py"
+      - "fail-open on any path-gate miss"
+      - "make erasure.failed advisory"
+      - "run erasure handler across tenants"
+    last_verified: "2026-05-26"
+
+  # ── Clause 8.4 — AI system impact assessment ─────────────────────────────
+
+  - id: "iso42001.8.4.impact_assessment"
+    iso_clause: "8.4"
+    article: "ISO/IEC 42001:2023 — Clause 8.4 — AI system impact assessment"
+    summary: >
+      The organisation must assess the impact of AI systems on individuals and
+      society.  Corvin implements this via the Operator Declaration Gate
+      (ADR-0057 Component 3): the dpia_completed flag and dpia_date field in
+      the operator declaration enforce that a DPIA has been conducted before
+      eu_production deployment.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0057
+        file: "operator/bridges/shared/operator_declaration.py"
+        test: "operator/bridges/shared/test_operator_declaration.py"
+    invariants:
+      - "dpia_completed must be true for eu_production boot to proceed"
+      - "dpia_date must be present and parseable"
+      - "DPIA content (notes, impacts) is NEVER written to the L16 audit chain"
+      - "operator.declaration_verified audit event follows allow-list: dpia_completed + dpia_date only"
+    forbidden_patterns:
+      - "accept dpia_completed=false for eu_production profile"
+      - "put DPIA content or impact notes in audit event details"
+      - "skip DPIA check for non-eu_production profiles that interact with natural persons"
+    last_verified: "2026-05-26"
+
+  # ── Clause 9.1 — Monitoring, measurement, analysis, evaluation ────────────
+
+  - id: "iso42001.9.1.monitoring"
+    iso_clause: "9.1"
+    article: "ISO/IEC 42001:2023 — Clause 9.1 — Monitoring and measurement"
+    summary: >
+      The organisation must evaluate AI system performance against objectives.
+      Corvin provides continuous monitoring via the L16 hash-chained audit
+      log and the L39 incident tracker, which auto-detects CRITICAL audit
+      events and opens structured incident records.
+    severity: critical
+    implemented_by:
+      - layer: L16
+        file: "operator/bridges/shared/audit.py"
+        test: "operator/bridges/shared/test_audit.py"
+      - layer: L39
+        file: "operator/bridges/shared/incident_tracker.py"
+        test: "operator/bridges/shared/test_incident_tracker.py"
+    invariants:
+      - "every CRITICAL audit event is a candidate for auto-incident via IncidentAutoDetector"
+      - "incident records stored at <tenant>/global/incidents/<id>.json mode 0600"
+      - "audit chain integrity verified daily by corvin-session-timeout.timer"
+      - "voice-audit verify exit-1 is never silenced"
+    forbidden_patterns:
+      - "silence voice-audit verify exit-1"
+      - "skip TRIGGER_EVENTS auto-detection in IncidentAutoDetector"
+      - "put monitoring metrics or incident counts in audit event details"
+    last_verified: "2026-05-26"
+
+  # ── Clause 9.2 — Internal audit ──────────────────────────────────────────
+
+  - id: "iso42001.9.2.internal_audit"
+    iso_clause: "9.2"
+    article: "ISO/IEC 42001:2023 — Clause 9.2 — Internal audit"
+    summary: >
+      The organisation must conduct internal audits at planned intervals.
+      Corvin implements systematic internal audit via the corvin-compliance-check
+      CLI and the CI gate, which together verify all manifest rules against
+      the current codebase on every PR and on demand.
+    severity: critical
+    implemented_by:
+      - layer: ADR-0056
+        file: "operator/bridges/shared/compliance_manifest.py"
+        test: "operator/bridges/shared/test_eu_compliance.py"
+    invariants:
+      - "corvin-compliance-check --all-frameworks reports pass/fail for every rule"
+      - "CI runs corvin-compliance-check on every PR touching manifest-mapped files"
+      - "bridge.sh doctor runs compliance check as part of its self-test suite"
+    forbidden_patterns:
+      - "skip compliance check in CI for any PR class"
+      - "gate corvin-compliance-check behind enterprise license"
+    last_verified: "2026-05-26"
+
+  # ── Clause 9.3 — Management review ───────────────────────────────────────
+
+  - id: "iso42001.9.3.management_review"
+    iso_clause: "9.3"
+    article: "ISO/IEC 42001:2023 — Clause 9.3 — Management review"
+    summary: >
+      Top management must review the AIMS at planned intervals to ensure its
+      continuing suitability and effectiveness.  Corvin provides the
+      corvin-annex-iv export-package command, which generates a full
+      certification package including compliance check reports, audit
+      excerpts, and multi-framework evidence that management can review.
+    severity: warning
+    implemented_by:
+      - layer: ADR-0057
+        file: "operator/voice/scripts/corvin_annex_iv.py"
+        test: "operator/voice/scripts/test_corvin_annex_iv.py"
+    invariants:
+      - "corvin-annex-iv export-package includes compliance-check-report.json for all frameworks"
+      - "export package is GPG-signed as a whole"
+      - "package is reproducible: same inputs produce same outputs modulo timestamps"
+    forbidden_patterns:
+      - "gate corvin-annex-iv export-package behind enterprise license"
+      - "generate export package from static data that bypasses the live audit chain"
+    last_verified: "2026-05-26"
+    notes: >
+      Warning severity: management review cadence and accountability are
+      operator obligations.  Corvin provides the tooling; the operator
+      must schedule and document the review process.
+
+  # ── Clause 10.1 — Nonconformity and corrective action ────────────────────
+
+  - id: "iso42001.10.1.nonconformity"
+    iso_clause: "10.1"
+    article: "ISO/IEC 42001:2023 — Clause 10.1 — Nonconformity and corrective action"
+    summary: >
+      When a nonconformity occurs the organisation must react, evaluate the
+      need for corrective action, and retain documented information.  Corvin
+      implements this via the Layer 39 incident tracker: CRITICAL audit events
+      auto-open incident records; the corvin-incident CLI manages the
+      corrective-action lifecycle; Art. 73 notification drafts are generated
+      for serious incidents.
+    severity: critical
+    implemented_by:
+      - layer: L39
+        file: "operator/bridges/shared/incident_tracker.py"
+        test: "operator/bridges/shared/test_incident_tracker.py"
+    invariants:
+      - "TRIGGER_EVENTS auto-open incident records via IncidentAutoDetector"
+      - "incident records are stored at <tenant>/global/incidents/<id>.json mode 0600"
+      - "incident.opened emits to audit chain with allow-listed fields only"
+      - "description field is NEVER written to the L16 audit chain"
+      - "notify_draft generates Art. 73 §2 notification; never auto-submits"
+      - "severity=serious triggers the 15-day Art. 73 notification clock"
+    forbidden_patterns:
+      - "put incident description or DPO contact in audit chain"
+      - "auto-submit notification to supervisory authority"
+      - "close incident without notified_at or explicit below-threshold decision"
+      - "import anthropic from incident_tracker.py"
+      - "auto-retry on FAILED incidents without DPO decision"
+    last_verified: "2026-05-26"
+
+  # ── Clause 10.2 — Continual improvement ──────────────────────────────────
+
+  - id: "iso42001.10.2.continual_improvement"
+    iso_clause: "10.2"
+    article: "ISO/IEC 42001:2023 — Clause 10.2 — Continual improvement"
+    summary: >
+      The organisation must continually improve the suitability, adequacy, and
+      effectiveness of the AIMS.  Corvin structures improvement via the LDD
+      outer loop (documented in CLAUDE.md) and the ADR process: every material
+      change to a compliance-relevant layer produces a versioned decision record,
+      and the manifest version is bumped on any rule change.
+    severity: warning
+    implemented_by:
+      - layer: "ADR-process"
+        file: "docs/decisions/"
+        test: "docs/decisions/0056-compliance-manifest.md"
+    invariants:
+      - "every material change to a compliance layer produces a new or updated ADR"
+      - "manifest version is bumped when any rule changes severity or invariants"
+      - "CHANGELOG.md in compliance/ is updated on every manifest change"
+    forbidden_patterns:
+      - "weaken a severity: critical rule without MAJOR version bump and companion ADR"
+      - "merge compliance-relevant changes without ADR"
+    last_verified: "2026-05-26"
+    notes: >
+      Warning severity: continual improvement is an ongoing organisational
+      process.  The LDD outer loop and ADR versioning are the Corvin
+      mechanisms; the cadence and accountability are operator obligations.

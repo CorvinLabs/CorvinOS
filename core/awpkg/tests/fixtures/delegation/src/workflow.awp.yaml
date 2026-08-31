@@ -1,0 +1,67 @@
+awp: "1.0.0"
+
+workflow:
+  name: code_review_bot
+  description: >
+    Automated multi-perspective code review via delegation graph.
+    Orchestrator spawns specialist reviewer workers (security, performance,
+    style) in parallel; synthesiser node merges findings into a structured
+    report. Demonstrates pure delegation_loop topology without an outer DAG.
+
+inputs:
+  diff_text:
+    type: string
+    required: true
+  language:
+    type: string
+    default: "python"
+  severity_threshold:
+    type: string
+    default: "warning"
+
+orchestration:
+  engine: dag
+  graph:
+    - id: review_orchestrator
+      type: delegation_loop
+      depends_on: []
+      share_output: [findings, summary, risk_score]
+      instructions: >
+        You are the code review manager. Spawn three specialist reviewers
+        (security, performance, style) in parallel. Collect their findings.
+        When all three have responded, COMPLETE and pass findings to synthesiser.
+      config:
+        manager: code_review_manager
+        budget:
+          max_loops: 4
+          max_total_workers: 6
+        workers:
+          - id: security_reviewer
+            instructions: >
+              Perform a security-focused review of the diff. Check for:
+              injection vulnerabilities, insecure deserialization, secrets
+              in code, missing input validation. Return severity-tagged findings.
+          - id: performance_reviewer
+            instructions: >
+              Perform a performance-focused review. Check for: O(n²) loops,
+              unnecessary database round-trips, blocking I/O in async context,
+              memory leaks. Return severity-tagged findings.
+          - id: style_reviewer
+            instructions: >
+              Perform a code-style review against PEP 8 / project conventions.
+              Check for: naming, docstrings, dead code, magic numbers. Return
+              severity-tagged findings.
+        termination:
+          enabled: true
+          window: 2
+          min_confidence_delta: 0.05
+
+    - id: synthesiser
+      type: agent
+      agent: assistant
+      instructions: >
+        Merge the findings arrays from the three reviewers. De-duplicate.
+        Sort by severity (critical → error → warning → info). Produce a
+        Markdown report with one section per severity level and an overall
+        risk_score 0-100.
+      depends_on: [review_orchestrator]
