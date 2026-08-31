@@ -1,0 +1,206 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://corvinOS.io/schemas/plugin-manifest-v1.json",
+  "title": "CorvinOS Plugin Manifest Schema",
+  "description": "Schema for plugin manifest.yaml files (ADR-0385, Phase 4)",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "version",
+    "author",
+    "license",
+    "description",
+    "category"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "minLength": 3,
+      "maxLength": 64,
+      "description": "Unique plugin identifier (lowercase, hyphens only)"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "description": "Human-readable plugin name"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-z0-9]+(\\.[a-z0-9]+)*)?$",
+      "description": "Semantic version (MAJOR.MINOR.PATCH[-prerelease])"
+    },
+    "author": {
+      "type": "object",
+      "required": ["name", "email"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "license": {
+      "type": "string",
+      "enum": [
+        "Apache-2.0",
+        "MIT",
+        "GPL-3.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "ISC"
+      ],
+      "description": "SPDX license identifier"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 200,
+      "description": "Short description (marketplace listing)"
+    },
+    "long_description": {
+      "type": "string",
+      "maxLength": 5000,
+      "description": "Markdown-formatted full description"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "Authentication",
+        "Performance",
+        "Security",
+        "Database",
+        "Integration",
+        "UI",
+        "Analytics",
+        "Tooling"
+      ],
+      "description": "Plugin category for marketplace filtering"
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri"
+    },
+    "repository": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["git"]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "keywords": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "string",
+        "maxLength": 32
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+\\.\\d+|\\*$"
+      },
+      "description": "Required plugins and versions (e.g., {'auth-saml': '2.1.0'})"
+    },
+    "conflicts_with": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Plugin IDs that conflict with this one"
+    },
+    "min_corvin_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+",
+      "default": "0.7.0"
+    },
+    "max_corvin_version": {
+      "type": ["string", "null"],
+      "pattern": "^\\d+\\.\\d+\\.\\d+",
+      "description": "Upper bound on CorvinOS version (null = no limit)"
+    },
+    "required_permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "storage.read",
+          "storage.write",
+          "network.http",
+          "network.https",
+          "process.fork",
+          "process.exec",
+          "filesystem.read",
+          "filesystem.write"
+        ]
+      },
+      "description": "Permissions required by this plugin"
+    },
+    "sandbox": {
+      "type": "object",
+      "properties": {
+        "cpu_limit_percent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "memory_limit_mb": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 2048,
+          "default": 256
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 3600,
+          "default": 60
+        },
+        "isolation": {
+          "type": "string",
+          "enum": ["process", "thread"],
+          "default": "process"
+        }
+      }
+    },
+    "entrypoint": {
+      "type": "string",
+      "description": "Main executable or script (e.g., 'index.py' or 'bin/start.sh')"
+    },
+    "config_schema": {
+      "type": "object",
+      "description": "JSON Schema for plugin configuration"
+    },
+    "boot_layer": {
+      "type": "string",
+      "enum": ["compliance", "core", "bundled", "installed"],
+      "default": "installed",
+      "description": "Load order and disableability (ADR-0243)"
+    },
+    "public_key": {
+      "type": ["string", "null"],
+      "description": "ED25519 public key (PEM format) for verifying plugin signature. Required for vetted origin plugins (Gap 2)."
+    }
+  },
+  "additionalProperties": false
+}
