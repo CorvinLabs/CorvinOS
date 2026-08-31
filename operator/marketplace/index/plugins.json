@@ -1,0 +1,194 @@
+{
+  "version": "2.0",
+  "schema": "ADR-0511",
+  "generated_at": "2026-08-31T18:15:14.187398Z",
+  "plugin_count": 1,
+  "plugins": [
+    {
+      "id": "plugin:buildin-memory-recall_backend",
+      "type": "plugin",
+      "name": "CEL Session Recall",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "memory",
+      "description": "Session recall backend providing memory persistence and retrieval for CorvinOS sessions. Implements ADR-0314 (Learning Infrastructure) with confidence scoring and outcome feedback loops.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/recall_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-30",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "memory",
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T00:00:00Z"
+    }
+  ],
+  "by_id": {
+    "plugin:buildin-memory-recall_backend": {
+      "id": "plugin:buildin-memory-recall_backend",
+      "type": "plugin",
+      "name": "CEL Session Recall",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "memory",
+      "description": "Session recall backend providing memory persistence and retrieval for CorvinOS sessions. Implements ADR-0314 (Learning Infrastructure) with confidence scoring and outcome feedback loops.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/recall_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-30",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "memory",
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T00:00:00Z"
+    }
+  },
+  "by_category": {
+    "memory": [
+      {
+        "id": "plugin:buildin-memory-recall_backend",
+        "type": "plugin",
+        "name": "CEL Session Recall",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "memory",
+        "description": "Session recall backend providing memory persistence and retrieval for CorvinOS sessions. Implements ADR-0314 (Learning Infrastructure) with confidence scoring and outcome feedback loops.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/recall_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-30",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "memory",
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T00:00:00Z"
+      }
+    ]
+  },
+  "by_tier": {
+    "buildin": [
+      {
+        "id": "plugin:buildin-memory-recall_backend",
+        "type": "plugin",
+        "name": "CEL Session Recall",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "memory",
+        "description": "Session recall backend providing memory persistence and retrieval for CorvinOS sessions. Implements ADR-0314 (Learning Infrastructure) with confidence scoring and outcome feedback loops.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/recall_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-30",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "memory",
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T00:00:00Z"
+      }
+    ]
+  }
+}

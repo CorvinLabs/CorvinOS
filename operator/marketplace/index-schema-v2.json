@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Corvin-Marketplace Index v2",
+  "description": "ADR-0511 compliant marketplace index (plugin.json source)",
+  "type": "object",
+  "required": ["version", "schema", "generated_at", "plugin_count", "plugins"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "2.0",
+      "description": "Index schema version"
+    },
+    "schema": {
+      "type": "string",
+      "const": "ADR-0511",
+      "description": "Specification reference"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of generation"
+    },
+    "plugin_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total number of plugins in index"
+    },
+    "plugins": {
+      "type": "array",
+      "description": "All plugins (from plugin.json manifests)",
+      "items": { "$ref": "#/definitions/PluginManifest" },
+      "minItems": 0
+    },
+    "by_id": {
+      "type": "object",
+      "description": "Lookup table: plugin_id → manifest",
+      "additionalProperties": { "$ref": "#/definitions/PluginManifest" }
+    },
+    "by_category": {
+      "type": "object",
+      "description": "Plugins grouped by category",
+      "properties": {
+        "memory": { "type": "array", "items": { "$ref": "#/definitions/PluginManifest" } },
+        "security_compliance": { "type": "array", "items": { "$ref": "#/definitions/PluginManifest" } },
+        "integration": { "type": "array", "items": { "$ref": "#/definitions/PluginManifest" } },
+        "data_processing": { "type": "array", "items": { "$ref": "#/definitions/PluginManifest" } },
+        "observability": { "type": "array", "items": { "$ref": "#/definitions/PluginManifest" } }
+      }
+    },
+    "by_tier": {
+      "type": "object",
+      "description": "Plugins grouped by tier",
+      "properties": {
+        "buildin": { "type": "array", "items": { "$ref": "#/definitions/PluginManifest" } },
+        "contributor": { "type": "array", "items": { "$ref": "#/definitions/PluginManifest" } }
+      }
+    }
+  },
+  "definitions": {
+    "PluginManifest": {
+      "type": "object",
+      "description": "Complete plugin.json manifest (ADR-0511)",
+      "required": [
+        "id",
+        "type",
+        "name",
+        "version",
+        "author",
+        "license",
+        "tier",
+        "category",
+        "description",
+        "distribution",
+        "last_updated"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["plugin"] },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "author": { "type": "string" },
+        "license": { "type": "string" },
+        "tier": { "type": "string", "enum": ["buildin", "contributor"] },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "distribution": { "type": "object" },
+        "boot_layer": { "type": "string" },
+        "last_updated": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
