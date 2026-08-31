@@ -11,7 +11,8 @@ Design constraints
 * **Non-blocking:** Async task, never blocks the main event loop.
 * **Fail-safe:** Daemon errors never crash the gateway (wrapped in try/except).
 * **Tenant isolation:** Each tenant gets its own metric collection pass.
-* **TTL cache reuse:** Writes to the existing metrics_cache.py layer.
+* **TTL cache reuse:** Warms audit_metrics.render()'s own per-(tenant,
+  since) TTL cache — the same cache the /metrics endpoint reads on scrape.
 * **Configurable interval:** CORVIN_METRICS_COLLECTOR_INTERVAL env var
   (default: 15s, min: 1s, max: 300s).
 """
@@ -132,15 +133,14 @@ class KPICollectorDaemon:
             # Import here to avoid module-level circular deps
             from corvin_gateway import audit_metrics as _audit_metrics
 
-            # Render metrics for this tenant (reads chain, aggregates)
+            # Warm the cache the /metrics endpoint reads: render() populates
+            # audit_metrics' own per-(tenant, since) TTL cache, which
+            # tenant_metrics() in app.py reads on scrape. This call IS the
+            # cache-warming — there is no separate cache layer to write to.
+            # (The prior _audit_metrics.set_cached_metrics(...) call referenced
+            # a function that lives in the unread core/telemetry/metrics_cache.py
+            # module, not audit_metrics, and raised AttributeError every pass.)
             metrics_text = _audit_metrics.render(tenant_id, since=None)
-
-            # Cache the result under a tenant-scoped key
-            cache_key = f"{tenant_id}:metrics:prometheus"
-            _audit_metrics.set_cached_metrics(cache_key, {
-                "text": metrics_text,
-                "content_type": "text/plain; version=0.0.4",
-            })
 
             logger.debug(
                 "Metrics collected for tenant %s (%d bytes)",

@@ -163,5 +163,28 @@ class ErrorHandlingTests(unittest.TestCase):
         asyncio.run(self.async_test_collection_error_doesnt_stop_daemon())
 
 
+class MetricsCacheRegressionTests(unittest.TestCase):
+    """Regression: _collect_tenant_sync must not crash on a missing cache setter.
+
+    Before the fix, the daemon called ``_audit_metrics.set_cached_metrics(...)``
+    — a function that lives in the unread ``core/telemetry/metrics_cache.py``
+    module, NOT in ``corvin_gateway.audit_metrics`` — so every collection pass
+    logged ``Failed to collect metrics ... has no attribute 'set_cached_metrics'``
+    while the gateway ran. ``audit_metrics.render()`` already warms the cache the
+    ``/metrics`` endpoint reads, so the erroneous call was removed. This test
+    drives the real ``audit_metrics`` module (no mock) so the AttributeError
+    regression would resurface as an ERROR log.
+    """
+
+    def test_collect_tenant_sync_does_not_log_collection_error(self):
+        daemon = KPICollectorDaemon(interval_seconds=0.1)
+        with tempfile.TemporaryDirectory() as td:
+            # A tenant global dir so render() has a valid (empty) chain path.
+            (Path(td) / "tenants" / "_default" / "global").mkdir(parents=True)
+            with patch.dict(os.environ, {"CORVIN_HOME": td}):
+                with self.assertNoLogs("collector_daemon", level="ERROR"):
+                    daemon._collect_tenant_sync("_default")
+
+
 if __name__ == "__main__":
     unittest.main()
