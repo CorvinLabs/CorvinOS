@@ -50,14 +50,23 @@ from pathlib import Path
 # When the gateway runs as a service from within a repo checkout, _forge_paths.corvin_home()
 # would detect repo context and return repo/.corvin, breaking session storage symmetry.
 
-# Fix: Add CorvinOS root to Python path for module imports (Phase 3.5 Console Integration)
+# Put the CorvinOS repo ROOT on sys.path so the `core.<subpackage>` imports
+# resolve (core/console/... does `from core.learning import ...`).
+#
+# `core/` ITSELF must NEVER go on sys.path. Its subdirectories carry generic
+# top-level names -- audit, console, context, integration, agent, license,
+# features, monitoring -- that shadow the bridge/PYTHONPATH modules of the same
+# name. Adding it on 2026-08-31 (commit 6ab97601) made the tripwire's
+# `import audit` resolve to core/audit/ instead of
+# operator/bridges/shared/audit.py; core/audit has no `audit_path`, so
+# audit_writer_reachable + audit_chain_intact both failed with AttributeError
+# and the boot tripwire refused to boot -- the console served nothing for ~45
+# restart cycles. APPEND, never insert(0): the repo root also exposes generic
+# names (tests/, scripts/, docs/), and existing sys.path entries must win.
 _app_file = Path(__file__).resolve()
 _corvin_root = _app_file.parent.parent.parent.parent  # Navigate to CorvinOS root
-_core_path = _corvin_root / 'core'
 if str(_corvin_root) not in sys.path and _corvin_root.exists():
-    sys.path.insert(0, str(_corvin_root))
-if str(_core_path) not in sys.path and _core_path.exists():
-    sys.path.insert(0, str(_core_path))
+    sys.path.append(str(_corvin_root))
 # This must run BEFORE any module imports that use corvin_home() (e.g., _audit_metrics).
 if not os.environ.get("CORVIN_HOME"):
     os.environ["CORVIN_HOME"] = str(Path.home() / ".corvin")
