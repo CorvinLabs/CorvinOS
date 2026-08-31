@@ -1,0 +1,271 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 510" width="980" height="510">
+  <defs>
+    <marker id="ab" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/>
+    </marker>
+    <marker id="ag" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#22c55e"/>
+    </marker>
+    <marker id="aa" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/>
+    </marker>
+    <marker id="ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/>
+    </marker>
+    <marker id="ap" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <!-- Canvas -->
+  <rect width="980" height="510" fill="#0d1117"/>
+
+  <!-- ── Title ────────────────────────────────────────────────────── -->
+  <rect x="0" y="0" width="980" height="52" fill="#161b22"/>
+  <rect x="0" y="51" width="980" height="1" fill="#30363d"/>
+  <text x="490" y="22" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="15" font-weight="bold" fill="#e6edf3">ULO — User-Defined Learning Objectives</text>
+  <text x="490" y="40" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="11" fill="#8b949e">Persistent per-chat behavioural goals  ·  ADR-0163  ·  M1 inject · M2 compliance · M3 reinforcement</text>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- SECTION 1: USER COMMANDS                                      -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <text x="18" y="76" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#3b82f6" font-weight="bold" letter-spacing="1.2">USER COMMANDS</text>
+  <rect x="14" y="80" width="952" height="108" rx="6" fill="#0c1520" stroke="#1d4ed8" stroke-width="1"/>
+
+  <!-- User node -->
+  <rect x="28" y="96" width="104" height="76" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="80" y="120" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="12" font-weight="bold" fill="#e6edf3">User</text>
+  <text x="80" y="136" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">Discord</text>
+  <text x="80" y="149" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">WhatsApp</text>
+  <text x="80" y="162" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">Console</text>
+
+  <!-- Arrow user → commands -->
+  <line x1="132" y1="134" x2="158" y2="134" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- Commands box -->
+  <rect x="160" y="86" width="352" height="96" rx="5" fill="#0d1a2e" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="172" y="103" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="#8b949e">
+    <tspan fill="#7ee787">/objective add </tspan><tspan fill="#f59e0b">high</tspan><tspan fill="#e6edf3">   Always reply in German</tspan>
+  </text>
+  <text x="172" y="117" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="#8b949e">
+    <tspan fill="#7ee787">/objective add </tspan><tspan fill="#8b949e">medium</tspan><tspan fill="#e6edf3"> Keep responses concise</tspan>
+  </text>
+  <text x="172" y="131" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="#8b949e">
+    <tspan fill="#7ee787">/objective add </tspan><tspan fill="#3b82f6">low</tspan><tspan fill="#e6edf3">    No markdown tables</tspan>
+  </text>
+  <line x1="172" y1="140" x2="500" y2="140" stroke="#21262d" stroke-width="1"/>
+  <text x="172" y="154" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">
+    <tspan fill="#7ee787">/objectives</tspan>
+    <tspan>  ·  </tspan>
+    <tspan fill="#7ee787">/objective pause</tspan>
+    <tspan> &lt;id&gt;  ·  </tspan>
+    <tspan fill="#7ee787">/objective resume</tspan>
+    <tspan> &lt;id&gt;  ·  </tspan>
+    <tspan fill="#7ee787">/objective delete</tspan>
+    <tspan> &lt;id&gt;</tspan>
+  </text>
+  <text x="172" y="172" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">Bridge + Console REST API both supported</text>
+
+  <!-- Arrow commands → registry -->
+  <line x1="512" y1="134" x2="538" y2="134" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- Registry box -->
+  <rect x="540" y="86" width="220" height="96" rx="5" fill="#161b22" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="650" y="106" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="12" font-weight="bold" fill="#a78bfa">ULO Registry</text>
+  <text x="650" y="122" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">tenants/&lt;tid&gt;/global/ulo/</text>
+  <text x="650" y="136" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#7ee787">&lt;channel&gt;__&lt;chat&gt;.json</text>
+  <text x="650" y="150" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">mode 0600  ·  per-tenant isolated</text>
+  <text x="650" y="166" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">GDPR Art. 17 erasure via corvin-erasure</text>
+  <text x="650" y="178" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">opt-in: spec.ulo.enabled: true</text>
+
+  <!-- Priority legend -->
+  <rect x="784" y="90" width="172" height="88" rx="5" fill="#0a1a0a" stroke="#22c55e" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="870" y="107" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="10" fill="#22c55e" font-weight="bold">Priority</text>
+  <circle cx="800" cy="122" r="5" fill="#ef4444"/>
+  <text x="812" y="126" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#e6edf3">high    — first in block</text>
+  <circle cx="800" cy="140" r="5" fill="#f59e0b"/>
+  <text x="812" y="144" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#e6edf3">medium — default</text>
+  <circle cx="800" cy="158" r="5" fill="#3b82f6"/>
+  <text x="812" y="162" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#e6edf3">low     — last in block</text>
+  <text x="870" y="175" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#8b949e">max 10 active / chat</text>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- SECTION 2: PER-TURN INJECTION (M1)                           -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <text x="18" y="210" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#3b82f6" font-weight="bold" letter-spacing="1.2">EVERY TURN — SYSTEM PROMPT INJECTION  (M1)</text>
+  <rect x="14" y="214" width="952" height="114" rx="6" fill="#0c1520" stroke="#1d4ed8" stroke-width="1"/>
+
+  <!-- Adapter -->
+  <rect x="28" y="228" width="104" height="86" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="80" y="253" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="12" font-weight="bold" fill="#e6edf3">Adapter</text>
+  <text x="80" y="269" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">reads active</text>
+  <text x="80" y="282" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">objectives</text>
+  <text x="80" y="295" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">from registry</text>
+  <text x="80" y="308" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#3b82f6">sorted h→m→l</text>
+
+  <line x1="132" y1="271" x2="158" y2="271" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- Prompt block -->
+  <rect x="160" y="222" width="310" height="100" rx="5" fill="#0d1a2e" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="172" y="238" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#7ee787">&lt;learning_objectives&gt;</text>
+  <text x="184" y="252" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#ffa657">  [high]  Always reply in German</text>
+  <text x="184" y="265" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#8b949e">  [med]   Keep responses concise</text>
+  <text x="184" y="278" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#3b82f6">  [low]   No markdown tables</text>
+  <text x="172" y="291" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#7ee787">&lt;/learning_objectives&gt;</text>
+  <text x="460" y="308" text-anchor="end" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#8b949e">injected before session_goal, after persona</text>
+  <text x="460" y="318" text-anchor="end" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#8b949e">M3 reinforcement block follows (if triggered)</text>
+
+  <line x1="470" y1="271" x2="496" y2="271" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- LLM -->
+  <rect x="498" y="232" width="128" height="78" rx="5" fill="#161b22" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="562" y="260" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="13" font-weight="bold" fill="#a78bfa">LLM</text>
+  <text x="562" y="276" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">Claude · Hermes</text>
+  <text x="562" y="289" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">Codex · OpenCode</text>
+  <text x="562" y="303" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#8b949e">Copilot · …</text>
+
+  <line x1="626" y1="271" x2="652" y2="271" stroke="#22c55e" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <!-- Response -->
+  <rect x="654" y="232" width="140" height="78" rx="5" fill="#0a1a0a" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="724" y="260" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="13" font-weight="bold" fill="#22c55e">Response</text>
+  <text x="724" y="276" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">guided by objectives</text>
+  <text x="724" y="289" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">via system prompt</text>
+
+  <!-- Arrow response down to compliance -->
+  <line x1="724" y1="310" x2="724" y2="348" stroke="#22c55e" stroke-width="1.5"
+        stroke-dasharray="4,3" marker-end="url(#ag)"/>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- SECTION 3: BACKGROUND COMPLIANCE + REINFORCEMENT             -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <text x="18" y="347" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#f59e0b" font-weight="bold" letter-spacing="1.2">BACKGROUND — M2 COMPLIANCE CHECK + M3 REINFORCEMENT</text>
+  <rect x="14" y="350" width="952" height="112" rx="6" fill="#130e00" stroke="#92400e" stroke-width="1"/>
+
+  <!-- Metadata -->
+  <rect x="654" y="362" width="140" height="88" rx="5" fill="#161b22" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="724" y="382" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="11" font-weight="bold" fill="#22c55e">Metadata</text>
+  <text x="724" y="397" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">language detected</text>
+  <text x="724" y="410" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">response length</text>
+  <text x="724" y="423" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">format / structure</text>
+  <text x="724" y="440" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#ef4444">never content / text</text>
+
+  <line x1="654" y1="406" x2="618" y2="406" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#aa)"/>
+
+  <!-- Haiku check -->
+  <rect x="498" y="362" width="118" height="88" rx="5" fill="#1a1200" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="557" y="382" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="11" font-weight="bold" fill="#f59e0b">Haiku-4.5</text>
+  <text x="557" y="397" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">per-objective</text>
+  <text x="557" y="410" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">compliance check</text>
+  <text x="557" y="423" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">async · best-effort</text>
+  <text x="557" y="436" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#8b949e">compliant / not</text>
+
+  <line x1="498" y1="406" x2="462" y2="406" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#aa)"/>
+
+  <!-- EMA rate -->
+  <rect x="346" y="362" width="114" height="88" rx="5" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="403" y="382" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="11" font-weight="bold" fill="#f59e0b">EMA Rate</text>
+  <text x="403" y="396" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">r ← α·result</text>
+  <text x="403" y="409" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">    + (1-α)·r</text>
+  <text x="403" y="422" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">α = 0.2</text>
+  <text x="403" y="436" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#8b949e">saved to registry</text>
+
+  <line x1="346" y1="406" x2="310" y2="406" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#aa)"/>
+
+  <!-- Threshold gate -->
+  <rect x="194" y="362" width="114" height="88" rx="5" fill="#1a0000" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="251" y="382" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="11" font-weight="bold" fill="#ef4444">Threshold</text>
+  <text x="251" y="396" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">rate &lt; threshold</text>
+  <text x="251" y="410" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">AND failures ≥ 2</text>
+  <line x1="204" y1="420" x2="298" y2="420" stroke="#30363d" stroke-width="1"/>
+  <text x="251" y="434" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#ef4444" font-weight="bold">→ trigger M3</text>
+  <text x="251" y="445" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#8b949e">next turn only</text>
+
+  <line x1="194" y1="406" x2="158" y2="406" stroke="#ef4444" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <!-- Reinforcement -->
+  <rect x="28" y="362" width="128" height="88" rx="5" fill="#1a0000" stroke="#ef4444"
+        stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="92" y="382" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="11" font-weight="bold" fill="#ef4444">Reinforcement</text>
+  <text x="92" y="396" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">&lt;ulo_reinforcement&gt;</text>
+  <text x="92" y="409" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">Reminder block</text>
+  <text x="92" y="422" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">added after</text>
+  <text x="92" y="435" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">&lt;/learning_objectives&gt;</text>
+  <text x="92" y="449" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#ef4444">M3 — next turn</text>
+
+  <!-- Arrow: reinforcement feeds back into prompt injection -->
+  <path d="M92,362 L92,316 L160,316 L160,286" fill="none" stroke="#ef4444"
+        stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#ar)"/>
+  <text x="130" y="312" font-family="ui-monospace,Consolas,monospace" font-size="8"
+        fill="#ef4444">injected next turn</text>
+
+  <!-- ── Footer ───────────────────────────────────────────────────── -->
+  <rect x="0" y="474" width="980" height="36" fill="#161b22"/>
+  <rect x="0" y="474" width="980" height="1" fill="#30363d"/>
+  <text x="490" y="491" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">Tenant-isolated  ·  GDPR Art.17 erasure  ·  L16 audit on all state changes  ·  spec.ulo.enabled opt-in  ·  never content in audit  ·  ADR-0163</text>
+  <text x="490" y="504" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">CorvinOS · User-Defined Learning Objectives</text>
+</svg>

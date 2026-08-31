@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>The audit spine — hash-chained log + compliance gate stack</title>
+  <desc>Top half: the hash chain visualized as linked records. Each event carries prev_hash and hash; tampering with any field breaks the chain at that point. Bottom half: the four structural compliance gates (disclosure, consent, zone, vault) all emit into the same chain, making a single voice-audit verify call cover every regulatory mechanism.</desc>
+
+  <defs>
+    <marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ar5w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#cbd5e1"/>
+    </marker>
+  </defs>
+
+  <text x="540" y="32" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">The audit spine — one chain, every gate</text>
+  <text x="540" y="54" text-anchor="middle" font-size="12" fill="#64748b">Hash-chained, tamper-evident, offline-verifiable. Every compliance mechanism emits into it.</text>
+
+  <!-- TOP — hash chain visualization -->
+  <text x="540" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Hash chain · &lt;corvin_home&gt;/global/forge/audit.jsonl</text>
+
+  <g font-size="10" fill="#0f172a">
+    <!-- record N-1 -->
+    <rect x="40" y="116" width="220" height="120" rx="8" fill="#f1f5f9" stroke="#0f172a" stroke-width="1.5"/>
+    <text x="150" y="138" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">event N-1 (older)</text>
+    <text x="56" y="160" font-family="monospace" font-size="9.5">"ts":         1778204000.5</text>
+    <text x="56" y="174" font-family="monospace" font-size="9.5">"event_type": "tool.invoked"</text>
+    <text x="56" y="188" font-family="monospace" font-size="9.5">"severity":   "INFO"</text>
+    <text x="56" y="202" font-family="monospace" font-size="9.5">"details":    {…}</text>
+    <text x="56" y="216" font-family="monospace" font-size="9.5">"prev_hash":  "f8a2…"</text>
+    <text x="56" y="230" font-family="monospace" font-size="9.5" font-weight="700" fill="#dc2626">"hash":       "9a3c…"</text>
+
+    <!-- record N -->
+    <rect x="320" y="116" width="220" height="120" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="430" y="138" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">event N (current)</text>
+    <text x="336" y="160" font-family="monospace" font-size="9.5">"ts":         1778204500.2</text>
+    <text x="336" y="174" font-family="monospace" font-size="9.5">"event_type": "consent.granted"</text>
+    <text x="336" y="188" font-family="monospace" font-size="9.5">"severity":   "INFO"</text>
+    <text x="336" y="202" font-family="monospace" font-size="9.5">"details":    {…}</text>
+    <text x="336" y="216" font-family="monospace" font-size="9.5" font-weight="700" fill="#dc2626">"prev_hash":  "9a3c…"  ←</text>
+    <text x="336" y="230" font-family="monospace" font-size="9.5" font-weight="700" fill="#dc2626">"hash":       "7b1f…"</text>
+
+    <!-- record N+1 -->
+    <rect x="600" y="116" width="220" height="120" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="710" y="138" text-anchor="middle" font-size="11" font-weight="700" fill="#14532d">event N+1 (newer)</text>
+    <text x="616" y="160" font-family="monospace" font-size="9.5">"ts":         1778204700.0</text>
+    <text x="616" y="174" font-family="monospace" font-size="9.5">"event_type": "skill.created"</text>
+    <text x="616" y="188" font-family="monospace" font-size="9.5">"severity":   "INFO"</text>
+    <text x="616" y="202" font-family="monospace" font-size="9.5">"details":    {…}</text>
+    <text x="616" y="216" font-family="monospace" font-size="9.5" font-weight="700" fill="#dc2626">"prev_hash":  "7b1f…"  ←</text>
+    <text x="616" y="230" font-family="monospace" font-size="9.5" font-weight="700" fill="#dc2626">"hash":       "5e8d…"</text>
+
+    <!-- next … -->
+    <rect x="880" y="148" width="160" height="56" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="3,3"/>
+    <text x="960" y="170" text-anchor="middle" font-size="11" font-weight="700" fill="#475569">…</text>
+    <text x="960" y="190" text-anchor="middle" font-size="10" fill="#475569">prev_hash: "5e8d…"</text>
+  </g>
+
+  <!-- chain links -->
+  <line x1="260" y1="222" x2="320" y2="222" stroke="#dc2626" stroke-width="2" marker-end="url(#ar5)"/>
+  <line x1="540" y1="222" x2="600" y2="222" stroke="#dc2626" stroke-width="2" marker-end="url(#ar5)"/>
+  <line x1="820" y1="178" x2="880" y2="178" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#ar5)"/>
+
+  <!-- hash formula -->
+  <rect x="40" y="252" width="1000" height="40" rx="6" fill="#fef3c7" stroke="#d97706"/>
+  <text x="540" y="270" text-anchor="middle" font-size="11" font-weight="700" fill="#92400e">hash = sha256(prev_hash ‖ canonical_json(record))[:16]</text>
+  <text x="540" y="285" text-anchor="middle" font-size="10" fill="#78350f">Tampering with ANY field of ANY record breaks the chain at that offset. voice-audit verify reports the line.</text>
+
+  <!-- BOTTOM — compliance gate stack feeding the chain -->
+  <text x="540" y="328" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Compliance gates — every mechanism emits into the chain</text>
+
+  <!-- Five gate columns -->
+  <g font-size="10" fill="#0f172a">
+    <!-- Gate 1 — disclosure -->
+    <rect x="40" y="354" width="180" height="220" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="130" y="378" text-anchor="middle" font-size="12" font-weight="700" fill="#92400e">DISCLOSURE</text>
+    <text x="130" y="396" text-anchor="middle" font-size="10" fill="#78350f">EU AI Act Art. 50</text>
+    <text x="130" y="416" text-anchor="middle">first-message card</text>
+    <text x="130" y="430" text-anchor="middle">per (channel,chat,uid)</text>
+    <text x="130" y="444" text-anchor="middle">/join · /pass · /leave</text>
+    <text x="130" y="468" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">→ chain events:</text>
+    <text x="130" y="484" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#92400e">disclosure.shown</text>
+    <text x="130" y="498" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#92400e">disclosure.action</text>
+    <text x="130" y="512" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#92400e">disclosure.joined</text>
+    <text x="130" y="540" text-anchor="middle" font-size="10" font-style="italic" fill="#78350f">"we informed user X</text>
+    <text x="130" y="554" text-anchor="middle" font-size="10" font-style="italic" fill="#78350f">on date Y; they chose Z"</text>
+
+    <!-- Gate 2 — consent -->
+    <rect x="240" y="354" width="180" height="240" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="330" y="378" text-anchor="middle" font-size="12" font-weight="700" fill="#1e3a8a">CONSENT</text>
+    <text x="330" y="396" text-anchor="middle" font-size="10" fill="#1e3a8a">GDPR Art. 6, 7</text>
+    <text x="330" y="416" text-anchor="middle">per-uid gate</text>
+    <text x="330" y="430" text-anchor="middle">deny by default</text>
+    <text x="330" y="444" text-anchor="middle">/consent on/off/&lt;ttl&gt; · /share</text>
+    <text x="330" y="468" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">→ chain events:</text>
+    <text x="330" y="484" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#1e3a8a">consent.observer_dropped</text>
+    <text x="330" y="498" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#1e3a8a">consent.share_admitted</text>
+    <text x="330" y="512" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#1e3a8a">consent.consume_drift</text>
+    <text x="330" y="526" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#1e3a8a">consent.store_corrupted</text>
+    <text x="330" y="554" text-anchor="middle" font-size="10" font-style="italic" fill="#1e3a8a">"observer X opted in;</text>
+    <text x="330" y="568" text-anchor="middle" font-size="10" font-style="italic" fill="#1e3a8a">all audit events use uid_hash</text>
+    <text x="330" y="582" text-anchor="middle" font-size="10" font-style="italic" fill="#1e3a8a">— never raw platform ID"</text>
+
+    <!-- Gate 3 — zone -->
+    <rect x="440" y="354" width="180" height="220" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="530" y="378" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">ZONE</text>
+    <text x="530" y="396" text-anchor="middle" font-size="10" fill="#166534">EU AI Act Art. 14 · GDPR Art. 32</text>
+    <text x="530" y="416" text-anchor="middle">tenant.data_residency</text>
+    <text x="530" y="430" text-anchor="middle">engine zone matched</text>
+    <text x="530" y="444" text-anchor="middle">eu-west / global / …</text>
+    <text x="530" y="468" text-anchor="middle" font-size="10" font-weight="700" fill="#14532d">→ chain events:</text>
+    <text x="530" y="484" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#14532d">gateway.zone_denied</text>
+    <text x="530" y="498" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#14532d">gateway.engine_denied</text>
+    <text x="530" y="540" text-anchor="middle" font-size="10" font-style="italic" fill="#166534">"every audit row with</text>
+    <text x="530" y="554" text-anchor="middle" font-size="10" font-style="italic" fill="#166534">engine_id matches an</text>
+    <text x="530" y="568" text-anchor="middle" font-size="10" font-style="italic" fill="#166534">allowed zone"</text>
+
+    <!-- Gate 4 — vault -->
+    <rect x="640" y="354" width="180" height="220" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="730" y="378" text-anchor="middle" font-size="12" font-weight="700" fill="#5b21b6">VAULT</text>
+    <text x="730" y="396" text-anchor="middle" font-size="10" fill="#4c1d95">GDPR Art. 32</text>
+    <text x="730" y="416" text-anchor="middle">capability split</text>
+    <text x="730" y="430" text-anchor="middle">env-by-name in tool meta</text>
+    <text x="730" y="444" text-anchor="middle">vault → bwrap, never LLM</text>
+    <text x="730" y="468" text-anchor="middle" font-size="10" font-weight="700" fill="#5b21b6">→ chain events:</text>
+    <text x="730" y="484" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#5b21b6">tool.secrets_injected</text>
+    <text x="730" y="498" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#5b21b6">acl.persona_secret_denied</text>
+    <text x="730" y="512" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#5b21b6">secret.vault_malformed</text>
+    <text x="730" y="540" text-anchor="middle" font-size="10" font-style="italic" fill="#4c1d95">"key X used by tool Y</text>
+    <text x="730" y="554" text-anchor="middle" font-size="10" font-style="italic" fill="#4c1d95">at time Z — name only,</text>
+    <text x="730" y="568" text-anchor="middle" font-size="10" font-style="italic" fill="#4c1d95">never the value"</text>
+
+    <!-- Gate 5 — path-gate -->
+    <rect x="840" y="354" width="200" height="220" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+    <text x="940" y="378" text-anchor="middle" font-size="12" font-weight="700" fill="#7f1d1d">PATH-GATE</text>
+    <text x="940" y="396" text-anchor="middle" font-size="10" fill="#991b1b">GDPR Art. 32</text>
+    <text x="940" y="416" text-anchor="middle">PreToolUse hook</text>
+    <text x="940" y="430" text-anchor="middle">denies direct writes to</text>
+    <text x="940" y="444" text-anchor="middle">forge / skill-forge / audit</text>
+    <text x="940" y="468" text-anchor="middle" font-size="10" font-weight="700" fill="#7f1d1d">→ chain events:</text>
+    <text x="940" y="484" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#7f1d1d">path_gate.denied</text>
+    <text x="940" y="498" text-anchor="middle" font-size="9.5" font-family="monospace" fill="#7f1d1d">path_gate.self_test_failed</text>
+    <text x="940" y="540" text-anchor="middle" font-size="10" font-style="italic" fill="#991b1b">"every Bash redirect/eval/</text>
+    <text x="940" y="554" text-anchor="middle" font-size="10" font-style="italic" fill="#991b1b">heredoc against forge tree</text>
+    <text x="940" y="568" text-anchor="middle" font-size="10" font-style="italic" fill="#991b1b">fail-closed at the LLM gate"</text>
+  </g>
+
+  <!-- arrows from gates down to spine -->
+  <line x1="130" y1="574" x2="130" y2="610" stroke="#475569" marker-end="url(#ar5)"/>
+  <line x1="330" y1="594" x2="330" y2="610" stroke="#475569" marker-end="url(#ar5)"/>
+  <line x1="530" y1="574" x2="530" y2="610" stroke="#475569" marker-end="url(#ar5)"/>
+  <line x1="730" y1="574" x2="730" y2="610" stroke="#475569" marker-end="url(#ar5)"/>
+  <line x1="940" y1="574" x2="940" y2="610" stroke="#475569" marker-end="url(#ar5)"/>
+
+  <!-- The unified chain -->
+  <rect x="40" y="610" width="1000" height="96" rx="10" fill="#0f172a"/>
+  <text x="540" y="636" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">UNIFIED HASH CHAIN — &lt;corvin_home&gt;/global/forge/audit.jsonl</text>
+  <text x="540" y="656" text-anchor="middle" font-size="11" fill="#cbd5e1">Daily systemd timer at 04:30 runs voice-audit verify → bridge-notification on chain break (out-of-band, hash_chain=False).</text>
+  <text x="540" y="672" text-anchor="middle" font-size="11" fill="#cbd5e1">Rotation is mutex-protected (fcntl flock): concurrent rotations fail fast rather than race. audit.rotation_link write is fail-closed: a write failure aborts rotation with RuntimeError.</text>
+  <text x="540" y="690" text-anchor="middle" font-size="11" fill="#cbd5e1">Per-tenant Prometheus /metrics scrape projects 14 metric families from this single substrate. No second telemetry pipeline.</text>
+</svg>

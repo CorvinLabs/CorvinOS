@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 760" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Corvin-OS — organisational integration map</title>
+  <desc>Layered integration map for organisations adopting Corvin-OS. Centre: the Corvin-OS core (bridge adapter, persona resolver, forge / skill-forge factory, hash-chain audit). Left: messaging channels (Discord, Slack, Telegram, WhatsApp, e-mail) reaching staff and read-only observers. Right: backend integration via MCP servers, custom tools, internal APIs, secret vault. Top: governance and compliance layer (roles, quota, consent, disclosure card, EU AI Act 2026 baseline). Bottom: pluggable LLM engines (Claude Code, Codex CLI, future engines via WorkerEngine protocol).</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrCyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#06b6d4"/>
+    </marker>
+  </defs>
+
+  <text x="540" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Corvin-OS — organisational integration map</text>
+  <text x="540" y="52" text-anchor="middle" font-size="12" fill="#475569">Five integration surfaces (channels, backends, engines, governance, persona) around one append-only audit chain.</text>
+
+  <!-- ============ TOP: Governance & Compliance ============ -->
+  <rect x="80" y="78" width="920" height="86" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="100" y="102" font-size="13" font-weight="700" fill="#92400e">Governance &amp; Compliance layer</text>
+  <text x="100" y="120" font-size="11" fill="#0f172a">Roles (owner / admin / member / observer)  ·  per-user Quota (msgs &amp; tokens / day)  ·  Consent gate (durable / TTL / per-message)</text>
+  <text x="100" y="138" font-size="11" fill="#0f172a">Bot-disclosure card (one-time per uid, EU AI Act 2026 baseline)  ·  Audit-view (/audit me, /audit chat)  ·  Daily hash-chain verify timer</text>
+  <text x="100" y="156" font-size="10" font-style="italic" fill="#92400e">Every grant, refusal, observer admit, secret injection and policy override appears as a signed event in the unified chain.</text>
+
+  <!-- ============ LEFT: Channels ============ -->
+  <rect x="40" y="195" width="220" height="456" rx="10" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="60" y="219" font-size="13" font-weight="700" fill="#1e40af">Channels (Layer 2)</text>
+  <text x="60" y="237" font-size="10" fill="#475569">Whitelist + read-only role per channel</text>
+
+  <rect x="60" y="252" width="180" height="42" rx="6" fill="#ffffff" stroke="#3b82f6"/>
+  <text x="72" y="270" font-size="11" font-weight="700" fill="#1e40af">Discord</text>
+  <text x="72" y="285" font-size="10" fill="#0f172a">slash-cmd registration · DMs &amp; guilds</text>
+
+  <rect x="60" y="304" width="180" height="42" rx="6" fill="#ffffff" stroke="#3b82f6"/>
+  <text x="72" y="322" font-size="11" font-weight="700" fill="#1e40af">Slack</text>
+  <text x="72" y="337" font-size="10" fill="#0f172a">socket-mode bot · workspace-scoped</text>
+
+  <rect x="60" y="356" width="180" height="42" rx="6" fill="#ffffff" stroke="#3b82f6"/>
+  <text x="72" y="374" font-size="11" font-weight="700" fill="#1e40af">Telegram</text>
+  <text x="72" y="389" font-size="10" fill="#0f172a">long-poll · per-chat profiles</text>
+
+  <rect x="60" y="408" width="180" height="42" rx="6" fill="#ffffff" stroke="#3b82f6"/>
+  <text x="72" y="426" font-size="11" font-weight="700" fill="#1e40af">WhatsApp (Baileys)</text>
+  <text x="72" y="441" font-size="10" fill="#0f172a">QR-pair · enabled_chats list</text>
+
+  <rect x="60" y="460" width="180" height="36" rx="6" fill="#ffffff" stroke="#3b82f6"/>
+  <text x="72" y="475" font-size="11" font-weight="700" fill="#1e40af">E-mail (IMAP/SMTP)</text>
+  <text x="72" y="489" font-size="10" fill="#0f172a">poll inbox · reply-by-mail thread</text>
+
+  <rect x="60" y="504" width="180" height="36" rx="6" fill="#ffffff" stroke="#0078d4"/>
+  <text x="72" y="519" font-size="11" font-weight="700" fill="#0078d4">Teams</text>
+  <text x="72" y="533" font-size="10" fill="#0f172a">Bot Framework · multi-tenant · Adaptive Cards</text>
+
+  <rect x="60" y="548" width="180" height="36" rx="6" fill="#ffffff" stroke="#3a76f0"/>
+  <text x="72" y="563" font-size="11" font-weight="700" fill="#3a76f0">Signal</text>
+  <text x="72" y="577" font-size="10" fill="#0f172a">signal-cli REST API · E.164 whitelist</text>
+
+  <rect x="60" y="592" width="180" height="42" rx="6" fill="#fef3c7" stroke="#d97706" stroke-dasharray="4,3"/>
+  <text x="72" y="610" font-size="11" font-weight="700" fill="#92400e">+ Custom channel</text>
+  <text x="72" y="624" font-size="10" fill="#0f172a">drop a daemon.js into</text>
+  <text x="72" y="636" font-size="10" fill="#0f172a">bridges/&lt;channel&gt;/, share inbox/outbox protocol</text>
+
+  <!-- ============ CENTRE: Corvin-OS Core ============ -->
+  <rect x="290" y="195" width="500" height="380" rx="14" fill="#cffafe" stroke="#06b6d4" stroke-width="2.5"/>
+  <text x="540" y="223" text-anchor="middle" font-size="15" font-weight="700" fill="#0e7490">Corvin-OS Core</text>
+  <text x="540" y="240" text-anchor="middle" font-size="10" fill="#475569">single agent, swappable engine, per-chat specialisation</text>
+
+  <!-- adapter -->
+  <rect x="312" y="258" width="456" height="56" rx="8" fill="#ffffff" stroke="#06b6d4"/>
+  <text x="540" y="278" text-anchor="middle" font-size="12" font-weight="700" fill="#0e7490">Bridge adapter (Layer 2)</text>
+  <text x="540" y="296" text-anchor="middle" font-size="10" fill="#0f172a">inbox queue · per-chat lock · /btw mid-stream inject · streaming watchdog · /reset · /cancel</text>
+  <text x="540" y="308" text-anchor="middle" font-size="10" fill="#475569">Hot-reload on every settings.json mtime change</text>
+
+  <!-- persona / routing -->
+  <rect x="312" y="324" width="220" height="62" rx="8" fill="#ffffff" stroke="#3b82f6"/>
+  <text x="422" y="343" text-anchor="middle" font-size="12" font-weight="700" fill="#1e40af">Personas (Layer 3)</text>
+  <text x="422" y="358" text-anchor="middle" font-size="10" fill="#0f172a">coder · browser · research · inbox</text>
+  <text x="422" y="370" text-anchor="middle" font-size="10" fill="#0f172a">forge · homeassistant · custom</text>
+  <text x="422" y="382" text-anchor="middle" font-size="9" fill="#475569">JSON file → tools, MCP, system prompt</text>
+
+  <rect x="548" y="324" width="220" height="62" rx="8" fill="#ffffff" stroke="#3b82f6"/>
+  <text x="658" y="343" text-anchor="middle" font-size="12" font-weight="700" fill="#1e40af">Auto-routing (Layer 4)</text>
+  <text x="658" y="358" text-anchor="middle" font-size="10" fill="#0f172a">heuristic · embedding · LLM fallback</text>
+  <text x="658" y="370" text-anchor="middle" font-size="10" fill="#0f172a">picks one persona per message</text>
+  <text x="658" y="382" text-anchor="middle" font-size="9" fill="#475569">~/.config / chat_profile override</text>
+
+  <!-- forge / skill-forge -->
+  <rect x="312" y="396" width="220" height="62" rx="8" fill="#ffffff" stroke="#0e7490"/>
+  <text x="422" y="415" text-anchor="middle" font-size="12" font-weight="700" fill="#0e7490">Forge (Layer 6)</text>
+  <text x="422" y="430" text-anchor="middle" font-size="10" fill="#0f172a">runtime tool factory · bwrap sandbox</text>
+  <text x="422" y="442" text-anchor="middle" font-size="10" fill="#0f172a">policy.json clamps · per-persona ACL</text>
+  <text x="422" y="454" text-anchor="middle" font-size="9" fill="#475569">stdout cap · cache · secret-vault env inject</text>
+
+  <rect x="548" y="396" width="220" height="62" rx="8" fill="#ffffff" stroke="#0e7490"/>
+  <text x="658" y="415" text-anchor="middle" font-size="12" font-weight="700" fill="#0e7490">Skill-Forge (Layer 7)</text>
+  <text x="658" y="430" text-anchor="middle" font-size="10" fill="#0f172a">linter-gated SKILL.md generation</text>
+  <text x="658" y="442" text-anchor="middle" font-size="10" fill="#0f172a">grade-driven promotion (task→user)</text>
+  <text x="658" y="454" text-anchor="middle" font-size="9" fill="#475569">slot-mirror to plugin tree (boot-discovery)</text>
+
+  <!-- audit chain -->
+  <rect x="312" y="468" width="456" height="56" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="540" y="488" text-anchor="middle" font-size="12" font-weight="700" fill="#9a3412">Unified hash-chain audit log (Layer 5)</text>
+  <text x="540" y="506" text-anchor="middle" font-size="10" fill="#0f172a">single ~/.corvin/global/forge/audit.jsonl · SHA-chained · `voice-audit verify` · daily timer</text>
+  <text x="540" y="518" text-anchor="middle" font-size="9" fill="#475569">tamper-evident; CRITICAL chain-break fans out via bridge notification relay</text>
+
+  <!-- LDD discipline -->
+  <rect x="312" y="534" width="456" height="32" rx="6" fill="#ecfeff" stroke="#0891b2" stroke-dasharray="4,3"/>
+  <text x="540" y="553" text-anchor="middle" font-size="11" font-weight="700" fill="#155e75">LDD (Layer 14) — 12 toggleable engineering disciplines · per-persona presets · cascading dependencies</text>
+
+  <!-- ============ RIGHT: Backends / Tools ============ -->
+  <rect x="820" y="195" width="220" height="380" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="840" y="219" font-size="13" font-weight="700" fill="#166534">Backends &amp; tooling</text>
+  <text x="840" y="237" font-size="10" fill="#475569">declarative wiring per persona</text>
+
+  <rect x="840" y="252" width="180" height="42" rx="6" fill="#ffffff" stroke="#16a34a"/>
+  <text x="852" y="270" font-size="11" font-weight="700" fill="#166534">MCP servers</text>
+  <text x="852" y="285" font-size="10" fill="#0f172a">internal APIs, CRM, ticketing</text>
+
+  <rect x="840" y="304" width="180" height="42" rx="6" fill="#ffffff" stroke="#16a34a"/>
+  <text x="852" y="322" font-size="11" font-weight="700" fill="#166534">Forged tools</text>
+  <text x="852" y="337" font-size="10" fill="#0f172a">deterministic Python · sandboxed</text>
+
+  <rect x="840" y="356" width="180" height="42" rx="6" fill="#ffffff" stroke="#16a34a"/>
+  <text x="852" y="374" font-size="11" font-weight="700" fill="#166534">Secret vault</text>
+  <text x="852" y="389" font-size="10" fill="#0f172a">~/.config/corvin-voice/secrets.json (0600)</text>
+
+  <rect x="840" y="408" width="180" height="42" rx="6" fill="#ffffff" stroke="#16a34a"/>
+  <text x="852" y="426" font-size="11" font-weight="700" fill="#166534">Notification relay</text>
+  <text x="852" y="441" font-size="10" fill="#0f172a">push desktop ↔ phone, audit alerts</text>
+
+  <rect x="840" y="460" width="180" height="42" rx="6" fill="#ffffff" stroke="#16a34a"/>
+  <text x="852" y="478" font-size="11" font-weight="700" fill="#166534">External webhooks</text>
+  <text x="852" y="493" font-size="10" fill="#0f172a">Sentry, PagerDuty, Mattermost, ...</text>
+
+  <rect x="840" y="512" width="180" height="48" rx="6" fill="#fef3c7" stroke="#d97706" stroke-dasharray="4,3"/>
+  <text x="852" y="530" font-size="11" font-weight="700" fill="#92400e">+ Custom MCP server</text>
+  <text x="852" y="546" font-size="10" fill="#0f172a">spawn via persona JSON</text>
+  <text x="852" y="558" font-size="10" fill="#0f172a">stdio or http transport</text>
+
+  <!-- ============ BOTTOM: Engines ============ -->
+  <rect x="80" y="664" width="920" height="92" rx="10" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.5"/>
+  <text x="100" y="688" font-size="13" font-weight="700" fill="#6b21a8">Engine layer (Layer 22) — WorkerEngine protocol</text>
+  <text x="100" y="705" font-size="11" fill="#0f172a">Backend-agnostic LLM-CLI contract: spawn() · inject() · capabilities · stream-json normalisation</text>
+
+  <rect x="120" y="714" width="200" height="34" rx="6" fill="#ffffff" stroke="#9333ea"/>
+  <text x="220" y="735" text-anchor="middle" font-size="11" font-weight="700" fill="#6b21a8">Claude Code (default)</text>
+
+  <rect x="340" y="714" width="200" height="34" rx="6" fill="#ffffff" stroke="#9333ea"/>
+  <text x="440" y="735" text-anchor="middle" font-size="11" font-weight="700" fill="#6b21a8">Codex CLI</text>
+
+  <rect x="560" y="714" width="200" height="34" rx="6" fill="#ffffff" stroke="#9333ea"/>
+  <text x="660" y="735" text-anchor="middle" font-size="11" font-weight="700" fill="#6b21a8">Gemini CLI / Cursor (planned)</text>
+
+  <rect x="780" y="714" width="200" height="34" rx="6" fill="#fef3c7" stroke="#d97706" stroke-dasharray="4,3"/>
+  <text x="880" y="735" text-anchor="middle" font-size="11" font-weight="700" fill="#92400e">+ Custom engine</text>
+
+  <!-- ============ Connector arrows ============ -->
+  <line x1="260" y1="423" x2="290" y2="423" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="790" y1="423" x2="820" y2="423" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="540" y1="164" x2="540" y2="195" stroke="#d97706" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="540" y1="575" x2="540" y2="664" stroke="#9333ea" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <text x="540" y="752" text-anchor="middle" font-size="11" font-style="italic" fill="#475569">
+    Cyan = Corvin-OS core. Blue = inherited messaging surface. Green = backend wiring. Orange = governance &amp; audit. Purple = engine layer.
+  </text>
+</svg>

@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 440" width="860" height="440">
+  <defs>
+    <marker id="ab" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/>
+    </marker>
+    <marker id="ag" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#22c55e"/>
+    </marker>
+    <marker id="aa" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/>
+    </marker>
+    <marker id="ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/>
+    </marker>
+    <marker id="ap" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <!-- Canvas -->
+  <rect width="860" height="440" fill="#0d1117"/>
+
+  <!-- Title -->
+  <rect x="0" y="0" width="860" height="50" fill="#161b22"/>
+  <rect x="0" y="49" width="860" height="1" fill="#30363d"/>
+  <text x="430" y="21" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="14" font-weight="bold" fill="#e6edf3">ULO — Objective Lifecycle &amp; Data Model</text>
+  <text x="430" y="39" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="10" fill="#8b949e">State machine (left)  ·  Compliance scoring detail (right)  ·  ADR-0163</text>
+
+  <!-- ──────────────────────────────────────────────────────── -->
+  <!-- LEFT: OBJECTIVE STATE MACHINE                           -->
+  <!-- ──────────────────────────────────────────────────────── -->
+  <text x="18" y="72" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#a78bfa" font-weight="bold" letter-spacing="1.2">OBJECTIVE LIFECYCLE</text>
+
+  <!-- START node -->
+  <circle cx="95" cy="106" r="16" fill="#3b82f6"/>
+  <text x="95" y="111" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="10" fill="#fff" font-weight="bold">add</text>
+
+  <!-- Arrow start → active -->
+  <line x1="111" y1="106" x2="157" y2="106" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+  <text x="134" y="99" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="8" fill="#3b82f6">active=true</text>
+
+  <!-- ACTIVE state -->
+  <rect x="158" y="82" width="118" height="48" rx="20" fill="#0a1a0a" stroke="#22c55e" stroke-width="2"/>
+  <text x="217" y="103" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="12" font-weight="bold" fill="#22c55e">ACTIVE</text>
+  <text x="217" y="118" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">injected every turn</text>
+
+  <!-- Arrow active → paused (below) -->
+  <path d="M217,130 L217,172" fill="none" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#aa)"/>
+  <text x="228" y="155" font-family="ui-monospace,Consolas,monospace" font-size="8" fill="#f59e0b">/pause</text>
+
+  <!-- PAUSED state -->
+  <rect x="158" y="174" width="118" height="48" rx="20" fill="#1a1200" stroke="#f59e0b" stroke-width="2"/>
+  <text x="217" y="196" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="12" font-weight="bold" fill="#f59e0b">PAUSED</text>
+  <text x="217" y="210" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">stored, not injected</text>
+
+  <!-- Arrow paused → active -->
+  <path d="M158,192 C118,192 118,106 158,106" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#ag)"/>
+  <text x="100" y="155" font-family="ui-monospace,Consolas,monospace" font-size="8" fill="#22c55e">/resume</text>
+
+  <!-- Arrow active → deleted -->
+  <path d="M276,106 L340,106 L340,262" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ar)"/>
+  <text x="298" y="99" font-family="ui-monospace,Consolas,monospace" font-size="8" fill="#ef4444">/delete</text>
+
+  <!-- Arrow paused → deleted -->
+  <path d="M276,198 L340,198 L340,262" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ar)"/>
+  <text x="298" y="193" font-family="ui-monospace,Consolas,monospace" font-size="8" fill="#ef4444">/delete</text>
+
+  <!-- DELETED / ERASED state -->
+  <rect x="288" y="264" width="108" height="48" rx="20" fill="#1a0000" stroke="#ef4444" stroke-width="2" stroke-dasharray="5,3"/>
+  <text x="342" y="285" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="12" font-weight="bold" fill="#ef4444">DELETED</text>
+  <text x="342" y="300" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">file purged</text>
+
+  <!-- GDPR erasure path -->
+  <circle cx="95" cy="288" r="16" fill="#1a0000" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="95" y="285" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="7" fill="#ef4444" font-weight="bold">GDPR</text>
+  <text x="95" y="296" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="7" fill="#ef4444">erase</text>
+  <path d="M95,272 L95,222 L158,198" fill="none" stroke="#ef4444" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="111" y1="288" x2="188" y2="288" stroke="#ef4444" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#ar)"/>
+  <text x="142" y="282" font-family="ui-monospace,Consolas,monospace" font-size="7" fill="#8b949e">all files</text>
+
+  <!-- Data model note -->
+  <rect x="28" y="334" width="380" height="92" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="44" y="352" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#a78bfa" font-weight="bold">Objective fields (ulo_schema.py)</text>
+  <text x="44" y="367" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#7ee787">id</text>
+  <text x="75" y="367" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">  nanoid  ·  immutable</text>
+  <text x="44" y="381" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#7ee787">text</text>
+  <text x="75" y="381" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">  NFKC-normalised, max 500 chars</text>
+  <text x="44" y="395" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#7ee787">priority</text>
+  <text x="75" y="395" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">  high | medium | low</text>
+  <text x="44" y="409" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#7ee787">active</text>
+  <text x="75" y="409" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">  bool  ·  compliance_rate  ·  consecutive_failures</text>
+
+  <!-- ──────────────────────────────────────────────────────── -->
+  <!-- RIGHT: COMPLIANCE SCORING                               -->
+  <!-- ──────────────────────────────────────────────────────── -->
+  <line x1="436" y1="58" x2="436" y2="428" stroke="#21262d" stroke-width="1"/>
+
+  <text x="452" y="72" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#f59e0b" font-weight="bold" letter-spacing="1.2">M2 COMPLIANCE SCORING — PER OBJECTIVE PER TURN</text>
+
+  <!-- Turn N annotation -->
+  <rect x="452" y="80" width="390" height="156" rx="5" fill="#130e00" stroke="#92400e" stroke-width="1"/>
+  <text x="462" y="98" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">Turn N — after response</text>
+
+  <!-- 1. Extract metadata -->
+  <rect x="462" y="104" width="176" height="56" rx="4" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="472" y="120" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e" font-weight="bold">1  Extract metadata</text>
+  <text x="472" y="134" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">   language, length, format</text>
+  <text x="472" y="148" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#ef4444">   never prompt or response text</text>
+
+  <!-- 2. Haiku call (per objective) -->
+  <line x1="638" y1="132" x2="648" y2="132" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#aa)"/>
+  <rect x="650" y="104" width="182" height="56" rx="4" fill="#1a1200" stroke="#f59e0b" stroke-width="1"/>
+  <text x="660" y="120" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#f59e0b" font-weight="bold">2  Haiku-4.5 judgment</text>
+  <text x="660" y="134" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">   compliant: true|false</text>
+  <text x="660" y="148" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">   confidence, reason_code</text>
+
+  <!-- 3. EMA update -->
+  <line x1="741" y1="160" x2="741" y2="170" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#aa)"/>
+  <rect x="650" y="172" width="182" height="56" rx="4" fill="#161b22" stroke="#f59e0b" stroke-width="1"/>
+  <text x="660" y="188" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#f59e0b" font-weight="bold">3  EMA update</text>
+  <text x="660" y="202" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">   r ← 0.2·result + 0.8·r</text>
+  <text x="660" y="216" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">   consecutive_failures++/reset</text>
+
+  <!-- 4. lock+save -->
+  <line x1="650" y1="200" x2="640" y2="200" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#aa)"/>
+  <rect x="462" y="172" width="176" height="56" rx="4" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="472" y="188" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e" font-weight="bold">4  Lock, reload, merge, save</text>
+  <text x="472" y="202" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">   reload from disk (safe merge)</text>
+  <text x="472" y="216" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">   only stats fields overwritten</text>
+
+  <!-- Threshold & reinforcement trigger -->
+  <rect x="452" y="248" width="390" height="90" rx="5" fill="#1a0000" stroke="#ef4444" stroke-width="1"/>
+  <text x="462" y="266" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#ef4444" font-weight="bold">M3 Reinforcement trigger (next turn)</text>
+  <text x="462" y="281" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">  condition:  compliance_rate &lt; objective.reinforcement_threshold</text>
+  <text x="462" y="295" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">             AND consecutive_failures ≥ 2</text>
+  <text x="462" y="309" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">  result:     &lt;ulo_reinforcement&gt; block appended after</text>
+  <text x="462" y="323" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">             &lt;/learning_objectives&gt; in the system prompt</text>
+
+  <!-- Audit trail note -->
+  <rect x="452" y="352" width="390" height="72" rx="5" fill="#0c1520" stroke="#3b82f6" stroke-width="1"/>
+  <text x="462" y="369" font-family="ui-monospace,Consolas,monospace" font-size="9"
+        fill="#3b82f6" font-weight="bold">L16 Audit events</text>
+  <text x="462" y="384" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#7ee787">ulo.objective_created</text>
+  <text x="462" y="397" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#7ee787">ulo.objective_updated   ulo.objective_deleted</text>
+  <text x="462" y="410" font-family="ui-monospace,Consolas,monospace" font-size="9" fill="#8b949e">fields: ulo_id, priority, scope, action, channel  ·  never text</text>
+
+  <!-- Footer -->
+  <rect x="0" y="412" width="860" height="28" fill="#161b22"/>
+  <rect x="0" y="412" width="860" height="1" fill="#30363d"/>
+  <text x="430" y="430" text-anchor="middle" font-family="ui-monospace,Consolas,monospace"
+        font-size="9" fill="#8b949e">CorvinOS · ULO Lifecycle &amp; Compliance  ·  ADR-0163  ·  spec.ulo.enabled opt-in  ·  per-tenant storage</text>
+</svg>

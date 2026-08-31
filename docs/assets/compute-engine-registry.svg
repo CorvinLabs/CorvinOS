@@ -1,0 +1,135 @@
+<svg width="960" height="480" viewBox="0 0 960 480" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgCER" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="regGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#0a1f3a"/>
+      <stop offset="100%" stop-color="#061220"/>
+    </linearGradient>
+    <marker id="mCB"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="mCA"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="mCP"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#a78bfa"/>
+    </marker>
+    <marker id="mCG"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="mCR"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#f87171"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="480" rx="10" fill="url(#bgCER)"/>
+
+  <!-- Title -->
+  <text x="480" y="24" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+    font-size="12" font-weight="600" fill="#8b949e" letter-spacing="2">
+    ADR-0029 · COMPUTE ENGINE PROTOCOL — PLUGGABLE ORCHESTRATORS
+  </text>
+
+  <!-- ══ TOP: MCP Bridge ══ -->
+  <rect x="300" y="36" width="360" height="56" rx="8" fill="#0a0f1a" stroke="#3b82f6" stroke-width="1.8"/>
+  <text x="480" y="56" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="12" font-weight="700" fill="#93c5fd">Forge MCP Bridge</text>
+  <text x="480" y="72" text-anchor="middle" font-family="monospace" font-size="8" fill="#3b82f6">
+    compute_submit · compute_status · compute_result · compute_gate · compute_abort
+  </text>
+  <text x="480" y="85" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#6b7280">
+    tools advertised only when ≥1 engine reachable · job_id prefix → engine dispatch
+  </text>
+
+  <!-- Arrow down to registry -->
+  <line x1="480" y1="92" x2="480" y2="130" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#mCB)"/>
+  <text x="492" y="114" font-family="monospace" font-size="7.5" fill="#3b82f6">dispatch(job_id)</text>
+
+  <!-- ══ CENTER: ComputeEngineRegistry ══ -->
+  <rect x="240" y="130" width="480" height="76" rx="8" fill="url(#regGrad)" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="480" y="150" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="12" font-weight="700" fill="#93c5fd">ComputeEngineRegistry</text>
+  <text x="480" y="166" text-anchor="middle" font-family="monospace" font-size="8" fill="#3b82f6">
+    register(engine) · get(engine_id) · engines_for_tenant(tenant_id)
+  </text>
+  <text x="480" y="181" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#8b949e">
+    job_id prefix routing · tenant allowlist check · discovery TTL cache (5 s)
+  </text>
+  <text x="480" y="196" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#6b7280">
+    engines_allowed: [flat, pipeline, hac]  ·  default_engine: flat  ·  hot-reload via tenant.corvin.yaml
+  </text>
+
+  <!-- ══ THREE ENGINE COLUMNS ══ -->
+
+  <!-- Arrows from registry to each engine -->
+  <line x1="340" y1="206" x2="155" y2="244" stroke="#f0b429" stroke-width="1.5" marker-end="url(#mCA)"/>
+  <line x1="480" y1="206" x2="480" y2="244" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#mCP)"/>
+  <line x1="620" y1="206" x2="805" y2="244" stroke="#3fb950" stroke-width="1.5" marker-end="url(#mCG)"/>
+
+  <!-- ENGINE 1: flat (amber) -->
+  <rect x="14" y="244" width="282" height="186" rx="8" fill="#0a1000" stroke="#f0b429" stroke-width="1.8"/>
+  <text x="155" y="263" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="12" font-weight="700" fill="#fcd34d">FlatEngine</text>
+  <text x="155" y="278" text-anchor="middle" font-family="monospace" font-size="8" fill="#f0b429">engine_id = "flat"</text>
+  <line x1="24" y1="285" x2="286" y2="285" stroke="#2a1800" stroke-width="1"/>
+  <!-- Protocol methods -->
+  <text x="24" y="299" font-family="monospace" font-size="7.5" fill="#8b949e">submit(spec)    → run_&lt;id&gt;</text>
+  <text x="24" y="313" font-family="monospace" font-size="7.5" fill="#8b949e">status(run_id)  → iterations, top_k</text>
+  <text x="24" y="327" font-family="monospace" font-size="7.5" fill="#8b949e">result(run_id)  → best_params, loss</text>
+  <text x="24" y="341" font-family="monospace" font-size="7.5" fill="#6b7280">gate_action()   → None (no gates)</text>
+  <text x="24" y="355" font-family="monospace" font-size="7.5" fill="#8b949e">abort(run_id)   → graceful stop</text>
+  <line x1="24" y1="362" x2="286" y2="362" stroke="#2a1800" stroke-width="0.8"/>
+  <!-- Spec badge -->
+  <rect x="24" y="367" width="262" height="36" rx="4" fill="#150f00" stroke="#f0b429" stroke-width="0.6"/>
+  <text x="155" y="381" text-anchor="middle" font-family="monospace" font-size="7" fill="#fcd34d">ADR-0013 / ADR-0026</text>
+  <text x="155" y="395" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">single tool · N iterations · scalar loss</text>
+  <text x="155" y="407" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">no forge gate · no sub-stages</text>
+
+  <!-- ENGINE 2: pipeline (purple) -->
+  <rect x="338" y="244" width="284" height="186" rx="8" fill="#0d0a1a" stroke="#a78bfa" stroke-width="1.8"/>
+  <text x="480" y="263" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="12" font-weight="700" fill="#c4b5fd">PipelineEngine</text>
+  <text x="480" y="278" text-anchor="middle" font-family="monospace" font-size="8" fill="#a78bfa">engine_id = "pipeline"</text>
+  <line x1="348" y1="285" x2="612" y2="285" stroke="#1a1a2e" stroke-width="1"/>
+  <text x="348" y="299" font-family="monospace" font-size="7.5" fill="#8b949e">submit(spec)    → pipeline_&lt;id&gt;</text>
+  <text x="348" y="313" font-family="monospace" font-size="7.5" fill="#8b949e">status(id)      → stage, top_k/stage</text>
+  <text x="348" y="327" font-family="monospace" font-size="7.5" fill="#8b949e">result(id)      → per-stage results</text>
+  <text x="348" y="341" font-family="monospace" font-size="7.5" fill="#c4b5fd">gate_action(id, action) → resume</text>
+  <text x="348" y="355" font-family="monospace" font-size="7.5" fill="#8b949e">abort(id)       → graceful stop</text>
+  <line x1="348" y1="362" x2="612" y2="362" stroke="#1a1a2e" stroke-width="0.8"/>
+  <rect x="348" y="367" width="262" height="36" rx="4" fill="#100d1a" stroke="#a78bfa" stroke-width="0.6"/>
+  <text x="480" y="381" text-anchor="middle" font-family="monospace" font-size="7" fill="#c4b5fd">ADR-0027 (ACP)</text>
+  <text x="480" y="395" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">linear stages · forge gate · LLM steers</text>
+  <text x="480" y="407" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">GateAction: forge / add_stage / resume</text>
+
+  <!-- ENGINE 3: hac (green) -->
+  <rect x="664" y="244" width="282" height="186" rx="8" fill="#0a1a0a" stroke="#3fb950" stroke-width="1.8"/>
+  <text x="805" y="263" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="12" font-weight="700" fill="#4ade80">HACEngine</text>
+  <text x="805" y="278" text-anchor="middle" font-family="monospace" font-size="8" fill="#3fb950">engine_id = "hac"</text>
+  <line x1="674" y1="285" x2="936" y2="285" stroke="#0f2d1a" stroke-width="1"/>
+  <text x="674" y="299" font-family="monospace" font-size="7.5" fill="#8b949e">submit(spec)    → hac_&lt;id&gt;</text>
+  <text x="674" y="313" font-family="monospace" font-size="7.5" fill="#8b949e">status(id)      → managers, L_root</text>
+  <text x="674" y="327" font-family="monospace" font-size="7.5" fill="#8b949e">result(id)      → full tree + rounds</text>
+  <text x="674" y="341" font-family="monospace" font-size="7.5" fill="#4ade80">gate_action(id, action) → backprop</text>
+  <text x="674" y="355" font-family="monospace" font-size="7.5" fill="#8b949e">abort(id)       → graceful stop</text>
+  <line x1="674" y1="362" x2="936" y2="362" stroke="#0f2d1a" stroke-width="0.8"/>
+  <rect x="674" y="367" width="262" height="36" rx="4" fill="#091209" stroke="#3fb950" stroke-width="0.6"/>
+  <text x="805" y="381" text-anchor="middle" font-family="monospace" font-size="7" fill="#4ade80">ADR-0028 (HAC)</text>
+  <text x="805" y="395" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">sub-manager tree · composite loss</text>
+  <text x="805" y="407" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">GateAction: forge / realloc / re_run</text>
+
+  <!-- ══ CUSTOM ENGINE HINT (dashed) ══ -->
+  <rect x="14" y="440" width="932" height="28" rx="5" fill="#0d1117" stroke="#484f58" stroke-width="1" stroke-dasharray="5,3"/>
+  <text x="480" y="450" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#6b7280">+ custom engines: implement ComputeEngine protocol → register(MyEngine()) → available as engine_id="my_engine" in tenant config</text>
+  <text x="480" y="463" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#484f58">job_id prefix: "my_" · ComputeSpec / ComputeStatus / ComputeResult / GateAction are the typed extension points</text>
+</svg>

@@ -1,17 +1,40 @@
 # CorvinOS Marketplace (ADR-0511)
 
-Plugin marketplace for CorvinOS with live telemetry dashboard.
+Plugin-Zentral Repository für CorvinOS Plugins.
 
-## Files
+## Struktur
 
-- `docs/marketplace/index.json` — Plugin index (API)
-- `docs/stats/dashboard.html` — Live telemetry + world map
+```
+marketplace/
+├── buildin/          → 5 Core-Plugins (Memory, Security, Data, Observability, Integration)
+├── contributor/      → 5+ Community-Plugins
+├── docs/
+│   ├── marketplace/index.json
+│   └── stats/dashboard.html
+└── README.md
+```
 
-## Live
+## Plugins
 
-- GitHub Pages: https://corvinlabs.github.io/Corvin-Marketplace/
-- Stats: https://corvinlabs.github.io/Corvin-Marketplace/stats/dashboard.html
+### Buildin (Kern-System)
+- **memory-plugin** — Vector embeddings & semantic search
+- **security-compliance** — Audit, secrets, compliance gates
+- **data-processing** — CSV/JSON/Parquet processing
+- **observability** — Metrics, logs, tracing
+- **integration-hub** — APIs, webhooks, connectors
+
+### Community (Beiträge)
+- **nlp-toolkit** — NLP processing, sentiment analysis
+- **sql-expert** — SQL optimization, query analysis
+- **cloud-deployer** — AWS, GCP, Azure, K8s
+- **document-analyzer** — PDF, Word, Excel, OCR
+- **web-scraper** — Web scraping, HTML parsing
+
+## GitHub Pages
+
+- Marketplace: https://corvinlabs.github.io/Corvin-Marketplace/
+- Stats: https://corvinlabs.github.io/Corvin-Marketplace/stats/
 
 ## Architecture
 
-See ADR-0511: Plugin-First Marketplace Redesign
+ADR-0511: Plugin-First Marketplace Redesign

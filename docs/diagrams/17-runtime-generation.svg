@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 640" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Runtime generation — two parallel pipelines, one safety substrate</title>
+  <desc>Two horizontal pipelines from left to right. Top pipeline (forge): user intent, MCP forge_tool call, schema lint, registry write, bwrap sandbox run, audit. Bottom pipeline (skill-forge): user intent, MCP skill_create call, body lint, slot mirror, prompt-injection on next turn, outcome grade. Both feed into a shared safety substrate (linter / bwrap / path-gate / audit chain) shown below.</desc>
+
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="540" y="34" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">Runtime generation — the agent extends itself</text>
+  <text x="540" y="56" text-anchor="middle" font-size="12" fill="#64748b">Two artifact classes (executable tools · prompt-injected skills) share one safety substrate (lint · sandbox · audit · scope ladder).</text>
+
+  <!-- Top pipeline — Forge (tools) -->
+  <text x="40" y="100" font-size="14" font-weight="700" fill="#0e7490">FORGE — runtime tool generation (executable)</text>
+
+  <g font-size="10.5" fill="#0f172a">
+    <!-- Step 1 -->
+    <rect x="40" y="116" width="140" height="68" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+    <text x="110" y="138" text-anchor="middle" font-weight="700" fill="#0e7490">1. INTENT</text>
+    <text x="110" y="156" text-anchor="middle">user: "compute</text>
+    <text x="110" y="170" text-anchor="middle">CSV statistics"</text>
+
+    <!-- Step 2 -->
+    <rect x="200" y="116" width="160" height="68" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+    <text x="280" y="138" text-anchor="middle" font-weight="700" fill="#0e7490">2. MCP CALL</text>
+    <text x="280" y="156" text-anchor="middle">mcp__forge__forge_tool</text>
+    <text x="280" y="170" text-anchor="middle">(name, schema, impl)</text>
+
+    <!-- Step 3 -->
+    <rect x="380" y="116" width="160" height="68" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+    <text x="460" y="138" text-anchor="middle" font-weight="700" fill="#0e7490">3. SCHEMA + STATIC</text>
+    <text x="460" y="156" text-anchor="middle">name regex · namespace</text>
+    <text x="460" y="170" text-anchor="middle">policy · imports allowlist</text>
+
+    <!-- Step 4 -->
+    <rect x="560" y="116" width="160" height="68" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+    <text x="640" y="138" text-anchor="middle" font-weight="700" fill="#0e7490">4. REGISTER</text>
+    <text x="640" y="156" text-anchor="middle">manifest + body</text>
+    <text x="640" y="170" text-anchor="middle">slot mirror to plugin/</text>
+
+    <!-- Step 5 -->
+    <rect x="740" y="116" width="160" height="68" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+    <text x="820" y="138" text-anchor="middle" font-weight="700" fill="#0e7490">5. RUN (bwrap)</text>
+    <text x="820" y="156" text-anchor="middle">no net · fresh /tmp</text>
+    <text x="820" y="170" text-anchor="middle">ro /usr · cap stdout</text>
+
+    <!-- Step 6 -->
+    <rect x="920" y="116" width="120" height="68" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+    <text x="980" y="138" text-anchor="middle" font-weight="700" fill="#0e7490">6. PROMOTE</text>
+    <text x="980" y="156" text-anchor="middle">task → session</text>
+    <text x="980" y="170" text-anchor="middle">→ project → user</text>
+  </g>
+
+  <line x1="180" y1="150" x2="200" y2="150" stroke="#475569" marker-end="url(#ar2)"/>
+  <line x1="360" y1="150" x2="380" y2="150" stroke="#475569" marker-end="url(#ar2)"/>
+  <line x1="540" y1="150" x2="560" y2="150" stroke="#475569" marker-end="url(#ar2)"/>
+  <line x1="720" y1="150" x2="740" y2="150" stroke="#475569" marker-end="url(#ar2)"/>
+  <line x1="900" y1="150" x2="920" y2="150" stroke="#475569" marker-end="url(#ar2)"/>
+
+  <!-- Bottom pipeline — Skill-Forge (knowledge) -->
+  <text x="40" y="240" font-size="14" font-weight="700" fill="#5b21b6">SKILL-FORGE — runtime knowledge generation (prompt-injected)</text>
+
+  <g font-size="10.5" fill="#0f172a">
+    <rect x="40" y="256" width="140" height="68" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="110" y="278" text-anchor="middle" font-weight="700" fill="#5b21b6">1. INTENT</text>
+    <text x="110" y="296" text-anchor="middle">user: "remember</text>
+    <text x="110" y="310" text-anchor="middle">how I deploy"</text>
+
+    <rect x="200" y="256" width="160" height="68" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="280" y="278" text-anchor="middle" font-weight="700" fill="#5b21b6">2. MCP CALL</text>
+    <text x="280" y="296" text-anchor="middle">mcp__skill_forge__</text>
+    <text x="280" y="310" text-anchor="middle">skill_create(name, body)</text>
+
+    <rect x="380" y="256" width="160" height="68" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="460" y="278" text-anchor="middle" font-weight="700" fill="#5b21b6">3. LINTER (fail-closed)</text>
+    <text x="460" y="296" text-anchor="middle">prompt-injection · NFKC</text>
+    <text x="460" y="310" text-anchor="middle">homoglyphs · persona-boundary</text>
+
+    <rect x="560" y="256" width="160" height="68" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="640" y="278" text-anchor="middle" font-weight="700" fill="#5b21b6">4. WRITE + MIRROR</text>
+    <text x="640" y="296" text-anchor="middle">SKILL.md + meta.json</text>
+    <text x="640" y="310" text-anchor="middle">+ slot-mirror (engine)</text>
+
+    <rect x="740" y="256" width="160" height="68" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="820" y="278" text-anchor="middle" font-weight="700" fill="#5b21b6">5. INJECT (next turn)</text>
+    <text x="820" y="296" text-anchor="middle">--append-system-prompt</text>
+    <text x="820" y="310" text-anchor="middle">filtered by grade-gate</text>
+
+    <rect x="920" y="256" width="120" height="68" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="980" y="278" text-anchor="middle" font-weight="700" fill="#5b21b6">6. GRADE</text>
+    <text x="980" y="296" text-anchor="middle">approval +0.9</text>
+    <text x="980" y="310" text-anchor="middle">rejection +0.1</text>
+  </g>
+
+  <line x1="180" y1="290" x2="200" y2="290" stroke="#475569" marker-end="url(#ar2)"/>
+  <line x1="360" y1="290" x2="380" y2="290" stroke="#475569" marker-end="url(#ar2)"/>
+  <line x1="540" y1="290" x2="560" y2="290" stroke="#475569" marker-end="url(#ar2)"/>
+  <line x1="720" y1="290" x2="740" y2="290" stroke="#475569" marker-end="url(#ar2)"/>
+  <line x1="900" y1="290" x2="920" y2="290" stroke="#475569" marker-end="url(#ar2)"/>
+
+  <!-- Both pipelines feed into safety substrate -->
+  <text x="540" y="380" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">SHARED SAFETY SUBSTRATE</text>
+  <text x="540" y="398" text-anchor="middle" font-size="11" fill="#64748b">Every step above is wrapped by these layers — bypassing one bypasses runtime generation entirely.</text>
+
+  <g font-size="10.5" fill="#0f172a">
+    <rect x="40" y="412" width="200" height="84" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="140" y="434" text-anchor="middle" font-weight="700" fill="#92400e">A. LINTER (fail-closed)</text>
+    <text x="140" y="454" text-anchor="middle">prompt-injection patterns</text>
+    <text x="140" y="468" text-anchor="middle">embedded secrets</text>
+    <text x="140" y="482" text-anchor="middle">persona-boundary phrases</text>
+
+    <rect x="260" y="412" width="200" height="84" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="360" y="434" text-anchor="middle" font-weight="700" fill="#92400e">B. SANDBOX (bwrap)</text>
+    <text x="360" y="454" text-anchor="middle">no net by default</text>
+    <text x="360" y="468" text-anchor="middle">opt-in per persona</text>
+    <text x="360" y="482" text-anchor="middle">+ loopback-deny shim</text>
+
+    <rect x="480" y="412" width="200" height="84" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="580" y="434" text-anchor="middle" font-weight="700" fill="#92400e">C. PATH-GATE</text>
+    <text x="580" y="454" text-anchor="middle">PreToolUse hook denies</text>
+    <text x="580" y="468" text-anchor="middle">direct Write/Edit/Bash on</text>
+    <text x="580" y="482" text-anchor="middle">forge / skill-forge / audit</text>
+
+    <rect x="700" y="412" width="200" height="84" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="800" y="434" text-anchor="middle" font-weight="700" fill="#92400e">D. SECRET VAULT</text>
+    <text x="800" y="454" text-anchor="middle">env-by-name in tool meta</text>
+    <text x="800" y="468" text-anchor="middle">per-persona ACL</text>
+    <text x="800" y="482" text-anchor="middle">stdout literal-redact</text>
+
+    <rect x="920" y="412" width="120" height="84" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="980" y="434" text-anchor="middle" font-weight="700" fill="#92400e">E. AUDIT</text>
+    <text x="980" y="454" text-anchor="middle">hash chain</text>
+    <text x="980" y="468" text-anchor="middle">tamper-evident</text>
+    <text x="980" y="482" text-anchor="middle">offline-verify</text>
+  </g>
+
+  <!-- arrows from pipelines to substrate -->
+  <line x1="500" y1="184" x2="500" y2="412" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="500" y1="324" x2="500" y2="412" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3"/>
+
+  <!-- Bottom result rail -->
+  <rect x="40" y="528" width="1000" height="80" rx="10" fill="#0f172a"/>
+  <text x="540" y="554" text-anchor="middle" font-size="13" font-weight="700" fill="#f8fafc">↓  AVAILABLE TO THE NEXT TURN  ↓</text>
+  <g font-size="11" fill="#cbd5e1">
+    <text x="60" y="578">FORGE outputs become callable as <tspan font-family="monospace" fill="#fbbf24">mcp__forge__&lt;name&gt;</tspan> in the same turn (tools/list_changed notification).</text>
+    <text x="60" y="596">SKILL-FORGE outputs land in the system prompt of the very next subprocess via skill_inject (filtered by mean_score &gt; 0).</text>
+  </g>
+</svg>

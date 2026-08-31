@@ -1,0 +1,179 @@
+<svg width="900" height="360" viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgCS" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <!-- Grid gradient for explored cells -->
+    <linearGradient id="cellExpl" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#1e3a5f"/>
+      <stop offset="100%" stop-color="#0e1829"/>
+    </linearGradient>
+    <!-- Bayesian GP curve gradient -->
+    <linearGradient id="gpGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%"   stop-color="#f0b42920"/>
+      <stop offset="100%" stop-color="#f0b42960"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="900" height="360" rx="10" fill="url(#bgCS)"/>
+
+  <text x="450" y="28" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">THREE BUILT-IN SEARCH STRATEGIES</text>
+
+  <!-- ══════ PANEL 1: GRID ══════ -->
+  <rect x="12" y="44" width="276" height="288" rx="8" fill="#0a0f1a" stroke="#3b82f6" stroke-width="1.5"/>
+
+  <text x="150" y="66" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#93c5fd">Grid Search</text>
+  <text x="150" y="82" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#3b82f6">exhaustive · deterministic · trivially batched</text>
+
+  <line x1="28" y1="92" x2="272" y2="92" stroke="#1e3a5f" stroke-width="1"/>
+
+  <!-- Grid visualization -->
+  <!-- 6x5 grid of cells, some "explored" (filled) some not -->
+  <!-- Param axes labels -->
+  <text x="150" y="113" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#6b7280">param_b →</text>
+  <text x="32" y="195" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#6b7280"
+        transform="rotate(-90, 32, 195)">param_a →</text>
+
+  <!-- Grid cells (6 cols × 5 rows, each 30×30, starting at x=48, y=118) -->
+  <!-- Row 0 -->
+  <rect x="50"  y="118" width="28" height="28" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <rect x="84"  y="118" width="28" height="28" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <rect x="118" y="118" width="28" height="28" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <rect x="152" y="118" width="28" height="28" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <rect x="186" y="118" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="220" y="118" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <!-- Row 1 -->
+  <rect x="50"  y="152" width="28" height="28" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <rect x="84"  y="152" width="28" height="28" rx="2" fill="#2a4a7f" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="98" y="170" text-anchor="middle" font-family="monospace" font-size="9" fill="#60a5fa">★</text>
+  <rect x="118" y="152" width="28" height="28" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <rect x="152" y="152" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="186" y="152" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="220" y="152" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <!-- Row 2 -->
+  <rect x="50"  y="186" width="28" height="28" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <rect x="84"  y="186" width="28" height="28" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <rect x="118" y="186" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="152" y="186" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="186" y="186" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="220" y="186" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <!-- Row 3 -->
+  <rect x="50"  y="220" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="84"  y="220" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="118" y="220" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="152" y="220" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="186" y="220" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <rect x="220" y="220" width="28" height="28" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+
+  <!-- Legend -->
+  <rect x="50" y="262" width="12" height="12" rx="2" fill="#1e3a5f" stroke="#3b82f6" stroke-width="0.8"/>
+  <text x="68" y="273" font-family="sans-serif" font-size="9" fill="#8b949e">evaluated</text>
+  <rect x="140" y="262" width="12" height="12" rx="2" fill="#0d1117" stroke="#3b82f6" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <text x="158" y="273" font-family="sans-serif" font-size="9" fill="#8b949e">pending</text>
+  <text x="98" y="273" font-family="monospace" font-size="9" fill="#60a5fa">★</text>
+  <text x="108" y="273" font-family="sans-serif" font-size="9" fill="#60a5fa"> best</text>
+
+  <text x="150" y="302" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">all combinations in param_grid</text>
+  <text x="150" y="317" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">stop early on convergence or budget</text>
+  <text x="150" y="332" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">use when: search space is small and enumerable</text>
+
+  <!-- ══════ PANEL 2: RANDOM ══════ -->
+  <rect x="312" y="44" width="276" height="288" rx="8" fill="#0a0f1a" stroke="#3fb950" stroke-width="1.5"/>
+
+  <text x="450" y="66" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#4ade80">Random Search</text>
+  <text x="450" y="82" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#3fb950">uniform sampling · no warm-up · parallelises trivially</text>
+
+  <line x1="328" y1="92" x2="572" y2="92" stroke="#0f2d1a" stroke-width="1"/>
+
+  <!-- Scatter plot of random samples in 2D space -->
+  <!-- Axes -->
+  <line x1="80+248" y1="250" x2="80+248" y2="108" stroke="#1a3a2a" stroke-width="1"/>
+  <line x1="80+248" y1="250" x2="230+248" y2="250" stroke="#1a3a2a" stroke-width="1"/>
+  <text x="450" y="262" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#6b7280">param_b</text>
+  <text x="328" y="186" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#6b7280"
+        transform="rotate(-90, 328, 186)">param_a</text>
+
+  <!-- Random dots (varying sizes to suggest loss value) -->
+  <circle cx="366" cy="140" r="5" fill="#3fb950" opacity="0.7"/>
+  <circle cx="392" cy="178" r="4" fill="#3fb950" opacity="0.6"/>
+  <circle cx="418" cy="155" r="6" fill="#3fb950" opacity="0.8"/>
+  <circle cx="444" cy="200" r="4" fill="#3fb950" opacity="0.5"/>
+  <circle cx="470" cy="125" r="5" fill="#3fb950" opacity="0.6"/>
+  <circle cx="496" cy="168" r="8" fill="#4ade80" opacity="0.9" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="496" y="160" text-anchor="middle" font-family="monospace" font-size="9" fill="#4ade80">★</text>
+  <circle cx="522" cy="190" r="4" fill="#3fb950" opacity="0.5"/>
+  <circle cx="380" cy="225" r="4" fill="#3fb950" opacity="0.4"/>
+  <circle cx="420" cy="238" r="3" fill="#3fb950" opacity="0.4"/>
+  <circle cx="460" cy="215" r="5" fill="#3fb950" opacity="0.6"/>
+  <circle cx="540" cy="140" r="4" fill="#3fb950" opacity="0.5"/>
+  <circle cx="350" cy="200" r="3" fill="#3fb950" opacity="0.4"/>
+  <circle cx="510" cy="230" r="4" fill="#3fb950" opacity="0.5"/>
+  <circle cx="374" cy="165" r="5" fill="#3fb950" opacity="0.6"/>
+  <circle cx="554" cy="178" r="3" fill="#3fb950" opacity="0.4"/>
+
+  <text x="450" y="282" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">N independent samples per batch</text>
+  <text x="450" y="297" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">no history needed · RNG seeded per-run</text>
+  <text x="450" y="312" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">effective for high-dimensional spaces</text>
+  <text x="450" y="327" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">use when: large or continuous search space</text>
+
+  <!-- ══════ PANEL 3: BAYESIAN ══════ -->
+  <rect x="612" y="44" width="276" height="288" rx="8" fill="#0d0a1a" stroke="#a78bfa" stroke-width="1.5"/>
+
+  <text x="750" y="66" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#c4b5fd">Bayesian Optimisation</text>
+  <text x="750" y="82" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#a78bfa">GP + EI · constant-liar · q-EI batch</text>
+
+  <line x1="628" y1="92" x2="872" y2="92" stroke="#1a1a2e" stroke-width="1"/>
+
+  <!-- GP curve visualization -->
+  <!-- Axes -->
+  <line x1="648" y1="242" x2="868" y2="242" stroke="#1a1a2e" stroke-width="1"/>
+  <line x1="648" y1="108" x2="648" y2="242" stroke="#1a1a2e" stroke-width="1"/>
+  <text x="760" y="254" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#6b7280">param space →</text>
+  <text x="636" y="178" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#6b7280"
+        transform="rotate(-90, 636, 178)">loss</text>
+
+  <!-- GP mean curve (purple) -->
+  <path d="M 655,195 C 670,190 685,175 700,168 C 715,161 725,150 740,138 C 755,126 765,130 775,140 C 785,152 795,170 810,178 C 825,185 845,192 862,195"
+        fill="none" stroke="#a78bfa" stroke-width="2"/>
+
+  <!-- GP uncertainty band (filled) -->
+  <path d="M 655,185 C 670,178 685,160 700,150 C 715,142 725,128 740,118 C 755,108 765,115 775,128 C 785,140 795,158 810,168 C 825,176 845,184 862,185
+           L 862,205 C 845,200 825,194 810,188 C 795,182 785,164 775,152 C 765,142 755,144 740,158 C 725,168 715,178 700,186 C 685,192 670,200 655,205 Z"
+        fill="#a78bfa" opacity="0.15"/>
+
+  <!-- Observed points (black dots with halos) -->
+  <circle cx="668" cy="195" r="5" fill="#a78bfa" opacity="0.9"/>
+  <circle cx="698" cy="168" r="5" fill="#a78bfa" opacity="0.9"/>
+  <circle cx="728" cy="152" r="5" fill="#a78bfa" opacity="0.9"/>
+  <circle cx="758" cy="135" r="7" fill="#c4b5fd" opacity="1" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="758" y="128" text-anchor="middle" font-family="monospace" font-size="9" fill="#c4b5fd">★</text>
+
+  <!-- Acquisition function hint -->
+  <rect x="798" y="115" width="58" height="30" rx="4" fill="#1a1a2e" stroke="#a78bfa" stroke-width="0.8" stroke-dasharray="3,2"/>
+  <text x="827" y="127" text-anchor="middle" font-family="monospace" font-size="7" fill="#a78bfa">EI peak</text>
+  <text x="827" y="139" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">explore here</text>
+  <line x1="810" y1="134" x2="800" y2="134" stroke="#a78bfa" stroke-width="0.8" stroke-dasharray="2,2"/>
+
+  <text x="750" y="270" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">warm-up: 2 × n_axes random samples</text>
+  <text x="750" y="285" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">GP surrogate · EI acquisition · 5 s CPU budget</text>
+  <text x="750" y="300" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">sklearn GaussianProcessRegressor</text>
+  <text x="750" y="315" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">use when: each iteration is expensive and you</text>
+  <text x="750" y="328" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">want to minimise the number of evaluations</text>
+
+  <!-- Footer -->
+  <text x="450" y="347" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#484f58">All strategies implement the same Protocol: suggest_batch(history, n) → update(history, new_results) → should_stop(history)</text>
+</svg>

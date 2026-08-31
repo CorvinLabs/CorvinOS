@@ -1,0 +1,88 @@
+<svg viewBox="0 0 820 200" xmlns="http://www.w3.org/2000/svg" font-family="'SF Mono',Menlo,Monaco,Consolas,monospace" font-size="12">
+  <defs>
+    <style>
+      .bg  { fill: #0d1117; }
+      .lbl { fill: #e6edf3; font-weight: 600; }
+      .dim { fill: #8b949e; }
+      .mono{ fill: #79c0ff; }
+    </style>
+    <marker id="ah2" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L0,8 L10,4 z" fill="#388bfd"/>
+    </marker>
+    <marker id="ah3" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L0,8 L10,4 z" fill="#f78534"/>
+    </marker>
+    <marker id="ah4" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L0,8 L10,4 z" fill="#3fb950"/>
+    </marker>
+    <marker id="ah5" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L0,8 L10,4 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="820" height="200"/>
+
+  <!-- title -->
+  <text x="24" y="28" fill="#e6edf3" font-size="14" font-weight="700">AWPKG Lifecycle</text>
+
+  <!-- Step boxes -->
+  <!-- 1: AUTHOR -->
+  <rect x="20" y="50" width="120" height="110" rx="7" fill="#1f6feb22" stroke="#1f6feb66" stroke-width="1.5"/>
+  <text x="80" y="75" text-anchor="middle" fill="#388bfd" font-weight="700" font-size="13">AUTHOR</text>
+  <text x="80" y="95" text-anchor="middle" class="dim" font-size="11">corvin pkg init</text>
+  <text x="80" y="112" text-anchor="middle" class="dim" font-size="11">edit awpkg.yaml</text>
+  <text x="80" y="129" text-anchor="middle" class="dim" font-size="11">corvin pkg build</text>
+  <text x="80" y="146" text-anchor="middle" class="mono" font-size="11">→ *.awpkg</text>
+
+  <!-- arrow 1→2 -->
+  <line x1="140" y1="105" x2="178" y2="105" stroke="#388bfd" stroke-width="2" marker-end="url(#ah2)"/>
+  <text x="159" y="98" text-anchor="middle" fill="#388bfd" font-size="10">ZIP</text>
+
+  <!-- 2: INSPECT -->
+  <rect x="180" y="50" width="120" height="110" rx="7" fill="#a78bfa22" stroke="#a78bfa66" stroke-width="1.5"/>
+  <text x="240" y="75" text-anchor="middle" fill="#a78bfa" font-weight="700" font-size="13">INSPECT</text>
+  <text x="240" y="95" text-anchor="middle" class="dim" font-size="11">read-only</text>
+  <text x="240" y="112" text-anchor="middle" class="dim" font-size="11">schema check</text>
+  <text x="240" y="129" text-anchor="middle" class="dim" font-size="11">component list</text>
+  <text x="240" y="146" text-anchor="middle" class="dim" font-size="11">warnings</text>
+
+  <!-- arrow 2→3 -->
+  <line x1="300" y1="105" x2="338" y2="105" stroke="#f78534" stroke-width="2" marker-end="url(#ah3)"/>
+  <text x="319" y="98" text-anchor="middle" fill="#f78534" font-size="10">pass</text>
+
+  <!-- 3: INSTALL -->
+  <rect x="340" y="50" width="160" height="110" rx="7" fill="#f7853422" stroke="#f7853466" stroke-width="1.5"/>
+  <text x="420" y="75" text-anchor="middle" fill="#f78534" font-weight="700" font-size="13">INSTALL</text>
+  <text x="420" y="93" text-anchor="middle" class="dim" font-size="11">8 pre-extract checks</text>
+  <text x="420" y="109" text-anchor="middle" class="dim" font-size="11">SkillForge linter</text>
+  <text x="420" y="125" text-anchor="middle" class="dim" font-size="11">AWP validator</text>
+  <text x="420" y="141" text-anchor="middle" class="dim" font-size="11">extract → scope dir</text>
+  <text x="420" y="157" text-anchor="middle" class="mono" font-size="11">audit: package.installed</text>
+
+  <!-- arrow 3→4 -->
+  <line x1="500" y1="105" x2="538" y2="105" stroke="#3fb950" stroke-width="2" marker-end="url(#ah4)"/>
+  <text x="519" y="98" text-anchor="middle" fill="#3fb950" font-size="10">ok</text>
+
+  <!-- 4: ACTIVE -->
+  <rect x="540" y="50" width="120" height="110" rx="7" fill="#3fb95022" stroke="#3fb95066" stroke-width="1.5"/>
+  <text x="600" y="75" text-anchor="middle" fill="#3fb950" font-weight="700" font-size="13">ACTIVE</text>
+  <text x="600" y="95" text-anchor="middle" class="dim" font-size="11">tools in MCP</text>
+  <text x="600" y="112" text-anchor="middle" class="dim" font-size="11">skills injected</text>
+  <text x="600" y="129" text-anchor="middle" class="dim" font-size="11">personas avail.</text>
+  <text x="600" y="146" text-anchor="middle" class="dim" font-size="11">workflows sched.</text>
+
+  <!-- arrow 4→5 -->
+  <line x1="660" y1="105" x2="698" y2="105" stroke="#8b949e" stroke-width="2" marker-end="url(#ah5)"/>
+  <text x="679" y="98" text-anchor="middle" class="dim" font-size="10">remove</text>
+
+  <!-- 5: REMOVED -->
+  <rect x="700" y="50" width="104" height="110" rx="7" fill="#30363d44" stroke="#30363d" stroke-width="1.5"/>
+  <text x="752" y="75" text-anchor="middle" fill="#8b949e" font-weight="700" font-size="13">REMOVED</text>
+  <text x="752" y="95" text-anchor="middle" class="dim" font-size="11">rmtree scope</text>
+  <text x="752" y="112" text-anchor="middle" class="dim" font-size="11">dir cleaned</text>
+  <text x="752" y="129" text-anchor="middle" class="mono" font-size="11">audit:</text>
+  <text x="752" y="146" text-anchor="middle" class="mono" font-size="11">package.removed</text>
+
+  <!-- DENY label below install -->
+  <text x="420" y="178" text-anchor="middle" fill="#f85149" font-size="10">any check fails → InstallError, zero extraction</text>
+</svg>

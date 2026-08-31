@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>The layers of Corvin (layers 0–5 + MCP Plugin Manager)</title>
+  <desc>Seven horizontal layers: Claude Code (layer 0), voice (1), bridges (2), cowork (3), auto-routing (4), forge with policy and audit (5), and MCP Plugin Manager (ADR-0096). Each layer carries one-line descriptions of what it owns and what it does not own.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="460" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">The layers of Corvin (0–5 + MCP Plugin Manager)</text>
+  <text x="460" y="52" text-anchor="middle" font-size="12" fill="#475569">Each layer is independently disable-able; layers below keep working when one above is removed.</text>
+
+  <!-- MCP Plugin Manager (ADR-0096) — sits alongside Layer 3/5, managing external MCP servers -->
+  <rect x="80" y="68" width="760" height="62" rx="8" fill="#fef9c3" stroke="#eab308" stroke-width="1.5"/>
+  <text x="100" y="93" font-size="13" font-weight="700" fill="#a16207">MCP Plugin Manager (ADR-0096) — user-installable external MCP servers</text>
+  <text x="100" y="113" font-size="11" fill="#0f172a">Owns: catalog.json, active.json (user+tenant), per-session + per-project scope files, builtin manifests. L10+L16+L34+L35 enforced.</text>
+  <text x="855" y="103" text-anchor="end" font-size="10" font-style="italic" fill="#a16207">ADR-0096</text>
+
+  <!-- Layer 5 -->
+  <rect x="80" y="143" width="760" height="62" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="100" y="168" font-size="13" font-weight="700" fill="#0e7490">Layer 5 · forge — runtime tool factory + policy + audit</text>
+  <text x="100" y="188" font-size="11" fill="#0f172a">Owns: register / call / audit forged tools. Self-contained, splittable. Bridge audit chains in via shared/audit.py.</text>
+
+  <!-- Layer 4 -->
+  <rect x="80" y="218" width="760" height="62" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="100" y="243" font-size="13" font-weight="700" fill="#1e40af">Layer 4 · auto-routing</text>
+  <text x="100" y="263" font-size="11" fill="#0f172a">Owns: pick a persona per message. Heuristic + embedding + fallback. Does not run any tool — it labels.</text>
+
+  <!-- Layer 3 -->
+  <rect x="80" y="293" width="760" height="62" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="100" y="318" font-size="13" font-weight="700" fill="#1e40af">Layer 3 · cowork — personas</text>
+  <text x="100" y="338" font-size="11" fill="#0f172a">Owns: per-chat tool surface, system prompt, MCP servers. mcp_plugins_allowed restricts catalog injection. Enforcement in adapter.</text>
+
+  <!-- Layer 2 -->
+  <rect x="80" y="368" width="760" height="62" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="100" y="393" font-size="13" font-weight="700" fill="#1e40af">Layer 2 · bridges</text>
+  <text x="100" y="413" font-size="11" fill="#0f172a">Owns: WhatsApp / Telegram / Discord / Slack / Email / Teams / Signal daemons + adapter loop. Whitelist is the trust boundary.</text>
+
+  <!-- Layer 1 -->
+  <rect x="80" y="443" width="760" height="62" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="100" y="468" font-size="13" font-weight="700" fill="#1e40af">Layer 1 · voice</text>
+  <text x="100" y="488" font-size="11" fill="#0f172a">Owns: read-aloud at the desk, voice-note transcription via Whisper, summarization policy. Does not pick personas.</text>
+
+  <!-- Layer 0 (Claude Code) -->
+  <rect x="80" y="518" width="760" height="62" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="100" y="543" font-size="13" font-weight="700" fill="#475569">Layer 0 · Claude Code (vanilla, unchanged)</text>
+  <text x="100" y="563" font-size="11" fill="#0f172a">Owns: agent loop, tool dispatcher, LLM client, sub-agents. Surfaces consumed: plugins, hooks, MCP servers.</text>
+
+  <!-- Tags on the right -->
+  <text x="855" y="178" text-anchor="end" font-size="10" font-style="italic" fill="#0e7490">splittable</text>
+  <text x="855" y="328" text-anchor="end" font-size="10" font-style="italic" fill="#1e40af">optional</text>
+  <text x="855" y="478" text-anchor="end" font-size="10" font-style="italic" fill="#1e40af">optional</text>
+  <text x="855" y="553" text-anchor="end" font-size="10" font-style="italic" fill="#475569">required</text>
+
+  <!-- Side annotation -->
+  <text x="460" y="648" text-anchor="middle" font-size="11" fill="#475569" font-style="italic">
+    Yellow = MCP Plugin Manager (ADR-0096). Cyan = forge (ADR-0011). Blue = inherited stack. Slate = vanilla Claude Code.
+  </text>
+</svg>

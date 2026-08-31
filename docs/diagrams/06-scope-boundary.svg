@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 540" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>What Corvin is, and what it is not</title>
+  <desc>An inner cyan-bordered region named "Corvin — in scope" containing the five layer names plus the audit log. An outer slate region named "out of scope" listing five things Corvin deliberately is not: a fork of Claude Code, a multi-agent orchestrator, a memory store, an arbitrary-code sandbox, a billing or usage tracker. A boundary line separates the two regions.</desc>
+
+  <text x="460" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">What Corvin is, and what it is not</text>
+  <text x="460" y="52" text-anchor="middle" font-size="12" fill="#475569">A boundary diagram. Inside: the five layers it ships. Outside: roles it deliberately does not take.</text>
+
+  <!-- Outer "out of scope" region -->
+  <rect x="40" y="80" width="840" height="430" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="62" y="108" font-size="13" font-weight="700" fill="#475569">Out of scope — Corvin does NOT</text>
+
+  <text x="62" y="138" font-size="11" font-weight="700" fill="#0f172a">be a fork of Claude Code</text>
+  <text x="62" y="153" font-size="10" fill="#475569">unmodified binary; everything plugs in via the official plugin / hook / MCP surface</text>
+
+  <text x="62" y="180" font-size="11" font-weight="700" fill="#0f172a">orchestrate multiple agents</text>
+  <text x="62" y="195" font-size="10" fill="#475569">one agent. personas change which tools it sees, never spawn parallel agents</text>
+
+  <text x="500" y="138" font-size="11" font-weight="700" fill="#0f172a">be a memory store</text>
+  <text x="500" y="153" font-size="10" fill="#475569">three flat-file tiers in ~/.config; no DB, no vector index, no cross-chat link</text>
+
+  <text x="500" y="180" font-size="11" font-weight="700" fill="#0f172a">sandbox the agent itself</text>
+  <text x="500" y="195" font-size="10" fill="#475569">forge sandbox isolates forged-tool exec only; agent runs with Claude Code's permissions</text>
+
+  <text x="62" y="225" font-size="11" font-weight="700" fill="#0f172a">track usage or billing</text>
+  <text x="62" y="240" font-size="10" fill="#475569">audit logs what happened, not what it cost; provider dashboards remain authoritative</text>
+
+  <!-- Inner "in scope" region -->
+  <rect x="180" y="280" width="560" height="200" rx="14" fill="#cffafe" stroke="#06b6d4" stroke-width="2.5"/>
+  <text x="460" y="310" text-anchor="middle" font-size="16" font-weight="700" fill="#0e7490">Corvin — in scope</text>
+  <text x="460" y="328" text-anchor="middle" font-size="11" fill="#0f172a">five layers on top of vanilla Claude Code, individually disable-able</text>
+
+  <!-- Five layer chips inside -->
+  <g>
+    <rect x="200" y="350" width="100" height="36" rx="6" fill="#fff" stroke="#06b6d4"/>
+    <text x="250" y="372" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">voice</text>
+
+    <rect x="310" y="350" width="100" height="36" rx="6" fill="#fff" stroke="#06b6d4"/>
+    <text x="360" y="372" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">bridges</text>
+
+    <rect x="420" y="350" width="100" height="36" rx="6" fill="#fff" stroke="#06b6d4"/>
+    <text x="470" y="372" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">cowork</text>
+
+    <rect x="530" y="350" width="100" height="36" rx="6" fill="#fff" stroke="#06b6d4"/>
+    <text x="580" y="372" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">routing</text>
+
+    <rect x="640" y="350" width="80" height="36" rx="6" fill="#cffafe" stroke="#0e7490" stroke-width="1.5"/>
+    <text x="680" y="372" text-anchor="middle" font-size="11" font-weight="700" fill="#0e7490">forge</text>
+  </g>
+
+  <!-- Audit band inside -->
+  <rect x="200" y="405" width="520" height="50" rx="8" fill="#0f172a"/>
+  <text x="460" y="428" text-anchor="middle" font-size="12" font-weight="700" fill="#22d3ee">audit log — SHA-chained, append-only</text>
+  <text x="460" y="445" text-anchor="middle" font-size="10" fill="#cbd5e1">tamper-evident record of forge events + bridge events</text>
+
+  <!-- Caption -->
+  <text x="460" y="500" text-anchor="middle" font-size="11" font-style="italic" fill="#475569">
+    forge is highlighted because it is the layer that is splittable on day one — extractable into its own repo without disturbing the rest.
+  </text>
+</svg>

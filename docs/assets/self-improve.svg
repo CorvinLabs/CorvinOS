@@ -1,0 +1,120 @@
+<svg width="860" height="290" viewBox="0 0 860 290" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgSI" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <marker id="arrSI"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#8b949e"/>
+    </marker>
+    <marker id="arrAmSI" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="arrPuSI" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrGrSI" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrGrSI2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <rect width="860" height="290" rx="10" fill="url(#bgSI)"/>
+
+  <!-- Title -->
+  <text x="430" y="28"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">RUNTIME SELF-IMPROVEMENT — THE AGENT THAT WRITES ITS OWN TOOLS</text>
+
+  <!-- ══ Box 1: Chat  x=14  w=196  center=112 ══ -->
+  <rect x="14" y="46" width="196" height="174" rx="8" fill="#1c2128" stroke="#30363d" stroke-width="1.5"/>
+  <!-- Speech bubble sketch -->
+  <rect x="34"  y="64" width="156" height="48" rx="6" fill="#30363d"/>
+  <polygon points="68,112 68,124 84,112" fill="#30363d"/>
+  <text x="112" y="82"  text-anchor="middle" font-family="sans-serif" font-size="9"  fill="#8b949e">user message</text>
+  <text x="112" y="100" text-anchor="middle" font-family="monospace" font-size="9" fill="#e6edf3">"forge a CSV parser"</text>
+  <!-- Box title -->
+  <text x="112" y="142" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Chat</text>
+  <text x="112" y="160" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">any channel</text>
+  <text x="112" y="176" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">WhatsApp · Telegram</text>
+  <text x="112" y="192" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">Discord · Slack · Email</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="210" y1="133" x2="232" y2="133" stroke="#f0b429" stroke-width="1.8" marker-end="url(#arrAmSI)"/>
+
+  <!-- ══ Box 2: Forge  x=234  w=196  center=332 ══ -->
+  <rect x="234" y="46" width="196" height="174" rx="8" fill="#1a0e00" stroke="#f0b429" stroke-width="1.8"/>
+  <text x="332" y="70" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#f0b429">Forge (L6)</text>
+  <text x="332" y="88" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#8b949e">bwrap sandboxed · schema-bound I/O</text>
+  <!-- Pill -->
+  <rect x="252" y="96" width="160" height="18" rx="9" fill="#0d1117"/>
+  <text x="332" y="109" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#f0b429">mcp__forge__&lt;name&gt;</text>
+  <text x="332" y="136" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">Python tool created at runtime</text>
+  <text x="332" y="153" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">no network · fresh /tmp</text>
+  <text x="332" y="170" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">callable in same turn</text>
+  <text x="332" y="187" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">4 scopes: task → user</text>
+  <text x="332" y="203" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#6b7280">per-persona network policy</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="430" y1="133" x2="452" y2="133" stroke="#a78bfa" stroke-width="1.8" marker-end="url(#arrPuSI)"/>
+
+  <!-- ══ Box 3: SkillForge  x=454  w=196  center=552 ══ -->
+  <rect x="454" y="46" width="196" height="174" rx="8" fill="#1a0e2e" stroke="#a78bfa" stroke-width="1.8"/>
+  <text x="552" y="70" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#a78bfa">SkillForge (L7)</text>
+  <text x="552" y="88" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#8b949e">NFKC linted · fail-closed</text>
+  <!-- Pill -->
+  <rect x="472" y="96" width="160" height="18" rx="9" fill="#0d1117"/>
+  <text x="552" y="109" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#a78bfa">task → session → user</text>
+  <text x="552" y="136" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">Markdown skill created</text>
+  <text x="552" y="153" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">prompt-injected next turn</text>
+  <text x="552" y="170" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">outcome-graded (L15)</text>
+  <text x="552" y="187" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">auto-promoted on grade</text>
+  <text x="552" y="203" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#6b7280">injection-safe linter</text>
+
+  <!-- Arrow 3→4 -->
+  <line x1="650" y1="133" x2="672" y2="133" stroke="#3fb950" stroke-width="1.8" marker-end="url(#arrGrSI)"/>
+
+  <!-- ══ Box 4: Grading  x=674  w=172  center=760 ══ -->
+  <rect x="674" y="46" width="172" height="174" rx="8" fill="#0c1f16" stroke="#3fb950" stroke-width="1.8"/>
+  <text x="760" y="70" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#3fb950">Grading (L15)</text>
+  <text x="760" y="88" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#8b949e">your reactions = gradient</text>
+  <!-- Grade pills -->
+  <rect x="682" y="96" width="76" height="18" rx="9" fill="#0d1117"/>
+  <text x="720" y="109" text-anchor="middle" font-family="monospace" font-size="9" fill="#3fb950">approve 0.9</text>
+  <rect x="766" y="96" width="72" height="18" rx="9" fill="#0d1117"/>
+  <text x="802" y="109" text-anchor="middle" font-family="monospace" font-size="9" fill="#fca5a5">reject 0.1</text>
+  <text x="760" y="136" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">rephrase → 0.3</text>
+  <text x="760" y="153" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">7-day TTL w/o grade</text>
+  <text x="760" y="170" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">method-evolution</text>
+  <text x="760" y="187" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">on 3+ same violation</text>
+  <text x="760" y="203" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#6b7280">no separate train step</text>
+
+  <!-- Feedback curve: bottom, right to left -->
+  <path d="M760 220 C760 252 112 252 112 220"
+        stroke="#3fb950" stroke-width="1.5" fill="none"
+        stroke-dasharray="5,3" marker-end="url(#arrGrSI)"/>
+
+  <text x="430" y="264"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#3fb950">better method on every next turn</text>
+  <text x="430" y="280"
+        text-anchor="middle"
+        font-family="sans-serif" font-size="10" fill="#484f58">conversations are the gradient — no separate training pipeline, no annotation team</text>
+</svg>

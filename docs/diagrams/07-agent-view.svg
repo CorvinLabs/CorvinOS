@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Claude's view of one message</title>
+  <desc>The agent's perspective at boot. Center: the Claude subprocess (one per message). Around it: what is visible (system prompt sources, tool list, forged tools, working directory, two env vars), what is hidden (audit log, other chats, daemons, policy.json), and what can change between turns (new tools appearing, tools disappearing under policy, persona switching). Three colored zones: visible (green), hidden (red), changes-between-turns (cyan).</desc>
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="540" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Claude's view of one message</text>
+  <text x="540" y="52" text-anchor="middle" font-size="12" fill="#475569">One subprocess per message. Fresh boot every time. Every flag is the resolved profile as of now.</text>
+
+  <!-- Center: the agent -->
+  <rect x="420" y="245" width="240" height="100" rx="12" fill="#fff" stroke="#0f172a" stroke-width="2.5"/>
+  <text x="540" y="278" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">claude (subprocess)</text>
+  <text x="540" y="298" text-anchor="middle" font-size="11" fill="#475569">spawned per inbox message</text>
+  <text x="540" y="316" text-anchor="middle" font-size="10" fill="#475569">CLI flags: --mcp-config, --allowedTools,</text>
+  <text x="540" y="330" text-anchor="middle" font-size="10" fill="#475569">--add-dir, --append-system-prompt</text>
+
+  <!-- Visible zone (top, green) -->
+  <rect x="80" y="80" width="920" height="140" rx="12" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="100" y="105" font-size="13" font-weight="700" fill="#065f46">visible at boot</text>
+
+  <rect x="100" y="118" width="200" height="86" rx="8" fill="#fff" stroke="#10b981"/>
+  <text x="200" y="138" text-anchor="middle" font-size="11" font-weight="700" fill="#065f46">system prompt</text>
+  <text x="200" y="156" text-anchor="middle" font-size="9" fill="#0f172a">Claude Code's own +</text>
+  <text x="200" y="170" text-anchor="middle" font-size="9" fill="#0f172a">persona append_system +</text>
+  <text x="200" y="184" text-anchor="middle" font-size="9" fill="#0f172a">chat_profile append_system</text>
+
+  <rect x="320" y="118" width="200" height="86" rx="8" fill="#fff" stroke="#10b981"/>
+  <text x="420" y="138" text-anchor="middle" font-size="11" font-weight="700" fill="#065f46">tool list</text>
+  <text x="420" y="156" text-anchor="middle" font-size="9" fill="#0f172a">standard tools (filtered)</text>
+  <text x="420" y="170" text-anchor="middle" font-size="9" fill="#0f172a">+ persona MCP servers</text>
+  <text x="420" y="184" text-anchor="middle" font-size="9" fill="#0f172a">+ mcp__forge__&lt;name&gt;</text>
+
+  <rect x="540" y="118" width="200" height="86" rx="8" fill="#fff" stroke="#10b981"/>
+  <text x="640" y="138" text-anchor="middle" font-size="11" font-weight="700" fill="#065f46">env vars</text>
+  <text x="640" y="156" text-anchor="middle" font-size="9" fill="#0f172a">FORGE_ALLOWED_TOOLS</text>
+  <text x="640" y="170" text-anchor="middle" font-size="9" fill="#0f172a">VOICE_HOOK_RECURSION</text>
+  <text x="640" y="184" text-anchor="middle" font-size="9" fill="#475569">(per-persona ACL list, hook flag)</text>
+
+  <rect x="760" y="118" width="220" height="86" rx="8" fill="#fff" stroke="#10b981"/>
+  <text x="870" y="138" text-anchor="middle" font-size="11" font-weight="700" fill="#065f46">working directory</text>
+  <text x="870" y="156" text-anchor="middle" font-size="9" fill="#0f172a">cwd from invocation</text>
+  <text x="870" y="170" text-anchor="middle" font-size="9" fill="#0f172a">+ --add-dir from persona</text>
+  <text x="870" y="184" text-anchor="middle" font-size="9" fill="#475569">(read/edit scope)</text>
+
+  <!-- Hidden zone (bottom, red) -->
+  <rect x="80" y="380" width="920" height="140" rx="12" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="100" y="405" font-size="13" font-weight="700" fill="#991b1b">hidden — I do not see</text>
+
+  <rect x="100" y="418" width="200" height="86" rx="8" fill="#fff" stroke="#dc2626"/>
+  <text x="200" y="438" text-anchor="middle" font-size="11" font-weight="700" fill="#991b1b">audit log</text>
+  <text x="200" y="456" text-anchor="middle" font-size="9" fill="#0f172a">written for me, not by me</text>
+  <text x="200" y="470" text-anchor="middle" font-size="9" fill="#0f172a">user reads via voice-audit</text>
+  <text x="200" y="484" text-anchor="middle" font-size="9" fill="#475569">unless explicitly asked</text>
+
+  <rect x="320" y="418" width="200" height="86" rx="8" fill="#fff" stroke="#dc2626"/>
+  <text x="420" y="438" text-anchor="middle" font-size="11" font-weight="700" fill="#991b1b">other chats</text>
+  <text x="420" y="456" text-anchor="middle" font-size="9" fill="#0f172a">fresh subprocess, no leak</text>
+  <text x="420" y="470" text-anchor="middle" font-size="9" fill="#0f172a">cross-chat state lives in</text>
+  <text x="420" y="484" text-anchor="middle" font-size="9" fill="#475569">/profile · /memory · /vault</text>
+
+  <rect x="540" y="418" width="200" height="86" rx="8" fill="#fff" stroke="#dc2626"/>
+  <text x="640" y="438" text-anchor="middle" font-size="11" font-weight="700" fill="#991b1b">bridges &amp; daemons</text>
+  <text x="640" y="456" text-anchor="middle" font-size="9" fill="#0f172a">no inbox / outbox visibility</text>
+  <text x="640" y="470" text-anchor="middle" font-size="9" fill="#0f172a">no channel awareness</text>
+  <text x="640" y="484" text-anchor="middle" font-size="9" fill="#475569">unless persona append_system tags it</text>
+
+  <rect x="760" y="418" width="220" height="86" rx="8" fill="#fff" stroke="#dc2626"/>
+  <text x="870" y="438" text-anchor="middle" font-size="11" font-weight="700" fill="#991b1b">policy.json</text>
+  <text x="870" y="456" text-anchor="middle" font-size="9" fill="#0f172a">readable as a regular file</text>
+  <text x="870" y="470" text-anchor="middle" font-size="9" fill="#0f172a">but blocks surface as errors,</text>
+  <text x="870" y="484" text-anchor="middle" font-size="9" fill="#475569">reasons live in audit log only</text>
+
+  <!-- Changes between turns (left, cyan) -->
+  <rect x="40" y="245" width="340" height="110" rx="12" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="60" y="268" font-size="12" font-weight="700" fill="#0e7490">changes between turns</text>
+  <text x="60" y="290" font-size="10" fill="#0f172a">+ tools can appear (new forge_tool)</text>
+  <text x="60" y="306" font-size="10" fill="#0f172a">− tools can disappear (policy edit, post-hoc)</text>
+  <text x="60" y="322" font-size="10" fill="#0f172a">↻ persona may switch (auto-routing per msg)</text>
+  <text x="60" y="338" font-size="10" fill="#0f172a">~ persona JSON edits land on next message</text>
+
+  <line x1="380" y1="295" x2="420" y2="295" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <!-- Right side: per-message envelope -->
+  <rect x="700" y="245" width="340" height="110" rx="12" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="720" y="268" font-size="12" font-weight="700" fill="#1e40af">per-message envelope</text>
+  <text x="720" y="290" font-size="10" fill="#0f172a">user message on the command line</text>
+  <text x="720" y="306" font-size="10" fill="#0f172a">reply to stdout (JSONL)</text>
+  <text x="720" y="322" font-size="10" fill="#0f172a">stop hook fires for read-aloud</text>
+  <text x="720" y="338" font-size="10" fill="#0f172a">audit entry written by adapter on exit</text>
+
+  <line x1="660" y1="295" x2="700" y2="295" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <!-- Vertical arrows from visible / hidden zones to center -->
+  <line x1="540" y1="220" x2="540" y2="245" stroke="#10b981" stroke-width="1.5" marker-end="url(#ar)"/>
+  <line x1="540" y1="345" x2="540" y2="380" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="3,3"/>
+
+  <text x="540" y="572" text-anchor="middle" font-size="11" font-style="italic" fill="#475569">
+    Hot-reload is invisible at the per-message scale — every message is a fresh me with the file system as it is right now.
+  </text>
+</svg>

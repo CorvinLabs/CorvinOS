@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="560" viewBox="0 0 920 560" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">
+  <title>ADR-0043 — Bridge model selection with workload routing (Tier 2.7)</title>
+  <style>
+    .box { fill:#f6f8fa; stroke:#57606a; rx:8; }
+    .gate { fill:#fff8c5; stroke:#9a6700; rx:8; }
+    .fast { fill:#dafbe1; stroke:#1a7f37; rx:8; }
+    .fall { fill:#ffebe9; stroke:#cf222e; rx:8; }
+    .lbl  { fill:#24292f; }
+    .sub  { fill:#57606a; font-size:11px; }
+    .arr  { stroke:#57606a; stroke-width:1.5; fill:none; marker-end:url(#a); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="28" font-size="16" font-weight="bold" class="lbl">ADR-0043 — OS-turn model selection with fast-chat workload routing</text>
+  <text x="20" y="46" class="sub">Hint travels as a FUNCTION PARAMETER (never os.environ): call_claude / call_claude_streaming → _build_claude_args / _resolve_spawn_inputs → _resolve_os_model</text>
+
+  <rect x="20" y="66" width="270" height="52" class="box"/>
+  <text x="35" y="88" class="lbl">user prompt → classify_and_store_workload_hint()</text>
+  <text x="35" y="106" class="sub">workload_classifier.py — heuristic, no LLM, rate-limited</text>
+
+  <rect x="330" y="66" width="270" height="52" class="box"/>
+  <text x="345" y="88" class="lbl">hint = {workload, confidence, timestamp}</text>
+  <text x="345" y="106" class="sub">chat 0.9 · code 0.6–0.95 · uncertain ≤0.4 · empty→uncertain 0.0</text>
+
+  <path class="arr" d="M290 92 H330"/>
+  <path class="arr" d="M465 118 V150"/>
+
+  <rect x="330" y="150" width="270" height="40" class="box"/>
+  <text x="345" y="175" class="lbl">_resolve_os_model(profile, …, workload_hint)</text>
+
+  <path class="arr" d="M465 190 V218"/>
+
+  <rect x="250" y="218" width="430" height="118" class="box"/>
+  <text x="265" y="240" class="lbl" font-weight="bold">Tier chain (top wins)</text>
+  <text x="265" y="260" class="sub">1  CORVIN_OS_MODEL_OVERRIDE (operator kill-switch)</text>
+  <text x="265" y="277" class="sub">2  profile.model — explicit pin ALWAYS beats workload routing</text>
+  <text x="265" y="294" class="sub">1.5 persona pin (ADR-0123) · 2.5 per-engine tenant default (ADR-0119)</text>
+  <text x="265" y="311" class="lbl" font-weight="bold">2.7 workload routing (ADR-0043) ↓</text>
+  <text x="265" y="328" class="sub">3  adaptive autoselect (ADR-0024/0112) · 4 None (CLI default)</text>
+
+  <path class="arr" d="M465 336 V364"/>
+
+  <rect x="250" y="364" width="430" height="76" class="gate"/>
+  <text x="265" y="386" class="lbl" font-weight="bold">Tier 2.7 gate — ALL must hold (fail-closed)</text>
+  <text x="265" y="404" class="sub">workload == "chat"  ∧  confidence ≥ 0.7  ∧  fast_chat_mode enabled</text>
+  <text x="265" y="421" class="sub">(profile fast_chat_mode OR tenant spec.features.fast_chat_mode — no env switch)</text>
+  <text x="265" y="436" class="sub">∧ engine in tier map ∧ model valid in load_registry() (fail-closed)</text>
+
+  <path class="arr" d="M355 440 V472"/>
+  <path class="arr" d="M575 440 V472"/>
+
+  <rect x="180" y="472" width="330" height="64" class="fast"/>
+  <text x="195" y="494" class="lbl" font-weight="bold">fast tier (claude_code → Haiku)</text>
+  <text x="195" y="512" class="sub">+ audit: bridge.workload_model_selection</text>
+  <text x="195" y="527" class="sub">{workload, confidence, model, engine, tier} — no message content</text>
+
+  <rect x="540" y="472" width="350" height="64" class="fall"/>
+  <text x="555" y="494" class="lbl" font-weight="bold">any other case → fall through</text>
+  <text x="555" y="512" class="sub">code / uncertain / low confidence / flag off / unknown engine</text>
+  <text x="555" y="527" class="sub">→ Tier 3 adaptive → Tier 4 None (user's model authority intact)</text>
+</svg>

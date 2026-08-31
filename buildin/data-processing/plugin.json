@@ -1,0 +1,13 @@
+{
+  "id": "data-processing",
+  "name": "Data Processing",
+  "version": "1.0.0",
+  "category": "Data",
+  "description": "CSV, JSON, Parquet processing, data validation, transformations",
+  "author": "CorvinOS Core",
+  "tier": "buildin",
+  "boot_layer": "bundled",
+  "rating": 4.7,
+  "installs": 3456,
+  "dependencies": []
+}

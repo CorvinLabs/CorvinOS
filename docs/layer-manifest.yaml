@@ -1,0 +1,573 @@
+# Layer Stack Manifest (ADR-0267)
+#
+# Comprehensive registry of all 36+ security and compliance layers in CorvinOS.
+# Each layer enforces one security/compliance mechanism independently.
+# This manifest is used by the Task Router (Phase 1 of ADR-0267) to map tasks
+# to affected layers and route them through appropriate analysis and verification pipelines.
+#
+# Format: YAML array of layer definitions, ordered L1–L44.
+# Each layer carries: id, name, description, doc_files, code_patterns, keywords, related_adrs.
+
+layers:
+  - id: L4
+    name: "Cowork (Multi-Persona Hub)"
+    description: "Route each chat to a different persona; multi-persona hub for task routing."
+    doc_files:
+      - "docs/claude-ref/layer-plugins.md"
+    code_patterns:
+      - "core/cowork/**/*.py"
+      - "operator/cowork/**/*.py"
+    keywords:
+      - persona
+      - cowork
+      - routing
+      - multi-persona
+    related_adrs: []
+
+  - id: L5
+    name: "Auto-Routing (Keyword-Based Persona Selection)"
+    description: "Keyword-based persona selection via heuristic or API."
+    doc_files:
+      - "docs/claude-ref/layer-plugins.md"
+    code_patterns:
+      - "core/auto_routing/**/*.py"
+      - "core/persona/**/*.py"
+    keywords:
+      - auto-routing
+      - persona selection
+      - keyword heuristic
+    related_adrs: []
+
+  - id: L6
+    name: "Forge (Runtime Tool Generation)"
+    description: "Runtime tool generation, schema-bound, MCP server. ADR-0030/0033."
+    doc_files:
+      - "docs/claude-ref/layer-plugins.md"
+    code_patterns:
+      - "core/forge/**/*.py"
+      - "operator/forge/**/*.py"
+      - "core/plugins/corvin_plugins/**/*.py"
+    keywords:
+      - forge
+      - tool generation
+      - mcp
+      - schema
+    related_adrs:
+      - "ADR-0030"
+      - "ADR-0033"
+
+  - id: L7
+    name: "SkillForge (Runtime Skill Generation)"
+    description: "Runtime skill generation via prompt injection. ADR-0032/0034."
+    doc_files:
+      - "docs/claude-ref/layer-plugins.md"
+    code_patterns:
+      - "core/skillforge/**/*.py"
+      - "operator/skill-forge/**/*.py"
+    keywords:
+      - skillforge
+      - skill generation
+      - prompt injection
+    related_adrs:
+      - "ADR-0032"
+      - "ADR-0034"
+
+  - id: L8
+    name: "Session Lifecycle"
+    description: "Session management: /new, /clear, /reset, audit-first lifecycle."
+    doc_files:
+      - "docs/claude-ref/session-lifecycle.md"
+    code_patterns:
+      - "core/sessions/**/*.py"
+      - "core/console/**/*session*.py"
+    keywords:
+      - session
+      - lifecycle
+      - new
+      - clear
+      - reset
+      - audit
+    related_adrs: []
+
+  - id: L10
+    name: "Path-Gate (FS-Write Protection)"
+    description: "File-system write protection, fail-closed, Bash detection. GDPR Art. 32."
+    doc_files:
+      - "docs/claude-ref/layer-10-path-gate.md"
+    code_patterns:
+      - "core/path_gate/**/*.py"
+      - "core/security/**/*path*.py"
+    keywords:
+      - path-gate
+      - filesystem protection
+      - fail-closed
+      - bash detection
+      - GDPR
+    related_adrs:
+      - "ADR-0008"
+      - "ADR-0009"
+
+  - id: L11
+    name: "Dialectic Decision-Points"
+    description: "Six integration sites for dialectical reasoning (skill promotion, auto-routing, etc)."
+    doc_files:
+      - "docs/claude-ref/layer-11-dialectic.md"
+    code_patterns:
+      - "core/dialectic/**/*.py"
+      - "operator/bundle/skills/ldd/**/*.py"
+    keywords:
+      - dialectic
+      - decision
+      - reasoning
+      - antithesis
+      - synthesis
+    related_adrs:
+      - "ADR-0115"
+
+  - id: L12
+    name: "Voice Listener-Profile"
+    description: "TTS tuning for the listener via voice_audience_* fields."
+    doc_files:
+      - "docs/claude-ref/layer-12-voice-profile.md"
+    code_patterns:
+      - "core/voice/**/*.py"
+      - "core/stt/**/*.py"
+    keywords:
+      - voice
+      - listener profile
+      - tts
+      - voice_audience
+    related_adrs:
+      - "ADR-0185"
+
+  - id: L13
+    name: "/btw Mid-Stream Injection"
+    description: "In-flight note pushing via side-channel envelope."
+    doc_files:
+      - "docs/claude-ref/layer-13-btw-injection.md"
+    code_patterns:
+      - "core/btw/**/*.py"
+      - "core/console/**/*btw*.py"
+    keywords:
+      - btw
+      - mid-stream
+      - injection
+      - side-channel
+    related_adrs: []
+
+  - id: L14
+    name: "LDD-Toggle System"
+    description: "Enable/disable all 12 LDD layers per persona/scope."
+    doc_files:
+      - "docs/claude-ref/layer-14-ldd-toggle.md"
+    code_patterns:
+      - "core/ldd/**/*.py"
+      - "operator/bundle/skills/ldd/**/*.py"
+    keywords:
+      - ldd
+      - toggle
+      - loss-driven development
+    related_adrs:
+      - "ADR-0135"
+
+  - id: L16
+    name: "Security Hardening"
+    description: "Consent gate, audit framing, TOCTOU re-validation. GDPR Art. 6, 7, 30, 32."
+    doc_files:
+      - "docs/claude-ref/layer-16-security.md"
+    code_patterns:
+      - "core/security/**/*.py"
+      - "core/consent/**/*.py"
+      - "core/audit/**/*.py"
+    keywords:
+      - security
+      - consent
+      - audit
+      - toctou
+      - hardening
+      - GDPR
+    related_adrs:
+      - "ADR-0002"
+
+  - id: L18
+    name: "Roles (Owner/Admin/Member/Observer)"
+    description: "4-tier role hierarchy with 7-day TTL. GDPR Art. 6."
+    doc_files:
+      - "docs/claude-ref/layer-users.md"
+    code_patterns:
+      - "core/users/**/*.py"
+      - "core/rbac/**/*.py"
+    keywords:
+      - roles
+      - owner
+      - admin
+      - member
+      - observer
+      - rbac
+    related_adrs:
+      - "ADR-0018"
+
+  - id: L19
+    name: "Disclosure (AI-Nature Card)"
+    description: "One-time AI-nature disclosure. EU AI Act Art. 50."
+    doc_files:
+      - "docs/claude-ref/layer-19-disclosure.md"
+    code_patterns:
+      - "core/disclosure/**/*.py"
+      - "core/console/**/*disclosure*.py"
+    keywords:
+      - disclosure
+      - ai-nature
+      - one-time
+      - EU AI Act
+    related_adrs:
+      - "ADR-0019"
+
+  - id: L20
+    name: "Quota (Per-Bundle Rate-Limit)"
+    description: "Per-bundle rate limiting: owner=unlimited, admin=500/day, member=100/day."
+    doc_files:
+      - "docs/claude-ref/layer-20-quota.md"
+    code_patterns:
+      - "core/quota/**/*.py"
+      - "core/rate_limit/**/*.py"
+    keywords:
+      - quota
+      - rate-limit
+      - per-bundle
+      - owner
+      - admin
+      - member
+    related_adrs:
+      - "ADR-0020"
+
+  - id: L21
+    name: "Proposals (Stack of Instructions)"
+    description: "Proposal stack: /propose → /go [steering], atomic consume."
+    doc_files:
+      - "docs/claude-ref/layer-21-proposals.md"
+    code_patterns:
+      - "core/proposals/**/*.py"
+      - "core/console/**/*propose*.py"
+    keywords:
+      - proposals
+      - propose
+      - go
+      - steering
+      - atomic
+    related_adrs:
+      - "ADR-0021"
+
+  - id: L22
+    name: "WorkerEngine Protocol"
+    description: "Five worker engines: ClaudeCode, Hermes, Copilot, Codex, OpenCode."
+    doc_files:
+      - "docs/claude-ref/layer-22-worker-engines.md"
+      - "docs/claude-ref/layer-22-task-engine-m2.md"
+    code_patterns:
+      - "core/engines/**/*.py"
+      - "core/worker/**/*.py"
+      - "operator/task_engine/**/*.py"
+    keywords:
+      - worker engine
+      - clausecode
+      - hermes
+      - copilot
+      - codex
+      - opencode
+    related_adrs:
+      - "ADR-0022"
+
+  - id: L23
+    name: "Speech-to-Text (Metadata-Only Audit)"
+    description: "STT with metadata-only audit (never transcript text). GDPR Art. 5."
+    doc_files:
+      - "docs/claude-ref/layer-23-stt.md"
+    code_patterns:
+      - "core/stt/**/*.py"
+      - "core/voice/**/*.py"
+    keywords:
+      - speech-to-text
+      - stt
+      - metadata-only
+      - audit
+      - GDPR
+    related_adrs:
+      - "ADR-0023"
+
+  - id: L24
+    name: "Large-Data Snapshot"
+    description: "Large data registration: data_register, data_snapshot, data_unregister MCP."
+    doc_files:
+      - "docs/claude-ref/layer-24-data-snapshot.md"
+    code_patterns:
+      - "core/data/**/*.py"
+      - "operator/forge/**/*data*.py"
+    keywords:
+      - large-data
+      - snapshot
+      - data_register
+      - data_snapshot
+      - mcp
+    related_adrs:
+      - "ADR-0024"
+
+  - id: L25
+    name: "Compute Worker"
+    description: "Out-of-LLM-loop optimization driver for compute-heavy tasks."
+    doc_files:
+      - "docs/claude-ref/layer-25-compute-worker.md"
+    code_patterns:
+      - "core/compute/**/*.py"
+      - "operator/compute/**/*.py"
+    keywords:
+      - compute worker
+      - optimization
+      - out-of-loop
+    related_adrs:
+      - "ADR-0025"
+
+  - id: L28
+    name: "Conversation Recall + User Modeling"
+    description: "FTS5 SQLite recall.db with distilled user model. GDPR Art. 28."
+    doc_files:
+      - "docs/claude-ref/layer-28-conversation-recall.md"
+    code_patterns:
+      - "core/recall/**/*.py"
+      - "core/user_model/**/*.py"
+    keywords:
+      - recall
+      - conversation
+      - user model
+      - fts5
+      - sqlite
+    related_adrs:
+      - "ADR-0028"
+
+  - id: L29
+    name: "Delegation"
+    description: "Task delegation and worker processes via MCP. ADR-0200+."
+    doc_files:
+      - "docs/claude-ref/layer-29-delegation.md"
+    code_patterns:
+      - "core/delegation/**/*.py"
+      - "operator/task_engine/**/*.py"
+    keywords:
+      - delegation
+      - mcp
+      - worker
+      - hardening
+      - confinement
+    related_adrs:
+      - "ADR-0200"
+      - "ADR-0201"
+
+  - id: L30
+    name: "Engine-Agnostic Forge"
+    description: "Worker processes via MCP with engine-agnostic routing."
+    doc_files:
+      - "docs/claude-ref/layer-29-delegation.md"
+    code_patterns:
+      - "core/forge/**/*.py"
+      - "operator/forge/**/*.py"
+    keywords:
+      - engine-agnostic
+      - forge
+      - mcp
+    related_adrs:
+      - "ADR-0030"
+
+  - id: L32
+    name: "Strict Anonymisation"
+    description: "k-Anonymity (k=5) with Laplace noise on row counts."
+    doc_files:
+      - "docs/claude-ref/layer-32-anonymisation.md"
+    code_patterns:
+      - "core/anonymisation/**/*.py"
+      - "core/privacy/**/*.py"
+    keywords:
+      - anonymisation
+      - k-anonymity
+      - laplace
+      - privacy
+    related_adrs:
+      - "ADR-0032"
+
+  - id: L33
+    name: "Session Artifact Memory"
+    description: "Non-text artifacts (PDF, image, CSV) with FTS5 recall."
+    doc_files:
+      - "docs/claude-ref/layer-33-artifacts.md"
+    code_patterns:
+      - "core/artifacts/**/*.py"
+      - "core/recall/**/*.py"
+    keywords:
+      - artifacts
+      - session memory
+      - pdf
+      - image
+      - csv
+      - fts5
+    related_adrs:
+      - "ADR-0033"
+
+  - id: L34
+    name: "Data Classification + Flow Guard"
+    description: "4-stage classification (PUBLIC/INTERNAL/CONFIDENTIAL/SECRET) × engine matrix. GDPR Art. 32."
+    doc_files:
+      - "docs/claude-ref/layer-34-data-classification.md"
+    code_patterns:
+      - "core/flow_guard/**/*.py"
+      - "core/data_classification/**/*.py"
+    keywords:
+      - data classification
+      - flow guard
+      - public
+      - internal
+      - confidential
+      - secret
+      - engine matrix
+    related_adrs:
+      - "ADR-0034"
+
+  - id: L35
+    name: "Network Egress Lockdown"
+    description: "allowed_hosts/forbidden_hosts per tenant with EU_PRODUCTION presets."
+    doc_files:
+      - "docs/claude-ref/layer-35-egress-lockdown.md"
+    code_patterns:
+      - "core/egress/**/*.py"
+      - "core/network/**/*.py"
+    keywords:
+      - egress
+      - network lockdown
+      - allowed_hosts
+      - forbidden_hosts
+      - eu_production
+    related_adrs:
+      - "ADR-0035"
+
+  - id: L36
+    name: "GDPR Art. 17 Erasure Orchestrator"
+    description: "Right-to-deletion across all layers with coordinated erasure."
+    doc_files:
+      - "docs/claude-ref/layer-36-erasure.md"
+    code_patterns:
+      - "core/erasure/**/*.py"
+      - "core/gdpr/**/*.py"
+    keywords:
+      - erasure
+      - right-to-deletion
+      - gdpr
+      - art 17
+    related_adrs:
+      - "ADR-0036"
+
+  - id: L37
+    name: "Audit-at-Rest Encryption + Retention"
+    description: "Hash chain rotation, seal via age/gpg, RFC 3161 TSA."
+    doc_files:
+      - "docs/claude-ref/layer-37-audit-sealing.md"
+    code_patterns:
+      - "core/audit/**/*.py"
+      - "core/encryption/**/*.py"
+    keywords:
+      - audit-at-rest
+      - encryption
+      - hash chain
+      - age
+      - gpg
+      - rfc 3161
+      - tsa
+    related_adrs:
+      - "ADR-0037"
+
+  - id: L38
+    name: "A2A TaskEnvelope Protocol"
+    description: "RemoteTriggerReceiver, Protocol v6, instance attestation. ADR-0238+."
+    doc_files:
+      - "docs/claude-ref/layer-38-a2a-network.md"
+    code_patterns:
+      - "core/a2a/**/*.py"
+      - "core/remote/**/*.py"
+    keywords:
+      - a2a
+      - remote trigger
+      - protocol
+      - taskenvelope
+      - attestation
+    related_adrs:
+      - "ADR-0238"
+      - "ADR-0260"
+      - "ADR-0261"
+
+  - id: L44
+    name: "House-Rules (Acceptable-Use Gate)"
+    description: "Acceptable-use gate: no military, offensive-cyber, disinformation. EU AI Act Art. 5, 50."
+    doc_files:
+      - "docs/claude-ref/layer-44-house-rules.md"
+    code_patterns:
+      - "core/house_rules/**/*.py"
+      - "core/acceptable_use/**/*.py"
+    keywords:
+      - house-rules
+      - acceptable-use
+      - military
+      - offensive-cyber
+      - disinformation
+      - eu ai act
+    related_adrs:
+      - "ADR-0044"
+
+  - id: LIP
+    name: "Layer Integrity Protocol"
+    description: "Cryptographic layer presence verification. ADR-0141."
+    doc_files:
+      - "docs/claude-ref/layer-integrity-protocol.md"
+    code_patterns:
+      - "core/integrity/**/*.py"
+      - "core/crypto/**/*.py"
+    keywords:
+      - integrity
+      - layer integrity
+      - cryptographic
+      - presence
+      - adr-0141
+    related_adrs:
+      - "ADR-0141"
+
+  - id: CLS
+    name: "Custom Layer System"
+    description: "Vendor layers with Tier-A/B/C licensing. ADR-0156."
+    doc_files:
+      - "docs/claude-ref/layer-cls.md"
+    code_patterns:
+      - "core/licensing/**/*.py"
+      - "core/tiers/**/*.py"
+    keywords:
+      - custom layer
+      - tier-a
+      - tier-b
+      - tier-c
+      - licensing
+      - vendor
+    related_adrs:
+      - "ADR-0156"
+
+  - id: LDD
+    name: "Loss-Driven Development"
+    description: "12 skill layers for development discipline. MANDATORY, all sessions."
+    doc_files:
+      - "docs/claude-ref/ldd-mandatory.md"
+      - "docs/claude-ref/layer-11-dialectic.md"
+    code_patterns:
+      - "operator/bundle/skills/ldd/**/*.py"
+      - "core/ldd/**/*.py"
+    keywords:
+      - ldd
+      - loss-driven development
+      - skill layer
+      - discipline
+    related_adrs:
+      - "ADR-0115"
+      - "ADR-0135"

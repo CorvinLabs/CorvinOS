@@ -1,0 +1,138 @@
+<svg width="860" height="530" viewBox="0 0 860 530" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="860" height="530" rx="10" fill="url(#bgL)"/>
+
+  <!-- Title -->
+  <text x="430" y="30"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">LAYER MODEL</text>
+
+  <!-- Legend -->
+  <rect x="540" y="14" width="12" height="12" rx="2" fill="#374151"/>
+  <text x="556" y="24" font-family="sans-serif" font-size="10" fill="#6b7280">Infrastructure</text>
+  <rect x="630" y="14" width="12" height="12" rx="2" fill="#1e3a5f"/>
+  <text x="646" y="24" font-family="sans-serif" font-size="10" fill="#6b7280">Persona / Routing</text>
+  <rect x="740" y="14" width="12" height="12" rx="2" fill="#422006"/>
+  <text x="756" y="24" font-family="sans-serif" font-size="10" fill="#6b7280">Runtime Gen</text>
+
+  <!-- ─── Layers ─── -->
+  <!-- ROW height = 27, gap = 4, start y = 46 -->
+
+  <!-- GROUP A: Infrastructure — #374151 -->
+  <text x="18" y="64"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" font-weight="600" fill="#6b7280" letter-spacing="1.5">INFRASTRUCTURE</text>
+
+  <!-- L1 -->
+  <rect x="18" y="70" width="824" height="28" rx="5" fill="#1c2128" stroke="#374151" stroke-width="1"/>
+  <rect x="18" y="70" width="42"  height="28" rx="5" fill="#374151"/>
+  <text x="39"  y="89" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#e6edf3">L1</text>
+  <text x="74"  y="89" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Per-chat profiles</text>
+  <text x="280" y="89" font-family="sans-serif" font-size="11" fill="#6b7280">— restrict individual chats (chat_profiles), hot-reload on every read</text>
+
+  <!-- L2 -->
+  <rect x="18" y="102" width="824" height="28" rx="5" fill="#1c2128" stroke="#374151" stroke-width="1"/>
+  <rect x="18" y="102" width="42"  height="28" rx="5" fill="#374151"/>
+  <text x="39"  y="121" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#e6edf3">L2</text>
+  <text x="74"  y="121" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Message routing</text>
+  <text x="280" y="121" font-family="sans-serif" font-size="11" fill="#6b7280">— inbox → adapter → outbox file-protocol, cross-chat parallel</text>
+
+  <!-- L3 -->
+  <rect x="18" y="134" width="824" height="28" rx="5" fill="#1c2128" stroke="#374151" stroke-width="1"/>
+  <rect x="18" y="134" width="42"  height="28" rx="5" fill="#374151"/>
+  <text x="39"  y="153" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#e6edf3">L3</text>
+  <text x="74"  y="153" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Notification relay</text>
+  <text x="280" y="153" font-family="sans-serif" font-size="11" fill="#6b7280">— desktop Claude push → phone via bridge</text>
+
+  <!-- GROUP B: Persona / Routing — #1e3a5f -->
+  <text x="18" y="178"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" font-weight="600" fill="#6b7280" letter-spacing="1.5">PERSONA &amp; ROUTING</text>
+
+  <!-- L4 -->
+  <rect x="18" y="184" width="824" height="28" rx="5" fill="#0e1f33" stroke="#1e3a5f" stroke-width="1"/>
+  <rect x="18" y="184" width="42"  height="28" rx="5" fill="#1e3a5f"/>
+  <text x="39"  y="203" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#93c5fd">L4</text>
+  <text x="74"  y="203" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Cowork plugin</text>
+  <text x="280" y="203" font-family="sans-serif" font-size="11" fill="#6b7280">— per-chat personas (browser, research, forge, …), MCP-aware merge</text>
+
+  <!-- L5 -->
+  <rect x="18" y="216" width="824" height="28" rx="5" fill="#0e1f33" stroke="#1e3a5f" stroke-width="1"/>
+  <rect x="18" y="216" width="42"  height="28" rx="5" fill="#1e3a5f"/>
+  <text x="39"  y="235" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#93c5fd">L5</text>
+  <text x="74"  y="235" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Auto-routing</text>
+  <text x="280" y="235" font-family="sans-serif" font-size="11" fill="#6b7280">— Haiku picks persona per message (heuristic / embedding), 0 ms default</text>
+
+  <!-- GROUP C: Runtime Generation — #422006 -->
+  <text x="18" y="260"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" font-weight="600" fill="#6b7280" letter-spacing="1.5">RUNTIME GENERATION</text>
+
+  <!-- L6 -->
+  <rect x="18" y="266" width="824" height="28" rx="5" fill="#1a0e00" stroke="#92400e" stroke-width="1"/>
+  <rect x="18" y="266" width="42"  height="28" rx="5" fill="#92400e"/>
+  <text x="39"  y="285" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#fcd34d">L6</text>
+  <text x="74"  y="285" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Forge plugin</text>
+  <text x="280" y="285" font-family="sans-serif" font-size="11" fill="#6b7280">— runtime sandboxed tools (bwrap, schema-bound I/O, per-persona network policy)</text>
+
+  <!-- L7 -->
+  <rect x="18" y="298" width="824" height="28" rx="5" fill="#1a0e00" stroke="#92400e" stroke-width="1"/>
+  <rect x="18" y="298" width="42"  height="28" rx="5" fill="#92400e"/>
+  <text x="39"  y="317" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#fcd34d">L7</text>
+  <text x="74"  y="317" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">SkillForge plugin</text>
+  <text x="280" y="317" font-family="sans-serif" font-size="11" fill="#6b7280">— runtime skills (markdown, linted, outcome-graded, scope ladder)</text>
+
+  <!-- GROUP D: Session / Voice — #0f291e -->
+  <text x="18" y="342"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" font-weight="600" fill="#6b7280" letter-spacing="1.5">SESSION &amp; VOICE</text>
+
+  <!-- L8 -->
+  <rect x="18" y="348" width="824" height="28" rx="5" fill="#0c1f16" stroke="#166534" stroke-width="1"/>
+  <rect x="18" y="348" width="42"  height="28" rx="5" fill="#166534"/>
+  <text x="39"  y="367" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#86efac">L8</text>
+  <text x="74"  y="367" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Session lifecycle</text>
+  <text x="280" y="367" font-family="sans-serif" font-size="11" fill="#6b7280">— /new · /clear · /reset purge, 7-day TTL sweep, audit-first rule</text>
+
+  <!-- L9 / L12 combined in this group -->
+  <rect x="18" y="380" width="824" height="28" rx="5" fill="#0c1f16" stroke="#166534" stroke-width="1"/>
+  <rect x="18" y="380" width="42"  height="28" rx="5" fill="#166534"/>
+  <text x="39"  y="399" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#86efac">L9</text>
+  <text x="74"  y="399" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Voice pipeline</text>
+  <text x="280" y="399" font-family="sans-serif" font-size="11" fill="#6b7280">— TTS, persona tone, listener profile, learning-mode annex (L12), STT chain (L23)</text>
+
+  <!-- GROUP E: Security — #2d1515 -->
+  <text x="18" y="424"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" font-weight="600" fill="#6b7280" letter-spacing="1.5">SECURITY &amp; COMPLIANCE</text>
+
+  <!-- L10 -->
+  <rect x="18" y="430" width="824" height="28" rx="5" fill="#1a0f0f" stroke="#7f1d1d" stroke-width="1"/>
+  <rect x="18" y="430" width="42"  height="28" rx="5" fill="#7f1d1d"/>
+  <text x="39"  y="449" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#fca5a5">L10</text>
+  <text x="74"  y="449" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Path-gate hook</text>
+  <text x="280" y="449" font-family="sans-serif" font-size="11" fill="#6b7280">— structural FS-write protection on forge workspaces, fail-closed, audit on every block</text>
+
+  <!-- L16 -->
+  <rect x="18" y="462" width="824" height="28" rx="5" fill="#1a0f0f" stroke="#7f1d1d" stroke-width="1"/>
+  <rect x="18" y="462" width="42"  height="28" rx="5" fill="#7f1d1d"/>
+  <text x="39"  y="481" text-anchor="middle" font-family="monospace" font-size="12" font-weight="700" fill="#fca5a5">L16</text>
+  <text x="74"  y="481" font-family="sans-serif" font-size="12" font-weight="600" fill="#e6edf3">Security hardening</text>
+  <text x="280" y="481" font-family="sans-serif" font-size="11" fill="#6b7280">— read-only role, consent gate, loopback-deny, PIN-elevation, hash-chained audit</text>
+
+  <!-- Footer note -->
+  <text x="430" y="516"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#484f58">
+    L11 Dialectic · L13 /btw inject · L14 LDD-toggle · L15 Outcome-grading · L18–21 Users · L22–30 Engines &amp; Delegation — full breakdown in docs/layer-model.md
+  </text>
+</svg>

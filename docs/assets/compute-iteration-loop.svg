@@ -1,0 +1,123 @@
+<svg width="760" height="520" viewBox="0 0 760 520" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgIL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <marker id="arrB" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrA" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="arrR" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ef4444"/>
+    </marker>
+    <marker id="arrP" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <rect width="760" height="520" rx="10" fill="url(#bgIL)"/>
+
+  <!-- Title -->
+  <text x="380" y="26" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="600" fill="#8b949e" letter-spacing="2">COMPUTE WORKER — ITERATION LOOP</text>
+
+  <!-- ── Node 1: submit ── -->
+  <rect x="270" y="44" width="220" height="42" rx="20" fill="#0a1f12" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="380" y="70" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="13" font-weight="600" fill="#3fb950">submit(spec)</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="380" y1="86" x2="380" y2="108" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrB)"/>
+
+  <!-- ── Node 2: suggest_batch ── -->
+  <rect x="200" y="110" width="360" height="50" rx="8" fill="#0d1f3a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="380" y="131" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="11" fill="#93c5fd">strategy.suggest_batch(history, n)</text>
+  <text x="380" y="149" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#6b7280">returns n parameter sets</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="380" y1="160" x2="380" y2="182" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrB)"/>
+
+  <!-- ── Node 3: ThreadPoolExecutor ── -->
+  <rect x="170" y="184" width="420" height="52" rx="8" fill="#0e1520" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="380" y="206" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="11" fill="#c4b5fd">ThreadPoolExecutor.map(forge.run_tool, sets)</text>
+  <text x="380" y="224" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#6b7280">n parallel bwrap-sandboxed forge calls</text>
+
+  <!-- Arrow 3→4 -->
+  <line x1="380" y1="236" x2="380" y2="258" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrB)"/>
+
+  <!-- ── Node 4: losses ── -->
+  <rect x="210" y="260" width="340" height="42" rx="8" fill="#15100a" stroke="#f0b429" stroke-width="1.5"/>
+  <text x="380" y="277" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="11" fill="#fde68a">[loss_1, loss_2, …, loss_n]</text>
+  <text x="380" y="293" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#6b7280">each forge tool returns a scalar</text>
+
+  <!-- Arrow 4→5 -->
+  <line x1="380" y1="302" x2="380" y2="324" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrB)"/>
+
+  <!-- ── Node 5: update + budget ── -->
+  <rect x="180" y="326" width="400" height="52" rx="8" fill="#0f1117" stroke="#8b949e" stroke-width="1.2"/>
+  <text x="380" y="347" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="10" fill="#c9d1d9">strategy.update(history, new_results)</text>
+  <text x="380" y="365" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="10" fill="#c9d1d9">budget.evaluate_termination(history)</text>
+
+  <!-- Arrow 5→branch -->
+  <line x1="380" y1="378" x2="380" y2="400" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrB)"/>
+
+  <!-- ── Branch diamond ── -->
+  <polygon points="380,400 430,426 380,452 330,426" fill="#0f1117" stroke="#8b949e" stroke-width="1.2"/>
+  <text x="380" y="430" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#8b949e">done?</text>
+
+  <!-- Branch YES → terminal (right) -->
+  <line x1="430" y1="426" x2="548" y2="426" stroke="#3fb950" stroke-width="1.8" marker-end="url(#arrG)"/>
+  <text x="488" y="419" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#3fb950">yes</text>
+  <rect x="550" y="406" width="164" height="40" rx="6" fill="#071a0d" stroke="#3fb950" stroke-width="1.2"/>
+  <text x="632" y="422" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="9" fill="#86efac">write summary.json</text>
+  <text x="632" y="437" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="9" fill="#86efac">compute.run_terminal ✓</text>
+
+  <!-- Branch NO → continue (left) looping back up -->
+  <line x1="330" y1="426" x2="110" y2="426" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#arrB)"/>
+  <text x="220" y="419" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#3b82f6">no — next batch</text>
+  <line x1="110" y1="426" x2="110" y2="135" stroke="#3b82f6" stroke-width="1.8"/>
+  <line x1="110" y1="135" x2="198" y2="135" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#arrB)"/>
+
+  <!-- Loop label -->
+  <text x="74" y="290" text-anchor="middle" transform="rotate(-90 74 290)"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#3b82f6">loop</text>
+
+  <!-- audit note -->
+  <rect x="554" y="214" width="180" height="54" rx="6" fill="#0a0c10" stroke="#484f58" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="644" y="233" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#8b949e">per iteration:</text>
+  <text x="644" y="248" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="9" fill="#6b7280">audit event emitted</text>
+  <text x="644" y="263" text-anchor="middle"
+        font-family="'SFMono-Regular',Consolas,monospace" font-size="9" fill="#6b7280">rolling Top-K updated</text>
+  <!-- dashed connector from node 4 to note -->
+  <line x1="550" y1="275" x2="555" y2="255" stroke="#484f58" stroke-width="1" stroke-dasharray="3,3"/>
+</svg>

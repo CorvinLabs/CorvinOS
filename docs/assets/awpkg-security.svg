@@ -1,0 +1,62 @@
+<svg viewBox="0 0 820 260" xmlns="http://www.w3.org/2000/svg" font-family="'SF Mono',Menlo,Monaco,Consolas,monospace" font-size="12">
+  <defs>
+    <style>
+      .bg  { fill: #0d1117; }
+      .dim { fill: #8b949e; }
+      .lbl { fill: #e6edf3; }
+      .mono{ fill: #79c0ff; }
+      .ok  { fill: #3fb950; }
+      .err { fill: #f85149; }
+      .warn{ fill: #f78534; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="820" height="260"/>
+
+  <text x="24" y="28" fill="#e6edf3" font-size="14" font-weight="700">AWPKG Security — Pre-Extraction Checks (all fail-closed)</text>
+
+  <!-- Left column -->
+  <text x="24" y="58" fill="#8b949e" font-size="11" font-weight="700">CHECK</text>
+  <text x="450" y="58" fill="#8b949e" font-size="11" font-weight="700">ON FAILURE</text>
+  <line x1="16" y1="64" x2="804" y2="64" stroke="#21262d" stroke-width="1"/>
+
+  <!-- rows -->
+  <!-- 1 -->
+  <rect x="16" y="68" width="820" height="24" fill="#161b22" rx="2"/>
+  <text x="24" y="85" class="mono">manifest.yaml</text><text x="130" y="85" class="dim">present + valid against JSON Schema v1</text>
+  <text x="450" y="85" class="err">abort before extraction · no file touched</text>
+
+  <!-- 2 -->
+  <text x="24" y="109" class="mono">component paths</text><text x="148" y="109" class="dim">all declared paths exist inside the archive</text>
+  <text x="450" y="109" class="err">abort · InstallError</text>
+
+  <!-- 3 -->
+  <rect x="16" y="116" width="820" height="24" fill="#161b22" rx="2"/>
+  <text x="24" y="133" class="mono">no undeclared files</text><text x="178" y="133" class="dim">no extra archive entries beyond manifest + README</text>
+  <text x="450" y="133" class="err">abort · InstallError</text>
+
+  <!-- 4 -->
+  <text x="24" y="157" class="mono">no path-traversal</text><text x="168" y="157" class="dim">no  ../  or absolute  /  prefix in any entry</text>
+  <text x="450" y="157" class="err">abort · InstallError</text>
+
+  <!-- 5 -->
+  <rect x="16" y="164" width="820" height="24" fill="#161b22" rx="2"/>
+  <text x="24" y="181" class="mono">tool namespace</text><text x="140" y="181" class="dim">JSON  name  field matches  ^code\.[a-z0-9_]+$</text>
+  <text x="450" y="181" class="err">abort · InstallError</text>
+
+  <!-- 6 -->
+  <text x="24" y="205" class="mono">network policy</text><text x="140" y="205" class="dim">tool  meta.network:allow  contradicts manifest  permissions.network:false</text>
+  <text x="450" y="205" class="err">abort · InstallError</text>
+
+  <!-- 7 -->
+  <rect x="16" y="212" width="820" height="24" fill="#161b22" rx="2"/>
+  <text x="24" y="229" class="mono">SkillForge linter</text><text x="148" y="229" class="dim">injection / homoglyph / secret-leak scan on every SKILL.md</text>
+  <text x="450" y="229" class="err">abort · InstallError</text>
+
+  <!-- 8 -->
+  <text x="24" y="253" class="mono">AWP validator</text><text x="134" y="253" class="dim">R1–R10 DAG rules on every  *.awp.yaml  (cycles, unknown types, …)</text>
+  <text x="450" y="253" class="err">abort · InstallError</text>
+
+  <!-- divider below header -->
+  <line x1="16" y1="240" x2="804" y2="240" stroke="#21262d" stroke-width="1"/>
+</svg>

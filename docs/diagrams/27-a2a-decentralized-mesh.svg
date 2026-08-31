@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 680" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Corvin A2A — Decentralized Agent Mesh</title>
+  <desc>Hub-free peer-to-peer mesh of Corvin nodes. Individual users, freelancers, research
+  labs, startups, and enterprises connect directly via HMAC-signed Friendship Tokens with no
+  central server or intermediary platform. Every node is both server and client.</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr-cyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0e7490"/>
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e40af"/>
+    </marker>
+    <marker id="arr-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b21a8"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <!-- ── Background ─────────────────────────────────────────────────── -->
+  <rect width="1080" height="680" fill="#f8fafc"/>
+
+  <!-- ── Top banner ─────────────────────────────────────────────────── -->
+  <rect x="0" y="0" width="1080" height="64" rx="0" fill="#0f172a"/>
+  <text x="540" y="24" text-anchor="middle" font-size="18" font-weight="700" fill="#f1f5f9">Corvin A2A — Decentralized Agent Mesh</text>
+  <text x="540" y="46" text-anchor="middle" font-size="12" fill="#94a3b8">Every instance is both server and client — no platform, no algorithm, no intermediary</text>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       CONNECTION LINES (drawn before nodes so nodes sit on top)
+  ══════════════════════════════════════════════════════════════════ -->
+
+  <!-- Silvio ↔ Acme: top-left node (175,195) to center-left (255,380) -->
+  <line x1="195" y1="248" x2="272" y2="345" stroke="#0e7490" stroke-width="1.8"
+        marker-start="url(#arr-cyan)" marker-end="url(#arr-cyan)"/>
+  <!-- Friendship Token label -->
+  <rect x="154" y="283" width="108" height="18" rx="4" fill="#ecfeff"/>
+  <text x="208" y="295" text-anchor="middle" font-size="10" font-weight="600" fill="#0e7490">Friendship Token</text>
+
+  <!-- Max ↔ Silvio: arcs above both nodes — label in clear space between banner and node tops -->
+  <path d="M 175 154 C 175 102 437 102 437 154" stroke="#0e7490" stroke-width="1.8"
+        fill="none" marker-start="url(#arr-cyan)" marker-end="url(#arr-cyan)"/>
+  <rect x="252" y="82" width="108" height="18" rx="4" fill="#ecfeff"/>
+  <text x="306" y="94" text-anchor="middle" font-size="10" font-weight="600" fill="#0e7490">Friendship Token</text>
+
+  <!-- Max ↔ Acme: top-center (437,190) to center-left (310,385) -->
+  <line x1="410" y1="252" x2="335" y2="348" stroke="#475569" stroke-width="1.5"
+        marker-start="url(#arr)" marker-end="url(#arr)"/>
+
+  <!-- Uni Berlin ↔ MegaCorp: top-right (820,195) to center-right (755,375) -->
+  <line x1="830" y1="248" x2="800" y2="345" stroke="#6b21a8" stroke-width="1.8"
+        marker-start="url(#arr-purple)" marker-end="url(#arr-purple)"/>
+  <rect x="814" y="286" width="106" height="18" rx="4" fill="#f5f3ff"/>
+  <text x="867" y="298" text-anchor="middle" font-size="10" font-weight="600" fill="#6b21a8">signed envelopes</text>
+
+  <!-- Acme ↔ MegaCorp: center-left (355,385) to center-right (720,385) -->
+  <line x1="395" y1="390" x2="720" y2="390" stroke="#1e40af" stroke-width="1.8"
+        marker-start="url(#arr-blue)" marker-end="url(#arr-blue)"/>
+  <rect x="506" y="377" width="68" height="18" rx="4" fill="#dbeafe"/>
+  <text x="540" y="389" text-anchor="middle" font-size="10" font-weight="600" fill="#1e40af">A2A task</text>
+
+  <!-- Dev Collective ↔ Acme: bottom-center (490,530) to center-left (330,415) -->
+  <line x1="465" y1="520" x2="356" y2="418" stroke="#16a34a" stroke-width="1.8"
+        marker-start="url(#arr-green)" marker-end="url(#arr-green)"/>
+
+  <!-- Dev Collective ↔ Max: bottom-center (490,530) to top-center (437,252) -->
+  <line x1="476" y1="522" x2="448" y2="258" stroke="#475569" stroke-width="1.5"
+        marker-start="url(#arr)" marker-end="url(#arr)"/>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       NODES
+  ══════════════════════════════════════════════════════════════════ -->
+
+  <!-- ── Node: Individual / Home (top-left) ─────────── cx≈175 cy≈200 -->
+  <rect x="80" y="154" width="190" height="88" rx="10" fill="#cffafe" stroke="#0e7490" stroke-width="2"/>
+  <!-- small person icon area -->
+  <circle cx="116" cy="182" r="11" fill="#0e7490"/>
+  <text x="116" y="186" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">S</text>
+  <text x="210" y="178" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Individual / Home</text>
+  <text x="175" y="194" text-anchor="middle" font-size="12" font-weight="700" fill="#0e7490">Silvio · Corvin</text>
+  <text x="175" y="210" text-anchor="middle" font-size="9" fill="#475569">192.168.x.x:8000</text>
+  <rect x="100" y="222" width="150" height="14" rx="4" fill="#a5f3fc"/>
+  <text x="175" y="232" text-anchor="middle" font-size="9" fill="#0e7490">instance · home laptop</text>
+
+  <!-- ── Node: Freelancer (top-center) ─────────────── cx≈437 cy≈200 -->
+  <rect x="342" y="154" width="190" height="88" rx="10" fill="#cffafe" stroke="#0e7490" stroke-width="2"/>
+  <circle cx="378" cy="182" r="11" fill="#0e7490"/>
+  <text x="378" y="186" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">M</text>
+  <text x="471" y="178" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Freelancer</text>
+  <text x="437" y="194" text-anchor="middle" font-size="12" font-weight="700" fill="#0e7490">Max · Corvin</text>
+  <text x="437" y="210" text-anchor="middle" font-size="9" fill="#475569">max.corvin.eu:8000</text>
+  <rect x="362" y="222" width="150" height="14" rx="4" fill="#a5f3fc"/>
+  <text x="437" y="232" text-anchor="middle" font-size="9" fill="#0e7490">instance · vserver</text>
+
+  <!-- ── Node: Research Lab (top-right) ────────────── cx≈830 cy≈200 -->
+  <rect x="728" y="154" width="210" height="88" rx="10" fill="#f5f3ff" stroke="#9333ea" stroke-width="2"/>
+  <circle cx="766" cy="182" r="11" fill="#9333ea"/>
+  <text x="766" y="187" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">🎓</text>
+  <text x="850" y="178" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Research Lab</text>
+  <text x="857" y="194" text-anchor="middle" font-size="12" font-weight="700" fill="#9333ea">Uni Berlin · Corvin</text>
+  <text x="833" y="210" text-anchor="middle" font-size="9" fill="#475569">corvin.hu-berlin.de:8000</text>
+  <rect x="750" y="222" width="166" height="14" rx="4" fill="#ede9fe"/>
+  <text x="833" y="232" text-anchor="middle" font-size="9" fill="#6b21a8">instance · on-prem server</text>
+
+  <!-- ── Node: Startup A (center-left) ─────────────── cx≈320 cy≈390 -->
+  <rect x="216" y="348" width="190" height="88" rx="10" fill="#dbeafe" stroke="#1e40af" stroke-width="2"/>
+  <circle cx="252" cy="376" r="11" fill="#1e40af"/>
+  <text x="252" y="381" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">A</text>
+  <text x="340" y="372" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Startup A</text>
+  <text x="334" y="388" text-anchor="middle" font-size="12" font-weight="700" fill="#1e40af">Acme GmbH · Corvin</text>
+  <text x="311" y="404" text-anchor="middle" font-size="9" fill="#475569">acme.corvin.eu:8000</text>
+  <rect x="232" y="416" width="158" height="14" rx="4" fill="#bfdbfe"/>
+  <text x="311" y="426" text-anchor="middle" font-size="9" fill="#1e40af">instance · cloud VM</text>
+
+  <!-- ── Node: Enterprise (center-right) ───────────── cx≈770 cy≈390 -->
+  <rect x="680" y="348" width="210" height="88" rx="10" fill="#dbeafe" stroke="#1e40af" stroke-width="2"/>
+  <circle cx="718" cy="376" r="11" fill="#1e40af"/>
+  <text x="718" y="381" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">E</text>
+  <text x="800" y="372" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Enterprise</text>
+  <text x="810" y="388" text-anchor="middle" font-size="12" font-weight="700" fill="#1e40af">MegaCorp AG · Corvin</text>
+  <text x="785" y="404" text-anchor="middle" font-size="9" fill="#475569">corvin.megacorp.de:8000</text>
+  <rect x="698" y="416" width="174" height="14" rx="4" fill="#bfdbfe"/>
+  <text x="785" y="426" text-anchor="middle" font-size="9" fill="#1e40af">instance · on-prem datacenter</text>
+
+  <!-- ── Node: Remote Team (bottom-center) ─────────── cx≈490 cy≈548 -->
+  <rect x="388" y="506" width="204" height="88" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <circle cx="424" cy="534" r="11" fill="#16a34a"/>
+  <text x="424" y="539" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">D</text>
+  <text x="512" y="530" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Remote Team</text>
+  <text x="490" y="546" text-anchor="middle" font-size="12" font-weight="700" fill="#16a34a">Dev Collective</text>
+  <text x="490" y="562" text-anchor="middle" font-size="9" fill="#475569">devcollective.corvin.eu:8000</text>
+  <rect x="406" y="574" width="168" height="14" rx="4" fill="#bbf7d0"/>
+  <text x="490" y="584" text-anchor="middle" font-size="9" fill="#16a34a">instance · shared VPS</text>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       LEGEND (bottom)
+  ══════════════════════════════════════════════════════════════════ -->
+  <rect x="40" y="622" width="1000" height="44" rx="8" fill="#0f172a"/>
+  <text x="60" y="641" font-size="12" font-weight="700" fill="#94a3b8">No central server</text>
+  <text x="196" y="641" font-size="12" fill="#64748b">·</text>
+  <text x="212" y="641" font-size="12" font-weight="700" fill="#94a3b8">HMAC-signed envelopes</text>
+  <text x="400" y="641" font-size="12" fill="#64748b">·</text>
+  <text x="416" y="641" font-size="12" font-weight="700" fill="#94a3b8">GDPR consent per connection</text>
+  <text x="644" y="641" font-size="12" fill="#64748b">·</text>
+  <text x="660" y="641" font-size="12" font-weight="700" fill="#94a3b8">Each node = one Corvin instance</text>
+
+  <text x="60" y="657" font-size="10" fill="#475569">Connections use Friendship Tokens (HMAC-SHA256) — bilateral key pairs, no third-party verification needed</text>
+
+  <!-- ── Small connection type legend ───────────────────────────────── -->
+  <line x1="852" y1="654" x2="880" y2="654" stroke="#0e7490" stroke-width="2" marker-end="url(#arr-cyan)" marker-start="url(#arr-cyan)"/>
+  <text x="886" y="658" font-size="10" fill="#94a3b8">Friendship Token</text>
+  <line x1="970" y1="654" x2="998" y2="654" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <!-- label hidden — fits in dark bar -->
+
+</svg>

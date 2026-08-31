@@ -1,0 +1,131 @@
+<svg width="900" height="360" viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgPL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <marker id="arrBlPL" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrAmPL" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="arrGrPL" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrPuPL" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrRdPL" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ef4444"/>
+    </marker>
+  </defs>
+
+  <rect width="900" height="360" rx="10" fill="url(#bgPL)"/>
+
+  <!-- Title -->
+  <text x="450" y="26" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">PLUGIN LIFECYCLE</text>
+
+  <!-- ═══ Stage 1: pip install pill (amber) ═══ -->
+  <rect x="300" y="38" width="300" height="36" rx="18"
+        fill="rgba(240,180,41,0.10)" stroke="#f0b429" stroke-width="1.5"/>
+  <text x="450" y="54" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="12" font-weight="700" fill="#f0b429">pip install mycompany-sa</text>
+  <text x="450" y="67" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#8b949e">publishes entry-point to corvin.plugins group</text>
+
+  <!-- Arrow 1 → 2 -->
+  <line x1="450" y1="86" x2="450" y2="116" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#arrBlPL)"/>
+
+  <!-- ═══ Stage 2: WorkerServer box (blue) ═══ -->
+  <rect x="170" y="120" width="560" height="60" rx="8"
+        fill="rgba(59,130,246,0.08)" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="340" y="145" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="12" font-weight="700" fill="#93c5fd">WorkerServer.serve_forever()</text>
+  <text x="340" y="163" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#8b949e">async server — one per tenant, one socket per worker</text>
+  <!-- Nested registration box -->
+  <rect x="548" y="128" width="174" height="44" rx="5"
+        fill="#0a0f1a" stroke="#3b82f6" stroke-width="1"/>
+  <text x="635" y="143" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="9" fill="#93c5fd">PluginRegistry</text>
+  <text x="635" y="156" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="9" fill="#93c5fd">.register(plugin, ctx)</text>
+
+  <!-- Arrow 2 → 3 with label -->
+  <line x1="450" y1="180" x2="450" y2="206" stroke="#3fb950" stroke-width="1.8" marker-end="url(#arrGrPL)"/>
+  <text x="468" y="197" text-anchor="start"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#3fb950">on_load(ctx)</text>
+
+  <!-- ═══ Stage 3: compute registry (green) ═══ -->
+  <rect x="215" y="210" width="420" height="44" rx="8"
+        fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="390" y="229" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="12" font-weight="700" fill="#86efac">compute_registry.register(self)</text>
+  <!-- audit note -->
+  <text x="648" y="229" text-anchor="start"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#8b949e">audit: compute.plugin_loaded</text>
+  <text x="215" y="246" text-anchor="start"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#6b7280">  self-registers with corvin_compute.engine_registry</text>
+
+  <!-- Arrow 3 → 4 (dashed — time passes) -->
+  <line x1="450" y1="254" x2="450" y2="280" stroke="#484f58" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrPuPL)"/>
+
+  <!-- ═══ Stage 4: MCP call (purple) ═══ -->
+  <rect x="215" y="284" width="460" height="44" rx="8"
+        fill="rgba(167,139,250,0.08)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="400" y="303" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="12" font-weight="700" fill="#c4b5fd">compute_submit(engine=&#39;sa&#39;, ...)</text>
+  <text x="688" y="303" text-anchor="start"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#8b949e">&#x2192; routed by job_id prefix &#39;sa_&#39;</text>
+  <text x="215" y="319" text-anchor="start"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#6b7280">  plugin.submit(spec) → "sa_AbCd..." — routed via prefix</text>
+
+  <!-- Arrow 4 → 5 -->
+  <line x1="450" y1="328" x2="450" y2="346" stroke="#ef4444" stroke-width="1.8" marker-end="url(#arrRdPL)"/>
+
+  <!-- ═══ Stage 5: shutdown pill (red) ═══ -->
+  <rect x="350" y="346" width="200" height="26" rx="13"
+        fill="rgba(239,68,68,0.08)" stroke="#ef4444" stroke-width="1.2"/>
+  <text x="450" y="363" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#fca5a5">plugin.on_unload()</text>
+
+  <!-- ═══ Health bar (right side) ═══ -->
+  <rect x="720" y="120" width="160" height="110" rx="6"
+        fill="#0a0f1a" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="800" y="138" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="10" fill="#3b82f6">health_check()</text>
+  <line x1="730" y1="144" x2="870" y2="144" stroke="#1e3a5f" stroke-width="1"/>
+  <text x="800" y="162" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="10" fill="#3fb950">HealthStatus(</text>
+  <text x="800" y="176" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="10" fill="#3fb950">  ok=True)</text>
+  <text x="800" y="195" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#8b949e">isolated per plugin</text>
+  <text x="800" y="208" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#6b7280">one broken plugin ≠</text>
+  <text x="800" y="220" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#6b7280">all others affected</text>
+</svg>

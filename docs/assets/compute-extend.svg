@@ -1,0 +1,162 @@
+<svg width="900" height="440" viewBox="0 0 900 440" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgCE" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <marker id="arrAE"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="arrPE"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrGE"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrBE"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+  </defs>
+
+  <rect width="900" height="440" rx="10" fill="url(#bgCE)"/>
+
+  <text x="450" y="28" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">EXTENDING COMPUTE — ENTERPRISE INTEGRATION MODEL</text>
+
+  <!-- ═══ LEFT COLUMN: Custom Strategy ═══ -->
+  <rect x="12" y="46" width="282" height="362" rx="8" fill="#0d0a1a" stroke="#a78bfa" stroke-width="1.5"/>
+
+  <text x="153" y="66" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="700" fill="#c4b5fd">1 — Custom Strategy</text>
+  <text x="153" y="82" text-anchor="middle" font-family="monospace" font-size="8" fill="#a78bfa">via Strategy Protocol · zero subclassing</text>
+
+  <line x1="28" y1="92" x2="278" y2="92" stroke="#1a1a2e" stroke-width="1"/>
+
+  <!-- Code block -->
+  <rect x="20" y="98" width="266" height="168" rx="5" fill="#0a0814" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="30" y="113" font-family="monospace" font-size="8" fill="#6b7280"># mycompany/strategies/simulated_annealing.py</text>
+  <text x="30" y="127" font-family="monospace" font-size="8.5" fill="#c4b5fd">class</text>
+  <text x="63" y="127" font-family="monospace" font-size="8.5" fill="#4ade80">SAStrategy</text>
+  <text x="63" y="127" font-family="monospace" font-size="8.5" fill="#8b949e">:</text>
+  <text x="30" y="143" font-family="monospace" font-size="8" fill="#6b7280">    name = </text>
+  <text x="94" y="143" font-family="monospace" font-size="8" fill="#fcd34d">"simulated_annealing"</text>
+  <text x="30" y="157" font-family="monospace" font-size="8" fill="#c4b5fd">    def</text>
+  <text x="58" y="157" font-family="monospace" font-size="8" fill="#93c5fd">suggest_batch</text>
+  <text x="160" y="157" font-family="monospace" font-size="8" fill="#8b949e">(self, history, n):</text>
+  <text x="30" y="171" font-family="monospace" font-size="8" fill="#6b7280">        # neighbour move at temp T</text>
+  <text x="30" y="185" font-family="monospace" font-size="8" fill="#c4b5fd">    def</text>
+  <text x="58" y="185" font-family="monospace" font-size="8" fill="#93c5fd">update</text>
+  <text x="100" y="185" font-family="monospace" font-size="8" fill="#8b949e">(self, history, results):</text>
+  <text x="30" y="199" font-family="monospace" font-size="8" fill="#6b7280">        # lower temperature</text>
+  <text x="30" y="213" font-family="monospace" font-size="8" fill="#c4b5fd">    def</text>
+  <text x="58" y="213" font-family="monospace" font-size="8" fill="#93c5fd">should_stop</text>
+  <text x="136" y="213" font-family="monospace" font-size="8" fill="#8b949e">(self, history):</text>
+  <text x="30" y="227" font-family="monospace" font-size="8" fill="#6b7280">        return T &lt; T_min, "frozen"</text>
+  <text x="30" y="243" font-family="monospace" font-size="8" fill="#c4b5fd">    name</text>
+  <text x="30" y="255" font-family="monospace" font-size="8" fill="#6b7280">    # 3 methods · no base class needed</text>
+
+  <!-- Registration steps -->
+  <rect x="20" y="274" width="266" height="48" rx="5" fill="#1a1a2e" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="30" y="289" font-family="monospace" font-size="7.5" fill="#6b7280"># register in tenant.corvin.yaml</text>
+  <text x="30" y="303" font-family="monospace" font-size="7.5" fill="#c4b5fd">spec.compute.strategies_allowed:</text>
+  <text x="30" y="317" font-family="monospace" font-size="7.5" fill="#fcd34d">  - simulated_annealing</text>
+
+  <text x="153" y="348" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">Strategy runs inside the worker process</text>
+  <text x="153" y="362" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">Trust level: operator-curated (same as path-gate)</text>
+  <text x="153" y="376" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">LLM strategies: claude -p subprocess (zero SDK calls)</text>
+  <text x="153" y="390" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">gate with disallow_llm_strategies: true if needed</text>
+
+  <!-- Arrow → worker -->
+  <line x1="294" y1="220" x2="318" y2="220"
+        stroke="#a78bfa" stroke-width="1.8" marker-end="url(#arrPE)"/>
+  <text x="306" y="213" text-anchor="middle" font-family="monospace" font-size="7" fill="#a78bfa">loaded</text>
+  <text x="306" y="230" text-anchor="middle" font-family="monospace" font-size="7" fill="#a78bfa">by worker</text>
+
+  <!-- ═══ CENTER COLUMN: Worker + Config ═══ -->
+  <rect x="320" y="46" width="260" height="362" rx="8" fill="#0a1200" stroke="#f0b429" stroke-width="1.8"/>
+
+  <text x="450" y="66" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="700" fill="#f0b429">2 — Tenant Configuration</text>
+  <text x="450" y="82" text-anchor="middle" font-family="monospace" font-size="8" fill="#f0b429">tenant.corvin.yaml · hot-reload</text>
+
+  <line x1="336" y1="92" x2="564" y2="92" stroke="#2a1800" stroke-width="1"/>
+
+  <!-- YAML block -->
+  <rect x="328" y="98" width="244" height="200" rx="5" fill="#040800" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="338" y="113" font-family="monospace" font-size="7.5" fill="#6b7280">spec:</text>
+  <text x="338" y="127" font-family="monospace" font-size="7.5" fill="#6b7280">  compute:</text>
+  <text x="338" y="141" font-family="monospace" font-size="7.5" fill="#fcd34d">    enabled: true</text>
+  <text x="338" y="155" font-family="monospace" font-size="7.5" fill="#8b949e">    max_parallel_iterations: 8</text>
+  <text x="338" y="169" font-family="monospace" font-size="7.5" fill="#8b949e">    max_concurrent_runs: 4</text>
+  <text x="338" y="183" font-family="monospace" font-size="7.5" fill="#8b949e">    max_iterations_per_run: 500</text>
+  <text x="338" y="197" font-family="monospace" font-size="7.5" fill="#8b949e">    max_wall_clock_per_run_s: 3600</text>
+  <text x="338" y="211" font-family="monospace" font-size="7.5" fill="#8b949e">    top_k_size: 10</text>
+  <text x="338" y="225" font-family="monospace" font-size="7.5" fill="#fcd34d">    disallow_llm_strategies: false</text>
+  <text x="338" y="239" font-family="monospace" font-size="7.5" fill="#8b949e">    strategies_allowed:</text>
+  <text x="338" y="253" font-family="monospace" font-size="7.5" fill="#8b949e">      - grid</text>
+  <text x="338" y="267" font-family="monospace" font-size="7.5" fill="#8b949e">      - random</text>
+  <text x="338" y="281" font-family="monospace" font-size="7.5" fill="#8b949e">      - bayesian</text>
+  <text x="338" y="295" font-family="monospace" font-size="7.5" fill="#a78bfa">      - simulated_annealing</text>
+
+  <!-- Data policy note -->
+  <rect x="328" y="306" width="244" height="56" rx="5" fill="#040800" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="338" y="321" font-family="monospace" font-size="7.5" fill="#6b7280"># data_policy.yaml (L24 + L32)</text>
+  <text x="338" y="335" font-family="monospace" font-size="7.5" fill="#8b949e">strict_anonymization: true</text>
+  <text x="338" y="349" font-family="monospace" font-size="7.5" fill="#8b949e">k_anonymity_threshold: 5</text>
+  <text x="338" y="363" font-family="monospace" font-size="7.5" fill="#6b7280"># schema + stats only → LLM</text>
+
+  <text x="450" y="390" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">extra="forbid" — unknown keys raise</text>
+  <text x="450" y="403" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">path-gate blocks LLM writes to config</text>
+
+  <!-- Arrow → observability -->
+  <line x1="580" y1="220" x2="608" y2="220"
+        stroke="#3fb950" stroke-width="1.8" marker-end="url(#arrGE)"/>
+  <text x="594" y="213" text-anchor="middle" font-family="monospace" font-size="7" fill="#3fb950">metrics</text>
+  <text x="594" y="230" text-anchor="middle" font-family="monospace" font-size="7" fill="#3fb950">+ audit</text>
+
+  <!-- ═══ RIGHT COLUMN: Observability & Ops ═══ -->
+  <rect x="610" y="46" width="278" height="362" rx="8" fill="#0c1a0c" stroke="#3fb950" stroke-width="1.5"/>
+
+  <text x="749" y="66" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="700" fill="#4ade80">3 — Observability &amp; Ops</text>
+  <text x="749" y="82" text-anchor="middle" font-family="monospace" font-size="8" fill="#3fb950">Prometheus · Grafana · systemd · audit chain</text>
+
+  <line x1="626" y1="92" x2="872" y2="92" stroke="#0f2d1a" stroke-width="1"/>
+
+  <!-- Prometheus metrics -->
+  <rect x="618" y="98" width="262" height="100" rx="5" fill="#091209" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="628" y="112" font-family="monospace" font-size="7.5" fill="#4ade80"># Prometheus metric families</text>
+  <text x="628" y="126" font-family="monospace" font-size="7.5" fill="#8b949e">corvin_compute_runs_started_total</text>
+  <text x="628" y="140" font-family="monospace" font-size="7.5" fill="#8b949e">corvin_compute_iterations_total</text>
+  <text x="628" y="154" font-family="monospace" font-size="7.5" fill="#8b949e">corvin_compute_runs_terminal_total</text>
+  <text x="628" y="168" font-family="monospace" font-size="7.5" fill="#8b949e">  labels: state · strategy · tenant_id</text>
+  <text x="628" y="182" font-family="monospace" font-size="7.5" fill="#8b949e">corvin_compute_worker_unreachable_total</text>
+
+  <!-- systemd -->
+  <rect x="618" y="206" width="262" height="60" rx="5" fill="#091209" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="628" y="220" font-family="monospace" font-size="7.5" fill="#4ade80"># systemd-user template unit</text>
+  <text x="628" y="234" font-family="monospace" font-size="7.5" fill="#fcd34d">systemctl --user enable \</text>
+  <text x="628" y="248" font-family="monospace" font-size="7.5" fill="#fcd34d">  corvin-compute@_default</text>
+  <text x="628" y="260" font-family="monospace" font-size="7.5" fill="#6b7280">    # one worker per tenant</text>
+
+  <!-- CLI -->
+  <rect x="618" y="274" width="262" height="60" rx="5" fill="#091209" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="628" y="288" font-family="monospace" font-size="7.5" fill="#4ade80"># CLI (corvin_compute)</text>
+  <text x="628" y="302" font-family="monospace" font-size="7.5" fill="#8b949e">python -m corvin_compute serve</text>
+  <text x="628" y="316" font-family="monospace" font-size="7.5" fill="#8b949e">python -m corvin_compute status</text>
+  <text x="628" y="330" font-family="monospace" font-size="7.5" fill="#6b7280">    # submit · result · abort</text>
+
+  <text x="749" y="356" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">audit chain: param_fingerprint only</text>
+  <text x="749" y="370" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b949e">no raw param values in any event</text>
+  <text x="749" y="384" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">GDPR: audit.jsonl hash-chained + verifiable</text>
+  <text x="749" y="398" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6b7280">daily verify via voice-audit verify at 04:30</text>
+
+  <!-- Footer -->
+  <text x="450" y="422" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#484f58">Bootstrap: bash core/compute/bootstrap.sh · CORVIN_COMPUTE_MINIMAL=1 skips sklearn for disk-constrained hosts</text>
+</svg>

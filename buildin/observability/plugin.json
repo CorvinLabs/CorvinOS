@@ -1,0 +1,13 @@
+{
+  "id": "observability",
+  "name": "Observability",
+  "version": "1.0.0",
+  "category": "Observability",
+  "description": "Metrics, logs, tracing, dashboards, alerting",
+  "author": "CorvinOS Core",
+  "tier": "buildin",
+  "boot_layer": "bundled",
+  "rating": 4.6,
+  "installs": 2789,
+  "dependencies": []
+}

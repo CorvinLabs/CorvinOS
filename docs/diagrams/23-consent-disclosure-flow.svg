@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 740" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Disclosure and consent lifecycle — from first contact to message processing</title>
+  <desc>Flow diagram showing how a new user's first message triggers the disclosure card (EU AI Act Art. 50 §1), then the consent gate (GDPR Art. 6), and only then proceeds to message processing. Each decision point emits an event into the hash-chained audit log. ADR-0072 hardening: uid_hash in audit events, store-corruption deny-all, UUID session-token framing delimiter.</desc>
+
+  <text x="490" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Disclosure + Consent — from first contact to reply</text>
+  <text x="490" y="52" text-anchor="middle" font-size="12" fill="#475569">EU AI Act Art. 50 §1 (L19) · GDPR Art. 6 + 7 (L16) · both structurally non-bypassable</text>
+
+  <!-- USER box -->
+  <rect x="60" y="78" width="120" height="44" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="2"/>
+  <text x="120" y="100" text-anchor="middle" font-size="12" font-weight="700" fill="#1e40af">User</text>
+  <text x="120" y="115" text-anchor="middle" font-size="10" fill="#1e40af">sends message</text>
+
+  <!-- Arrow right -->
+  <line x1="180" y1="100" x2="240" y2="100" stroke="#0f172a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- DISCLOSURE GATE -->
+  <rect x="240" y="68" width="200" height="64" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+  <text x="340" y="88" text-anchor="middle" font-size="11" font-weight="700" fill="#92400e">L19 DISCLOSURE GATE</text>
+  <text x="340" y="103" text-anchor="middle" font-size="10" fill="#0f172a">Has uid received the</text>
+  <text x="340" y="118" text-anchor="middle" font-size="10" fill="#0f172a">disclosure card?</text>
+
+  <!-- YES path from disclosure (right) -->
+  <line x1="440" y1="100" x2="500" y2="100" stroke="#16a34a" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="470" y="92" text-anchor="middle" font-size="9" fill="#16a34a">YES</text>
+
+  <!-- NO path from disclosure (down) -->
+  <line x1="340" y1="132" x2="340" y2="180" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+  <text x="356" y="160" font-size="9" fill="#dc2626">NO</text>
+
+  <!-- EMIT CARD box -->
+  <rect x="240" y="180" width="200" height="54" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="340" y="198" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">Emit disclosure card</text>
+  <text x="340" y="213" text-anchor="middle" font-size="9" fill="#0f172a">AI-nature statement + /join /pass /leave</text>
+  <text x="340" y="226" text-anchor="middle" font-size="9" fill="#475569">disclosure.shown → audit chain</text>
+
+  <!-- User action box -->
+  <rect x="240" y="252" width="200" height="64" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+  <text x="340" y="272" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">User chooses action</text>
+  <text x="340" y="288" text-anchor="middle" font-size="10" fill="#0f172a">/join → observer role</text>
+  <text x="340" y="303" text-anchor="middle" font-size="10" fill="#0f172a">/pass → opt-out · /leave → revoke</text>
+
+  <!-- Join path goes right and up to consent gate -->
+  <path d="M 440 284 L 460 284 L 460 100 L 500 100" stroke="#16a34a" stroke-width="1.5" fill="none" marker-end="url(#arrowGreen)" stroke-dasharray="5,3"/>
+  <text x="452" y="200" font-size="9" fill="#16a34a" transform="rotate(-90 452 200)">/join</text>
+
+  <!-- Pass/leave path to end -->
+  <line x1="340" y1="316" x2="340" y2="360" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+  <rect x="240" y="360" width="200" height="40" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="340" y="378" text-anchor="middle" font-size="10" font-weight="700" fill="#991b1b">Session ends</text>
+  <text x="340" y="394" text-anchor="middle" font-size="9" fill="#475569">disclosure.passed / disclosure.left → audit</text>
+
+  <!-- CONSENT GATE (main path, right side) -->
+  <rect x="500" y="68" width="220" height="64" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="2"/>
+  <text x="610" y="88" text-anchor="middle" font-size="11" font-weight="700" fill="#0e7490">L16 CONSENT GATE</text>
+  <text x="610" y="103" text-anchor="middle" font-size="10" fill="#0f172a">Is there a valid, non-expired</text>
+  <text x="610" y="118" text-anchor="middle" font-size="10" fill="#0f172a">consent.granted for this uid?</text>
+
+  <!-- YES from consent (right to processing) -->
+  <line x1="720" y1="100" x2="780" y2="100" stroke="#16a34a" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="750" y="92" text-anchor="middle" font-size="9" fill="#16a34a">YES</text>
+
+  <!-- NO from consent (down to drop) -->
+  <line x1="610" y1="132" x2="610" y2="180" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+  <text x="626" y="160" font-size="9" fill="#dc2626">NO</text>
+
+  <!-- Observer drop box -->
+  <rect x="500" y="180" width="220" height="64" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="610" y="200" text-anchor="middle" font-size="10" font-weight="700" fill="#991b1b">Message dropped</text>
+  <text x="610" y="215" text-anchor="middle" font-size="9" fill="#0f172a">consent.observer_dropped → audit chain</text>
+  <text x="610" y="230" text-anchor="middle" font-size="9" fill="#475569">User can /consent on to grant standing consent</text>
+
+  <!-- /share one-shot bypass -->
+  <rect x="500" y="260" width="220" height="64" rx="8" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="610" y="280" text-anchor="middle" font-size="10" font-weight="700" fill="#065f46">/share one-shot path</text>
+  <text x="610" y="295" text-anchor="middle" font-size="9" fill="#0f172a">Single message admitted; audited</text>
+  <text x="610" y="310" text-anchor="middle" font-size="9" fill="#475569">consent.share_admitted → audit chain</text>
+
+  <!-- Arrow from /share one-shot to processing -->
+  <path d="M 720 292 L 755 292 L 755 140 L 780 140" stroke="#10b981" stroke-width="1.5" fill="none" marker-end="url(#arrowGreen)" stroke-dasharray="4,3"/>
+
+  <!-- PROCESSING box -->
+  <rect x="780" y="68" width="160" height="140" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="860" y="92" text-anchor="middle" font-size="11" font-weight="700" fill="#15803d">Message</text>
+  <text x="860" y="107" text-anchor="middle" font-size="11" font-weight="700" fill="#15803d">Processing</text>
+  <text x="860" y="126" text-anchor="middle" font-size="9" fill="#0f172a">L34 data classification</text>
+  <text x="860" y="141" text-anchor="middle" font-size="9" fill="#0f172a">L35 egress gate</text>
+  <text x="860" y="156" text-anchor="middle" font-size="9" fill="#0f172a">L22 engine spawn</text>
+  <text x="860" y="171" text-anchor="middle" font-size="9" fill="#0f172a">L10 path-gate</text>
+  <text x="860" y="190" text-anchor="middle" font-size="9" fill="#475569">→ response + provenance</text>
+
+  <!-- Consent types: TTL diagram -->
+  <rect x="60" y="280" width="160" height="140" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="140" y="298" text-anchor="middle" font-size="10" font-weight="700" fill="#0f172a">Consent types</text>
+  <rect x="72" y="308" width="136" height="22" rx="4" fill="#dcfce7" stroke="#16a34a" stroke-width="1"/>
+  <text x="140" y="323" text-anchor="middle" font-size="9" fill="#15803d">/consent on — durable (no TTL)</text>
+  <rect x="72" y="336" width="136" height="22" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="140" y="351" text-anchor="middle" font-size="9" fill="#92400e">/consent 1h — TTL 60–2,592,000 s</text>
+  <rect x="72" y="364" width="136" height="22" rx="4" fill="#ecfdf5" stroke="#10b981" stroke-width="1"/>
+  <text x="140" y="379" text-anchor="middle" font-size="9" fill="#065f46">/share — one-shot, audited</text>
+  <rect x="72" y="392" width="136" height="22" rx="4" fill="#fee2e2" stroke="#dc2626" stroke-width="1"/>
+  <text x="140" y="407" text-anchor="middle" font-size="9" fill="#991b1b">(none) — deny-by-default</text>
+
+  <!-- TOCTOU note -->
+  <rect x="60" y="436" width="160" height="64" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1"/>
+  <text x="140" y="454" text-anchor="middle" font-size="9" font-weight="700" fill="#0f172a">TOCTOU guard</text>
+  <text x="140" y="468" text-anchor="middle" font-size="9" fill="#475569">Stale epoch (&gt;30s)</text>
+  <text x="140" y="482" text-anchor="middle" font-size="9" fill="#475569">re-reads from disk</text>
+  <text x="140" y="496" text-anchor="middle" font-size="9" fill="#475569">before processing</text>
+
+  <!-- Audit events summary -->
+  <rect x="60" y="520" width="860" height="130" rx="8" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.5"/>
+  <text x="80" y="541" font-size="11" font-weight="700" fill="#0369a1">Audit events emitted per disclosure + consent lifecycle</text>
+  <!-- L19 events -->
+  <rect x="72" y="550" width="8" height="8" fill="#f59e0b"/>
+  <text x="86" y="559" font-size="9" font-family="monospace" fill="#0f172a">disclosure.shown</text>
+  <text x="86" y="572" font-size="9" fill="#475569">uid_hash · channel · action="pending"</text>
+
+  <rect x="225" y="550" width="8" height="8" fill="#f59e0b"/>
+  <text x="239" y="559" font-size="9" font-family="monospace" fill="#0f172a">disclosure.joined</text>
+  <text x="239" y="572" font-size="9" fill="#475569">uid_hash · channel</text>
+
+  <rect x="378" y="550" width="8" height="8" fill="#06b6d4"/>
+  <text x="392" y="559" font-size="9" font-family="monospace" fill="#0f172a">consent.granted</text>
+  <text x="392" y="572" font-size="9" fill="#475569">channel · mode · ttl_s</text>
+
+  <rect x="531" y="550" width="8" height="8" fill="#dc2626"/>
+  <text x="545" y="559" font-size="9" font-family="monospace" fill="#0f172a">consent.observer_dropped</text>
+  <text x="545" y="572" font-size="9" fill="#475569">channel · uid_hash · msg_id</text>
+
+  <rect x="72" y="582" width="8" height="8" fill="#10b981"/>
+  <text x="86" y="591" font-size="9" font-family="monospace" fill="#0f172a">consent.share_admitted</text>
+  <text x="86" y="604" font-size="9" fill="#475569">uid · msg_id · text_len · via="/share"</text>
+
+  <rect x="225" y="582" width="8" height="8" fill="#dc2626"/>
+  <text x="239" y="591" font-size="9" font-family="monospace" fill="#0f172a">consent.revoked</text>
+  <text x="239" y="604" font-size="9" fill="#475569">channel · uid</text>
+
+  <rect x="378" y="582" width="8" height="8" fill="#f59e0b"/>
+  <text x="392" y="591" font-size="9" font-family="monospace" fill="#0f172a">consent.toctou_drop</text>
+  <text x="392" y="604" font-size="9" fill="#475569">age_s · toctou_max_s=30</text>
+
+  <rect x="531" y="582" width="8" height="8" fill="#dc2626"/>
+  <text x="545" y="591" font-size="9" font-family="monospace" fill="#0f172a">consent.store_corrupted</text>
+  <text x="545" y="604" font-size="9" fill="#475569">severity: CRITICAL · action=deny-all</text>
+
+  <text x="860" y="640" text-anchor="end" font-size="9" fill="#475569">→ SHA-256 hash chain · 7-year retention</text>
+
+  <!-- Invariants box -->
+  <rect x="500" y="350" width="420" height="152" rx="8" fill="#fdf4ff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="518" y="370" font-size="11" font-weight="700" fill="#7e22ce">Structural invariants (non-bypassable)</text>
+  <text x="518" y="388" font-size="9" fill="#0f172a">✗  No "trusted user" list that skips disclosure</text>
+  <text x="518" y="403" font-size="9" fill="#0f172a">✗  Owner cannot grant consent for another user</text>
+  <text x="518" y="418" font-size="9" fill="#0f172a">✗  Expired consent → message dropped, no processing</text>
+  <text x="518" y="433" font-size="9" fill="#0f172a">✗  No env var or config flag disables disclosure</text>
+  <text x="518" y="448" font-size="9" fill="#0f172a">✗  Disclosure fires before auth check (gate-zero)</text>
+  <text x="518" y="463" font-size="9" fill="#0f172a">✗  uid from bridge protocol — owner cannot spoof another uid</text>
+  <text x="518" y="478" font-size="9" fill="#0f172a">✗  consent audit events use uid_hash only — never raw platform UID</text>
+  <text x="900" y="493" text-anchor="end" font-size="8" fill="#a855f7">verified by test_consent_gate.py · test_disclosure.py</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#0f172a"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#dc2626"/>
+    </marker>
+  </defs>
+</svg>

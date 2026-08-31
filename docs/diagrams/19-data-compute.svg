@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Data + compute — handle large data without burning the LLM context</title>
+  <desc>Two stacked subsystems. Top — Layer 24 large-data snapshot: a 1 GB CSV is registered, sniffed, snapshotted, PII-redacted, and returned as a small data_handle to the LLM while the sandbox-side tool sees the real file ro-bound. Bottom — Layer 25 compute worker: the LLM submits one parameter sweep, the driver iterates outside the LLM loop via socket, returns Top-K progress. Both subsystems emit metadata-only audit events.</desc>
+
+  <defs>
+    <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="540" y="32" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">Data + compute — keep the LLM context lean</text>
+  <text x="540" y="54" text-anchor="middle" font-size="12" fill="#64748b">Big data and long-running iteration both leak context if naïvely handled. Two layers solve them by moving work out of the LLM loop.</text>
+
+  <!-- Top half — Layer 24 snapshot -->
+  <text x="540" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#7f1d1d">LAYER 24 · LARGE-DATA SNAPSHOT (PII-aware data locality)</text>
+
+  <!-- The big-file problem -->
+  <rect x="40" y="108" width="160" height="74" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="120" y="130" text-anchor="middle" font-size="11" font-weight="700" fill="#7f1d1d">1 GB CSV</text>
+  <text x="120" y="148" text-anchor="middle" font-size="10" fill="#991b1b">+ PII columns</text>
+  <text x="120" y="164" text-anchor="middle" font-size="10" fill="#991b1b">customer_email,</text>
+  <text x="120" y="178" text-anchor="middle" font-size="10" fill="#991b1b">credit_card, phone…</text>
+
+  <line x1="200" y1="146" x2="240" y2="146" stroke="#475569" marker-end="url(#ar4)"/>
+  <text x="220" y="138" text-anchor="middle" font-size="9" fill="#64748b">data_register</text>
+
+  <!-- Snapshot pipeline -->
+  <rect x="240" y="108" width="600" height="180" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="540" y="128" text-anchor="middle" font-size="11" font-weight="700" fill="#7f1d1d">SNAPSHOT PIPELINE (operator policy gates each step)</text>
+
+  <g font-size="10">
+    <rect x="252" y="142" width="108" height="58" rx="6" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="306" y="160" text-anchor="middle" font-weight="700" fill="#7f1d1d">format sniff</text>
+    <text x="306" y="174" text-anchor="middle" fill="#991b1b">magic-byte +</text>
+    <text x="306" y="188" text-anchor="middle" fill="#991b1b">extension</text>
+
+    <rect x="372" y="142" width="108" height="58" rx="6" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="426" y="160" text-anchor="middle" font-weight="700" fill="#7f1d1d">PII detect</text>
+    <text x="426" y="174" text-anchor="middle" fill="#991b1b">headers · regex</text>
+    <text x="426" y="188" text-anchor="middle" fill="#991b1b">opt-in NER</text>
+
+    <rect x="492" y="142" width="108" height="58" rx="6" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="546" y="160" text-anchor="middle" font-weight="700" fill="#7f1d1d">stats + sample</text>
+    <text x="546" y="174" text-anchor="middle" fill="#991b1b">HLL-distinct</text>
+    <text x="546" y="188" text-anchor="middle" fill="#991b1b">P5/P95 (no min/max)</text>
+
+    <rect x="612" y="142" width="108" height="58" rx="6" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="666" y="160" text-anchor="middle" font-weight="700" fill="#7f1d1d">redact</text>
+    <text x="666" y="174" text-anchor="middle" fill="#991b1b">drop · pseudonymize</text>
+    <text x="666" y="188" text-anchor="middle" fill="#991b1b">mask · hash · agg</text>
+
+    <rect x="732" y="142" width="100" height="58" rx="6" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="782" y="160" text-anchor="middle" font-weight="700" fill="#7f1d1d">token cap</text>
+    <text x="782" y="174" text-anchor="middle" fill="#991b1b">≤ 4000 tok</text>
+    <text x="782" y="188" text-anchor="middle" fill="#991b1b">degrade else</text>
+  </g>
+
+  <line x1="360" y1="170" x2="372" y2="170" stroke="#475569" marker-end="url(#ar4)"/>
+  <line x1="480" y1="170" x2="492" y2="170" stroke="#475569" marker-end="url(#ar4)"/>
+  <line x1="600" y1="170" x2="612" y2="170" stroke="#475569" marker-end="url(#ar4)"/>
+  <line x1="720" y1="170" x2="732" y2="170" stroke="#475569" marker-end="url(#ar4)"/>
+
+  <!-- Two parallel outputs from snapshot -->
+  <rect x="252" y="220" width="280" height="56" rx="6" fill="#0f172a"/>
+  <text x="392" y="240" text-anchor="middle" font-size="11" font-weight="700" fill="#f8fafc">↑ TO LLM (agent-facing view)</text>
+  <text x="392" y="258" text-anchor="middle" font-size="10" fill="#cbd5e1">data_handle + 4 KB redacted snapshot</text>
+  <text x="392" y="270" text-anchor="middle" font-size="9" fill="#94a3b8">{schema, sample, stats, oversized_flag}</text>
+
+  <rect x="552" y="220" width="280" height="56" rx="6" fill="#0f172a"/>
+  <text x="692" y="240" text-anchor="middle" font-size="11" font-weight="700" fill="#f8fafc">↓ TO TOOL (sandbox-facing view)</text>
+  <text x="692" y="258" text-anchor="middle" font-size="10" fill="#cbd5e1">real file ro-bound into bwrap</text>
+  <text x="692" y="270" text-anchor="middle" font-size="9" fill="#94a3b8">forged tool computes over full data</text>
+
+  <line x1="540" y1="200" x2="392" y2="220" stroke="#dc2626" stroke-width="1.5" marker-end="url(#ar4)"/>
+  <line x1="540" y1="200" x2="692" y2="220" stroke="#dc2626" stroke-width="1.5" marker-end="url(#ar4)"/>
+
+  <line x1="392" y1="276" x2="392" y2="316" stroke="#475569" marker-end="url(#ar4)"/>
+  <text x="402" y="298" font-size="9" fill="#64748b">tool answer</text>
+  <line x1="692" y1="276" x2="392" y2="316" stroke="#475569" marker-end="url(#ar4)"/>
+
+  <rect x="312" y="316" width="160" height="32" rx="6" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="392" y="336" text-anchor="middle" font-size="11" font-weight="700" fill="#92400e">user receives answer</text>
+
+  <text x="540" y="362" text-anchor="middle" font-size="11" fill="#64748b" font-style="italic">→ The LLM never sees raw PII. The sandbox-side tool sees the full file. The user gets the answer over the full dataset.</text>
+
+  <!-- Bottom half — Layer 25 compute worker -->
+  <text x="540" y="408" text-anchor="middle" font-size="14" font-weight="700" fill="#1e3a8a">LAYER 25 · COMPUTE WORKER (out-of-LLM-loop iteration)</text>
+
+  <!-- LLM side -->
+  <rect x="40" y="426" width="200" height="180" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="140" y="446" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">LLM TURN (3 calls total)</text>
+
+  <g font-size="10" fill="#0f172a">
+    <rect x="56" y="460" width="168" height="36" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="140" y="478" text-anchor="middle" font-weight="700">1. compute_run(spec)</text>
+    <text x="140" y="490" text-anchor="middle">→ run_id (immediate)</text>
+
+    <rect x="56" y="500" width="168" height="36" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="140" y="518" text-anchor="middle" font-weight="700">2. compute_status(run_id)</text>
+    <text x="140" y="530" text-anchor="middle">→ Top-K progress (poll)</text>
+
+    <rect x="56" y="540" width="168" height="36" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="140" y="558" text-anchor="middle" font-weight="700">3. compute_result(run_id)</text>
+    <text x="140" y="570" text-anchor="middle">→ best_params + loss</text>
+
+    <text x="140" y="594" text-anchor="middle" font-size="10" font-style="italic" fill="#64748b">100-iter sweep = 3 LLM calls,</text>
+    <text x="140" y="606" text-anchor="middle" font-size="10" font-style="italic" fill="#64748b">not 100 LLM calls.</text>
+  </g>
+
+  <!-- Driver side -->
+  <line x1="240" y1="478" x2="280" y2="478" stroke="#475569" marker-end="url(#ar4)"/>
+  <text x="260" y="470" text-anchor="middle" font-size="9" fill="#64748b">unix socket</text>
+
+  <rect x="280" y="426" width="540" height="180" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="550" y="446" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">COMPUTE WORKER (corvin-compute@_default.service)</text>
+
+  <g font-size="10" fill="#0f172a">
+    <rect x="296" y="460" width="120" height="40" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="356" y="478" text-anchor="middle" font-weight="700" fill="#1e3a8a">durable queue</text>
+    <text x="356" y="492" text-anchor="middle">SQLite WAL</text>
+
+    <rect x="426" y="460" width="120" height="40" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="486" y="478" text-anchor="middle" font-weight="700" fill="#1e3a8a">strategy</text>
+    <text x="486" y="492" text-anchor="middle">grid · random · BO</text>
+
+    <rect x="556" y="460" width="120" height="40" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="616" y="478" text-anchor="middle" font-weight="700" fill="#1e3a8a">ParallelDriver</text>
+    <text x="616" y="492" text-anchor="middle">batched ThreadPool</text>
+
+    <rect x="686" y="460" width="120" height="40" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="746" y="478" text-anchor="middle" font-weight="700" fill="#1e3a8a">forge tool</text>
+    <text x="746" y="492" text-anchor="middle">bwrap per iter</text>
+
+    <rect x="296" y="510" width="510" height="60" rx="6" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="551" y="528" text-anchor="middle" font-weight="700" fill="#1e3a8a">rolling Top-K + iteration log</text>
+    <text x="551" y="546" text-anchor="middle" fill="#1e3a8a">{ iter, params (sensitive→sha:&lt;12&gt;), loss, wall_ms, cache_hit }</text>
+    <text x="551" y="562" text-anchor="middle" font-size="9" fill="#64748b">→ artifact dir at &lt;corvin_home&gt;/global/compute/runs/&lt;run_id&gt;/iterations/*.json</text>
+  </g>
+
+  <line x1="416" y1="480" x2="426" y2="480" stroke="#475569" marker-end="url(#ar4)"/>
+  <line x1="546" y1="480" x2="556" y2="480" stroke="#475569" marker-end="url(#ar4)"/>
+  <line x1="676" y1="480" x2="686" y2="480" stroke="#475569" marker-end="url(#ar4)"/>
+  <!-- loop arrow -->
+  <path d="M 786 500 Q 820 530 786 558" fill="none" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ar4)"/>
+  <text x="822" y="528" font-size="9" fill="#1e3a8a">loop</text>
+
+  <line x1="280" y1="540" x2="240" y2="540" stroke="#475569" marker-end="url(#ar4)"/>
+
+  <!-- Audit substrate (full width) -->
+  <rect x="40" y="624" width="1000" height="60" rx="10" fill="#0f172a"/>
+  <text x="540" y="648" text-anchor="middle" font-size="13" font-weight="700" fill="#f8fafc">↓  METADATA-ONLY AUDIT  ↓</text>
+  <g font-size="10.5" fill="#cbd5e1">
+    <text x="60" y="668">data.{registered, snapshot_generated, pii_detected, policy_violated, snapshot_oversized}  ·  compute.{run_started, iteration_completed, run_terminal, run_failed}</text>
+    <text x="60" y="680">No raw values. No parameter values for sensitive fields. No transcripts. The chain shows shape and outcome — not contents.</text>
+  </g>
+</svg>

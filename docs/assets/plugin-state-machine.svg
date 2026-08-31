@@ -1,0 +1,123 @@
+<svg width="860" height="220" viewBox="0 0 860 220" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgSM" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <marker id="arrAmSM" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="arrBlSM" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrPuSM" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrGrSM" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrRdSM" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ef4444"/>
+    </marker>
+    <marker id="arrPuRevSM" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <rect width="860" height="220" rx="10" fill="url(#bgSM)"/>
+
+  <!-- Title -->
+  <text x="430" y="22" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">PLUGIN ENGINE — JOB STATE MACHINE</text>
+
+  <!-- ═══ (none) circle ═══ -->
+  <circle cx="80" cy="110" r="28" fill="#161b22" stroke="#484f58" stroke-width="1.5"/>
+  <text x="80" y="106" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#8b949e">(none)</text>
+
+  <!-- Arrow (none) → queued -->
+  <line x1="108" y1="110" x2="172" y2="110" stroke="#f0b429" stroke-width="1.8" marker-end="url(#arrAmSM)"/>
+  <text x="140" y="103" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#f0b429">submit()</text>
+
+  <!-- ═══ queued box (amber) ═══ -->
+  <rect x="180" y="90" width="100" height="40" rx="8"
+        fill="#0a0f1a" stroke="#f0b429" stroke-width="1.5"/>
+  <text x="230" y="115" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="12" fill="#fcd34d">queued</text>
+
+  <!-- Arrow queued → running -->
+  <line x1="280" y1="110" x2="342" y2="110" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#arrBlSM)"/>
+  <text x="311" y="103" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#3b82f6">worker picks up</text>
+
+  <!-- ═══ running box (blue) ═══ -->
+  <rect x="350" y="90" width="100" height="40" rx="8"
+        fill="#0a0f1a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="400" y="115" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="12" fill="#93c5fd">running</text>
+
+  <!-- Arrow running → gate_open (dashed, upward arc) -->
+  <path d="M 410 90 Q 460 42 510 60" fill="none"
+        stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrPuSM)"/>
+  <text x="463" y="50" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#a78bfa">gate fires</text>
+
+  <!-- ═══ gate_open box (purple, dashed) ═══ -->
+  <rect x="505" y="38" width="110" height="36" rx="8"
+        fill="#0a0f1a" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="560" y="60" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c4b5fd">gate_open</text>
+
+  <!-- Arrow gate_open → running (back) -->
+  <path d="M 510 74 Q 460 84 450 90" fill="none"
+        stroke="#a78bfa" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#arrPuRevSM)"/>
+  <text x="474" y="92" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#8b949e">resume / timeout</text>
+
+  <!-- Arrow running → terminal -->
+  <line x1="450" y1="110" x2="502" y2="110" stroke="#3fb950" stroke-width="1.8" marker-end="url(#arrGrSM)"/>
+  <text x="476" y="103" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#3fb950">converged</text>
+
+  <!-- ═══ terminal box (green) ═══ -->
+  <rect x="510" y="90" width="100" height="36" rx="8"
+        fill="#0a0f1a" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="560" y="113" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="12" fill="#86efac">terminal</text>
+
+  <!-- Arrow running → failed -->
+  <path d="M 450 130 Q 480 158 502 158" fill="none"
+        stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrRdSM)"/>
+  <text x="467" y="155" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="9" fill="#ef4444">exception</text>
+
+  <!-- ═══ failed box (red) ═══ -->
+  <rect x="510" y="140" width="100" height="36" rx="8"
+        fill="#0a0f1a" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="560" y="163" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="12" fill="#fca5a5">failed</text>
+
+  <!-- Arrow labels for terminal -->
+  <text x="476" y="118" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="8" fill="#6b7280">/ budget</text>
+
+  <!-- Bottom-right note -->
+  <text x="840" y="200" text-anchor="end"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#6b7280">(gate path: supports_gates=True only)</text>
+</svg>

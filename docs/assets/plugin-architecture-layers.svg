@@ -1,0 +1,100 @@
+<svg width="940" height="620" viewBox="0 0 940 620" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgPAL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="goldPAL" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#f0b429"/>
+      <stop offset="100%" stop-color="#c97800"/>
+    </linearGradient>
+    <linearGradient id="redPAL" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#f85149"/>
+      <stop offset="100%" stop-color="#a4241e"/>
+    </linearGradient>
+    <pattern id="gridPAL" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#ffffff" stroke-width="0.25" opacity="0.05"/>
+    </pattern>
+    <marker id="arrPAL" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+
+  <rect width="940" height="620" fill="url(#bgPAL)"/>
+  <rect width="940" height="620" fill="url(#gridPAL)"/>
+
+  <text x="470" y="34" font-family="system-ui,sans-serif" font-size="19" font-weight="700"
+        fill="#e6edf3" text-anchor="middle">CorvinOS Plugin System — layers and who owns what</text>
+  <text x="470" y="54" font-family="system-ui,sans-serif" font-size="11.5"
+        fill="#8b949e" text-anchor="middle">ADR-0030 lifecycle · ADR-0033 providers · ADR-0233 consolidation · ADR-0232 mandatory core</text>
+
+  <!-- Console surface -->
+  <rect x="40" y="74" width="860" height="60" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.4"/>
+  <text x="58" y="98" font-family="system-ui,sans-serif" font-size="13" font-weight="600" fill="#3b82f6">Console — Settings → Plugins</text>
+  <text x="58" y="118" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e">list · enable/disable · schema-generated settings form · /plugins/health · /plugins/metrics</text>
+  <rect x="700" y="86" width="184" height="36" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="792" y="103" font-family="ui-monospace,monospace" font-size="9.5" fill="#f0b429" text-anchor="middle">plugin_console_surface</text>
+  <text x="792" y="115" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e" text-anchor="middle">flag · default off → 404</text>
+
+  <path d="M470,134 L470,158" stroke="#8b949e" stroke-width="1.4" marker-end="url(#arrPAL)"/>
+  <text x="482" y="150" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">tenant from SessionRecord, never an env var</text>
+
+  <!-- corvin_plugins -->
+  <rect x="40" y="160" width="860" height="176" rx="8" fill="#161b22" stroke="url(#goldPAL)" stroke-width="1.8"/>
+  <text x="58" y="184" font-family="system-ui,sans-serif" font-size="13.5" font-weight="700" fill="#f0b429">corvin_plugins — the ONE lifecycle contract</text>
+  <text x="58" y="202" font-family="system-ui,sans-serif" font-size="10.5" fill="#8b949e">core/plugins/corvin_plugins/ · on_load / on_unload / health_check</text>
+
+  <g font-family="ui-monospace,monospace" font-size="9.5">
+    <rect x="58" y="214" width="126" height="46" rx="5" fill="#0d1117" stroke="#30363d"/>
+    <text x="121" y="232" fill="#e6edf3" text-anchor="middle">protocol.py</text>
+    <text x="121" y="248" fill="#8b949e" text-anchor="middle" font-size="8.5">11 plugin types</text>
+
+    <rect x="194" y="214" width="126" height="46" rx="5" fill="#0d1117" stroke="#30363d"/>
+    <text x="257" y="232" fill="#e6edf3" text-anchor="middle">registry.py</text>
+    <text x="257" y="248" fill="#8b949e" text-anchor="middle" font-size="8.5">+ breaker-aware</text>
+
+    <rect x="330" y="214" width="126" height="46" rx="5" fill="#0d1117" stroke="#30363d"/>
+    <text x="393" y="232" fill="#e6edf3" text-anchor="middle">manifest.py</text>
+    <text x="393" y="248" fill="#8b949e" text-anchor="middle" font-size="8.5">record · deps · schema</text>
+
+    <rect x="466" y="214" width="126" height="46" rx="5" fill="#0d1117" stroke="#30363d"/>
+    <text x="529" y="232" fill="#e6edf3" text-anchor="middle">state.py</text>
+    <text x="529" y="248" fill="#8b949e" text-anchor="middle" font-size="8.5">registry.yaml 0600</text>
+
+    <rect x="602" y="214" width="126" height="46" rx="5" fill="#0d1117" stroke="#30363d"/>
+    <text x="665" y="232" fill="#e6edf3" text-anchor="middle">circuit_breaker</text>
+    <text x="665" y="248" fill="#8b949e" text-anchor="middle" font-size="8.5">closed/open/half</text>
+
+    <rect x="738" y="214" width="146" height="46" rx="5" fill="#0d1117" stroke="#30363d"/>
+    <text x="811" y="232" fill="#e6edf3" text-anchor="middle">health · healing</text>
+    <text x="811" y="248" fill="#8b949e" text-anchor="middle" font-size="8.5">poll · Stage 3 dark</text>
+
+    <rect x="58" y="272" width="826" height="48" rx="5" fill="#0d1117" stroke="#30363d"/>
+    <text x="70" y="290" fill="#a78bfa" font-size="10">providers/ — one active provider per type</text>
+    <text x="70" y="306" fill="#8b949e" font-size="9">notification · recall · summary · router · audit · user · stt · data_connector</text>
+  </g>
+
+  <path d="M470,336 L470,360" stroke="#8b949e" stroke-width="1.4" marker-end="url(#arrPAL)"/>
+  <text x="482" y="352" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">plugin.on_load(ctx) self-registers</text>
+
+  <!-- layer registries -->
+  <rect x="40" y="362" width="860" height="58" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.4"/>
+  <text x="58" y="384" font-family="system-ui,sans-serif" font-size="12.5" font-weight="600" fill="#e6edf3">Layer registries — authoritative routing, unchanged</text>
+  <text x="58" y="404" font-family="ui-monospace,monospace" font-size="9.5" fill="#8b949e">engine_factory (L22) · ComputeEngineRegistry (L25) · channel_registry (bridge) · provider registries</text>
+
+  <path d="M470,420 L470,444" stroke="#8b949e" stroke-width="1.4" marker-end="url(#arrPAL)"/>
+  <text x="482" y="436" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">artifacts arrive only through a verified path</text>
+
+  <!-- distribution -->
+  <rect x="40" y="446" width="860" height="58" rx="8" fill="#161b22" stroke="#a78bfa" stroke-width="1.4"/>
+  <text x="58" y="468" font-family="system-ui,sans-serif" font-size="12.5" font-weight="600" fill="#a78bfa">Distribution — reuses hardened paths, no new downloader</text>
+  <text x="58" y="488" font-family="ui-monospace,monospace" font-size="9.5" fill="#8b949e">ADR-0096 mcp_manager (SHA256/digest per spawn, L34/L35, vault) · ADR-0142/0156 ext.* layers</text>
+
+  <!-- mandatory core -->
+  <rect x="40" y="516" width="860" height="76" rx="8" fill="#161b22" stroke="url(#redPAL)" stroke-width="2"/>
+  <text x="58" y="540" font-family="system-ui,sans-serif" font-size="13" font-weight="700" fill="#f85149">Mandatory core — hardcoded, tripwired, fail-closed (ADR-0232)</text>
+  <text x="58" y="559" font-family="system-ui,sans-serif" font-size="10.5" fill="#8b949e">L16 audit hash-chain · L18 consent gate · L34 flow guard · L44 house rules · L36 erasure</text>
+  <text x="58" y="578" font-family="system-ui,sans-serif" font-size="10.5" fill="#e6edf3">A plugin may ADD a backend or a rule. It can never replace, disable or weaken one.</text>
+
+  <text x="900" y="608" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e" text-anchor="end">7 boot tripwires · no override switch, by design</text>
+</svg>

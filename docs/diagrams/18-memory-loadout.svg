@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 660" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>The user's persistent shell loadout — three memory layers, one auto-inject path</title>
+  <desc>Three concentric memory layers around a central "next chat turn" node: outermost auto-memory (LLM-curated facts), middle user_style (auto-learned bullets via shadow A/B), innermost personal tools (operator-curated). All three auto-inject into every turn via the adapter. A loop on the right shows the user_style learner cycle: outcome signal observed → cluster → judge → shadow A/B → promote/rollback.</desc>
+
+  <defs>
+    <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ar3w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f1f5f9"/>
+    </marker>
+  </defs>
+
+  <text x="540" y="34" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">The user's persistent shell loadout</text>
+  <text x="540" y="56" text-anchor="middle" font-size="12" fill="#64748b">Three memory layers · one auto-inject path · all survive every session reset and every project switch.</text>
+
+  <!-- Concentric layers (left side) -->
+  <!-- Outer: auto-memory -->
+  <ellipse cx="320" cy="350" rx="260" ry="200" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="320" y="180" text-anchor="middle" font-size="13" font-weight="700" fill="#92400e">AUTO-MEMORY · LLM-curated facts</text>
+  <text x="320" y="200" text-anchor="middle" font-size="11" fill="#78350f">user / feedback / project / reference types · indexed in MEMORY.md · lazy-loaded on demand</text>
+
+  <!-- Middle: user_style -->
+  <ellipse cx="320" cy="370" rx="200" ry="150" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="320" y="240" text-anchor="middle" font-size="13" font-weight="700" fill="#14532d">USER_STYLE · auto-learned bullets</text>
+  <text x="320" y="258" text-anchor="middle" font-size="11" fill="#166534">live + shadow-A/B promoted from outcome signals · daily 04:45 sweep</text>
+
+  <!-- Inner: personal tools -->
+  <ellipse cx="320" cy="390" rx="140" ry="100" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="320" y="380" text-anchor="middle" font-size="13" font-weight="700" fill="#0e7490">PERSONAL TOOLS · me.*</text>
+  <text x="320" y="400" text-anchor="middle" font-size="11" fill="#0f172a">operator-curated</text>
+  <text x="320" y="418" text-anchor="middle" font-size="11" fill="#0f172a">forge tools at user-scope</text>
+
+  <!-- Center label -->
+  <circle cx="320" cy="350" r="28" fill="#0f172a"/>
+  <text x="320" y="346" text-anchor="middle" font-size="10" font-weight="700" fill="#f8fafc">YOU</text>
+  <text x="320" y="360" text-anchor="middle" font-size="9" fill="#cbd5e1">scope=user</text>
+
+  <!-- Auto-inject arrow on right -->
+  <text x="700" y="180" text-anchor="middle" font-size="13" font-weight="700" fill="#1e3a8a">EVERY BRIDGE TURN</text>
+  <text x="700" y="200" text-anchor="middle" font-size="11" fill="#475569">adapter._resolve_spawn_inputs</text>
+
+  <rect x="640" y="220" width="120" height="40" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="700" y="240" text-anchor="middle" font-size="11" font-weight="700" fill="#1e3a8a">+ memory index</text>
+  <text x="700" y="254" text-anchor="middle" font-size="9.5" fill="#1e3a8a">(MEMORY.md, ~20 lines)</text>
+
+  <rect x="640" y="270" width="120" height="40" rx="6" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="700" y="290" text-anchor="middle" font-size="11" font-weight="700" fill="#14532d">+ user_style block</text>
+  <text x="700" y="304" text-anchor="middle" font-size="9.5" fill="#166534">(live + shadow A/B)</text>
+
+  <rect x="640" y="320" width="120" height="40" rx="6" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="700" y="340" text-anchor="middle" font-size="11" font-weight="700" fill="#0e7490">+ me.* tools list</text>
+  <text x="700" y="354" text-anchor="middle" font-size="9.5" fill="#0f172a">(discovery hint)</text>
+
+  <rect x="640" y="370" width="120" height="40" rx="6" fill="#0f172a"/>
+  <text x="700" y="390" text-anchor="middle" font-size="11" font-weight="700" fill="#f8fafc">→ system prompt</text>
+  <text x="700" y="404" text-anchor="middle" font-size="9.5" fill="#cbd5e1">+ user query</text>
+
+  <line x1="580" y1="350" x2="640" y2="240" stroke="#475569" marker-end="url(#ar3)"/>
+  <line x1="580" y1="350" x2="640" y2="290" stroke="#475569" marker-end="url(#ar3)"/>
+  <line x1="580" y1="350" x2="640" y2="340" stroke="#475569" marker-end="url(#ar3)"/>
+
+  <!-- Right side: user_style learning loop -->
+  <text x="940" y="180" text-anchor="middle" font-size="13" font-weight="700" fill="#14532d">USER_STYLE LEARNING LOOP</text>
+  <text x="940" y="200" text-anchor="middle" font-size="11" fill="#475569">daily systemd timer · 04:45 local</text>
+
+  <g font-size="10">
+    <rect x="840" y="220" width="200" height="36" rx="6" fill="#f0fdf4" stroke="#16a34a"/>
+    <text x="940" y="238" text-anchor="middle" font-weight="700" fill="#14532d">1. observe outcome signal</text>
+    <text x="940" y="252" text-anchor="middle" fill="#166534">approval / rejection / rephrase</text>
+
+    <rect x="840" y="266" width="200" height="36" rx="6" fill="#f0fdf4" stroke="#16a34a"/>
+    <text x="940" y="284" text-anchor="middle" font-weight="700" fill="#14532d">2. cluster + confidence-gate</text>
+    <text x="940" y="298" text-anchor="middle" fill="#166534">≥5 hits · &gt; 70% negative</text>
+
+    <rect x="840" y="312" width="200" height="36" rx="6" fill="#f0fdf4" stroke="#16a34a"/>
+    <text x="940" y="330" text-anchor="middle" font-weight="700" fill="#14532d">3. dialectic judge (CLI)</text>
+    <text x="940" y="344" text-anchor="middle" fill="#166534">FAITHFUL or OVERFIT?</text>
+
+    <rect x="840" y="358" width="200" height="36" rx="6" fill="#f0fdf4" stroke="#16a34a"/>
+    <text x="940" y="376" text-anchor="middle" font-weight="700" fill="#14532d">4. shadow A/B (3 days)</text>
+    <text x="940" y="390" text-anchor="middle" fill="#166534">parity-bit cohort assignment</text>
+
+    <rect x="840" y="404" width="200" height="36" rx="6" fill="#f0fdf4" stroke="#16a34a"/>
+    <text x="940" y="422" text-anchor="middle" font-weight="700" fill="#14532d">5. promote · rollback · cooldown</text>
+    <text x="940" y="436" text-anchor="middle" fill="#166534">measurable Δloss required</text>
+  </g>
+
+  <line x1="940" y1="256" x2="940" y2="266" stroke="#16a34a" marker-end="url(#ar3)"/>
+  <line x1="940" y1="302" x2="940" y2="312" stroke="#16a34a" marker-end="url(#ar3)"/>
+  <line x1="940" y1="348" x2="940" y2="358" stroke="#16a34a" marker-end="url(#ar3)"/>
+  <line x1="940" y1="394" x2="940" y2="404" stroke="#16a34a" marker-end="url(#ar3)"/>
+  <!-- loopback arrow -->
+  <path d="M 1040 422 Q 1070 280 1040 220" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ar3)"/>
+  <text x="1060" y="320" font-size="9.5" fill="#166534">cycle</text>
+
+  <!-- Bottom — properties -->
+  <rect x="40" y="500" width="320" height="140" rx="10" fill="#0f172a"/>
+  <text x="60" y="524" font-size="13" font-weight="700" fill="#f8fafc">AUTO-MEMORY · LLM-curated</text>
+  <text x="60" y="546" font-size="11" fill="#cbd5e1">save trigger: explicit "remember X" or LLM saves on signal</text>
+  <text x="60" y="564" font-size="11" fill="#cbd5e1">storage: ~/.corvin/.../memory/*.md (one file per fact)</text>
+  <text x="60" y="582" font-size="11" fill="#cbd5e1">control: /memory list · /memory show · /memory rm</text>
+  <text x="60" y="606" font-size="11" font-weight="700" fill="#fbbf24">→ for: who you are, what you prefer, project context</text>
+
+  <rect x="380" y="500" width="320" height="140" rx="10" fill="#0f172a"/>
+  <text x="400" y="524" font-size="13" font-weight="700" fill="#f8fafc">USER_STYLE · auto-learned</text>
+  <text x="400" y="546" font-size="11" fill="#cbd5e1">save trigger: ZERO manual action — learned from your reactions</text>
+  <text x="400" y="564" font-size="11" fill="#cbd5e1">storage: ~/.corvin/.../user_style/{candidates,live,cooldown}.json</text>
+  <text x="400" y="582" font-size="11" fill="#cbd5e1">control: /python user_style.py {sweep,status,list-live}</text>
+  <text x="400" y="606" font-size="11" font-weight="700" fill="#86efac">→ for: how you like answers shaped (tone, depth, format)</text>
+
+  <rect x="720" y="500" width="320" height="140" rx="10" fill="#0f172a"/>
+  <text x="740" y="524" font-size="13" font-weight="700" fill="#f8fafc">PERSONAL TOOLS · operator-curated</text>
+  <text x="740" y="546" font-size="11" fill="#cbd5e1">save trigger: /tool save &lt;name&gt; (explicit, never automatic)</text>
+  <text x="740" y="564" font-size="11" fill="#cbd5e1">storage: ~/.corvin/.../forge/tools/me.*.py + registry.json</text>
+  <text x="740" y="582" font-size="11" fill="#cbd5e1">control: /tools · /tool show · /tool rm</text>
+  <text x="740" y="606" font-size="11" font-weight="700" fill="#67e8f9">→ for: actions you repeat (your API client, log helpers, …)</text>
+</svg>

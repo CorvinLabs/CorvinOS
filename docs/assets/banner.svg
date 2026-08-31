@@ -1,0 +1,69 @@
+<svg width="860" height="220" viewBox="0 0 860 220" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="goldBar" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#f0b429"/>
+      <stop offset="100%" stop-color="#c97800"/>
+    </linearGradient>
+    <radialGradient id="markGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#f0b429" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#f0b429" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#ffffff" stroke-width="0.25" opacity="0.05"/>
+    </pattern>
+    <linearGradient id="l5" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1c2840"/> <stop offset="100%" stop-color="#141e30"/>
+    </linearGradient>
+    <linearGradient id="l4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e3a5f"/> <stop offset="100%" stop-color="#152d4a"/>
+    </linearGradient>
+    <linearGradient id="l3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e40af"/> <stop offset="100%" stop-color="#1a35a0"/>
+    </linearGradient>
+    <linearGradient id="l2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2563eb"/> <stop offset="100%" stop-color="#1d55c5"/>
+    </linearGradient>
+    <linearGradient id="l1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f0b429"/> <stop offset="100%" stop-color="#c97800"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background + grid texture -->
+  <rect width="860" height="220" rx="12" fill="url(#bg)"/>
+  <rect width="860" height="220" rx="12" fill="url(#grid)"/>
+
+  <!-- Left accent bar -->
+  <rect x="0" y="0" width="4" height="200" rx="2" fill="url(#goldBar)"/>
+
+  <!-- ─── Logo mark — aligned to wordmark centre ─── -->
+  <g transform="translate(-2 29) scale(1.1)">
+    <!-- Soft glow centred on logo content -->
+    <ellipse cx="58" cy="55" rx="55" ry="40" fill="url(#markGlow)"/>
+    <path fill="none" stroke="#EEF1F5" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M28 40 L56 60 L28 80"/>
+    <rect fill="#EEF1F5" x="66" y="72" width="30" height="9" rx="2"/>
+    <circle cx="80" cy="50" r="10" fill="#C9A227"/>
+    <circle cx="80" cy="50" r="10" fill="none" stroke="#EEF1F5" stroke-width="2"/>
+  </g>
+
+  <!-- ─── Wordmark ─── -->
+  <text x="136" y="118"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="64" font-weight="800" letter-spacing="-2">
+    <tspan fill="#e6edf3">Corvin</tspan><tspan fill="#f0b429">OS</tspan>
+  </text>
+
+  <!-- Separator rule -->
+  <line x1="136" y1="135" x2="740" y2="135" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Tagline -->
+  <text x="138" y="158"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="17" fill="#6e7b8a" letter-spacing="0.4">
+    EU AI Act 2026 · Self-improving · Agentic Compute · Self-hosted · GDPR
+  </text>
+
+</svg>

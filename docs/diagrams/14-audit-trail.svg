@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Audit trail — one chain, scoped views</title>
+  <desc>The unified hash-chained audit log records every authority change, consent grant, disclosure event, quota decision, and proposal action. Each entry references the previous entry's SHA-256 digest, so any tampering breaks the chain at the affected line. Two scoped views: /audit me (own events, every bundle has audit_self) and /audit chat (chat-wide, owner/admin only). The daily systemd timer runs voice-audit verify at 04:30 and pushes a bridge notification on chain break.</desc>
+
+  <text x="490" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Audit trail — one chain, scoped views</text>
+  <text x="490" y="52" text-anchor="middle" font-size="12" fill="#475569">SHA-256-chained · append-only · operator-readable · /audit me · /audit chat · daily verify</text>
+
+  <!-- Audit chain visual: a sequence of linked entries -->
+  <text x="80" y="90" font-size="12" font-weight="700" fill="#0f172a">A typical day in the chain (excerpt)</text>
+
+  <!-- Entry 1 -->
+  <rect x="60" y="105" width="860" height="40" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
+  <text x="75" y="123" font-size="10" font-family="monospace" fill="#92400e">disclosure.shown</text>
+  <text x="220" y="123" font-size="10" fill="#0f172a">first contact: uid=carol — card displayed in chat-1</text>
+  <text x="75" y="138" font-size="9" font-family="monospace" fill="#475569">prev_hash: a4c8…  ·  hash: f12e…  ·  ts: 2026-05-09 14:23</text>
+
+  <!-- Entry 2 -->
+  <rect x="60" y="155" width="860" height="40" rx="6" fill="#dcfce7" stroke="#16a34a" stroke-width="1.2"/>
+  <text x="75" y="173" font-size="10" font-family="monospace" fill="#166534">disclosure.joined</text>
+  <text x="220" y="173" font-size="10" fill="#0f172a">carol typed /join → self-grant observer (granted_by=carol, indefinite)</text>
+  <text x="75" y="188" font-size="9" font-family="monospace" fill="#475569">prev_hash: f12e…  ·  hash: 5b91…  ·  ts: 2026-05-09 14:24</text>
+
+  <!-- Entry 3 -->
+  <rect x="60" y="205" width="860" height="40" rx="6" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="75" y="223" font-size="10" font-family="monospace" fill="#1e40af">grant.issued</text>
+  <text x="220" y="223" font-size="10" fill="#0f172a">alice (owner) → carol = member · 7d · "vacation cover"</text>
+  <text x="75" y="238" font-size="9" font-family="monospace" fill="#475569">prev_hash: 5b91…  ·  hash: 28d4…  ·  ts: 2026-05-09 14:30</text>
+
+  <!-- Entry 4 -->
+  <rect x="60" y="255" width="860" height="40" rx="6" fill="#fff" stroke="#0f172a" stroke-width="1.2"/>
+  <text x="75" y="273" font-size="10" font-family="monospace" fill="#0f172a">proposal.added</text>
+  <text x="220" y="273" font-size="10" fill="#0f172a">carol (member) submitted: "Sollte X auch berücksichtigen" — stack #3</text>
+  <text x="75" y="288" font-size="9" font-family="monospace" fill="#475569">prev_hash: 28d4…  ·  hash: 90b7…  ·  ts: 2026-05-09 15:02</text>
+
+  <!-- Entry 5 -->
+  <rect x="60" y="305" width="860" height="40" rx="6" fill="#fff" stroke="#0f172a" stroke-width="1.2"/>
+  <text x="75" y="323" font-size="10" font-family="monospace" fill="#0f172a">proposal.executed</text>
+  <text x="220" y="323" font-size="10" fill="#0f172a">alice triggered /go · count=3 · from_uids=[bob, carol] · owner_text_len=42</text>
+  <text x="75" y="338" font-size="9" font-family="monospace" fill="#475569">prev_hash: 90b7…  ·  hash: c3a5…  ·  ts: 2026-05-09 15:11</text>
+
+  <!-- Entry 6 -->
+  <rect x="60" y="355" width="860" height="40" rx="6" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.2"/>
+  <text x="75" y="373" font-size="10" font-family="monospace" fill="#854d0e">quota.over_limit</text>
+  <text x="220" y="373" font-size="10" fill="#0f172a">eve (member) hit 100/100 daily messages — refused; metric=messages</text>
+  <text x="75" y="388" font-size="9" font-family="monospace" fill="#475569">prev_hash: c3a5…  ·  hash: 7e02…  ·  ts: 2026-05-09 17:45</text>
+
+  <!-- Entry 7 -->
+  <rect x="60" y="405" width="860" height="40" rx="6" fill="#fce7f3" stroke="#db2777" stroke-width="1.2"/>
+  <text x="75" y="423" font-size="10" font-family="monospace" fill="#9d174d">grant.revoked</text>
+  <text x="220" y="423" font-size="10" fill="#0f172a">alice (owner) → eve · prior_bundle=member · reason="excessive use"</text>
+  <text x="75" y="438" font-size="9" font-family="monospace" fill="#475569">prev_hash: 7e02…  ·  hash: 1da9…  ·  ts: 2026-05-09 17:51</text>
+
+  <!-- Hash-chain links visual -->
+  <g stroke="#94a3b8" stroke-width="1" stroke-dasharray="2,2">
+    <line x1="500" y1="145" x2="500" y2="155"/>
+    <line x1="500" y1="195" x2="500" y2="205"/>
+    <line x1="500" y1="245" x2="500" y2="255"/>
+    <line x1="500" y1="295" x2="500" y2="305"/>
+    <line x1="500" y1="345" x2="500" y2="355"/>
+    <line x1="500" y1="395" x2="500" y2="405"/>
+  </g>
+
+  <!-- Chain integrity note -->
+  <rect x="60" y="470" width="430" height="100" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1"/>
+  <text x="80" y="492" font-size="11" font-weight="700" fill="#0f172a">Chain integrity</text>
+  <text x="80" y="510" font-size="10" fill="#0f172a">Each entry hash = SHA-256(prev_hash || event_body)</text>
+  <text x="80" y="525" font-size="10" fill="#0f172a">Tampering breaks every entry from that point forward.</text>
+  <text x="80" y="543" font-size="10" fill="#0f172a"><tspan font-weight="600">voice-audit verify</tspan> walks the chain front-to-back.</text>
+  <text x="80" y="558" font-size="10" fill="#0f172a">Daily systemd timer at 04:30 + bridge notify on break.</text>
+
+  <!-- Scoped views -->
+  <rect x="510" y="470" width="410" height="100" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1"/>
+  <text x="530" y="492" font-size="11" font-weight="700" fill="#0f172a">Scoped views (Layer 20)</text>
+  <text x="530" y="510" font-size="10" fill="#0f172a"><tspan font-weight="600">/audit me [&lt;n&gt;] [&lt;prefix&gt;]</tspan></text>
+  <text x="530" y="525" font-size="9" fill="#475569">  matches uid / target / grantor / granted_by / revoker</text>
+  <text x="530" y="543" font-size="10" fill="#0f172a"><tspan font-weight="600">/audit chat [&lt;n&gt;] [&lt;prefix&gt;]</tspan></text>
+  <text x="530" y="558" font-size="9" fill="#475569">  owner/admin only · capability: audit_chat</text>
+
+  <!-- Event types overview band -->
+  <rect x="60" y="585" width="860" height="50" rx="8" fill="#0f172a" stroke="#0f172a" stroke-width="1.5"/>
+  <text x="80" y="606" font-size="11" font-weight="700" fill="#22d3ee">All event-types in the chain (one place to look)</text>
+  <text x="80" y="623" font-size="9" fill="#cbd5e1">disclosure.* · consent.* · grant.* · revoke.* · proposal.* · quota.* · auth.elevation.* · bridge.* · forge.tool_* · skill.* · path_gate.denied · session.reset · session.timeout · os_turn.* · task.*</text>
+
+  <!-- Daily verify band -->
+  <rect x="60" y="650" width="860" height="53" rx="8" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="80" y="672" font-size="11" font-weight="700" fill="#854d0e">corvin-audit-verify.timer (04:30 daily, systemd-user)</text>
+  <text x="80" y="690" font-size="10" fill="#0f172a">Runs voice-audit verify --notify-bridge → on chain break, every configured channel gets an out-of-band warning</text>
+  <text x="80" y="703" font-size="9" fill="#475569">(out-of-band = the warning event itself does NOT chain — broken chain can still record its own gap)</text>
+</svg>

@@ -1,0 +1,13 @@
+{
+  "id": "sql-expert",
+  "name": "SQL Expert",
+  "version": "0.3.0",
+  "category": "Data",
+  "description": "SQL optimization, query analysis, database performance tuning",
+  "author": "Community",
+  "tier": "contributor",
+  "boot_layer": "installed",
+  "rating": 4.3,
+  "installs": 654,
+  "github": "https://github.com/community/corvin-sql-expert"
+}

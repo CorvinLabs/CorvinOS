@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 760" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Corvin through the lens of a traditional operating system</title>
+  <desc>Two columns side by side. Left column lists eleven classic operating system subsystems (kernel, userspace, shell, process model, system calls, drivers, IPC, filesystem, security, resource management, audit). Right column lists the Corvin counterparts (Claude Code, plugins, messenger chat, subprocess per message, tools via MCP, bridges, inbox/outbox JSON, ~/.config/corvin-voice/, four enforcement surfaces, breakers in forge.policy, SHA-chained audit log). Horizontal connector arrows link each pair.</desc>
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="550" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Corvin through the lens of an operating system</text>
+  <text x="550" y="52" text-anchor="middle" font-size="12" fill="#475569">Eleven analogies — what each subsystem catches, where the OS metaphor stops being literal.</text>
+
+  <!-- Column headers -->
+  <rect x="40" y="80" width="490" height="40" rx="8" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="285" y="105" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Classic OS subsystem</text>
+
+  <rect x="570" y="80" width="490" height="40" rx="8" fill="#cffafe" stroke="#06b6d4"/>
+  <text x="815" y="105" text-anchor="middle" font-size="14" font-weight="700" fill="#0e7490">Corvin counterpart</text>
+
+  <!-- Row 1: kernel -->
+  <rect x="40" y="130" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="150" font-size="12" font-weight="700" fill="#0f172a">Kernel</text>
+  <text x="60" y="167" font-size="10" fill="#475569">CPU scheduling · memory · syscalls · privileged ring</text>
+  <line x1="530" y1="153" x2="570" y2="153" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="130" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="150" font-size="12" font-weight="700" fill="#0e7490">Claude Code (vanilla, layer 0)</text>
+  <text x="590" y="167" font-size="10" fill="#0f172a">conversation · tool dispatch · LLM client · sub-agents</text>
+
+  <!-- Row 2: userspace -->
+  <rect x="40" y="184" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="204" font-size="12" font-weight="700" fill="#0f172a">Userspace</text>
+  <text x="60" y="221" font-size="10" fill="#475569">daemons · libraries · applications</text>
+  <line x1="530" y1="207" x2="570" y2="207" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="184" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="204" font-size="12" font-weight="700" fill="#0e7490">plugins — voice · bridges · cowork · forge</text>
+  <text x="590" y="221" font-size="10" fill="#0f172a">independently disable-able, like systemd units</text>
+
+  <!-- Row 3: shell -->
+  <rect x="40" y="238" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="258" font-size="12" font-weight="700" fill="#0f172a">Shell</text>
+  <text x="60" y="275" font-size="10" fill="#475569">bash / zsh / fish — where you type commands</text>
+  <line x1="530" y1="261" x2="570" y2="261" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="238" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="258" font-size="12" font-weight="700" fill="#0e7490">messenger chat (WhatsApp / Telegram / …)</text>
+  <text x="590" y="275" font-size="10" fill="#0f172a">multiple chats = multiple terminals open</text>
+
+  <!-- Row 4: process model -->
+  <rect x="40" y="292" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="312" font-size="12" font-weight="700" fill="#0f172a">Process model — fork &amp; exec</text>
+  <text x="60" y="329" font-size="10" fill="#475569">parent forks, child execs, exits, parent waits</text>
+  <line x1="530" y1="315" x2="570" y2="315" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="292" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="312" font-size="12" font-weight="700" fill="#0e7490">one `claude` subprocess per inbox message</text>
+  <text x="590" y="329" font-size="10" fill="#0f172a">adapter spawns, claude runs, exits, adapter loops</text>
+
+  <!-- Row 5: syscalls -->
+  <rect x="40" y="346" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="366" font-size="12" font-weight="700" fill="#0f172a">System calls</text>
+  <text x="60" y="383" font-size="10" fill="#475569">read · write · open · mmap · socket — fixed table</text>
+  <line x1="530" y1="369" x2="570" y2="369" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="346" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="366" font-size="12" font-weight="700" fill="#0e7490">tools — standard · MCP · forged (JIT-loaded)</text>
+  <text x="590" y="383" font-size="10" fill="#0f172a">tools/list = "show me my syscall table"</text>
+
+  <!-- Row 6: drivers -->
+  <rect x="40" y="400" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="420" font-size="12" font-weight="700" fill="#0f172a">Device drivers</text>
+  <text x="60" y="437" font-size="10" fill="#475569">/dev/eth0, /dev/sda — uniform interface, varied hardware</text>
+  <line x1="530" y1="423" x2="570" y2="423" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="400" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="420" font-size="12" font-weight="700" fill="#0e7490">bridges — one daemon per messenger</text>
+  <text x="590" y="437" font-size="10" fill="#0f172a">protocol-specific quirks → uniform inbox/outbox JSON</text>
+
+  <!-- Row 7: IPC -->
+  <rect x="40" y="454" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="474" font-size="12" font-weight="700" fill="#0f172a">Pipes / message queues</text>
+  <text x="60" y="491" font-size="10" fill="#475569">FIFO IPC between processes</text>
+  <line x1="530" y1="477" x2="570" y2="477" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="454" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="474" font-size="12" font-weight="700" fill="#0e7490">inbox/&lt;id&gt;.json · outbox/&lt;id&gt;.json in /tmp/</text>
+  <text x="590" y="491" font-size="10" fill="#0f172a">FIFO via mtime, inspectable with `ls`</text>
+
+  <!-- Row 8: filesystem -->
+  <rect x="40" y="508" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="528" font-size="12" font-weight="700" fill="#0f172a">Filesystem (FHS)</text>
+  <text x="60" y="545" font-size="10" fill="#475569">/etc · ~/.config · /var/log · /usr/local/bin</text>
+  <line x1="530" y1="531" x2="570" y2="531" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="508" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="528" font-size="12" font-weight="700" fill="#0e7490">~/.config/corvin-voice/ hierarchy</text>
+  <text x="590" y="545" font-size="10" fill="#0f172a">service.env · forge/tools · forge/runs · personas</text>
+
+  <!-- Row 9: security -->
+  <rect x="40" y="562" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="582" font-size="12" font-weight="700" fill="#0f172a">Security — DAC + MAC + namespaces</text>
+  <text x="60" y="599" font-size="10" fill="#475569">iptables · file perms · SELinux/AppArmor · containers</text>
+  <line x1="530" y1="585" x2="570" y2="585" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="562" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="582" font-size="12" font-weight="700" fill="#0e7490">whitelist → ACL → policy → sandbox (bwrap)</text>
+  <text x="590" y="599" font-size="10" fill="#0f172a">defense in depth, four enforcement surfaces</text>
+
+  <!-- Row 10: cgroups -->
+  <rect x="40" y="616" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="636" font-size="12" font-weight="700" fill="#0f172a">Cgroups</text>
+  <text x="60" y="653" font-size="10" fill="#475569">cpu quota · pids.max · memory.max · io.weight</text>
+  <line x1="530" y1="639" x2="570" y2="639" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="616" width="490" height="46" rx="6" fill="#fff" stroke="#06b6d4"/>
+  <text x="590" y="636" font-size="12" font-weight="700" fill="#0e7490">breakers in forge.policy</text>
+  <text x="590" y="653" font-size="10" fill="#0f172a">per_tool_rpm · per_session_forge_count (no mem yet)</text>
+
+  <!-- Row 11: audit -->
+  <rect x="40" y="670" width="490" height="46" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="60" y="690" font-size="12" font-weight="700" fill="#0f172a">auditd</text>
+  <text x="60" y="707" font-size="10" fill="#475569">append-only log of system events; integrity per admin</text>
+  <line x1="530" y1="693" x2="570" y2="693" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="570" y="670" width="490" height="46" rx="6" fill="#fff" stroke="#0e7490" stroke-width="2"/>
+  <text x="590" y="690" font-size="12" font-weight="700" fill="#0e7490">SHA-chained audit log + voice-audit verify</text>
+  <text x="590" y="707" font-size="10" fill="#0f172a">tamper-evident: chain breaks on edit/reorder/delete</text>
+
+  <!-- Footer -->
+  <text x="550" y="745" text-anchor="middle" font-size="11" font-style="italic" fill="#475569">
+    Highlighted row = a place where Corvin exceeds the analogue (audit). See os-analogy.md §"Where the analogy breaks down" for the asymmetries.
+  </text>
+</svg>

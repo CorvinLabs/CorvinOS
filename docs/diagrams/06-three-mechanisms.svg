@@ -1,0 +1,153 @@
+<svg viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 26px; font-weight: bold; fill: #000; }
+      .mech-title { font-size: 16px; font-weight: bold; fill: #000; }
+      .label { font-size: 12px; fill: #222; }
+      .metric { font-size: 13px; font-weight: bold; fill: #000; }
+      .saving { font-size: 14px; font-weight: bold; fill: #2e7d32; }
+      .box { rx: 8; stroke-width: 2; }
+      .box-cc { fill: #f5f5f5; stroke: #999; }
+      .box-tde { fill: #e8f5e9; stroke: #4caf50; }
+      .arrow { stroke: #333; stroke-width: 2; marker-end: url(#arrowhead); }
+      .iteration { fill: #e3f2fd; stroke: #2196f3; }
+      .worker { fill: #f1f8e9; stroke: #689f38; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#333"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="35" class="title" text-anchor="middle">The Three Mechanisms Driving Token Savings</text>
+
+  <!-- MECHANISM 1: Context Carryover -->
+  <g>
+    <text x="200" y="70" class="mech-title">Mechanism 1: Context Carryover</text>
+    <text x="200" y="90" class="label">Moderate/Complex Tasks (26% savings)</text>
+
+    <!-- Control: Claude Code (repeated re-reads) -->
+    <g>
+      <rect x="50" y="110" width="300" height="200" class="box box-cc"/>
+      <text x="200" y="135" class="label" text-anchor="middle" font-weight="bold">Control: Claude Code</text>
+
+      <rect x="70" y="155" width="260" height="35" class="iteration"/>
+      <text x="200" y="178" class="label" text-anchor="middle">Iteration 1: Read+Analyze+Impl = 6.5k</text>
+
+      <rect x="70" y="200" width="260" height="35" class="iteration" opacity="0.7"/>
+      <text x="200" y="223" class="label" text-anchor="middle">Iteration 2: RE-READ all+Analyze = 6.5k ⚠️</text>
+
+      <rect x="70" y="245" width="260" height="35" class="iteration" opacity="0.5"/>
+      <text x="200" y="268" class="label" text-anchor="middle">Iteration 3: RE-READ again = 6.5k ⚠️</text>
+
+      <text x="200" y="300" class="metric" text-anchor="middle">Total: 19.5k tokens</text>
+    </g>
+
+    <!-- Treatment: TDE (context warm) -->
+    <g>
+      <rect x="400" y="110" width="300" height="200" class="box box-tde"/>
+      <text x="550" y="135" class="label" text-anchor="middle" font-weight="bold">Treatment: TDE</text>
+
+      <rect x="420" y="155" width="260" height="35" class="iteration"/>
+      <text x="550" y="178" class="label" text-anchor="middle">Iteration 1: Read+Analyze = 6.5k</text>
+
+      <rect x="420" y="200" width="80" height="35" class="iteration" fill="#c8e6c9"/>
+      <text x="550" y="223" class="label" text-anchor="middle" font-size="11">Iteration 2: Delta = 2k ✓</text>
+
+      <rect x="420" y="245" width="35" height="35" class="iteration" fill="#a5d6a7"/>
+      <text x="550" y="268" class="label" text-anchor="middle" font-size="11">Iteration 3: Final = 0.8k ✓</text>
+
+      <text x="550" y="300" class="metric" text-anchor="middle" fill="#4caf50">Total: 9.3k tokens (-52%)</text>
+    </g>
+
+    <!-- Savings annotation -->
+    <text x="200" y="330" class="saving" text-anchor="middle">Context stays warm → 52% reduction</text>
+  </g>
+
+  <!-- MECHANISM 2: Parallelization Efficiency -->
+  <g>
+    <text x="200" y="420" class="mech-title">Mechanism 2: Parallelization Efficiency</text>
+    <text x="200" y="440" class="label">Parallel Tasks (64% savings)</text>
+
+    <!-- Control: Sequential -->
+    <g>
+      <rect x="50" y="460" width="300" height="150" class="box box-cc"/>
+      <text x="200" y="485" class="label" text-anchor="middle" font-weight="bold">Control: Sequential</text>
+
+      <text x="70" y="510" class="label">File 1: 200 tokens</text>
+      <text x="70" y="530" class="label">File 2: 200 tokens</text>
+      <text x="70" y="550" class="label">... (48 more files)</text>
+      <text x="70" y="570" class="label">File 50: 200 tokens</text>
+
+      <text x="200" y="595" class="metric" text-anchor="middle">Total: 10,500 tokens</text>
+    </g>
+
+    <!-- Treatment: Parallel (8 workers) -->
+    <g>
+      <rect x="400" y="460" width="300" height="150" class="box box-tde"/>
+      <text x="550" y="485" class="label" text-anchor="middle" font-weight="bold">Treatment: ACS (8 workers)</text>
+
+      <!-- 8 worker boxes -->
+      <rect x="410" y="510" width="32" height="20" class="worker"/>
+      <rect x="450" y="510" width="32" height="20" class="worker"/>
+      <rect x="490" y="510" width="32" height="20" class="worker"/>
+      <rect x="530" y="510" width="32" height="20" class="worker"/>
+      <rect x="410" y="540" width="32" height="20" class="worker"/>
+      <rect x="450" y="540" width="32" height="20" class="worker"/>
+      <rect x="490" y="540" width="32" height="20" class="worker"/>
+      <rect x="530" y="540" width="32" height="20" class="worker"/>
+
+      <text x="550" y="573" class="label" text-anchor="middle" font-size="11">50 files ÷ 8 workers</text>
+      <text x="550" y="593" class="label" text-anchor="middle" font-size="11">= ~6 files/worker</text>
+
+      <text x="550" y="615" class="metric" text-anchor="middle" fill="#4caf50">Total: 1,750 tokens (-83%)</text>
+    </g>
+
+    <!-- Savings annotation -->
+    <text x="200" y="640" class="saving" text-anchor="middle">Parallel processing reduces O(n) → O(n/8)</text>
+  </g>
+
+  <!-- MECHANISM 3: Task Enablement -->
+  <g>
+    <text x="750" y="70" class="mech-title">Mechanism 3: Task Enablement</text>
+    <text x="750" y="90" class="label">Big Data Tasks (84%+ savings + enables impossible)</text>
+
+    <!-- Control: Claude Code (fails) -->
+    <g>
+      <rect x="700" y="110" width="300" height="200" class="box box-cc"/>
+      <text x="850" y="135" class="label" text-anchor="middle" font-weight="bold">Control: Claude Code</text>
+
+      <text x="720" y="160" class="label">Task: Analyze 1GB Parquet</text>
+      <text x="720" y="180" class="label">Rows: 1,000,000</text>
+      <text x="720" y="200" class="label">Columns: 10 (50MB each)</text>
+
+      <rect x="720" y="225" width="240" height="40" fill="#ffcccc" stroke="#d32f2f" stroke-width="2"/>
+      <text x="840" y="252" class="label" text-anchor="middle" font-weight="bold" fill="#d32f2f">❌ TASK FAILS</text>
+      <text x="840" y="270" class="label" text-anchor="middle">Context window exceeded</text>
+
+      <text x="850" y="300" class="metric" text-anchor="middle" fill="#d32f2f">Cost: Wasted API call</text>
+    </g>
+
+    <!-- Treatment: ACS (streams + parallelizes) -->
+    <g>
+      <rect x="700" y="330" width="300" height="200" class="box box-tde"/>
+      <text x="850" y="355" class="label" text-anchor="middle" font-weight="bold">Treatment: ACS</text>
+
+      <text x="720" y="380" class="label">Split 1GB into 100 × 10MB chunks</text>
+      <text x="720" y="400" class="label">Process in parallel (no LLM context)</text>
+      <text x="720" y="420" class="label">Aggregate results to LLM only</text>
+
+      <rect x="720" y="445" width="240" height="40" fill="#ccffcc" stroke="#4caf50" stroke-width="2"/>
+      <text x="840" y="472" class="label" text-anchor="middle" font-weight="bold" fill="#4caf50">✅ TASK SUCCEEDS</text>
+
+      <text x="850" y="515" class="metric" text-anchor="middle" fill="#4caf50">Cost: 8,000 tokens (vs impossible)</text>
+      <text x="850" y="535" class="metric" text-anchor="middle" fill="#4caf50">Benefit: Unlocks entire workload class</text>
+    </g>
+  </g>
+
+  <!-- Bottom summary -->
+  <rect x="50" y="650" width="1100" height="40" fill="#f5f5f5" stroke="#ccc" stroke-width="1" rx="4"/>
+  <text x="600" y="677" class="label" text-anchor="middle" font-weight="bold">
+    Combined Effect: 48.8% aggregate savings + enables impossible-for-CC workloads
+  </text>
+</svg>

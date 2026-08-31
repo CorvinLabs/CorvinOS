@@ -1,0 +1,180 @@
+<svg width="1200" height="460" viewBox="0 0 1200 460" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgF" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <pattern id="gridF" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#ffffff" stroke-width="0.2" opacity="0.04"/>
+    </pattern>
+    <marker id="arrB" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrA" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f0b429"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="460" fill="url(#bgF)"/>
+  <rect width="1200" height="460" fill="url(#gridF)"/>
+
+  <!-- Title -->
+  <text x="600" y="28" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">
+    A2A PROTOCOL FLOW  ·  LAYER 38  ·  PROTOCOL v3
+  </text>
+
+  <!-- ══ Box 1 — Remote Agent (Sender) ═══════════════════════════════ -->
+  <rect x="12" y="44" width="255" height="196" rx="8" fill="#0e1829" stroke="#3b82f6" stroke-width="1.5"/>
+  <circle cx="60" cy="91" r="21" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="60" y="97" text-anchor="middle"
+        font-family="ui-monospace, 'SF Mono', Consolas, monospace"
+        font-size="17" font-weight="700" fill="#93c5fd">A</text>
+  <text x="160" y="82" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Remote Agent</text>
+  <text x="160" y="98" text-anchor="middle"
+        font-family="ui-monospace, monospace" font-size="10" fill="#3b82f6">(Sender)</text>
+  <line x1="30" y1="111" x2="247" y2="111" stroke="#1e3a5f" stroke-width="1"/>
+  <text x="134" y="127" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">sender_instance_id</text>
+  <text x="134" y="143" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">HMAC-SHA256 key  (pre-paired)</text>
+  <text x="134" y="159" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">instruction  ≤ 16 KB  (NFKC sanitised)</text>
+  <text x="134" y="175" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">attachments  ≤ 16  ·  ≤ 1 MiB total</text>
+  <text x="134" y="191" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">nonce  +  timestamp  +  ttl_s</text>
+  <text x="134" y="224" text-anchor="middle"
+        font-family="ui-monospace, monospace" font-size="10" fill="#3b82f6">POST /v1/a2a/task</text>
+
+  <!-- Arrow 1: Sender → Validate -->
+  <line x1="268" y1="138" x2="296" y2="138" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrB)"/>
+  <text x="282" y="130" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#3b82f6">TaskEnvelope</text>
+  <text x="282" y="150" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#484f58">HMAC signed</text>
+
+  <!-- ══ Box 2 — Receiver + Validate ══════════════════════════════════ -->
+  <rect x="298" y="44" width="285" height="196" rx="8" fill="#1a1200" stroke="#f0b429" stroke-width="1.5"/>
+  <circle cx="346" cy="91" r="21" fill="#2a1e00" stroke="#f0b429" stroke-width="1.5"/>
+  <path d="M346 71 L361 78 L361 95 Q361 105 346 110 Q331 105 331 95 L331 78 Z"
+        fill="none" stroke="#f0b429" stroke-width="1.8"/>
+  <text x="346" y="98" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="700" fill="#f0b429">✓</text>
+  <text x="440" y="82" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Receiver  ·  Validate</text>
+  <text x="440" y="98" text-anchor="middle"
+        font-family="ui-monospace, monospace" font-size="10" fill="#f0b429">6-step sequence</text>
+  <line x1="316" y1="111" x2="563" y2="111" stroke="#2a1e00" stroke-width="1"/>
+  <text x="388" y="128" font-family="sans-serif" font-size="11" fill="#3fb950">①  Schema validation</text>
+  <text x="388" y="145" font-family="sans-serif" font-size="11" fill="#3fb950">②  Origin registry lookup</text>
+  <text x="388" y="162" font-family="sans-serif" font-size="11" fill="#3fb950">③  Time window  ±300 s</text>
+  <text x="388" y="179" font-family="sans-serif" font-size="11" fill="#3fb950">④  Nonce dedup  (replay-proof)</text>
+  <text x="388" y="196" font-family="sans-serif" font-size="11" fill="#3fb950">⑤  TTL cap enforcement</text>
+  <text x="388" y="213" font-family="sans-serif" font-size="11" fill="#3fb950">⑥  HMAC-SHA256  (constant-time)</text>
+  <text x="440" y="232" text-anchor="middle"
+        font-family="sans-serif" font-size="9" fill="#f0b429" font-style="italic">audit-first: chain write before any spawn</text>
+
+  <!-- Arrow 2: Validate → Worker -->
+  <line x1="584" y1="138" x2="612" y2="138" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrG)"/>
+  <text x="598" y="130" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#3fb950">spawn</text>
+  <text x="598" y="150" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#484f58">framing block</text>
+
+  <!-- ══ Box 3 — Worker ════════════════════════════════════════════════ -->
+  <rect x="614" y="44" width="253" height="196" rx="8" fill="#0c1f16" stroke="#3fb950" stroke-width="1.5"/>
+  <circle cx="662" cy="91" r="21" fill="#0f2d1a" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="662" y="98" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#3fb950">⚙</text>
+  <text x="762" y="82" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Worker  (L22)</text>
+  <text x="762" y="98" text-anchor="middle"
+        font-family="ui-monospace, monospace" font-size="10" fill="#3fb950">bwrap sandbox</text>
+  <line x1="632" y1="111" x2="847" y2="111" stroke="#0f2d1a" stroke-width="1"/>
+  <text x="740" y="127" text-anchor="middle"
+        font-family="ui-monospace, monospace" font-size="9" fill="#8b949e">&lt;a2a_instruction origin="…"&gt;</text>
+  <text x="740" y="143" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">scratch /tmp/…/in/  (mode 0700)</text>
+  <text x="740" y="159" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">output   /tmp/…/out/</text>
+  <text x="740" y="175" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">L10 path-gate  (no FS escapes)</text>
+  <text x="740" y="191" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">L34 data classification gate</text>
+  <text x="740" y="207" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">L35 egress lockdown</text>
+  <text x="740" y="228" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#484f58">scratch cleaned on every path</text>
+
+  <!-- Arrow 3: Worker → Filter -->
+  <line x1="868" y1="138" x2="896" y2="138" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrG)"/>
+  <text x="882" y="130" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#3fb950">output</text>
+
+  <!-- ══ Box 4 — Result Filter ══════════════════════════════════════ -->
+  <rect x="898" y="44" width="290" height="196" rx="8" fill="#1a1200" stroke="#f0b429" stroke-width="1.5"/>
+  <circle cx="946" cy="91" r="21" fill="#2a1e00" stroke="#f0b429" stroke-width="1.5"/>
+  <text x="946" y="98" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#f0b429">⊘</text>
+  <text x="1048" y="82" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Result Filter</text>
+  <text x="1048" y="98" text-anchor="middle"
+        font-family="ui-monospace, monospace" font-size="10" fill="#f0b429">result_schema</text>
+  <line x1="916" y1="111" x2="1178" y2="111" stroke="#2a1e00" stroke-width="1"/>
+  <text x="1048" y="127" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">JSONSchema strip (undeclared → drop)</text>
+  <text x="1048" y="143" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">empty schema  →  data: {}</text>
+  <text x="1048" y="159" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">sha256 digest verified per attachment</text>
+  <text x="1048" y="175" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">attachment names validated</text>
+  <text x="1048" y="191" text-anchor="middle"
+        font-family="ui-monospace, monospace" font-size="9" fill="#8b949e">[A-Za-z0-9_-]…  (no path sep)</text>
+  <text x="1048" y="207" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">rejected  →  no response  (no oracle)</text>
+  <text x="1048" y="228" text-anchor="middle"
+        font-family="ui-monospace, monospace" font-size="10" fill="#f0b429">→ ResponseEnvelope  (signed)</text>
+
+  <!-- Return arrow: down from Filter → left → up into Sender -->
+  <line x1="1048" y1="240" x2="1048" y2="262" stroke="#f0b429" stroke-width="1.5"/>
+  <line x1="1048" y1="262" x2="134"  y2="262" stroke="#f0b429" stroke-width="1.5"/>
+  <line x1="134"  y1="262" x2="134"  y2="240" stroke="#f0b429" stroke-width="1.5" marker-end="url(#arrA)"/>
+  <text x="591" y="254" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="11" fill="#f0b429">
+    ResponseEnvelope  —  HMAC-signed  ·  instance_id verified  ·  attachments_out harvested
+  </text>
+
+  <!-- ══ Audit Chain section ══════════════════════════════════════════ -->
+  <rect x="12" y="278" width="1176" height="120" rx="6" fill="#080d14" stroke="#21262d" stroke-width="1"/>
+  <text x="600" y="296" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="11" font-weight="600" fill="#8b949e">
+    SHA-256 HASH CHAIN  ·  GDPR Art. 30/32  ·  written BEFORE any spawn or response  ·  allow-listed fields only — no instruction content, no attachment data
+  </text>
+
+  <!-- 5 audit event boxes -->
+  <rect x="22"  y="305" width="215" height="82" rx="4" fill="#0d1117" stroke="#3b82f6" stroke-width="1"/>
+  <text x="129" y="321" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#60a5fa">A2A.envelope_received</text>
+  <text x="129" y="337" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">task_id · origin_id</text>
+  <text x="129" y="352" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">nonce_prefix · sender_instance_id</text>
+  <text x="129" y="367" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">instance_id_match · ttl_s</text>
+
+  <rect x="248" y="305" width="215" height="82" rx="4" fill="#0d1117" stroke="#3fb950" stroke-width="1"/>
+  <text x="355" y="321" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#3fb950">A2A.engine_spawned</text>
+  <text x="355" y="337" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">engine_id · persona · channel</text>
+  <text x="355" y="352" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">ttl_s · duration_ms</text>
+  <text x="355" y="367" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">chat_key</text>
+
+  <rect x="474" y="305" width="215" height="82" rx="4" fill="#0d1117" stroke="#3fb950" stroke-width="1"/>
+  <text x="581" y="321" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#3fb950">A2A.result_filtered</text>
+  <text x="581" y="337" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">filter_pass_count</text>
+  <text x="581" y="352" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">filter_reject_count</text>
+  <text x="581" y="367" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">task_id</text>
+
+  <rect x="700" y="305" width="215" height="82" rx="4" fill="#0d1117" stroke="#f0b429" stroke-width="1"/>
+  <text x="807" y="321" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#f0b429">A2A.response_signed</text>
+  <text x="807" y="337" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">instance_id · endpoint_id</text>
+  <text x="807" y="352" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">http_status · duration_ms</text>
+  <text x="807" y="367" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">task_id · status</text>
+
+  <rect x="926" y="305" width="252" height="82" rx="4" fill="#0d1117" stroke="#ef4444" stroke-width="1"/>
+  <text x="1052" y="321" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#ef4444">A2A.request_rejected</text>
+  <text x="1052" y="337" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">reason · origin_id</text>
+  <text x="1052" y="352" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">no response signed (no oracle)</text>
+  <text x="1052" y="367" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#484f58">task_id · status: rejected</text>
+
+  <!-- Footer -->
+  <text x="600" y="448" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#484f58">
+    8 A2A.* event types total  ·  full list: docs/claude-ref/layer-engines.md  ·  audit fields are allow-listed — instruction content and attachment bytes are NEVER written to the chain
+  </text>
+</svg>

@@ -1,0 +1,136 @@
+<svg width="1000" height="360" viewBox="0 0 1000 360" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgMM" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="leftZone" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#1a0808"/>
+      <stop offset="100%" stop-color="#0d0505"/>
+    </linearGradient>
+    <linearGradient id="rightZone" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#071a0d"/>
+      <stop offset="100%" stop-color="#040d07"/>
+    </linearGradient>
+    <marker id="arrRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ef4444"/>
+    </marker>
+    <marker id="arrGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrBlueRev" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#3b82f6"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1000" height="360" rx="10" fill="url(#bgMM)"/>
+
+  <!-- Title -->
+  <text x="500" y="26" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="600" fill="#8b949e" letter-spacing="2">COMPUTE WORKER — MENTAL MODEL</text>
+
+  <!-- ── LEFT: Without Compute Worker ── -->
+  <rect x="16" y="38" width="462" height="280" rx="8" fill="url(#leftZone)" stroke="#ef4444" stroke-width="1.2"/>
+  <text x="247" y="60" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#ef4444">WITHOUT COMPUTE WORKER</text>
+
+  <!-- LLM label -->
+  <rect x="34" y="74" width="60" height="220" rx="6" fill="#1a0505" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="64" y="188" text-anchor="middle" transform="rotate(-90 64 188)"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="600" fill="#ef4444">LLM</text>
+
+  <!-- Round-trip arrows: LLM ↔ Tool, repeated 4x + ellipsis -->
+  <!-- Row 1 -->
+  <rect x="112" y="80" width="340" height="28" rx="4" fill="#1a0808" stroke="#6b2020" stroke-width="0.8"/>
+  <text x="282" y="98" text-anchor="middle" font-family="'SFMono-Regular',Consolas,monospace" font-size="9" fill="#fca5a5">submit param set 1  →  eval result 1</text>
+  <!-- Row 2 -->
+  <rect x="112" y="114" width="340" height="28" rx="4" fill="#1a0808" stroke="#6b2020" stroke-width="0.8"/>
+  <text x="282" y="132" text-anchor="middle" font-family="'SFMono-Regular',Consolas,monospace" font-size="9" fill="#fca5a5">submit param set 2  →  eval result 2</text>
+  <!-- Row 3 -->
+  <rect x="112" y="148" width="340" height="28" rx="4" fill="#1a0808" stroke="#6b2020" stroke-width="0.8"/>
+  <text x="282" y="166" text-anchor="middle" font-family="'SFMono-Regular',Consolas,monospace" font-size="9" fill="#fca5a5">submit param set 3  →  eval result 3</text>
+  <!-- Ellipsis -->
+  <text x="282" y="198" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="18" fill="#6b2020">⋮</text>
+  <text x="282" y="213" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#8b949e">× N iterations</text>
+  <!-- Row N -->
+  <rect x="112" y="222" width="340" height="28" rx="4" fill="#1a0808" stroke="#6b2020" stroke-width="0.8"/>
+  <text x="282" y="240" text-anchor="middle" font-family="'SFMono-Regular',Consolas,monospace" font-size="9" fill="#fca5a5">submit param set N  →  "best is set 42"</text>
+
+  <!-- Cost summary -->
+  <rect x="112" y="260" width="340" height="44" rx="5" fill="#2d0a0a" stroke="#ef4444" stroke-width="1"/>
+  <text x="282" y="278" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="11" font-weight="700" fill="#ef4444">N × LLM round-trips</text>
+  <text x="282" y="295" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#fca5a5">N × token spend</text>
+
+  <!-- ── Divider ── -->
+  <line x1="500" y1="44" x2="500" y2="312" stroke="#30363d" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="500" y="336" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#484f58">vs</text>
+
+  <!-- ── RIGHT: With Compute Worker ── -->
+  <rect x="522" y="38" width="462" height="280" rx="8" fill="url(#rightZone)" stroke="#3fb950" stroke-width="1.2"/>
+  <text x="753" y="60" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#3fb950">WITH COMPUTE WORKER</text>
+
+  <!-- LLM box (right) -->
+  <rect x="536" y="74" width="100" height="60" rx="6" fill="#0a1f12" stroke="#3fb950" stroke-width="1.2"/>
+  <text x="586" y="100" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="700" fill="#3fb950">LLM</text>
+  <text x="586" y="116" text-anchor="middle" font-family="monospace" font-size="9" fill="#6b7280">3 calls total</text>
+
+  <!-- Arrow LLM → Worker: compute_run -->
+  <line x1="640" y1="98" x2="688" y2="98" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrBlue)"/>
+  <text x="664" y="91" text-anchor="middle" font-family="monospace" font-size="8" fill="#3b82f6">compute_run</text>
+
+  <!-- Worker box -->
+  <rect x="692" y="68" width="270" height="182" rx="8" fill="#061510" stroke="#3fb950" stroke-width="1.2"/>
+  <text x="827" y="91" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="700" fill="#3fb950">WORKER</text>
+  <line x1="706" y1="99" x2="948" y2="99" stroke="#1a3a24" stroke-width="1"/>
+
+  <!-- Worker internals -->
+  <rect x="706" y="107" width="242" height="26" rx="4" fill="#0a1f12" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="827" y="124" text-anchor="middle" font-family="monospace" font-size="9" fill="#86efac">strategy.suggest_batch</text>
+  <rect x="706" y="139" width="242" height="26" rx="4" fill="#0a1f12" stroke="#3b82f6" stroke-width="0.8"/>
+  <text x="827" y="156" text-anchor="middle" font-family="monospace" font-size="9" fill="#93c5fd">ParallelDriver  ×  N iterations</text>
+  <rect x="706" y="171" width="242" height="26" rx="4" fill="#0a1f12" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="827" y="188" text-anchor="middle" font-family="monospace" font-size="9" fill="#c4b5fd">bwrap sandbox per call</text>
+  <rect x="706" y="203" width="242" height="26" rx="4" fill="#0a1f12" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="827" y="220" text-anchor="middle" font-family="monospace" font-size="9" fill="#fde68a">strategy.update + budget check</text>
+
+  <!-- Zero tokens label -->
+  <text x="827" y="245" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#6b7280">zero LLM tokens during execution</text>
+
+  <!-- Arrow Worker → LLM: compute_result -->
+  <line x1="688" y1="118" x2="640" y2="118" stroke="#3fb950" stroke-width="2" marker-end="url(#arrBlueRev)"/>
+  <text x="664" y="131" text-anchor="middle" font-family="monospace" font-size="8" fill="#3fb950">result</text>
+
+  <!-- Cost summary (right) -->
+  <rect x="536" y="260" width="434" height="44" rx="5" fill="#071a0d" stroke="#3fb950" stroke-width="1"/>
+  <text x="753" y="278" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="11" font-weight="700" fill="#3fb950">3 LLM calls total</text>
+  <text x="753" y="295" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#86efac">submit · poll · result   —   N iterations cost zero tokens</text>
+</svg>

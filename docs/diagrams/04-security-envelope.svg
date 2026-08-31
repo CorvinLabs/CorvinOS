@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Security envelope — defense in depth</title>
+  <desc>Six concentric rectangles representing six enforcement surfaces. From outside in: whitelist plus optional read-only role and observer transcript at the bridge edge (Layer 16); persona ACL via cowork plus forge; policy via forge.policy with hot-reload and per-persona sandbox overrides; sandbox via bwrap with loopback-deny shim; path-gate hook blocking direct Write or Edit or Bash to forge / skill-forge / audit / policy regardless of permission mode; operator elevation gating forge_promote and skill_promote behind a chat-bound PIN. A thick audit-log band at the bottom catches every gate event into a SHA-256-chained file.</desc>
+
+  <text x="490" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Security envelope — six surfaces, one audit log</text>
+  <text x="490" y="52" text-anchor="middle" font-size="12" fill="#475569">Each surface catches a different class of failure. The audit log records every block and every action.</text>
+
+  <!-- Surface 1: whitelist (outer) -->
+  <rect x="60" y="80" width="860" height="540" rx="16" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+  <text x="80" y="104" font-size="13" font-weight="700" fill="#92400e">Surface 1 · whitelist + read-only role (bridge daemon)</text>
+  <text x="80" y="121" font-size="10" fill="#0f172a">Catches: unknown senders. Trust boundary. Layer 16: read_only list (in chat, may not trigger), observer_visibility:transcript (text fed as ambient context).</text>
+
+  <!-- Surface 2: persona ACL -->
+  <rect x="95" y="140" width="790" height="465" rx="14" fill="#dbeafe" stroke="#3b82f6" stroke-width="2"/>
+  <text x="115" y="164" font-size="13" font-weight="700" fill="#1e40af">Surface 2 · persona ACL (cowork + forge)</text>
+  <text x="115" y="181" font-size="10" fill="#0f172a">Catches: scope mistakes. tools / disallowed_tools / permission_mode (Claude Code) · FORGE_ALLOWED_TOOLS (forge)</text>
+
+  <!-- Surface 3: policy -->
+  <rect x="130" y="200" width="720" height="390" rx="12" fill="#cffafe" stroke="#06b6d4" stroke-width="2"/>
+  <text x="150" y="224" font-size="13" font-weight="700" fill="#0e7490">Surface 3 · policy (forge.policy + skill-forge linter, hot-reload)</text>
+  <text x="150" y="241" font-size="10" fill="#0f172a">Catches: project-wide rule violations. forbidden_tool_names · breakers · persona_namespaces · linter (NFKC + confusables, prompt-injection, secrets)</text>
+
+  <!-- Surface 4: sandbox -->
+  <rect x="165" y="260" width="650" height="315" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="2"/>
+  <text x="185" y="284" font-size="13" font-weight="700" fill="#065f46">Surface 4 · sandbox (bwrap + loopback-deny)</text>
+  <text x="185" y="301" font-size="10" fill="#0f172a">Catches: a forged tool actually doing what it should not. minimal mount set · /tmp tmpfs · x-bind only · no net unless overridden · loopback shim</text>
+
+  <!-- Surface 5: path-gate -->
+  <rect x="200" y="320" width="580" height="240" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="2"/>
+  <text x="220" y="344" font-size="13" font-weight="700" fill="#854d0e">Surface 5 · path-gate hook (PreToolUse, structural)</text>
+  <text x="220" y="361" font-size="10" fill="#0f172a">Catches: direct Write / Edit / Bash to forge / skill-forge / audit.jsonl / policy.json — regardless of permission_mode. Layer-16 v2: eval/exec/$()/heredoc fail-closed.</text>
+
+  <!-- Surface 6: operator elevation -->
+  <rect x="235" y="380" width="510" height="165" rx="10" fill="#fce7f3" stroke="#db2777" stroke-width="2"/>
+  <text x="255" y="404" font-size="13" font-weight="700" fill="#9d174d">Surface 6 · operator elevation (PIN, Layer 16)</text>
+  <text x="255" y="421" font-size="10" fill="#0f172a">Catches: unauthorised promotion. /auth-up &lt;pin&gt; engages a TTL-bounded grant; forge_promote / skill_promote denied without it.</text>
+
+  <!-- Center: the agent / tool exec / promote target -->
+  <rect x="295" y="450" width="390" height="80" rx="8" fill="#fff" stroke="#0f172a" stroke-width="1.5"/>
+  <text x="490" y="475" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">forged tool exec · skill body inject · promotion</text>
+  <text x="490" y="495" text-anchor="middle" font-size="10" fill="#475569">runs here only with the conjunction of all six surfaces' decisions</text>
+  <text x="490" y="514" text-anchor="middle" font-size="10" fill="#475569">a single deny in any ring blocks the action and writes an audit event</text>
+
+  <!-- Right-side annotations -->
+  <g>
+    <line x1="920" y1="100" x2="970" y2="100" stroke="#f59e0b" stroke-width="2"/>
+    <text x="924" y="92" font-size="9" fill="#92400e">unknown senders · observers</text>
+
+    <line x1="885" y1="160" x2="970" y2="160" stroke="#3b82f6" stroke-width="2"/>
+    <text x="889" y="152" font-size="9" fill="#1e40af">wrong-role calls</text>
+
+    <line x1="850" y1="220" x2="970" y2="220" stroke="#06b6d4" stroke-width="2"/>
+    <text x="854" y="212" font-size="9" fill="#0e7490">name + linter + breaker</text>
+
+    <line x1="815" y1="280" x2="970" y2="280" stroke="#10b981" stroke-width="2"/>
+    <text x="819" y="272" font-size="9" fill="#065f46">undeclared paths · loopback</text>
+
+    <line x1="780" y1="340" x2="970" y2="340" stroke="#ca8a04" stroke-width="2"/>
+    <text x="784" y="332" font-size="9" fill="#854d0e">direct-write attempts</text>
+
+    <line x1="745" y1="400" x2="970" y2="400" stroke="#db2777" stroke-width="2"/>
+    <text x="749" y="392" font-size="9" fill="#9d174d">unelevated promote</text>
+  </g>
+
+  <!-- Audit log band -->
+  <rect x="60" y="635" width="860" height="68" rx="10" fill="#0f172a" stroke="#0f172a" stroke-width="1.5"/>
+  <text x="80" y="662" font-size="14" font-weight="700" fill="#22d3ee">audit log — SHA-256-chained, append-only</text>
+  <text x="80" y="682" font-size="11" fill="#cbd5e1">forge + skill-forge + bridge + ACL denials + policy reloads + breaker trips + path_gate.denied + auth_elevation.* — voice-audit verify walks the chain.</text>
+  <text x="80" y="697" font-size="10" fill="#94a3b8">Layer 16 / Roadmap L: daily systemd timer (04:30) re-verifies and pushes a bridge notification on chain break.</text>
+
+  <!-- Arrows from each surface into audit -->
+  <line x1="200" y1="605" x2="200" y2="635" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,3"/>
+  <line x1="320" y1="590" x2="320" y2="635" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,3"/>
+  <line x1="440" y1="575" x2="440" y2="635" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,3"/>
+  <line x1="560" y1="560" x2="560" y2="635" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,3"/>
+  <line x1="680" y1="545" x2="680" y2="635" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,3"/>
+  <line x1="800" y1="530" x2="800" y2="635" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,3"/>
+</svg>

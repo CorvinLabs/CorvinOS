@@ -1,0 +1,129 @@
+<svg viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 28px; font-weight: bold; fill: #000; }
+      .axis-label { font-size: 13px; fill: #222; }
+      .category { font-size: 14px; font-weight: bold; fill: #111; }
+      .metric { font-size: 12px; fill: #333; }
+      .savings-good { fill: #4caf50; }
+      .savings-neutral { fill: #999; }
+      .savings-negative { fill: #ff9800; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="35" class="title" text-anchor="middle">Benchmark Results: Token Savings by Category</text>
+
+  <!-- Y-Axis (Savings %) -->
+  <line x1="80" y1="500" x2="80" y2="50" stroke="#333" stroke-width="2"/>
+  <text x="30" y="275" class="axis-label" text-anchor="middle" transform="rotate(-90 30 275)">Savings %</text>
+
+  <!-- Y-Axis Labels -->
+  <text x="70" y="505" class="axis-label" text-anchor="end">-10%</text>
+  <text x="70" y="435" class="axis-label" text-anchor="end">0%</text>
+  <text x="70" y="365" class="axis-label" text-anchor="end">25%</text>
+  <text x="70" y="295" class="axis-label" text-anchor="end">50%</text>
+  <text x="70" y="225" class="axis-label" text-anchor="end">75%</text>
+  <text x="70" y="155" class="axis-label" text-anchor="end">100%</text>
+
+  <!-- Grid lines -->
+  <line x1="80" y1="435" x2="1150" y2="435" stroke="#ddd" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="80" y1="365" x2="1150" y2="365" stroke="#ddd" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="80" y1="295" x2="1150" y2="295" stroke="#ddd" stroke-width="1" stroke-dasharray="3,3"/>
+
+  <!-- X-Axis -->
+  <line x1="80" y1="500" x2="1150" y2="500" stroke="#333" stroke-width="2"/>
+  <text x="600" y="545" class="axis-label" text-anchor="middle">Task Category</text>
+
+  <!-- Trivial: -4.3% (negative bar) -->
+  <g>
+    <rect x="100" y="467" width="50" height="33" class="savings-negative"/>
+    <text x="125" y="520" class="category" text-anchor="middle">Trivial</text>
+    <text x="125" y="537" class="metric" text-anchor="middle" font-size="11">3 tasks</text>
+    <text x="125" y="455" class="metric" text-anchor="middle" font-weight="bold">-4.3%</text>
+  </g>
+
+  <!-- Simple: -5.2% (negative bar) -->
+  <g>
+    <rect x="170" y="463" width="50" height="37" class="savings-negative"/>
+    <text x="195" y="520" class="category" text-anchor="middle">Simple</text>
+    <text x="195" y="537" class="metric" text-anchor="middle" font-size="11">2 tasks</text>
+    <text x="195" y="450" class="metric" text-anchor="middle" font-weight="bold">-5.2%</text>
+  </g>
+
+  <!-- Moderate: 26.8% (positive bar) -->
+  <g>
+    <rect x="240" y="322" width="50" height="178" class="savings-good"/>
+    <text x="265" y="520" class="category" text-anchor="middle">Moderate</text>
+    <text x="265" y="537" class="metric" text-anchor="middle" font-size="11">2 tasks</text>
+    <text x="265" y="305" class="metric" text-anchor="middle" font-weight="bold">26.8%</text>
+  </g>
+
+  <!-- Complex: 36.1% (positive bar) -->
+  <g>
+    <rect x="310" y="248" width="50" height="252" class="savings-good"/>
+    <text x="335" y="520" class="category" text-anchor="middle">Complex</text>
+    <text x="335" y="537" class="metric" text-anchor="middle" font-size="11">1 task</text>
+    <text x="335" y="230" class="metric" text-anchor="middle" font-weight="bold">36.1%</text>
+  </g>
+
+  <!-- Parallel: 63.6% (positive bar) -->
+  <g>
+    <rect x="380" y="56" width="50" height="444" class="savings-good"/>
+    <text x="405" y="520" class="category" text-anchor="middle">Parallel</text>
+    <text x="405" y="537" class="metric" text-anchor="middle" font-size="11">2 tasks</text>
+    <text x="405" y="35" class="metric" text-anchor="middle" font-weight="bold">63.6%</text>
+  </g>
+
+  <!-- Big Data: 84.4% (positive bar) -->
+  <g>
+    <rect x="450" y="-89" width="50" height="589" class="savings-good"/>
+    <!-- Bar capped at top, add text label outside -->
+    <text x="475" y="520" class="category" text-anchor="middle">Big Data</text>
+    <text x="475" y="537" class="metric" text-anchor="middle" font-size="11">1 task</text>
+    <text x="475" y="10" class="metric" text-anchor="middle" font-weight="bold">84.4%</text>
+  </g>
+
+  <!-- Aggregate bar (separate, highlighted) -->
+  <g>
+    <rect x="550" y="68" width="80" height="432" fill="#1976d2" stroke="#0d47a1" stroke-width="2"/>
+    <text x="590" y="520" class="category" text-anchor="middle">AGGREGATE</text>
+    <text x="590" y="537" class="metric" text-anchor="middle" font-size="11">11 tasks</text>
+    <text x="590" y="45" class="metric" text-anchor="middle" font-weight="bold" fill="#0d47a1" font-size="14">48.8%</text>
+    <text x="590" y="60" class="metric" text-anchor="middle" font-size="11" fill="#0d47a1">simulated</text>
+  </g>
+
+  <!-- Legend -->
+  <g>
+    <rect x="700" y="80" width="420" height="350" fill="#f9f9f9" stroke="#ccc" stroke-width="1" rx="6"/>
+    <text x="720" y="105" class="category" fill="#333">Results Summary</text>
+
+    <text x="720" y="135" class="metric" font-weight="bold">Control (Claude Code):</text>
+    <text x="720" y="155" class="metric">93,018 total tokens</text>
+
+    <text x="720" y="180" class="metric" font-weight="bold">Treatment (TDE):</text>
+    <text x="720" y="200" class="metric">47,596 total tokens</text>
+
+    <line x1="720" y1="215" x2="1100" y2="215" stroke="#ddd" stroke-width="1"/>
+
+    <text x="720" y="240" class="metric" font-weight="bold" fill="#4caf50" font-size="14">
+      SAVINGS: 45,422 tokens (48.8%)
+    </text>
+
+    <text x="720" y="270" class="metric" font-size="11">✓ Pre-gate optimizes trivial/simple</text>
+    <text x="720" y="290" class="metric" font-size="11">✓ Context carryover saves moderate</text>
+    <text x="720" y="310" class="metric" font-size="11">✓ Parallelization saves parallel</text>
+    <text x="720" y="330" class="metric" font-size="11">✓ Big-data enables impossible tasks</text>
+
+    <line x1="720" y1="345" x2="1100" y2="345" stroke="#ddd" stroke-width="1"/>
+
+    <text x="720" y="370" class="metric" font-size="11" font-weight="bold">Honesty note:</text>
+    <text x="720" y="390" class="metric" font-size="11">Deterministic simulation of assumed ratios</text>
+    <text x="720" y="410" class="metric" font-size="11">No measured usage — no significance claim</text>
+  </g>
+
+  <!-- Note at bottom -->
+  <text x="600" y="580" class="metric" text-anchor="middle" font-size="11" fill="#666">
+    Overhead on trivial/simple tasks (orange bars) is eliminated by cheap pre-gate in production
+  </text>
+</svg>

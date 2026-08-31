@@ -1,0 +1,13 @@
+{
+  "id": "nlp-toolkit",
+  "name": "NLP Toolkit",
+  "version": "0.5.0",
+  "category": "Integration",
+  "description": "Advanced NLP processing, sentiment analysis, entity extraction",
+  "author": "Community",
+  "tier": "contributor",
+  "boot_layer": "installed",
+  "rating": 4.4,
+  "installs": 891,
+  "github": "https://github.com/community/corvin-nlp-toolkit"
+}

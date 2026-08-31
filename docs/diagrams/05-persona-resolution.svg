@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 540" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Persona resolution — how a message picks its persona</title>
+  <desc>A decision tree starting from an inbound message. First branch: is a persona pinned for this chat (chat_profiles.persona)? Yes leads directly to "use the pinned persona" with a green tick. No leads into auto-routing, which itself branches by mode: off, heuristic, embedding. Heuristic match yes leads to use that persona. Heuristic miss or embedding mode leads to embedding similarity. Embedding above threshold leads to that persona. Below threshold leads to fallback persona (assistant).</desc>
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ar-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981"/>
+    </marker>
+  </defs>
+
+  <text x="460" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Persona resolution per message</text>
+  <text x="460" y="52" text-anchor="middle" font-size="12" fill="#475569">Pinned chats skip routing. Routed chats run heuristic → embedding → fallback in order.</text>
+
+  <!-- Inbound -->
+  <rect x="380" y="80" width="160" height="50" rx="8" fill="#dbeafe" stroke="#3b82f6"/>
+  <text x="460" y="103" text-anchor="middle" font-size="12" font-weight="700" fill="#1e40af">inbound message</text>
+  <text x="460" y="119" text-anchor="middle" font-size="10" fill="#0f172a">chat_key + text</text>
+
+  <!-- Decision: pinned? -->
+  <polygon points="460,160 600,210 460,260 320,210" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="460" y="205" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">pinned for chat?</text>
+  <text x="460" y="221" text-anchor="middle" font-size="10" fill="#475569">chat_profiles.persona</text>
+
+  <!-- Yes: pinned -->
+  <rect x="640" y="180" width="200" height="60" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="740" y="206" text-anchor="middle" font-size="12" font-weight="700" fill="#065f46">use pinned persona</text>
+  <text x="740" y="223" text-anchor="middle" font-size="10" fill="#0f172a">routing skipped, [name] prefix</text>
+  <text x="740" y="234" text-anchor="middle" font-size="9" fill="#475569">/persona reset to clear</text>
+
+  <line x1="600" y1="210" x2="640" y2="210" stroke="#10b981" stroke-width="1.5" marker-end="url(#ar-green)"/>
+  <text x="610" y="200" font-size="10" fill="#065f46">yes</text>
+
+  <!-- No: routing -->
+  <line x1="460" y1="260" x2="460" y2="290" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="468" y="280" font-size="10" fill="#475569">no</text>
+
+  <!-- Routing mode decision -->
+  <polygon points="460,290 590,335 460,380 330,335" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="460" y="332" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">routing.mode</text>
+  <text x="460" y="349" text-anchor="middle" font-size="10" fill="#475569">off / heuristic / embedding</text>
+
+  <!-- off branch -->
+  <rect x="40" y="305" width="170" height="60" rx="8" fill="#f8fafc" stroke="#94a3b8"/>
+  <text x="125" y="328" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">use fallback</text>
+  <text x="125" y="345" text-anchor="middle" font-size="10" fill="#0f172a">→ assistant</text>
+  <text x="125" y="358" text-anchor="middle" font-size="9" fill="#475569">routing.mode=off</text>
+
+  <line x1="330" y1="335" x2="210" y2="335" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="240" y="325" font-size="10" fill="#475569">off</text>
+
+  <!-- heuristic / embedding branches go down -->
+  <line x1="460" y1="380" x2="460" y2="410" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="470" y="400" font-size="10" fill="#475569">heuristic / embedding</text>
+
+  <!-- Heuristic block -->
+  <rect x="280" y="410" width="360" height="60" rx="8" fill="#dbeafe" stroke="#3b82f6"/>
+  <text x="460" y="432" text-anchor="middle" font-size="12" font-weight="700" fill="#1e40af">heuristic pass</text>
+  <text x="460" y="449" text-anchor="middle" font-size="10" fill="#0f172a">_HEURISTIC_PATTERNS, two-token rule for ambiguous verbs</text>
+  <text x="460" y="462" text-anchor="middle" font-size="9" fill="#475569">&lt; 1 ms · no API key · default mode</text>
+
+  <!-- Decision: heuristic match? -->
+  <polygon points="460,490 600,490 530,510 530,510" fill="none" stroke="none"/>
+  <text x="460" y="490" text-anchor="middle" font-size="0" fill="none">.</text>
+
+  <!-- Forks from heuristic -->
+  <line x1="380" y1="470" x2="200" y2="495" stroke="#10b981" stroke-width="1.5" marker-end="url(#ar-green)"/>
+  <text x="280" y="487" font-size="10" fill="#065f46">match → use that persona</text>
+
+  <line x1="540" y1="470" x2="700" y2="495" stroke="#475569" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="610" y="487" font-size="10" fill="#475569">miss → embedding pass (if enabled)</text>
+
+  <!-- Heuristic match outcome -->
+  <rect x="40" y="495" width="320" height="35" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="200" y="518" text-anchor="middle" font-size="11" font-weight="700" fill="#065f46">use matched persona — confidence ≥ 0.8</text>
+
+  <!-- Embedding outcome -->
+  <rect x="560" y="495" width="320" height="35" rx="8" fill="#cffafe" stroke="#06b6d4"/>
+  <text x="720" y="518" text-anchor="middle" font-size="11" font-weight="700" fill="#0e7490">cosine sim vs anchors → above thresh? else fallback</text>
+
+</svg>

@@ -1,0 +1,30 @@
+<svg viewBox="0 0 800 400" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="400" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">
+    Current Architecture: One Engine Fits All
+  </text>
+
+  <!-- Claude Code (left) -->
+  <rect x="50" y="80" width="200" height="150" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="150" y="105" font-size="16" font-weight="bold" text-anchor="middle" fill="#2c5aa0">Claude Code</text>
+  <text x="150" y="130" font-size="12" text-anchor="middle" fill="#333">✓ Keeps context</text>
+  <text x="150" y="150" font-size="12" text-anchor="middle" fill="#333">✗ Can't parallelize</text>
+  <text x="150" y="170" font-size="12" text-anchor="middle" fill="#333">✗ Wastes tokens on small tasks</text>
+  <text x="150" y="190" font-size="12" text-anchor="middle" fill="#333">Cost: 5k-15k tokens/task</text>
+  <text x="150" y="215" font-size="14" font-weight="bold" text-anchor="middle" fill="#d9534f">Used for ALL tasks</text>
+
+  <!-- ACS (right) -->
+  <rect x="550" y="80" width="200" height="150" fill="#f4e8e8" stroke="#a02c2c" stroke-width="2"/>
+  <text x="650" y="105" font-size="16" font-weight="bold" text-anchor="middle" fill="#a02c2c">ACS</text>
+  <text x="650" y="130" font-size="12" text-anchor="middle" fill="#333">✓ Parallelizes</text>
+  <text x="650" y="150" font-size="12" text-anchor="middle" fill="#333">✓ Handles big data</text>
+  <text x="650" y="170" font-size="12" text-anchor="middle" fill="#333">✗ Loses context</text>
+  <text x="650" y="190" font-size="12" text-anchor="middle" fill="#333">Cost: 8k-20k tokens/task</text>
+  <text x="650" y="215" font-size="14" font-weight="bold" text-anchor="middle" fill="#d9534f">Rarely used</text>
+
+  <!-- Problem -->
+  <rect x="50" y="270" width="700" height="90" fill="#fff3cd" stroke="#ff6b6b" stroke-width="2" stroke-dasharray="5,5"/>
+  <text x="400" y="295" font-size="14" font-weight="bold" text-anchor="middle" fill="#d9534f">THE PROBLEM:</text>
+  <text x="400" y="320" font-size="13" text-anchor="middle" fill="#333">Claude Code handles 95% of tasks but wastes tokens on simple ones</text>
+  <text x="400" y="345" font-size="13" text-anchor="middle" fill="#333">ACS sits unused for most workloads (context loss is a deal-breaker)</text>
+</svg>

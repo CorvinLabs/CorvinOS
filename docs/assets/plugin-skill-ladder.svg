@@ -1,0 +1,84 @@
+<svg width="900" height="250" viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgSL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="goldGSL" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#f0b429"/>
+      <stop offset="100%" stop-color="#c97800"/>
+    </linearGradient>
+    <marker id="arrSL" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#f0b429" opacity="0.7"/>
+    </marker>
+  </defs>
+
+  <rect width="900" height="250" rx="10" fill="url(#bgSL)"/>
+  <rect x="0" y="0" width="4" height="250" rx="2" fill="url(#goldGSL)"/>
+
+  <!-- Title -->
+  <text x="450" y="28" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">SKILL PROMOTION SCOPE LADDER</text>
+
+  <!-- ── Box 1: task (grey) ── -->
+  <rect x="30"  y="52" width="170" height="88" rx="8" fill="#1f2937" stroke="#484f58" stroke-width="1.5"/>
+  <rect x="30"  y="52" width="170" height="3"  rx="2" fill="#484f58"/>
+  <text x="115" y="76"  text-anchor="middle" font-family="'SFMono-Regular', Consolas, monospace" font-size="15" font-weight="700" fill="#8b949e">task</text>
+  <text x="115" y="95"  text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#6e7681">ephemeral · in-memory</text>
+  <text x="115" y="113" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#6e7681">one LLM request</text>
+  <text x="115" y="131" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="10" fill="#6e7681">no slot-mirror</text>
+
+  <!-- Arrow 1 + requirement -->
+  <line x1="201" y1="96" x2="240" y2="96" stroke="#f0b429" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrSL)"/>
+  <text x="220" y="88"  text-anchor="middle" font-family="-apple-system, sans-serif" font-size="9" fill="#f0b429">≥ 1 positive</text>
+  <text x="220" y="100" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="9" fill="#f0b429">grade</text>
+
+  <!-- ── Box 2: session (blue) ── -->
+  <rect x="242" y="52" width="170" height="88" rx="8" fill="#1f2937" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect x="242" y="52" width="170" height="3"  rx="2" fill="#3b82f6" opacity="0.85"/>
+  <text x="327" y="76"  text-anchor="middle" font-family="'SFMono-Regular', Consolas, monospace" font-size="15" font-weight="700" fill="#3b82f6">session</text>
+  <text x="327" y="95"  text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">chat session</text>
+  <text x="327" y="113" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">until /new or /reset</text>
+  <text x="327" y="131" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="10" fill="#6e7681">no slot-mirror</text>
+
+  <!-- Arrow 2 + requirement -->
+  <line x1="413" y1="96" x2="452" y2="96" stroke="#f0b429" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrSL)"/>
+  <text x="432" y="83"  text-anchor="middle" font-family="-apple-system, sans-serif" font-size="9" fill="#f0b429">≥ 3 grades</text>
+  <text x="432" y="95"  text-anchor="middle" font-family="-apple-system, sans-serif" font-size="9" fill="#f0b429">mean ≥ 0.5</text>
+  <text x="432" y="107" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="9" fill="#f0b429">auto-grade</text>
+
+  <!-- ── Box 3: project (purple) ── -->
+  <rect x="454" y="52" width="170" height="88" rx="8" fill="#1f2937" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="454" y="52" width="170" height="3"  rx="2" fill="#a78bfa" opacity="0.85"/>
+  <text x="539" y="76"  text-anchor="middle" font-family="'SFMono-Regular', Consolas, monospace" font-size="15" font-weight="700" fill="#a78bfa">project</text>
+  <text x="539" y="95"  text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">repo-wide persistent</text>
+  <text x="539" y="113" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">.corvin/ scope</text>
+  <text x="539" y="131" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="10" fill="#a78bfa">slot-mirror active ✓</text>
+
+  <!-- Arrow 3 + requirement -->
+  <line x1="625" y1="96" x2="664" y2="96" stroke="#f0b429" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrSL)"/>
+  <text x="644" y="88"  text-anchor="middle" font-family="-apple-system, sans-serif" font-size="9" fill="#f0b429">force=True</text>
+  <text x="644" y="100" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="9" fill="#f0b429">operator</text>
+
+  <!-- ── Box 4: user (gold) ── -->
+  <rect x="666" y="52" width="204" height="88" rx="8" fill="#1f2937" stroke="#f0b429" stroke-width="2"/>
+  <rect x="666" y="52" width="204" height="3"  rx="2" fill="#f0b429"/>
+  <text x="768" y="76"  text-anchor="middle" font-family="'SFMono-Regular', Consolas, monospace" font-size="15" font-weight="700" fill="#f0b429">user</text>
+  <text x="768" y="95"  text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#e6edf3">global · ~/.corvin/</text>
+  <text x="768" y="113" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#e6edf3">all sessions, all chats</text>
+  <text x="768" y="131" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="10" fill="#f0b429">slot-mirror active ✓</text>
+
+  <!-- Auto-grading legend -->
+  <line x1="30" y1="162" x2="870" y2="162" stroke="#30363d" stroke-width="0.5"/>
+  <text x="450" y="180" text-anchor="middle"
+        font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">Auto-grading after each bridge reply:</text>
+  <text x="180" y="198" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="10" fill="#3fb950">mention / paraphrase → 0.7</text>
+  <text x="450" y="198" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="10" fill="#3fb950">approval → 0.9</text>
+  <text x="720" y="198" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="10" fill="#ef4444">rejection → 0.1  ·  rephrase → 0.3</text>
+
+  <text x="450" y="225" text-anchor="middle"
+        font-family="-apple-system, sans-serif" font-size="10" fill="#484f58">
+    Linter: NFKC · prompt-injection check · secrets scan · persona-boundary check · size limit
+  </text>
+</svg>

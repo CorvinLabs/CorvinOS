@@ -1,0 +1,107 @@
+<svg viewBox="0 0 820 420" xmlns="http://www.w3.org/2000/svg" font-family="'SF Mono',Menlo,Monaco,Consolas,monospace" font-size="12">
+  <defs>
+    <style>
+      .bg  { fill: #0d1117; }
+      .box { fill: #161b22; stroke: #30363d; stroke-width: 1.5; rx: 6; }
+      .hdr { fill: #1f6feb; rx: 4; }
+      .hdr2{ fill: #388bfd22; stroke: #388bfd55; stroke-width: 1; rx: 4; }
+      .lbl { fill: #e6edf3; font-weight: 600; }
+      .dim { fill: #8b949e; }
+      .tag { fill: #3fb95022; stroke: #3fb95066; stroke-width: 1; rx: 3; }
+      .tagt{ fill: #3fb950; font-size: 11px; font-weight: 600; }
+      .tag2{ fill: #f7853422; stroke: #f7853466; stroke-width: 1; rx: 3; }
+      .tag2t{fill: #f78534; font-size: 11px; font-weight: 600; }
+      .tag3{ fill: #a78bfa22; stroke: #a78bfa66; stroke-width: 1; rx: 3; }
+      .tag3t{fill: #a78bfa; font-size: 11px; font-weight: 600; }
+      .mono{ fill: #79c0ff; font-family: inherit; }
+      .arr { stroke: #30363d; stroke-width: 1.5; fill: none; marker-end: url(#ah); }
+    </style>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#30363d"/>
+    </marker>
+  </defs>
+
+  <!-- background -->
+  <rect class="bg" width="820" height="420"/>
+
+  <!-- title -->
+  <text x="24" y="32" fill="#e6edf3" font-size="15" font-weight="700">AWPKG Archive Layout</text>
+  <text x="24" y="50" class="dim" font-size="11">name-version.awpkg  (ZIP / deflate)</text>
+
+  <!-- outer ZIP border -->
+  <rect x="16" y="62" width="380" height="342" rx="8" fill="#161b22" stroke="#388bfd" stroke-width="1.5" stroke-dasharray="6,3"/>
+
+  <!-- manifest.yaml -->
+  <rect x="32" y="78" width="348" height="38" rx="5" fill="#1f6feb22" stroke="#1f6feb55" stroke-width="1"/>
+  <text x="48" y="98" class="mono" font-weight="700">manifest.yaml</text>
+  <text x="260" y="98" class="dim">mandatory · JSON Schema v1</text>
+
+  <!-- workflows/ -->
+  <rect x="32" y="126" width="164" height="92" rx="5" class="tag"/>
+  <text x="48" y="145" class="tagt">workflows/</text>
+  <text x="48" y="163" class="dim">*.awp.yaml</text>
+  <text x="48" y="180" class="dim">DAG · delegation_loop</text>
+  <text x="48" y="197" class="dim">triggers · deliver_to</text>
+
+  <!-- tools/ -->
+  <rect x="208" y="126" width="164" height="92" rx="5" class="tag2"/>
+  <text x="224" y="145" class="tag2t">tools/</text>
+  <text x="224" y="163" class="dim">code.*.json</text>
+  <text x="224" y="180" class="dim">bwrap sandbox</text>
+  <text x="224" y="197" class="dim">network: deny</text>
+
+  <!-- skills/ -->
+  <rect x="32" y="230" width="164" height="76" rx="5" class="tag3"/>
+  <text x="48" y="249" class="tag3t">skills/</text>
+  <text x="48" y="267" class="dim">&lt;slug&gt;/SKILL.md</text>
+  <text x="48" y="284" class="dim">SkillForge linted</text>
+
+  <!-- personas/ -->
+  <rect x="208" y="230" width="164" height="76" rx="5" fill="#f8533322" stroke="#f8533366" stroke-width="1"/>
+  <rect x="208" y="230" width="164" height="76" rx="5" fill="#db613722" stroke="#db613766" stroke-width="1"/>
+  <text x="224" y="249" fill="#db6137" font-size="11" font-weight="600">personas/</text>
+  <text x="224" y="267" class="dim">*.yaml</text>
+  <text x="224" y="284" class="dim">cowork persona</text>
+
+  <!-- data/ -->
+  <rect x="32" y="318" width="164" height="60" rx="5" fill="#8b949e22" stroke="#8b949e55" stroke-width="1"/>
+  <text x="48" y="337" fill="#8b949e" font-size="11" font-weight="600">data/  (optional)</text>
+  <text x="48" y="357" class="dim">defaults.yaml</text>
+
+  <!-- README.md -->
+  <rect x="208" y="318" width="164" height="60" rx="5" fill="#8b949e22" stroke="#8b949e55" stroke-width="1"/>
+  <text x="224" y="337" fill="#8b949e" font-size="11" font-weight="600">README.md  (optional)</text>
+  <text x="224" y="357" class="dim">shown by inspect</text>
+
+  <!-- RIGHT PANEL: manifest fields -->
+  <rect x="416" y="62" width="388" height="342" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="432" y="90" fill="#e6edf3" font-size="13" font-weight="700">manifest.yaml — key fields</text>
+
+  <!-- field rows -->
+  <text x="432" y="115" class="mono">awpkg:</text>    <text x="560" y="115" class="dim">"1.0"  (format version)</text>
+  <text x="432" y="133" class="mono">id:</text>        <text x="560" y="133" class="dim">"com.example.pkg"  (reverse-domain)</text>
+  <text x="432" y="151" class="mono">version:</text>   <text x="560" y="151" class="dim">SemVer  "1.2.3"</text>
+  <text x="432" y="169" class="mono">name:</text>      <text x="560" y="169" class="dim">human-readable display name</text>
+  <text x="432" y="187" class="mono">description:</text>
+
+  <!-- divider -->
+  <line x1="432" y1="200" x2="790" y2="200" stroke="#30363d" stroke-width="1"/>
+
+  <text x="432" y="220" fill="#8b949e" font-size="11" font-weight="600">components:</text>
+  <text x="448" y="238" class="dim">workflows: [...]</text>
+  <text x="448" y="254" class="dim">forge_tools: [...]</text>
+  <text x="448" y="270" class="dim">skills: [...]</text>
+  <text x="448" y="286" class="dim">personas: [...]</text>
+
+  <line x1="432" y1="298" x2="790" y2="298" stroke="#30363d" stroke-width="1"/>
+
+  <text x="432" y="318" fill="#8b949e" font-size="11" font-weight="600">permissions:</text>
+  <text x="448" y="336" class="dim">network: false  (sandbox policy)</text>
+  <text x="448" y="352" class="dim">compute: true   (Compute Worker)</text>
+  <text x="448" y="368" class="dim">secrets: [MY_KEY]  (names only)</text>
+
+  <line x1="432" y1="380" x2="790" y2="380" stroke="#30363d" stroke-width="1"/>
+
+  <text x="432" y="398" fill="#8b949e" font-size="11" font-weight="600">dependencies:</text>
+  <text x="530" y="398" class="dim">- id: "com.other.dep"  version: ">=1.0.0"</text>
+</svg>

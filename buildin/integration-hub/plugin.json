@@ -1,0 +1,13 @@
+{
+  "id": "integration-hub",
+  "name": "Integration Hub",
+  "version": "1.0.0",
+  "category": "Integration",
+  "description": "APIs, webhooks, message queues, data connectors",
+  "author": "CorvinOS Core",
+  "tier": "buildin",
+  "boot_layer": "bundled",
+  "rating": 4.5,
+  "installs": 2123,
+  "dependencies": []
+}

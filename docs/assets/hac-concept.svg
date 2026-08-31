@@ -1,0 +1,272 @@
+<svg width="980" height="620" viewBox="0 0 980 620" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgH" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="rootGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#0a1f3a"/>
+      <stop offset="100%" stop-color="#061220"/>
+    </linearGradient>
+    <linearGradient id="subGradA" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#1a0f00"/>
+      <stop offset="100%" stop-color="#0d0800"/>
+    </linearGradient>
+    <linearGradient id="subGradB" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#0d0a1a"/>
+      <stop offset="100%" stop-color="#080614"/>
+    </linearGradient>
+    <linearGradient id="subGradC" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#0a1f0a"/>
+      <stop offset="100%" stop-color="#061406"/>
+    </linearGradient>
+    <linearGradient id="lossLand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#1a0a00"/>
+      <stop offset="100%" stop-color="#0d0500"/>
+    </linearGradient>
+
+    <!-- Arrow markers -->
+    <marker id="fwdG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="bwdR" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#f87171"/>
+    </marker>
+    <marker id="budgA" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="budgP" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#a78bfa"/>
+    </marker>
+    <marker id="budgGn" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#4ade80"/>
+    </marker>
+
+    <!-- Drop shadow filter -->
+    <filter id="glow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="blur"/>
+      <feFlood flood-color="#f87171" flood-opacity="0.4" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="980" height="620" rx="10" fill="url(#bgH)"/>
+
+  <!-- ══════════════════════════════════════════════════
+       TITLE
+  ══════════════════════════════════════════════════ -->
+  <text x="490" y="24" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+    font-size="12" font-weight="600" fill="#8b949e" letter-spacing="2">
+    HIERARCHICAL ADAPTIVE COMPUTE — COMPUTE AS GRADIENT DESCENT ON PROBLEM STRUCTURE
+  </text>
+
+  <!-- ══════════════════════════════════════════════════
+       ROOT PROBLEM (top center)
+  ══════════════════════════════════════════════════ -->
+  <rect x="280" y="36" width="420" height="72" rx="8" fill="url(#rootGrad)" stroke="#3b82f6" stroke-width="2"/>
+  <text x="490" y="57" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="13" font-weight="700" fill="#93c5fd">Root Problem</text>
+  <text x="490" y="72" text-anchor="middle" font-family="monospace" font-size="8.5" fill="#3b82f6">
+    e.g. "optimise recommendation system end-to-end"
+  </text>
+
+  <!-- Root Loss badge -->
+  <rect x="390" y="82" width="200" height="20" rx="4" fill="#0a1f3a" stroke="#3b82f6" stroke-width="0.8"/>
+  <text x="490" y="96" text-anchor="middle" font-family="monospace" font-size="8" fill="#8b949e">
+    L_root = w_A·L_A + w_B·L_B + w_C·L_C
+  </text>
+
+  <!-- ══════════════════════════════════════════════════
+       THREE SUB-MANAGERS (middle row)
+  ══════════════════════════════════════════════════ -->
+
+  <!-- Sub-Manager A -->
+  <rect x="20" y="152" width="272" height="220" rx="8" fill="url(#subGradA)" stroke="#f0b429" stroke-width="1.8"/>
+  <text x="156" y="171" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="11" font-weight="700" fill="#f0b429">Sub-Manager A</text>
+  <text x="156" y="185" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#8b949e">feature selection</text>
+  <!-- Stage A1 -->
+  <rect x="30" y="193" width="116" height="50" rx="5" fill="#1a1000" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="88" y="210" text-anchor="middle" font-family="monospace" font-size="8" fill="#fcd34d">Stage A1</text>
+  <text x="88" y="223" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">raw_feature_eng</text>
+  <text x="88" y="236" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">L_A1: 0.18</text>
+  <!-- Stage A2 (forged) -->
+  <rect x="156" y="193" width="126" height="50" rx="5" fill="#0d0a1a" stroke="#a78bfa" stroke-width="1"/>
+  <text x="219" y="210" text-anchor="middle" font-family="monospace" font-size="8" fill="#c4b5fd">Stage A2 ✦</text>
+  <text x="219" y="223" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">outlier_filter</text>
+  <text x="219" y="236" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">forged at gate</text>
+  <!-- Sub-Loss A -->
+  <rect x="30" y="252" width="252" height="30" rx="4" fill="#150f00" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="156" y="263" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#fcd34d">L_A (sub-loss)</text>
+  <text x="156" y="275" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#8b949e">primary: 0.14 · coverage: 0.06 · confidence: 0.88</text>
+  <!-- Budget A -->
+  <rect x="30" y="290" width="252" height="24" rx="4" fill="#0d1117" stroke="#484f58" stroke-width="0.6"/>
+  <text x="42" y="305" font-family="monospace" font-size="7" fill="#6b7280">budget: 200 iter / 1800s</text>
+  <text x="200" y="305" text-anchor="end" font-family="monospace" font-size="7" fill="#f0b429">used: 73%</text>
+  <!-- Artifact out -->
+  <rect x="30" y="322" width="252" height="20" rx="4" fill="#091209" stroke="#3fb950" stroke-width="0.6"/>
+  <text x="156" y="336" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#3fb950">→ features.parquet  /  outlier_mask.json</text>
+
+  <!-- Sub-Manager B -->
+  <rect x="354" y="152" width="272" height="220" rx="8" fill="url(#subGradB)" stroke="#a78bfa" stroke-width="1.8"/>
+  <text x="490" y="171" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="11" font-weight="700" fill="#c4b5fd">Sub-Manager B</text>
+  <text x="490" y="185" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#8b949e">architecture search</text>
+  <!-- Stage B1 -->
+  <rect x="364" y="193" width="116" height="50" rx="5" fill="#0d0a1a" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="422" y="210" text-anchor="middle" font-family="monospace" font-size="8" fill="#c4b5fd">Stage B1</text>
+  <text x="422" y="223" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">arch_candidate</text>
+  <text x="422" y="236" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">L_B1: 0.31 !</text>
+  <!-- Stage B2 -->
+  <rect x="490" y="193" width="126" height="50" rx="5" fill="#0d0a1a" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="553" y="210" text-anchor="middle" font-family="monospace" font-size="8" fill="#c4b5fd">Stage B2</text>
+  <text x="553" y="223" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">arch_pruning</text>
+  <text x="553" y="236" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">L_B2: 0.22</text>
+  <!-- Sub-Loss B -->
+  <rect x="364" y="252" width="252" height="30" rx="4" fill="#100d1a" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="490" y="263" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#c4b5fd">L_B (sub-loss)</text>
+  <text x="490" y="275" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#8b949e">primary: 0.29 · coverage: 0.18 · confidence: 0.71</text>
+  <!-- Budget B -->
+  <rect x="364" y="290" width="252" height="24" rx="4" fill="#0d1117" stroke="#484f58" stroke-width="0.6"/>
+  <text x="376" y="305" font-family="monospace" font-size="7" fill="#6b7280">budget: 400 iter / 3600s</text>
+  <text x="534" y="305" text-anchor="end" font-family="monospace" font-size="7" fill="#f87171">used: 51% — backprop target</text>
+  <!-- Artifact out -->
+  <rect x="364" y="322" width="252" height="20" rx="4" fill="#091209" stroke="#3fb950" stroke-width="0.6"/>
+  <text x="490" y="336" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#3fb950">→ arch_config.json  /  model_skeleton.pkl</text>
+
+  <!-- Sub-Manager C -->
+  <rect x="688" y="152" width="272" height="220" rx="8" fill="url(#subGradC)" stroke="#3fb950" stroke-width="1.8"/>
+  <text x="824" y="171" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="11" font-weight="700" fill="#4ade80">Sub-Manager C</text>
+  <text x="824" y="185" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#8b949e">hyperparameter tuning</text>
+  <!-- Stage C1 -->
+  <rect x="698" y="193" width="252" height="50" rx="5" fill="#0a1a0a" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="824" y="210" text-anchor="middle" font-family="monospace" font-size="8" fill="#4ade80">Stage C1</text>
+  <text x="824" y="223" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">bayesian_hparam_sweep</text>
+  <text x="824" y="236" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">L_C1: 0.09 ✓ converged</text>
+  <!-- Sub-Loss C -->
+  <rect x="698" y="252" width="252" height="30" rx="4" fill="#091209" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="824" y="263" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#4ade80">L_C (sub-loss)</text>
+  <text x="824" y="275" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#8b949e">primary: 0.09 · coverage: 0.04 · confidence: 0.94</text>
+  <!-- Budget C -->
+  <rect x="698" y="290" width="252" height="24" rx="4" fill="#0d1117" stroke="#484f58" stroke-width="0.6"/>
+  <text x="710" y="305" font-family="monospace" font-size="7" fill="#6b7280">budget: 300 iter / 1200s</text>
+  <text x="938" y="305" text-anchor="end" font-family="monospace" font-size="7" fill="#3fb950">used: 34% — surplus → B</text>
+  <!-- Artifact out -->
+  <rect x="698" y="322" width="252" height="20" rx="4" fill="#091209" stroke="#3fb950" stroke-width="0.6"/>
+  <text x="824" y="336" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#3fb950">→ best_hparams.json</text>
+
+  <!-- ══════════════════════════════════════════════════
+       FORWARD ARROWS (green, going UP to root)
+  ══════════════════════════════════════════════════ -->
+  <line x1="156" y1="152" x2="370" y2="108" stroke="#3fb950" stroke-width="1.5" marker-end="url(#fwdG)"/>
+  <text x="230" y="124" font-family="monospace" font-size="7" fill="#3fb950">artifacts + L_A</text>
+
+  <line x1="490" y1="152" x2="490" y2="108" stroke="#3fb950" stroke-width="1.5" marker-end="url(#fwdG)"/>
+  <text x="500" y="134" font-family="monospace" font-size="7" fill="#3fb950">artifacts + L_B</text>
+
+  <line x1="824" y1="152" x2="620" y2="108" stroke="#3fb950" stroke-width="1.5" marker-end="url(#fwdG)"/>
+  <text x="736" y="124" font-family="monospace" font-size="7" fill="#3fb950">artifacts + L_C</text>
+
+  <!-- ══════════════════════════════════════════════════
+       BACKPROP ARROWS (red, going DOWN from root)
+       Only to Sub-Manager B (highest attribution)
+  ══════════════════════════════════════════════════ -->
+  <!-- Main backprop arrow to B -->
+  <line x1="450" y1="108" x2="420" y2="152"
+        stroke="#f87171" stroke-width="2.5" stroke-dasharray="6,3" marker-end="url(#bwdR)"
+        filter="url(#glow)"/>
+  <rect x="330" y="118" width="90" height="28" rx="4" fill="#1f0a0a" stroke="#f87171" stroke-width="0.8"/>
+  <text x="375" y="130" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#f87171">∂L/∂B = 0.68</text>
+  <text x="375" y="142" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#fca5a5">re-run B ↓</text>
+
+  <!-- Thin backprop to A -->
+  <line x1="380" y1="108" x2="200" y2="152"
+        stroke="#f87171" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#bwdR)" opacity="0.5"/>
+  <text x="270" y="118" font-family="monospace" font-size="7" fill="#f87171" opacity="0.6">∂L/∂A = 0.24</text>
+
+  <!-- No backprop to C (converged) -->
+  <text x="746" y="135" font-family="monospace" font-size="7" fill="#3fb950">C converged ✓</text>
+
+  <!-- ══════════════════════════════════════════════════
+       BUDGET REALLOCATION: C surplus → B
+  ══════════════════════════════════════════════════ -->
+  <path d="M 824 390 Q 824 420 490 420 Q 360 420 360 380"
+        fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="5,3"
+        marker-end="url(#budgP)"/>
+  <rect x="548" y="406" width="150" height="18" rx="4" fill="#0d0a1a" stroke="#a78bfa" stroke-width="0.6"/>
+  <text x="623" y="419" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#a78bfa">C surplus → B (+66% budget)</text>
+
+  <!-- ══════════════════════════════════════════════════
+       INTEGRATION / ROOT LOSS SECTION (below root box)
+  ══════════════════════════════════════════════════ -->
+  <rect x="310" y="440" width="360" height="88" rx="8" fill="#0a0f1a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="490" y="458" text-anchor="middle"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+    font-size="11" font-weight="700" fill="#93c5fd">Backpropagation Gate</text>
+  <text x="490" y="472" text-anchor="middle" font-family="monospace" font-size="8" fill="#3b82f6">opens after root loss is computed</text>
+  <line x1="320" y1="478" x2="660" y2="478" stroke="#1e3a5f" stroke-width="0.8"/>
+  <!-- Attribution row -->
+  <text x="324" y="494" font-family="sans-serif" font-size="8" fill="#8b949e">Attribution:</text>
+  <rect x="398" y="483" width="36" height="14" rx="3" fill="#f87171" opacity="0.3"/>
+  <text x="416" y="494" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#f87171">B 68%</text>
+  <rect x="440" y="483" width="36" height="14" rx="3" fill="#f0b429" opacity="0.2"/>
+  <text x="458" y="494" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#f0b429">A 24%</text>
+  <rect x="482" y="483" width="36" height="14" rx="3" fill="#3fb950" opacity="0.2"/>
+  <text x="500" y="494" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#3fb950">C 8%</text>
+  <!-- LLM actions -->
+  <text x="324" y="510" font-family="sans-serif" font-size="8" fill="#8b949e">LLM:</text>
+  <text x="358" y="510" font-family="monospace" font-size="8" fill="#a78bfa">forge_tool("better_arch_search")</text>
+  <text x="358" y="522" font-family="monospace" font-size="8" fill="#f0b429">B.add_budget(C.surplus)</text>
+  <text x="605" y="522" text-anchor="end" font-family="monospace" font-size="8" fill="#3fb950">resume()</text>
+
+  <!-- Arrow from root box DOWN to backprop gate -->
+  <line x1="490" y1="108" x2="490" y2="440" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4,4" opacity="0.4"/>
+
+  <!-- Arrow from backprop gate back UP to B -->
+  <path d="M 390 440 Q 390 395 400 372"
+        fill="none" stroke="#f87171" stroke-width="1.8" stroke-dasharray="5,3"
+        marker-end="url(#bwdR)"/>
+
+  <!-- ══════════════════════════════════════════════════
+       LOSS LANDSCAPE sketch (right side)
+  ══════════════════════════════════════════════════ -->
+  <!-- (removed to keep layout clean — concept clear enough from main diagram) -->
+
+  <!-- ══════════════════════════════════════════════════
+       LEGEND + KEY CONCEPTS (bottom strip)
+  ══════════════════════════════════════════════════ -->
+  <rect x="10" y="544" width="960" height="62" rx="6" fill="#0a0f1a" stroke="#484f58" stroke-width="0.8"/>
+
+  <!-- Forward pass -->
+  <line x1="22" y1="562" x2="52" y2="562" stroke="#3fb950" stroke-width="1.5" marker-end="url(#fwdG)"/>
+  <text x="58" y="566" font-family="sans-serif" font-size="8" fill="#3fb950">forward: artifacts + sub-loss</text>
+
+  <!-- Backprop -->
+  <line x1="22" y1="580" x2="52" y2="580" stroke="#f87171" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#bwdR)"/>
+  <text x="58" y="584" font-family="sans-serif" font-size="8" fill="#f87171">backprop: attribution → re-run highest-∂L sub-problem</text>
+
+  <!-- Budget flow -->
+  <line x1="260" y1="562" x2="290" y2="562" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#budgP)"/>
+  <text x="296" y="566" font-family="sans-serif" font-size="8" fill="#a78bfa">budget realloc: converged → struggling</text>
+
+  <!-- Forged tool -->
+  <rect x="260" y="572" width="8" height="8" rx="1" fill="#0d0a1a" stroke="#a78bfa" stroke-width="1"/>
+  <text x="274" y="580" font-family="monospace" font-size="7.5" fill="#a78bfa">✦ = tool forged mid-run at forge gate</text>
+
+  <!-- Key metrics -->
+  <text x="520" y="562" font-family="monospace" font-size="8" fill="#8b949e">L_root = w_A·L_A + w_B·L_B + w_C·L_C</text>
+  <text x="520" y="576" font-family="monospace" font-size="8" fill="#8b949e">attribution: ∂L_root/∂h_i  identifies re-run target</text>
+  <text x="520" y="590" font-family="monospace" font-size="8" fill="#6b7280">zero LLM tokens during stage execution · AWP 5D budget · metadata-only audit</text>
+
+  <!-- Convergence criterion -->
+  <text x="820" y="562" text-anchor="end" font-family="monospace" font-size="8" fill="#3fb950">converge: ΔL_root &lt; ε  across N backprop rounds</text>
+  <text x="820" y="576" text-anchor="end" font-family="monospace" font-size="8" fill="#6b7280">or budget exhausted → graceful terminal</text>
+  <text x="820" y="590" text-anchor="end" font-family="monospace" font-size="8" fill="#6b7280">max_backprop_rounds in tenant config</text>
+</svg>

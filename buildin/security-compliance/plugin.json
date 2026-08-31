@@ -1,0 +1,13 @@
+{
+  "id": "security-compliance",
+  "name": "Security & Compliance",
+  "version": "1.0.0",
+  "category": "Security",
+  "description": "Audit logging, secrets management, compliance gates (GDPR, EU AI Act)",
+  "author": "CorvinOS Core",
+  "tier": "buildin",
+  "boot_layer": "bundled",
+  "rating": 4.9,
+  "installs": 4891,
+  "dependencies": []
+}

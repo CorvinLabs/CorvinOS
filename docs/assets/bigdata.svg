@@ -1,0 +1,175 @@
+<svg width="860" height="360" viewBox="0 0 860 360" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgBD" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="cylTop" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#1e3a5f"/>
+      <stop offset="100%" stop-color="#0e1829"/>
+    </linearGradient>
+    <marker id="arrBD"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrBDg" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrBDr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#fca5a5"/>
+    </marker>
+  </defs>
+
+  <rect width="860" height="360" rx="10" fill="url(#bgBD)"/>
+
+  <!-- Title -->
+  <text x="430" y="28"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">BIG-DATA COMPUTE — RAW DATA NEVER ENTERS THE LLM</text>
+
+  <!-- ══════════════════════════════════════════
+       ZONE 1 — Dataset  (blue)
+       x=14  w=200
+  ══════════════════════════════════════════ -->
+  <rect x="14" y="46" width="200" height="252" rx="8" fill="#0e1829" stroke="#3b82f6" stroke-width="1.5"/>
+
+  <!-- Cylinder body -->
+  <rect x="44" y="108" width="140" height="90" rx="4" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1"/>
+  <!-- Cylinder top ellipse -->
+  <ellipse cx="114" cy="108" rx="70" ry="14" fill="#2a4a6f" stroke="#3b82f6" stroke-width="1"/>
+  <!-- Cylinder bottom ellipse -->
+  <ellipse cx="114" cy="198" rx="70" ry="14" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1"/>
+
+  <text x="114" y="156" text-anchor="middle" font-family="monospace" font-size="11" fill="#93c5fd">GB · TB</text>
+  <text x="114" y="172" text-anchor="middle" font-family="sans-serif" font-size="9"  fill="#6b7280">rows · columns</text>
+
+  <text x="114" y="64" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="12" font-weight="700" fill="#e6edf3">Your Dataset</text>
+  <text x="114" y="80" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#3b82f6">data_register (L24)</text>
+
+  <text x="114" y="232" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">stays on disk</text>
+  <text x="114" y="248" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">never loaded into RAM</text>
+  <text x="114" y="264" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">by the LLM process</text>
+  <text x="114" y="280" text-anchor="middle" font-family="sans-serif" font-size="9"  fill="#6b7280">path-gate protected</text>
+
+  <!-- Arrow zone1 → zone2 (full data, blue) -->
+  <line x1="214" y1="172" x2="256" y2="172"
+        stroke="#3b82f6" stroke-width="2" marker-end="url(#arrBD)"/>
+  <text x="236" y="163" text-anchor="middle"
+        font-family="monospace" font-size="8" fill="#3b82f6">full data</text>
+
+  <!-- ══════════════════════════════════════════
+       ZONE 2 — Compute Worker  (amber)
+       x=258  w=230
+  ══════════════════════════════════════════ -->
+  <rect x="258" y="46" width="230" height="252" rx="8" fill="#1a0e00" stroke="#f0b429" stroke-width="1.8"/>
+
+  <text x="373" y="68" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#f0b429">Compute Worker</text>
+  <text x="373" y="85" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#8b949e">L25 · bwrap-isolated · no LLM link</text>
+
+  <!-- Strategy pills -->
+  <rect x="274" y="94"  width="58" height="18" rx="9" fill="#0d1117"/>
+  <text x="303" y="107" text-anchor="middle" font-family="monospace" font-size="9" fill="#fcd34d">grid</text>
+  <rect x="340" y="94"  width="62" height="18" rx="9" fill="#0d1117"/>
+  <text x="371" y="107" text-anchor="middle" font-family="monospace" font-size="9" fill="#fcd34d">random</text>
+  <rect x="410" y="94"  width="66" height="18" rx="9" fill="#0d1117"/>
+  <text x="443" y="107" text-anchor="middle" font-family="monospace" font-size="9" fill="#fcd34d">bayesian</text>
+
+  <line x1="278" y1="120" x2="468" y2="120" stroke="#2a1e00" stroke-width="1"/>
+
+  <text x="373" y="140" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">runs out-of-LLM-loop</text>
+  <text x="373" y="157" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">iterates grid / random / bayes</text>
+  <text x="373" y="174" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">compute_run · status · result</text>
+  <text x="373" y="191" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">abort MCP tools (L25)</text>
+  <text x="373" y="216" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">opt-in: compute.enabled</text>
+  <text x="373" y="232" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">worker.sock IPC</text>
+  <text x="373" y="248" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">never auto-starts</text>
+  <text x="373" y="264" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">from bridge / adapter</text>
+  <text x="373" y="284" text-anchor="middle" font-family="sans-serif" font-size="9"  fill="#6b7280">MUST NOT import anthropic</text>
+
+  <!-- ══════════════════════════════════════════
+       FIREWALL — vertical barrier  x=494  w=28
+  ══════════════════════════════════════════ -->
+  <rect x="494" y="46" width="28" height="252" rx="0" fill="#1f0a0a" stroke="#7f1d1d" stroke-width="1.5"/>
+
+  <!-- Red X marks -->
+  <text x="508" y="150" text-anchor="middle"
+        font-family="sans-serif" font-size="22" font-weight="900" fill="#7f1d1d">✕</text>
+  <text x="508" y="200" text-anchor="middle"
+        font-family="sans-serif" font-size="22" font-weight="900" fill="#7f1d1d">✕</text>
+
+  <!-- Vertical label -->
+  <text x="508" y="86"
+        text-anchor="middle"
+        writing-mode="tb-rl"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="8" font-weight="700" fill="#fca5a5" letter-spacing="2">DATA FIREWALL</text>
+
+  <!-- "raw data blocked" label below firewall -->
+  <text x="508" y="310" text-anchor="middle"
+        font-family="sans-serif" font-size="8" fill="#fca5a5">raw data</text>
+  <text x="508" y="320" text-anchor="middle"
+        font-family="sans-serif" font-size="8" fill="#fca5a5">blocked</text>
+
+  <!-- Thin filtered arrow from firewall → zone3 (green, schema only) -->
+  <line x1="522" y1="172" x2="556" y2="172"
+        stroke="#3fb950" stroke-width="1.8" marker-end="url(#arrBDg)"/>
+  <text x="539" y="163" text-anchor="middle"
+        font-family="monospace" font-size="7" fill="#3fb950">schema</text>
+  <text x="539" y="182" text-anchor="middle"
+        font-family="monospace" font-size="7" fill="#3fb950">+stats</text>
+
+  <!-- "raw data" arrow hitting firewall (blocked) -->
+  <line x1="490" y1="210" x2="496" y2="210"
+        stroke="#7f1d1d" stroke-width="1.5" stroke-dasharray="3,2"
+        marker-end="url(#arrBDr)"/>
+
+  <!-- ══════════════════════════════════════════
+       ZONE 3 — LLM Context  (green)
+       x=558  w=288
+  ══════════════════════════════════════════ -->
+  <rect x="558" y="46" width="288" height="252" rx="8" fill="#0c1f16" stroke="#3fb950" stroke-width="1.5"/>
+
+  <text x="702" y="68" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#3fb950">LLM Context</text>
+  <text x="702" y="85" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#8b949e">data_snapshot (L24) · ≤ 4 000 tokens</text>
+
+  <line x1="578" y1="96" x2="826" y2="96" stroke="#0f2d1a" stroke-width="1"/>
+
+  <!-- What arrives: 4 items -->
+  <!-- schema -->
+  <rect x="574" y="104" width="264" height="32" rx="5" fill="#0f2d1a" stroke="#3fb950" stroke-width="1"/>
+  <text x="594" y="118" font-family="monospace" font-size="9" fill="#3fb950">schema</text>
+  <text x="594" y="130" font-family="sans-serif" font-size="9" fill="#8b949e">column names + data types</text>
+
+  <!-- statistics -->
+  <rect x="574" y="142" width="264" height="32" rx="5" fill="#0f2d1a" stroke="#3fb950" stroke-width="1"/>
+  <text x="594" y="156" font-family="monospace" font-size="9" fill="#3fb950">statistics</text>
+  <text x="594" y="168" font-family="sans-serif" font-size="9" fill="#8b949e">count · mean · min · max · stddev · nulls</text>
+
+  <!-- k-anon sample -->
+  <rect x="574" y="180" width="264" height="32" rx="5" fill="#0f2d1a" stroke="#3fb950" stroke-width="1"/>
+  <text x="594" y="194" font-family="monospace" font-size="9" fill="#3fb950">k-anon sample  (L32)</text>
+  <text x="594" y="206" font-family="sans-serif" font-size="9" fill="#8b949e">PII-redacted · Laplace noise · k ≥ 5</text>
+
+  <!-- distinct-count -->
+  <rect x="574" y="218" width="264" height="32" rx="5" fill="#0f2d1a" stroke="#3fb950" stroke-width="1"/>
+  <text x="594" y="232" font-family="monospace" font-size="9" fill="#3fb950">distinct counts</text>
+  <text x="594" y="244" font-family="sans-serif" font-size="9" fill="#8b949e">bucketed · proportional noise · no raw values</text>
+
+  <text x="702" y="272" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">ask questions, request more iterations,</text>
+  <text x="702" y="287" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">steer compute — without ever seeing raw rows</text>
+
+  <!-- Footer -->
+  <text x="430" y="342"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="11" fill="#484f58">Compute runs in a bwrap sandbox with no network and no LLM connection — the firewall is architectural, not configurable</text>
+</svg>

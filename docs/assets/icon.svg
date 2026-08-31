@@ -1,0 +1,46 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-label="Corvin icon — stacked-layers mark with terminal cursor">
+  <title>Corvin</title>
+  <defs>
+    <!-- L1: gold (top) -->
+    <linearGradient id="i-gold" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f0b429"/> <stop offset="100%" stop-color="#c97800"/>
+    </linearGradient>
+    <!-- L2–L5: blue gradient progression, bright → deep -->
+    <linearGradient id="i-bl2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#60a5fa"/> <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="i-bl3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6"/> <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="i-bl4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2563eb"/> <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="i-bl5" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e40af"/> <stop offset="100%" stop-color="#1e3a8a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Transparent background -->
+
+  <!-- L1 — gold, narrowest (top) -->
+  <rect x="196" y="162" width="120" height="40" rx="9" fill="url(#i-gold)" stroke="#c97800"  stroke-width="1.5"/>
+
+  <!-- L2 — bright blue -->
+  <rect x="164" y="212" width="184" height="40" rx="9" fill="url(#i-bl2)"  stroke="#3b82f6"  stroke-width="1"/>
+
+  <!-- L3 — medium blue -->
+  <rect x="131" y="262" width="250" height="40" rx="9" fill="url(#i-bl3)"  stroke="#2563eb"  stroke-width="1"/>
+
+  <!-- L4 — deeper blue -->
+  <rect x="99"  y="312" width="314" height="40" rx="9" fill="url(#i-bl4)"  stroke="#1d4ed8"  stroke-width="1"/>
+
+  <!-- L5 — deep blue, widest (bottom) -->
+  <rect x="66"  y="362" width="380" height="40" rx="9" fill="url(#i-bl5)"  stroke="#1e3a8a"  stroke-width="1"/>
+
+  <!-- Terminal cursor: >_ — larger -->
+  <text x="256" y="136"
+        text-anchor="middle"
+        font-family="ui-monospace, 'SF Mono', Consolas, Monaco, monospace"
+        font-size="68" font-weight="700" fill="#f0b429">&gt;_</text>
+</svg>

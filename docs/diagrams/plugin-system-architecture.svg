@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800">
+  <defs>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f8f9fa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#e2e8f0;stop-opacity:1" />
+    </linearGradient>
+    <style>
+      .boot-layer { stroke-width: 2; }
+      .boot-title { font-weight: bold; font-size: 13px; }
+      .boot-detail { font-size: 10px; }
+      .tier-box { stroke: #e2e8f0; stroke-width: 1; }
+      .tier-label { font-weight: bold; font-size: 11px; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="800" fill="url(#grad2)"/>
+
+  <text x="600" y="40" font-size="28" font-weight="bold" text-anchor="middle" fill="#1a202c">
+    CorvinOS Plugin System v2 Architecture
+  </text>
+  <text x="600" y="65" font-size="14" text-anchor="middle" fill="#4a5568">
+    Boot Layers, Tier System, Origin Attestation (ADR-0243, 0250, 0251)
+  </text>
+
+  <!-- BOOT LAYERS -->
+  <text x="50" y="120" font-size="14" font-weight="bold" fill="#2d3748">BOOT LAYER STACK (Load Order & Disableability)</text>
+
+  <!-- Layer 1: Compliance -->
+  <rect x="50" y="140" width="220" height="180" rx="8" fill="#fee" stroke="#e53e3e" class="boot-layer"/>
+  <text x="160" y="165" font-size="13" font-weight="bold" text-anchor="middle" fill="#c2185b" class="boot-title">compliance</text>
+  <text x="60" y="190" font-size="11" fill="#4a5568">• Audit chain verification</text>
+  <text x="60" y="208" font-size="11" fill="#4a5568">• Bot disclosure (EU AI Act)</text>
+  <text x="60" y="226" font-size="11" fill="#4a5568">• Consent gates (GDPR)</text>
+  <text x="60" y="244" font-size="11" fill="#4a5568">• Non-disableable</text>
+  <text x="60" y="262" font-size="11" fill="#4a5568">• Loads first</text>
+  <text x="60" y="280" font-size="11" fill="#4a5568">• Fail-closed</text>
+  <text x="60" y="298" font-size="10" fill="#718096">ADR-0232, ADR-0233</text>
+
+  <!-- Layer 2: Core -->
+  <rect x="290" y="140" width="220" height="180" rx="8" fill="#ffe" stroke="#ed8936" class="boot-layer"/>
+  <text x="400" y="165" font-size="13" font-weight="bold" text-anchor="middle" fill="#c65911" class="boot-title">core</text>
+  <text x="300" y="190" font-size="11" fill="#4a5568">• Plugin subsystem hub</text>
+  <text x="300" y="208" font-size="11" fill="#4a5568">• Registry manager</text>
+  <text x="300" y="226" font-size="11" fill="#4a5568">• Dependency resolver</text>
+  <text x="300" y="244" font-size="11" fill="#4a5568">• Replaceable (v1 → v2)</text>
+  <text x="300" y="262" font-size="11" fill="#4a5568">• Loads second</text>
+  <text x="300" y="280" font-size="11" fill="#4a5568">• Bootstrap guard</text>
+  <text x="300" y="298" font-size="10" fill="#718096">ADR-0243</text>
+
+  <!-- Layer 3: Bundled -->
+  <rect x="530" y="140" width="220" height="180" rx="8" fill="#eef" stroke="#4299e1" class="boot-layer"/>
+  <text x="640" y="165" font-size="13" font-weight="bold" text-anchor="middle" fill="#0b66c3" class="boot-title">bundled</text>
+  <text x="540" y="190" font-size="11" fill="#4a5568">• Shipped with CorvinOS</text>
+  <text x="540" y="208" font-size="11" fill="#4a5568">• Brain subsystems (8x)</text>
+  <text x="540" y="226" font-size="11" fill="#4a5568">• Trusted components</text>
+  <text x="540" y="244" font-size="11" fill="#4a5568">• Disableable in config</text>
+  <text x="540" y="262" font-size="11" fill="#4a5568">• Loads third</text>
+  <text x="540" y="280" font-size="11" fill="#4a5568">• No external deps</text>
+  <text x="540" y="298" font-size="10" fill="#718096">YAML configurable</text>
+
+  <!-- Layer 4: Installed -->
+  <rect x="770" y="140" width="220" height="180" rx="8" fill="#efe" stroke="#38a169" class="boot-layer"/>
+  <text x="880" y="165" font-size="13" font-weight="bold" text-anchor="middle" fill="#1b6c2a" class="boot-title">installed</text>
+  <text x="780" y="190" font-size="11" fill="#4a5568">• User plugins</text>
+  <text x="780" y="208" font-size="11" fill="#4a5568">• Custom subsystems</text>
+  <text x="780" y="226" font-size="11" fill="#4a5568">• Community packages</text>
+  <text x="780" y="244" font-size="11" fill="#4a5568">• Disableable</text>
+  <text x="780" y="262" font-size="11" fill="#4a5568">• Loads last</text>
+  <text x="780" y="280" font-size="11" fill="#4a5568">• Isolated from core</text>
+  <text x="780" y="298" font-size="10" fill="#718096">~/.corvin/plugins/</text>
+
+  <!-- Boot Sequence Arrow -->
+  <path d="M 270 230 L 290 230" stroke="#2d3748" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 510 230 L 530 230" stroke="#2d3748" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 750 230 L 770 230" stroke="#2d3748" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#2d3748"/>
+    </marker>
+  </defs>
+
+  <!-- TIER SYSTEM -->
+  <text x="50" y="380" font-size="14" font-weight="bold" fill="#2d3748">TIER SYSTEM (Licensing & Capabilities)</text>
+
+  <!-- Tier A -->
+  <rect x="50" y="410" width="280" height="150" rx="8" class="tier-box" fill="#fef5e7"/>
+  <text x="190" y="435" font-size="13" font-weight="bold" text-anchor="middle" fill="#8B6F47" class="tier-label">TIER A — Premium</text>
+  <text x="60" y="460" font-size="10" fill="#4a5568">• Full Brain access</text>
+  <text x="60" y="476" font-size="10" fill="#4a5568">• Learning engine enabled</text>
+  <text x="60" y="492" font-size="10" fill="#4a5568">• Custom subsystems allowed</text>
+  <text x="60" y="508" font-size="10" fill="#4a5568">• Unlimited task parallelism</text>
+  <text x="60" y="524" font-size="10" fill="#4a5568">• Priority support</text>
+  <text x="60" y="540" font-size="10" fill="#4a5568">• $500+/month</text>
+
+  <!-- Tier B -->
+  <rect x="370" y="410" width="280" height="150" rx="8" class="tier-box" fill="#eef6ff"/>
+  <text x="510" y="435" font-size="13" font-weight="bold" text-anchor="middle" fill="#003d7a" class="tier-label">TIER B — Professional</text>
+  <text x="380" y="460" font-size="10" fill="#4a5568">• Brain access (2 subsystems)</text>
+  <text x="380" y="476" font-size="10" fill="#4a5568">• Cost controller only</text>
+  <text x="380" y="492" font-size="10" fill="#4a5568">• Limited custom plugins</text>
+  <text x="380" y="508" font-size="10" fill="#4a5568">• Max 3 parallel tasks</text>
+  <text x="380" y="524" font-size="10" fill="#4a5568">• Community support</text>
+  <text x="380" y="540" font-size="10" fill="#4a5568">• $100-500/month</text>
+
+  <!-- Tier C -->
+  <rect x="690" y="410" width="280" height="150" rx="8" class="tier-box" fill="#efe9f5"/>
+  <text x="830" y="435" font-size="13" font-weight="bold" text-anchor="middle" fill="#540d8a" class="tier-label">TIER C — Starter (Free)</text>
+  <text x="700" y="460" font-size="10" fill="#4a5568">• Brain disabled</text>
+  <text x="700" y="476" font-size="10" fill="#4a5568">• Manual task management</text>
+  <text x="700" y="492" font-size="10" fill="#4a5568">• No custom plugins</text>
+  <text x="700" y="508" font-size="10" fill="#4a5568">• Single task only</text>
+  <text x="700" y="524" font-size="10" fill="#4a5568">• Community only</text>
+  <text x="700" y="540" font-size="10" fill="#4a5568">• Free, open-source</text>
+
+  <!-- ORIGIN SYSTEM -->
+  <text x="50" y="630" font-size="14" font-weight="bold" fill="#2d3748">ORIGIN ATTESTATION (Provenance & Trust)</text>
+
+  <rect x="50" y="660" width="350" height="100" rx="8" fill="#eef" stroke="#4299e1" stroke-width="2"/>
+  <text x="225" y="685" font-size="12" font-weight="bold" text-anchor="middle" fill="#0b66c3">builtin</text>
+  <text x="60" y="710" font-size="10" fill="#4a5568">Shipped with CorvinOS</text>
+  <text x="60" y="728" font-size="10" fill="#4a5568">Source: core/orchestration/subsystems/</text>
+  <text x="60" y="745" font-size="10" fill="#4a5568">Trust: High | Audit: Daily</text>
+
+  <rect x="425" y="660" width="350" height="100" rx="8" fill="#efe" stroke="#38a169" stroke-width="2"/>
+  <text x="600" y="685" font-size="12" font-weight="bold" text-anchor="middle" fill="#1b6c2a">vetted</text>
+  <text x="435" y="710" font-size="10" fill="#4a5568">Community plugins (reviewed)</text>
+  <text x="435" y="728" font-size="10" fill="#4a5568">Source: github.com/corvinOS/vetted-plugins/</text>
+  <text x="435" y="745" font-size="10" fill="#4a5568">Trust: Medium | Audit: Weekly</text>
+
+  <rect x="800" y="660" width="350" height="100" rx="8" fill="#fee" stroke="#e53e3e" stroke-width="2"/>
+  <text x="975" y="685" font-size="12" font-weight="bold" text-anchor="middle" fill="#c2185b">community</text>
+  <text x="810" y="710" font-size="10" fill="#4a5568">User-created plugins</text>
+  <text x="810" y="728" font-size="10" fill="#4a5568">Source: ~/.corvin/plugins/ (local)</text>
+  <text x="810" y="745" font-size="10" fill="#4a5568">Trust: User's responsibility | Audit: None</text>
+</svg>

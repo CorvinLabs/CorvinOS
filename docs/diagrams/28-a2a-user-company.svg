@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>A2A — Individual connecting to a Company</title>
+  <desc>Step-by-step pairing workflow showing how an individual user establishes an A2A Friendship
+  Token connection with a company instance. Left panel: home laptop creates token. Center:
+  out-of-band token exchange (Signal / email). Right panel: company imports token. Bottom:
+  resulting bidirectional HMAC-signed connection with PENDING to ACTIVE state transition.</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr-cyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0e7490"/>
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e40af"/>
+    </marker>
+    <marker id="arr-slate" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <!-- ── Background ─────────────────────────────────────────────────── -->
+  <rect width="1080" height="700" fill="#f8fafc"/>
+
+  <!-- ── Top banner ─────────────────────────────────────────────────── -->
+  <rect x="0" y="0" width="1080" height="64" rx="0" fill="#0f172a"/>
+  <text x="540" y="24" text-anchor="middle" font-size="18" font-weight="700" fill="#f1f5f9">A2A — Individual connecting to a Company</text>
+  <text x="540" y="46" text-anchor="middle" font-size="12" fill="#94a3b8">Friendship Token pairing workflow · no central registry · bilateral key exchange</text>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       LEFT PANEL — Individual User
+  ══════════════════════════════════════════════════════════════════ -->
+  <rect x="30" y="84" width="356" height="440" rx="10" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <rect x="30" y="84" width="356" height="40" rx="10" fill="#0e7490"/>
+  <rect x="30" y="104" width="356" height="20" fill="#0e7490"/>
+  <text x="208" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Individual User — home laptop</text>
+
+  <!-- Laptop icon -->
+  <rect x="80" y="140" width="64" height="44" rx="4" fill="#cffafe" stroke="#0e7490" stroke-width="1.5"/>
+  <rect x="84" y="144" width="56" height="32" rx="2" fill="#0e7490"/>
+  <text x="112" y="165" text-anchor="middle" font-size="10" fill="#a5f3fc" font-family="'Courier New', monospace">&gt;_</text>
+  <rect x="74" y="184" width="76" height="6" rx="3" fill="#94a3b8"/>
+
+  <!-- Corvin badge -->
+  <rect x="158" y="140" width="200" height="48" rx="8" fill="#cffafe" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="258" y="158" text-anchor="middle" font-size="11" font-weight="700" fill="#0e7490">Corvin Instance</text>
+  <text x="258" y="173" text-anchor="middle" font-size="10" fill="#0e7490">192.168.1.10 : 8000</text>
+  <text x="258" y="185" text-anchor="middle" font-size="9" fill="#475569">silvio · home · L38 enabled</text>
+
+  <!-- Step 1 label -->
+  <rect x="50" y="204" width="24" height="24" rx="12" fill="#0e7490"/>
+  <text x="62" y="220" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">1</text>
+  <text x="84" y="220" font-size="11" font-weight="600" fill="#0f172a">Create Friendship Token</text>
+
+  <!-- Code block -->
+  <rect x="50" y="232" width="316" height="52" rx="6" fill="#0f172a"/>
+  <text x="62" y="248" font-size="9" fill="#94a3b8">$ </text>
+  <text x="74" y="248" font-size="9" fill="#a5f3fc" font-family="'Courier New', monospace">corvin-a2a create-token \</text>
+  <text x="74" y="262" font-size="9" fill="#a5f3fc" font-family="'Courier New', monospace">  --label "Acme GmbH"</text>
+  <text x="74" y="276" font-size="9" fill="#4ade80" font-family="'Courier New', monospace">Token created: ft1:a3x9…</text>
+
+  <!-- Step 2 label -->
+  <rect x="50" y="298" width="24" height="24" rx="12" fill="#0e7490"/>
+  <text x="62" y="314" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">2</text>
+  <text x="84" y="314" font-size="11" font-weight="600" fill="#0f172a">Generated Token</text>
+
+  <!-- Token display -->
+  <rect x="50" y="328" width="316" height="56" rx="6" fill="#fff" stroke="#06b6d4" stroke-width="1.5"/>
+  <!-- Token icon -->
+  <rect x="62" y="340" width="28" height="20" rx="4" fill="#cffafe" stroke="#0e7490" stroke-width="1"/>
+  <text x="76" y="354" text-anchor="middle" font-size="9" fill="#0e7490">🔑</text>
+  <text x="100" y="344" font-size="9" font-weight="700" fill="#0e7490">Friendship Token</text>
+  <text x="100" y="358" font-size="8" fill="#475569" font-family="'Courier New', monospace">corvin-a2a:ft1:a3x9kp…</text>
+  <text x="100" y="370" font-size="8" fill="#475569" font-family="'Courier New', monospace">label=Acme GmbH · expires=never</text>
+  <text x="100" y="382" font-size="8" fill="#94a3b8">URL: optional at creation time</text>
+
+  <!-- Step 3 -->
+  <rect x="50" y="400" width="24" height="24" rx="12" fill="#0e7490"/>
+  <text x="62" y="416" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">3</text>
+  <text x="84" y="416" font-size="11" font-weight="600" fill="#0f172a">Optional: add your URL</text>
+
+  <rect x="50" y="428" width="316" height="36" rx="6" fill="#0f172a"/>
+  <text x="62" y="444" font-size="9" fill="#94a3b8">$ </text>
+  <text x="74" y="444" font-size="9" fill="#a5f3fc" font-family="'Courier New', monospace">corvin-a2a set-url ft1:a3x9… \</text>
+  <text x="74" y="458" font-size="9" fill="#a5f3fc" font-family="'Courier New', monospace">  --url "http://192.168.1.10:8000"</text>
+
+  <!-- Info tag -->
+  <rect x="50" y="474" width="158" height="34" rx="6" fill="#fff7ed" stroke="#d97706" stroke-width="1"/>
+  <text x="129" y="489" text-anchor="middle" font-size="9" font-weight="600" fill="#d97706">URL optional at</text>
+  <text x="129" y="501" text-anchor="middle" font-size="9" fill="#d97706">creation time</text>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       CENTER — Exchange
+  ══════════════════════════════════════════════════════════════════ -->
+  <rect x="400" y="84" width="280" height="440" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6 3"/>
+  <text x="540" y="116" text-anchor="middle" font-size="13" font-weight="700" fill="#475569">Friendship Token</text>
+  <text x="540" y="132" text-anchor="middle" font-size="13" font-weight="700" fill="#475569">Exchange</text>
+  <text x="540" y="150" text-anchor="middle" font-size="10" fill="#94a3b8">out-of-band</text>
+
+  <!-- Arrow right (share token) -->
+  <line x1="420" y1="210" x2="660" y2="210" stroke="#0e7490" stroke-width="2" marker-end="url(#arr-cyan)"/>
+  <rect x="444" y="195" width="176" height="20" rx="4" fill="#ecfeff"/>
+  <text x="532" y="209" text-anchor="middle" font-size="10" font-weight="600" fill="#0e7490">shares token via Signal / email</text>
+
+  <!-- Channel icon group -->
+  <rect x="448" y="230" width="184" height="100" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="540" y="250" text-anchor="middle" font-size="10" font-weight="600" fill="#475569">Secure channel options</text>
+  <rect x="462" y="260" width="156" height="18" rx="4" fill="#dcfce7"/>
+  <text x="540" y="273" text-anchor="middle" font-size="10" fill="#16a34a">Signal message</text>
+  <rect x="462" y="284" width="156" height="18" rx="4" fill="#dbeafe"/>
+  <text x="540" y="297" text-anchor="middle" font-size="10" fill="#1e40af">Encrypted email</text>
+  <rect x="462" y="308" width="156" height="18" rx="4" fill="#f5f3ff"/>
+  <text x="540" y="321" text-anchor="middle" font-size="10" fill="#7c3aed">Any trusted channel</text>
+
+  <!-- Optional reverse arrow -->
+  <line x1="660" y1="358" x2="420" y2="358" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arr-slate)"/>
+  <rect x="444" y="343" width="176" height="20" rx="4" fill="#f1f5f9"/>
+  <text x="532" y="357" text-anchor="middle" font-size="10" font-weight="600" fill="#64748b">reverse token (optional)</text>
+
+  <!-- Checkpoint -->
+  <rect x="448" y="386" width="184" height="60" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1"/>
+  <text x="540" y="404" text-anchor="middle" font-size="10" font-weight="700" fill="#16a34a">Bilateral pairing</text>
+  <text x="540" y="420" text-anchor="middle" font-size="9" fill="#475569">Both sides run import-token</text>
+  <text x="540" y="436" text-anchor="middle" font-size="9" fill="#475569">Each gets origin + endpoint files</text>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       RIGHT PANEL — Company
+  ══════════════════════════════════════════════════════════════════ -->
+  <rect x="694" y="84" width="356" height="440" rx="10" fill="#eff6ff" stroke="#1e40af" stroke-width="2"/>
+  <rect x="694" y="84" width="356" height="40" rx="10" fill="#1e40af"/>
+  <rect x="694" y="104" width="356" height="20" fill="#1e40af"/>
+  <text x="872" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Acme GmbH — company instance</text>
+
+  <!-- Building icon -->
+  <rect x="742" y="140" width="64" height="48" rx="4" fill="#dbeafe" stroke="#1e40af" stroke-width="1.5"/>
+  <!-- building windows -->
+  <rect x="750" y="148" width="8" height="8" rx="1" fill="#1e40af"/>
+  <rect x="762" y="148" width="8" height="8" rx="1" fill="#1e40af"/>
+  <rect x="774" y="148" width="8" height="8" rx="1" fill="#1e40af"/>
+  <rect x="750" y="162" width="8" height="8" rx="1" fill="#1e40af"/>
+  <rect x="762" y="162" width="8" height="8" rx="1" fill="#1e40af"/>
+  <rect x="774" y="162" width="8" height="8" rx="1" fill="#1e40af"/>
+  <rect x="757" y="176" width="14" height="12" rx="1" fill="#93c5fd"/>
+
+  <!-- Corvin badge company -->
+  <rect x="820" y="140" width="210" height="48" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="925" y="158" text-anchor="middle" font-size="11" font-weight="700" fill="#1e40af">Corvin Instance</text>
+  <text x="925" y="173" text-anchor="middle" font-size="10" fill="#1e40af">acme.corvin.eu : 8000</text>
+  <text x="925" y="185" text-anchor="middle" font-size="9" fill="#475569">admin · cloud · L38 enabled</text>
+
+  <!-- Step A -->
+  <rect x="714" y="204" width="24" height="24" rx="12" fill="#1e40af"/>
+  <text x="726" y="220" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">A</text>
+  <text x="748" y="220" font-size="11" font-weight="600" fill="#0f172a">Import Friendship Token</text>
+
+  <rect x="714" y="232" width="316" height="52" rx="6" fill="#0f172a"/>
+  <text x="726" y="248" font-size="9" fill="#94a3b8">$ </text>
+  <text x="738" y="248" font-size="9" fill="#93c5fd" font-family="'Courier New', monospace">corvin-a2a import-token \</text>
+  <text x="738" y="262" font-size="9" fill="#93c5fd" font-family="'Courier New', monospace">  "corvin-a2a:ft1:a3x9kp…"</text>
+  <text x="738" y="276" font-size="9" fill="#4ade80" font-family="'Courier New', monospace">Origin + endpoint files written.</text>
+
+  <!-- Step B -->
+  <rect x="714" y="298" width="24" height="24" rx="12" fill="#1e40af"/>
+  <text x="726" y="314" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">B</text>
+  <text x="748" y="314" font-size="11" font-weight="600" fill="#0f172a">Files written</text>
+
+  <rect x="714" y="328" width="316" height="72" rx="6" fill="#fff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="726" y="344" font-size="9" font-weight="700" fill="#1e40af">Origin file (inbound):</text>
+  <text x="726" y="358" font-size="8" fill="#475569" font-family="'Courier New', monospace">remote_origins/silvio-home.json</text>
+  <text x="726" y="372" font-size="9" font-weight="700" fill="#1e40af">Endpoint file (outbound):</text>
+  <text x="726" y="386" font-size="8" fill="#475569" font-family="'Courier New', monospace">remote_endpoints/silvio-home.json</text>
+  <text x="726" y="398" font-size="8" fill="#94a3b8">url · hmac_key · label · instance_id</text>
+
+  <!-- Step C -->
+  <rect x="714" y="412" width="24" height="24" rx="12" fill="#1e40af"/>
+  <text x="726" y="428" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">C</text>
+  <text x="748" y="428" font-size="11" font-weight="600" fill="#0f172a">Configure consent policy</text>
+
+  <rect x="714" y="442" width="316" height="36" rx="6" fill="#0f172a"/>
+  <text x="726" y="458" font-size="9" fill="#94a3b8">$ </text>
+  <text x="738" y="458" font-size="9" fill="#93c5fd" font-family="'Courier New', monospace">corvin-a2a set-origin silvio-home \</text>
+  <text x="738" y="472" font-size="9" fill="#93c5fd" font-family="'Courier New', monospace">  --spawn-worker true</text>
+
+  <!-- Info tags right -->
+  <rect x="714" y="488" width="152" height="30" rx="6" fill="#fff7ed" stroke="#d97706" stroke-width="1"/>
+  <text x="790" y="502" text-anchor="middle" font-size="9" font-weight="600" fill="#d97706">Both sides run</text>
+  <text x="790" y="514" text-anchor="middle" font-size="9" fill="#d97706">import-token</text>
+
+  <rect x="876" y="488" width="130" height="30" rx="6" fill="#f0fdf4" stroke="#16a34a" stroke-width="1"/>
+  <text x="941" y="502" text-anchor="middle" font-size="9" font-weight="600" fill="#16a34a">consent gate</text>
+  <text x="941" y="514" text-anchor="middle" font-size="9" fill="#16a34a">enforced per request</text>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       BOTTOM — Result connection
+  ══════════════════════════════════════════════════════════════════ -->
+  <rect x="30" y="546" width="1020" height="128" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  <text x="540" y="566" text-anchor="middle" font-size="13" font-weight="700" fill="#16a34a">A2A Connection Established</text>
+
+  <!-- Left result node -->
+  <rect x="60" y="578" width="200" height="72" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <circle cx="90" cy="604" r="12" fill="#0e7490"/>
+  <text x="90" y="608" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">S</text>
+  <text x="168" y="598" text-anchor="middle" font-size="11" font-weight="700" fill="#0e7490">Silvio · home</text>
+  <text x="168" y="613" text-anchor="middle" font-size="10" fill="#475569">192.168.1.10:8000</text>
+  <text x="168" y="628" text-anchor="middle" font-size="9" fill="#0e7490">origin: silvio-home</text>
+  <text x="168" y="640" text-anchor="middle" font-size="9" fill="#0e7490">endpoint: acme-main</text>
+
+  <!-- Bidirectional arrow center -->
+  <line x1="270" y1="614" x2="500" y2="614" stroke="#16a34a" stroke-width="2.5" marker-start="url(#arr-green)" marker-end="url(#arr-green)"/>
+  <rect x="310" y="599" width="180" height="18" rx="4" fill="#bbf7d0"/>
+  <text x="400" y="612" text-anchor="middle" font-size="10" font-weight="600" fill="#16a34a">HMAC-signed TaskEnvelopes</text>
+  <!-- State indicator -->
+  <rect x="326" y="624" width="148" height="18" rx="4" fill="#0f172a"/>
+  <text x="400" y="636" text-anchor="middle" font-size="9"><tspan fill="#94a3b8">PENDING</tspan><tspan fill="#64748b"> → </tspan><tspan fill="#4ade80">ACTIVE</tspan></text>
+
+  <!-- Right result node -->
+  <rect x="510" y="578" width="220" height="72" rx="8" fill="#dbeafe" stroke="#1e40af" stroke-width="2"/>
+  <circle cx="540" cy="604" r="12" fill="#1e40af"/>
+  <text x="540" y="608" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">A</text>
+  <text x="628" y="598" text-anchor="middle" font-size="11" font-weight="700" fill="#1e40af">Acme GmbH · company</text>
+  <text x="628" y="613" text-anchor="middle" font-size="10" fill="#475569">acme.corvin.eu:8000</text>
+  <text x="628" y="628" text-anchor="middle" font-size="9" fill="#1e40af">origin: acme-main</text>
+  <text x="628" y="640" text-anchor="middle" font-size="9" fill="#1e40af">endpoint: silvio-home</text>
+
+  <!-- Protocol info box -->
+  <rect x="756" y="578" width="268" height="72" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="890" y="597" text-anchor="middle" font-size="10" font-weight="700" fill="#0f172a">Protocol guarantees</text>
+  <text x="772" y="612" font-size="9" fill="#475569">Signed with  HMAC-SHA256</text>
+  <text x="772" y="626" font-size="9" fill="#475569">Replay-proof nonce  (TTL-keyed)</text>
+  <text x="772" y="640" font-size="9" fill="#475569">Instance-ID pin  (swap detection)</text>
+  <text x="772" y="654" font-size="9" fill="#475569">Consent gate  enforced per request</text>
+
+</svg>

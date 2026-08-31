@@ -1,0 +1,246 @@
+{
+  "annotations": {"list": []},
+  "description": "Corvin Gateway — security incidents. Auth failures, cross-tenant denials, engine / zone policy denials, path-gate blocks, consent drops, quota exhaustion, audit-chain integrity. Designed for an on-call dashboard.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Audit chain intact",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"options": {"0": {"text": "BROKEN", "color": "red"}}, "type": "value"},
+            {"options": {"1": {"text": "OK",     "color": "green"}}, "type": "value"}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red",   "value": null},
+            {"color": "green", "value": 1}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none"},
+      "targets": [{"expr": "corvin_audit_chain_intact", "refId": "A"}]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Auth failures / 1h",
+      "gridPos": {"h": 4, "w": 5, "x": 4, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 10},
+            {"color": "red",    "value": 50}
+          ]}
+        }
+      },
+      "targets": [
+        {"expr": "sum(increase(corvin_gateway_auth_failures_total[1h]))", "refId": "A"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Cross-tenant denials / 1h",
+      "gridPos": {"h": 4, "w": 5, "x": 9, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "red",    "value": 5}
+          ]}
+        }
+      },
+      "targets": [
+        {"expr": "sum(increase(corvin_gateway_cross_tenant_denied_total[1h]))", "refId": "A"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Path-gate denials / 1h",
+      "gridPos": {"h": 4, "w": 5, "x": 14, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"expr": "sum(increase(corvin_path_gate_denied_total[1h]))", "refId": "A"}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Quota exhaustions / 1h",
+      "gridPos": {"h": 4, "w": 5, "x": 19, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"expr": "sum(increase(corvin_quota_exceeded_total[1h]))", "refId": "A"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Auth failures by reason",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(corvin_gateway_auth_failures_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Policy denials (engine + zone + cross-tenant)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [
+        {
+          "expr": "sum(rate(corvin_gateway_engine_denied_total[5m]))",
+          "legendFormat": "engine",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(corvin_gateway_zone_denied_total[5m]))",
+          "legendFormat": "zone",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(corvin_gateway_cross_tenant_denied_total[5m]))",
+          "legendFormat": "cross-tenant",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Path-gate by tool",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [
+        {
+          "expr": "sum by (tool_name) (rate(corvin_path_gate_denied_total[5m]))",
+          "legendFormat": "{{tool_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Consent drops + quota exhaustions",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "targets": [
+        {
+          "expr": "sum(rate(corvin_consent_drops_total[5m]))",
+          "legendFormat": "consent",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (bundle) (rate(corvin_quota_exceeded_total[5m]))",
+          "legendFormat": "quota / {{bundle}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Webhook delivery (success vs failure)",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(corvin_gateway_webhooks_total[5m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Data registrations (by format) & PII detected",
+      "description": "ADR-0012 data-locality — datasets registered through data_register and PII columns detected by class.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
+      "targets": [
+        {
+          "expr": "sum by (format) (rate(corvin_data_registered_total[5m]))",
+          "legendFormat": "registered / {{format}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (pii_class) (rate(corvin_data_pii_detected_total[5m]))",
+          "legendFormat": "pii / {{pii_class}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Snapshots oversized / 1h",
+      "description": "Snapshot payloads that exceeded the prompt-token cap and degraded to schema-only (ADR-0012 §E).",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 28},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "red",    "value": 20}
+          ]}
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(corvin_data_snapshot_oversized_total[1h]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Data-policy violations (by reason)",
+      "description": "Strict-mode rejections via data_register / data_snapshot. A non-zero baseline here usually means a tenant policy is stricter than current tool authors.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(corvin_data_policy_violated_total[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["corvin", "gateway", "security"],
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "type": "constant",
+        "current": {"selected": false, "text": "_default", "value": "_default"},
+        "label": "Tenant"
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Corvin — Security incidents",
+  "uid": "corvin-security",
+  "version": 1,
+  "weekStart": ""
+}

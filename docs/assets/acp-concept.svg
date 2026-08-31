@@ -1,0 +1,211 @@
+<svg width="960" height="520" viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgACP" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="forgeGate" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#1a0f00"/>
+      <stop offset="100%" stop-color="#0d0800"/>
+    </linearGradient>
+    <linearGradient id="stageGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#0f1f0f"/>
+      <stop offset="100%" stop-color="#0a150a"/>
+    </linearGradient>
+    <marker id="mA"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="mG"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="mP"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#a78bfa"/>
+    </marker>
+    <marker id="mB"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="mR"  markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#f87171"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="520" rx="10" fill="url(#bgACP)"/>
+
+  <!-- Title -->
+  <text x="480" y="26" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+        font-size="12" font-weight="600" fill="#8b949e" letter-spacing="2">
+    ADR-0027 · ADAPTIVE COMPUTE PIPELINES — LLM AS CONDUCTOR
+  </text>
+
+  <!-- ══ TOP ROW: LLM Conductor ══ -->
+  <rect x="350" y="38" width="260" height="64" rx="8" fill="#0a0f1a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="480" y="58" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+        font-size="13" font-weight="700" fill="#93c5fd">LLM Conductor</text>
+  <text x="480" y="74" text-anchor="middle" font-family="monospace" font-size="8" fill="#3b82f6">plan · inspect · forge · steer · stop</text>
+  <text x="480" y="90" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#6b7280">AWP Delegation-Loop pattern · 3 calls per steering gate</text>
+
+  <!-- ══ FORGE GATE (center, tall amber box) ══ -->
+  <!-- Gate 1 -->
+  <rect x="196" y="128" width="100" height="340" rx="6" fill="url(#forgeGate)" stroke="#f0b429" stroke-width="1.8"/>
+  <text x="246" y="148" text-anchor="middle" font-family="monospace" font-size="8" fill="#f0b429">FORGE</text>
+  <text x="246" y="160" text-anchor="middle" font-family="monospace" font-size="8" fill="#f0b429">GATE 1</text>
+  <line x1="206" y1="168" x2="286" y2="168" stroke="#2a1800" stroke-width="1"/>
+
+  <!-- "LLM inspects" callout inside gate -->
+  <rect x="206" y="175" width="80" height="56" rx="4" fill="#150f00" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="246" y="191" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#fcd34d">LLM sees:</text>
+  <text x="246" y="203" text-anchor="middle" font-family="monospace" font-size="7" fill="#8b949e">Top-K results</text>
+  <text x="246" y="215" text-anchor="middle" font-family="monospace" font-size="7" fill="#8b949e">artifact schemas</text>
+  <text x="246" y="227" text-anchor="middle" font-family="monospace" font-size="7" fill="#8b949e">loss curve</text>
+
+  <!-- forge_tool callout -->
+  <rect x="206" y="238" width="80" height="52" rx="4" fill="#150f00" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="246" y="254" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#a78bfa">forge_tool()</text>
+  <text x="246" y="268" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">new tool minted</text>
+  <text x="246" y="280" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">for THIS data</text>
+  <text x="246" y="284" text-anchor="middle" font-family="monospace" font-size="6" fill="#6b7280">or skip if not needed</text>
+
+  <!-- add_stage callout -->
+  <rect x="206" y="298" width="80" height="50" rx="4" fill="#150f00" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="246" y="314" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#3fb950">add_stage()</text>
+  <text x="246" y="328" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">pre-def or newly</text>
+  <text x="246" y="340" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#8b949e">forged tool</text>
+
+  <!-- resume/stop -->
+  <rect x="206" y="356" width="80" height="42" rx="4" fill="#150f00" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="246" y="372" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#fcd34d">resume() or</text>
+  <text x="246" y="386" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#f87171">abort()</text>
+  <text x="246" y="396" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">budget check</text>
+
+  <!-- Gate 2 -->
+  <rect x="432" y="128" width="100" height="340" rx="6" fill="url(#forgeGate)" stroke="#f0b429" stroke-width="1.8"/>
+  <text x="482" y="148" text-anchor="middle" font-family="monospace" font-size="8" fill="#f0b429">FORGE</text>
+  <text x="482" y="160" text-anchor="middle" font-family="monospace" font-size="8" fill="#f0b429">GATE 2</text>
+  <line x1="442" y1="168" x2="522" y2="168" stroke="#2a1800" stroke-width="1"/>
+  <rect x="442" y="175" width="80" height="170" rx="4" fill="#150f00" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="482" y="195" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#fcd34d">same pattern:</text>
+  <text x="482" y="210" text-anchor="middle" font-family="monospace" font-size="7" fill="#8b949e">inspect results</text>
+  <text x="482" y="224" text-anchor="middle" font-family="monospace" font-size="7" fill="#8b949e">forge if needed</text>
+  <text x="482" y="238" text-anchor="middle" font-family="monospace" font-size="7" fill="#8b949e">add / replace</text>
+  <text x="482" y="252" text-anchor="middle" font-family="monospace" font-size="7" fill="#8b949e">next stage</text>
+  <text x="482" y="274" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#a78bfa">LLM forged a</text>
+  <text x="482" y="288" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#a78bfa">clustering tool</text>
+  <text x="482" y="302" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#a78bfa">it didn't know</text>
+  <text x="482" y="316" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#a78bfa">existed yet ↓</text>
+  <rect x="442" y="352" width="80" height="38" rx="4" fill="#1a1a2e" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="482" y="368" text-anchor="middle" font-family="monospace" font-size="7" fill="#a78bfa">kmeans_v2</text>
+  <text x="482" y="382" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">just forged</text>
+
+  <!-- Gate 3 (terminal) -->
+  <rect x="664" y="128" width="100" height="340" rx="6" fill="#0a100a" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="714" y="148" text-anchor="middle" font-family="monospace" font-size="8" fill="#3fb950">GATE 3</text>
+  <text x="714" y="160" text-anchor="middle" font-family="monospace" font-size="8" fill="#3fb950">TERMINAL</text>
+  <line x1="674" y1="168" x2="754" y2="168" stroke="#0f2d1a" stroke-width="1"/>
+  <rect x="674" y="175" width="80" height="90" rx="4" fill="#091209" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="714" y="193" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#4ade80">convergence</text>
+  <text x="714" y="207" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#4ade80">detected or</text>
+  <text x="714" y="221" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#4ade80">budget hit</text>
+  <text x="714" y="237" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">auto-stop ok</text>
+  <text x="714" y="260" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#3fb950">pipeline_result()</text>
+  <text x="714" y="276" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#8b949e">full result tree</text>
+  <text x="714" y="290" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#8b949e">per stage Top-K</text>
+  <text x="714" y="304" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#8b949e">best params</text>
+  <text x="714" y="318" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#8b949e">artifact paths</text>
+
+  <!-- ══ STAGE BOXES ══ -->
+  <!-- Stage 0 (initial, pre-gate) -->
+  <rect x="14" y="128" width="176" height="340" rx="8" fill="url(#stageGrad)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="102" y="148" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+        font-size="11" font-weight="700" fill="#4ade80">Stage 0</text>
+  <text x="102" y="162" text-anchor="middle" font-family="monospace" font-size="8" fill="#3fb950">pre-defined at submit</text>
+  <line x1="24" y1="170" x2="180" y2="170" stroke="#0f2d1a" stroke-width="1"/>
+  <rect x="22" y="177" width="160" height="46" rx="4" fill="#091209" stroke="#3fb950" stroke-width="0.8"/>
+  <text x="102" y="193" text-anchor="middle" font-family="monospace" font-size="8" fill="#4ade80">feature_eng</text>
+  <text x="102" y="207" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#8b949e">strategy: grid</text>
+  <text x="102" y="219" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#6b7280">input: raw_data_handle</text>
+  <rect x="22" y="230" width="160" height="32" rx="4" fill="#091209" stroke="#3fb950" stroke-width="0.5"/>
+  <text x="102" y="246" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#3fb950">N iterations</text>
+  <text x="102" y="258" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">Worker, no LLM tokens</text>
+  <rect x="22" y="269" width="160" height="32" rx="4" fill="#091209" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="102" y="285" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#fcd34d">emits artifacts</text>
+  <text x="102" y="297" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">features.parquet</text>
+  <text x="102" y="328" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#8b949e">best_loss: 0.031</text>
+  <text x="102" y="345" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#8b949e">bimodal signal in col X</text>
+  <text x="102" y="362" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#8b949e">→ LLM decides:</text>
+  <text x="102" y="378" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#a78bfa">forge a clustering tool</text>
+
+  <!-- Stage 1 (LLM added, post gate 1) -->
+  <rect x="302" y="128" width="124" height="340" rx="8" fill="url(#stageGrad)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="364" y="148" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+        font-size="11" font-weight="700" fill="#c4b5fd">Stage 1</text>
+  <text x="364" y="162" text-anchor="middle" font-family="monospace" font-size="8" fill="#a78bfa">LLM forged at gate</text>
+  <line x1="312" y1="170" x2="416" y2="170" stroke="#1a1a2e" stroke-width="1"/>
+  <rect x="310" y="177" width="108" height="44" rx="4" fill="#1a1a2e" stroke="#a78bfa" stroke-width="0.8"/>
+  <text x="364" y="193" text-anchor="middle" font-family="monospace" font-size="8" fill="#c4b5fd">kmeans_cluster</text>
+  <text x="364" y="207" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#8b949e">strategy: grid</text>
+  <text x="364" y="218" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">k: [2,3,4,5]</text>
+  <rect x="310" y="228" width="108" height="30" rx="4" fill="#1a1a2e" stroke="#a78bfa" stroke-width="0.5"/>
+  <text x="364" y="244" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#a78bfa">N iterations</text>
+  <text x="364" y="256" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">input: $stage0.artifacts</text>
+  <text x="364" y="290" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#6b7280">tool did not exist</text>
+  <text x="364" y="305" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#6b7280">before this run</text>
+  <text x="364" y="340" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#8b949e">best k=3</text>
+  <text x="364" y="357" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#8b949e">→ LLM sees cluster</text>
+  <text x="364" y="374" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#a78bfa">shapes, refines</text>
+  <text x="364" y="390" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#a78bfa">next stage params</text>
+
+  <!-- Stage 2 (LLM steered, post gate 2) -->
+  <rect x="538" y="128" width="120" height="340" rx="8" fill="url(#stageGrad)" stroke="#f0b429" stroke-width="1.5"/>
+  <text x="598" y="148" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,sans-serif"
+        font-size="11" font-weight="700" fill="#fcd34d">Stage 2</text>
+  <text x="598" y="162" text-anchor="middle" font-family="monospace" font-size="8" fill="#f0b429">LLM steered at gate</text>
+  <line x1="548" y1="170" x2="648" y2="170" stroke="#2a1800" stroke-width="1"/>
+  <rect x="546" y="177" width="104" height="44" rx="4" fill="#150f00" stroke="#f0b429" stroke-width="0.8"/>
+  <text x="598" y="193" text-anchor="middle" font-family="monospace" font-size="8" fill="#fcd34d">train_model</text>
+  <text x="598" y="207" text-anchor="middle" font-family="sans-serif" font-size="7.5" fill="#8b949e">strategy: bayesian</text>
+  <text x="598" y="218" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">narrowed params</text>
+  <rect x="546" y="228" width="104" height="30" rx="4" fill="#150f00" stroke="#f0b429" stroke-width="0.5"/>
+  <text x="598" y="244" text-anchor="middle" font-family="monospace" font-size="7.5" fill="#f0b429">N iterations</text>
+  <text x="598" y="256" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#6b7280">input: $stage1.artifacts</text>
+  <text x="598" y="295" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#8b949e">Bayesian converged</text>
+  <text x="598" y="312" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#8b949e">loss Δ &lt; threshold</text>
+  <text x="598" y="329" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#3fb950">→ auto-stop</text>
+  <text x="598" y="346" text-anchor="middle" font-family="sans-serif" font-size="8.5" fill="#3fb950">budget gate fires</text>
+
+  <!-- ══ ARROWS between stages and gates ══ -->
+  <!-- Stage 0 → Gate 1 -->
+  <line x1="190" y1="300" x2="196" y2="300" stroke="#f0b429" stroke-width="2" marker-end="url(#mA)"/>
+  <!-- Gate 1 → Stage 1 -->
+  <line x1="296" y1="300" x2="302" y2="300" stroke="#a78bfa" stroke-width="2" marker-end="url(#mP)"/>
+  <!-- Stage 1 → Gate 2 -->
+  <line x1="426" y1="300" x2="432" y2="300" stroke="#f0b429" stroke-width="2" marker-end="url(#mA)"/>
+  <!-- Gate 2 → Stage 2 -->
+  <line x1="532" y1="300" x2="538" y2="300" stroke="#f0b429" stroke-width="2" marker-end="url(#mA)"/>
+  <!-- Stage 2 → Gate 3 -->
+  <line x1="658" y1="300" x2="664" y2="300" stroke="#3fb950" stroke-width="2" marker-end="url(#mG)"/>
+
+  <!-- LLM conductor vertical arrows down to gates -->
+  <line x1="320" y1="102" x2="246" y2="128" stroke="#3b82f6" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#mB)"/>
+  <line x1="440" y1="102" x2="480" y2="128" stroke="#3b82f6" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#mB)"/>
+  <line x1="570" y1="102" x2="714" y2="128" stroke="#3b82f6" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#mB)"/>
+
+  <!-- Result arrow back to LLM -->
+  <path d="M 714 128 Q 760 60 600 55 Q 540 52 480 52" fill="none"
+        stroke="#3fb950" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#mG)"/>
+  <text x="740" y="60" font-family="monospace" font-size="7" fill="#3fb950">pipeline_result()</text>
+
+  <!-- ══ BUDGET BAR (bottom) ══ -->
+  <rect x="14" y="480" width="932" height="28" rx="5" fill="#0a100a" stroke="#484f58" stroke-width="1"/>
+  <text x="24" y="496" font-family="monospace" font-size="8" fill="#6b7280">5D Budget:</text>
+  <text x="100" y="496" font-family="monospace" font-size="8" fill="#3fb950">max_stages=20</text>
+  <text x="228" y="496" font-family="monospace" font-size="8" fill="#a78bfa">max_tool_creations=10</text>
+  <text x="390" y="496" font-family="monospace" font-size="8" fill="#f0b429">max_total_iterations=1000</text>
+  <text x="574" y="496" font-family="monospace" font-size="8" fill="#3b82f6">max_wall_clock_s=86400</text>
+  <text x="740" y="496" font-family="monospace" font-size="8" fill="#fcd34d">steering_gate_timeout_s=3600</text>
+  <text x="924" y="496" text-anchor="end" font-family="monospace" font-size="8" fill="#484f58">AWP-5D</text>
+</svg>

@@ -1,0 +1,135 @@
+<svg width="1200" height="340" viewBox="0 0 1200 340" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgC2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <marker id="arrDown" markerWidth="6" markerHeight="5" refX="3" refY="5" orient="auto">
+      <polygon points="0 0, 6 0, 3 5" fill="#21262d"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="340" rx="10" fill="url(#bgC2)"/>
+
+  <!-- Title -->
+  <text x="600" y="28" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">
+    EU AI ACT 2026 + GDPR — STRUCTURAL COMPLIANCE FOR AGENTIC COMMUNICATION
+  </text>
+
+  <!-- ══ Pillar 1 — Identity Attestation (blue) ══════════════════════ -->
+  <rect x="14" y="44" width="218" height="262" rx="8" fill="#0e1829" stroke="#3b82f6" stroke-width="1.5"/>
+  <circle cx="123" cy="88" r="22" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+  <!-- Fingerprint-style icon -->
+  <circle cx="123" cy="88" r="8"  fill="none" stroke="#93c5fd" stroke-width="1.5"/>
+  <circle cx="123" cy="88" r="14" fill="none" stroke="#93c5fd" stroke-width="1"/>
+  <circle cx="123" cy="88" r="4"  fill="#93c5fd"/>
+  <text x="123" y="125" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Identity Attestation</text>
+  <text x="123" y="141" text-anchor="middle"
+        font-family="monospace" font-size="10" fill="#3b82f6">EU AI Act Art. 50</text>
+  <line x1="34" y1="152" x2="212" y2="152" stroke="#1e3a5f" stroke-width="1"/>
+  <text x="123" y="169" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">Bidirectional instance_id</text>
+  <text x="123" y="185" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">sender signs every envelope</text>
+  <text x="123" y="201" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">receiver pins expected instance_id</text>
+  <text x="123" y="217" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">swap detection: mismatch → reject</text>
+  <text x="123" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">HMAC-SHA256 (constant-time)</text>
+  <text x="123" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">key pair: corvin-a2a pair</text>
+  <text x="123" y="265" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#6b7280">no anonymous agent calls</text>
+  <text x="123" y="290" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#3b82f6">L38 · instance_identity.py</text>
+
+  <!-- ══ Pillar 2 — Consent Gate (purple) ════════════════════════════ -->
+  <rect x="244" y="44" width="218" height="262" rx="8" fill="#1a0e2e" stroke="#a78bfa" stroke-width="1.5"/>
+  <circle cx="353" cy="88" r="22" fill="#2d1a4a" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="343" y="89" width="20" height="14" rx="2" fill="#a78bfa"/>
+  <path d="M345 89 C345 80 361 80 361 89" stroke="#a78bfa" stroke-width="2.2" fill="none"/>
+  <text x="353" y="125" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Consent Gate</text>
+  <text x="353" y="141" text-anchor="middle"
+        font-family="monospace" font-size="10" fill="#a78bfa">GDPR Art. 6 &amp; 7</text>
+  <line x1="264" y1="152" x2="442" y2="152" stroke="#2d1a4a" stroke-width="1"/>
+  <text x="353" y="169" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">deny-by-default per-uid</text>
+  <text x="353" y="185" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">re-validated at every consume</text>
+  <text x="353" y="201" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">TTL-capped  · no auto-admit</text>
+  <text x="353" y="217" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">agent actions bound to user consent</text>
+  <text x="353" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">/consent on|off|&lt;ttl&gt;</text>
+  <text x="353" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">identity-bound — no transfer</text>
+  <text x="353" y="265" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#6b7280">owner cannot grant for another user</text>
+  <text x="353" y="290" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#a78bfa">L16 · consent gate</text>
+
+  <!-- ══ Pillar 3 — Audit Trail (green) ══════════════════════════════ -->
+  <rect x="474" y="44" width="218" height="262" rx="8" fill="#0c1f16" stroke="#3fb950" stroke-width="1.5"/>
+  <circle cx="583" cy="88" r="22" fill="#0f2d1a" stroke="#3fb950" stroke-width="1.5"/>
+  <circle cx="575" cy="88" r="7" fill="none" stroke="#3fb950" stroke-width="2"/>
+  <circle cx="591" cy="88" r="7" fill="none" stroke="#3fb950" stroke-width="2"/>
+  <text x="583" y="125" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Audit Trail</text>
+  <text x="583" y="141" text-anchor="middle"
+        font-family="monospace" font-size="10" fill="#3fb950">GDPR Art. 30 &amp; 32</text>
+  <line x1="494" y1="152" x2="672" y2="152" stroke="#0f2d1a" stroke-width="1"/>
+  <text x="583" y="169" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">8 A2A.* event types</text>
+  <text x="583" y="185" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">SHA-256 hash-chained</text>
+  <text x="583" y="201" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">audit-first invariant</text>
+  <text x="583" y="217" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">chain write before spawn/response</text>
+  <text x="583" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">allow-listed fields only</text>
+  <text x="583" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">instruction / output: NEVER logged</text>
+  <text x="583" y="265" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#6b7280">offline-verifiable: voice-audit verify</text>
+  <text x="583" y="290" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#3fb950">L16 · audit.jsonl</text>
+
+  <!-- ══ Pillar 4 — Data Residency (amber) ══════════════════════════ -->
+  <rect x="704" y="44" width="218" height="262" rx="8" fill="#1a1200" stroke="#f0b429" stroke-width="1.5"/>
+  <circle cx="813" cy="88" r="22" fill="#2a1e00" stroke="#f0b429" stroke-width="1.5"/>
+  <circle cx="813" cy="88" r="12" fill="none" stroke="#f0b429" stroke-width="1.5"/>
+  <circle cx="813" cy="88" r="5"  fill="#f0b429"/>
+  <text x="813" y="125" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Data Residency</text>
+  <text x="813" y="141" text-anchor="middle"
+        font-family="monospace" font-size="10" fill="#f0b429">EU AI Act Art. 14</text>
+  <line x1="724" y1="152" x2="902" y2="152" stroke="#2a1e00" stroke-width="1"/>
+  <text x="813" y="169" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">compliance-zone routing</text>
+  <text x="813" y="185" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">allowed_engines policy</text>
+  <text x="813" y="201" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">L34 data classification (4 levels)</text>
+  <text x="813" y="217" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">L35 egress lockdown per-host</text>
+  <text x="813" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">no cross-zone LLM call</text>
+  <text x="813" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">EU_PRODUCTION preset ships ready</text>
+  <text x="813" y="265" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#6b7280">no compliance-off mode</text>
+  <text x="813" y="290" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#f0b429">L34 · L35 · ADR-0007</text>
+
+  <!-- ══ Pillar 5 — Output Control (red/orange) ══════════════════════ -->
+  <rect x="934" y="44" width="252" height="262" rx="8" fill="#1a0a0a" stroke="#f97316" stroke-width="1.5"/>
+  <circle cx="1060" cy="88" r="22" fill="#2a1000" stroke="#f97316" stroke-width="1.5"/>
+  <!-- Filter icon -->
+  <path d="M1050 76 L1070 76 L1063 88 L1063 102 L1057 102 L1057 88 Z"
+        fill="none" stroke="#f97316" stroke-width="1.8"/>
+  <text x="1060" y="125" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" fill="#e6edf3">Output Control</text>
+  <text x="1060" y="141" text-anchor="middle"
+        font-family="monospace" font-size="10" fill="#f97316">EU AI Act Art. 14 / 32</text>
+  <line x1="954" y1="152" x2="1176" y2="152" stroke="#2a1000" stroke-width="1"/>
+  <text x="1060" y="169" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">result_schema JSONSchema filter</text>
+  <text x="1060" y="185" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">undeclared fields stripped</text>
+  <text x="1060" y="201" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">prompt-injection framing block</text>
+  <text x="1060" y="217" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">NFKC normalise + 16 KB cap</text>
+  <text x="1060" y="233" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">control-char strip on input</text>
+  <text x="1060" y="249" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b949e">sha256 verified per attachment</text>
+  <text x="1060" y="265" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#6b7280">reject → unsigned (no oracle)</text>
+  <text x="1060" y="290" text-anchor="middle"
+        font-family="monospace" font-size="9" fill="#f97316">L38 · a2a_worker.py</text>
+
+  <!-- Footer -->
+  <text x="600" y="326" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#484f58">
+    All five mechanisms are structural constraints — cannot be disabled via env var, flag, or config option
+  </text>
+</svg>

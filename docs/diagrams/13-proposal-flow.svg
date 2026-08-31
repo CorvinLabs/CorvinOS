@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Curated proposal flow — Layer 21</title>
+  <desc>Multi-user brainstorm pattern: members and observers /propose ideas to a chat-scoped stack; the stack accumulates without triggering the LLM. The owner reviews via /proposals, drops bad ones via /proposal rm, and explicitly fires the LLM with /go. The /go consume is atomic — read and clear in one operation — so a parallel /go cannot double-trigger. Stack and audit trail recorded in the unified hash chain.</desc>
+
+  <text x="490" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Curated proposal flow — collect, sieve, then go</text>
+  <text x="490" y="52" text-anchor="middle" font-size="12" fill="#475569">Multi-user input · single-owner trigger · atomic consume · audit-traced</text>
+
+  <!-- Stage 1: Contributors -->
+  <rect x="40" y="90" width="240" height="180" rx="10" fill="#dbeafe" stroke="#3b82f6" stroke-width="2"/>
+  <text x="160" y="115" text-anchor="middle" font-size="13" font-weight="700" fill="#1e40af">1 · Contributors</text>
+  <text x="60" y="138" font-size="10" fill="#0f172a">Anyone in the chat can submit:</text>
+  <text x="60" y="158" font-size="10" font-weight="600" fill="#0f172a">/propose &lt;text&gt;</text>
+  <text x="60" y="180" font-size="10" fill="#0f172a">  • member · observer · stranger</text>
+  <text x="60" y="195" font-size="10" fill="#0f172a">  • read-only-side too (with consent)</text>
+  <text x="60" y="216" font-size="9" fill="#475569">Voice notes? → already transcribed</text>
+  <text x="60" y="230" font-size="9" fill="#475569">Files? → drop link or paste</text>
+  <text x="60" y="252" font-size="9" fill="#7c2d12">audit: proposal.added (per entry)</text>
+
+  <!-- Stage 2: Stack (center) -->
+  <rect x="320" y="90" width="340" height="280" rx="10" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+  <text x="490" y="115" text-anchor="middle" font-size="13" font-weight="700" fill="#92400e">2 · Proposal stack (chat-scoped)</text>
+  <text x="490" y="135" text-anchor="middle" font-size="10" fill="#0f172a">stored at &lt;corvin_home&gt;/global/proposals/</text>
+
+  <!-- Stack entries (visual stack) -->
+  <rect x="345" y="155" width="290" height="34" rx="6" fill="#fff" stroke="#0f172a" stroke-width="1"/>
+  <text x="355" y="176" font-size="10" fill="#0f172a"><tspan font-family="monospace" fill="#475569">ab12cd</tspan>  [alice, member]  Idee Alpha — Test mit X</text>
+
+  <rect x="345" y="197" width="290" height="34" rx="6" fill="#fff" stroke="#0f172a" stroke-width="1"/>
+  <text x="355" y="218" font-size="10" fill="#0f172a"><tspan font-family="monospace" fill="#475569">9f3e21</tspan>  [bob, observer]  Hier ist die Spezifikation</text>
+
+  <rect x="345" y="239" width="290" height="34" rx="6" fill="#fff" stroke="#0f172a" stroke-width="1"/>
+  <text x="355" y="260" font-size="10" fill="#0f172a"><tspan font-family="monospace" fill="#475569">7c401a</tspan>  [carol, member]  Bitte berücksichtige Edge…</text>
+
+  <rect x="345" y="281" width="290" height="34" rx="6" fill="#fff" stroke="#0f172a" stroke-width="1" stroke-dasharray="3,3"/>
+  <text x="355" y="301" font-size="10" fill="#475569"><tspan font-family="monospace">…</tspan>  up to MAX_STACK_SIZE = 50</text>
+
+  <text x="490" y="343" text-anchor="middle" font-size="9" fill="#7c2d12">does NOT auto-trigger · does NOT expire</text>
+  <text x="490" y="358" text-anchor="middle" font-size="9" fill="#7c2d12">overflow drops oldest (with audit)</text>
+
+  <!-- Stage 3: Owner curation -->
+  <rect x="700" y="90" width="240" height="180" rx="10" fill="#fce7f3" stroke="#db2777" stroke-width="2"/>
+  <text x="820" y="115" text-anchor="middle" font-size="13" font-weight="700" fill="#9d174d">3 · Owner curates</text>
+  <text x="720" y="138" font-size="10" fill="#0f172a">Review the stack:</text>
+  <text x="720" y="158" font-size="10" font-weight="600" fill="#0f172a">/proposals</text>
+  <text x="720" y="178" font-size="10" fill="#0f172a">Drop bad / off-topic:</text>
+  <text x="720" y="198" font-size="10" font-weight="600" fill="#0f172a">/proposal rm 9f3e21</text>
+  <text x="720" y="218" font-size="10" fill="#0f172a">Reset entirely:</text>
+  <text x="720" y="238" font-size="10" font-weight="600" fill="#0f172a">/proposal clear</text>
+  <text x="720" y="258" font-size="9" fill="#7c2d12">audit: proposal.removed / .cleared</text>
+
+  <!-- Stage 4: /go trigger -->
+  <rect x="320" y="410" width="340" height="160" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="490" y="435" text-anchor="middle" font-size="13" font-weight="700" fill="#166534">4 · /go [owner steering]</text>
+  <text x="335" y="458" font-size="10" fill="#0f172a">Atomic: consume_for_go() reads + clears</text>
+  <text x="335" y="473" font-size="10" fill="#0f172a">in ONE operation. No double-trigger.</text>
+  <text x="335" y="495" font-size="10" fill="#0f172a">Daemon synthesises a single inbox</text>
+  <text x="335" y="510" font-size="10" fill="#0f172a">message: stack-block + owner-text.</text>
+  <text x="335" y="530" font-size="10" font-weight="600" fill="#0f172a">[PROPOSAL STACK — N items]</text>
+  <text x="335" y="544" font-size="10" font-weight="600" fill="#0f172a">  &lt;id&gt; [&lt;uid&gt;, &lt;role&gt;]: …</text>
+  <text x="335" y="558" font-size="10" font-weight="600" fill="#0f172a">[END]   + owner steering</text>
+
+  <!-- Stage 5: LLM run -->
+  <rect x="700" y="410" width="240" height="160" rx="10" fill="#cffafe" stroke="#06b6d4" stroke-width="2"/>
+  <text x="820" y="435" text-anchor="middle" font-size="13" font-weight="700" fill="#0e7490">5 · LLM run</text>
+  <text x="720" y="458" font-size="10" fill="#0f172a">Adapter spawns claude with</text>
+  <text x="720" y="473" font-size="10" fill="#0f172a">the combined prompt as if it</text>
+  <text x="720" y="488" font-size="10" fill="#0f172a">were a normal owner turn.</text>
+  <text x="720" y="510" font-size="10" fill="#0f172a">Reply lands in chat as usual.</text>
+  <text x="720" y="525" font-size="10" fill="#0f172a">Stack is now empty —</text>
+  <text x="720" y="540" font-size="10" fill="#0f172a">ready for the next round.</text>
+  <text x="720" y="558" font-size="9" fill="#7c2d12">audit: proposal.executed (count + uids)</text>
+
+  <!-- Arrows -->
+  <line x1="280" y1="180" x2="320" y2="180" stroke="#3b82f6" stroke-width="2" marker-end="url(#aB)"/>
+  <text x="285" y="170" font-size="9" fill="#1e40af">add</text>
+
+  <line x1="660" y1="180" x2="700" y2="180" stroke="#db2777" stroke-width="2" marker-end="url(#aP)"/>
+  <text x="666" y="170" font-size="9" fill="#9d174d">review</text>
+
+  <path d="M 700 180 Q 680 250 660 270" stroke="#db2777" stroke-width="1.5" stroke-dasharray="4,3" fill="none" marker-end="url(#aP)"/>
+  <text x="675" y="265" font-size="9" fill="#9d174d">rm</text>
+
+  <line x1="490" y1="370" x2="490" y2="410" stroke="#16a34a" stroke-width="2" marker-end="url(#aG)"/>
+  <text x="500" y="395" font-size="9" fill="#166534">consume + clear</text>
+
+  <line x1="660" y1="490" x2="700" y2="490" stroke="#06b6d4" stroke-width="2" marker-end="url(#aC)"/>
+  <text x="666" y="480" font-size="9" fill="#0e7490">trigger</text>
+
+  <!-- Reply loop back -->
+  <path d="M 940 530 Q 980 600 600 600 Q 220 600 160 280" stroke="#0f172a" stroke-width="1.2" stroke-dasharray="4,3" fill="none" marker-end="url(#aReply)"/>
+  <text x="500" y="595" font-size="9" fill="#475569">reply lands in chat → next round may begin</text>
+
+  <!-- Audit chain band -->
+  <rect x="60" y="635" width="860" height="68" rx="10" fill="#0f172a" stroke="#0f172a" stroke-width="1.5"/>
+  <text x="80" y="660" font-size="14" font-weight="700" fill="#22d3ee">audit chain — every step traced</text>
+  <text x="80" y="680" font-size="10" fill="#cbd5e1">proposal.added (per submission) · proposal.removed · proposal.cleared · proposal.executed (count + from_uids + owner_text len)</text>
+  <text x="80" y="697" font-size="10" fill="#94a3b8">SHA-256-chained at &lt;corvin_home&gt;/global/forge/audit.jsonl — voice-audit verify · /audit chat</text>
+
+  <defs>
+    <marker id="aB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 9 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="aP" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 9 3, 0 6" fill="#db2777"/>
+    </marker>
+    <marker id="aG" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 9 3, 0 6" fill="#16a34a"/>
+    </marker>
+    <marker id="aC" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 9 3, 0 6" fill="#06b6d4"/>
+    </marker>
+    <marker id="aReply" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 9 3, 0 6" fill="#0f172a"/>
+    </marker>
+  </defs>
+</svg>

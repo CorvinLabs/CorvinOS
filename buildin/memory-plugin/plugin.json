@@ -1,0 +1,13 @@
+{
+  "id": "memory-plugin",
+  "name": "Memory System",
+  "version": "1.0.0",
+  "category": "Memory",
+  "description": "Vector embeddings, semantic search, long-term memory storage",
+  "author": "CorvinOS Core",
+  "tier": "buildin",
+  "boot_layer": "bundled",
+  "rating": 4.8,
+  "installs": 5234,
+  "dependencies": []
+}

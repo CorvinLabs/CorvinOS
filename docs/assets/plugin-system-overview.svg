@@ -1,0 +1,89 @@
+<svg width="900" height="480" viewBox="0 0 900 480" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgPSO" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="goldGPSO" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#f0b429"/>
+      <stop offset="100%" stop-color="#c97800"/>
+    </linearGradient>
+    <pattern id="gridPSO" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#ffffff" stroke-width="0.25" opacity="0.05"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="480" rx="12" fill="url(#bgPSO)"/>
+  <rect width="900" height="480" rx="12" fill="url(#gridPSO)"/>
+  <rect x="0" y="0" width="4" height="480" rx="2" fill="url(#goldGPSO)"/>
+
+  <!-- Header -->
+  <text x="450" y="30" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">PLUGIN SYSTEM — FOUR EXTENSION SURFACES</text>
+  <text x="450" y="52" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="11" fill="#8b949e" opacity="0.7">Declarative · Hot-reload · no fork · no restart</text>
+  <line x1="20" y1="62" x2="880" y2="62" stroke="#30363d" stroke-width="1"/>
+
+  <!-- ═══ CARD 1 — Personas (gold) ═══ top-left: x=20 y=72 w=420 h=185 -->
+  <rect x="20" y="72" width="420" height="185" rx="8" fill="#161b22" stroke="#f0b429" stroke-width="1" stroke-opacity="0.45"/>
+  <rect x="20" y="72" width="420" height="3" rx="2" fill="#f0b429" opacity="0.85"/>
+  <circle cx="50" cy="104" r="16" fill="#f0b429" opacity="0.12"/>
+  <text x="50" y="110" text-anchor="middle"
+        font-family="sans-serif" font-size="16">🎭</text>
+  <text x="76" y="100" font-family="-apple-system, sans-serif" font-size="14" font-weight="700" fill="#f0b429">Personas (Cowork)</text>
+  <text x="76" y="116" font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">Layer 4 · YAML / JSON</text>
+  <line x1="32" y1="126" x2="428" y2="126" stroke="#30363d" stroke-width="0.5"/>
+  <text x="36" y="145" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Custom roles per chat — Coder, Browser, Research …</text>
+  <text x="36" y="163" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  MCP servers, working-dir &amp; system prompt declarative</text>
+  <text x="36" y="181" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Override bundle personas in ~/.corvin/cowork/</text>
+  <text x="36" y="199" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Auto-routing without manual assignment (/bind)</text>
+  <text x="36" y="245" font-family="'SFMono-Regular', Consolas, monospace" font-size="10" fill="#f0b429" opacity="0.85">/cowork-list  ·  /cowork-add  ·  /cowork-bind  ·  /cowork-show</text>
+
+  <!-- ═══ CARD 2 — Forge (blue) ═══ top-right: x=460 y=72 -->
+  <rect x="460" y="72" width="420" height="185" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.45"/>
+  <rect x="460" y="72" width="420" height="3" rx="2" fill="#3b82f6" opacity="0.85"/>
+  <circle cx="490" cy="104" r="16" fill="#3b82f6" opacity="0.12"/>
+  <text x="490" y="110" text-anchor="middle"
+        font-family="sans-serif" font-size="16">🔧</text>
+  <text x="516" y="100" font-family="-apple-system, sans-serif" font-size="14" font-weight="700" fill="#3b82f6">Forge (Runtime Tools)</text>
+  <text x="516" y="116" font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">Layer 6 · Python · MCP-sandboxed</text>
+  <line x1="472" y1="126" x2="868" y2="126" stroke="#30363d" stroke-width="0.5"/>
+  <text x="476" y="145" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Schema-bound tools — callable via MCP immediately</text>
+  <text x="476" y="163" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Sandbox: no network, no subprocess (bwrap)</text>
+  <text x="476" y="181" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Secrets by name — values in vault only, never in prompt</text>
+  <text x="476" y="199" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  4 scopes: task · session · project · user</text>
+  <text x="476" y="245" font-family="'SFMono-Regular', Consolas, monospace" font-size="10" fill="#3b82f6" opacity="0.85">/forge  ·  mcp__forge__forge_list  ·  policy.json</text>
+
+  <!-- ═══ CARD 3 — SkillForge (purple) ═══ bottom-left: x=20 y=280 -->
+  <rect x="20" y="280" width="420" height="185" rx="8" fill="#161b22" stroke="#a78bfa" stroke-width="1" stroke-opacity="0.45"/>
+  <rect x="20" y="280" width="420" height="3" rx="2" fill="#a78bfa" opacity="0.85"/>
+  <circle cx="50" cy="312" r="16" fill="#a78bfa" opacity="0.12"/>
+  <text x="50" y="318" text-anchor="middle"
+        font-family="sans-serif" font-size="16">📚</text>
+  <text x="76" y="308" font-family="-apple-system, sans-serif" font-size="14" font-weight="700" fill="#a78bfa">SkillForge (Runtime Skills)</text>
+  <text x="76" y="324" font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">Layer 7 · Markdown · Prompt-injection</text>
+  <line x1="32" y1="334" x2="428" y2="334" stroke="#30363d" stroke-width="0.5"/>
+  <text x="36" y="353" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Agent learns new behaviours via Markdown files</text>
+  <text x="36" y="371" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Auto-grading after each reply (mention → 0.7)</text>
+  <text x="36" y="389" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Promotion: task → session → project → user</text>
+  <text x="36" y="407" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Scope-gate: slot-mirror for project/user only (no leak)</text>
+  <text x="36" y="453" font-family="'SFMono-Regular', Consolas, monospace" font-size="10" fill="#a78bfa" opacity="0.85">/skill-create  ·  mcp__skill_forge__skill_list  ·  skill_grade</text>
+
+  <!-- ═══ CARD 4 — Bridge Config (green) ═══ bottom-right: x=460 y=280 -->
+  <rect x="460" y="280" width="420" height="185" rx="8" fill="#161b22" stroke="#3fb950" stroke-width="1" stroke-opacity="0.45"/>
+  <rect x="460" y="280" width="420" height="3" rx="2" fill="#3fb950" opacity="0.85"/>
+  <circle cx="490" cy="312" r="16" fill="#3fb950" opacity="0.12"/>
+  <text x="490" y="318" text-anchor="middle"
+        font-family="sans-serif" font-size="16">⚙️</text>
+  <text x="516" y="308" font-family="-apple-system, sans-serif" font-size="14" font-weight="700" fill="#3fb950">Bridge Configuration</text>
+  <text x="516" y="324" font-family="-apple-system, sans-serif" font-size="11" fill="#8b949e">Hot-reload · settings.json · no restart needed</text>
+  <line x1="472" y1="334" x2="868" y2="334" stroke="#30363d" stroke-width="0.5"/>
+  <text x="476" y="353" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Whitelist, rate-limit, chat profiles — effective immediately</text>
+  <text x="476" y="371" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Voice, LDD layers &amp; progress updates per chat</text>
+  <text x="476" y="389" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  Persona per chat: chat_profiles.persona = "research"</text>
+  <text x="476" y="407" font-family="-apple-system, sans-serif" font-size="12" fill="#e6edf3">▸  LDD toggle: /ldd-on  ·  /ldd-preset  ·  /ldd-set</text>
+  <text x="476" y="453" font-family="'SFMono-Regular', Consolas, monospace" font-size="10" fill="#3fb950" opacity="0.85">/settings  ·  /voice-config  ·  /ldd-status  ·  /ldd-on</text>
+</svg>

@@ -1,0 +1,106 @@
+<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 26px; font-weight: bold; fill: #000; }
+      .signal-label { font-size: 14px; font-weight: bold; fill: #000; }
+      .signal-text { font-size: 11px; fill: #222; }
+      .weight-text { font-size: 12px; font-weight: bold; fill: #d39e00; }
+      .example-text { font-size: 12px; fill: #222; }
+      .signal-box { rx: 6; stroke-width: 2; }
+      .signal1 { fill: #fff3cd; stroke: #ffc107; }
+      .signal2 { fill: #e3f2fd; stroke: #2196f3; }
+      .signal3 { fill: #f3e5f5; stroke: #9c27b0; }
+      .signal4 { fill: #f1f8e9; stroke: #689f38; }
+      .signal5 { fill: #fce4ec; stroke: #c2185b; }
+      .softmax-box { fill: #f5f5f5; stroke: #666; stroke-width: 2; rx: 6; }
+      .example-box { fill: #e8f5e9; stroke: #388e3c; stroke-width: 2; rx: 6; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="35" class="title" text-anchor="middle">TDE Router: 5-Signal Ensemble</text>
+
+  <!-- Signal 1: Parallelization -->
+  <rect x="30" y="60" width="160" height="140" class="signal-box signal1"/>
+  <text x="110" y="85" class="signal-label" text-anchor="middle">Signal 1</text>
+  <text x="110" y="102" class="signal-text" text-anchor="middle">Parallelization</text>
+  <text x="110" y="120" class="signal-text" text-anchor="middle">% of steps can</text>
+  <text x="110" y="133" class="signal-text" text-anchor="middle">run in parallel</text>
+  <text x="110" y="153" class="weight-text" text-anchor="middle">Weight: 35%</text>
+  <text x="110" y="170" class="signal-text" text-anchor="middle" font-size="10">0% → CC/TDE</text>
+  <text x="110" y="183" class="signal-text" text-anchor="middle" font-size="10">>60% → ACS</text>
+
+  <!-- Signal 2: Iteration Loops -->
+  <rect x="210" y="60" width="160" height="140" class="signal-box signal2"/>
+  <text x="290" y="85" class="signal-label" text-anchor="middle">Signal 2</text>
+  <text x="290" y="102" class="signal-text" text-anchor="middle">Iteration Loops</text>
+  <text x="290" y="120" class="signal-text" text-anchor="middle">Steps that</text>
+  <text x="290" y="133" class="signal-text" text-anchor="middle">re-read outputs</text>
+  <text x="290" y="153" class="weight-text" text-anchor="middle">Weight: 25%</text>
+  <text x="290" y="170" class="signal-text" text-anchor="middle" font-size="10">1-2 → ACS OK</text>
+  <text x="290" y="183" class="signal-text" text-anchor="middle" font-size="10">>2 → TDE wins</text>
+
+  <!-- Signal 3: Context Dependency -->
+  <rect x="390" y="60" width="160" height="140" class="signal-box signal3"/>
+  <text x="470" y="85" class="signal-label" text-anchor="middle">Signal 3</text>
+  <text x="470" y="102" class="signal-text" text-anchor="middle">Context</text>
+  <text x="470" y="120" class="signal-text" text-anchor="middle">State flows</text>
+  <text x="470" y="133" class="signal-text" text-anchor="middle">between steps?</text>
+  <text x="470" y="153" class="weight-text" text-anchor="middle">Weight: 20%</text>
+  <text x="470" y="170" class="signal-text" text-anchor="middle" font-size="10">High → TDE</text>
+  <text x="470" y="183" class="signal-text" text-anchor="middle" font-size="10">Low → ACS</text>
+
+  <!-- Signal 4: Data Volume -->
+  <rect x="570" y="60" width="160" height="140" class="signal-box signal4"/>
+  <text x="650" y="85" class="signal-label" text-anchor="middle">Signal 4</text>
+  <text x="650" y="102" class="signal-text" text-anchor="middle">Data Volume</text>
+  <text x="650" y="120" class="signal-text" text-anchor="middle">Size of input</text>
+  <text x="650" y="133" class="signal-text" text-anchor="middle">data (MB)</text>
+  <text x="650" y="153" class="weight-text" text-anchor="middle">Weight: 15%</text>
+  <text x="650" y="170" class="signal-text" text-anchor="middle" font-size="10"><100MB → CC</text>
+  <text x="650" y="183" class="signal-text" text-anchor="middle" font-size="10">>1GB → ACS</text>
+
+  <!-- Signal 5: Task Type -->
+  <rect x="750" y="60" width="150" height="140" class="signal-box signal5"/>
+  <text x="825" y="85" class="signal-label" text-anchor="middle">Signal 5</text>
+  <text x="825" y="102" class="signal-text" text-anchor="middle">Task Type</text>
+  <text x="825" y="120" class="signal-text" text-anchor="middle">code_gen,</text>
+  <text x="825" y="133" class="signal-text" text-anchor="middle">reasoning, etc</text>
+  <text x="825" y="153" class="weight-text" text-anchor="middle">Weight: 5%</text>
+  <text x="825" y="170" class="signal-text" text-anchor="middle" font-size="10">Tiebreaker</text>
+  <text x="825" y="183" class="signal-text" text-anchor="middle" font-size="10">Bonus signal</text>
+
+  <!-- Softmax Normalization -->
+  <rect x="40" y="240" width="920" height="100" class="softmax-box"/>
+  <text x="500" y="270" class="signal-label" text-anchor="middle">Softmax Ensemble with Logit Scaling (×5)</text>
+  <line x1="50" y1="285" x2="950" y2="285" stroke="#999" stroke-width="1"/>
+  <text x="500" y="310" class="signal-text" text-anchor="middle" font-size="12">Real probability distribution across 3 engines</text>
+  <text x="500" y="330" class="signal-text" text-anchor="middle" font-size="12" font-weight="bold">Result: TDE: 75% | ACS: 20% | CC: 5%</text>
+
+  <!-- Example: Complex Refactor -->
+  <rect x="40" y="380" width="920" height="290" class="example-box"/>
+  <text x="500" y="410" class="signal-label" text-anchor="middle">Example: Complex Refactor (Iterative Task)</text>
+  <line x1="50" y1="425" x2="950" y2="425" stroke="#388e3c" stroke-width="1"/>
+
+  <g class="example-text">
+    <text x="60" y="450">Signal 1 (Parallelization: 20%):</text>
+    <text x="880" y="450" text-anchor="end" fill="#666">CC scores +0.2</text>
+
+    <text x="60" y="475">Signal 2 (Iteration loops: 4):</text>
+    <text x="880" y="475" text-anchor="end" fill="#388e3c" font-weight="bold">TDE scores +0.8 ✓</text>
+
+    <text x="60" y="500">Signal 3 (Context: HIGH):</text>
+    <text x="880" y="500" text-anchor="end" fill="#388e3c" font-weight="bold">TDE scores +0.9 ✓</text>
+
+    <text x="60" y="525">Signal 4 (Data: 50MB):</text>
+    <text x="880" y="525" text-anchor="end" fill="#666">CC scores +0.1</text>
+
+    <text x="60" y="550">Signal 5 (Task: code_generation):</text>
+    <text x="880" y="550" text-anchor="end" fill="#388e3c">TDE bonus +0.2 ✓</text>
+
+    <line x1="50" y1="565" x2="950" y2="565" stroke="#388e3c" stroke-width="1" stroke-dasharray="3,3"/>
+
+    <text x="500" y="600" text-anchor="middle" font-weight="bold" fill="#1b5e20">Result: TDE wins with 72% confidence</text>
+    <text x="500" y="625" text-anchor="middle" fill="#333">TDE best for this task (iterative + context-heavy)</text>
+  </g>
+</svg>

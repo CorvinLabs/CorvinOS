@@ -1,0 +1,126 @@
+<svg width="860" height="292" viewBox="0 0 860 292" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgC" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+  </defs>
+  <rect width="860" height="292" rx="10" fill="url(#bgC)"/>
+
+  <!-- Title -->
+  <text x="430" y="28"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">EU AI ACT 2026 + GDPR — STRUCTURAL COMPLIANCE</text>
+
+  <!-- ══════════════════════════════════════════════════════
+       PILLAR 1 — Bot Disclosure  (blue)
+       x=14  w=193  center=110.5
+  ══════════════════════════════════════════════════════ -->
+  <rect x="14" y="44" width="193" height="224" rx="8" fill="#0e1829" stroke="#3b82f6" stroke-width="1.5"/>
+
+  <!-- Icon: circle with "i" -->
+  <circle cx="111" cy="82" r="20" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="111" y="82" text-anchor="middle" dominant-baseline="central"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="22" font-style="italic" font-weight="700" fill="#93c5fd">i</text>
+
+  <text x="111" y="120" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#e6edf3">Bot Disclosure</text>
+  <text x="111" y="137" text-anchor="middle"
+        font-family="monospace" font-size="11" fill="#3b82f6">EU AI Act Art. 50</text>
+
+  <line x1="34" y1="149" x2="187" y2="149" stroke="#1e3a5f" stroke-width="1"/>
+
+  <text x="111" y="167" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">One-time per user</text>
+  <text x="111" y="183" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">/join · /pass · /leave</text>
+  <text x="111" y="199" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">AI-nature statement</text>
+  <text x="111" y="215" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">structurally locked</text>
+  <text x="111" y="231" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">≤ 1500 chars · DE/EN</text>
+  <text x="111" y="247" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#6b7280">no bypass shortcut</text>
+
+  <!-- ══════════════════════════════════════════════════════
+       PILLAR 2 — Consent Gate  (purple)
+       x=217  w=193  center=313.5
+  ══════════════════════════════════════════════════════ -->
+  <rect x="217" y="44" width="193" height="224" rx="8" fill="#1a0e2e" stroke="#a78bfa" stroke-width="1.5"/>
+
+  <!-- Icon: lock (rect body + arc shackle) -->
+  <circle cx="314" cy="82" r="20" fill="#2d1a4a" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="305" y="80" width="18" height="13" rx="2" fill="#a78bfa"/>
+  <path d="M307 80 C307 71 321 71 321 80" stroke="#a78bfa" stroke-width="2.2" fill="none"/>
+
+  <text x="314" y="120" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#e6edf3">Consent Gate</text>
+  <text x="314" y="137" text-anchor="middle"
+        font-family="monospace" font-size="11" fill="#a78bfa">GDPR Art. 6 &amp; 7</text>
+
+  <line x1="237" y1="149" x2="390" y2="149" stroke="#2d1a4a" stroke-width="1"/>
+
+  <text x="314" y="167" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">Deny-by-default</text>
+  <text x="314" y="183" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">TTL-capped · per-uid</text>
+  <text x="314" y="199" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">/consent on|off|&lt;ttl&gt;</text>
+  <text x="314" y="215" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">re-validated at consume</text>
+  <text x="314" y="231" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">no auto-admit shortcut</text>
+  <text x="314" y="247" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#6b7280">identity-bound grant</text>
+
+  <!-- ══════════════════════════════════════════════════════
+       PILLAR 3 — Hash-Chained Audit  (green)
+       x=420  w=193  center=516.5
+  ══════════════════════════════════════════════════════ -->
+  <rect x="420" y="44" width="193" height="224" rx="8" fill="#0c1f16" stroke="#3fb950" stroke-width="1.5"/>
+
+  <!-- Icon: two interlocked circles (chain) -->
+  <circle cx="517" cy="82" r="20" fill="#0f2d1a" stroke="#3fb950" stroke-width="1.5"/>
+  <circle cx="509" cy="82" r="7" fill="none" stroke="#3fb950" stroke-width="2"/>
+  <circle cx="525" cy="82" r="7" fill="none" stroke="#3fb950" stroke-width="2"/>
+
+  <text x="517" y="120" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#e6edf3">Audit Chain</text>
+  <text x="517" y="137" text-anchor="middle"
+        font-family="monospace" font-size="11" fill="#3fb950">GDPR Art. 30 &amp; 32</text>
+
+  <line x1="440" y1="149" x2="593" y2="149" stroke="#0f2d1a" stroke-width="1"/>
+
+  <text x="517" y="167" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">SHA-256 hash-chain</text>
+  <text x="517" y="183" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">tamper-evident</text>
+  <text x="517" y="199" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">offline-verifiable</text>
+  <text x="517" y="215" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">daily auto-verify 04:30</text>
+  <text x="517" y="231" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">voice-audit verify</text>
+  <text x="517" y="247" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#6b7280">exit-1 on chain break</text>
+
+  <!-- ══════════════════════════════════════════════════════
+       PILLAR 4 — Data Residency  (amber)
+       x=623  w=223  center=734.5
+  ══════════════════════════════════════════════════════ -->
+  <rect x="623" y="44" width="223" height="224" rx="8" fill="#1a1200" stroke="#f0b429" stroke-width="1.5"/>
+
+  <!-- Icon: concentric rings (zone) -->
+  <circle cx="735" cy="82" r="20" fill="#2a1e00" stroke="#f0b429" stroke-width="1.5"/>
+  <circle cx="735" cy="82" r="12" fill="none" stroke="#f0b429" stroke-width="1.5"/>
+  <circle cx="735" cy="82" r="5"  fill="#f0b429"/>
+
+  <text x="735" y="120" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#e6edf3">Data Residency</text>
+  <text x="735" y="137" text-anchor="middle"
+        font-family="monospace" font-size="11" fill="#f0b429">EU AI Act Art. 14</text>
+
+  <line x1="643" y1="149" x2="826" y2="149" stroke="#2a1e00" stroke-width="1"/>
+
+  <text x="735" y="167" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">Compliance-zone routing</text>
+  <text x="735" y="183" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">allowed_engines policy</text>
+  <text x="735" y="199" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">forbid_engines policy</text>
+  <text x="735" y="215" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">data_residency config</text>
+  <text x="735" y="231" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8b949e">no cross-zone LLM call</text>
+  <text x="735" y="247" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#6b7280">no compliance-off mode</text>
+
+  <!-- Footer -->
+  <text x="430" y="280"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="10" fill="#484f58">All four mechanisms are structural constraints — cannot be disabled via env var, flag, or config option</text>
+</svg>

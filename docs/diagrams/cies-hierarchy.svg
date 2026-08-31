@@ -1,0 +1,173 @@
+<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .box-idea { fill: #e6f2ff; stroke: #0066cc; stroke-width: 2; }
+      .box-concept { fill: #fff4e6; stroke: #ff8800; stroke-width: 2; }
+      .box-adr { fill: #e6ffe6; stroke: #00aa44; stroke-width: 2; }
+      .text-title { font-size: 16px; font-weight: bold; fill: #1a1a1a; }
+      .text-desc { font-size: 12px; fill: #555; }
+      .text-props { font-size: 10px; fill: #666; font-family: monospace; }
+      .arrow { stroke: #0066cc; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-up { stroke: #cc6600; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead-up); stroke-dasharray: 5,5; }
+      .label { font-size: 11px; fill: #0066cc; font-weight: bold; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#0066cc" />
+    </marker>
+    <marker id="arrowhead-up" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#cc6600" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="35" class="text-title" text-anchor="middle" font-size="24">
+    Corvin Idea Evolution System (CIES)
+  </text>
+  <text x="600" y="55" class="text-desc" text-anchor="middle" font-size="13">
+    Three-Layer Hierarchy: Vision → Method → Decision
+  </text>
+
+  <!-- Layer 1: IDEA-ADR -->
+  <rect x="100" y="100" width="320" height="200" class="box-idea" rx="8"/>
+  <text x="260" y="130" class="text-title">IDEA-ADR (Root)</text>
+  <text x="260" y="150" class="text-desc">Strategic Direction</text>
+
+  <text x="115" y="175" class="text-props">id: IDEA-ADR-0042</text>
+  <text x="115" y="192" class="text-props">vision: "Multi-tenant learning"</text>
+  <text x="115" y="209" class="text-props">problem: "Central model doesn't</text>
+  <text x="115" y="226" class="text-props">          capture per-tenant patterns"</text>
+  <text x="115" y="243" class="text-props">stakeholders: [ops-team, ml-lead]</text>
+  <text x="115" y="260" class="text-props">downstream: [CONCEPT-ADR-0009]</text>
+  <text x="115" y="277" class="text-props">created_at: 2026-08-01</text>
+
+  <!-- Layer 2: CONCEPT-ADR -->
+  <rect x="550" y="100" width="320" height="200" class="box-concept" rx="8"/>
+  <text x="710" y="130" class="text-title">CONCEPT-ADR (Middle)</text>
+  <text x="710" y="150" class="text-desc">Reusable Working Method</text>
+
+  <text x="565" y="175" class="text-props">id: CONCEPT-0002</text>
+  <text x="565" y="192" class="text-props">method: "Live-report-driven</text>
+  <text x="565" y="209" class="text-props">         root cause method"</text>
+  <text x="565" y="226" class="text-props">recurrence: [task-1, task-2, task-3]</text>
+  <text x="565" y="243" class="text-props">skills: [assistant.corvinOS_...]</text>
+  <text x="565" y="260" class="text-props">upstream: [IDEA-ADR-0001]</text>
+  <text x="565" y="277" class="text-props">downstream: [ADR-0232, ADR-0233]</text>
+
+  <!-- Layer 3: ADR-NNNN -->
+  <rect x="900" y="100" width="280" height="200" class="box-adr" rx="8"/>
+  <text x="1040" y="130" class="text-title">ADR-NNNN (Leaf)</text>
+  <text x="1040" y="150" class="text-desc">Architecture Decision</text>
+
+  <text x="915" y="175" class="text-props">id: ADR-0314</text>
+  <text x="915" y="192" class="text-props">status: proposed</text>
+  <text x="915" y="209" class="text-props">paths: [core/learning/**]</text>
+  <text x="915" y="226" class="text-props">docs: [docs/claude-ref/layer-*.md]</text>
+  <text x="915" y="243" class="text-props">depends_on: [ADR-0312]</text>
+  <text x="915" y="260" class="text-props">upstream: [CONCEPT-ADR-0009]</text>
+  <text x="915" y="277" class="text-props">commits: [9f3a8e2c]</text>
+
+  <!-- Arrows: Downstream -->
+  <path d="M 420 200 L 550 200" class="arrow"/>
+  <text x="475" y="190" class="label">downstream</text>
+
+  <path d="M 870 200 L 900 200" class="arrow"/>
+  <text x="875" y="190" class="label">downstream</text>
+
+  <!-- Arrows: Upstream -->
+  <path d="M 550 230 L 420 230" class="arrow-up"/>
+  <text x="475" y="250" class="label" fill="#cc6600">upstream</text>
+
+  <path d="M 900 230 L 870 230" class="arrow-up"/>
+  <text x="875" y="250" class="label" fill="#cc6600">upstream</text>
+
+  <!-- Validation Gates -->
+  <rect x="100" y="350" width="1080" height="400" fill="none" stroke="#ddd" stroke-width="1" stroke-dasharray="5,5" rx="8"/>
+  <text x="110" y="375" class="text-title" font-size="14">Validation Gates & Lifecycle</text>
+
+  <!-- Stage 1 -->
+  <rect x="120" y="410" width="240" height="280" fill="#f0f7ff" stroke="#0066cc" stroke-width="1.5" rx="6"/>
+  <text x="240" y="440" class="text-title" text-anchor="middle" font-size="12">Stage 1: IDEA-ADR</text>
+
+  <text x="130" y="470" class="text-desc" font-weight="bold">When:</text>
+  <text x="130" y="485" class="text-desc">• New feature surfaces</text>
+  <text x="130" y="500" class="text-desc">• Market opportunity</text>
+  <text x="130" y="515" class="text-desc">• Org constraint emerges</text>
+
+  <text x="130" y="545" class="text-desc" font-weight="bold">Gate:</text>
+  <text x="130" y="560" class="text-desc">✓ Problem specific</text>
+  <text x="130" y="575" class="text-desc">✓ 2+ stakeholders align</text>
+  <text x="130" y="590" class="text-desc">✓ Success criteria clear</text>
+  <text x="130" y="605" class="text-desc">✓ Timeline realistic</text>
+
+  <text x="130" y="635" class="text-desc" font-weight="bold">Output:</text>
+  <text x="130" y="650" class="text-desc">Ideas archive</text>
+  <text x="130" y="665" class="text-desc">Future reference</text>
+
+  <!-- Stage 2 -->
+  <rect x="420" y="410" width="240" height="280" fill="#fffbf0" stroke="#ff8800" stroke-width="1.5" rx="6"/>
+  <text x="540" y="440" class="text-title" text-anchor="middle" font-size="12">Stage 2: CONCEPT-ADR</text>
+
+  <text x="430" y="470" class="text-desc" font-weight="bold">When:</text>
+  <text x="430" y="485" class="text-desc">• 2+ tasks show pattern</text>
+  <text x="430" y="500" class="text-desc">• Root-cause generalizes</text>
+  <text x="430" y="515" class="text-desc">• Verification technique</text>
+  <text x="430" y="530" class="text-desc">  proved decisive</text>
+
+  <text x="430" y="560" class="text-desc" font-weight="bold">Gate:</text>
+  <text x="430" y="575" class="text-desc">✓ 2+ real evidence</text>
+  <text x="430" y="590" class="text-desc">✓ Method generalizable</text>
+  <text x="430" y="605" class="text-desc">✓ When NOT stated</text>
+  <text x="430" y="620" class="text-desc">✓ Skill minted</text>
+
+  <text x="430" y="650" class="text-desc" font-weight="bold">Output:</text>
+  <text x="430" y="665" class="text-desc">Skill for auto-injection</text>
+
+  <!-- Stage 3 -->
+  <rect x="720" y="410" width="240" height="280" fill="#f0fff0" stroke="#00aa44" stroke-width="1.5" rx="6"/>
+  <text x="840" y="440" class="text-title" text-anchor="middle" font-size="12">Stage 3: ADR-NNNN</text>
+
+  <text x="730" y="470" class="text-desc" font-weight="bold">When:</text>
+  <text x="730" y="485" class="text-desc">• Design choice made</text>
+  <text x="730" y="500" class="text-desc">• Structural trigger:</text>
+  <text x="730" y="515" class="text-desc">  - new protocol</text>
+  <text x="730" y="530" class="text-desc">  - security mechanism</text>
+
+  <text x="730" y="560" class="text-desc" font-weight="bold">Gate:</text>
+  <text x="730" y="575" class="text-desc">✓ Frontmatter complete</text>
+  <text x="730" y="590" class="text-desc">✓ 3 levels discussed</text>
+  <text x="730" y="605" class="text-desc">✓ Pre-commit passes</text>
+  <text x="730" y="620" class="text-desc">✓ Code + docs + ADR</text>
+
+  <text x="730" y="650" class="text-desc" font-weight="bold">Output:</text>
+  <text x="730" y="665" class="text-desc">Corvin-ADR/decisions/</text>
+
+  <!-- Deployment -->
+  <rect x="1020" y="410" width="160" height="280" fill="#fff5f5" stroke="#cc0000" stroke-width="1.5" rx="6"/>
+  <text x="1100" y="440" class="text-title" text-anchor="middle" font-size="12">Deploy</text>
+
+  <text x="1030" y="480" class="text-desc" font-weight="bold">Git commit:</text>
+  <text x="1030" y="495" class="text-props">Code + ADR</text>
+
+  <text x="1030" y="530" class="text-desc" font-weight="bold">CI/CD:</text>
+  <text x="1030" y="545" class="text-props">Code-ADR</text>
+  <text x="1030" y="560" class="text-props">sync check</text>
+
+  <text x="1030" y="595" class="text-desc" font-weight="bold">Output:</text>
+  <text x="1030" y="610" class="text-props">Permanent</text>
+  <text x="1030" y="625" class="text-props">archive</text>
+  <text x="1030" y="640" class="text-props">(Git)</text>
+
+  <!-- Flow arrows between stages -->
+  <path d="M 360 545 L 420 545" class="arrow" stroke-width="2"/>
+  <path d="M 660 545 L 720 545" class="arrow" stroke-width="2"/>
+  <path d="M 960 545 L 1020 545" class="arrow" stroke-width="2"/>
+
+  <!-- Legend -->
+  <text x="110" y="750" class="text-desc" font-weight="bold">Legend:</text>
+  <rect x="280" y="735" width="12" height="12" class="box-idea"/>
+  <text x="300" y="745" class="text-desc">Idea (Strategic)</text>
+  <rect x="480" y="735" width="12" height="12" class="box-concept"/>
+  <text x="500" y="745" class="text-desc">Concept (Method)</text>
+  <rect x="680" y="735" width="12" height="12" class="box-adr"/>
+  <text x="700" y="745" class="text-desc">Decision (Architecture)</text>
+</svg>

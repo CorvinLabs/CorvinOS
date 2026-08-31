@@ -1,0 +1,87 @@
+<svg viewBox="0 0 1000 600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 28px; font-weight: bold; fill: #000; }
+      .box-label { font-size: 16px; font-weight: bold; fill: #000; }
+      .box-text { font-size: 12px; fill: #222; }
+      .subtitle { font-size: 14px; fill: #555; }
+      .arrow { stroke: #333; stroke-width: 2; marker-end: url(#arrowhead); }
+      .box { rx: 8; stroke-width: 2; }
+      .input-box { fill: #5cb85c; stroke: #3d8b3d; }
+      .detector-box { fill: #e3f2fd; stroke: #1976d2; }
+      .engine-box-cc { fill: #e8f4f8; stroke: #2c5aa0; }
+      .engine-box-tde { fill: #e8f8e8; stroke: #3d8b3d; }
+      .engine-box-acs { fill: #f4e8e8; stroke: #a02c2c; }
+      .divider { stroke: #ddd; stroke-width: 1; }
+      .savings { font-size: 13px; font-weight: bold; fill: #2e7d32; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#333"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="35" class="title" text-anchor="middle">TDE Layer: Adaptive Engine Selection</text>
+
+  <!-- Input -->
+  <rect x="350" y="50" width="300" height="50" class="input-box box"/>
+  <text x="500" y="82" class="box-label" text-anchor="middle" fill="white">User Task</text>
+
+  <!-- Arrow -->
+  <line x1="500" y1="100" x2="500" y2="130" class="arrow"/>
+
+  <!-- TDE Router -->
+  <rect x="250" y="130" width="500" height="100" class="detector-box box"/>
+  <text x="500" y="160" class="box-label" text-anchor="middle" fill="#1976d2">TDE Router: 5-Signal Ensemble</text>
+  <line x1="260" y1="175" x2="740" y2="175" class="divider"/>
+  <text x="500" y="195" class="subtitle" text-anchor="middle">Parallelization | Iteration | Context | Data Volume | Task Type</text>
+  <text x="500" y="215" class="subtitle" text-anchor="middle">→ Score each engine via Softmax (0.0-1.0)</text>
+
+  <!-- Arrow -->
+  <line x1="500" y1="230" x2="500" y2="265" class="arrow"/>
+
+  <!-- Three Engines Row -->
+  <!-- Claude Code -->
+  <rect x="60" y="265" width="220" height="310" class="engine-box-cc box"/>
+  <text x="170" y="295" class="box-label" text-anchor="middle" fill="#2c5aa0">Claude Code</text>
+  <text x="170" y="315" class="subtitle" text-anchor="middle">(Simple/Interactive)</text>
+  <line x1="70" y1="330" x2="270" y2="330" class="divider"/>
+  <text x="85" y="355" class="box-text">• Keeps full context</text>
+  <text x="85" y="375" class="box-text">• Real-time interaction</text>
+  <text x="85" y="395" class="box-text">• Safe default choice</text>
+  <text x="85" y="420" class="box-text">• No parallelization</text>
+  <line x1="70" y1="440" x2="270" y2="440" class="divider"/>
+  <text x="170" y="465" class="subtitle" text-anchor="middle" font-weight="bold">Cost: 1-3k tokens</text>
+  <text x="170" y="530" class="savings" text-anchor="middle" fill="#388e3c">✓ SAVES 80%</text>
+
+  <!-- TDE -->
+  <rect x="390" y="265" width="220" height="310" class="engine-box-tde box" stroke-width="3"/>
+  <text x="500" y="295" class="box-label" text-anchor="middle" fill="#3d8b3d">Tiered Delegation</text>
+  <text x="500" y="315" class="subtitle" text-anchor="middle">(Balanced Optimum)</text>
+  <line x1="400" y1="330" x2="600" y2="330" class="divider"/>
+  <text x="415" y="355" class="box-text">• Keeps context warm</text>
+  <text x="415" y="375" class="box-text">• Smart delegation</text>
+  <text x="415" y="395" class="box-text">• Iterative refinement</text>
+  <text x="415" y="415" class="box-text">• Limited parallelism</text>
+  <line x1="400" y1="440" x2="600" y2="440" class="divider"/>
+  <text x="500" y="465" class="subtitle" text-anchor="middle" font-weight="bold">Cost: 3-7k tokens</text>
+  <text x="500" y="530" class="savings" text-anchor="middle" fill="#3d8b3d">✓ SAVES 50%</text>
+
+  <!-- ACS -->
+  <rect x="720" y="265" width="220" height="310" class="engine-box-acs box"/>
+  <text x="830" y="295" class="box-label" text-anchor="middle" fill="#a02c2c">ACS</text>
+  <text x="830" y="315" class="subtitle" text-anchor="middle">(Parallel/Big-Data)</text>
+  <line x1="730" y1="330" x2="930" y2="330" class="divider"/>
+  <text x="745" y="355" class="box-text">• Parallelizes 8x+</text>
+  <text x="745" y="375" class="box-text">• Handles 1GB+ data</text>
+  <text x="745" y="395" class="box-text">• Stateless processing</text>
+  <text x="745" y="415" class="box-text">• No context retention</text>
+  <line x1="730" y1="440" x2="930" y2="440" class="divider"/>
+  <text x="830" y="465" class="subtitle" text-anchor="middle" font-weight="bold">Cost: 5-15k tokens</text>
+  <text x="830" y="530" class="savings" text-anchor="middle" fill="#a02c2c">✓ SAVES 40%</text>
+
+  <!-- Result Summary -->
+  <rect x="100" y="540" width="800" height="50" fill="#f5f5f5" stroke="#999" stroke-width="1" rx="4"/>
+  <text x="500" y="560" class="subtitle" text-anchor="middle" font-weight="bold">Result: Optimal engine selected per-task → 48.8% aggregate token savings</text>
+  <text x="500" y="580" class="subtitle" text-anchor="middle">simulated across 11 modeled benchmark tasks — no measured usage</text>
+</svg>

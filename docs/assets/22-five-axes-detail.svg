@@ -1,0 +1,182 @@
+<svg width="1000" height="320" viewBox="0 0 1000 320" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg22" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <marker id="arrBlue22" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrAmber22" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f0b429"/>
+    </marker>
+    <marker id="arrPurple22" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrGreen22" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrCyan22" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#22d3ee"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="320" rx="10" fill="url(#bg22)"/>
+
+  <!-- Title -->
+  <text x="500" y="28" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#8b949e" letter-spacing="2">FIVE ORTHOGONAL AXES — CORVINOSS</text>
+
+  <!-- ═══ Column 1: surface (blue, x=95) ═══ -->
+  <rect x="21" y="44" width="148" height="200" rx="8"
+        fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.30)" stroke-width="1.2"/>
+  <text x="95" y="68" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#3b82f6">surface</text>
+  <!-- down arrow -->
+  <line x1="95" y1="78" x2="95" y2="89" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrBlue22)"/>
+  <!-- values -->
+  <text x="95" y="108" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">WhatsApp</text>
+  <text x="95" y="126" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">Discord</text>
+  <text x="95" y="144" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">Email</text>
+  <text x="95" y="162" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">Voice</text>
+  <text x="95" y="180" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">Slack</text>
+  <text x="95" y="198" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#8b949e">…</text>
+
+  <!-- × separator 1 (x=182) -->
+  <text x="182" y="70" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="18" font-weight="700" fill="#484f58">×</text>
+
+  <!-- ═══ Column 2: engine (amber, x=270) ═══ -->
+  <rect x="196" y="44" width="148" height="200" rx="8"
+        fill="rgba(240,180,41,0.08)" stroke="rgba(240,180,41,0.30)" stroke-width="1.2"/>
+  <text x="270" y="68" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#f0b429">engine</text>
+  <!-- down arrow -->
+  <line x1="270" y1="78" x2="270" y2="89" stroke="#f0b429" stroke-width="1.5" marker-end="url(#arrAmber22)"/>
+  <!-- values -->
+  <text x="270" y="108" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">Claude Code</text>
+  <text x="270" y="126" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">Codex CLI</text>
+  <text x="270" y="144" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">OpenCode</text>
+  <text x="270" y="162" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">Ollama</text>
+  <text x="270" y="180" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#8b949e">…</text>
+
+  <!-- × separator 2 (x=362) -->
+  <text x="362" y="70" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="18" font-weight="700" fill="#484f58">×</text>
+
+  <!-- ═══ Column 3: persona (purple, x=450) ═══ -->
+  <rect x="376" y="44" width="148" height="200" rx="8"
+        fill="rgba(167,139,250,0.08)" stroke="rgba(167,139,250,0.30)" stroke-width="1.2"/>
+  <text x="450" y="68" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#a78bfa">persona</text>
+  <!-- down arrow -->
+  <line x1="450" y1="78" x2="450" y2="89" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrPurple22)"/>
+  <!-- values -->
+  <text x="450" y="108" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">coder</text>
+  <text x="450" y="126" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">forge</text>
+  <text x="450" y="144" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">browser</text>
+  <text x="450" y="162" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">research</text>
+  <text x="450" y="180" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">inbox</text>
+  <text x="450" y="198" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#8b949e">…</text>
+
+  <!-- × separator 3 (x=542) -->
+  <text x="542" y="70" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="18" font-weight="700" fill="#484f58">×</text>
+
+  <!-- ═══ Column 4: scope (green, x=630) ═══ -->
+  <rect x="556" y="44" width="148" height="200" rx="8"
+        fill="rgba(63,185,80,0.08)" stroke="rgba(63,185,80,0.30)" stroke-width="1.2"/>
+  <text x="630" y="68" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#3fb950">scope</text>
+  <!-- down arrow -->
+  <line x1="630" y1="78" x2="630" y2="89" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrGreen22)"/>
+  <!-- values -->
+  <text x="630" y="108" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">task</text>
+  <text x="630" y="126" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">session</text>
+  <text x="630" y="144" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">project</text>
+  <text x="630" y="162" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">user</text>
+
+  <!-- × separator 4 (x=722) -->
+  <text x="722" y="70" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="18" font-weight="700" fill="#484f58">×</text>
+
+  <!-- ═══ Column 5: tenant (cyan, x=810) ═══ -->
+  <rect x="736" y="44" width="148" height="200" rx="8"
+        fill="rgba(34,211,238,0.08)" stroke="rgba(34,211,238,0.30)" stroke-width="1.2"/>
+  <text x="810" y="68" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="700" fill="#22d3ee">tenant</text>
+  <!-- down arrow -->
+  <line x1="810" y1="78" x2="810" y2="89" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrCyan22)"/>
+  <!-- values -->
+  <text x="810" y="108" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">_default</text>
+  <text x="810" y="126" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">acme</text>
+  <text x="810" y="144" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#c9d1d9">globex</text>
+  <text x="810" y="162" text-anchor="middle"
+        font-family="'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"
+        font-size="11" fill="#8b949e">…</text>
+
+  <!-- ═══ Audit log bar ═══ -->
+  <rect x="20" y="276" width="960" height="28" rx="6"
+        fill="#1a0f00" stroke="#f0b429" stroke-width="1.2"/>
+  <text x="500" y="294" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="11" fill="#f0b429">&#x2194;  unified hash-chained audit log  &#x2194;  every state transition on every axis</text>
+</svg>
