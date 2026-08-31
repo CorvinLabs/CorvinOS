@@ -1,0 +1,41 @@
+{
+  "id": "plugin:buildin-data_processing-data_classification",
+  "type": "plugin",
+  "name": "Data Classification",
+  "version": "1.0.0",
+  "author": "Anthropic PBC",
+  "license": "Apache-2.0",
+  "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+  "tier": "buildin",
+  "category": "data_processing",
+  "description": "L34 data classification engine",
+  "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#data_classification",
+  "distribution": {
+    "supports_source": true,
+    "supports_wheel": true,
+    "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/data_classification.py",
+    "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-data_classification-1.0.0-py3-none-any.whl",
+    "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-data_classification-1.0.0-py3-none-any.whl.asc",
+    "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "dependencies": [],
+  "requires_version": ">=1.0.0",
+  "boot_layer": "bundled",
+  "sla_level": "buildin",
+  "security_audit": {
+    "last_audit_date": "2026-08-31",
+    "auditor": "CorvinOS Security Team",
+    "findings": 0,
+    "findings_by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+  },
+  "maintainer_url": "mailto:plugins@anthropic.com",
+  "tags": [
+    "data"
+  ]
+}
