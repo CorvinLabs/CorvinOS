@@ -1,0 +1,32 @@
+{
+  "id": "slack-notifier",
+  "name": "Slack Notifier",
+  "version": "1.2.0",
+  "category": "Integration",
+  "description": "Send notifications and messages to Slack channels. Real-time alerts, scheduled reminders, and rich formatting.",
+  "author": "Community Contributors",
+  "email": "plugins@corvin.org",
+  "license": "Apache-2.0",
+  "tier": "contributor",
+  "boot_layer": "installed",
+  "rating": 4.6,
+  "installs": 1247,
+  "homepage": "https://github.com/corvin-community/slack-notifier",
+  "github": "https://github.com/corvin-community/slack-notifier",
+  "repository": "https://github.com/corvin-community/slack-notifier",
+  "min_corvin_version": "0.10.0",
+  "dependencies": [],
+  "features": [
+    "send_message",
+    "schedule_reminder",
+    "rich_formatting",
+    "thread_support",
+    "oauth_auth"
+  ],
+  "tags": [
+    "notification",
+    "messaging",
+    "slack",
+    "integration"
+  ]
+}

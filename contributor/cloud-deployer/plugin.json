@@ -1,0 +1,31 @@
+{
+  "id": "cloud-deployer",
+  "name": "Cloud Deployer",
+  "version": "2.0.0",
+  "category": "Integration",
+  "description": "Deploy applications to AWS, GCP, and Azure with one-click deployment",
+  "author": "Community Contributors",
+  "email": "plugins@corvin.org",
+  "license": "Apache-2.0",
+  "tier": "contributor",
+  "boot_layer": "installed",
+  "rating": 4.5,
+  "installs": 342,
+  "homepage": "https://github.com/corvin-community/cloud-deployer",
+  "github": "https://github.com/corvin-community/cloud-deployer",
+  "repository": "https://github.com/corvin-community/cloud-deployer",
+  "min_corvin_version": "0.10.0",
+  "dependencies": [],
+  "features": [
+    "deploy_to_aws",
+    "deploy_to_gcp",
+    "deploy_to_azure",
+    "ci_cd_integration"
+  ],
+  "tags": [
+    "deployment",
+    "cloud",
+    "infrastructure",
+    "devops"
+  ]
+}

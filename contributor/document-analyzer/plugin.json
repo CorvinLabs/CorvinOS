@@ -1,0 +1,31 @@
+{
+  "id": "document-analyzer",
+  "name": "Document Analyzer",
+  "version": "1.5.0",
+  "category": "Integration",
+  "description": "Extract text, metadata, and insights from PDFs, Word docs, and images",
+  "author": "Community Contributors",
+  "email": "plugins@corvin.org",
+  "license": "Apache-2.0",
+  "tier": "contributor",
+  "boot_layer": "installed",
+  "rating": 4.3,
+  "installs": 567,
+  "homepage": "https://github.com/corvin-community/document-analyzer",
+  "github": "https://github.com/corvin-community/document-analyzer",
+  "repository": "https://github.com/corvin-community/document-analyzer",
+  "min_corvin_version": "0.10.0",
+  "dependencies": [],
+  "features": [
+    "extract_text",
+    "ocr_support",
+    "metadata_extraction",
+    "table_parsing"
+  ],
+  "tags": [
+    "document",
+    "analysis",
+    "pdf",
+    "processing"
+  ]
+}
