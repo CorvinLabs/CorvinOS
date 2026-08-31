@@ -20,7 +20,11 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Literal
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PluginCategory(Enum):
@@ -104,7 +108,8 @@ class PluginMetadata:
 
     def is_discoverable(self) -> bool:
         """Whether plugin appears in marketplace listings."""
-        return self.listed and self.origin != PluginOrigin.BUILTIN
+        # All listed plugins are discoverable (including bundled/builtin for admin install flow)
+        return self.listed
 
     def should_auto_remove(self) -> bool:
         """Whether governance rules require removal."""
@@ -239,10 +244,94 @@ class PluginMarketplace:
     In production, this would be backed by SQLite or PostgreSQL.
     """
 
-    def __init__(self):
+    def __init__(self, registry_path: Optional[str] = None):
         self.plugins: Dict[str, PluginMetadata] = {}
         self.installations: Dict[str, List[PluginInstallation]] = {}  # plugin_id -> [installations]
         self.reviews: Dict[str, List[PluginReview]] = {}  # plugin_id -> [reviews]
+
+        # Load registry if provided, otherwise try default locations
+        if registry_path:
+            self._load_registry(registry_path)
+        else:
+            self._load_registry_from_defaults()
+
+    def _load_registry_from_defaults(self) -> None:
+        """Load registry from default locations."""
+        default_paths = [
+            Path('/home/shumway/projects/Corvin-Marketplace/registry.json'),
+            Path.home() / '.corvin/marketplace/registry.json',
+            Path.cwd() / 'registry.json',
+        ]
+        for path in default_paths:
+            if path.exists():
+                self._load_registry(str(path))
+                return
+        logger.debug("No marketplace registry found in default locations")
+
+    def _load_registry(self, registry_path: str) -> None:
+        """Load plugins from registry.json file."""
+        try:
+            with open(registry_path) as f:
+                registry_data = json.load(f)
+
+            plugins = registry_data.get('plugins', {})
+            logger.info(f"Loading {len(plugins)} plugins from {registry_path}")
+
+            for plugin_id, plugin_data in plugins.items():
+                try:
+                    # Map category string to enum (handle variations)
+                    category_str = plugin_data.get('categories', ['integration'])[0].upper()
+                    # Try exact match first, then common mappings
+                    try:
+                        category = PluginCategory[category_str]
+                    except KeyError:
+                        # Try common mappings
+                        category_map = {
+                            'COMMUNICATION': 'INTEGRATION',
+                            'INTEGRATION': 'INTEGRATION',
+                            'NOTIFICATION': 'INTEGRATION',
+                            'AUTH': 'AUTHENTICATION',
+                        }
+                        category = PluginCategory[category_map.get(category_str, 'INTEGRATION')]
+
+                    # Map boot_layer to enum
+                    boot_layer_str = plugin_data.get('boot_layer', 'bundled').upper()
+                    boot_layer = BootLayer[boot_layer_str]
+
+                    # Map origin to enum
+                    origin_str = plugin_data.get('origin', 'builtin').upper()
+                    origin = PluginOrigin[origin_str]
+
+                    metadata = PluginMetadata(
+                        plugin_id=plugin_data['id'],
+                        name=plugin_data['name'],
+                        version=plugin_data['version'],
+                        category=category,
+                        boot_layer=boot_layer,
+                        origin=origin,
+                        author_id=plugin_data.get('email', 'unknown'),
+                        author_email=plugin_data.get('email', 'unknown'),
+                        license=plugin_data.get('license', 'Apache-2.0'),
+                        description=plugin_data.get('description', ''),
+                        long_description=plugin_data.get('description', ''),
+                        homepage_url=plugin_data.get('homepage'),
+                        repository_url=plugin_data.get('repository'),
+                        min_corvin_version=plugin_data.get('min_corvin_version', '0.10.0'),
+                        max_corvin_version=plugin_data.get('max_corvin_version'),
+                        download_count=plugin_data.get('download_count', 0),
+                        rating_count=plugin_data.get('rating_count', 0),
+                        rating_average=plugin_data.get('rating_average', 5.0),
+                        listed=plugin_data.get('listed', True),
+                    )
+                    self.plugins[plugin_id] = metadata
+                    logger.debug(f"Loaded plugin: {plugin_id} ({plugin_data['name']})")
+
+                except Exception as e:
+                    logger.error(f"Failed to load plugin {plugin_id}: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Failed to load marketplace registry from {registry_path}: {e}")
 
     def register_plugin(self, metadata: PluginMetadata) -> None:
         """Register a plugin in the marketplace."""

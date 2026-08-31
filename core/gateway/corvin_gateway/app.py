@@ -43,11 +43,21 @@ keep the bridges' inbox-based interface and never expose any port.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 # CRITICAL: Set CORVIN_HOME BEFORE any imports that call corvin_home().
 # When the gateway runs as a service from within a repo checkout, _forge_paths.corvin_home()
 # would detect repo context and return repo/.corvin, breaking session storage symmetry.
+
+# Fix: Add CorvinOS root to Python path for module imports (Phase 3.5 Console Integration)
+_app_file = Path(__file__).resolve()
+_corvin_root = _app_file.parent.parent.parent.parent  # Navigate to CorvinOS root
+_core_path = _corvin_root / 'core'
+if str(_corvin_root) not in sys.path and _corvin_root.exists():
+    sys.path.insert(0, str(_corvin_root))
+if str(_core_path) not in sys.path and _core_path.exists():
+    sys.path.insert(0, str(_core_path))
 # This must run BEFORE any module imports that use corvin_home() (e.g., _audit_metrics).
 if not os.environ.get("CORVIN_HOME"):
     os.environ["CORVIN_HOME"] = str(Path.home() / ".corvin")
