@@ -1,21 +1,21 @@
 {
-  "id": "plugin:buildin-memory-recall_backend",
+  "id": "plugin:buildin-security_compliance-user_backend",
   "type": "plugin",
-  "name": "CEL Session Recall",
+  "name": "User Backend",
   "version": "1.0.0",
   "author": "Anthropic PBC",
   "license": "Apache-2.0",
   "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
   "tier": "buildin",
-  "category": "memory",
-  "description": "Session recall backend providing memory persistence and retrieval. Implements ADR-0314 learning infrastructure.",
-  "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
+  "category": "security_compliance",
+  "description": "User authentication and authorization. GDPR Art. 6, 7 consent management.",
+  "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#user_backend",
   "distribution": {
     "supports_source": true,
     "supports_wheel": true,
-    "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/recall_backend.py",
-    "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl",
-    "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-memory-recall_backend-1.0.0-py3-none-any.whl.asc",
+    "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/user_backend.py",
+    "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl",
+    "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl.asc",
     "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "dependencies": [],
@@ -39,5 +39,5 @@
     "ai-learning",
     "compliance"
   ],
-  "last_updated": "2026-08-31T18:29:14.520126Z"
+  "last_updated": "2026-08-31T18:29:14.520902Z"
 }

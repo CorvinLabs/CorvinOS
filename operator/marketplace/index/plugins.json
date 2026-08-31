@@ -1,9 +1,224 @@
 {
   "version": "2.0",
   "schema": "ADR-0511",
-  "generated_at": "2026-08-31T18:15:14.187398Z",
-  "plugin_count": 1,
+  "generated_at": "2026-08-31T18:29:15.517914Z",
+  "plugin_count": 8,
   "plugins": [
+    {
+      "id": "plugin:buildin-integration-notification_backend",
+      "type": "plugin",
+      "name": "Notification Backend",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "integration",
+      "description": "Event notification and pub/sub messaging.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#notification_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/notification_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-notification_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-notification_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520783Z"
+    },
+    {
+      "id": "plugin:buildin-integration-router_backend",
+      "type": "plugin",
+      "name": "Router Backend",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "integration",
+      "description": "Message routing and delegation. ADR-0255 worker engine integration.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#router_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/router_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-router_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-router_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520288Z"
+    },
+    {
+      "id": "plugin:buildin-integration-data_connector",
+      "type": "plugin",
+      "name": "Data Connector",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "integration",
+      "description": "External data source integration for artifact processing.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#data_connector",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/data_connector.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-data_connector-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-data_connector-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520653Z"
+    },
+    {
+      "id": "plugin:buildin-security_compliance-audit_backend",
+      "type": "plugin",
+      "name": "Audit Backend",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "security_compliance",
+      "description": "Audit trail management with hash-chained immutability. Implements GDPR Art. 30, 32 compliance.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#audit_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/audit_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-audit_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-audit_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.519729Z"
+    },
+    {
+      "id": "plugin:buildin-security_compliance-user_backend",
+      "type": "plugin",
+      "name": "User Backend",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "security_compliance",
+      "description": "User authentication and authorization. GDPR Art. 6, 7 consent management.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#user_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/user_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520902Z"
+    },
     {
       "id": "plugin:buildin-memory-recall_backend",
       "type": "plugin",
@@ -14,7 +229,7 @@
       "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
       "tier": "buildin",
       "category": "memory",
-      "description": "Session recall backend providing memory persistence and retrieval for CorvinOS sessions. Implements ADR-0314 (Learning Infrastructure) with confidence scoring and outcome feedback loops.",
+      "description": "Session recall backend providing memory persistence and retrieval. Implements ADR-0314 learning infrastructure.",
       "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
       "distribution": {
         "supports_source": true,
@@ -29,7 +244,7 @@
       "boot_layer": "bundled",
       "sla_level": "buildin",
       "security_audit": {
-        "last_audit_date": "2026-08-30",
+        "last_audit_date": "2026-08-31",
         "auditor": "CorvinOS Security Team",
         "findings": 0,
         "findings_by_severity": {
@@ -42,14 +257,314 @@
       },
       "maintainer_url": "mailto:plugins@anthropic.com",
       "tags": [
-        "memory",
         "ai-learning",
         "compliance"
       ],
-      "last_updated": "2026-08-31T00:00:00Z"
+      "last_updated": "2026-08-31T18:29:14.520126Z"
+    },
+    {
+      "id": "plugin:buildin-data_processing-stt_provider",
+      "type": "plugin",
+      "name": "Speech-to-Text Provider",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "data_processing",
+      "description": "Speech transcription with metadata-only audit. GDPR Art. 5 compliance.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#stt_provider",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/stt_provider.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-stt_provider-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-stt_provider-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520425Z"
+    },
+    {
+      "id": "plugin:buildin-data_processing-summary_provider",
+      "type": "plugin",
+      "name": "Summary Provider",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "data_processing",
+      "description": "Turn summary generation for memory enrichment.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#summary_provider",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/summary_provider.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-summary_provider-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-summary_provider-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520537Z"
     }
   ],
   "by_id": {
+    "plugin:buildin-integration-notification_backend": {
+      "id": "plugin:buildin-integration-notification_backend",
+      "type": "plugin",
+      "name": "Notification Backend",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "integration",
+      "description": "Event notification and pub/sub messaging.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#notification_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/notification_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-notification_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-notification_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520783Z"
+    },
+    "plugin:buildin-integration-router_backend": {
+      "id": "plugin:buildin-integration-router_backend",
+      "type": "plugin",
+      "name": "Router Backend",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "integration",
+      "description": "Message routing and delegation. ADR-0255 worker engine integration.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#router_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/router_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-router_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-router_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520288Z"
+    },
+    "plugin:buildin-integration-data_connector": {
+      "id": "plugin:buildin-integration-data_connector",
+      "type": "plugin",
+      "name": "Data Connector",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "integration",
+      "description": "External data source integration for artifact processing.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#data_connector",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/data_connector.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-data_connector-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-data_connector-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520653Z"
+    },
+    "plugin:buildin-security_compliance-audit_backend": {
+      "id": "plugin:buildin-security_compliance-audit_backend",
+      "type": "plugin",
+      "name": "Audit Backend",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "security_compliance",
+      "description": "Audit trail management with hash-chained immutability. Implements GDPR Art. 30, 32 compliance.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#audit_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/audit_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-audit_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-audit_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.519729Z"
+    },
+    "plugin:buildin-security_compliance-user_backend": {
+      "id": "plugin:buildin-security_compliance-user_backend",
+      "type": "plugin",
+      "name": "User Backend",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "security_compliance",
+      "description": "User authentication and authorization. GDPR Art. 6, 7 consent management.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#user_backend",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/user_backend.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520902Z"
+    },
     "plugin:buildin-memory-recall_backend": {
       "id": "plugin:buildin-memory-recall_backend",
       "type": "plugin",
@@ -60,7 +575,7 @@
       "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
       "tier": "buildin",
       "category": "memory",
-      "description": "Session recall backend providing memory persistence and retrieval for CorvinOS sessions. Implements ADR-0314 (Learning Infrastructure) with confidence scoring and outcome feedback loops.",
+      "description": "Session recall backend providing memory persistence and retrieval. Implements ADR-0314 learning infrastructure.",
       "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
       "distribution": {
         "supports_source": true,
@@ -75,7 +590,7 @@
       "boot_layer": "bundled",
       "sla_level": "buildin",
       "security_audit": {
-        "last_audit_date": "2026-08-30",
+        "last_audit_date": "2026-08-31",
         "auditor": "CorvinOS Security Team",
         "findings": 0,
         "findings_by_severity": {
@@ -88,14 +603,318 @@
       },
       "maintainer_url": "mailto:plugins@anthropic.com",
       "tags": [
-        "memory",
         "ai-learning",
         "compliance"
       ],
-      "last_updated": "2026-08-31T00:00:00Z"
+      "last_updated": "2026-08-31T18:29:14.520126Z"
+    },
+    "plugin:buildin-data_processing-stt_provider": {
+      "id": "plugin:buildin-data_processing-stt_provider",
+      "type": "plugin",
+      "name": "Speech-to-Text Provider",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "data_processing",
+      "description": "Speech transcription with metadata-only audit. GDPR Art. 5 compliance.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#stt_provider",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/stt_provider.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-stt_provider-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-stt_provider-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520425Z"
+    },
+    "plugin:buildin-data_processing-summary_provider": {
+      "id": "plugin:buildin-data_processing-summary_provider",
+      "type": "plugin",
+      "name": "Summary Provider",
+      "version": "1.0.0",
+      "author": "Anthropic PBC",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+      "tier": "buildin",
+      "category": "data_processing",
+      "description": "Turn summary generation for memory enrichment.",
+      "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#summary_provider",
+      "distribution": {
+        "supports_source": true,
+        "supports_wheel": true,
+        "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/summary_provider.py",
+        "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-summary_provider-1.0.0-py3-none-any.whl",
+        "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-summary_provider-1.0.0-py3-none-any.whl.asc",
+        "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependencies": [],
+      "requires_version": ">=1.0.0",
+      "boot_layer": "bundled",
+      "sla_level": "buildin",
+      "security_audit": {
+        "last_audit_date": "2026-08-31",
+        "auditor": "CorvinOS Security Team",
+        "findings": 0,
+        "findings_by_severity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+      },
+      "maintainer_url": "mailto:plugins@anthropic.com",
+      "tags": [
+        "ai-learning",
+        "compliance"
+      ],
+      "last_updated": "2026-08-31T18:29:14.520537Z"
     }
   },
   "by_category": {
+    "integration": [
+      {
+        "id": "plugin:buildin-integration-notification_backend",
+        "type": "plugin",
+        "name": "Notification Backend",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "integration",
+        "description": "Event notification and pub/sub messaging.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#notification_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/notification_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-notification_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-notification_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520783Z"
+      },
+      {
+        "id": "plugin:buildin-integration-router_backend",
+        "type": "plugin",
+        "name": "Router Backend",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "integration",
+        "description": "Message routing and delegation. ADR-0255 worker engine integration.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#router_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/router_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-router_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-router_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520288Z"
+      },
+      {
+        "id": "plugin:buildin-integration-data_connector",
+        "type": "plugin",
+        "name": "Data Connector",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "integration",
+        "description": "External data source integration for artifact processing.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#data_connector",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/data_connector.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-data_connector-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-data_connector-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520653Z"
+      }
+    ],
+    "security_compliance": [
+      {
+        "id": "plugin:buildin-security_compliance-audit_backend",
+        "type": "plugin",
+        "name": "Audit Backend",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "security_compliance",
+        "description": "Audit trail management with hash-chained immutability. Implements GDPR Art. 30, 32 compliance.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#audit_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/audit_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-audit_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-audit_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.519729Z"
+      },
+      {
+        "id": "plugin:buildin-security_compliance-user_backend",
+        "type": "plugin",
+        "name": "User Backend",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "security_compliance",
+        "description": "User authentication and authorization. GDPR Art. 6, 7 consent management.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#user_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/user_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520902Z"
+      }
+    ],
     "memory": [
       {
         "id": "plugin:buildin-memory-recall_backend",
@@ -107,7 +926,7 @@
         "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
         "tier": "buildin",
         "category": "memory",
-        "description": "Session recall backend providing memory persistence and retrieval for CorvinOS sessions. Implements ADR-0314 (Learning Infrastructure) with confidence scoring and outcome feedback loops.",
+        "description": "Session recall backend providing memory persistence and retrieval. Implements ADR-0314 learning infrastructure.",
         "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
         "distribution": {
           "supports_source": true,
@@ -122,7 +941,7 @@
         "boot_layer": "bundled",
         "sla_level": "buildin",
         "security_audit": {
-          "last_audit_date": "2026-08-30",
+          "last_audit_date": "2026-08-31",
           "auditor": "CorvinOS Security Team",
           "findings": 0,
           "findings_by_severity": {
@@ -135,16 +954,318 @@
         },
         "maintainer_url": "mailto:plugins@anthropic.com",
         "tags": [
-          "memory",
           "ai-learning",
           "compliance"
         ],
-        "last_updated": "2026-08-31T00:00:00Z"
+        "last_updated": "2026-08-31T18:29:14.520126Z"
+      }
+    ],
+    "data_processing": [
+      {
+        "id": "plugin:buildin-data_processing-stt_provider",
+        "type": "plugin",
+        "name": "Speech-to-Text Provider",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "data_processing",
+        "description": "Speech transcription with metadata-only audit. GDPR Art. 5 compliance.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#stt_provider",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/stt_provider.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-stt_provider-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-stt_provider-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520425Z"
+      },
+      {
+        "id": "plugin:buildin-data_processing-summary_provider",
+        "type": "plugin",
+        "name": "Summary Provider",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "data_processing",
+        "description": "Turn summary generation for memory enrichment.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#summary_provider",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/summary_provider.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-summary_provider-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-summary_provider-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520537Z"
       }
     ]
   },
   "by_tier": {
     "buildin": [
+      {
+        "id": "plugin:buildin-integration-notification_backend",
+        "type": "plugin",
+        "name": "Notification Backend",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "integration",
+        "description": "Event notification and pub/sub messaging.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#notification_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/notification_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-notification_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-notification_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520783Z"
+      },
+      {
+        "id": "plugin:buildin-integration-router_backend",
+        "type": "plugin",
+        "name": "Router Backend",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "integration",
+        "description": "Message routing and delegation. ADR-0255 worker engine integration.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#router_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/router_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-router_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-router_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520288Z"
+      },
+      {
+        "id": "plugin:buildin-integration-data_connector",
+        "type": "plugin",
+        "name": "Data Connector",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "integration",
+        "description": "External data source integration for artifact processing.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#data_connector",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/data_connector.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-integration-data_connector-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-integration-data_connector-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520653Z"
+      },
+      {
+        "id": "plugin:buildin-security_compliance-audit_backend",
+        "type": "plugin",
+        "name": "Audit Backend",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "security_compliance",
+        "description": "Audit trail management with hash-chained immutability. Implements GDPR Art. 30, 32 compliance.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#audit_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/audit_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-audit_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-audit_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.519729Z"
+      },
+      {
+        "id": "plugin:buildin-security_compliance-user_backend",
+        "type": "plugin",
+        "name": "User Backend",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "security_compliance",
+        "description": "User authentication and authorization. GDPR Art. 6, 7 consent management.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#user_backend",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/user_backend.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-security_compliance-user_backend-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520902Z"
+      },
       {
         "id": "plugin:buildin-memory-recall_backend",
         "type": "plugin",
@@ -155,7 +1276,7 @@
         "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
         "tier": "buildin",
         "category": "memory",
-        "description": "Session recall backend providing memory persistence and retrieval for CorvinOS sessions. Implements ADR-0314 (Learning Infrastructure) with confidence scoring and outcome feedback loops.",
+        "description": "Session recall backend providing memory persistence and retrieval. Implements ADR-0314 learning infrastructure.",
         "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#recall_backend",
         "distribution": {
           "supports_source": true,
@@ -170,7 +1291,7 @@
         "boot_layer": "bundled",
         "sla_level": "buildin",
         "security_audit": {
-          "last_audit_date": "2026-08-30",
+          "last_audit_date": "2026-08-31",
           "auditor": "CorvinOS Security Team",
           "findings": 0,
           "findings_by_severity": {
@@ -183,11 +1304,96 @@
         },
         "maintainer_url": "mailto:plugins@anthropic.com",
         "tags": [
-          "memory",
           "ai-learning",
           "compliance"
         ],
-        "last_updated": "2026-08-31T00:00:00Z"
+        "last_updated": "2026-08-31T18:29:14.520126Z"
+      },
+      {
+        "id": "plugin:buildin-data_processing-stt_provider",
+        "type": "plugin",
+        "name": "Speech-to-Text Provider",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "data_processing",
+        "description": "Speech transcription with metadata-only audit. GDPR Art. 5 compliance.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#stt_provider",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/stt_provider.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-stt_provider-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-stt_provider-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520425Z"
+      },
+      {
+        "id": "plugin:buildin-data_processing-summary_provider",
+        "type": "plugin",
+        "name": "Summary Provider",
+        "version": "1.0.0",
+        "author": "Anthropic PBC",
+        "license": "Apache-2.0",
+        "license_url": "https://github.com/anthropics/CorvinOS/blob/main/LICENSE",
+        "tier": "buildin",
+        "category": "data_processing",
+        "description": "Turn summary generation for memory enrichment.",
+        "readme_url": "https://github.com/anthropics/CorvinOS/blob/main/docs/plugin-developer-guide.md#summary_provider",
+        "distribution": {
+          "supports_source": true,
+          "supports_wheel": true,
+          "source_url": "https://github.com/anthropics/CorvinOS/tree/main/core/plugins/corvin_plugins/providers/summary_provider.py",
+          "wheel_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-summary_provider-1.0.0-py3-none-any.whl",
+          "wheel_signature_url": "https://releases.corvinlabs.com/plugins/buildin-data_processing-summary_provider-1.0.0-py3-none-any.whl.asc",
+          "wheel_checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "dependencies": [],
+        "requires_version": ">=1.0.0",
+        "boot_layer": "bundled",
+        "sla_level": "buildin",
+        "security_audit": {
+          "last_audit_date": "2026-08-31",
+          "auditor": "CorvinOS Security Team",
+          "findings": 0,
+          "findings_by_severity": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+          },
+          "audit_report_url": "https://github.com/anthropics/CorvinOS/security/advisories"
+        },
+        "maintainer_url": "mailto:plugins@anthropic.com",
+        "tags": [
+          "ai-learning",
+          "compliance"
+        ],
+        "last_updated": "2026-08-31T18:29:14.520537Z"
       }
     ]
   }
