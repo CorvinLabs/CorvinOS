@@ -139,6 +139,7 @@ _cel_emit_record = None
 _cel_persist_assembly = None  # G1: Glass-Box assembly persistence (console parity)
 _cel_build_sections = None
 _cel_record_outcome = None  # G4: outcome-feedback loop (ADR-0269 Phase-4b)
+_cel_capture_decision = None  # ADR-0407: decision-point capture (outbound hook)
 try:
     import importlib.util as _ilu  # noqa: PLC0415
     # Source tree → <repo>/operator/context_engineering. Wheel → the vendored
@@ -179,6 +180,10 @@ try:
         _cel_run_full_async = _cel_mod.run_full_pipeline_async
         _cel_render_skills = _cel_mod.render_skill_bindings
         _cel_apply_tools = _cel_mod.apply_tool_bindings
+        # ADR-0407 amendment — decision-point capture (OUTBOUND). Ship-dark behind
+        # cel_load_bearing_anchor; the wrapper re-checks the flag, so a default
+        # install never writes and the turn is byte-identical.
+        _cel_capture_decision = _cel_mod.maybe_capture_decision_point
         _CEL_AVAILABLE = True
         # G4 (ADR-0269 Phase-4b): record_turn_outcome lives in stages.grades and is
         # NOT re-exported from the package __init__ — bind it from the submodule in a
@@ -6566,6 +6571,18 @@ async def stream_turn(
     combined_text = "".join(final_text_parts).strip()
     if _ann_suffix:
         combined_text = (combined_text + "\n\n" + _ann_suffix).strip()
+
+    # ADR-0407 amendment — decision-point capture (OUTBOUND). If this final reply
+    # offered the user a choice, persist it verbatim so a later "Option N" still
+    # resolves after context compression. Ship-dark: the wrapper re-checks the
+    # cel_load_bearing_anchor flag (OFF by default ⇒ no store write, no-op) and
+    # never raises. Same (tenant, session_key) the inbound anchor uses via
+    # pipeline._session_key_of(sess, …).
+    if _cel_capture_decision is not None and combined_text:
+        try:
+            _cel_capture_decision(combined_text, sess.tenant_id, sess)
+        except Exception:  # noqa: BLE001 — never break a turn on the way out
+            pass
     # ADR-0194 Phase 1: the exact string the client will hand to /voice/tts —
     # i.e. the text of the LAST `result` event yielded above. It is NOT
     # combined_text: `result_text` is the CLI's final assistant message, while
