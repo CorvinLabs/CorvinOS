@@ -1,0 +1,11 @@
+---
+name: os.workflow_optimizer
+version: "1.0.0"
+goal: "Optimize orchestration"
+triggers: [{name: before_orchestration_plan}]
+input_schema: {type: object, required: [worker_count]}
+output_schema: {type: object, required: [strategy]}
+learning_signal: {metrics: [wall_clock_time], feedback_sources: [], sanitization: {disallow_fields: [prompt]}}
+boot_layer: bundled
+origin: builtin
+depends_on: [{name: os.delegation_router}]
