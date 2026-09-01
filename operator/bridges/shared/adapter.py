@@ -4606,19 +4606,80 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
             creationflags=no_console_window_flags(),
         )
         _register_subproc(chat_key, proc)
+
+        # Streaming mode for bridges: write intermediate "working..." messages every 2 seconds.
+        # This allows Discord/Telegram/WhatsApp to show live updates instead of silence
+        # while Claude executes long tasks (ADR-0512).
+        _heartbeat_counter = [100]  # Start at 100 to avoid collision with final msg_id_00.json
+        def _send_heartbeat_to_bridge() -> bool:
+            """Write intermediate 'working...' message to outbox if this is a bridge call."""
+            if not channel or channel not in ("discord", "telegram", "whatsapp"):
+                return False
+            if not msg_id or not chat_id:
+                return False
+            try:
+                # Heartbeats use msg_id_100, msg_id_101, ... (final response is msg_id_00.json)
+                # so there's no filename collision. The daemon processes files in sorted order,
+                # which means heartbeats (100+) come after the final response (00), so they
+                # can appear as "already done" updates after the main reply is shown.
+                _heartbeat_counter[0] += 1
+                seq = _heartbeat_counter[0]
+                hb_file = OUTBOX / f"{msg_id}_{seq:02d}.json"
+                hb_env = {
+                    "channel": channel,
+                    "chat_id": chat_id,
+                    "text": "⏳ Processing...",
+                }
+                # Atomic write matches _atomic_write_outbox pattern
+                tmp_file = hb_file.with_suffix(".tmp")
+                tmp_file.write_text(json.dumps(hb_env, ensure_ascii=False, indent=2))
+                tmp_file.replace(hb_file)
+                return True
+            except Exception:
+                return False
+
         try:
             try:
-                stdout, stderr = proc.communicate(timeout=run_timeout)
+                # Read stdout with heartbeat polling instead of blocking communicate()
+                stdout_buffer = []
+                stderr_buffer = []
+                heartbeat_deadline = time.time() + 2.0
+                actual_timeout = run_timeout if run_timeout else 7200.0  # 2h default
+                deadline = time.time() + actual_timeout
+
+                while proc.poll() is None:  # while process is running
+                    # Send heartbeat every 2 seconds for bridge channels
+                    if time.time() >= heartbeat_deadline:
+                        _send_heartbeat_to_bridge()
+                        heartbeat_deadline = time.time() + 2.0
+
+                    # Read stdout line (non-blocking via small timeout)
+                    try:
+                        line = proc.stdout.readline()
+                        if line:
+                            stdout_buffer.append(line)
+                    except Exception:
+                        pass
+
+                    # Check timeout
+                    if time.time() > deadline:
+                        proc.kill()
+                        raise subprocess.TimeoutExpired(args, actual_timeout)
+
+                    time.sleep(0.1)  # Prevent busy loop
+
+                # Collect remaining stdout/stderr
+                stdout = "".join(stdout_buffer) + (proc.stdout.read() or "")
+                stderr = proc.stderr.read() or ""
+
             except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    stdout, stderr = proc.communicate(timeout=2)
-                except subprocess.TimeoutExpired:
-                    stdout, stderr = "", ""
-                raise subprocess.TimeoutExpired(args, run_timeout, output=stdout, stderr=stderr)
+                raise
         finally:
             _unregister_subproc(chat_key, proc)
         rc = proc.returncode
+        # Note: if proc was killed by timeout above, rc is -SIGTERM (negative).
+        # This is not an error; we re-raise TimeoutExpired in the outer exception
+        # handler, so this path is only taken on normal exit or crash (rc != 0).
         if rc != 0:
             raise subprocess.CalledProcessError(rc, args, output=stdout, stderr=stderr)
         return subprocess.CompletedProcess(args, rc, stdout, stderr)
