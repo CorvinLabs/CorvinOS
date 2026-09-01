@@ -68,12 +68,12 @@ def validate_skill_manifest(manifest_path: Path) -> ValidationReport:
     if not triggers or not isinstance(triggers, list):
         blockers.append("triggers must be non-empty list")
 
-    # Check 6: PII patterns in learning_signal
+    # Check 6: PII patterns in learning_signal (ADR-0534, fail-closed)
     learning = manifest.get('learning_signal', {})
     sanitization = learning.get('sanitization', {})
     disallow_fields = sanitization.get('disallow_fields', [])
-    if 'prompt' not in disallow_fields and 'response' not in disallow_fields:
-        warnings.append("Recommended: add 'prompt' and 'response' to disallow_fields")
+    if 'prompt' not in disallow_fields or 'response' not in disallow_fields:
+        blockers.append("Required: 'prompt' and 'response' must be in disallow_fields (ADR-0534, fail-closed PII)")
 
     # Check 7: No cycles (DAG check)
     # For MVP, skip; Phase 3 implements full DAG validation

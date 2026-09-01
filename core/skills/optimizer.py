@@ -77,7 +77,7 @@ class SkillOptimizer:
                 accepted = False
                 logger.info(f"Iteration {k}: ✗ No improvement ({plateau_counter}/3)")
 
-            # Checkpoint
+            # Checkpoint (atomic write: tmp → rename)
             epoch_state['completed_iterations'] = k
             epoch_state['best_score'] = best_score
             epoch_state['hypotheses'].append({
@@ -87,8 +87,10 @@ class SkillOptimizer:
                 'accepted': accepted
             })
 
-            with open(self.epoch_state_file, 'w') as f:
+            tmp_file = self.epoch_state_file.with_suffix('.tmp')
+            with open(tmp_file, 'w') as f:
                 json.dump(epoch_state, f)
+            tmp_file.replace(self.epoch_state_file)
 
             # Plateau check
             if plateau_counter >= 3:
@@ -160,7 +162,9 @@ class SkillOptimizer:
             return 0.0
 
         mde = sum(errors) / len(errors)
-        return 1.0 - mde  # Score = 1 - error, clamped to [0, 1]
+        score = 1.0 - mde
+        # ADR-0315: Score must be in [0, 1] (probability invariant)
+        return max(0.0, min(1.0, score))
 
     def _score_with_hypothesis(self, hypothesis: str, runs: List[Dict]) -> float:
         """Score runs with hypothesis (simplified)."""

@@ -33,9 +33,11 @@ class SkillStatus:
 
 
 class SkillRegistry:
-    """Maintain registry of installed skills."""
+    """Maintain registry of installed skills (tenant-scoped)."""
 
-    def __init__(self, registry_path: Path):
+    def __init__(self, registry_path: Path, tenant_id: str = None):
+        self.registry_path = registry_path
+        self.tenant_id = tenant_id  # ADR-0007: Tenant isolation
         self.registry_file = registry_path / 'registry.yaml'
         self.registry_file.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_registry()
@@ -174,8 +176,9 @@ class SkillManager:
     def __init__(self, corvin_home: Path, tenant_id: str):
         self.corvin_home = corvin_home
         self.tenant_id = tenant_id
-        self.skills_dir = corvin_home / 'skills'
-        self.registry = SkillRegistry(self.skills_dir)
+        # ADR-0007: Tenant-scoped skills directory
+        self.skills_dir = corvin_home / 'tenants' / tenant_id / 'skills'
+        self.registry = SkillRegistry(self.skills_dir, tenant_id=tenant_id)
 
     def install_skill(self, skill_bundle: Path) -> Dict[str, Any]:
         """Install skill from .zip or directory."""
