@@ -80,6 +80,7 @@ except Exception:  # noqa: BLE001 — path prep must never break adapter boot
 # in chat_runtime.py — same CEL, same trace, same audit-complete Decision Record.
 _CEL_AVAILABLE = False
 _cel_build_brief = _cel_render = _cel_persist_trace = _cel_emit_record = None
+_cel_maybe_capture_decision = None  # ADR-0407: decision-point capture (outbound)
 try:
     import importlib.util as _ilu  # noqa: PLC0415
     _cel_dir = Path(__file__).resolve().parents[2] / "context_engineering"
@@ -101,6 +102,10 @@ try:
         # unreachable (review R6).
         _cel_apply_tools = _cel_mod.apply_tool_bindings
         _cel_render_skills = _cel_mod.render_skill_bindings
+        # ADR-0407 amendment — decision-point capture (OUTBOUND). Ship-dark behind
+        # cel_load_bearing_anchor; the wrapper re-checks the flag, so a default
+        # install never writes and the reply is unchanged.
+        _cel_maybe_capture_decision = _cel_mod.maybe_capture_decision_point
         _CEL_AVAILABLE = True
 except Exception:  # noqa: BLE001 — CEL absent → feature off, turns unchanged
     _CEL_AVAILABLE = False
@@ -11084,6 +11089,21 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # out of the answer BEFORE the split, so the chat-text never carries the
     # markup and the voice path uses the explicit voice version.
     answer, voice_override = extract_voice_override(answer)
+
+    # ADR-0407 amendment — decision-point capture (OUTBOUND). If this final reply
+    # offered the user a choice, persist it verbatim so a later "Option N" still
+    # resolves after context compression. Ship-dark: the wrapper re-checks the
+    # cel_load_bearing_anchor flag (OFF by default ⇒ no store write, no-op) and
+    # never raises. Tenant + session mirror the bridge's CEL INBOUND path exactly
+    # (this bridge process is env-tenant-scoped — the same source `_cel_tid` uses
+    # at spawn — and build_brief is called there with session=None), so capture
+    # lands in the SAME (tenant, session_key) store the next turn's brief reads.
+    if _cel_maybe_capture_decision is not None and answer:
+        try:
+            _cdp_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
+            _cel_maybe_capture_decision(answer, _cdp_tid, None)
+        except Exception:  # noqa: BLE001 — never break a turn on the way out
+            pass
 
     # Per-channel chunk limits. Discord caps at 2000 chars/message, so
     # we stay well below it here — the daemon would otherwise re-split

@@ -93,6 +93,30 @@ def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
         pass
 
 
+def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
+                                 session: Any = None) -> "dict | None":
+    """Outbound hook (ADR-0407 amendment — decision-point capture). Called with
+    the FINAL assistant reply text, on the way out, from the bridge adapter and
+    the console chat_runtime.
+
+    Ship-dark behind the SAME ``cel_load_bearing_anchor`` flag: flag OFF (default)
+    ⇒ this returns immediately, writes nothing, has zero side effects. Flag ON ⇒
+    if the reply offered the user a choice, the block is persisted verbatim as a
+    ``decision`` anchor fact under the SAME (tenant, session_key) the inbound
+    ``_maybe_apply_anchor`` uses, so the next turn's brief re-injects it. The
+    session_key comes from ``_session_key_of`` — NO env-var fallback.
+
+    Never raises (best-effort): an error here must never break a turn."""
+    try:
+        if not reply_text or not _anchor_enabled(tenant):
+            return None
+        from . import anchor  # noqa: PLC0415
+        session_key = _session_key_of(session, reply_text)
+        return anchor.capture_decision_point(tenant, session_key, reply_text)
+    except Exception:  # noqa: BLE001 — the outbound hook never breaks a turn
+        return None
+
+
 def build_context(task: str, tenant: str = "_default", session: Any = None,
                   meter: bool = True, active: bool = False,
                   persona: str = "") -> "tuple[Any, dict]":

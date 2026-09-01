@@ -43,6 +43,12 @@ _DEFAULT_KIND = "constraint"
 # Append-only, dedup-by-text, cap the newest 20 (oldest evicted).
 CAP = 20
 
+# Per-kind sub-cap for "decision" (ADR-0407 amendment — decision-point capture):
+# keep only the newest N decision menus, evicting the OLDEST decision WITHOUT
+# ever displacing a constraint/id/goal. A stale "Option N" from three menus ago
+# is noise; the newest few are what "Option 2" still refers to after compression.
+DECISION_SUBCAP = 3
+
 # Blocker signal vocabulary (kept in sync with stages/_util._BLOCKER_SIGNALS).
 # Used by ``collect_load_bearing`` to recover the rank-6+/low-confidence blocker
 # facts that the pipeline's own [:5] caps drop — the exact gap this anchor closes.
@@ -80,6 +86,31 @@ def record_injection(n: int, *, session_key: str = "") -> None:
 def injected_total() -> int:
     """Current value of the watchdog-readable injection counter."""
     return INJECTED_FACTS_TOTAL
+
+
+# ── Move-2 (capture side): watchdog-readable decision-capture signal ────────
+# Symmetric to INJECTED_FACTS_TOTAL: a monitor reads this counter (and the log
+# stream) to confirm the OUTBOUND capture path fires. Positive iff a decision
+# menu was actually persisted (not a duplicate, not a non-decision reply).
+CAPTURED_DECISIONS_TOTAL = 0
+
+
+def record_capture(*, session_key: str = "") -> None:
+    """Record that one decision menu was captured from an outbound reply.
+
+    LOUD, not silent (Move-2): bumps the module-level counter a watchdog polls
+    AND emits a log line. Muting this call (the mutation the Move-2 test guards)
+    leaves the counter flat — which the fires-test catches."""
+    global CAPTURED_DECISIONS_TOTAL
+    with _lock:
+        CAPTURED_DECISIONS_TOTAL += 1
+    logger.info("cel.anchor.decision_captured session=%s total=%d",
+                session_key or "?", CAPTURED_DECISIONS_TOTAL)
+
+
+def captured_total() -> int:
+    """Current value of the watchdog-readable decision-capture counter."""
+    return CAPTURED_DECISIONS_TOTAL
 
 
 # ── Path resolution (tenant/session scoped, no env fallback) ───────────────
@@ -159,6 +190,14 @@ def add_fact(tenant_id: str, session_key: str, kind: str, text: str) -> "dict | 
                 "hash": h,
             }
             facts.append(entry)
+            # Per-kind sub-cap for "decision": keep only the newest
+            # DECISION_SUBCAP decision menus, evicting the OLDEST decision only —
+            # constraint/id/goal entries are never displaced by this rule (that
+            # is the whole point of a SUB-cap, not the global CAP below).
+            decisions = [f for f in facts if f.get("kind") == "decision"]
+            if len(decisions) > DECISION_SUBCAP:
+                _evict = {id(f) for f in decisions[:-DECISION_SUBCAP]}
+                facts = [f for f in facts if id(f) not in _evict]
             if len(facts) > CAP:  # cap the newest CAP, evict oldest
                 facts = facts[-CAP:]
             _write_all(tenant_id, session_key, facts)
@@ -221,16 +260,149 @@ def collect_load_bearing(brief: Any) -> "list[tuple[str, str]]":
     return facts
 
 
+# ── Decision-point capture (ADR-0407 amendment — outbound path) ─────────────
+# When an assistant reply OFFERS the user a choice, the block is persisted
+# verbatim (+ framing) so that after context compression a later "Option 2"
+# still resolves. CONSERVATIVE detection — most replies are NOT decision menus.
+
+# ≥2 "Option N" tokens (DE/EN — the word "Option" is identical in both).
+_OPTION_RE = re.compile(r"\boption\s*\d", re.IGNORECASE)
+# Choice-intent keywords that qualify a labelled/numbered list as a real choice.
+_CHOICE_WORDS = (
+    "?", "wähl", "waehl", "choose", "which ", "welche", "welchen", "welches",
+    "prefer", "bevorzug", "option", "möchtest", "moechtest", "entscheid",
+    "shall i", "soll ich", "pick ", "auswahl",
+)
+
+
+def _has_choice_intent(text: str) -> bool:
+    low = text.lower()
+    return any(w in low for w in _CHOICE_WORDS)
+
+
+def _numbered_after_question(text: str) -> bool:
+    """True iff lines ``1.`` and ``2.`` (or ``1)``/``2)``) directly follow a
+    question line or a ``**Frage`` marker — the ONLY numbered lists we treat as a
+    choice. A plain enumeration (no preceding question) is NOT captured."""
+    lines = text.split("\n")
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        low = s.lower()
+        is_q = s.endswith("?") or low.startswith("**frage") or "**frage:" in low
+        if not is_q:
+            continue
+        nums: list[int] = []
+        for ln2 in lines[i + 1:]:
+            t = ln2.strip()
+            if not t:
+                if nums:
+                    break  # blank line ends the block once it started
+                continue
+            m = re.match(r"^(\d+)[.)]\s", t)
+            if m:
+                nums.append(int(m.group(1)))
+            else:
+                break
+        if 1 in nums and 2 in nums:
+            return True
+    return False
+
+
+def _classify_decision(text: str) -> "str | None":
+    """Return the decision kind ('option' | 'label' | 'numbered') or None.
+    Conservative: unclear input → None (do not capture every list)."""
+    if len(_OPTION_RE.findall(text)) >= 2:
+        return "option"
+    if re.search(r"\(a\)", text, re.IGNORECASE) and re.search(r"\(b\)", text, re.IGNORECASE):
+        if _has_choice_intent(text):
+            return "label"
+    if _numbered_after_question(text):
+        return "numbered"
+    return None
+
+
+def _first_trigger_pos(text: str, kind: str) -> int:
+    if kind == "option":
+        m = _OPTION_RE.search(text)
+    elif kind == "label":
+        m = re.search(r"\(a\)", text, re.IGNORECASE)
+    else:  # numbered
+        m = re.search(r"(?m)^\s*1[.)]\s", text)
+    return m.start() if m else 0
+
+
+def _extract_decision_block(text: str) -> "str | None":
+    """Extract the choice block VERBATIM plus one framing line before it, bounded
+    to ~1500 chars. None when the reply is not a clear decision menu."""
+    kind = _classify_decision(text)
+    if not kind:
+        return None
+    pos = _first_trigger_pos(text, kind)
+    line_start = text.rfind("\n", 0, pos) + 1  # start of the option/label line
+    framing = ""
+    head = text[:line_start].rstrip()
+    if head:
+        for ln in reversed(head.split("\n")):
+            if ln.strip():
+                framing = ln.rstrip()
+                break
+    block = text[line_start:]
+    if framing:
+        block = framing + "\n" + block
+    block = block.strip()
+    if len(block) > 1500:
+        block = block[:1500].rstrip()
+    return block or None
+
+
+def capture_decision_point(tenant_id: str, session_key: str,
+                           reply_text: str) -> "dict | None":
+    """Persist a decision/options block from an assistant reply (verbatim + a
+    framing line) as a ``kind='decision'`` anchor fact, so a later "Option N"
+    resolves even after the context is compressed. Returns the stored entry, or
+    None when the reply is not a clear decision menu / the block is a duplicate.
+
+    Best-effort: NEVER raises (an error here must never break a turn)."""
+    try:
+        text = (reply_text or "").strip()
+        if not text:
+            return None
+        block = _extract_decision_block(text)
+        if not block:
+            return None
+        entry = add_fact(tenant_id, session_key, "decision", block)
+        if entry is not None:  # actually stored (not a duplicate) → loud signal
+            record_capture(session_key=session_key)
+        return entry
+    except Exception:  # noqa: BLE001 — capture is best-effort, never break a turn
+        return None
+
+
 def render_lines(facts: "list[dict]") -> "list[str]":
     """Render persisted anchor facts into brief lines — UNCAPPED, assertive header.
 
     All facts render (no ``[:5]``): re-injecting them truncation-safe every turn is
-    the whole point. Empty input → no lines (I5: off is a quiet path)."""
+    the whole point. Empty input → no lines (I5: off is a quiet path).
+
+    Grouped by kind (ADR-0407 amendment): decision-point facts get their OWN
+    protected header so a compressed "Option N" resolves against the verbatim
+    block; constraint/id/goal facts stay under the load-bearing header. Both
+    UNCAPPED."""
     if not facts:
         return []
-    lines = [
-        "Load-bearing facts (persist across this whole session — always honor these):"
-    ]
-    for f in facts:
-        lines.append(f"  - {f.get('text', '')}")
+    decisions = [f for f in facts if f.get("kind") == "decision"]
+    others = [f for f in facts if f.get("kind") != "decision"]
+    lines: list[str] = []
+    if others:
+        lines.append(
+            "Load-bearing facts (persist across this whole session — always honor these):"
+        )
+        for f in others:
+            lines.append(f"  - {f.get('text', '')}")
+    if decisions:
+        lines.append(
+            "Open decision points you were offered (verbatim — 'Option N' refers to these):"
+        )
+        for f in decisions:
+            lines.append(f"  - {f.get('text', '')}")
     return lines

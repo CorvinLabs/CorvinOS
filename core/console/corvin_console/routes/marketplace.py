@@ -187,3 +187,10 @@ async def reload_index() -> Dict[str, Any]:
         "status": "reloaded",
         "plugin_count": index.get("plugin_count", 0),
     }
+
+
+# Phase 3 Installation API (imported from marketplace_install.py)
+# Routes: POST /install, /uninstall, PATCH /enable, /disable, GET /progress
+# See marketplace_install.py for full implementation
+from . import marketplace_install as _install_routes
+router.include_router(_install_routes.router)
