@@ -132,6 +132,8 @@ def _queue_grading_request(
     tenant_id = ctx.get('tenant_id')
     if not tenant_id:
         # Fallback: reject if tenant_id is missing (fail-closed)
+        # Log at WARNING level so operator can see learning is disabled for this turn
+        logger.warning(f"Grading request dropped: missing tenant_id (skill={skill_obj.name}, version={skill_obj.version})")
         return
 
     request = {

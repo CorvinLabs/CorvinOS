@@ -69,7 +69,8 @@ class DependencyResolver:
             return False
 
         for dep in skill.get('depends_on', []):
-            dep_name = dep['name']
+            # Safe type handling: dict or string format (consistent with validate_dependencies)
+            dep_name = dep['name'] if isinstance(dep, dict) else dep
             if dep_name not in visited:
                 if self._has_cycle(dep_name, visited, rec_stack):
                     return True
@@ -94,7 +95,8 @@ class DependencyResolver:
                 continue
 
             for dep in skill.get('depends_on', []):
-                dep_name = dep['name']
+                # Safe type handling: dict or string format
+                dep_name = dep['name'] if isinstance(dep, dict) else dep
                 if dep_name in active_skills:
                     adj_list[dep_name].append(skill_id)
                     in_degree[skill_id] += 1
