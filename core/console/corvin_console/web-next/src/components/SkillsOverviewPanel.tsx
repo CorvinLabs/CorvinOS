@@ -11,10 +11,11 @@
 
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle, TrendingUp, Clock, AlertTriangle } from "lucide-react";
+import { AlertCircle, CheckCircle, TrendingUp, Clock, AlertTriangle, Brain } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import SkillsMetricsChart from "./SkillsMetricsChart";
 
 interface Skill {
   id: string;
@@ -196,29 +197,49 @@ export const SkillsOverviewPanel: React.FC = () => {
       </Card>
 
       {selectedSkill && (
-        <Card className="border-blue-200 bg-blue-50">
-          <CardHeader>
-            <CardTitle className="text-blue-900">Skill Details: {selectedSkill}</CardTitle>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setSelectedSkill(null)}
-              className="absolute top-4 right-4"
-            >
-              ✕
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-blue-800 mb-3">
-              Detailed metrics for {selectedSkill} will load here in Phase 5.2
-            </p>
-            <Button variant="outline" size="sm" onClick={() => setSelectedSkill(null)}>
-              Close
-            </Button>
-          </CardContent>
-        </Card>
+        <SkillDetailsModal skillId={selectedSkill} onClose={() => setSelectedSkill(null)} />
       )}
     </div>
+  );
+};
+
+// Phase 6: Skill Details Modal with Charts
+interface SkillDetailsModalProps {
+  skillId: string;
+  onClose: () => void;
+}
+
+const SkillDetailsModal: React.FC<SkillDetailsModalProps> = ({ skillId, onClose }) => {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["skill-metrics", skillId],
+    queryFn: async () => {
+      const response = await fetch(`/api/skills/${skillId}/metrics?tenant_id=_default`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    },
+    refetchInterval: 10000, // Update every 10s (lower frequency than list)
+  });
+
+  return (
+    <Card className="border-blue-200 bg-blue-50">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-blue-900">Skill Details: {skillId}</CardTitle>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+          >
+            ✕
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading && <div className="text-center py-8 text-gray-500">Loading metrics...</div>}
+        {error && <div className="text-center py-8 text-red-500">Failed to load metrics</div>}
+        {data && <SkillsMetricsChart data={data} />}
+      </CardContent>
+    </Card>
   );
 };
 
