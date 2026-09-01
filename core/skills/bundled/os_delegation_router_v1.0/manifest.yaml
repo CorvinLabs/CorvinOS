@@ -1,0 +1,102 @@
+---
+name: os.delegation_router
+version: "1.0.0"
+goal: "Decide where to send a task: native OS, ACS, or TDE"
+description: >
+  Minimal MVP skill that routes tasks based on task_shape.
+  big_data -> ACS (cost-efficient), else native (fast).
+author: "Corvin OS Team"
+license: "Apache-2.0"
+created_at: "2026-09-01T00:00:00Z"
+updated_at: "2026-09-01T00:00:00Z"
+
+triggers:
+  - name: before_delegation_decision
+    event_type: decision_point
+    phase: pre_routing
+    condition: every_turn
+    async_allowed: false
+    timeout_ms: 5000
+
+input_schema:
+  type: object
+  required:
+    - task_shape
+    - context_size
+    - tenant_id
+  properties:
+    task_shape:
+      type: string
+      enum: [small_code, big_data, prose, structured]
+    context_size:
+      type: integer
+      minimum: 0
+      maximum: 2000000
+    tenant_id:
+      type: string
+      pattern: "^[a-z0-9_-]+$"
+    history_window:
+      type: integer
+      default: 100
+  additionalProperties: false
+
+output_schema:
+  type: object
+  required:
+    - decision
+    - confidence
+    - reasoning
+  properties:
+    decision:
+      type: string
+      enum: [native, acs, tde]
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+    reasoning:
+      type: string
+      maxLength: 500
+  additionalProperties: false
+
+learning_signal:
+  metrics:
+    - latency_actual_vs_predicted
+    - cost_per_token
+    - quality_score_outcome
+  scoring_rule: "mde < 5%"
+  feedback_sources:
+    - event_type: turn_completed
+      extract:
+        - latency
+        - cost
+        - quality_outcome
+      required_fields:
+        - task_shape
+        - decision
+    - event_type: user_feedback
+      extract:
+        - thumbs_up_down
+        - explicit_eval_score
+  sanitization:
+    disallow_fields:
+      - prompt
+      - response
+      - user_id
+      - raw_content
+    pii_patterns:
+      - email
+      - phone
+      - credit_card
+    fail_closed: true
+
+boot_layer: bundled
+origin: builtin
+priority: 10
+scope: local_development
+tenant_override: false
+
+state:
+  runs_retention_days: 90
+  feedback_log_max_size_mb: 1000
+  grading_stats_epochs: 10

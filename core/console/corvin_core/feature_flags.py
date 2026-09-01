@@ -262,6 +262,34 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("bridges", "orchestration", "notifications"),
     ),
     FeatureFlag(
+        id="bridge_orphan_task_reaper",
+        label="Report abandoned background tasks whose worker died",
+        description=(
+            "Turn an ABANDONED background-completion record into a loud "
+            "failure notice instead of leaving it silently wedged. Off, a "
+            "`/task` worker that is SIGKILL/OOM-killed WITHOUT ever claiming "
+            "its record (the case completion_notify's dead-producer reap "
+            "deliberately skips, because an unclaimed long-running compute "
+            "worker looks identical) sits pending until CN_PENDING_MAX_AGE "
+            "(7 days) with no ping and holding a concurrency slot. On, a "
+            "pending record older than CN_ORPHAN_DEADLINE (default 2h) whose "
+            "producer is provably gone (host rebooted / claimed pid dead) OR "
+            "was never claimed at all, AND that is NOT an active supervised "
+            "run, is converted to a failed completion ('Task abgebrochen — "
+            "Worker gestorben') delivered through the SAME outbox the normal "
+            "completion path uses, then closed. RISK this flag gates: a "
+            "genuinely long UNCLAIMED compute job (L24/L25 >2h) is "
+            "indistinguishable from a dead one and would be falsely reported "
+            "aborted and its later result dropped — enable only if you do not "
+            "run multi-hour unclaimed compute jobs. Off means the pre-feature "
+            "path, byte-identical: nothing is reaped and the 7-day prune "
+            "still applies."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("bridges", "orchestration", "notifications"),
+    ),
+    FeatureFlag(
         id="bridge_big_data_delegation",
         label="Big-data delegation on messenger bridges",
         description=(
