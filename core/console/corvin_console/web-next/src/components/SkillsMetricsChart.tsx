@@ -44,9 +44,9 @@ const COLORS_FEEDBACK = ["#10b981", "#ef4444", "#f59e0b", "#8b5cf6"];
 export const SkillsMetricsChart: React.FC<SkillsMetricsChartProps> = ({ data }) => {
   const { metrics } = data;
 
-  // Prepare pie data (outcomes)
+  // Prepare pie data (outcomes) — fix Issue 4: null check
   const pieData = useMemo(() => {
-    const feedback = metrics.feedback_breakdown.by_outcome;
+    const feedback = metrics.feedback_breakdown.by_outcome || {};
     return Object.entries(feedback).map(([name, value]) => ({
       name,
       value,
@@ -169,8 +169,8 @@ export const SkillsMetricsChart: React.FC<SkillsMetricsChartProps> = ({ data }) 
               <div className="text-gray-600">Error Rate</div>
               <div className="text-lg font-bold">
                 {metrics.total_runs > 0
-                  ? ((metrics.total_errors / metrics.total_runs) * 100).toFixed(1)
-                  : 0}
+                  ? (Math.min(100, (metrics.total_errors / Math.max(metrics.total_runs, 1)) * 100)).toFixed(1)
+                  : "0"}
                 %
               </div>
             </div>

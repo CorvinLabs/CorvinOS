@@ -209,6 +209,38 @@ interface SkillDetailsModalProps {
   onClose: () => void;
 }
 
+// Error boundary for SkillDetailsModal (fixes Issue 2)
+class SkillDetailsErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Card className="border-red-200 bg-red-50">
+          <CardHeader>
+            <CardTitle className="text-red-900">Error loading skill metrics</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-red-800">{this.state.error?.message || "Unknown error"}</p>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 const SkillDetailsModal: React.FC<SkillDetailsModalProps> = ({ skillId, onClose }) => {
   const { data, isLoading, error } = useQuery({
     queryKey: ["skill-metrics", skillId],
@@ -221,25 +253,27 @@ const SkillDetailsModal: React.FC<SkillDetailsModalProps> = ({ skillId, onClose 
   });
 
   return (
-    <Card className="border-blue-200 bg-blue-50">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-blue-900">Skill Details: {skillId}</CardTitle>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-          >
-            ✕
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {isLoading && <div className="text-center py-8 text-gray-500">Loading metrics...</div>}
-        {error && <div className="text-center py-8 text-red-500">Failed to load metrics</div>}
-        {data && <SkillsMetricsChart data={data} />}
-      </CardContent>
-    </Card>
+    <SkillDetailsErrorBoundary>
+      <Card className="border-blue-200 bg-blue-50">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-blue-900">Skill Details: {skillId}</CardTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+            >
+              ✕
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading && <div className="text-center py-8 text-gray-500">Loading metrics...</div>}
+          {error && <div className="text-center py-8 text-red-500">Failed to load metrics</div>}
+          {data && <SkillsMetricsChart data={data} />}
+        </CardContent>
+      </Card>
+    </SkillDetailsErrorBoundary>
   );
 };
 
