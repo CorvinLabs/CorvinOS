@@ -58,6 +58,7 @@ class SkillOptimizer:
         K_MAX = 10
         plateau_counter = 0
         convergence_reason = 'max_iterations_hit'
+        k = start_iteration - 1  # Initialize k to handle empty range
 
         # Inner Loop
         for k in range(start_iteration, K_MAX):
