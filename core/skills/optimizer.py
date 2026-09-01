@@ -115,8 +115,11 @@ class SkillOptimizer:
                 logger.info(f"Refinement {r}: ✓ Score {best_score:.3f}")
 
                 epoch_state['best_score'] = best_score
-                with open(self.epoch_state_file, 'w') as f:
+                # Atomic write: tmp → rename (consistent with inner loop)
+                tmp_file = self.epoch_state_file.with_suffix('.tmp')
+                with open(tmp_file, 'w') as f:
                     json.dump(epoch_state, f)
+                tmp_file.replace(self.epoch_state_file)
             else:
                 logger.info(f"Refinement {r}: ✗ No improvement")
                 break

@@ -36,10 +36,18 @@ class DependencyResolver:
 
         depends_on = skill.get('depends_on', [])
 
-        # Check existence
+        # Check existence (safe dict/string access)
         for dep in depends_on:
-            if dep['name'] not in self.registry:
-                errors.append(f"Dependency {dep['name']} not installed")
+            if isinstance(dep, dict):
+                dep_name = dep.get('name')
+            elif isinstance(dep, str):
+                dep_name = dep
+            else:
+                errors.append(f"Invalid depends_on format: {dep} (must be dict or string)")
+                continue
+
+            if not dep_name or dep_name not in self.registry:
+                errors.append(f"Dependency {dep_name} not installed")
 
         # Check for cycles (DFS)
         if self._has_cycle(skill_id):
@@ -104,8 +112,10 @@ class DependencyResolver:
                 if in_degree[dependent] == 0:
                     queue.append(dependent)
 
-        # Check if all processed (would indicate cycle, shouldn't happen after validation)
+        # Check if all processed (would indicate cycle)
         if len(result) != len(active_skills):
-            logger.warning("Topological sort incomplete, possible cycle")
+            # This should never happen after validate_dependencies, but fail-closed if it does
+            missing = set(active_skills) - set(result)
+            raise RuntimeError(f"Topological sort incomplete: cyclic dependencies detected involving {missing}")
 
         return result
