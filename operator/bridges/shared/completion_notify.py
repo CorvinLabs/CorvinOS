@@ -61,6 +61,17 @@ CN_LOCK_STALE = float(os.environ.get("CN_LOCK_STALE", "600"))
 # shorter than CN_PENDING_MAX_AGE (7d) which used to leave a hard-killed worker's
 # record wedged for a week, locking the user out of /task.
 CN_PENDING_REAP = float(os.environ.get("CN_PENDING_REAP", str(30 * 60)))
+# Deadline for the OPT-IN orphan reaper (reap_orphan_pending, gated by the
+# ship-dark `bridge_orphan_task_reaper` flag). Deliberately far longer than
+# CN_PENDING_REAP (30 min): the reaper's UNCLAIMED branch cannot distinguish a
+# dead worker from a legitimately long compute job that never claims, so the
+# window must be generous. Default 2 h.
+CN_ORPHAN_DEADLINE = float(os.environ.get("CN_ORPHAN_DEADLINE", str(2 * 3600)))
+# Text delivered when an abandoned task is reaped. Runtime user-facing string.
+CN_ORPHAN_TEXT = os.environ.get(
+    "CN_ORPHAN_TEXT",
+    "❌ Task abgebrochen (Worker gestorben) — es kam kein Ergebnis zurück.",
+)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -561,6 +572,84 @@ def deliver_ready(
             except OSError:
                 pass
     return delivered
+
+
+# ─── opt-in orphan reaper (ship-dark) ──────────────────────────────────────
+
+
+def reap_orphan_pending(
+    *, now: float | None = None, enabled: bool = False,
+    deadline: float | None = None,
+) -> int:
+    """Convert ABANDONED pending records into a loud failure notice.
+
+    SHIP-DARK: ``enabled=False`` (the default) is a byte-identical no-op — the
+    caller resolves the ``bridge_orphan_task_reaper`` flag and passes it in, so
+    a default install never runs this. When enabled, a pending record is reaped
+    (marked ready + ok=False + CN_ORPHAN_TEXT) so the next ``deliver_ready``
+    tick tells the user the task was aborted and closes the record, instead of
+    leaving it wedged until ``CN_PENDING_MAX_AGE`` (7 d) with no ping.
+
+    A record is reaped only when ALL hold:
+      * state is still ``pending`` and older than ``deadline``
+        (``CN_ORPHAN_DEADLINE``, default 2 h);
+      * it is NOT an active supervised run (``_supervised`` — the supervisor
+        owns those and will resume or fail them itself);
+      * its producer is provably gone — the host rebooted since it claimed, or
+        its claimed pid is dead — OR it was NEVER claimed at all (pid=None).
+
+    The last clause is the only NEW risk over completion_notify's own
+    dead-producer reap, which deliberately skips unclaimed records: an
+    unclaimed record could be a legitimately long compute worker that never
+    claims. That is exactly why this whole function is gated behind an opt-in
+    flag and uses a generous deadline. Best-effort, per-record isolated, never
+    raises.
+    """
+    if not enabled:
+        return 0
+    now = time.time() if now is None else now
+    deadline = CN_ORPHAN_DEADLINE if deadline is None else deadline
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return 0
+    reaped = 0
+    for path in sorted(qdir.glob("*.json")):
+        try:
+            rec = _read(path)
+            if rec is None or rec.get("state") != _STATE_PENDING:
+                continue
+            age = now - float(rec.get("created_at") or 0)
+            if age <= deadline:
+                continue
+            # A supervised run has an owner for exactly this situation — leave
+            # it to task_supervisor (mirrors deliver_ready's dead-producer reap).
+            if _supervised(rec.get("id")):
+                continue
+            pid = rec.get("producer_pid")
+            boot = rec.get("producer_boot")
+            if pid:
+                producer_gone = (
+                    (boot and boot != _host_boot_id())
+                    or not _pid_alive(int(pid))
+                )
+            else:
+                # Never claimed: past the (generous) deadline with no live
+                # producer signal at all — treat as abandoned. THIS is the
+                # branch the flag gates (see docstring).
+                producer_gone = True
+            if not producer_gone:
+                continue
+            rec["state"] = _STATE_READY
+            rec["ok"] = False
+            rec["text"] = CN_ORPHAN_TEXT
+            rec["voice_text"] = None
+            rec["ready_at"] = now
+            _atomic_write(path, rec)
+            reaped += 1
+        except Exception as e:  # noqa: BLE001 — per-record isolation, never raise
+            print(f"completion_notify: orphan reap failed {path.name}: {e}",
+                  file=sys.stderr)
+    return reaped
 
 
 # ─── GDPR Art. 17 ──────────────────────────────────────────────────────────

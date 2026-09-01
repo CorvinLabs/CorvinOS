@@ -2061,19 +2061,42 @@ def _house_rules_audit_path() -> Path:
     return _ch / "global" / "forge" / "audit.jsonl"
 
 
+# Set once the first time `_bg_flag` has to fall back to OFF because the
+# console feature-flags package could not be imported. Without this, an install
+# where the console package is genuinely absent silently resolves EVERY
+# ship-dark bridge flag to OFF and there is no trace of WHY — a supervised/
+# progress/reaper feature the operator enabled in config appears to do nothing.
+# One WARNING makes that fail-to-OFF observable; the guard keeps it from
+# spamming the log on every poll tick.
+_bg_flag_import_warned = False
+
+
 def _bg_flag(flag_id: str) -> bool:
     """Resolve one ship-dark feature flag for the current tenant.
 
     Absent/unreadable console package or config means OFF — the same
     fail-to-off contract `_maybe_delegate_big_data` uses, so a bridge-only
     deployment without the console never accidentally enables a dark feature.
+    The fail-to-OFF is logged ONCE (WARNING) so it is observable instead of
+    silent — `is_enabled` itself never raises, so this except only fires on a
+    genuine import failure of the console package.
     """
+    global _bg_flag_import_warned
     try:
         from corvin_core import feature_flags as _ff  # type: ignore  # noqa: PLC0415
 
         tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
         return bool(_ff.is_enabled(flag_id, tid))
-    except Exception:  # noqa: BLE001 — console package absent → feature is off
+    except Exception as _ff_exc:  # noqa: BLE001 — console package absent → feature is off
+        if not _bg_flag_import_warned:
+            _bg_flag_import_warned = True
+            try:
+                log(f"[feature-flags] WARNING: console feature_flags package "
+                    f"unavailable ({type(_ff_exc).__name__}: {_ff_exc}) — all "
+                    f"ship-dark bridge flags resolve OFF (first offender: "
+                    f"{flag_id!r})")
+            except Exception:  # noqa: BLE001 — logging must never break the caller
+                pass
         return False
 
 
@@ -4607,73 +4630,22 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         )
         _register_subproc(chat_key, proc)
 
-        # Streaming mode for bridges: write intermediate "working..." messages every 2 seconds.
-        # This allows Discord/Telegram/WhatsApp to show live updates instead of silence
-        # while Claude executes long tasks (ADR-0512).
-        _heartbeat_counter = [100]  # Start at 100 to avoid collision with final msg_id_00.json
-        def _send_heartbeat_to_bridge() -> bool:
-            """Write intermediate 'working...' message to outbox if this is a bridge call."""
-            if not channel or channel not in ("discord", "telegram", "whatsapp"):
-                return False
-            if not msg_id or not chat_id:
-                return False
-            try:
-                # Heartbeats use msg_id_100, msg_id_101, ... (final response is msg_id_00.json)
-                # so there's no filename collision. The daemon processes files in sorted order,
-                # which means heartbeats (100+) come after the final response (00), so they
-                # can appear as "already done" updates after the main reply is shown.
-                _heartbeat_counter[0] += 1
-                seq = _heartbeat_counter[0]
-                hb_file = OUTBOX / f"{msg_id}_{seq:02d}.json"
-                hb_env = {
-                    "channel": channel,
-                    "chat_id": chat_id,
-                    "text": "⏳ Processing...",
-                }
-                # Atomic write matches _atomic_write_outbox pattern
-                tmp_file = hb_file.with_suffix(".tmp")
-                tmp_file.write_text(json.dumps(hb_env, ensure_ascii=False, indent=2))
-                tmp_file.replace(hb_file)
-                return True
-            except Exception:
-                return False
-
+        # Block until the (legacy image/document) subprocess finishes, enforcing
+        # CLAUDE_BRIDGE_TIMEOUT when set. Live intermediate "working…" updates for
+        # long bridge tasks come from `_call_claude_streaming_via_engine` (the sole
+        # streaming path) and, for detached `/task` runs, from the durable
+        # task_progress queue — NOT from here. A prior heartbeat loop wedged into
+        # this function referenced `msg_id`/`chat_id`, which are not parameters of
+        # `call_claude`, so it raised NameError the moment it fired for a
+        # discord/telegram/whatsapp channel (e.g. the engine-fallback path at
+        # call_claude() call site) — dead on arrival, removed 2026-09-01.
         try:
-            try:
-                # Read stdout with heartbeat polling instead of blocking communicate()
-                stdout_buffer = []
-                stderr_buffer = []
-                heartbeat_deadline = time.time() + 2.0
-                actual_timeout = run_timeout if run_timeout else 7200.0  # 2h default
-                deadline = time.time() + actual_timeout
-
-                while proc.poll() is None:  # while process is running
-                    # Send heartbeat every 2 seconds for bridge channels
-                    if time.time() >= heartbeat_deadline:
-                        _send_heartbeat_to_bridge()
-                        heartbeat_deadline = time.time() + 2.0
-
-                    # Read stdout line (non-blocking via small timeout)
-                    try:
-                        line = proc.stdout.readline()
-                        if line:
-                            stdout_buffer.append(line)
-                    except Exception:
-                        pass
-
-                    # Check timeout
-                    if time.time() > deadline:
-                        proc.kill()
-                        raise subprocess.TimeoutExpired(args, actual_timeout)
-
-                    time.sleep(0.1)  # Prevent busy loop
-
-                # Collect remaining stdout/stderr
-                stdout = "".join(stdout_buffer) + (proc.stdout.read() or "")
-                stderr = proc.stderr.read() or ""
-
-            except subprocess.TimeoutExpired:
-                raise
+            actual_timeout = run_timeout if run_timeout else None
+            stdout, stderr = proc.communicate(timeout=actual_timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
         finally:
             _unregister_subproc(chat_key, proc)
         rc = proc.returncode
@@ -12287,6 +12259,19 @@ def main() -> int:
                         def _synth_voice(text: str) -> str | None:
                             p = synthesize_voice_note(text, lang="de")
                             return str(p) if p else None
+                        # Ship-dark (bridge_orphan_task_reaper): convert an
+                        # ABANDONED pending record — a worker SIGKILLed before it
+                        # claimed, which completion_notify's own reap skips — into a
+                        # loud failure BEFORE the delivery pass, so the abort notice
+                        # reaches the user in THIS tick. No-op when the flag is off.
+                        try:
+                            _reaped = _cn.reap_orphan_pending(
+                                enabled=_bg_flag("bridge_orphan_task_reaper"))
+                            if _reaped:
+                                log(f"completion_notify: reaped {_reaped} "
+                                    f"abandoned task(s) as failed")
+                        except Exception as _re:  # noqa: BLE001 — never break the tick
+                            log(f"orphan reaper tick failed: {_re}")
                         sent = _cn.deliver_ready(OUTBOX, synthesize_voice=_synth_voice)
                         if sent:
                             log(f"completion_notify: delivered {sent} notification(s)")
