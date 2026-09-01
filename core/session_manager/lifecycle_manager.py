@@ -36,8 +36,15 @@ class Checkpoint:
     phase: str = field(default="execution")
 
     def compute_hash(self) -> str:
-        """Compute SHA256 of (goal + context_reduction + timestamp)."""
-        hashable = f"{self.goal}|{self.context_reduction_pct}|{self.timestamp}"
+        """Compute SHA256 of all checkpoint fields (CRITICAL-004 fix: complete integrity).
+
+        Includes: session_id, goal, phase, audit_trail_hash, context_tokens_used,
+                 context_reduction_pct, timestamp
+
+        This ensures ANY tampering is detected.
+        """
+        # Include ALL critical fields to prevent tampering
+        hashable = f"{self.session_id}|{self.goal}|{self.phase}|{self.audit_trail_hash}|{self.context_tokens_used}|{self.context_reduction_pct}|{self.timestamp}"
         return hashlib.sha256(hashable.encode()).hexdigest()
 
 
