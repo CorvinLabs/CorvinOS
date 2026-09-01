@@ -4285,35 +4285,53 @@ def _build_context_bar(channel: str, chat_key: str, profile: dict | None) -> str
 
 def _heartbeat_writer(sender: str, msg_id: str, channel: str, chat_id,
                        stop_event: threading.Event, delay: float | None = None) -> None:
-    """Background thread: if Claude hasn't returned in `delay` seconds,
-    drop a brief acknowledgement into the outbox so the user sees the
-    bridge picked up the request. The channel-aware envelope lets the
-    right daemon (telegram/discord/whatsapp) pick it up.
+    """Background thread: write continuous "⏳ Processing..." updates while Claude runs.
 
-    Default delay is 1.5 s — fast enough that the user gets feedback
-    almost immediately, slow enough that a sub-second reply doesn't
-    cause two messages. Override via BRIDGE_HEARTBEAT_DELAY (seconds).
+    Sends first heartbeat after `delay` seconds (default 1.5s), then every 2 seconds
+    until stop_event is set. This keeps Discord/Telegram/WhatsApp showing live
+    updates during long tasks (5-30 min), preventing user confusion about whether
+    the bot is working.
+
+    Default delay is 1.5 s — fast enough that the user gets feedback almost
+    immediately, slow enough that a sub-second reply doesn't cause spam.
+    Override via BRIDGE_HEARTBEAT_DELAY (seconds).
     """
     if delay is None:
         try:
             delay = float(os.environ.get("BRIDGE_HEARTBEAT_DELAY", "1.5"))
         except ValueError:
             delay = 1.5
+
+    # Wait for initial delay before first heartbeat
     if stop_event.wait(delay):
-        return  # finished before the timeout — no heartbeat needed
-    # msg_id rides along so the daemon can correlate progress/heartbeat
-    # files with the final reply and silently drop stale ones after the
-    # real reply has been delivered (sticky-cleanup contract).
-    out = {"channel": channel, "to": sender, "msg_id": msg_id,
-           "text": "Got it – working on your request.", "_heartbeat": True}
-    if chat_id is not None:
-        out["chat_id"] = chat_id
-    out_file = OUTBOX / f"{msg_id}_hb.json"
-    try:
-        _atomic_write_outbox(out_file, json.dumps(out, ensure_ascii=False))
-        log(f"heartbeat sent for {msg_id}")
-    except OSError:
-        pass
+        return  # Task finished before initial delay — no heartbeat needed
+
+    # Now send continuous heartbeats every 2 seconds until task completes
+    seq = 0
+    while not stop_event.is_set():
+        seq += 1
+        out = {
+            "channel": channel,
+            "to": sender,
+            "msg_id": msg_id,
+            "text": "⏳ Processing...",
+            "_heartbeat": True,
+        }
+        if chat_id is not None:
+            out["chat_id"] = chat_id
+
+        # Filename format: msg_id_hb_001.json, msg_id_hb_002.json, ...
+        # (use sequential numbering so daemon picks them up in order)
+        out_file = OUTBOX / f"{msg_id}_hb_{seq:03d}.json"
+        try:
+            _atomic_write_outbox(out_file, json.dumps(out, ensure_ascii=False))
+            log(f"heartbeat #{seq} sent for {msg_id}")
+        except OSError:
+            pass  # Best-effort: write failure doesn't block the main task
+
+        # Sleep 2 seconds before next heartbeat, but exit early if task finishes
+        if stop_event.wait(2.0):
+            break
 
 
 # ADR-0214 review — per-chat record of the ACS-X primitive active in the

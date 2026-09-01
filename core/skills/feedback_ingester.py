@@ -16,10 +16,10 @@ class Sanitizer:
     """Fail-closed PII/secret detection."""
 
     PII_PATTERNS = {
-        'email': r'[\w.-]+@[\w.-]+\.\w+',
-        'phone': r'\d{3}-\d{3}-\d{4}',
-        'credit_card': r'\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}',
-        'ssn': r'\d{3}-\d{2}-\d{4}',
+        'email': r'\b[\w.-]+@[\w.-]+\.\w+\b',  # Anchored to word boundaries
+        'phone': r'\b\d{3}-\d{3}-\d{4}\b',  # Anchored
+        'credit_card': r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b',
+        'ssn': r'\b\d{3}-\d{2}-\d{4}\b',
     }
 
     DISALLOW_FIELDS = ['prompt', 'response', 'user_id', 'raw_content']
@@ -103,33 +103,47 @@ class FeedbackIngester:
                 f.write(json.dumps(genesis) + '\n')
 
     def ingest(self, event: Dict[str, Any]) -> bool:
-        """Ingest feedback event (atomic append)."""
+        """Ingest feedback event (atomic append, ADR-0534)."""
         # Sanitize
         sanitized = Sanitizer.sanitize_outcome(event)
         if sanitized is None:
             logger.warning(f"Event dropped (PII detected)")
             return False
 
-        # Get previous hash
-        with open(self.feedback_log, 'rb') as f:
-            lines = f.readlines()
-        if lines:
-            prev_line = lines[-1]
-            prev_hash = hashlib.sha256(prev_line).hexdigest()
-        else:
+        # Get previous hash (seek-to-end for O(1) instead of O(n))
+        try:
+            with open(self.feedback_log, 'rb') as f:
+                f.seek(0, 2)  # Seek to end
+                pos = f.tell()
+                if pos > 0:
+                    # Read last line efficiently (bounded read, ~1KB max)
+                    read_size = min(1024, pos)
+                    f.seek(max(0, pos - read_size))
+                    chunk = f.read()
+                    lines = chunk.split(b'\n')
+                    prev_line = lines[-2] if len(lines) > 1 else lines[-1]
+                    prev_hash = hashlib.sha256(prev_line).hexdigest()
+                else:
+                    prev_hash = '0' * 64
+        except Exception as e:
+            logger.error(f"Failed to read last hash: {e}")
             prev_hash = '0' * 64
 
         # Add hash chain
         sanitized['sha256_prev'] = prev_hash
+        json_line = json.dumps(sanitized) + '\n'
 
-        # Atomic append (tmpfile not needed for append, but for safety)
+        # Atomic write: write to tmp, then rename
         tmp_file = self.feedback_log.with_suffix('.tmp')
         try:
-            with open(self.feedback_log, 'a') as f:
-                f.write(json.dumps(sanitized) + '\n')
+            with open(tmp_file, 'a') as f:
+                f.write(json_line)
+            tmp_file.replace(self.feedback_log)
             return True
         except Exception as e:
             logger.error(f"Feedback write failed: {e}")
+            if tmp_file.exists():
+                tmp_file.unlink()
             return False
 
     def load_feedback_log(self, limit: int = 1000) -> List[Dict[str, Any]]:
