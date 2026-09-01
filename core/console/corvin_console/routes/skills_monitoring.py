@@ -287,58 +287,126 @@ async def get_skill_metrics(
     tenant_id: str = "_default",
     current_user = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Get detailed learning metrics for a skill.
+    """Get detailed learning metrics for a skill (Phase 5.2).
 
-    Response:
-      {
-        "skill_id": str,
-        "version": str,
-        "metrics": {
-          "total_runs": int,
-          "total_errors": int,
-          "score_history": [
-            {"epoch": int, "score": float, "timestamp": datetime}
-          ],
-          "score_trend": float (-1.0 to +1.0, positive = improving),
-          "feedback_breakdown": {
-            "by_outcome": {"success": int, "failure": int},
-            "by_task_shape": {<task>: int},
-            "by_decision": {<decision>: int}
-          },
-          "anomalies": [str] (unusual patterns detected)
-        },
-        "recommendations": [str],
-        "timestamp": datetime
-      }
+    Loads grading_stats.json + feedback_log.jsonl to calculate:
+    - Score progression over epochs
+    - Feedback breakdown (by outcome, task_shape, decision)
+    - Anomalies (unusual patterns)
+    - Recommendations (convergence hints)
     """
     try:
-        from core.skills.skill_manager import SkillManager
+        import json
         from pathlib import Path
+        from core.skills.skill_manager import SkillManager
 
         skill_mgr = SkillManager(Path.home() / '.corvin', tenant_id)
+        skill_path = skill_mgr.registry.get_skill_path(skill_id) if hasattr(skill_mgr, 'registry') else None
 
-        # Placeholder implementation — real metrics from grading_stats.json
-        # TODO: Load actual grading_stats and feedback_log for this skill
+        if not skill_path:
+            raise HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+
+        # Load grading_stats.json
+        grading_stats_file = skill_path / 'grading_stats.json'
+        score_history = []
+        current_score = None
+
+        if grading_stats_file.exists():
+            try:
+                with open(grading_stats_file) as f:
+                    grading_stats = json.load(f)
+                    current_score = grading_stats.get('current_score')
+                    # Build score history from epochs
+                    for epoch in grading_stats.get('epochs', []):
+                        score_history.append({
+                            'epoch': epoch.get('epoch'),
+                            'score': epoch.get('score'),
+                            'timestamp': epoch.get('timestamp'),
+                        })
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # Load feedback_log.jsonl
+        feedback_log_file = skill_path / 'feedback_log.jsonl'
+        feedback_breakdown = {
+            'by_outcome': {'success': 0, 'failure': 0},
+            'by_task_shape': {},
+            'by_decision': {},
+        }
+        total_runs = 0
+        total_errors = 0
+
+        if feedback_log_file.exists():
+            try:
+                with open(feedback_log_file) as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            event = json.loads(line)
+                            payload = event.get('payload', {})
+
+                            # Track outcomes
+                            outcome = payload.get('outcome')
+                            if outcome:
+                                feedback_breakdown['by_outcome'][outcome] = feedback_breakdown['by_outcome'].get(outcome, 0) + 1
+
+                            # Track by task_shape
+                            task_shape = payload.get('task_shape')
+                            if task_shape:
+                                feedback_breakdown['by_task_shape'][task_shape] = feedback_breakdown['by_task_shape'].get(task_shape, 0) + 1
+
+                            # Track by decision
+                            decision = payload.get('decision')
+                            if decision:
+                                feedback_breakdown['by_decision'][decision] = feedback_breakdown['by_decision'].get(decision, 0) + 1
+
+                            total_runs += 1
+                            if outcome == 'failure':
+                                total_errors += 1
+                        except json.JSONDecodeError:
+                            continue
+            except Exception:
+                pass
+
+        # Calculate score trend
+        score_trend = 0.0
+        if len(score_history) >= 2:
+            recent_score = score_history[-1]['score'] if score_history[-1] else 0
+            baseline_score = score_history[0]['score'] if score_history[0] else 0
+            if baseline_score > 0:
+                score_trend = (recent_score - baseline_score) / baseline_score
+
+        # Detect anomalies
+        anomalies = []
+        if total_errors > total_runs * 0.2:
+            anomalies.append(f"High error rate: {total_errors}/{total_runs} ({100*total_errors//total_runs}%)")
+        if len(score_history) > 5:
+            last_5_scores = [s['score'] for s in score_history[-5:] if s['score']]
+            if last_5_scores and last_5_scores[-1] < 0.5:
+                anomalies.append("Score below 50% — learning may be stalled")
+            if len(set(last_5_scores)) == 1:
+                anomalies.append("Score plateau detected — no improvement over last 5 epochs")
+
         return {
             "skill_id": skill_id,
-            "version": "1.0.0",  # TODO: get from manifest
+            "version": "1.0.0",  # TODO: load from manifest
             "metrics": {
-                "total_runs": 0,
-                "total_errors": 0,
-                "score_history": [],
-                "score_trend": 0.0,
-                "feedback_breakdown": {
-                    "by_outcome": {"success": 0, "failure": 0},
-                    "by_task_shape": {},
-                    "by_decision": {},
-                },
-                "anomalies": [],
+                "total_runs": total_runs,
+                "total_errors": total_errors,
+                "score_history": score_history,
+                "score_trend": round(score_trend, 3),
+                "feedback_breakdown": feedback_breakdown,
+                "anomalies": anomalies,
             },
             "recommendations": [
-                "Monitor this skill for learning convergence",
-                "Check feedback events in audit log if score plateaus",
+                "Monitor learning convergence via score_trend" if score_trend != 0 else "Learning loop in progress",
+                f"Error rate: {100*total_errors//max(total_runs, 1):.1f}% — investigate if >20%" if total_errors > 0 else "No errors detected",
+                "Run E2E tests to validate learning quality" if total_runs > 50 else "Collect more feedback before evaluation",
             ],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load metrics: {str(e)}")
