@@ -43,8 +43,8 @@ class _IndexManager:
         if self._index is not None:
             return self._index
 
+        # Try local path first (legacy)
         if self._index_path is None:
-            # Default path
             self._index_path = Path.cwd() / "operator" / "marketplace" / "index" / "plugins.json"
 
         try:
@@ -53,8 +53,18 @@ class _IndexManager:
             logger.info(f"✅ Loaded marketplace index from {self._index_path}")
             return self._index
         except FileNotFoundError:
-            logger.warning(f"⚠️  Index not found at {self._index_path}")
-            return self._empty_index()
+            logger.warning(f"⚠️  Index not found at {self._index_path}, fetching from GitHub...")
+            # Fallback: fetch from Corvin-Marketplace repo
+            try:
+                import urllib.request
+                url = "https://raw.githubusercontent.com/CorvinLabs/Corvin-Marketplace/main/index/plugins.json"
+                with urllib.request.urlopen(url, timeout=5) as response:
+                    self._index = json.loads(response.read())
+                logger.info(f"✅ Loaded marketplace index from GitHub: {url}")
+                return self._index
+            except Exception as e:
+                logger.error(f"❌ Failed to fetch from GitHub: {e}")
+                return self._empty_index()
         except json.JSONDecodeError as e:
             logger.error(f"❌ Failed to parse index: {e}")
             return self._empty_index()
