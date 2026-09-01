@@ -904,3 +904,129 @@ grep "skill_executed.*delegation_router" ~/.corvin/audit.jsonl | tail -1
 → Full reference: See Corvin-ADR repo for ADR-0532–0535 (os-skills-architecture through composition-dependencies)
 → Implementation: `/home/shumway/projects/Corvin-ADR/implementation/ADR-0532-IMPLEMENTATION-PLAN.md` (detailed roadmap, risk matrix, phase gates)
 
+---
+
+## Audit Chain as Ground Truth — Complete User Proof (load-bearing)
+
+**CORE PRINCIPLE:** CorvinOS is a **proof system**. Every action — plugin load, Skill decision, A2A dispatch, consent check, data flow — creates an immutable audit event. Together they form a **complete, tenant-scoped proof of work** that the operator can inspect, verify, and cite. This is NOT just logging; it is the system's memory and legal foundation.
+
+**What Gets Audited (Everything):**
+
+| Subsystem | What | Event Type | Payload | Chain Link |
+|---|---|---|---|---|
+| **Plugins** | Load, init, execution, error, disable | `plugin_loaded`, `plugin_executed`, `plugin_disabled` | plugin_id, version, boot_layer, input, output, error, tenant_id | Hash-chained |
+| **Skills 2.0 (ACP)** | Execute, config, feedback, optimization | `skill_executed`, `skill_config_updated`, `skill_feedback` | skill_id, version, input, output, latency, lom | Hash-chained |
+| **Consent / House-Rules** | Consent given, checked, denied | `consent_granted`, `consent_checked`, `house_rule_denied` | user_id, consent_type, tenant_id, timestamp | Hash-chained |
+| **A2A (App-to-App)** | Task received, processed, result sent | `a2a_task_received`, `a2a_task_executed`, `a2a_result_sent` | task_id, source_app, target_app, tenant_id, payload_hash | Hash-chained |
+| **Audit System Itself** | Chain verification, key rotation, snapshot | `audit_chain_verified`, `audit_key_rotated`, `audit_snapshot` | chain_height, last_hash, verification_result | Self-verifying |
+| **Learning (ADR-0314)** | Feedback received, config optimized | `learning_event_received`, `optimizer_config_updated` | event_type, skill_id, signal, confidence_delta | Hash-chained |
+| **Context Engineering** | Snapshot taken, context adapted | `context_snapshot`, `context_adapted` | context_id, tenant_id, user_id, preserved_fields, added_fields | Hash-chained |
+| **Data Flow Guard (L34)** | Input classified, flow allowed, blocked | `data_flow_classified`, `data_flow_allowed`, `data_flow_blocked` | data_class, engine, dest, reason | Hash-chained |
+
+**Tenant Isolation (GDPR Art. 5, 6, 32):**
+
+Every audit event is **immutable and tenant-scoped:**
+```
+{
+  "tenant_id": "<tenant>",                    # Fail-closed: null tenant → denied
+  "timestamp": "2026-09-01T12:34:56.789Z",
+  "event_type": "skill_executed",
+  "skill_id": "os.delegation_router",
+  "input": "classify_request(...)",
+  "output": "route_to_agent=opus",
+  "latency_ms": 42,
+  "lom": "assistant.Forge::route_request:L237",  # Line of Moral Responsibility
+  "hash": "sha256(...)",                      # Chained to previous event
+  "prev_hash": "sha256(...)"                  # Immutable backward reference
+}
+```
+
+Queries: All reads filtered by `tenant_id`. No cross-tenant leakage.
+
+**Why This Matters (Proof System):**
+
+1. **Operator Proof:** "Show me every Skill decision for task XYZ" → audit trail proves what happened, when, to whom
+2. **Compliance Proof:** "Does CorvinOS respect consent?" → audit shows every consent check + decision (accept/deny + reason)
+3. **Security Proof:** "Was this A2A task really processed?" → audit shows source, destination, payload hash, result, no tampering
+4. **Learning Proof:** "Did the Skill really learn?" → audit shows feedback received, config before/after, optimizer delta
+5. **Auditability (GDPR Art. 30):** Every event is attributed, timestamped, signed; no silent operations
+
+**Integration with LDD + Dialektical Reasoning:**
+
+When designing any new subsystem (Plugin, Skill, A2A handler, Consent gate):
+
+| LDD Phase | What | Audit Implication |
+|---|---|---|
+| **k=1 (Dialectical)** | Surface design choice | "What audit events will this subsystem emit?" *must* be answered before code |
+| **k=2 (E2E)** | Prove it works | E2E test must verify: (1) subsystem does X, (2) audit event Y is logged, (3) hash-chain intact |
+| **k=3 (Red/Green)** | Iterate | Each iteration updates audit schema if needed (immutable: never delete prior events, only append) |
+| **k=4–5 (Refinement)** | Polish | Audit schema is finalized; all future instances follow it |
+
+**Mandatory Dialectical Prompts:**
+
+Before coding any new Skill, Plugin, or A2A handler:
+```
+/dialectical-reasoning
+  "New Skill: <name>"
+  
+  Questions to surface:
+  1. What audit events will this Skill emit (input, output, config changes)?
+  2. What tenant scopes will it cross (single tenant, multi-tenant)?
+  3. Are all events immutable + hash-chained?
+  4. Can an operator reconstruct the Skill's entire behavior from audit logs?
+  5. Are there any "silent" operations (optimizations, cleanups) that should be audited?
+```
+
+**E2E Wiring Proof (must include audit verification):**
+
+```bash
+# 1. Run the Skill / Plugin / A2A handler
+pytest tests/test_skill_xyz.py::test_e2e -v
+
+# 2. Verify audit events were logged
+grep "skill_executed\|plugin_loaded\|a2a_task_executed" ~/.corvin/audit.jsonl \
+  | jq -c 'select(.skill_id == "os.xyz" or .plugin_id == "xyz")'
+
+# 3. Verify hash-chain integrity
+python3 scripts/verify_audit_chain.py --tenant=_default --since=<start_time>
+# Output: ✅ Chain intact (N events, N-1 hash links verified)
+
+# 4. Commit only if audit proof succeeds
+git add ... && git commit -m "feat(xyz): description [audit-verified]"
+```
+
+**Must NOT do (absolute):**
+
+- **Don't code without Dialectical audit design** — audit schema is not an afterthought
+- **Don't emit unattributed events** — every event must have tenant_id, timestamp, lom, event_type, hash
+- **Don't merge without hash-chain verification** — E2E tests MUST verify `prev_hash` + `hash` integrity
+- **Don't weaken tenant isolation** — audit reads MUST filter by tenant_id; no fallback to "any tenant"
+- **Don't alter past audit events** — immutable append-only; never update/delete/rewrite
+- **Don't silently optimize** — if a Skill optimizes config (ADR-0314), emit `skill_config_updated` event with delta
+- **Don't skip audit for "internal" operations** — Plugin init, context adaptation, data flow guard—all audited
+- **Don't assume audit is "just logging"** — it is the system's proof of work and legal foundation (GDPR Art. 30, 32)
+
+**Audit Verification Workflow (for operator + auditor):**
+
+```bash
+# Inspect full proof for a task
+corvin audit show-task <task_id>
+# Output: full chain of events for this task across plugins, skills, consent, data flow
+
+# Verify chain integrity (daily)
+corvin audit verify-chain --tenant=_default
+# Output: ✅ Chain height 142857, all hashes verified, 0 gaps
+
+# Extract proof for compliance report
+corvin audit export --tenant=_default --format=pdf --since=2026-09-01 --until=2026-09-30 \
+  --events=skill_executed,plugin_loaded,consent_granted,a2a_task_executed
+# Output: compliance-report-2026-09.pdf (auditor-ready, signatures included)
+
+# Trace a Skill decision (operator debugging)
+corvin audit trace skill os.delegation_router --task=<task_id>
+# Output: every event in the chain (config → execute → feedback → optimize)
+```
+
+→ Full audit spec: See ADR-0232/0233 (boot tripwire, chain integrity), ADR-0537 (audit event schema), RFC 3161 (TSA timestamping)
+→ Integration: Every new ADR MUST define its audit events (required frontmatter field: `audit_events`)
+
