@@ -128,9 +128,18 @@ def _queue_grading_request(
     except (RuntimeError, ValueError):
         ctx = {}
 
+    # ADR-0007: Mandatory tenant_id in all learning events (GDPR Art. 32)
+    tenant_id = ctx.get('tenant_id')
+    if not tenant_id:
+        # Fallback: reject if tenant_id is missing (fail-closed)
+        # Log at WARNING level so operator can see learning is disabled for this turn
+        logger.warning(f"Grading request dropped: missing tenant_id (skill={skill_obj.name}, version={skill_obj.version})")
+        return
+
     request = {
         "skill_name": skill_obj.name,
         "skill_version": skill_obj.version,
+        "tenant_id": tenant_id,  # Explicit isolation
         "args": str(args)[:100],  # Limit arg capture to 100 chars
         "kwargs": str(kwargs)[:100],
         "output": str(output)[:100] if output else None,

@@ -14,6 +14,7 @@ import { Route } from "react-router-dom";
 import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
 import { MarketplacePanel } from "./marketplace";
+import { SkillsOverviewPanel } from "@/components/SkillsOverviewPanel";
 import {
   DashboardPage, SettingsPage, EnginesPage, BrowserPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
@@ -54,6 +55,7 @@ export const PANELS: ConsolePanel[] = [
   rc("voice", "Voice", VoicePage),
   rc("forge", "Forge", ForgePage),
   rc("skills", "Skills", SkillsPage),
+  rc("os-skills", "OS-Skills", SkillsOverviewPanel as unknown as ComponentType),
   rc("packages", "Packages", PackagesPage),
   rc("cowork", "Cowork", CoworkPage),
   rc("ldd", "LDD", LddPage),

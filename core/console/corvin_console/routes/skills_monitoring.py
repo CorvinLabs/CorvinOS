@@ -201,3 +201,212 @@ async def clear_cache(
         "entries_cleared": stats_before.get("size", 0),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# === Phase 5: Learning Dashboard Endpoints ===
+
+
+@router.get("/status", summary="Get all skills status")
+async def get_skills_status(
+    tenant_id: str = "_default",
+    current_user = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get status of all active skills for dashboard.
+
+    Response:
+      {
+        "tenant_id": str,
+        "skills": [
+          {
+            "id": str (e.g., "os.delegation_router"),
+            "version": str,
+            "enabled": bool,
+            "score": float (0.0–1.0) | null,
+            "runs_24h": int,
+            "errors_24h": int,
+            "last_run": datetime | null,
+            "status": "healthy" | "degraded" | "error"
+          },
+          ...
+        ],
+        "timestamp": datetime
+      }
+    """
+    from pathlib import Path
+    from core.skills.skill_manager import SkillManager
+
+    try:
+        skill_mgr = SkillManager(Path.home() / '.corvin', tenant_id)
+        active_skills = skill_mgr.list_active_skills() if hasattr(skill_mgr, 'list_active_skills') else []
+
+        skills_list = []
+        for skill_id in active_skills:
+            try:
+                status = skill_mgr.get_skill_status(skill_id) if hasattr(skill_mgr, 'get_skill_status') else None
+                if status:
+                    # Determine health status
+                    health = "healthy"
+                    if status.errors_24h > 5:
+                        health = "error"
+                    elif status.errors_24h > 0:
+                        health = "degraded"
+
+                    skills_list.append({
+                        "id": skill_id,
+                        "version": status.version,
+                        "enabled": status.enabled,
+                        "score": status.score,
+                        "runs_24h": status.runs_24h,
+                        "errors_24h": status.errors_24h,
+                        "last_run": None,  # TODO: track from grading_stats
+                        "status": health,
+                    })
+            except Exception as e:
+                # Log but continue; one skill failure shouldn't break the dashboard
+                import logging
+                logging.warning(f"Failed to get status for {skill_id}: {e}")
+
+        return {
+            "tenant_id": tenant_id,
+            "skills": skills_list,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        # Fallback: return empty list if SkillManager unavailable
+        return {
+            "tenant_id": tenant_id,
+            "skills": [],
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+@router.get("/{skill_id}/metrics", summary="Get skill learning metrics")
+async def get_skill_metrics(
+    skill_id: str,
+    tenant_id: str = "_default",
+    current_user = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get detailed learning metrics for a skill (Phase 5.2).
+
+    Loads grading_stats.json + feedback_log.jsonl to calculate:
+    - Score progression over epochs
+    - Feedback breakdown (by outcome, task_shape, decision)
+    - Anomalies (unusual patterns)
+    - Recommendations (convergence hints)
+    """
+    try:
+        import json
+        from pathlib import Path
+        from core.skills.skill_manager import SkillManager
+
+        skill_mgr = SkillManager(Path.home() / '.corvin', tenant_id)
+        skill_path = skill_mgr.registry.get_skill_path(skill_id) if hasattr(skill_mgr, 'registry') else None
+
+        if not skill_path:
+            raise HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+
+        # Load grading_stats.json
+        grading_stats_file = skill_path / 'grading_stats.json'
+        score_history = []
+        current_score = None
+
+        if grading_stats_file.exists():
+            try:
+                with open(grading_stats_file) as f:
+                    grading_stats = json.load(f)
+                    current_score = grading_stats.get('current_score')
+                    # Build score history from epochs
+                    for epoch in grading_stats.get('epochs', []):
+                        score_history.append({
+                            'epoch': epoch.get('epoch'),
+                            'score': epoch.get('score'),
+                            'timestamp': epoch.get('timestamp'),
+                        })
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # Load feedback_log.jsonl
+        feedback_log_file = skill_path / 'feedback_log.jsonl'
+        feedback_breakdown = {
+            'by_outcome': {'success': 0, 'failure': 0},
+            'by_task_shape': {},
+            'by_decision': {},
+        }
+        total_runs = 0
+        total_errors = 0
+
+        if feedback_log_file.exists():
+            try:
+                with open(feedback_log_file) as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            event = json.loads(line)
+                            payload = event.get('payload', {})
+
+                            # Track outcomes
+                            outcome = payload.get('outcome')
+                            if outcome:
+                                feedback_breakdown['by_outcome'][outcome] = feedback_breakdown['by_outcome'].get(outcome, 0) + 1
+
+                            # Track by task_shape
+                            task_shape = payload.get('task_shape')
+                            if task_shape:
+                                feedback_breakdown['by_task_shape'][task_shape] = feedback_breakdown['by_task_shape'].get(task_shape, 0) + 1
+
+                            # Track by decision
+                            decision = payload.get('decision')
+                            if decision:
+                                feedback_breakdown['by_decision'][decision] = feedback_breakdown['by_decision'].get(decision, 0) + 1
+
+                            total_runs += 1
+                            if outcome == 'failure':
+                                total_errors += 1
+                        except json.JSONDecodeError:
+                            continue
+            except Exception:
+                pass
+
+        # Calculate score trend
+        score_trend = 0.0
+        if len(score_history) >= 2:
+            recent_score = score_history[-1]['score'] if score_history[-1] else 0
+            baseline_score = score_history[0]['score'] if score_history[0] else 0
+            if baseline_score > 0:
+                score_trend = (recent_score - baseline_score) / baseline_score
+
+        # Detect anomalies
+        anomalies = []
+        if total_errors > total_runs * 0.2:
+            anomalies.append(f"High error rate: {total_errors}/{total_runs} ({100*total_errors//total_runs}%)")
+        if len(score_history) > 5:
+            last_5_scores = [s['score'] for s in score_history[-5:] if s['score']]
+            if last_5_scores and last_5_scores[-1] < 0.5:
+                anomalies.append("Score below 50% — learning may be stalled")
+            if len(set(last_5_scores)) == 1:
+                anomalies.append("Score plateau detected — no improvement over last 5 epochs")
+
+        return {
+            "skill_id": skill_id,
+            "version": "1.0.0",  # TODO: load from manifest
+            "metrics": {
+                "total_runs": total_runs,
+                "total_errors": total_errors,
+                "score_history": score_history,
+                "score_trend": round(score_trend, 3),
+                "feedback_breakdown": feedback_breakdown,
+                "anomalies": anomalies,
+            },
+            "recommendations": [
+                "Monitor learning convergence via score_trend" if score_trend != 0 else "Learning loop in progress",
+                f"Error rate: {100*total_errors//max(total_runs, 1):.1f}% — investigate if >20%" if total_errors > 0 else "No errors detected",
+                "Run E2E tests to validate learning quality" if total_runs > 50 else "Collect more feedback before evaluation",
+            ],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load metrics: {str(e)}")
