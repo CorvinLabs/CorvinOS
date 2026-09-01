@@ -75,16 +75,17 @@ class GradingManager:
         if not name or not version:
             return False
 
-        skill = self.store.load(name, version)
-        if not skill:
-            return False
-
         try:
             start_t = time.time()
             grade = await self.grader.grade(request)
             latency = time.time() - start_t
 
             async with self._lock:
+                # Load skill INSIDE lock to prevent concurrent overwrites (ADR-0232)
+                skill = self.store.load(name, version)
+                if not skill:
+                    return False
+
                 self.latencies.append(latency)
                 if grade:
                     skill.add_grade(grade)

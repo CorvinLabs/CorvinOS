@@ -1,0 +1,10 @@
+---
+name: os.context_adapter
+version: "1.0.0"
+goal: "Adapt context for agent type"
+triggers: [{name: before_context_engineering, event_type: decision_point}]
+input_schema: {type: object, required: [agent_type]}
+output_schema: {type: object, required: [context_depth]}
+learning_signal: {metrics: [memory_hit_rate], feedback_sources: [], sanitization: {disallow_fields: [prompt]}}
+boot_layer: bundled
+origin: builtin

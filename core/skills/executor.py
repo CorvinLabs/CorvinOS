@@ -263,10 +263,10 @@ class SkillExecutor:
             return result
 
         except Exception as e:
-            # Capture exception details
+            # Capture exception details (sanitized, no PII)
             elapsed_ms = (time.time() - start_time) * 1000
             error_class = self._classify_exception(e)
-            error_message = f"{type(e).__name__}: {str(e)}"
+            error_message = self._sanitize_error_message(e)
 
             result = ExecutionResult(
                 status="failure",
@@ -277,6 +277,25 @@ class SkillExecutor:
             )
             self._record_execution(tenant_id, skill_name, result)
             return result
+
+    def _sanitize_error_message(self, exc: Exception) -> str:
+        """Return sanitized error message (GDPR Art. 32, no PII)."""
+        import re
+        exc_type = type(exc).__name__
+        exc_msg = str(exc)
+
+        # Remove PII patterns (consistent with feedback_ingester patterns)
+        # Note: Ideally these should be imported from core.pii.patterns (TODO: refactor)
+        exc_msg = re.sub(r'\b[\w\.-]+@[\w\.-]+\.\w+\b', '[EMAIL]', exc_msg)
+        # Phone: dash-separated only (consistent with feedback_ingester line 20)
+        exc_msg = re.sub(r'\b\d{3}-\d{3}-\d{4}\b', '[PHONE]', exc_msg)
+        # Remove paths only if clearly filesystem paths (more conservative than original)
+        exc_msg = re.sub(r'(?:/[^/\s]+)+', '[PATH]', exc_msg)
+        # Limit to first 200 chars
+        if len(exc_msg) > 200:
+            exc_msg = exc_msg[:197] + '...'
+
+        return f"{exc_type}: {exc_msg}"
 
     def _classify_exception(self, exc: Exception) -> ErrorClass:
         """Classify an exception into an ErrorClass.

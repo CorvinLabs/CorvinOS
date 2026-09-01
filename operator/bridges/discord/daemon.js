@@ -40,6 +40,7 @@ const { AutoOwnershipBridge }   = require('./auto_ownership');
 const { startOutboxPoller, countPending } = require('../shared/js/outbox');
 const { isNetworkError, networkUp } = require('../shared/js/net_probe');
 const { startHealthServer }     = require('../shared/js/health-server');
+const { queueStats }            = require('../shared/js/queue_stats');
 const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
@@ -309,49 +310,39 @@ client.on('interactionCreate', async (interaction) => {
     const userId = interaction.user.id;
     const channelId = interaction.channelId;
 
-    // Phase 3: Handle /task command specially (routing to task creation API)
+    // /task — route to the SAME durable background backbone the typed
+    // `/task <text>` command uses (adapter.py's /task handler → completion_notify
+    // register → detached bg_task_worker → completion delivered back to THIS
+    // channel). The previous implementation POSTed to /v1/console/tasks, which
+    // (a) is CSRF-protected so this unauthenticated call got 401, and (b) even
+    // on success dropped channel/chat_id/sender — they are not fields of
+    // TaskCreateRequest — so a completion had no route back here. It promised
+    // "Updates will arrive here" and delivered nothing. We now hand the request
+    // to the working backbone by writing a normal `/task …` inbox message with
+    // the real routing, exactly as a typed message would (R5, 2026-09-01).
     if (interaction.commandName === 'task') {
-      const instruction = interaction.options.getString('args') || 'task';
+      const instruction = interaction.options.getString('args') || '';
       log(`/task from=${userId} ch=${channelId} instr="${instruction.slice(0, 50)}..."`);
-
       try {
-        // Acknowledge immediately (Discord requires ack within 3s)
         await interaction.deferReply({ ephemeral: false });
-
-        // Call task creation API with routing info
-        const response = await fetch('http://127.0.0.1:8765/v1/console/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_key: `discord:${channelId}`,
-            instruction: instruction,
-            ttl_seconds: 3600,
-            // Phase 2/3 routing info
-            channel: 'discord',
-            chat_id: String(channelId),
-            sender: String(userId),
-          }),
+        // The adapter's /task handler parses `text` as "/task <instruction>".
+        writeInbox({
+          from: String(userId),
+          chat_id: String(channelId),
+          text: `/task ${instruction}`.trim(),
+          ts: Date.now(),
         });
-
-        if (!response.ok) {
-          const error = await response.text();
-          log(`task creation failed: ${response.status} ${error}`);
-          await interaction.editReply(`❌ Task creation failed: ${response.status}`);
-          return;
-        }
-
-        const result = await response.json();
-        const taskId = result.task_id;
-
-        log(`task created: ${taskId}`);
+        // The adapter emits its own acknowledgement AND the eventual completion
+        // through the outbox into this channel; keep the slash reply honest and
+        // minimal so we don't promise a result the backbone will actually send.
         await interaction.editReply(
-          `✅ Task started: \`${taskId}\`\n` +
-          `Running: ${instruction}\n` +
-          `📊 Updates will arrive here when done.`
+          instruction
+            ? '🛠️ Running in the background — I\'ll message you here when it\'s done.'
+            : 'Usage: `/task <what to do>` — I\'ll run it in the background and message you here when it\'s done.'
         );
       } catch (e) {
-        log(`/task API error: ${e.message}`);
-        await interaction.editReply(`❌ Error: ${e.message}`);
+        log(`/task inbox-write failed: ${e.message}`);
+        try { await interaction.editReply(`❌ Error: ${e.message}`); } catch {}
       }
       return;  // Don't process as normal command
     }
@@ -1199,6 +1190,12 @@ startHealthServer({
     // replies sit undelivered for 90 minutes on 2026-07-27 while this very
     // field would have shown it. > 0 means preCheck is the blocker.
     precheck_stalled_s: outboxPoller.stats().precheck_stalled_s,
+    // Upstream durable-queue liveness (R3). poller_stalled_s only sees the
+    // OUTBOX; a background task whose worker died piles up in the Python-owned
+    // completion/progress queues that never reach the outbox at all — this
+    // surfaces that backlog + oldest age so a stall is visible instead of
+    // "healthy / 0 pending_outbox". Best-effort; zeros on any read error.
+    ...queueStats(),
   }),
 });
 

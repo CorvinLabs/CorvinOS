@@ -141,6 +141,42 @@ def _supervise_runs() -> int:
         return 0
 
 
+def _orphan_reaper_enabled() -> bool:
+    """Resolve the ship-dark `bridge_orphan_task_reaper` flag, fail-to-OFF.
+
+    Mirrors adapter._bg_flag's contract: an absent/unreadable console package
+    means OFF, so this backup poller never reaps on a bridge-only install that
+    never opted in.
+    """
+    try:
+        from corvin_core import feature_flags as _ff  # type: ignore
+
+        tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        return bool(_ff.is_enabled("bridge_orphan_task_reaper", tid))
+    except Exception:  # noqa: BLE001 — console package absent → feature is off
+        return False
+
+
+def _reap_orphans() -> int:
+    """Backup poller for the opt-in orphan reaper (bridge_orphan_task_reaper).
+
+    Same relationship to completion_notify.reap_orphan_pending that
+    _deliver_completions has to deliver_ready: the adapter main loop runs it
+    while the bridge polls; this runs from the systemd timer so an abandoned
+    task is still reported even when the adapter is idle/restarting. No-op when
+    the flag is off. Idempotent with the adapter (state transition + O_EXCL
+    delivery lock), never raises.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import completion_notify as _cn  # type: ignore
+
+        return _cn.reap_orphan_pending(enabled=_orphan_reaper_enabled())
+    except Exception as e:  # noqa: BLE001
+        print(f"bg_monitor: orphan reap failed: {e}", file=sys.stderr)
+        return 0
+
+
 def _deliver_completions() -> int:
     """Backup poller for the durable completion queue.
 
@@ -254,6 +290,11 @@ def run_once() -> int:
     #    verdict reaches the user in this tick instead of waiting 60 s for the
     #    next one. It can also emit a resume notice, same reasoning.
     _supervise_runs()
+
+    # 1b) Reap abandoned pending records into loud failures BEFORE delivery, so
+    #     the abort notice ships in this same tick. Ship-dark: no-op unless the
+    #     bridge_orphan_task_reaper flag is on.
+    _reap_orphans()
 
     # 2) Always deliver ready durable completions (idempotent backup poller).
     delivered = _deliver_completions()

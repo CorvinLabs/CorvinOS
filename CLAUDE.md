@@ -394,85 +394,47 @@ Canonical runtime root: `~/.corvin/`; voice/secret config: `~/.config/corvin-voi
 
 ---
 
-## Feature Flags — Ship Dark by Default (load-bearing)
+## Plugin-Based Isolation — All Features Always On (load-bearing)
 
-**Goal: a stable CorvinOS core.** New functionality must never change the behavior of an
-existing install until the operator turns it on deliberately.
+**POLICY CHANGE (2026-09-01):** Ship-dark-by-default via feature flags is **obsolete**.
+Plugins are now the isolation unit. All features activate by default; control via plugin enable/disable.
 
-**Every new feature MUST:**
-1. sit behind a named flag in `spec.features.<flag_id>` of `tenant.corvin.yaml`;
-2. default to **`false`** — off on a fresh install and off after an upgrade
-   (absent key = off; never "on because unset");
-3. be toggleable from the Console **Settings → Features** panel, no file editing, no restart;
-4. degrade to the pre-feature code path when off — off must be a *quiet* path, never an error;
-5. carry tests for BOTH states (flag-off = old behavior preserved, flag-on = new behavior).
-   A flag that is only ever tested in one state rots.
+**Rationale:**
+- Plugin system provides process-level isolation (ADR-0243, boot_layer model)
+- Code safety is structural (plugin boundary), not behavioral (feature flag)
+- Feature flags added complexity without real safety gain; plugins do it cleaner
+- Operator controls features by managing plugins, not by flipping buried flags
 
-**Flag lifecycle:** every flag gets an owner and a target release in which it either
-flips to default-on or the feature is removed. Flags are not permanent architecture.
+**Rule (effective immediately):**
 
-**Exceptions — these MUST NOT get a flag (they stay always-on and non-disableable):**
-security and compliance mechanisms of the Compliance Baseline above — bot disclosure,
-audit hash-chain, consent gate, L10 path-gate, L44 house-rules, L34 flow guard, licensing
-gates. "New feature" is never an excuse to ship a compliance mechanism default-off, and a
-default-off switch on any of them is the same violation as an env kill-flag.
-Telemetry keeps its documented default-ON / opt-out shape (maintainer decision) — do not
-convert those three channels to default-off flags.
-
-### Worker Engine Selection (Settings → Engine)
-
-The engine that performs a turn is operator-selectable — one setting,
-`spec.web_chat.worker_engine`, resolved through the shared `delegation_policy`
-module. No surface may carry its own routing rule.
-
-**Reach today (verified 2026-07-28).** The **Console web-chat** calls the full
-rule on every turn. The **messenger bridges** now call it too, but only behind
-a flag that ships dark, so a default install is unchanged:
-
-| Flag (both default OFF) | What a bridge turn gets |
+| Scenario | What to do |
 |---|---|
-| neither | the direct OS-turn, always. Matches `native` by wiring now, not by accident. |
-| `bridge_big_data_delegation` | the big-data carve-out only — no `/delegate`, no triage, no mode-awareness (`_maybe_delegate_big_data`). |
-| `bridge_worker_engine_parity` | the full rule (ADR-0255, `_maybe_delegate_worker`): the operator's `worker_engine` mode, an explicit `/delegate`, and the console's own triage heuristic — the same `should_delegate_bundled` function, not a copy. Supersedes the row above while on. |
+| New plugin/subsystem | Ship active by default; plugin lifecycle controls visibility, not a flag. |
+| Legacy feature flag exists | Deprecate on next release; migrate logic into a dedicated plugin or remove flag check. |
+| Feature MUST be toggleable at runtime | Make it a plugin setting (`plugin.corvin.yaml`), not a feature flag. |
+| Experimental behavior (high-risk, unsure) | Ship as separate plugin, disabled by default in `registry.yaml`. |
+| Security/compliance mechanism | Always on, never toggleable (no feature flag, no plugin disable, no env var). |
 
-**TDE is still unreachable from a bridge either way** — `_worker_engine_target`
-hard-codes `tde_available=False`, so `mode: tde` degrades to the direct turn
-there (ADR-0221 P3/P4 stay frozen behind ADR-0222's measured gate). **Remote
-triggers still have no Tier-1 delegation at all.** Don't describe the setting as
-fully cross-surface: two of four surfaces reach it, one only on an opt-in.
+**Concrete workflow:**
 
-The OS-model side is now genuinely single-source: both surfaces resolve through
-`model_selector.resolve_os_model()` (ADR-0024/0119/0123/0043). Before
-2026-07-27 `chat_runtime` hand-rolled Tiers 1+3 only, so the console's own
-"OS Model" setting had no effect on the console's own chat.
+1. **Design feature as a plugin** (or plugin extension, if it enhances an existing plugin).
+2. **Register in `registry.yaml` or `tenant.corvin.yaml`** with `enabled: true` by default.
+3. **Test both states** (plugin loaded vs. not loaded), but default state is LOADED.
+4. **Commit:** `feat(plugin-name): description [ADR-XXXX]` (one ADR per new plugin).
 
-| Value | Meaning |
-|---|---|
-| `native` (**DEFAULT**) | Claude Code does the work in-process. The ONLY auto-delegation left is **structured-data**-shaped work → ACS. |
-| `acs` | Delegate qualifying turns to the ACS manager/worker fan-out. |
-| `tde` | Delegate qualifying turns to the Tiered Delegation Engine. **Off by default** — TDE only ever runs on an explicit operator opt-in. |
+**Migration (existing features with flags):**
+- Flags staying: `spec.web_chat.worker_engine`, telemetry opts (GDPR-driven).
+  These are *settings*, not on/off toggles; keep them.
+- Flags going: Any `spec.features.<flag>` that defaults to `false` — migrate to plugin-based control.
 
-Invariants:
-- Default install = `native`. TDE is **never** entered without an explicit setting change.
-- **Structured-data**-shaped work routes to ACS even in `native` mode (per-worker context
-  isolation genuinely wins there); everything else stays native. Narrowed 2026-07-28 to
-  four affirmative shapes — big-data vocabulary · a tabular paste of ≥10 rows · a
-  CSV/spreadsheet file or database/SQL operation PAIRED with a bulk data verb or a volume ·
-  a volume/count tied to a data noun, minus hardware and **code** clauses. An ordinary
-  request, prose, or a coding task must never trigger it: every ACS run charges one
-  `compute_units_per_day`. Don't widen it back, and don't make a bare mention of
-  "Datenbank"/"SQL"/"Tabelle" sufficient on its own. → delegation-routing.md § 2a.
-- A chat turn shows at most 20 artifact chips, and runtime bookkeeping (`acs/`, `tasks/`,
-  `tde/`, `voice/` under the session workdir) is never a chat artifact — a `delegate_*`
-  call writes `acs/runs/<id>/{manifest,result}.json` per invocation, which once flooded one
-  turn with 144 identical chips. → delegation-routing.md § 7a.
-- An explicit `/delegate` from the user still beats the classifier (delegation-routing.md §6).
-- Every degrade ladder ends at **`native`**, not at another delegation engine: ACS quota
-  exhausted / TDE unavailable → run the turn natively, never silently swap engines.
+**Critical exception:** Compliance / security mechanisms stay **always-on, non-disableable**
+(ADR-0232/0233, L44, audit chain, disclosure, consent gates). A plugin cannot weaken them.
+These are not features; they are load-bearing constraints.
 
-**Must NOT do:** ship a feature without a flag · default a new flag to `true` ·
-flag a compliance/security mechanism · read the engine choice from an env var or from a
-second config key · let a degrade path route into an engine the operator did not select.
+**Must NOT do:** ship feature flags with default-off · treat plugins as "experimental" and
+disable by default unless high-risk and explicitly gated · use feature flags to control
+plugin visibility (use plugin enable/disable instead) · weaken compliance mechanisms via
+feature flag or plugin disable.
 
 ---
 
@@ -790,4 +752,281 @@ Phase 3 builds the learning layer on top of Phase 2 (Skill System). It enables c
 - Don't bypass audit chain (write_event always attempts audit logging)
 
 → Full spec: See Corvin-ADR repo for ADR-0314 (learning-infrastructure-event-schema)
+
+---
+
+## Skills 2.0 as Agentic Control Plane (load-bearing)
+
+**ARCHITECTURE VISION (2026-09-01):** CorvinOS transforms from **task-runner** → **agentic operating system**
+by making **Skills 2.0 the unified control plane**. Every subsystem (routing, state, orchestration, security,
+learning, deployment) becomes a swappable Skill — written in hybrid code (deterministic Python + LLM-generated
+logic), versioned, composable, and self-learning via ADR-0314's feedback loop.
+
+**Core Principle:** A Skill is NOT a static prompt; it is a **program** that:
+- ✅ Owns a domain (delegation routing, context adaptation, workflow optimization, security enforcement)
+- ✅ Executes deterministic Python (sync I/O, caching, local decisions — fail-fast, auditable)
+- ✅ Calls LLM on demand (e.g., `/router classify_request` → LLM picks delegation strategy)
+- ✅ Learns via feedback (confidence scoring, outcome signals, optimizer loop per ADR-0314)
+- ✅ Composes with other Skills (dependencies declared, topological sort, DAG validation per ADR-0535)
+- ✅ Versioned & deployed (semantic versioning, canary rollout, in-flight freeze per ADR-0533)
+- ✅ Observable (telemetry, execution traces, decision logs → Vibe dashboard)
+
+**Why now:** ADR-0314 (Learning) + ADR-0532-0535 (OS-Skills) together unlock this. Learning infra provides
+feedback signals; Skills infra provides the execution model. Together they make Skills self-optimizing.
+
+**Five Layers of Control Plane Replacement (ADR-0532 Roadmap):**
+
+| Layer | Today | Tomorrow (Skills 2.0) | ADR | Timeline |
+|---|---|---|---|---|
+| **L5: Routing** | Hardcoded persona → engine mapping | `os.delegation_router` Skill (LLM-classified by task type) | ADR-0532 Phase 1 | Weeks 2–4 |
+| **L10: Context** | Snapshot → prompt injection | `os.context_adapter` Skill (learns user/task patterns) | ADR-0532 Phase 1 | Weeks 2–4 |
+| **L22: Workflow** | Stateless request/response | `os.workflow_optimizer` Skill (learns execution chains) | ADR-0532 Phase 2 | Weeks 6–10 |
+| **L16: Security** | Config-driven gates | `os.security_orchestrator` Skill (learns attack patterns) | ADR-0532 Phase 3 | Weeks 11–18 |
+| **L34: Data Flow** | Hardcoded validators | `os.flow_guard` Skill (learns safe data shapes) | ADR-0532 Phase 4 | Weeks 19–24 |
+
+**Implementation Roadmap (3 Phases, 8–12 weeks, ~2600 LoC + skills library):**
+
+**Phase 1 (Weeks 1–4): Foundation**
+- Deliver `os.delegation_router` Skill + `os.context_adapter` Skill (2 minimal skills)
+- Wire into L5 (auto-routing) + L10 (context engineering)
+- Prove E2E: real requests flow through Skills, learning events emitted to ADR-0314
+- Tests: 25 E2E, 12 adversarial (crash recovery, timeout isolation, PII leakage)
+- Blocker: ADR-0532 Phase 1 + ADR-0533 manifest schema + ADR-0534 feedback integration ready
+- Deliverable: `core/skills/os_skills/` directory with routing + context skills + test suite
+
+**Phase 2 (Weeks 5–10): Learning Loop**
+- Wire ADR-0314 feedback into Skills → optimization loop
+- Add `os.workflow_optimizer` (learns execution chains from user feedback)
+- Build dashboard (Vibe → OS-Skills observability panel)
+- Tests: 40 E2E + 18 adversarial (optimization convergence, stale feedback, feedback injection)
+- Blocker: ADR-0534 (feedback integration) accepted
+- Deliverable: Learning loop E2E, dashboard, 2 skills composition-ready
+
+**Phase 3 (Weeks 11–24): Scale & Ecosystem**
+- Ship 2 more Skills (`os.security_orchestrator` + `os.flow_guard`)
+- Marketplace integration: Skills as discoverable, installable OS subsystems
+- Community contrib gate: review checklist for Skill authors
+- Tests: 60 E2E + 25 adversarial (marketplace attack surfaces, skill conflicts, versioning)
+- Blocker: ADR-0535 (composition), ADR-0536 (marketplace, TBD)
+- Deliverable: v2.0 production-ready, Skills marketplace live
+
+**Integration with Compliance (ADR-0232/0233 — non-negotiable):**
+
+| Mechanism | Skill Constraint | Enforcement |
+|---|---|---|
+| **Audit chain (LOAD-BEARING)** | Every Skill decision + internal state change MUST log via `audit_backend` (appendix-only) | Boot tripwire checks before any Skill runs; audit trail hash-chain verified on every Skill load |
+| **Skill-Internal Audit** | All Skill.execute() calls, config changes, feedback processing, optimization steps → audit event | `SkillAuditEvent` (immutable, tenant_id, timestamp, skill_id, input, output, latency, errors, lom) |
+| Consent gate | Skill output validated against user consent (L16) | Fail-closed: deny on any PII signal, no bypass |
+| House-rules (L44) | Skill code CANNOT disable `house_rules_enforcer()` | Compiled into Skill manifest as immutable `required_checks` |
+| Bot disclosure | Skill decisions attributed in transparency log | Every Skill event includes `skill_id`, `version`, `lom` (line-of-moral-responsibility) |
+
+**Integration with Learning Infrastructure (ADR-0314 — self-optimizing):**
+
+```
+Skill Execution Loop:
+  1. Input → Skill.execute() [deterministic Python]
+  2. Emit SkillExecutedEvent (input, output, latency, errors)
+  3. User gives feedback (→ FeedbackEvent)
+  4. Optimizer reads {FeedbackEvent, SkillExecutedEvent}
+  5. Adjusts Skill config (e.g., router thresholds, context window, retry strategy)
+  6. Next invocation uses tuned config
+  7. Dashboard shows confidence score, convergence rate
+```
+
+Feedback types (ADR-0314):
+- `outcome_feedback` — "was that routing decision correct?" (yes/no/other)
+- `preference_feedback` — "prefer this style next time" (LLM, deterministic, neither)
+- `confidence_score` — estimated P(Skill makes correct decision | input)
+- `metric_observed` — latency, error rate, cost — optimizer adjusts thresholds
+
+**Audit-First Design (LOAD-BEARING):**
+
+Every Skill is a black box from compliance perspective — internal behavior MUST be fully observable via audit trail.
+
+| Stage | Audit Event | Payload | Immutability |
+|---|---|---|---|
+| **Skill Load** | `skill_loaded` | skill_id, version, config_hash, boot_layer, dependencies, required_checks | Hash-chain verified |
+| **Skill Execute** | `skill_executed` | skill_id, version, input, output, latency_ms, errors, lom, tenant_id | Audit-backend appendix-only |
+| **Feedback Received** | `skill_feedback` | skill_id, feedback_type (outcome/preference/confidence/metric), signal, timestamp | Audit-backend appendix-only |
+| **Config Optimized** | `skill_config_updated` | skill_id, version, param_delta, confidence_before/after, reason | Audit-backend appendix-only |
+| **Skill Disabled** | `skill_disabled` | skill_id, reason, requestor, timestamp | Audit-backend appendix-only |
+
+No Skill is a black box: audit trail proves what it did, when, to whom, with what result. **No audit bypass, no silent optimization.**
+
+**LDD for Skills — Dialectical Reasoning Only (SPECIALIZED CYCLE):**
+
+Standard LDD (12 layers) is overkill for Skill changes. Skills use a **lightweight 2-gate cycle:**
+
+| Gate | When | What |
+|---|---|---|
+| **Gate 1: Dialectical Reasoning** | BEFORE any Skill change (config tuning, feedback-loop adjustment, dependency change) | `/dialectical-reasoning` — argue for/against the change, surface hidden assumptions, confirm tradeoffs |
+| **Gate 2: E2E Wiring Proof** | AFTER coding, before merge | Real E2E test proving the Skill runs end-to-end + audit event is emitted + feedback loop processes it |
+
+**NOT required for Skills:** full LDD k=1–5, `docs-as-definition-of-done`, `e2e-driven-iteration` per task, Concept Gate (use existing CONCEPT-XXXX instead).
+
+**Required for Skills:** Dialectical reasoning (surface design choices) + E2E proof (Skill is called and audited).
+
+Example workflow:
+```
+# 1. Propose Skill change
+/dialectical-reasoning
+  Is tuning os.delegation_router's confidence_threshold from 0.7→0.65 correct?
+  Argue: for/against, alternatives, risks
+
+# 2. Code + test
+core/skills/os_skills/delegation_router.py [edit]
+tests/skills/test_delegation_router_e2e.py [add/edit E2E test]
+
+# 3. E2E proof
+pytest tests/skills/test_delegation_router_e2e.py -v
+# Must show: Skill.execute() called → output produced → SkillAuditEvent logged
+
+# 4. Audit verification
+grep "skill_executed.*delegation_router" ~/.corvin/audit.jsonl | tail -1
+# Must show: output matches test expectation + lom (line-of-moral-responsibility) present
+
+# 5. Commit + no ADR skip needed
+# (Skills inherit ADR requirement from their parent L-layer ADR; incremental tuning is [skip-adr-check])
+```
+
+**Must NOT do (hard rules):**
+
+- **Don't hardcode** subsystem logic outside Skills — every L-layer contract must be a Skill
+- **Don't skip Dialectical Reasoning** for Skill changes — surface assumptions, confirm tradeoffs (cheap, mandatory)
+- **Don't merge without E2E proof** — unit tests ≠ called; prove real execution + audit event
+- **Don't audit-bypass** — every Skill.execute() + feedback + optimization MUST log (no silent learning)
+- **Don't weaken feedback loop** — no opt-out, no stale-feedback bypass, no learning-off flag
+- **Don't let Skill disable compliance** — audit chain, consent, house-rules are meta-Skills (immune to versioning/disable)
+- **Don't leak PII into Skill manifests** — manifests are public; learned params must be scrubbed
+- **Don't add OS-level Skill without ADR** — one ADR per new L-layer Skill (after ADR-0535)
+- **Don't fork SkillForge architecture** — one `skill_forge/` registry, not `skill_forge_v2/`, `os_skill_builder/`, etc.
+
+→ Full reference: See Corvin-ADR repo for ADR-0532–0535 (os-skills-architecture through composition-dependencies)
+→ Implementation: `/home/shumway/projects/Corvin-ADR/implementation/ADR-0532-IMPLEMENTATION-PLAN.md` (detailed roadmap, risk matrix, phase gates)
+
+---
+
+## Audit Chain as Ground Truth — Complete User Proof (load-bearing)
+
+**CORE PRINCIPLE:** CorvinOS is a **proof system**. Every action — plugin load, Skill decision, A2A dispatch, consent check, data flow — creates an immutable audit event. Together they form a **complete, tenant-scoped proof of work** that the operator can inspect, verify, and cite. This is NOT just logging; it is the system's memory and legal foundation.
+
+**What Gets Audited (Everything):**
+
+| Subsystem | What | Event Type | Payload | Chain Link |
+|---|---|---|---|---|
+| **Plugins** | Load, init, execution, error, disable | `plugin_loaded`, `plugin_executed`, `plugin_disabled` | plugin_id, version, boot_layer, input, output, error, tenant_id | Hash-chained |
+| **Skills 2.0 (ACP)** | Execute, config, feedback, optimization | `skill_executed`, `skill_config_updated`, `skill_feedback` | skill_id, version, input, output, latency, lom | Hash-chained |
+| **Consent / House-Rules** | Consent given, checked, denied | `consent_granted`, `consent_checked`, `house_rule_denied` | user_id, consent_type, tenant_id, timestamp | Hash-chained |
+| **A2A (App-to-App)** | Task received, processed, result sent | `a2a_task_received`, `a2a_task_executed`, `a2a_result_sent` | task_id, source_app, target_app, tenant_id, payload_hash | Hash-chained |
+| **Audit System Itself** | Chain verification, key rotation, snapshot | `audit_chain_verified`, `audit_key_rotated`, `audit_snapshot` | chain_height, last_hash, verification_result | Self-verifying |
+| **Learning (ADR-0314)** | Feedback received, config optimized | `learning_event_received`, `optimizer_config_updated` | event_type, skill_id, signal, confidence_delta | Hash-chained |
+| **Context Engineering** | Snapshot taken, context adapted | `context_snapshot`, `context_adapted` | context_id, tenant_id, user_id, preserved_fields, added_fields | Hash-chained |
+| **Data Flow Guard (L34)** | Input classified, flow allowed, blocked | `data_flow_classified`, `data_flow_allowed`, `data_flow_blocked` | data_class, engine, dest, reason | Hash-chained |
+
+**Tenant Isolation (GDPR Art. 5, 6, 32):**
+
+Every audit event is **immutable and tenant-scoped:**
+```
+{
+  "tenant_id": "<tenant>",                    # Fail-closed: null tenant → denied
+  "timestamp": "2026-09-01T12:34:56.789Z",
+  "event_type": "skill_executed",
+  "skill_id": "os.delegation_router",
+  "input": "classify_request(...)",
+  "output": "route_to_agent=opus",
+  "latency_ms": 42,
+  "lom": "assistant.Forge::route_request:L237",  # Line of Moral Responsibility
+  "hash": "sha256(...)",                      # Chained to previous event
+  "prev_hash": "sha256(...)"                  # Immutable backward reference
+}
+```
+
+Queries: All reads filtered by `tenant_id`. No cross-tenant leakage.
+
+**Why This Matters (Proof System):**
+
+1. **Operator Proof:** "Show me every Skill decision for task XYZ" → audit trail proves what happened, when, to whom
+2. **Compliance Proof:** "Does CorvinOS respect consent?" → audit shows every consent check + decision (accept/deny + reason)
+3. **Security Proof:** "Was this A2A task really processed?" → audit shows source, destination, payload hash, result, no tampering
+4. **Learning Proof:** "Did the Skill really learn?" → audit shows feedback received, config before/after, optimizer delta
+5. **Auditability (GDPR Art. 30):** Every event is attributed, timestamped, signed; no silent operations
+
+**Integration with LDD + Dialektical Reasoning:**
+
+When designing any new subsystem (Plugin, Skill, A2A handler, Consent gate):
+
+| LDD Phase | What | Audit Implication |
+|---|---|---|
+| **k=1 (Dialectical)** | Surface design choice | "What audit events will this subsystem emit?" *must* be answered before code |
+| **k=2 (E2E)** | Prove it works | E2E test must verify: (1) subsystem does X, (2) audit event Y is logged, (3) hash-chain intact |
+| **k=3 (Red/Green)** | Iterate | Each iteration updates audit schema if needed (immutable: never delete prior events, only append) |
+| **k=4–5 (Refinement)** | Polish | Audit schema is finalized; all future instances follow it |
+
+**Mandatory Dialectical Prompts:**
+
+Before coding any new Skill, Plugin, or A2A handler:
+```
+/dialectical-reasoning
+  "New Skill: <name>"
+  
+  Questions to surface:
+  1. What audit events will this Skill emit (input, output, config changes)?
+  2. What tenant scopes will it cross (single tenant, multi-tenant)?
+  3. Are all events immutable + hash-chained?
+  4. Can an operator reconstruct the Skill's entire behavior from audit logs?
+  5. Are there any "silent" operations (optimizations, cleanups) that should be audited?
+```
+
+**E2E Wiring Proof (must include audit verification):**
+
+```bash
+# 1. Run the Skill / Plugin / A2A handler
+pytest tests/test_skill_xyz.py::test_e2e -v
+
+# 2. Verify audit events were logged
+grep "skill_executed\|plugin_loaded\|a2a_task_executed" ~/.corvin/audit.jsonl \
+  | jq -c 'select(.skill_id == "os.xyz" or .plugin_id == "xyz")'
+
+# 3. Verify hash-chain integrity
+python3 scripts/verify_audit_chain.py --tenant=_default --since=<start_time>
+# Output: ✅ Chain intact (N events, N-1 hash links verified)
+
+# 4. Commit only if audit proof succeeds
+git add ... && git commit -m "feat(xyz): description [audit-verified]"
+```
+
+**Must NOT do (absolute):**
+
+- **Don't code without Dialectical audit design** — audit schema is not an afterthought
+- **Don't emit unattributed events** — every event must have tenant_id, timestamp, lom, event_type, hash
+- **Don't merge without hash-chain verification** — E2E tests MUST verify `prev_hash` + `hash` integrity
+- **Don't weaken tenant isolation** — audit reads MUST filter by tenant_id; no fallback to "any tenant"
+- **Don't alter past audit events** — immutable append-only; never update/delete/rewrite
+- **Don't silently optimize** — if a Skill optimizes config (ADR-0314), emit `skill_config_updated` event with delta
+- **Don't skip audit for "internal" operations** — Plugin init, context adaptation, data flow guard—all audited
+- **Don't assume audit is "just logging"** — it is the system's proof of work and legal foundation (GDPR Art. 30, 32)
+
+**Audit Verification Workflow (for operator + auditor):**
+
+```bash
+# Inspect full proof for a task
+corvin audit show-task <task_id>
+# Output: full chain of events for this task across plugins, skills, consent, data flow
+
+# Verify chain integrity (daily)
+corvin audit verify-chain --tenant=_default
+# Output: ✅ Chain height 142857, all hashes verified, 0 gaps
+
+# Extract proof for compliance report
+corvin audit export --tenant=_default --format=pdf --since=2026-09-01 --until=2026-09-30 \
+  --events=skill_executed,plugin_loaded,consent_granted,a2a_task_executed
+# Output: compliance-report-2026-09.pdf (auditor-ready, signatures included)
+
+# Trace a Skill decision (operator debugging)
+corvin audit trace skill os.delegation_router --task=<task_id>
+# Output: every event in the chain (config → execute → feedback → optimize)
+```
+
+→ Full audit spec: See ADR-0232/0233 (boot tripwire, chain integrity), ADR-0537 (audit event schema), RFC 3161 (TSA timestamping)
+→ Integration: Every new ADR MUST define its audit events (required frontmatter field: `audit_events`)
 
