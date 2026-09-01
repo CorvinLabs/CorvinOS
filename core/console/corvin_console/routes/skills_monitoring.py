@@ -201,3 +201,144 @@ async def clear_cache(
         "entries_cleared": stats_before.get("size", 0),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# === Phase 5: Learning Dashboard Endpoints ===
+
+
+@router.get("/status", summary="Get all skills status")
+async def get_skills_status(
+    tenant_id: str = "_default",
+    current_user = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get status of all active skills for dashboard.
+
+    Response:
+      {
+        "tenant_id": str,
+        "skills": [
+          {
+            "id": str (e.g., "os.delegation_router"),
+            "version": str,
+            "enabled": bool,
+            "score": float (0.0–1.0) | null,
+            "runs_24h": int,
+            "errors_24h": int,
+            "last_run": datetime | null,
+            "status": "healthy" | "degraded" | "error"
+          },
+          ...
+        ],
+        "timestamp": datetime
+      }
+    """
+    from pathlib import Path
+    from core.skills.skill_manager import SkillManager
+
+    try:
+        skill_mgr = SkillManager(Path.home() / '.corvin', tenant_id)
+        active_skills = skill_mgr.list_active_skills() if hasattr(skill_mgr, 'list_active_skills') else []
+
+        skills_list = []
+        for skill_id in active_skills:
+            try:
+                status = skill_mgr.get_skill_status(skill_id) if hasattr(skill_mgr, 'get_skill_status') else None
+                if status:
+                    # Determine health status
+                    health = "healthy"
+                    if status.errors_24h > 5:
+                        health = "error"
+                    elif status.errors_24h > 0:
+                        health = "degraded"
+
+                    skills_list.append({
+                        "id": skill_id,
+                        "version": status.version,
+                        "enabled": status.enabled,
+                        "score": status.score,
+                        "runs_24h": status.runs_24h,
+                        "errors_24h": status.errors_24h,
+                        "last_run": None,  # TODO: track from grading_stats
+                        "status": health,
+                    })
+            except Exception as e:
+                # Log but continue; one skill failure shouldn't break the dashboard
+                import logging
+                logging.warning(f"Failed to get status for {skill_id}: {e}")
+
+        return {
+            "tenant_id": tenant_id,
+            "skills": skills_list,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        # Fallback: return empty list if SkillManager unavailable
+        return {
+            "tenant_id": tenant_id,
+            "skills": [],
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+@router.get("/{skill_id}/metrics", summary="Get skill learning metrics")
+async def get_skill_metrics(
+    skill_id: str,
+    tenant_id: str = "_default",
+    current_user = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get detailed learning metrics for a skill.
+
+    Response:
+      {
+        "skill_id": str,
+        "version": str,
+        "metrics": {
+          "total_runs": int,
+          "total_errors": int,
+          "score_history": [
+            {"epoch": int, "score": float, "timestamp": datetime}
+          ],
+          "score_trend": float (-1.0 to +1.0, positive = improving),
+          "feedback_breakdown": {
+            "by_outcome": {"success": int, "failure": int},
+            "by_task_shape": {<task>: int},
+            "by_decision": {<decision>: int}
+          },
+          "anomalies": [str] (unusual patterns detected)
+        },
+        "recommendations": [str],
+        "timestamp": datetime
+      }
+    """
+    try:
+        from core.skills.skill_manager import SkillManager
+        from pathlib import Path
+
+        skill_mgr = SkillManager(Path.home() / '.corvin', tenant_id)
+
+        # Placeholder implementation — real metrics from grading_stats.json
+        # TODO: Load actual grading_stats and feedback_log for this skill
+        return {
+            "skill_id": skill_id,
+            "version": "1.0.0",  # TODO: get from manifest
+            "metrics": {
+                "total_runs": 0,
+                "total_errors": 0,
+                "score_history": [],
+                "score_trend": 0.0,
+                "feedback_breakdown": {
+                    "by_outcome": {"success": 0, "failure": 0},
+                    "by_task_shape": {},
+                    "by_decision": {},
+                },
+                "anomalies": [],
+            },
+            "recommendations": [
+                "Monitor this skill for learning convergence",
+                "Check feedback events in audit log if score plateaus",
+            ],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load metrics: {str(e)}")

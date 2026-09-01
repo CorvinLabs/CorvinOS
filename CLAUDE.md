@@ -814,7 +814,8 @@ feedback signals; Skills infra provides the execution model. Together they make 
 
 | Mechanism | Skill Constraint | Enforcement |
 |---|---|---|
-| Audit chain | Every Skill decision MUST log via `audit_backend` (appendix-only) | Boot tripwire checks before any Skill runs |
+| **Audit chain (LOAD-BEARING)** | Every Skill decision + internal state change MUST log via `audit_backend` (appendix-only) | Boot tripwire checks before any Skill runs; audit trail hash-chain verified on every Skill load |
+| **Skill-Internal Audit** | All Skill.execute() calls, config changes, feedback processing, optimization steps → audit event | `SkillAuditEvent` (immutable, tenant_id, timestamp, skill_id, input, output, latency, errors, lom) |
 | Consent gate | Skill output validated against user consent (L16) | Fail-closed: deny on any PII signal, no bypass |
 | House-rules (L44) | Skill code CANNOT disable `house_rules_enforcer()` | Compiled into Skill manifest as immutable `required_checks` |
 | Bot disclosure | Skill decisions attributed in transparency log | Every Skill event includes `skill_id`, `version`, `lom` (line-of-moral-responsibility) |
@@ -838,15 +839,66 @@ Feedback types (ADR-0314):
 - `confidence_score` — estimated P(Skill makes correct decision | input)
 - `metric_observed` — latency, error rate, cost — optimizer adjusts thresholds
 
+**Audit-First Design (LOAD-BEARING):**
+
+Every Skill is a black box from compliance perspective — internal behavior MUST be fully observable via audit trail.
+
+| Stage | Audit Event | Payload | Immutability |
+|---|---|---|---|
+| **Skill Load** | `skill_loaded` | skill_id, version, config_hash, boot_layer, dependencies, required_checks | Hash-chain verified |
+| **Skill Execute** | `skill_executed` | skill_id, version, input, output, latency_ms, errors, lom, tenant_id | Audit-backend appendix-only |
+| **Feedback Received** | `skill_feedback` | skill_id, feedback_type (outcome/preference/confidence/metric), signal, timestamp | Audit-backend appendix-only |
+| **Config Optimized** | `skill_config_updated` | skill_id, version, param_delta, confidence_before/after, reason | Audit-backend appendix-only |
+| **Skill Disabled** | `skill_disabled` | skill_id, reason, requestor, timestamp | Audit-backend appendix-only |
+
+No Skill is a black box: audit trail proves what it did, when, to whom, with what result. **No audit bypass, no silent optimization.**
+
+**LDD for Skills — Dialectical Reasoning Only (SPECIALIZED CYCLE):**
+
+Standard LDD (12 layers) is overkill for Skill changes. Skills use a **lightweight 2-gate cycle:**
+
+| Gate | When | What |
+|---|---|---|
+| **Gate 1: Dialectical Reasoning** | BEFORE any Skill change (config tuning, feedback-loop adjustment, dependency change) | `/dialectical-reasoning` — argue for/against the change, surface hidden assumptions, confirm tradeoffs |
+| **Gate 2: E2E Wiring Proof** | AFTER coding, before merge | Real E2E test proving the Skill runs end-to-end + audit event is emitted + feedback loop processes it |
+
+**NOT required for Skills:** full LDD k=1–5, `docs-as-definition-of-done`, `e2e-driven-iteration` per task, Concept Gate (use existing CONCEPT-XXXX instead).
+
+**Required for Skills:** Dialectical reasoning (surface design choices) + E2E proof (Skill is called and audited).
+
+Example workflow:
+```
+# 1. Propose Skill change
+/dialectical-reasoning
+  Is tuning os.delegation_router's confidence_threshold from 0.7→0.65 correct?
+  Argue: for/against, alternatives, risks
+
+# 2. Code + test
+core/skills/os_skills/delegation_router.py [edit]
+tests/skills/test_delegation_router_e2e.py [add/edit E2E test]
+
+# 3. E2E proof
+pytest tests/skills/test_delegation_router_e2e.py -v
+# Must show: Skill.execute() called → output produced → SkillAuditEvent logged
+
+# 4. Audit verification
+grep "skill_executed.*delegation_router" ~/.corvin/audit.jsonl | tail -1
+# Must show: output matches test expectation + lom (line-of-moral-responsibility) present
+
+# 5. Commit + no ADR skip needed
+# (Skills inherit ADR requirement from their parent L-layer ADR; incremental tuning is [skip-adr-check])
+```
+
 **Must NOT do (hard rules):**
 
 - **Don't hardcode** subsystem logic outside Skills — every L-layer contract must be a Skill
-- **Don't downgrade LDD** — all Skill changes require full LDD cycle (k=1–5) + E2E wiring proof
+- **Don't skip Dialectical Reasoning** for Skill changes — surface assumptions, confirm tradeoffs (cheap, mandatory)
+- **Don't merge without E2E proof** — unit tests ≠ called; prove real execution + audit event
+- **Don't audit-bypass** — every Skill.execute() + feedback + optimization MUST log (no silent learning)
 - **Don't weaken feedback loop** — no opt-out, no stale-feedback bypass, no learning-off flag
 - **Don't let Skill disable compliance** — audit chain, consent, house-rules are meta-Skills (immune to versioning/disable)
 - **Don't leak PII into Skill manifests** — manifests are public; learned params must be scrubbed
-- **Don't add Skill without ADR** — one ADR per new OS-level Skill (routes to ADR-0XXX after ADR-0535)
-- **Don't merge Skill code before E2E wiring proof** — unit tests don't prove the Skill is called
+- **Don't add OS-level Skill without ADR** — one ADR per new L-layer Skill (after ADR-0535)
 - **Don't fork SkillForge architecture** — one `skill_forge/` registry, not `skill_forge_v2/`, `os_skill_builder/`, etc.
 
 → Full reference: See Corvin-ADR repo for ADR-0532–0535 (os-skills-architecture through composition-dependencies)
