@@ -223,3 +223,12 @@ export const SkillsOverviewPanel: React.FC = () => {
 };
 
 export default SkillsOverviewPanel;
+
+// Phase 5.3: Marketplace Integration (minimal MVP)
+// TODO: Link to Corvin-Marketplace (ADR-0511)
+// For now: show skill source + install status
+
+interface MarketplaceAction {
+  type: "installed" | "available" | "update-available";
+  source: "bundled" | "marketplace" | "custom";
+}
