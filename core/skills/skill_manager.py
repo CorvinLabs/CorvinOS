@@ -37,7 +37,7 @@ class SkillRegistry:
 
     def __init__(self, registry_path: Path, tenant_id: str = None):
         self.registry_path = registry_path
-        self.tenant_id = tenant_id  # ADR-0007: Tenant isolation
+        # Note: tenant_id passed for context; actual isolation via registry_path scoping
         self.registry_file = registry_path / 'registry.yaml'
         self.registry_file.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_registry()

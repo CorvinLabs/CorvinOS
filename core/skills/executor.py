@@ -284,12 +284,13 @@ class SkillExecutor:
         exc_type = type(exc).__name__
         exc_msg = str(exc)
 
-        # Remove email addresses
-        exc_msg = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[EMAIL]', exc_msg)
-        # Remove phone numbers (10+ consecutive digits with common separators)
-        exc_msg = re.sub(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', '[PHONE]', exc_msg)
-        # Remove paths (heuristic: sequences with / or \)
-        exc_msg = re.sub(r'(?:(?:/|\\)[^\s/:]*)+', '[PATH]', exc_msg)
+        # Remove PII patterns (consistent with feedback_ingester patterns)
+        # Note: Ideally these should be imported from core.pii.patterns (TODO: refactor)
+        exc_msg = re.sub(r'\b[\w\.-]+@[\w\.-]+\.\w+\b', '[EMAIL]', exc_msg)
+        # Phone: dash-separated only (consistent with feedback_ingester line 20)
+        exc_msg = re.sub(r'\b\d{3}-\d{3}-\d{4}\b', '[PHONE]', exc_msg)
+        # Remove paths only if clearly filesystem paths (more conservative than original)
+        exc_msg = re.sub(r'(?:/[^/\s]+)+', '[PATH]', exc_msg)
         # Limit to first 200 chars
         if len(exc_msg) > 200:
             exc_msg = exc_msg[:197] + '...'

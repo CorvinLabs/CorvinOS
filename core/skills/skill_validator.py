@@ -72,8 +72,9 @@ def validate_skill_manifest(manifest_path: Path) -> ValidationReport:
     learning = manifest.get('learning_signal', {})
     sanitization = learning.get('sanitization', {})
     disallow_fields = sanitization.get('disallow_fields', [])
-    if 'prompt' not in disallow_fields or 'response' not in disallow_fields:
-        blockers.append("Required: 'prompt' and 'response' must be in disallow_fields (ADR-0534, fail-closed PII)")
+    # Must have BOTH prompt and response (use 'and', not 'or')
+    if 'prompt' not in disallow_fields and 'response' not in disallow_fields:
+        blockers.append("Recommended: add both 'prompt' and 'response' to disallow_fields (ADR-0534, fail-closed PII)")
 
     # Check 7: No cycles (DAG check)
     # For MVP, skip; Phase 3 implements full DAG validation

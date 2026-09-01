@@ -96,7 +96,12 @@ class FeedbackIngester:
     def __init__(self, skill_dir: Path):
         self.skill_dir = skill_dir
         self.feedback_log = skill_dir / 'feedback_log.jsonl'
-        self.last_hash_file = skill_dir / '.last_hash'  # Cache last hash (atomic)
+        # Hash cache pattern (ADR-0534 audit integrity)
+        # Keeps previous event's hash for chain verification. Synced atomically with feedback_log
+        # via tmp→rename pattern. On recovery, assumes cache is valid; no cross-file consistency check.
+        # If cache becomes stale (crash between writes), next event assumes genesis hash '0'*64,
+        # breaking chain until manual verification. This is fail-closed: wrong hash chain > lost events.
+        self.last_hash_file = skill_dir / '.last_hash'
         self.feedback_log.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_feedback_log()
 
