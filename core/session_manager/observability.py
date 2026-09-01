@@ -40,7 +40,8 @@ class ObservabilityCollector:
     """Phase 3: Observability collector (ADR-0472 Phase 3, Production-Ready)."""
 
     def __init__(self):
-        self.events: List[SessionEvent] = []
+        # CRITICAL-010 fix: Make events private to prevent direct manipulation
+        self._events: List[SessionEvent] = []
         self.task_metrics: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
             "sessions": [],
             "splits": 0,
@@ -49,9 +50,23 @@ class ObservabilityCollector:
             "end_time": None,
         })
 
+    def get_events(self) -> List[SessionEvent]:
+        """Get a copy of events list (read-only, CRITICAL-010 fix).
+
+        Returns:
+            Copy of events list (modifications don't affect internal state)
+        """
+        return list(self._events)
+
     async def record_event(self, event: SessionEvent) -> None:
-        """Record session lifecycle event (Phase 3)."""
-        self.events.append(event)
+        """Record session lifecycle event (Phase 3, with validation - CRITICAL-010 fix)."""
+        # CRITICAL-010 fix: Validate event before recording
+        if not self._validate_event(event):
+            logger.error(f"[Observability] Invalid event rejected: {event}")
+            return
+
+        # Use private _events list
+        self._events.append(event)
 
         # Update task-level metrics
         if event.task_id in self.task_metrics:
@@ -68,15 +83,40 @@ class ObservabilityCollector:
 
         logger.info(f"[Observability] {event.event_type}: {event.task_id}")
 
+    @staticmethod
+    def _validate_event(event: SessionEvent) -> bool:
+        """Validate event before recording (CRITICAL-010 fix).
+
+        Args:
+            event: Event to validate
+
+        Returns:
+            True if valid, False otherwise
+        """
+        # Validate required fields
+        if not event.task_id or not event.session_id or event.timestamp <= 0:
+            return False
+
+        # Validate event_type is one of the known types
+        valid_types = {"session_started", "split", "error", "completed"}
+        if event.event_type not in valid_types:
+            return False
+
+        # Validate metadata is a dict
+        if not isinstance(event.metadata, dict):
+            return False
+
+        return True
+
     async def get_task_timeline(self, task_id: str) -> List[Dict[str, Any]]:
         """Get session timeline for dashboard (Phase 3)."""
-        timeline = [asdict(e) for e in self.events if e.task_id == task_id]
+        timeline = [asdict(e) for e in self._events if e.task_id == task_id]
         return sorted(timeline, key=lambda x: x["timestamp"])
 
     async def compute_metrics(self) -> SessionMetrics:
         """Compute production-ready dashboard metrics (Phase 3)."""
         total_tasks = len(self.task_metrics)
-        total_sessions = len(self.events)
+        total_sessions = len(self._events)  # Use private _events
         total_splits = sum(
             m["splits"] for m in self.task_metrics.values()
         )

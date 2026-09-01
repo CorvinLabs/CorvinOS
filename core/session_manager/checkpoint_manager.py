@@ -13,12 +13,14 @@ logger = logging.getLogger(__name__)
 class CheckpointManager:
     """Manage checkpoint storage & recovery for autonomous sessions (ADR-0471)."""
 
-    def __init__(self, checkpoint_dir: Optional[str] = None):
+    def __init__(self, checkpoint_dir: Optional[str] = None, cleanup_interval_days: int = 7, auto_cleanup: bool = True):
         """Initialize checkpoint storage.
 
         Args:
             checkpoint_dir: Directory for storing checkpoints.
                           Defaults to ~/.corvin/checkpoints/
+            cleanup_interval_days: Delete checkpoints older than this (default 7)
+            auto_cleanup: Run cleanup on initialization (CRITICAL-007 fix)
         """
         if checkpoint_dir is None:
             corvin_home = os.getenv("CORVIN_HOME", os.path.expanduser("~/.corvin"))
@@ -26,7 +28,19 @@ class CheckpointManager:
 
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.cleanup_interval_days = cleanup_interval_days
         logger.info(f"[CheckpointManager] Using checkpoint dir: {self.checkpoint_dir}")
+
+        # CRITICAL-007 fix: Run cleanup on initialization to prevent disk exhaustion
+        if auto_cleanup:
+            # Run async cleanup in background (fire and forget)
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.cleanup_old_checkpoints(self.cleanup_interval_days))
+            except RuntimeError:
+                # No event loop running, skip background cleanup
+                logger.debug("[CheckpointManager] No event loop for background cleanup")
 
     async def save_checkpoint(self, checkpoint) -> bool:
         """Save checkpoint atomically to disk.
@@ -98,7 +112,16 @@ class CheckpointManager:
             )
             checkpoint.checkpoint_hash = data['checkpoint_hash']
 
-            logger.info(f"[CheckpointManager] Loaded: {session_id}")
+            # CRITICAL FIX: Verify checkpoint integrity immediately after loading (fail-closed)
+            is_valid = await self.verify_checkpoint_integrity(checkpoint)
+            if not is_valid:
+                logger.error(
+                    f"[CheckpointManager] Checkpoint integrity verification FAILED: {session_id} "
+                    f"— refusing to load corrupted checkpoint"
+                )
+                return None
+
+            logger.info(f"[CheckpointManager] Loaded and verified: {session_id}")
             return checkpoint
         except Exception as e:
             logger.exception(f"[CheckpointManager] Load failed: {e}")
