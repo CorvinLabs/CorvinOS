@@ -110,10 +110,12 @@ flags = result["result"]["flags"] if result["success"] else []
 
 ---
 
-## Related Artifacts
+## Related Artifacts (from Spike 1)
 
-- Spike 1 Final Report: `docs/SPIKE_1_FINAL_REPORT_SEPT4.md`
-- Phase 1b Rollout Plan: `docs/SPIKE_1_PHASE2_ROLLOUT_PLAN.md`
+Spike 1 (Sept 1-2) delivered the base implementations:
 - Skills Implementation: `core/skills/feature_flags_skill.py`
 - Wrapper Adapter: `core/console/corvin_core/feature_flags_legacy_adapter.py`
+- Skills Registry: `core/skills/feature_flags_registry.yaml`
+
+See `docs/SPIKE_1_FINAL_REPORT_SEPT4.md` and `docs/SPIKE_1_PHASE2_ROLLOUT_PLAN.md` for full Spike 1 details.
 
