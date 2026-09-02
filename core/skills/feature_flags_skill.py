@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -21,6 +22,20 @@ from corvin_core import feature_flags as _ff
 from forge import paths as _forge_paths
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_tenant_id(tenant_id: str) -> None:
+    """Validate tenant_id format (alphanumeric + underscore, no path traversal).
+
+    FIX #5: Prevent path traversal via tenant_id (e.g., "../../../etc/passwd")
+    Raises ValueError if tenant_id is invalid (GDPR Art. 32).
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        raise ValueError(f"Invalid tenant_id: must be non-empty string, got {tenant_id!r}")
+
+    # Only allow alphanumeric + underscore + hyphen (safe for paths)
+    if not re.match(r'^[a-zA-Z0-9_-]+$', tenant_id):
+        raise ValueError(f"Invalid tenant_id format: {tenant_id!r} (only alphanumeric, underscore, hyphen allowed)")
 
 # Audit integration (Phase 2, ADR-0232/0233)
 try:
@@ -52,10 +67,14 @@ class FeatureFlagsStorage:
 
     def _overlay_path(self, tenant_id: str) -> Path:
         """Get overlay file path for tenant."""
+        # FIX #5: Validate tenant_id before path construction (prevent path traversal)
+        _validate_tenant_id(tenant_id)
         return _forge_paths.tenant_global_dir(tenant_id) / self._OVERLAY_NAME
 
     def read_overlay(self, tenant_id: str) -> dict[str, Any]:
         """Read flag overlay for tenant (fail-safe)."""
+        # FIX #6: Validate tenant_id upfront (GDPR Art. 32 isolation)
+        _validate_tenant_id(tenant_id)
         try:
             path = self._overlay_path(tenant_id)
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -65,6 +84,8 @@ class FeatureFlagsStorage:
 
     def write_overlay(self, tenant_id: str, data: dict[str, Any]) -> None:
         """Write flag overlay for tenant (atomic)."""
+        # FIX #6: Validate tenant_id upfront (GDPR Art. 32 isolation)
+        _validate_tenant_id(tenant_id)
         path = self._overlay_path(tenant_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
@@ -77,6 +98,8 @@ class FeatureFlagsStorage:
 
     def get_flag_state(self, flag_id: str, tenant_id: str) -> bool:
         """Get a flag's enabled state (with precedence: overlay → YAML spec → default)."""
+        # FIX #6: Validate tenant_id upfront (GDPR Art. 32 isolation)
+        _validate_tenant_id(tenant_id)
         overlay = self.read_overlay(tenant_id).get("flags", {})
 
         if isinstance(overlay, dict) and flag_id in overlay:
@@ -87,6 +110,8 @@ class FeatureFlagsStorage:
 
     def set_flag_state(self, flag_id: str, enabled: bool, tenant_id: str) -> None:
         """Set a flag's enabled state in overlay."""
+        # FIX #6: Validate tenant_id upfront (GDPR Art. 32 isolation)
+        _validate_tenant_id(tenant_id)
         with self._LOCK:
             data = self.read_overlay(tenant_id)
             flags = data.get("flags", {})

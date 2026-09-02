@@ -1,15 +1,30 @@
-import logging
 """Phase 2: EventStore — Learning event persistence (ADR-0314)."""
 
 from __future__ import annotations
 
 import json
+import logging
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from core.learning.learning_events import LearningEvent, EventType
+
+logger = logging.getLogger(__name__)
+
+
+def _validate_tenant_id(tenant_id: str) -> None:
+    """Validate tenant_id format (alphanumeric + underscore, no path traversal).
+
+    FIX #6: Prevent tenant isolation bypass (GDPR Art. 32).
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        raise ValueError(f"Invalid tenant_id: must be non-empty string, got {tenant_id!r}")
+
+    if not re.match(r'^[a-zA-Z0-9_-]+$', tenant_id):
+        raise ValueError(f"Invalid tenant_id format: {tenant_id!r}")
 
 
 class EventStore:
@@ -58,6 +73,9 @@ class EventStore:
         until: Optional[str] = None,
     ) -> list[LearningEvent]:
         """Query events with optional filters."""
+        # FIX #6: Validate tenant_id upfront (prevent cross-tenant leakage, GDPR Art. 32)
+        _validate_tenant_id(tenant_id)
+
         with self._lock:
             results = []
 
@@ -77,6 +95,12 @@ class EventStore:
                                 continue
 
                             data = json.loads(line)
+
+                            # FIX #13: Validate required fields before reconstruction (prevent KeyError)
+                            required_fields = {"event_id", "event_type", "skill_id", "tenant_id", "timestamp"}
+                            if not all(field in data for field in required_fields):
+                                logger.warning(f"Skipping malformed event: missing fields {required_fields - set(data.keys())} in {data}")
+                                continue
 
                             if data.get("tenant_id") != tenant_id:
                                 continue
@@ -100,7 +124,12 @@ class EventStore:
                             )
                             results.append(event)
 
-                except (json.JSONDecodeError, IOError):
+                except json.JSONDecodeError as e:
+                    # FIX #4: Log corrupted JSON instead of silent skip (audit trail incomplete)
+                    logger.warning(f"Corrupted JSON in {event_file} (line {event_file.name}): {e} — event(s) LOST")
+                    continue
+                except IOError as e:
+                    logger.error(f"IO error reading {event_file}: {e}")
                     continue
 
             return results
