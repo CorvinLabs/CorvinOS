@@ -277,3 +277,46 @@ def test_emission_side_wired_into_system_prompt():
         "the emission block must document the bgtask/bgstep/bgdone protocol")
     # And it is gated on the same ship-dark flag (block stays empty when off).
     assert 'if _bg_flag("bridge_mid_turn_task_notify"):' in src
+
+
+# ── review Round-2 LOW fixes ────────────────────────────────────────────────
+
+def test_sweep_removes_expired_and_corrupt_but_not_fresh(tmp_path):
+    """Round-2 #1 — flag-off cleanup: sweep GCs expired + corrupt markers but
+    keeps a fresh one, and emits nothing (no outbox writes)."""
+    state, outbox = tmp_path / "s", tmp_path / "o"
+    mth.mark_active(state, "sess", channel="discord", chat_id="c", sender=None, label="fresh")
+    mth.mark_active(state, "sess", channel="discord", chat_id="c", sender=None, label="old")
+    # age the "old" one past MAX_AGE
+    import json as _j
+    p_old = mth._marker_path(state, "sess", "old")
+    d = _j.loads(p_old.read_text()); d["started_at"] = time.time() - 5000; p_old.write_text(_j.dumps(d))
+    # a corrupt file
+    corrupt = mth._dir(state) / "sess__deadbeef00.json"; corrupt.write_text("{not json")
+    removed = mth.sweep(state)
+    assert removed == 2                      # old + corrupt
+    assert mth.active_count(state) == 1      # fresh survives
+    assert not outbox.exists() or list(outbox.glob("*.json")) == []  # emitted nothing
+
+
+def test_strip_does_not_eat_foreign_bracket_after_partial():
+    """Round-2 #2 — a partial ⟦bgstep: must not swallow an independent ⟦…⟧ that
+    follows it on the same line."""
+    out = mth.strip_markers("text ⟦bgstep:foo and then ⟦other⟧ tail")
+    assert "⟦other⟧" in out          # foreign structure preserved
+    assert "⟦bgstep" not in out      # the partial marker is stripped
+
+
+def test_strip_mirrors_parser_no_wandering_edge():
+    """Round-3 — strip mirrors the parser: a VALID marker whose status contains a
+    literal ⟦ is stripped WHOLE (no leak), while a PARTIAL opener still preserves
+    an independent ⟦…⟧ that follows it. Both edges hold at once."""
+    # Valid bgstep, status contains a literal ⟦…⟧ → stripped entirely.
+    assert mth.strip_markers("pre ⟦bgstep:build|weird ⟦text⟧ post").strip() == "pre  post".strip()
+    # parse_steps agrees it is a valid marker (status up to first ⟧).
+    assert mth.parse_steps("⟦bgstep:build|weird ⟦text⟧") == [("build", "weird ⟦text")]
+    # Partial opener (no |, no close) + independent foreign bracket → foreign kept.
+    out = mth.strip_markers("text ⟦bgstep:foo and then ⟦other⟧ tail")
+    assert "⟦other⟧" in out and "⟦bgstep" not in out
+    # Normal complete markers still strip cleanly.
+    assert "⟦bg" not in mth.strip_markers("a ⟦bgtask:T⟧ b ⟦bgdone:T⟧ c")

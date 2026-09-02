@@ -56,7 +56,18 @@ _DONE_RE = re.compile(r"⟦bgdone:([^⟧]{1,80})⟧")
 # the channel. The closing ⟧ is optional and the label is unbounded up to the
 # next ⟧/newline — a marker split across chunks (no ⟧ yet) or one whose label
 # blew past the 80/120 parse caps is removed all the same.
-_ANY_RE = re.compile(r"⟦bg(?:task|step|done):[^⟧\n⟦]*⟧?")
+_ANY_RE = re.compile(
+    # MIRROR THE PARSERS so strip and parse can never disagree (a regex that
+    # over- or under-strips relative to what parse_* recognises is how a marker
+    # leaks). Complete forms first (identical shape to _MARKER_RE/_STEP_RE/
+    # _DONE_RE, so a literal ⟦ inside a status is stripped WITH its marker),
+    # then a conservative partial/malformed opener that stops at the next ⟦ so
+    # it never swallows an independent ⟦…⟧ that follows an unterminated marker.
+    r"⟦bgtask:[^⟧\n]{1,80}⟧"
+    r"|⟦bgstep:[^|⟧\n]{1,80}\|[^⟧\n]{1,120}⟧"
+    r"|⟦bgdone:[^⟧\n]{1,80}⟧"
+    r"|⟦bg(?:task|step|done):[^⟧\n⟦]*⟧?"
+)
 # In the streaming live-scan we can advance the scan index past everything but
 # the last ~this-many chars — only a marker split across the final chunk could
 # still be incomplete, and no complete marker is longer than this (prefix
