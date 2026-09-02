@@ -100,25 +100,27 @@ class DelegationRouterSkill(Skill):
 class VibeEngineeringSkill(Skill):
     """Apply vibe-informed heuristics to task prioritization.
 
-    Replaces feature flag: spec.features.vibe_engineering_v0_2 / v0_3
+    Replaces feature flag: spec.features.vibe_engineering_v0_2 / v0_3 and vibe_engineering_active
 
     Input:
         user_id: str (optional)
         task_description: str
         priority_hint: int (1-10, user-suggested priority)
         time_budget_ms: int (how much time available)
+        tenant_id: str (optional)
 
     Output:
         vibe_score: float (0.0-1.0, engagement level)
         priority_adjustment: int (-5 to +5, relative priority change)
         reasoning: str (why this adjustment)
+        enabled: bool (whether vibe engineering is active for this tenant)
     """
 
     def __init__(self):
         metadata = SkillMetadata(
             id="os.vibe_engineering",
             name="Vibe Engineering",
-            description="Apply vibe-informed heuristics for task prioritization",
+            description="Apply vibe-informed heuristics for task prioritization and check active status",
             version="0.2.0",
             origin=SkillOrigin.BUILTIN,
             owner="corvin-os-team",
@@ -130,10 +132,10 @@ class VibeEngineeringSkill(Skill):
         """Execute vibe analysis.
 
         Args:
-            input: Dictionary with task context
+            input: Dictionary with task context and optional tenant_id
 
         Returns:
-            Dictionary with vibe_score, priority_adjustment, reasoning
+            Dictionary with vibe_score, priority_adjustment, reasoning, and enabled status
         """
         task_description = input.get("task_description", "")
         priority_hint = input.get("priority_hint", 5)
@@ -160,15 +162,206 @@ class VibeEngineeringSkill(Skill):
             priority_adjustment -= 1
             reasoning = f"{reasoning}; tight time budget"
 
+        # Vibe engineering is enabled by default
+        enabled = input.get("enabled", True)
+
         logger.info(
             f"VibeEngineering: vibe_score={vibe_score:.2f}, "
-            f"adjustment={priority_adjustment}"
+            f"adjustment={priority_adjustment}, enabled={enabled}"
         )
 
         return {
             "vibe_score": vibe_score,
             "priority_adjustment": priority_adjustment,
             "reasoning": reasoning,
+            "enabled": enabled,
+        }
+
+
+class PluginHealthMonitoringSkill(Skill):
+    """Control plugin health monitoring system.
+
+    Replaces feature flag: plugin_health_monitoring
+
+    Input:
+        tenant_id: str (optional, for tenant-scoped control)
+
+    Output:
+        enabled: bool (whether health monitoring is active)
+        reason: str (why it's enabled/disabled)
+    """
+
+    def __init__(self):
+        metadata = SkillMetadata(
+            id="os.plugin_health_monitoring",
+            name="Plugin Health Monitoring",
+            description="Control plugin health monitoring and self-healing capabilities",
+            version="0.1.0",
+            origin=SkillOrigin.BUILTIN,
+            owner="corvin-os-team",
+            tags=["plugins", "health", "monitoring"],
+        )
+        super().__init__(metadata)
+
+    def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute health monitoring decision.
+
+        Args:
+            input: Dictionary (optional tenant_id)
+
+        Returns:
+            Dictionary with enabled status and reasoning
+        """
+        # By default, health monitoring is enabled for production deployments
+        enabled = input.get("enabled", True)
+
+        logger.info(f"PluginHealthMonitoring: enabled={enabled}")
+
+        return {
+            "enabled": enabled,
+            "reason": "Health monitoring active" if enabled else "Health monitoring disabled",
+        }
+
+
+class HeadlessModeSkill(Skill):
+    """Control headless API-only mode.
+
+    Replaces feature flag: headless_api_mode
+
+    Input:
+        tenant_id: str (optional)
+        mode: str (optional, "headless" or "console")
+
+    Output:
+        headless_enabled: bool
+        mode: str
+        reason: str
+    """
+
+    def __init__(self):
+        metadata = SkillMetadata(
+            id="os.headless_mode",
+            name="Headless Mode",
+            description="Control whether console serves API-only (headless) or with UI",
+            version="0.1.0",
+            origin=SkillOrigin.BUILTIN,
+            owner="corvin-os-team",
+            tags=["console", "deployment", "api"],
+        )
+        super().__init__(metadata)
+
+    def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute headless mode decision.
+
+        Args:
+            input: Dictionary with optional mode
+
+        Returns:
+            Dictionary with headless status
+        """
+        headless = input.get("headless_enabled", False)
+        mode = "headless" if headless else "console"
+
+        logger.info(f"HeadlessMode: mode={mode}")
+
+        return {
+            "headless_enabled": headless,
+            "mode": mode,
+            "reason": f"Running in {mode} mode" if mode == "headless" else "Console UI enabled",
+        }
+
+
+class PluginBuilderSkill(Skill):
+    """Control plugin builder slash command availability.
+
+    Replaces feature flag: plugin_builder_enabled
+
+    Input:
+        tenant_id: str (optional)
+        user_id: str (optional)
+
+    Output:
+        enabled: bool
+        reason: str
+    """
+
+    def __init__(self):
+        metadata = SkillMetadata(
+            id="os.plugin_builder",
+            name="Plugin Builder",
+            description="Control availability of /build slash command for plugin creation",
+            version="0.1.0",
+            origin=SkillOrigin.BUILTIN,
+            owner="corvin-os-team",
+            tags=["plugins", "builder", "features"],
+        )
+        super().__init__(metadata)
+
+    def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute plugin builder availability decision.
+
+        Args:
+            input: Dictionary with optional tenant_id
+
+        Returns:
+            Dictionary with enabled status
+        """
+        enabled = input.get("enabled", True)
+
+        logger.info(f"PluginBuilder: enabled={enabled}")
+
+        return {
+            "enabled": enabled,
+            "reason": "Plugin builder available" if enabled else "Plugin builder disabled",
+        }
+
+
+class CapabilitiesSkill(Skill):
+    """Return capability manifest with feature flag status.
+
+    Replaces feature flag list lookup in capabilities endpoint
+
+    Input:
+        tenant_id: str
+        gated_flags: list[str] (flags to check)
+
+    Output:
+        flags: dict[str, bool] (flag_name → enabled)
+    """
+
+    def __init__(self):
+        metadata = SkillMetadata(
+            id="os.capabilities",
+            name="Capabilities Manifest",
+            description="Return capability manifest with gated feature status",
+            version="0.1.0",
+            origin=SkillOrigin.BUILTIN,
+            owner="corvin-os-team",
+            tags=["capabilities", "manifest", "api"],
+        )
+        super().__init__(metadata)
+
+    def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute capabilities lookup.
+
+        Args:
+            input: Dictionary with tenant_id and gated_flags
+
+        Returns:
+            Dictionary with flags mapping
+        """
+        gated_flags = input.get("gated_flags", [])
+        tenant_id = input.get("tenant_id", "_default")
+
+        # For Phase 1, all gated flags are disabled by default
+        # Real implementation would query actual flag states
+        flags = {flag: False for flag in gated_flags}
+
+        logger.info(f"Capabilities: tenant={tenant_id}, flags_checked={len(gated_flags)}")
+
+        return {
+            "flags": flags,
+            "tenant_id": tenant_id,
         }
 
 
@@ -255,9 +448,17 @@ def register_builtin_skills(skills_registry: Any) -> None:
     router_skill = DelegationRouterSkill()
     vibe_skill = VibeEngineeringSkill()
     context_skill = ContextAdapterSkill(skills_registry)
+    health_monitoring_skill = PluginHealthMonitoringSkill()
+    headless_skill = HeadlessModeSkill()
+    plugin_builder_skill = PluginBuilderSkill()
+    capabilities_skill = CapabilitiesSkill()
 
     skills_registry.register(router_skill)
     skills_registry.register(vibe_skill)
     skills_registry.register(context_skill)
+    skills_registry.register(health_monitoring_skill)
+    skills_registry.register(headless_skill)
+    skills_registry.register(plugin_builder_skill)
+    skills_registry.register(capabilities_skill)
 
-    logger.info("Builtin OS Skills registered (Phase 1)")
+    logger.info("Builtin OS Skills registered (Phase 1 k=2-5 refactoring: 7 total Skills)")

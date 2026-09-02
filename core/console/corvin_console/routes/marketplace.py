@@ -16,6 +16,7 @@ The new source of truth is JSON manifests (plugin.json) in operator/marketplace/
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -43,9 +44,8 @@ class _IndexManager:
         if self._index is not None:
             return self._index
 
-        # Try local path first (legacy)
         if self._index_path is None:
-            self._index_path = Path.cwd() / "operator" / "marketplace" / "index" / "plugins.json"
+            self._index_path = resolve_index_path()
 
         try:
             with open(self._index_path) as f:
@@ -80,6 +80,35 @@ class _IndexManager:
             "by_category": {},
             "by_tier": {},
         }
+
+
+def resolve_index_path() -> Path:
+    """Locate plugins.json.
+
+    The plugin sources were moved out of CorvinOS into the sibling
+    Corvin-Marketplace repository (commit 3c691741), so the in-repo path only
+    still exists on branches predating that move. Resolution order:
+
+    1. ``CORVIN_MARKETPLACE_INDEX`` — explicit operator override.
+    2. ``<cwd>/operator/marketplace/index/plugins.json`` — legacy in-repo index.
+    3. ``<repo parent>/Corvin-Marketplace/index/plugins.json`` — sibling checkout.
+
+    Returns the first candidate that exists; otherwise the legacy path, so the
+    caller's FileNotFoundError branch takes over and falls back to GitHub.
+    """
+    override = os.environ.get("CORVIN_MARKETPLACE_INDEX")
+    if override:
+        return Path(override).expanduser()
+
+    legacy = Path.cwd() / "operator" / "marketplace" / "index" / "plugins.json"
+    # core/console/corvin_console/routes/marketplace.py -> repo root -> its parent
+    repo_root = Path(__file__).resolve().parents[4]
+    sibling = repo_root.parent / "Corvin-Marketplace" / "index" / "plugins.json"
+
+    for candidate in (legacy, sibling):
+        if candidate.is_file():
+            return candidate
+    return legacy
 
 
 _index_manager = _IndexManager()
