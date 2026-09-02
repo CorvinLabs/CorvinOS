@@ -28,9 +28,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import threading
 import time
+import uuid
 from pathlib import Path
+
+# Serialises the read-modify-write sections of the store (mark_active /
+# update_status / clear_task / deliver_due) within a single process, so two
+# threads in the long-running adapter can't interleave a load()→mutate→write
+# against the same marker and lose an update. Cross-PROCESS safety still rests
+# on the atomic tmp-file replace in `_atomic_write` (unique tmp per writer).
+_lock = threading.RLock()
 
 # Liveness cadence (human-friendly — a courtesy, not a firehose).
 FIRST_AFTER_S = 90      # no liveness ping until a task has run this long
@@ -42,14 +52,34 @@ STATUS_CAP = 120        # max chars of a status line
 _MARKER_RE = re.compile(r"⟦bgtask:([^⟧]{1,80})⟧")
 _STEP_RE = re.compile(r"⟦bgstep:([^|⟧]{1,80})\|([^⟧]{1,120})⟧")
 _DONE_RE = re.compile(r"⟦bgdone:([^⟧]{1,80})⟧")
-_ANY_RE = re.compile(r"⟦bg(?:task|step|done):[^⟧]{1,205}⟧")
+# Strips COMPLETE, PARTIAL, empty AND oversized markers so nothing leaks into
+# the channel. The closing ⟧ is optional and the label is unbounded up to the
+# next ⟧/newline — a marker split across chunks (no ⟧ yet) or one whose label
+# blew past the 80/120 parse caps is removed all the same.
+_ANY_RE = re.compile(
+    # MIRROR THE PARSERS so strip and parse can never disagree (a regex that
+    # over- or under-strips relative to what parse_* recognises is how a marker
+    # leaks). Complete forms first (identical shape to _MARKER_RE/_STEP_RE/
+    # _DONE_RE, so a literal ⟦ inside a status is stripped WITH its marker),
+    # then a conservative partial/malformed opener that stops at the next ⟦ so
+    # it never swallows an independent ⟦…⟧ that follows an unterminated marker.
+    r"⟦bgtask:[^⟧\n]{1,80}⟧"
+    r"|⟦bgstep:[^|⟧\n]{1,80}\|[^⟧\n]{1,120}⟧"
+    r"|⟦bgdone:[^⟧\n]{1,80}⟧"
+    r"|⟦bg(?:task|step|done):[^⟧\n⟦]*⟧?"
+)
+# In the streaming live-scan we can advance the scan index past everything but
+# the last ~this-many chars — only a marker split across the final chunk could
+# still be incomplete, and no complete marker is longer than this (prefix
+# `⟦bgstep:` + 80 label + `|` + 120 status + `⟧`). Keeps scan_new_steps O(n).
+_MAX_MARKER_LEN = 210
 
 
 # ── Marker parsing / stripping (used by the adapter reply hook) ──────────────
 
 def parse_markers(reply_text: str) -> "list[str]":
     """Start markers: labels of ``⟦bgtask:<label>⟧``."""
-    if not reply_text:
+    if not isinstance(reply_text, str) or not reply_text:
         return []
     out, seen = [], set()
     for m in _MARKER_RE.findall(reply_text):
@@ -62,7 +92,7 @@ def parse_markers(reply_text: str) -> "list[str]":
 
 def parse_steps(reply_text: str) -> "list[tuple[str, str]]":
     """Status updates: ``(label, status)`` from ``⟦bgstep:<label>|<status>⟧``."""
-    if not reply_text:
+    if not isinstance(reply_text, str) or not reply_text:
         return []
     out = []
     for lbl, status in _STEP_RE.findall(reply_text):
@@ -74,7 +104,7 @@ def parse_steps(reply_text: str) -> "list[tuple[str, str]]":
 
 def parse_done(reply_text: str) -> "list[str]":
     """Stop markers: labels of ``⟦bgdone:<label>⟧``."""
-    if not reply_text:
+    if not isinstance(reply_text, str) or not reply_text:
         return []
     return [m.strip() for m in _DONE_RE.findall(reply_text) if m.strip()]
 
@@ -87,20 +117,31 @@ def scan_new_steps(buf: str, from_index: int) -> "tuple[list[tuple[str, str]], i
     next call once its rest arrives. Used by the streaming path to surface a
     synchronous turn's current step live, not only at the final reply."""
     out: list[tuple[str, str]] = []
+    if not isinstance(from_index, int) or from_index < 0:
+        from_index = 0
     end = from_index
-    if not buf:
+    if not isinstance(buf, str) or not buf:
         return out, end
     for m in _STEP_RE.finditer(buf, from_index):
         lbl, status = m.group(1).strip(), m.group(2).strip()[:STATUS_CAP]
         if lbl and status:
             out.append((lbl, status))
         end = m.end()
+    # Advance the scan cursor past markerless text so the next call is not O(n)
+    # over the whole (ever-growing) buffer again: only the trailing
+    # ``_MAX_MARKER_LEN`` chars can still hold a marker split across chunks, so
+    # everything before that is safe to skip. Never move backwards (< end) and
+    # never past what we already consumed complete markers up to.
+    end = max(end, min(len(buf) - _MAX_MARKER_LEN, len(buf)))
+    if end < from_index:
+        end = from_index
     return out, end
 
 
 def strip_markers(reply_text: str) -> str:
-    """Remove all bg markers so they never reach the channel."""
-    if not reply_text:
+    """Remove all bg markers so they never reach the channel — including
+    partial (unterminated), empty-label and oversized ones (see ``_ANY_RE``)."""
+    if not isinstance(reply_text, str) or not reply_text:
         return reply_text
     return _ANY_RE.sub("", reply_text).rstrip()
 
@@ -123,7 +164,11 @@ def _marker_path(state_dir: str | Path, session_key: str, label: str) -> Path:
 
 def _atomic_write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # UNIQUE tmp name per writer (pid + random) — a fixed ``.tmp`` sibling let two
+    # concurrent writers to the same marker clobber each other's tmp file and
+    # replace() a half-written one into place. Uniqueness makes the write-then-
+    # atomic-replace safe across processes; ``_lock`` covers threads.
+    tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
 
@@ -145,18 +190,19 @@ def mark_active(state_dir: str | Path, session_key: str, *, channel: str,
         if not label:
             return None
         p = _marker_path(state_dir, session_key, label)
-        existing = _load(p) if p.is_file() else None
-        if existing:
-            return existing  # keep original started_at
-        rec = {
-            "session_key": session_key, "channel": channel or "discord",
-            "chat_id": chat_id, "sender": sender, "label": label,
-            "status": (status or "").strip()[:STATUS_CAP],
-            "last_status_sent": "", "started_at": time.time(),
-            "last_ping_at": 0.0, "ping_count": 0,
-        }
-        _atomic_write(p, rec)
-        return rec
+        with _lock:
+            existing = _load(p) if p.is_file() else None
+            if existing:
+                return existing  # keep original started_at
+            rec = {
+                "session_key": session_key, "channel": channel or "discord",
+                "chat_id": chat_id, "sender": sender, "label": label,
+                "status": (status or "").strip()[:STATUS_CAP],
+                "last_status_sent": "", "started_at": time.time(),
+                "last_ping_at": 0.0, "ping_count": 0,
+            }
+            _atomic_write(p, rec)
+            return rec
     except Exception:  # noqa: BLE001
         return None
 
@@ -172,14 +218,15 @@ def update_status(state_dir: str | Path, session_key: str, *, channel: str = "di
         if not label:
             return None
         p = _marker_path(state_dir, session_key, label)
-        rec = _load(p) if p.is_file() else None
-        if rec is None:
-            rec = mark_active(state_dir, session_key, channel=channel, chat_id=chat_id,
-                              sender=sender, label=label, status=status)
+        with _lock:  # RLock: mark_active re-enters it below
+            rec = _load(p) if p.is_file() else None
+            if rec is None:
+                rec = mark_active(state_dir, session_key, channel=channel, chat_id=chat_id,
+                                  sender=sender, label=label, status=status)
+                return rec
+            rec["status"] = status
+            _atomic_write(p, rec)
             return rec
-        rec["status"] = status
-        _atomic_write(p, rec)
-        return rec
     except Exception:  # noqa: BLE001
         return None
 
@@ -187,9 +234,10 @@ def update_status(state_dir: str | Path, session_key: str, *, channel: str = "di
 def clear_task(state_dir: str | Path, session_key: str, label: str) -> bool:
     try:
         p = _marker_path(state_dir, session_key, label)
-        if p.is_file():
-            p.unlink()
-            return True
+        with _lock:
+            if p.is_file():
+                p.unlink()
+                return True
     except OSError:
         pass
     return False
@@ -217,14 +265,47 @@ def active_count(state_dir: str | Path) -> int:
     return len(list(d.glob("*.json"))) if d.is_dir() else 0
 
 
+def sweep(state_dir: str | Path, *, max_age_s: float = MAX_AGE_S,
+          now: float | None = None) -> int:
+    """Remove corrupt + past-``max_age_s`` marker files WITHOUT emitting anything.
+    ``deliver_due`` normally does this GC, but the adapter gates it behind the
+    flag — so when the flag is OFF, residual markers from a prior flag-ON phase
+    would otherwise linger forever. The main loop calls this in the flag-OFF
+    branch to keep the same bounded cleanup. Never raises."""
+    removed = 0
+    now = time.time() if now is None else now
+    try:
+        with _lock:
+            d = _dir(state_dir)
+            if not d.is_dir():
+                return 0
+            for p in sorted(d.glob("*.json")):
+                try:
+                    rec = _load(p)
+                    stale = rec is None or (now - float(rec.get("started_at", now))) >= max_age_s
+                    if stale:
+                        p.unlink()
+                        removed += 1
+                except Exception:  # noqa: BLE001 — a bad file: drop it, keep sweeping
+                    try:
+                        p.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
+    except Exception:  # noqa: BLE001
+        pass
+    return removed
+
+
 # ── Delivery (called from the adapter main loop) ────────────────────────────
 
 def _envelope(rec: dict, text: str, kind: str, seq) -> dict:
-    uid = hashlib.sha1(
-        f"{rec.get('session_key')}{rec.get('label')}{kind}{seq}".encode("utf-8")
-    ).hexdigest()[:12]
+    # Collision-free msg_id: a sha1(session+label+kind+seq) collided whenever two
+    # ticks produced the same (kind, seq) for a label, silently overwriting one
+    # outbox envelope. Stickiness is chId-keyed in the daemon, so a unique
+    # per-envelope id is safe (uniqueness is irrelevant to the in-place edit).
     env = {
-        "msg_id": f"mth_{uid}",
+        "msg_id": f"mth_{uuid.uuid4().hex[:16]}",
         "channel": rec.get("channel") or "discord",
         "chat_id": rec.get("chat_id"),
         "text": text,
@@ -244,7 +325,11 @@ def _envelope(rec: dict, text: str, kind: str, seq) -> dict:
 
 
 def _mins(rec: dict, now: float) -> int:
-    return max(1, int((now - rec.get("started_at", now)) // 60))
+    try:
+        started = float(rec.get("started_at", now))
+    except (TypeError, ValueError):
+        started = now
+    return max(1, int((now - started) // 60))
 
 
 def deliver_due(state_dir: str | Path, outbox_dir: str | Path, *,
@@ -253,7 +338,15 @@ def deliver_due(state_dir: str | Path, outbox_dir: str | Path, *,
                 now: float | None = None) -> int:
     """Write due envelopes for every active task: a status line the moment the
     step changes, and a slim liveness line on the slow cadence. Bounded by
-    ``max_pings``/``max_age_s``. Returns envelopes written. Never raises."""
+    ``max_pings``/``max_age_s``. Returns envelopes written. Never raises.
+
+    Accepted limitations (reviewed, deliberately NOT fixed — out of scope):
+      * Double-surface of the same bgstep: the live sticky (ephemeral) is
+        deleted at the final reply and the persisted status message is the
+        record — this is redundancy, not a defect.
+      * Only the LAST step of a batch persists as a status message: intermediate
+        steps appear live in the sticky while the turn streams; by design.
+    """
     written = 0
     now = time.time() if now is None else now
     try:
@@ -263,47 +356,66 @@ def deliver_due(state_dir: str | Path, outbox_dir: str | Path, *,
         outp = Path(outbox_dir)
         outp.mkdir(parents=True, exist_ok=True)
         for p in sorted(d.glob("*.json")):
-            rec = _load(p)
-            if rec is None:
-                continue
-            label = rec.get("label", "Task")
-            dirty = False
+            # Per-record isolation: one corrupt/poisoned marker must not abort
+            # the whole tick and starve every marker sorted after it.
+            try:
+                with _lock:
+                    rec = _load(p)
+                    if rec is None:
+                        # Unreadable/corrupt marker — GC it so it is not
+                        # re-scanned every tick forever (it can never ping).
+                        try:
+                            p.unlink()
+                        except OSError:
+                            pass
+                        continue
+                    label = rec.get("label", "Task")
+                    dirty = False
 
-            # 🔧 status line — immediate, whenever the step changed.
-            status = (rec.get("status") or "").strip()
-            if status and status != rec.get("last_status_sent", ""):
-                env = _envelope(rec, f"🔧 {label}: {status}", "status",
-                                rec.get("_status_seq", 0))
-                _atomic_write(outp / f"{env['msg_id']}.json", env)
-                written += 1
-                rec["last_status_sent"] = status
-                rec["_status_seq"] = rec.get("_status_seq", 0) + 1
-                dirty = True
+                    # 🔧 status line — immediate, whenever the step changed.
+                    status = (rec.get("status") or "").strip()
+                    if status and status != rec.get("last_status_sent", ""):
+                        env = _envelope(rec, f"🔧 {label}: {status}", "status",
+                                        rec.get("_status_seq", 0))
+                        _atomic_write(outp / f"{env['msg_id']}.json", env)
+                        written += 1
+                        rec["last_status_sent"] = status
+                        rec["_status_seq"] = rec.get("_status_seq", 0) + 1
+                        dirty = True
 
-            # ⏱️ liveness line — slim, slow cadence, bounded.
-            age = now - rec.get("started_at", now)
-            expired = age >= max_age_s
-            due = age >= first_after_s and (now - rec.get("last_ping_at", 0.0)) >= interval_s
-            if due or expired:
-                over = rec.get("ping_count", 0) >= max_pings or expired
-                text = (f"⏱️ {label} läuft weiter im Hintergrund (seit {_mins(rec, now)} min)."
-                        if over else
-                        f"⏱️ {label} — läuft seit {_mins(rec, now)} min…")
-                env = _envelope(rec, text, "live", rec.get("ping_count", 0))
-                _atomic_write(outp / f"{env['msg_id']}.json", env)
-                written += 1
-                if over:
+                    # ⏱️ liveness line — slim, slow cadence, bounded. A record
+                    # missing/garbage started_at falls back to `now` (age 0), so
+                    # a bad timestamp can never make a marker appear expired and
+                    # ping forever; float() guards a non-numeric value.
                     try:
-                        p.unlink()
-                    except OSError:
-                        pass
-                    continue
-                rec["last_ping_at"] = now
-                rec["ping_count"] = rec.get("ping_count", 0) + 1
-                dirty = True
+                        started_at = float(rec.get("started_at", now))
+                    except (TypeError, ValueError):
+                        started_at = now
+                    age = now - started_at
+                    expired = age >= max_age_s
+                    due = age >= first_after_s and (now - rec.get("last_ping_at", 0.0)) >= interval_s
+                    if due or expired:
+                        over = rec.get("ping_count", 0) >= max_pings or expired
+                        text = (f"⏱️ {label} läuft weiter im Hintergrund (seit {_mins(rec, now)} min)."
+                                if over else
+                                f"⏱️ {label} — läuft seit {_mins(rec, now)} min…")
+                        env = _envelope(rec, text, "live", rec.get("ping_count", 0))
+                        _atomic_write(outp / f"{env['msg_id']}.json", env)
+                        written += 1
+                        if over:
+                            try:
+                                p.unlink()
+                            except OSError:
+                                pass
+                            continue
+                        rec["last_ping_at"] = now
+                        rec["ping_count"] = rec.get("ping_count", 0) + 1
+                        dirty = True
 
-            if dirty:
-                _atomic_write(p, rec)
+                    if dirty:
+                        _atomic_write(p, rec)
+            except Exception:  # noqa: BLE001 — isolate a single bad record
+                continue
     except Exception:  # noqa: BLE001
         pass
     return written

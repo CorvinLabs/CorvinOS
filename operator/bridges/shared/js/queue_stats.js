@@ -17,16 +17,27 @@ const fs = require('fs');
 const path = require('path');
 const { corvinHome } = require('./bridge_paths');
 
+// A record counts toward `queue_stalled_s` only when it is genuinely STUCK, not
+// merely in-flight: a still-running (pending, not yet finished) task is normal
+// and must not raise a stall. So a record is "stalled" only if it is either
+// FINISHED-but-not-delivered (its work is done, delivery is what's wedged) OR
+// older than this threshold (undelivered for suspiciously long regardless of
+// state). Below this age an ordinary pending task is just working.
+const STALL_THRESHOLD_S = 300; // 5 min
+
 // pending_notifications record is undelivered while state != "delivered".
 // task_progress record is undelivered while state == "queued".
-function _scan(dir, { glob, isPending }) {
+// `isPending` gates the backlog + oldest-age (visibility); `isStalled` gates the
+// separate stall signal (see STALL_THRESHOLD_S).
+function _scan(dir, { glob, isPending, isStalled }) {
   let backlog = 0;
   let oldest = 0; // largest age in seconds among undelivered records
+  let stalled = 0; // largest age among records that count as a stall
   let entries;
   try {
     entries = fs.readdirSync(dir);
   } catch {
-    return { backlog: 0, oldest_s: 0 }; // dir absent → empty queue
+    return { backlog: 0, oldest_s: 0, stalled_s: 0 }; // dir absent → empty queue
   }
   const now = Date.now() / 1000;
   for (const name of entries) {
@@ -53,8 +64,13 @@ function _scan(dir, { glob, isPending }) {
     }
     const age = now - created;
     if (age > oldest) oldest = age;
+    if (isStalled(rec, age) && age > stalled) stalled = age;
   }
-  return { backlog, oldest_s: Math.max(0, Math.round(oldest)) };
+  return {
+    backlog,
+    oldest_s: Math.max(0, Math.round(oldest)),
+    stalled_s: Math.max(0, Math.round(stalled)),
+  };
 }
 
 /**
@@ -70,19 +86,27 @@ function queueStats(home) {
     const notify = _scan(path.join(root, 'pending_notifications'), {
       glob: null,
       isPending: (r) => r.state !== 'delivered',
+      // A completion record is stalled if its work is DONE ('ready') but not
+      // delivered, or if it has sat undelivered past the threshold. A fresh
+      // 'pending' record (worker still running) is NOT a stall.
+      isStalled: (r, age) => r.state === 'ready' || age > STALL_THRESHOLD_S,
     });
     const progress = _scan(path.join(root, 'task_progress'), {
       glob: /^tp_.*\.json$/,
       isPending: (r) => r.state === 'queued',
+      // A 'queued' progress update is content already produced and waiting to be
+      // delivered — so it's a stall only once it has waited past the threshold.
+      isStalled: (r, age) => age > STALL_THRESHOLD_S,
     });
     return {
       notify_backlog: notify.backlog,
       notify_oldest_s: notify.oldest_s,
       progress_backlog: progress.backlog,
       progress_oldest_s: progress.oldest_s,
-      // Single Move-2 signal: the oldest undelivered item anywhere upstream.
-      // > 0 and growing = a stall the outbox poller cannot see.
-      queue_stalled_s: Math.max(notify.oldest_s, progress.oldest_s),
+      // Single Move-2 signal: the oldest STALLED item anywhere upstream (see
+      // STALL_THRESHOLD_S). > 0 and growing = a stall the outbox poller cannot
+      // see. A merely in-flight (young, pending) task does NOT raise this.
+      queue_stalled_s: Math.max(notify.stalled_s, progress.stalled_s),
     };
   } catch {
     return {
