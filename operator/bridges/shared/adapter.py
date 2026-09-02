@@ -11169,10 +11169,14 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             except ImportError:
                 import mid_turn_heartbeat as _mth  # type: ignore[no-redef]
             _mth_sk = f"{channel}:{chat_id or sender}"
-            _mth.clear_session(ROOT, _mth_sk)
             for _lbl in _mth.parse_markers(answer):
                 _mth.mark_active(ROOT, _mth_sk, channel=channel,
                                  chat_id=chat_id, sender=sender, label=_lbl)
+            for _lbl, _st in _mth.parse_steps(answer):
+                _mth.update_status(ROOT, _mth_sk, channel=channel, chat_id=chat_id,
+                                   sender=sender, label=_lbl, status=_st)
+            for _lbl in _mth.parse_done(answer):
+                _mth.clear_task(ROOT, _mth_sk, _lbl)
             answer = _mth.strip_markers(answer)
     except Exception:  # noqa: BLE001 — never break a turn on the way out
         pass

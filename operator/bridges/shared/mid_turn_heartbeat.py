@@ -1,27 +1,28 @@
-"""Mid-turn background-task heartbeat (ADR-0551 C1, variant B — ship-dark).
+"""Mid-turn background-task heartbeat + status (ADR-0551 C1, variant B — ship-dark).
 
-The gap (ADR-0551): when the agent spawns a background sub-agent *mid-turn*, the
-bridge's durable `/task` backbone is never engaged, so no "still working" pings
-reach the user while it runs. Variant B closes ONLY that gap: completion still
-comes from the agent's own reply when the host re-invokes it; this module adds
-the missing *intermediate* heartbeat and nothing else (no completion ping, so no
-double-ping, and no coupling to host task-file internals for completion).
+Closes the "is it still working / what is it doing?" gap for a sub-agent the
+assistant spawns MID-TURN (which never engages the durable `/task` backbone).
+Completion still comes from the agent's own reply (variant B — no double-ping);
+this module adds the missing *intermediate* signal, in TWO shapes the operator
+asked for:
 
-Signal source (deterministic, no host-internal coupling): the agent emits a
-marker ``⟦bgtask:<label>⟧`` in the reply that launches background work. The
-adapter parses it at the outbound reply hook and calls :func:`mark_active`; it
-strips the marker so it never reaches the channel. A marker is cleared when the
-same session produces its NEXT reply (the prior work is done/superseded) and, as
-a backstop, self-expires by age/ping cap so it can never ping forever.
+  * ⏱️ a slim **liveness** line on a slow cadence ("läuft seit N min"), and
+  * 🔧 a **status** line whenever the current step changes ("Phase 2/4: E2E",
+    "Iteration 3/5", "committe…") — a short "what is happening", not just "that".
+
+Signal source (deterministic, no host-internal coupling): the assistant emits
+markers in its replies; the adapter parses+strips them (so they never reach the
+channel):
+
+  * ``⟦bgtask:<label>⟧``            — start tracking a task
+  * ``⟦bgstep:<label>|<status>⟧``   — update its current step → emits a status line
+  * ``⟦bgdone:<label>⟧``            — stop tracking it
+
+A task auto-expires after ``MAX_AGE_S`` as a backstop so nothing can ping forever.
 
 Ship-dark behind ``bridge_mid_turn_task_notify`` (default OFF); the adapter gates
-every call, so with the flag off nothing here is reached.
-
-Delivery reuses the normal outbox envelope (`channel`/`chat_id`/`text`/unique
-`msg_id`/`_task_progress`) — the exact shape ``daemon.js sendDiscord`` +
-``outbox.js`` already deliver proactively (channel-filtered, not reply-bound).
-
-Best-effort throughout: a broken heartbeat must never break a turn or the loop.
+every call. Delivery reuses the normal outbox envelope. Best-effort throughout:
+a broken heartbeat must never break a turn or the loop.
 """
 from __future__ import annotations
 
@@ -31,19 +32,23 @@ import re
 import time
 from pathlib import Path
 
-# Tunables (conservative — a heartbeat is a courtesy, not a firehose).
-FIRST_AFTER_S = 60      # no ping until a task has run this long
-INTERVAL_S = 60         # min gap between pings for one task
-MAX_PINGS = 10          # then emit a final note and stop
-MAX_AGE_S = 1800        # 30 min hard cap; stop pinging past this
+# Liveness cadence (human-friendly — a courtesy, not a firehose).
+FIRST_AFTER_S = 90      # no liveness ping until a task has run this long
+INTERVAL_S = 180        # min gap between liveness pings (3 min)
+MAX_PINGS = 8           # liveness pings, then a final note and stop
+MAX_AGE_S = 3600        # 1h hard cap; expire the marker past this
+STATUS_CAP = 120        # max chars of a status line
 
 _MARKER_RE = re.compile(r"⟦bgtask:([^⟧]{1,80})⟧")
+_STEP_RE = re.compile(r"⟦bgstep:([^|⟧]{1,80})\|([^⟧]{1,120})⟧")
+_DONE_RE = re.compile(r"⟦bgdone:([^⟧]{1,80})⟧")
+_ANY_RE = re.compile(r"⟦bg(?:task|step|done):[^⟧]{1,205}⟧")
 
 
 # ── Marker parsing / stripping (used by the adapter reply hook) ──────────────
 
 def parse_markers(reply_text: str) -> "list[str]":
-    """Return the labels of any ``⟦bgtask:<label>⟧`` markers in a reply."""
+    """Start markers: labels of ``⟦bgtask:<label>⟧``."""
     if not reply_text:
         return []
     out, seen = [], set()
@@ -55,14 +60,33 @@ def parse_markers(reply_text: str) -> "list[str]":
     return out
 
 
+def parse_steps(reply_text: str) -> "list[tuple[str, str]]":
+    """Status updates: ``(label, status)`` from ``⟦bgstep:<label>|<status>⟧``."""
+    if not reply_text:
+        return []
+    out = []
+    for lbl, status in _STEP_RE.findall(reply_text):
+        lbl, status = lbl.strip(), status.strip()[:STATUS_CAP]
+        if lbl and status:
+            out.append((lbl, status))
+    return out
+
+
+def parse_done(reply_text: str) -> "list[str]":
+    """Stop markers: labels of ``⟦bgdone:<label>⟧``."""
+    if not reply_text:
+        return []
+    return [m.strip() for m in _DONE_RE.findall(reply_text) if m.strip()]
+
+
 def strip_markers(reply_text: str) -> str:
-    """Remove all bgtask markers so they never reach the channel."""
+    """Remove all bg markers so they never reach the channel."""
     if not reply_text:
         return reply_text
-    return _MARKER_RE.sub("", reply_text).rstrip()
+    return _ANY_RE.sub("", reply_text).rstrip()
 
 
-# ── Store (one file per (session, label), so N concurrent tasks per session) ─
+# ── Store (one file per (session, label)) ────────────────────────────────────
 
 def _safe(s: str) -> str:
     s2 = re.sub(r"[^A-Za-z0-9_.-]", "_", str(s or "")).strip("_")
@@ -85,39 +109,81 @@ def _atomic_write(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+def _load(path: Path) -> "dict | None":
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def mark_active(state_dir: str | Path, session_key: str, *, channel: str,
-                chat_id: str | None, sender: str | None, label: str) -> "dict | None":
-    """Record that a background task ``label`` is running for this session.
-    Idempotent per (session, label): re-marking refreshes nothing (keeps the
-    original ``started_at``). Never raises."""
+                chat_id: str | None, sender: str | None, label: str,
+                status: str = "") -> "dict | None":
+    """Start tracking a background task. Idempotent per (session, label): keeps
+    the original ``started_at`` on re-mark. Never raises."""
     try:
         label = (label or "").strip()[:80]
         if not label:
             return None
         p = _marker_path(state_dir, session_key, label)
-        if p.is_file():
-            return None  # already tracked; keep original started_at
+        existing = _load(p) if p.is_file() else None
+        if existing:
+            return existing  # keep original started_at
         rec = {
             "session_key": session_key, "channel": channel or "discord",
             "chat_id": chat_id, "sender": sender, "label": label,
-            "started_at": time.time(), "last_ping_at": 0.0, "ping_count": 0,
+            "status": (status or "").strip()[:STATUS_CAP],
+            "last_status_sent": "", "started_at": time.time(),
+            "last_ping_at": 0.0, "ping_count": 0,
         }
         _atomic_write(p, rec)
         return rec
-    except Exception:  # noqa: BLE001 — best-effort
+    except Exception:  # noqa: BLE001
         return None
 
 
+def update_status(state_dir: str | Path, session_key: str, *, channel: str = "discord",
+                  chat_id: str | None = None, sender: str | None = None,
+                  label: str = "", status: str = "") -> "dict | None":
+    """Set a task's current step. Creates the marker if the step arrives before
+    the start marker (so no update is silently lost). Never raises."""
+    try:
+        label = (label or "").strip()[:80]
+        status = (status or "").strip()[:STATUS_CAP]
+        if not label:
+            return None
+        p = _marker_path(state_dir, session_key, label)
+        rec = _load(p) if p.is_file() else None
+        if rec is None:
+            rec = mark_active(state_dir, session_key, channel=channel, chat_id=chat_id,
+                              sender=sender, label=label, status=status)
+            return rec
+        rec["status"] = status
+        _atomic_write(p, rec)
+        return rec
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def clear_task(state_dir: str | Path, session_key: str, label: str) -> bool:
+    try:
+        p = _marker_path(state_dir, session_key, label)
+        if p.is_file():
+            p.unlink()
+            return True
+    except OSError:
+        pass
+    return False
+
+
 def clear_session(state_dir: str | Path, session_key: str) -> int:
-    """Remove every active marker for a session (its next reply arrived → the
-    prior background work is done/superseded). Returns count removed. Never raises."""
+    """Remove every marker for a session. Never raises."""
     n = 0
     try:
-        pref = f"{_safe(session_key)}__"
         d = _dir(state_dir)
         if not d.is_dir():
             return 0
-        for p in d.glob(f"{pref}*.json"):
+        for p in d.glob(f"{_safe(session_key)}__*.json"):
             try:
                 p.unlink(); n += 1
             except OSError:
@@ -134,16 +200,16 @@ def active_count(state_dir: str | Path) -> int:
 
 # ── Delivery (called from the adapter main loop) ────────────────────────────
 
-def _envelope(rec: dict, text: str) -> dict:
+def _envelope(rec: dict, text: str, kind: str, seq) -> dict:
     uid = hashlib.sha1(
-        f"{rec.get('session_key')}{rec.get('label')}{rec.get('ping_count')}"
-        .encode("utf-8")).hexdigest()[:12]
+        f"{rec.get('session_key')}{rec.get('label')}{kind}{seq}".encode("utf-8")
+    ).hexdigest()[:12]
     env = {
         "msg_id": f"mth_{uid}",
         "channel": rec.get("channel") or "discord",
         "chat_id": rec.get("chat_id"),
         "text": text,
-        "_task_progress": True,   # normal proactive envelope; NOT a sticky _progress
+        "_task_progress": True,   # normal proactive envelope; NOT sticky _progress
         "ts": time.time(),
     }
     if rec.get("sender") and not rec.get("chat_id"):
@@ -151,21 +217,17 @@ def _envelope(rec: dict, text: str) -> dict:
     return env
 
 
-def _fmt(rec: dict, *, final: bool) -> str:
-    mins = max(1, int((time.time() - rec.get("started_at", time.time())) // 60))
-    label = rec.get("label", "Hintergrund-Task")
-    if final:
-        return f"⏳ „{label}“ läuft weiter im Hintergrund (seit {mins} min) — Ergebnis kommt, sobald es fertig ist."
-    return f"⏳ Noch dran an „{label}“ — läuft seit {mins} min…"
+def _mins(rec: dict, now: float) -> int:
+    return max(1, int((now - rec.get("started_at", now)) // 60))
 
 
 def deliver_due(state_dir: str | Path, outbox_dir: str | Path, *,
                 first_after_s: float = FIRST_AFTER_S, interval_s: float = INTERVAL_S,
                 max_pings: int = MAX_PINGS, max_age_s: float = MAX_AGE_S,
                 now: float | None = None) -> int:
-    """Write a heartbeat envelope for every active task that is due. Bounded by
-    ``max_pings``/``max_age_s`` (then a final note + marker removed). Returns the
-    number of envelopes written. Never raises."""
+    """Write due envelopes for every active task: a status line the moment the
+    step changes, and a slim liveness line on the slow cadence. Bounded by
+    ``max_pings``/``max_age_s``. Returns envelopes written. Never raises."""
     written = 0
     now = time.time() if now is None else now
     try:
@@ -175,27 +237,46 @@ def deliver_due(state_dir: str | Path, outbox_dir: str | Path, *,
         outp = Path(outbox_dir)
         outp.mkdir(parents=True, exist_ok=True)
         for p in sorted(d.glob("*.json")):
-            try:
-                rec = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001 — skip a corrupt marker
+            rec = _load(p)
+            if rec is None:
                 continue
+            label = rec.get("label", "Task")
+            dirty = False
+
+            # 🔧 status line — immediate, whenever the step changed.
+            status = (rec.get("status") or "").strip()
+            if status and status != rec.get("last_status_sent", ""):
+                env = _envelope(rec, f"🔧 {label}: {status}", "status",
+                                rec.get("_status_seq", 0))
+                _atomic_write(outp / f"{env['msg_id']}.json", env)
+                written += 1
+                rec["last_status_sent"] = status
+                rec["_status_seq"] = rec.get("_status_seq", 0) + 1
+                dirty = True
+
+            # ⏱️ liveness line — slim, slow cadence, bounded.
             age = now - rec.get("started_at", now)
-            if age < first_after_s:
-                continue
-            if now - rec.get("last_ping_at", 0.0) < interval_s:
-                continue
-            over = rec.get("ping_count", 0) >= max_pings or age >= max_age_s
-            env = _envelope(rec, _fmt(rec, final=over))
-            _atomic_write(outp / f"{env['msg_id']}.json", env)
-            written += 1
-            if over:
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-            else:
+            expired = age >= max_age_s
+            due = age >= first_after_s and (now - rec.get("last_ping_at", 0.0)) >= interval_s
+            if due or expired:
+                over = rec.get("ping_count", 0) >= max_pings or expired
+                text = (f"⏱️ {label} läuft weiter im Hintergrund (seit {_mins(rec, now)} min)."
+                        if over else
+                        f"⏱️ {label} — läuft seit {_mins(rec, now)} min…")
+                env = _envelope(rec, text, "live", rec.get("ping_count", 0))
+                _atomic_write(outp / f"{env['msg_id']}.json", env)
+                written += 1
+                if over:
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+                    continue
                 rec["last_ping_at"] = now
                 rec["ping_count"] = rec.get("ping_count", 0) + 1
+                dirty = True
+
+            if dirty:
                 _atomic_write(p, rec)
     except Exception:  # noqa: BLE001
         pass
