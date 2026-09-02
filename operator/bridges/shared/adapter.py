@@ -11156,6 +11156,27 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
 
+    # ADR-0551 C1-B — mid-turn background heartbeat (ship-dark, default OFF).
+    # A fresh reply for this conversation means any prior mid-turn task is done
+    # or superseded → clear its markers; then register any ⟦bgtask:<label>⟧ this
+    # reply announces and STRIP the marker so it never reaches the channel. The
+    # main loop emits the bounded "still working" ping; completion stays with
+    # this reply path (variant B — no bridge completion ping, no double-ping).
+    try:
+        if answer and _bg_flag("bridge_mid_turn_task_notify"):
+            try:
+                from . import mid_turn_heartbeat as _mth  # type: ignore
+            except ImportError:
+                import mid_turn_heartbeat as _mth  # type: ignore[no-redef]
+            _mth_sk = f"{channel}:{chat_id or sender}"
+            _mth.clear_session(ROOT, _mth_sk)
+            for _lbl in _mth.parse_markers(answer):
+                _mth.mark_active(ROOT, _mth_sk, channel=channel,
+                                 chat_id=chat_id, sender=sender, label=_lbl)
+            answer = _mth.strip_markers(answer)
+    except Exception:  # noqa: BLE001 — never break a turn on the way out
+        pass
+
     # Per-channel chunk limits. Discord caps at 2000 chars/message, so
     # we stay well below it here — the daemon would otherwise re-split
     # mid-stream and turn one reply into two Discord messages.
@@ -12322,6 +12343,16 @@ def main() -> int:
                             log(f"task_progress: delivered {prog} update(s)")
                     except Exception as e:
                         log(f"task_progress tick failed: {e}")
+                    try:  # ADR-0551 C1-B — mid-turn background heartbeat
+                        try:
+                            from . import mid_turn_heartbeat as _mth2  # type: ignore
+                        except ImportError:
+                            import mid_turn_heartbeat as _mth2  # type: ignore[no-redef]
+                        hb = _mth2.deliver_due(ROOT, OUTBOX)
+                        if hb:
+                            log(f"mid_turn_heartbeat: delivered {hb} heartbeat(s)")
+                    except Exception as e:
+                        log(f"mid_turn_heartbeat tick failed: {e}")
                     last_cn_poll = time.monotonic()
                 if time.monotonic() - last_cleanup > CLEANUP_INTERVAL:
                     _cleanup_in_flight()
