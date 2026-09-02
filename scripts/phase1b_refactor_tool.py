@@ -4,8 +4,21 @@
 Auto-refactors feature_flags API calls to Skills API.
 Patterns: is_enabled, set_enabled, worker_engine_mode
 
+IMPLEMENTATION NOTE (Layer 2 Design):
+  This tool uses regex-based pattern matching (not AST).
+  Trade-off: Fast & simple, but fragile with edge cases (import ordering, kwargs).
+
+  For production use, consider AST-based rewriting:
+    - ast.parse() to build full syntax tree
+    - Safer import placement (respects __future__ rules)
+    - Better kwarg parsing (ast.Call.keywords)
+    - Full verification via ast.unparse()
+
+  For now, this tool is suitable for Wave 1-2 (21-25 calls with simple patterns).
+  Waves 3+ may need more sophisticated approach.
+
 Usage: python3 scripts/phase1b_refactor_tool.py --file <path> --apply
-       python3 scripts/phase1b_refactor_tool.py --wave1 (refactor all Wave 1 files)
+       python3 scripts/phase1b_refactor_tool.py --wave1 [--apply]
 """
 
 import re
@@ -29,15 +42,18 @@ def refactor_is_enabled(content):
     def replace_fn(match):
         args = match.group(2)
         if ',' in args:
-            flag, tenant = args.split(',', 1)
-            flag = flag.strip()
-            tenant = tenant.strip()
+            parts = args.split(',', 1)
+            flag = parts[0].strip()
+            tenant = parts[1].strip()
+            if '=' in tenant:
+                tenant = f'"{tenant.split("=")[1].strip()}"'
         else:
             flag = args.strip()
             tenant = '"_default"'
         return f'feature_flags_skill.execute({{"operation": "is_enabled", "flag_id": {flag}, "tenant_id": {tenant}}})["result"]["enabled"]'
 
-    pattern = r'(_?(?:ff|cel_ff|pb_ff|_ff_badge))\.is_enabled\(([^)]+)\)'
+    # Match both variable-style (_ff.is_enabled) and module-style (_feature_flags_module.is_enabled)
+    pattern = r'(?:_?(?:ff|cel_ff|pb_ff|_ff_badge)|_feature_flags_module)\.is_enabled\(([^)]+)\)'
     return re.sub(pattern, replace_fn, content)
 
 def refactor_set_enabled(content):
@@ -48,14 +64,19 @@ def refactor_set_enabled(content):
 
         if len(parts) == 2:
             flag, enabled = parts
+            if '=' in enabled:
+                enabled = f'"{enabled.split("=")[1].strip()}"'
             return f'feature_flags_skill.execute({{"operation": "set_enabled", "flag_id": {flag}, "enabled": {enabled}, "tenant_id": "_default"}})'
         elif len(parts) >= 3:
             flag, enabled = parts[0], parts[1]
             tenant = ','.join(parts[2:])
+            if '=' in tenant:
+                tenant = f'"{tenant.split("=")[1].strip()}"'
             return f'feature_flags_skill.execute({{"operation": "set_enabled", "flag_id": {flag}, "enabled": {enabled}, "tenant_id": {tenant}}})'
         return match.group(0)
 
-    pattern = r'(_?ff)\.set_enabled\(([^)]+)\)'
+    # Match both variable-style (_ff.set_enabled) and module-style (_feature_flags_module.set_enabled)
+    pattern = r'(?:_?ff|_feature_flags_module)\.set_enabled\(([^)]+)\)'
     return re.sub(pattern, replace_fn, content)
 
 def refactor_worker_engine_mode(content):
@@ -63,11 +84,15 @@ def refactor_worker_engine_mode(content):
     def replace_fn(match):
         args = match.group(2)
         if args.strip():
-            return f'feature_flags_skill.execute({{"operation": "worker_engine_mode", "tenant_id": {args}}})["result"]["mode"]'
+            tenant = args.strip()
+            if '=' in tenant:
+                tenant = f'"{tenant.split("=")[1].strip()}"'
+            return f'feature_flags_skill.execute({{"operation": "worker_engine_mode", "tenant_id": {tenant}}})["result"]["mode"]'
         else:
             return f'feature_flags_skill.execute({{"operation": "worker_engine_mode", "tenant_id": "_default"}})["result"]["mode"]'
 
-    pattern = r'(_?ff)\.worker_engine_mode\(([^)]*)\)'
+    # Match both variable-style (_ff.worker_engine_mode) and module-style (_feature_flags_module.worker_engine_mode)
+    pattern = r'(?:_?ff|_feature_flags_module)\.worker_engine_mode\(([^)]*)\)'
     return re.sub(pattern, replace_fn, content)
 
 def add_skill_import(content):
@@ -97,12 +122,16 @@ def add_skill_import(content):
     return '\n'.join(lines)
 
 def refactor_file(file_path, apply=False):
-    """Refactor a single file."""
+    """Refactor a single file. Returns status dict + error (if any)."""
     path = Path(file_path)
     if not path.exists():
-        return {"file": file_path, "status": "NOT_FOUND", "changes": 0}
+        return {"file": file_path, "status": "NOT_FOUND", "changes": 0}, None
 
-    original = path.read_text(encoding='utf-8')
+    try:
+        original = path.read_text(encoding='utf-8')
+    except Exception as e:
+        return {"file": file_path, "status": "READ_ERROR", "changes": 0}, str(e)
+
     content = original
 
     # Count before
@@ -124,12 +153,18 @@ def refactor_file(file_path, apply=False):
     changes = (before_is_enabled - after_is_enabled) + (before_set_enabled - after_set_enabled) + (before_engine - after_engine)
 
     if apply and content != original:
-        path.write_text(content, encoding='utf-8')
-        return {"file": file_path, "status": "REFACTORED", "changes": changes}
+        try:
+            # Atomic write: write to temp, then rename
+            tmp = path.with_suffix('.tmp')
+            tmp.write_text(content, encoding='utf-8')
+            tmp.replace(path)
+            return {"file": file_path, "status": "REFACTORED", "changes": changes}, None
+        except Exception as e:
+            return {"file": file_path, "status": "WRITE_ERROR", "changes": 0}, str(e)
     elif content != original:
-        return {"file": file_path, "status": "READY", "changes": changes}
+        return {"file": file_path, "status": "READY", "changes": changes}, None
     else:
-        return {"file": file_path, "status": "NO_CHANGES", "changes": 0}
+        return {"file": file_path, "status": "NO_CHANGES", "changes": 0}, None
 
 if __name__ == '__main__':
     if '--wave1' in sys.argv:
