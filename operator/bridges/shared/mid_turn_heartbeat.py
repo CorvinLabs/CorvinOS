@@ -209,9 +209,16 @@ def _envelope(rec: dict, text: str, kind: str, seq) -> dict:
         "channel": rec.get("channel") or "discord",
         "chat_id": rec.get("chat_id"),
         "text": text,
-        "_task_progress": True,   # normal proactive envelope; NOT sticky _progress
         "ts": time.time(),
     }
+    # Liveness ("läuft seit N min") is a SINGLE sticky the daemon edits in place —
+    # so the time is shown once and updated, never flooded as a new message per
+    # interval. A status CHANGE is a distinct new message (a real event worth a
+    # ping), via the non-sticky _task_progress envelope.
+    if kind == "live":
+        env["_progress"] = True
+    else:
+        env["_task_progress"] = True
     if rec.get("sender") and not rec.get("chat_id"):
         env["to"] = rec.get("sender")
     return env

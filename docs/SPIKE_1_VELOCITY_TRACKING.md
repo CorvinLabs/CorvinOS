@@ -174,3 +174,18 @@ TIME     TASK#  DESCRIPTION               ACTUAL(h)  CUMULATIVE  STATUS
 **Current Status:** Awaiting ADR-0544 amendments and Phase 2 start signal.  
 **Last Updated:** Sept 2, 2026 | 16:30 UTC  
 **Next Update:** Sept 3, 06:00 UTC (blocker resolution report)
+
+## BLOCKER ANSWERS RECEIVED
+**Time:** 2026-09-02 17:33 UTC
+**Source:** Default Risk-Optimal Answers
+
+### Architecture Choice (Blocker #2)
+**Answer:** wrapper_phased
+**Rationale:** Minimizes Spike 1 escalation risk, keeps Phase 1b on schedule
+
+### All Answers Locked
+- Flag-to-Skill Mapping: Composite (6 Skills)
+- Architecture Choice: Wrapper+Phased
+- Worker Engine Mode: Legacy Config (separate)
+- Tier Management: Keep in Skills
+

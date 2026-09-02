@@ -112,6 +112,21 @@ def test_max_age_expires_and_removes(tmp_path):
     assert mth.active_count(state) == 0
 
 
+def test_liveness_is_sticky_progress_status_is_new_message(tmp_path):
+    """Liveness must be an in-place sticky (_progress → daemon edits ONE message,
+    no time flood); a status change must be a distinct new message (_task_progress)."""
+    state, outbox = tmp_path / "s", tmp_path / "o"
+    t0 = time.time()
+    mth.mark_active(state, "sess", channel="discord", chat_id="c", sender=None, label="F")
+    mth.update_status(state, "sess", label="F", status="Phase 1")
+    mth.deliver_due(state, outbox, first_after_s=90, interval_s=180, now=t0 + 100)
+    envs = _envs(outbox)
+    live = [e for e in envs if "läuft seit" in e["text"]]
+    status = [e for e in envs if "🔧" in e["text"]]
+    assert live and live[0].get("_progress") is True and "_task_progress" not in live[0]
+    assert status and status[0].get("_task_progress") is True and "_progress" not in status[0]
+
+
 # ── E2E wiring reachability: real adapter surfaces call the hooks ────────────
 
 def test_adapter_wires_heartbeat_on_live_paths():

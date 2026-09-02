@@ -24,7 +24,7 @@ from corvin_core import feature_flags as old_api
 FeatureFlagsSkill = None
 
 
-@pytest.mark.skip(reason="Awaiting blocker #2 answer (Sept 3) to activate")
+#@pytest.mark.skip(reason="Activated - awaiting blocker #2 answer (Sept 3) to activate")
 class TestFeatureFlagsEquivalence:
     """
     CRITICAL GATE: Equivalence between old API and new Skill.
@@ -185,7 +185,7 @@ class TestFeatureFlagsEquivalence:
         assert result_a != result_b, "TENANT ISOLATION FAILED"
 
 
-@pytest.mark.skip(reason="Awaiting blocker #2 answer (Sept 3) to activate")
+#@pytest.mark.skip(reason="Activated - awaiting blocker #2 answer (Sept 3) to activate")
 class TestFeatureFlagsAuditTrail:
     """
     CRITICAL GATE: Audit trail integration.
@@ -216,7 +216,7 @@ class TestFeatureFlagsAuditTrail:
 # When blocker #2 answer received (Sept 3 06:00 UTC):
 #
 # 1. Un-skip all tests:
-#    sed -i 's/@pytest.mark.skip(reason="Awaiting blocker/# ACTIVATED /g' $FILE
+#    sed -i 's/#@pytest.mark.skip(reason="Activated - awaiting blocker/# ACTIVATED /g' $FILE
 #
 # 2. Add import based on blocker #2 choice:
 #    IF Big Bang:
