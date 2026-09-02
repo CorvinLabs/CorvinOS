@@ -11,15 +11,25 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from corvin_core import feature_flags as _ff
 from forge import paths as _forge_paths
 
 logger = logging.getLogger(__name__)
+
+# Audit integration (Phase 2, ADR-0232/0233)
+try:
+    from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
+    _AUDIT_AVAILABLE = True
+except ImportError:
+    _AUDIT_AVAILABLE = False
+    AuditChainWriter = None
+    AuditEvent = None
 
 
 # ─── STORAGE LAYER (Tenant-isolated overlay JSON) ──────────────────────────────
@@ -87,16 +97,39 @@ class FeatureFlagsStorage:
             self.write_overlay(tenant_id, data)
 
 
-# ─── AUDIT TRAIL INTEGRATION ──────────────────────────────────────────────────
+# ─── AUDIT TRAIL INTEGRATION (Phase 2) ───────────────────────────────────────
 
 class FeatureFlagsAudit:
     """
-    Audit trail for feature flags operations.
+    Audit trail for feature flags operations (Phase 2).
 
     Every is_enabled/set_enabled call emits SKILL_EXECUTED event.
     Events are hash-chained (GDPR Art. 30, 32).
     Tenant-scoped (no cross-tenant leakage).
     """
+
+    _writer: AuditChainWriter | None = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def _get_writer(cls) -> AuditChainWriter | None:
+        """Get or initialize audit chain writer (lazy singleton)."""
+        if not _AUDIT_AVAILABLE:
+            return None
+
+        if cls._writer is None:
+            with cls._lock:
+                if cls._writer is None:
+                    # Initialize writer with ~/.corvin/audit.jsonl path
+                    home = Path.home()
+                    audit_path = home / ".corvin" / "audit.jsonl"
+                    try:
+                        cls._writer = AuditChainWriter(audit_path)
+                    except Exception as e:
+                        logger.warning(f"Could not initialize AuditChainWriter: {e}")
+                        return None
+
+        return cls._writer
 
     @staticmethod
     def emit_event(
@@ -108,13 +141,13 @@ class FeatureFlagsAudit:
         latency_ms: float,
     ) -> None:
         """
-        Emit SKILL_EXECUTED event for audit trail.
+        Emit SKILL_EXECUTED event for audit trail (hash-chained).
 
-        Format:
+        Event structure (ADR-0232/0233):
           {
             "event_type": "skill_executed",
             "skill_id": "os.feature_flags_*",
-            "operation": "is_enabled" | "set_enabled" | ...,
+            "operation": operation,
             "flag_id": flag_id,
             "tenant_id": tenant_id,
             "input": input_data (no PII),
@@ -124,19 +157,41 @@ class FeatureFlagsAudit:
             "lom": "Line of Moral Responsibility"
           }
 
-        Note: Hash-chaining via audit_backend (not implemented in Spike 1).
-        Placeholder for Phase 2 integration.
+        Guarantees:
+        - Hash-chained for tamper detection (GDPR Art. 30, 32)
+        - Tenant-scoped (no cross-tenant leakage)
+        - Immutable (append-only)
+        - Fail-safe (exceptions don't crash operation)
         """
+        writer = FeatureFlagsAudit._get_writer()
+        if not writer:
+            logger.debug(f"Audit disabled; skipping event for {operation}({flag_id})")
+            return
+
         try:
-            # TODO: Call audit_backend.write_event() when available
-            # For Spike 1, just log for now
-            logger.debug(
-                f"AUDIT: skill_id=os.feature_flags, operation={operation}, "
-                f"flag_id={flag_id}, tenant_id={tenant_id}, latency_ms={latency_ms}"
+            event = AuditEvent(
+                event_id=str(uuid4()),
+                event_type="skill_executed",
+                tenant_id=tenant_id,
+                user_id=None,  # Feature flags are system-level, not user-specific
+                timestamp=datetime.utcnow().isoformat() + "Z",
+                details={
+                    "skill_id": "os.feature_flags_system",
+                    "operation": operation,
+                    "flag_id": flag_id,
+                    "input": input_data,
+                    "output": output_data,
+                    "latency_ms": latency_ms,
+                    "lom": "core.skills.feature_flags_skill:FeatureFlagsSkill.execute",
+                },
+                severity="info",
             )
+            writer.write_event(event)
+            logger.debug(f"Audit event emitted: {event.event_type}[{operation}]")
+
         except Exception as e:
-            # Audit failure should not crash the operation
-            logger.error(f"Audit trail error: {e}")
+            # Audit failure should not crash the operation (fail-safe)
+            logger.error(f"Audit event emission failed: {e}")
 
 
 # ─── FEATURE FLAGS SKILL IMPLEMENTATION ───────────────────────────────────────
