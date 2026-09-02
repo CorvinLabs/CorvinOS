@@ -24,6 +24,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+# corvin_core (feature_flags) + forge live outside shared/ — the bridge process
+# runs with these on PYTHONPATH. Mirror that so the flag-ON delivery-path tests
+# below can resolve the REAL proactive_communication flag + write the REAL audit
+# chain the migrated deliver_ready path routes through.
+_REPO = HERE.parents[2]
+for _p in (_REPO / "core" / "console", _REPO / "operator" / "forge"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 
 def _fresh(home: Path):
@@ -517,6 +525,151 @@ def test_sequential_multi_task_voice_delivery_preserves_order_and_distinct_paths
 
         print("PASS: 3 sequential want_voice tasks each deliver their own distinct, "
               "correctly-matched voice note -- no drops, no cross-contamination")
+
+
+# ── ADR-0554 Phase 2 (MB1): the FLAG-ON delivery path of deliver_ready ────────
+#
+# The flag-OFF (ship-dark default) path is covered above and in test_proactive.py;
+# the flag-ON DENY→direct-fallback is covered by test_proactive.py's
+# test_mb1_flag_on_house_deny_falls_back_direct. These close the remaining gap:
+# the path that actually runs in production when proactive_communication is ON.
+# They drive the REAL deliver_ready → _proactive_flag_on → _emit_via_proactive →
+# proactive.emit_proactive(solicited=True) chain, mocking ONLY the house_rules
+# boundary (and, for the rate case, the rate ceiling). The flag is flipped ON via
+# a REAL console overlay for the record's tenant, exactly as an operator would.
+
+_FLAG_ID = "proactive_communication"
+_SNOWFLAKE = "1501540900529246251"  # real 19-digit Discord channel id (> 2^53)
+
+
+def _flag_on_overlay(tenant: str) -> None:
+    from corvin_core import feature_flags as ff  # type: ignore
+
+    ff._write_overlay(tenant, {"flags": {_FLAG_ID: True}})
+    assert ff.is_enabled(_FLAG_ID, tenant) is True
+
+
+def test_flag_on_all_gates_pass_delivers_via_gate_exactly_once(monkeypatch) -> None:
+    """MB1 gap #1: flag ON + all gates pass (solicited) → deliver_ready routes the
+    completion THROUGH the proactive gate, writing exactly ONE envelope, marking
+    the record delivered, and staying exactly-once on a second poll."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        import proactive as P  # type: ignore
+
+        _flag_on_overlay("acme")
+        # Mock ONLY the house-rules boundary (fail-closed gate) → PASS.
+        monkeypatch.setattr(P, "_house_rules_allows",
+                            lambda text, *, channel, chat_key: True)
+        # Spy on the real primitive to PROVE the gate path (not the direct write)
+        # was taken, and with the record's tenant.
+        seen: list = []
+        real_emit = P.emit_proactive
+
+        def spy(**kw):
+            seen.append(kw.get("tenant_id"))
+            return real_emit(**kw)
+
+        monkeypatch.setattr(P, "emit_proactive", spy)
+
+        tid = cn.register(channel="discord", chat_id=_SNOWFLAKE, sender="u1",
+                          tenant_id="acme", label="nightly job")
+        assert cn.mark_done(tid, text="the answer the user waited for", ok=True)
+
+        assert cn.deliver_ready(outbox) == 1
+        assert seen == ["acme"], f"completion must route via the gate for its tenant: {seen}"
+        files = list(outbox.glob("cn_*.json"))
+        assert len(files) == 1
+        env = json.loads(files[0].read_text())
+        assert env["_completion_notify"] is True          # completion shape preserved
+        assert env["chat_id"] == _SNOWFLAKE               # string, precision intact
+        assert "the answer the user waited for" in env["text"]
+        assert cn._read(cn._record_path(tid))["state"] == "delivered"
+        # exactly-once: a second poll adds nothing.
+        assert cn.deliver_ready(outbox) == 0
+        assert len(list(outbox.glob("cn_*.json"))) == 1
+        print("PASS: flag ON + gates pass → one envelope via gate, delivered, exactly-once")
+
+
+def test_flag_on_rate_limited_leaves_record_ready_and_retries(monkeypatch) -> None:
+    """MB1 gap #3: flag ON + emit_proactive RATE_LIMITED → NO envelope, record
+    stays READY (retry possible), no double-send. When the transient clears the
+    next poll delivers exactly once. RATE_LIMITED is driven via the REAL rate
+    ceiling (MAX_PER_WINDOW=0), mocking only the house-rules boundary."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        import proactive as P  # type: ignore
+
+        _flag_on_overlay("acme")
+        monkeypatch.setattr(P, "_house_rules_allows",
+                            lambda text, *, channel, chat_key: True)
+        monkeypatch.setattr(P, "MAX_PER_WINDOW", 0)  # every emit floods → RATE_LIMITED
+
+        tid = cn.register(channel="discord", chat_id=_SNOWFLAKE, sender="u1",
+                          tenant_id="acme", label="rate job")
+        assert cn.mark_done(tid, text="hold me until the window clears", ok=True)
+
+        assert cn.deliver_ready(outbox) == 0              # nothing delivered
+        assert list(outbox.glob("cn_*.json")) == []       # ZERO outbox writes
+        assert cn._read(cn._record_path(tid))["state"] == "ready"  # left READY
+        # A second poll is still rate-limited — still READY, still no double.
+        assert cn.deliver_ready(outbox) == 0
+        assert cn._read(cn._record_path(tid))["state"] == "ready"
+        assert list(outbox.glob("cn_*.json")) == []
+
+        # Transient clears → the retry delivers exactly once.
+        monkeypatch.setattr(P, "MAX_PER_WINDOW", 5)
+        assert cn.deliver_ready(outbox) == 1
+        assert len(list(outbox.glob("cn_*.json"))) == 1
+        assert cn._read(cn._record_path(tid))["state"] == "delivered"
+        print("PASS: flag ON + RATE_LIMITED leaves READY, no double, retry delivers once")
+
+
+def test_flag_on_resolved_for_record_tenant_not_env(monkeypatch) -> None:
+    """MB1 gap #4: the flag is resolved for the RECORD's tenant, never an ambient
+    CORVIN_TENANT_ID. Flag ON for 'acme', OFF for '_default'; env tenant is
+    '_default'. The acme record (flag ON) routes THROUGH the gate; the _default
+    record (flag OFF) takes the DIRECT path — even though the env tenant matches
+    the OFF tenant in both calls."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        import proactive as P  # type: ignore
+        from corvin_core import feature_flags as ff  # type: ignore
+
+        ff._write_overlay("acme", {"flags": {_FLAG_ID: True}})
+        assert ff.is_enabled(_FLAG_ID, "acme") is True
+        assert ff.is_enabled(_FLAG_ID, "_default") is False
+        monkeypatch.setenv("CORVIN_TENANT_ID", "_default")  # ambient env is the OFF tenant
+        monkeypatch.setattr(P, "_house_rules_allows",
+                            lambda text, *, channel, chat_key: True)
+        seen: list = []
+        real_emit = P.emit_proactive
+
+        def spy(**kw):
+            seen.append(kw.get("tenant_id"))
+            return real_emit(**kw)
+
+        monkeypatch.setattr(P, "emit_proactive", spy)
+
+        tid_a = cn.register(channel="discord", chat_id=_SNOWFLAKE, sender="u1",
+                            tenant_id="acme", label="A")
+        assert cn.mark_done(tid_a, text="acme answer", ok=True)
+        tid_d = cn.register(channel="discord", chat_id="222", sender="u2",
+                            tenant_id="_default", label="D")
+        assert cn.mark_done(tid_d, text="default answer", ok=True)
+
+        assert cn.deliver_ready(outbox) == 2               # both completions delivered
+        assert seen == ["acme"], (
+            f"only the acme (flag-ON) record may route via the gate; the flag "
+            f"must resolve to the record tenant, not env _default: {seen}")
+        envs = [json.loads(p.read_text()) for p in outbox.glob("cn_*.json")]
+        bodies = " ".join(e.get("text", "") for e in envs)
+        assert len(envs) == 2
+        assert "acme answer" in bodies and "default answer" in bodies
+        print("PASS: flag resolved for the record tenant, not CORVIN_TENANT_ID")
 
 
 def main() -> int:

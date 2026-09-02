@@ -238,6 +238,13 @@ def register(
         "state": _STATE_PENDING,
         "text": None,
         "voice_text": None,
+        # ADR-0554 Phase 0 (approach (a)): a pre-synthesized voice-note path,
+        # stamped by attach_voice() when a producer (bg_task_worker) synthesizes
+        # a spoken summary at completion time. When set, deliver_ready attaches
+        # it to the envelope regardless of which poller delivers (no callback
+        # needed) — poller-independent. None => text-only unless a want_voice
+        # synthesize_voice callback is injected (the pre-existing ADR-0189 path).
+        "voice_path": None,
         "ok": None,
         "created_at": time.time(),
         "ready_at": None,
@@ -263,6 +270,38 @@ def claim(task_id: str) -> bool:
     rec["producer_boot"] = _host_boot_id()
     _atomic_write(path, rec)
     return True
+
+
+def attach_voice(task_id: str, voice_path: str) -> bool:
+    """Stamp a pre-synthesized voice-note path onto a registered record.
+
+    ADR-0554 Phase 0 (approach (a)): the detached ``bg_task_worker`` condenses
+    its result into a spoken summary and synthesizes an OGG-Opus note at
+    COMPLETION time, then calls this BEFORE :func:`mark_done`. Because the path
+    is written while the record is still ``pending`` (never delivered until
+    mark_done flips it to ``ready``), the ready record already carries
+    ``voice_path`` and :func:`deliver_ready` attaches it to the outbox envelope
+    regardless of WHICH poller (adapter loop or bg_monitor timer) delivers — no
+    ``synthesize_voice`` callback needed, no delivery race.
+
+    ``mark_done`` preserves this field (it re-reads the whole record and only
+    rewrites text/state/ok), so the ordering attach_voice → mark_done is safe.
+
+    No-op if the record is gone or already delivered. Best-effort: never raises
+    — a voice note is an enhancement, never a delivery precondition.
+    """
+    if not task_id or not voice_path:
+        return False
+    try:
+        path = _record_path(task_id)
+        rec = _read(path)
+        if rec is None or rec.get("state") == _STATE_DELIVERED:
+            return False
+        rec["voice_path"] = str(voice_path)
+        _atomic_write(path, rec)
+        return True
+    except Exception:  # noqa: BLE001 — voice is an enhancement, never a blocker
+        return False
 
 
 def count_active(sender: str | None = None) -> int:
@@ -395,6 +434,100 @@ def _envelope_for(rec: dict, *, voice_path: str | None = None) -> dict:
     env["_final"] = True
     env["provenance"] = build_provenance(channel, chat_id or to or "")
     return env
+
+
+def _proactive_flag_on(tenant_id: str) -> bool:
+    """Resolve the ship-dark ``proactive_communication`` flag for ``tenant_id``.
+
+    OFF (default / unresolved) → the migrated delivery path uses the
+    pre-migration DIRECT outbox write (byte-identical, ship-dark: a default
+    install is never routed through the proactive choke point). ON → the
+    completion routes through the governed gate. Never raises."""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import proactive as _p  # type: ignore
+        return bool(_p._flag_on(tenant_id or "_default"))
+    except Exception:  # noqa: BLE001 — primitive/console absent → OFF (direct write)
+        return False
+
+
+def _write_outbox_direct(env: dict, voice_path: str | None,
+                         outbox: "str | Path", out_file_name: str) -> bool:
+    """Byte-identical pre-migration DIRECT outbox write (atomic tmp-replace, 0600).
+
+    Used for the ship-dark default (flag OFF) AND as the DENIED/unavailable
+    fallback under flag ON — a SOLICITED completion the user is waiting for must
+    never be silently lost to a house-rules false-positive or a broken gate.
+    Never raises."""
+    try:
+        e = dict(env)
+        if voice_path and not e.get("voice_path"):
+            e["voice_path"] = str(voice_path)
+        out_file = Path(outbox) / out_file_name
+        tmp = out_file.with_suffix(out_file.suffix + ".tmp")
+        tmp.write_text(json.dumps(e, ensure_ascii=False), encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)  # envelope carries routing PII
+        except OSError:
+            pass
+        tmp.replace(out_file)
+        return True
+    except Exception as ex:  # noqa: BLE001 — never raise
+        print(f"completion_notify: direct outbox write failed {out_file_name}: {ex}",
+              file=sys.stderr)
+        return False
+
+
+def _emit_via_proactive(env: dict, rec: dict, *, voice_path: str | None,
+                        outbox: "str | Path", out_file_name: str) -> str:
+    """Route ONE ready completion envelope through the proactive gate (ADR-0554
+    Phase 2 / ADR-0553 amendment). Only reached when the ``proactive_communication``
+    flag is ON for the record's tenant.
+
+    ``solicited=True``: a completion answers an explicit ``/task`` command, so
+    the flag / consent / disclosure gates are SKIPPED — House-rules + rate/flood
+    + the content-free ``proactive.emitted`` audit STILL apply. The pre-built
+    ``env`` is written verbatim (so the ``_completion_notify`` / ``_final`` /
+    provenance shape + ``cn_`` filename are byte-identical) and ``voice_path`` is
+    attached by the primitive as the single delivery site.
+
+    Returns a status string: ``"emitted"`` (envelope written), ``"rate_limited"``
+    (transient — leave READY, retry next poll), or ``"denied"`` (house-rules
+    fail-closed / false-positive / primitive unavailable — the caller MUST fall
+    back to a direct write so the solicited completion is never lost). Never
+    raises.
+    """
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import proactive as _p  # type: ignore
+    except Exception as e:  # noqa: BLE001 — primitive missing → deny → direct fallback
+        print(f"completion_notify: proactive gate unavailable {out_file_name}: {e}",
+              file=sys.stderr)
+        return "denied"
+    try:
+        res = _p.emit_proactive(
+            channel=env.get("channel") or rec.get("channel") or "discord",
+            chat_id=rec.get("chat_id"), to=rec.get("to"),
+            tenant_id=rec.get("tenant_id") or "_default",
+            uid=str(rec.get("sender") or ""),
+            text=env.get("text") or "",
+            kind="completion", voice_path=voice_path, solicited=True,
+            envelope=env, out_file_name=out_file_name, outbox_dir=outbox,
+        )
+        if res == _p.EmitResult.EMITTED:
+            return "emitted"
+        if res == _p.EmitResult.RATE_LIMITED:
+            return "rate_limited"
+        # DENIED or ERROR → a solicited completion must still reach the user.
+        return "denied"
+    except Exception as e:  # noqa: BLE001 — emit_proactive never raises; belt + braces
+        print(f"completion_notify: proactive emit failed {out_file_name}: {e}",
+              file=sys.stderr)
+        return "denied"
 
 
 def deliver_ready(
@@ -562,8 +695,14 @@ def deliver_ready(
             rec = _read(path)
             if rec is None or rec.get("state") != _STATE_READY:
                 continue
-            voice_path = None
-            if synthesize_voice is not None and rec.get("want_voice"):
+            # ADR-0554 Phase 0 (approach (a)): a producer may have pre-synthesized
+            # a voice note at completion time and stamped its path on the record
+            # (attach_voice). Prefer it — this is poller-INDEPENDENT (attached by
+            # ANY poller's deliver_ready, with or without a callback). Fall back to
+            # the injected synthesize_voice callback for records that opted into
+            # want_voice but have no pre-synthesized path (the ADR-0189 path).
+            voice_path = rec.get("voice_path")
+            if not voice_path and synthesize_voice is not None and rec.get("want_voice"):
                 try:
                     voice_path = synthesize_voice(
                         rec.get("voice_text") or rec.get("text") or ""
@@ -574,15 +713,30 @@ def deliver_ready(
                     print(f"completion_notify: voice synth failed {path.name}: {ve}",
                           file=sys.stderr)
                     voice_path = None
-            env = _envelope_for(rec, voice_path=voice_path)
-            out_file = outbox / f"cn_{rec.get('id')}_{secrets.token_hex(4)}.json"
-            tmp = out_file.with_suffix(out_file.suffix + ".tmp")
-            tmp.write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
-            try:
-                os.chmod(tmp, 0o600)  # envelope carries the same routing PII
-            except OSError:
-                pass
-            tmp.replace(out_file)
+            # ADR-0554 Phase 2 — SHIP-DARK (ADR-0553 amendment): the envelope is
+            # built here (preserving the exact completion shape). The default
+            # (proactive_communication OFF) writes it DIRECTLY (byte-identical to
+            # before the migration — no gate, no silent loss). Only when the
+            # operator turned the flag ON does the completion route through the
+            # governed gate; and even then a DENIED / unavailable outcome falls
+            # back to a direct write, because a SOLICITED completion the user is
+            # waiting for must never be dropped by a house-rules false-positive
+            # or a broken primitive. A transient RATE_LIMITED leaves the record
+            # READY to retry next poll.
+            env = _envelope_for(rec)
+            out_name = f"cn_{rec.get('id')}_{secrets.token_hex(4)}.json"
+            if _proactive_flag_on(rec.get("tenant_id") or "_default"):
+                status = _emit_via_proactive(env, rec, voice_path=voice_path,
+                                             outbox=outbox, out_file_name=out_name)
+                if status == "rate_limited":
+                    # Leave READY; next poll retries. NOT marked delivered, so
+                    # exactly-once (O_EXCL) is preserved.
+                    continue
+                if status != "emitted":
+                    # DENIED / unavailable → deliver directly (never lose it).
+                    _write_outbox_direct(env, voice_path, outbox, out_name)
+            else:
+                _write_outbox_direct(env, voice_path, outbox, out_name)
             # GDPR: a concurrent purge_user may have unlinked this record between
             # the re-read above and here; don't resurrect it with PII if so.
             if not path.exists():
