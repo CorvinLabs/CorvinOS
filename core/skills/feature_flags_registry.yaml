@@ -1,0 +1,445 @@
+# Feature Flags as Skills Registry
+# Phase 1 Spike: 59 flags mapped to 6 composite Skills
+# Architecture: Wrapper+Phased (legacy adapter delegates to Skill)
+
+version: "0.1.0-spike1"
+description: "Feature flags system as Skills API (replacement for feature_flags.py)"
+
+# ─── COMPOSITE SKILLS (6 Groups) ──────────────────────────────────────────────
+
+skills:
+
+  # SKILL 1: Chat & Context
+  - skill_id: "os.feature_flags_chat"
+    version: "0.1.0"
+    release_tier: "alpha"
+    description: "Feature flags for chat, context engineering, and conversation control"
+    owner: "maintainer"
+    target_release: "0.11.x"
+
+    config_params:
+      - flag_id: "execution_context_badge"
+        label: "Execution context badge (capture only — no badge yet)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "ccc_command_routing"
+        label: "Chat command control (entity extraction)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "acs_context_sync"
+        label: "Delegation transcript sync"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "fast_chat_mode"
+        label: "Fast chat routing (workload-aware model tier, ADR-0043)"
+        default: false
+        tier: "alpha"
+
+  # SKILL 2: Delegation & Execution
+  - skill_id: "os.feature_flags_delegation"
+    version: "0.1.0"
+    release_tier: "alpha"
+    description: "Feature flags for task delegation, TDE, and messenger bridges"
+    owner: "maintainer"
+    target_release: "0.11.x"
+
+    config_params:
+      - flag_id: "tde_shadow_measurement"
+        label: "TDE shadow measurement"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "tde_measurement_collection"
+        label: "TDE decision measurement collection (native-arm only, zero-cost)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "bridge_task_supervision"
+        label: "Supervise and auto-resume long background tasks"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "bridge_task_progress_updates"
+        label: "Intermediate progress updates for background tasks"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "bridge_mid_turn_task_notify"
+        label: "Intermediate heartbeat for mid-turn background sub-agents"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "bridge_orphan_task_reaper"
+        label: "Report abandoned background tasks whose worker died"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "bridge_big_data_delegation"
+        label: "Big-data delegation on messenger bridges"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "bridge_worker_engine_parity"
+        label: "Worker-engine parity on messenger bridges"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "bridge_tde_execution"
+        label: "TDE execution on messenger bridges (measured opt-in)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "delegation_badge"
+        label: "Delegation transparency badge"
+        default: false
+        tier: "alpha"
+
+  # SKILL 3: Plugins & System Administration
+  - skill_id: "os.feature_flags_plugins"
+    version: "0.1.0"
+    release_tier: "alpha"
+    description: "Feature flags for plugin lifecycle, health monitoring, and admin control"
+    owner: "maintainer"
+    target_release: "0.11.x"
+
+    config_params:
+      - flag_id: "plugin_health_monitoring"
+        label: "Plugin health monitoring"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "plugin_runtime_lifecycle"
+        label: "Runtime plugin install/enable"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "plugin_trust_enforcement"
+        label: "Plugin provenance enforcement"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "plugin_self_healing"
+        label: "Plugin self-healing"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "plugin_console_surface"
+        label: "Plugins page in the Console"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "plugin_extension_points"
+        label: "Plugin extension points"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "admin_control_plane"
+        label: "Admin control plane API"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "bridge_supervisor_plugins"
+        label: "Bridges as supervised plugins"
+        default: false
+        tier: "alpha"
+
+  # SKILL 4: Context Engineering & Vibe
+  - skill_id: "os.feature_flags_context_engineering"
+    version: "0.1.0"
+    release_tier: "beta"
+    description: "Feature flags for Context Engineering Layer (CEL), Vibe, and learning"
+    owner: "maintainer"
+    target_release: "0.12.x"
+
+    config_params:
+      - flag_id: "vibe_engineering"
+        label: "Vibe Engineering — CEL brief on live turns"
+        default: false
+        tier: "beta"
+
+      - flag_id: "vibe_engineering_active"
+        label: "Vibe Engineering — ACTIVE brain (LLM synthesis + ToolForge/SkillForge)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "cel_cache_stable"
+        label: "Cache-stable CEL context (cost fix)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "cel_brief_includes_content"
+        label: "CEL brief injects memory content (not just titles)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "cel_load_bearing_anchor"
+        label: "CEL Session Load-Bearing-Fact Anchor (truncation-safe re-injection)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "auto_load_github_repo"
+        label: "Auto-load GitHub repo in Cross-Device Learning"
+        default: false
+        tier: "beta"
+
+      - flag_id: "outcome_feedback_loop"
+        label: "Outcome-feedback loop (self-improving CEL)"
+        default: false
+        tier: "alpha"
+
+  # SKILL 5: Learning & Skills System
+  - skill_id: "os.feature_flags_learning"
+    version: "0.1.0"
+    release_tier: "alpha"
+    description: "Feature flags for learning infrastructure, skill forge, and adaptation"
+    owner: "maintainer"
+    target_release: "0.13.x"
+
+    config_params:
+      - flag_id: "plugin_builder_enabled"
+        label: "Plugin Builder"
+        default: false
+        tier: "beta"
+
+      - flag_id: "plugin_builder_idea_first_interview"
+        label: "Plugin Builder: idea-first interview"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "plugin_builder_checkpoint_review"
+        label: "Plugin Builder: checkpoint review"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "plugin_builder_generate_e2e_tests"
+        label: "Plugin Builder: generate E2E tests"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "plugin_builder_ideas_mode"
+        label: "Plugin Builder: --ideas co-ideation mode"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "skill_forge_enabled"
+        label: "Skill Forge 2.0 — Autonomous Skill Creation & Auto-Grading"
+        default: false
+        tier: "beta"
+
+      - flag_id: "learning_gap_3_attribution"
+        label: "Skill Attribution Model (Fair multi-skill grading)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "learning_gap_6_cost_learning"
+        label: "Cost Learning & Budget Refinement (EMA multiplier updates)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "learning_gap_7_operator_feedback"
+        label: "Operator Feedback Loop (tool/skill ratings → auto-promotion)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "memory_confidence_gate_enabled"
+        label: "Memory confidence gating"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "per_stage_token_budgeting"
+        label: "Per-stage token budgeting in context pipeline"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "adaptive_context_routing"
+        label: "Adaptive Context Routing & Dynamic Budgeting"
+        default: false
+        tier: "alpha"
+
+  # SKILL 6: Infrastructure, Console & APIs
+  - skill_id: "os.feature_flags_infrastructure"
+    version: "0.1.0"
+    release_tier: "alpha"
+    description: "Feature flags for console UI, APIs, data handling, and deployment modes"
+    owner: "maintainer"
+    target_release: "0.12.x"
+
+    config_params:
+      - flag_id: "model_catalog_auto_refresh"
+        label: "Auto-refresh the live model catalogue"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "console_marketplace_panel"
+        label: "Console Marketplace panel"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "package_marketplace_ui"
+        label: "Package Marketplace UI redesign"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "console_auto_reload"
+        label: "Console auto-reload on new build"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "frontend_forge"
+        label: "FrontendForge (in-browser panel authoring)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "console_web_surface_plugin"
+        label: "Console as web_surface plugin"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "browser_automation"
+        label: "Browser automation"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "live_model_discovery"
+        label: "Live model discovery"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "validator_factory_enabled"
+        label: "Input Validator Factory (ADR-0296)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "file_permissions_enabled"
+        label: "File Permission Hardener (ADR-0295)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "dual_gate_pipeline_enabled"
+        label: "Dual-Gate Pipeline: Input Validation (ADR-0300)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "dual_gate_pii_detection_enabled"
+        label: "Dual-Gate Pipeline: PII Detection (ADR-0300)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "dual_gate_queue_integrity_enabled"
+        label: "Dual-Gate Pipeline: Queue Integrity Check (ADR-0300)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "queue_corruption_detection_enabled"
+        label: "Queue Corruption Detection & Recovery (ADR-0298)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "a2a_relay_fallback"
+        label: "A2A encrypted relay fallback"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "a2a_lan_bind"
+        label: "Bind A2A/Console to all network interfaces (0.0.0.0)"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "headless_api_mode"
+        label: "Headless API-only boot"
+        default: false
+        tier: "alpha"
+
+      - flag_id: "cross_device_sync"
+        label: "Cross-device tenant sync"
+        default: false
+        tier: "alpha"
+
+# ─── SPECIAL PARAMETERS (Non-flag Settings) ──────────────────────────────────
+
+special_params:
+  - param_id: "worker_engine_mode"
+    type: "enum"
+    values: ["native", "acs", "tde"]
+    default: "native"
+    description: "Worker engine selection (NOT a feature flag — separate config)"
+    note: "Handled separately via legacy feature_flags.py::worker_engine_mode()"
+
+# ─── AUDIT INTEGRATION ────────────────────────────────────────────────────────
+
+audit_events:
+  - event_type: "skill_executed"
+    description: "Emitted on every Skill.execute() call for feature_flags operations"
+    required_fields:
+      - "skill_id"
+      - "operation" # is_enabled | set_enabled | describe_all | tier_of | etc.
+      - "flag_id"
+      - "tenant_id"
+      - "input" # operation parameters
+      - "output" # operation result
+      - "timestamp"
+      - "lom" # Line of Moral Responsibility
+      - "hash" # hash-chained to previous event
+
+# ─── COMPLIANCE & CONSTRAINTS ─────────────────────────────────────────────────
+
+constraints:
+  - name: "Tenant Isolation (GDPR Art. 5, 32)"
+    description: "Every operation must validate tenant_id; cross-tenant queries blocked"
+
+  - name: "Audit Trail (GDPR Art. 30)"
+    description: "Every is_enabled/set_enabled call emits audit event"
+
+  - name: "No Compliance Bypass"
+    description: "Compliance mechanisms (audit, consent, disclosure, etc.) cannot be flagged"
+
+  - name: "Protected Substrings"
+    blocked_in_flag_ids:
+      - "audit"
+      - "consent"
+      - "disclosure"
+      - "path_gate"
+      - "pathgate"
+      - "house_rules"
+      - "houserules"
+      - "flow_guard"
+      - "flowguard"
+      - "license"
+      - "licence"
+      - "compliance"
+      - "gdpr"
+      - "erasure"
+
+# ─── METADATA ─────────────────────────────────────────────────────────────────
+
+metadata:
+  created_date: "2026-09-02"
+  phase: "spike1"
+  scenario: "wrapper_phased"
+  comment: |
+    This manifest represents the 59 feature flags from feature_flags.py
+    reorganized as 6 composite Skills. The wrapper adapter (FeatureFlagLegacyAdapter)
+    transparently delegates to these Skills, so 88 call-sites remain unchanged
+    during Phase 1b migration.
+
+    For Phase 1b Big Bang scenario, use 1:1 mapping instead.
+
+# ─── DEPLOYMENT ──────────────────────────────────────────────────────────────
+
+deployment:
+  location: "core/skills/"
+  files:
+    - "feature_flags_registry.yaml" # This manifest
+    - "feature_flags_skill.py" # Skills implementation
+    - "feature_flags_legacy_adapter.py" # Wrapper for 88 call-sites
+
+  test_files:
+    - "tests/integration/test_feature_flags_equivalence_template.py" # 59 tests
+    - "tests/unit/test_feature_flags_skill.py" # Unit tests (TBD)
+
+  dependencies:
+    - "core/console/corvin_core/feature_flags.py" # Original (still used by wrapper)
+    - "audit_backend" # For SKILL_EXECUTED events
