@@ -37,6 +37,20 @@ def _validate_tenant_id(tenant_id: str) -> None:
     if not re.match(r'^[a-zA-Z0-9_-]+$', tenant_id):
         raise ValueError(f"Invalid tenant_id format: {tenant_id!r} (only alphanumeric, underscore, hyphen allowed)")
 
+
+def _validate_flag_id(flag_id: str) -> None:
+    """Validate flag_id format (alphanumeric + underscore).
+
+    FIX #18: Prevent injection via flag_id
+    Raises ValueError if flag_id is invalid.
+    """
+    if not flag_id or not isinstance(flag_id, str):
+        raise ValueError(f"Invalid flag_id: must be non-empty string, got {flag_id!r}")
+
+    # Only allow alphanumeric + underscore (safe for audit trail)
+    if not re.match(r'^[a-zA-Z0-9_]+$', flag_id):
+        raise ValueError(f"Invalid flag_id format: {flag_id!r} (only alphanumeric, underscore allowed)")
+
 # Audit integration (Phase 2, ADR-0232/0233)
 try:
     from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
@@ -277,21 +291,27 @@ class FeatureFlagsSkill:
         tenant_id = input_data.get("tenant_id", "_default")
 
         # Validate inputs (GDPR Art. 32: tenant isolation)
-        if not tenant_id or not isinstance(tenant_id, str):
+        try:
+            _validate_tenant_id(tenant_id)
+        except ValueError as e:
             return {
                 "operation": operation,
                 "success": False,
-                "error": "Invalid tenant_id (must be non-empty string)",
+                "error": str(e),
                 "latency_ms": (time.time() - start_time) * 1000,
             }
 
-        if flag_id and not isinstance(flag_id, str):
-            return {
-                "operation": operation,
-                "success": False,
-                "error": "Invalid flag_id (must be string)",
-                "latency_ms": (time.time() - start_time) * 1000,
-            }
+        # FIX #18: Validate flag_id format
+        if flag_id:
+            try:
+                _validate_flag_id(flag_id)
+            except ValueError as e:
+                return {
+                    "operation": operation,
+                    "success": False,
+                    "error": str(e),
+                    "latency_ms": (time.time() - start_time) * 1000,
+                }
 
         # Whitelist allowed operations
         ALLOWED_OPERATIONS = {

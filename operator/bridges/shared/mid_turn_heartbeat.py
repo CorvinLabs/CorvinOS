@@ -295,7 +295,15 @@ def deliver_due(state_dir: str | Path, outbox_dir: str | Path, *,
                 now: float | None = None) -> int:
     """Write due envelopes for every active task: a status line the moment the
     step changes, and a slim liveness line on the slow cadence. Bounded by
-    ``max_pings``/``max_age_s``. Returns envelopes written. Never raises."""
+    ``max_pings``/``max_age_s``. Returns envelopes written. Never raises.
+
+    Accepted limitations (reviewed, deliberately NOT fixed — out of scope):
+      * Double-surface of the same bgstep: the live sticky (ephemeral) is
+        deleted at the final reply and the persisted status message is the
+        record — this is redundancy, not a defect.
+      * Only the LAST step of a batch persists as a status message: intermediate
+        steps appear live in the sticky while the turn streams; by design.
+    """
     written = 0
     now = time.time() if now is None else now
     try:
