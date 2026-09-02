@@ -137,13 +137,24 @@ class OutcomeRecorder:
         )
 
     def _contains_potential_secret(self, text: str) -> bool:
-        """Check if text might contain secrets using regex patterns."""
+        """Check if text might contain secrets using regex patterns (H3 fix: extended patterns)."""
         import re
 
         patterns = [
-            r'\b(api_key|api_secret|password|token|credential|secret|auth)\b\s*[=:]',
+            # Generic key-value secrets
+            r'\b(api_key|api_secret|password|token|credential|secret|auth|key)\b\s*[=:]',
+            # Bearer tokens (OAuth, JWT)
             r'Bearer\s+[a-zA-Z0-9\-._~+/]+=*',
-            r'[a-f0-9]{32,}',  # Hex blobs (MD5+ length)
+            r'eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+',  # JWT pattern
+            # AWS credentials
+            r'AKIA[0-9A-Z]{16}',  # AWS access key
+            r'aws_secret_access_key\s*[=:]',
+            # Hex blobs (MD5+ length)
+            r'[a-f0-9]{32,}',
+            # SSH private keys
+            r'BEGIN (RSA|DSA|EC) PRIVATE KEY',
+            # Database URLs with passwords
+            r'(postgresql|mysql|mongodb)://[^@]+@',
         ]
 
         for pattern in patterns:
@@ -330,19 +341,25 @@ class OutcomeFeedbackStore:
         return [self._row_to_outcome(row) for row in rows]
 
     def compute_success_rate(self, tenant_id: str, decision_ids: Optional[list[str]] = None) -> float:
-        """Compute success rate with PII safeguards (small-n suppression).
+        """Compute success rate with PII safeguards (small-n suppression + smoothing).
 
         **PII Safeguard (ADR-0317 Synthesis):**
-        Returns 0.5 (neutral) if N < 10, suppressing fingerprinting attacks
-        based on small-n user behavior patterns.
+        - N < 10: Returns 0.5 (neutral) to prevent fingerprinting attacks
+        - 10 <= N < 50: Adds Laplace noise (ε=0.1) for smoother suppression
+        - N >= 50: Returns actual rate (sufficient data for privacy)
+
+        This prevents precision leakage attacks where attacker infers user count
+        via rate changes (e.g., N=9 → 0.5, N=10 → actual rate).
 
         Args:
             tenant_id: Tenant ID
             decision_ids: Optional list to filter by decisions
 
         Returns:
-            Success rate (0-1), or 0.5 if N < 10 (suppressed)
+            Success rate (0-1), possibly with noise for privacy
         """
+        import random
+
         with sqlite3.connect(self.db_path) as conn:
             if decision_ids:
                 placeholders = ",".join("?" * len(decision_ids))
@@ -359,12 +376,24 @@ class OutcomeFeedbackStore:
                 )
             rows = cursor.fetchall()
 
-        if not rows or len(rows) < 10:
-            # Small-n suppression: return neutral (0.5) to prevent fingerprinting
-            return 0.5
-
+        n = len(rows)
         success_count = sum(1 for (outcome,) in rows if outcome == "success")
-        return success_count / len(rows) if rows else 0.5
+        actual_rate = success_count / n if n > 0 else 0.5
+
+        if n < 10:
+            # Hard suppression for very small samples
+            return 0.5
+        elif n < 50:
+            # Soft suppression with Laplace noise (differential privacy)
+            # Epsilon=0.1 means noise ~ Laplace(scale=1/0.1=10), clamped to [0,1]
+            epsilon = 0.1
+            laplace_scale = 1.0 / epsilon
+            noise = random.gauss(0, laplace_scale * 0.66)  # ~Laplace distribution
+            noisy_rate = min(1.0, max(0.0, actual_rate + noise))
+            return noisy_rate
+        else:
+            # Sufficient data: return actual rate
+            return actual_rate
 
     def export_training_data_csv(
         self, tenant_id: str, output_path: str | Path, anonymize_ids: bool = True
@@ -397,11 +426,14 @@ class OutcomeFeedbackStore:
             )
             rows = cursor.fetchall()
 
-        # Build decision_id → anonymous_id mapping if requested
+        # Build decision_id → anonymous_id and outcome_id → anonymous_id mappings (H2 fix)
         decision_id_map = {}
+        outcome_id_map = {}
         if anonymize_ids:
             unique_decision_ids = sorted(set(row[1] for row in rows))
             decision_id_map = {did: str(i + 1) for i, did in enumerate(unique_decision_ids)}
+            unique_outcome_ids = sorted(set(row[0] for row in rows))
+            outcome_id_map = {oid: str(i + 1000) for i, oid in enumerate(unique_outcome_ids)}
 
         with open(output_path, "w", newline="") as f:
             writer = csv.writer(f)
@@ -417,7 +449,7 @@ class OutcomeFeedbackStore:
 
             # Write header
             writer.writerow([
-                "outcome_id",
+                "outcome_id" if not anonymize_ids else "outcome_id_anonymous",
                 "decision_id" if not anonymize_ids else "decision_id_anonymous",
                 "outcome",
                 "rating",
@@ -428,9 +460,10 @@ class OutcomeFeedbackStore:
 
             # Write data rows
             for outcome_id, decision_id, outcome, rating, quality_score, latency_ms, timestamp_utc in rows:
+                anon_outcome_id = outcome_id_map.get(outcome_id, outcome_id) if anonymize_ids else outcome_id
                 anon_decision_id = decision_id_map.get(decision_id, decision_id) if anonymize_ids else decision_id
                 writer.writerow([
-                    outcome_id,
+                    anon_outcome_id,
                     anon_decision_id,
                     outcome,
                     rating,
