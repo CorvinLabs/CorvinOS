@@ -19,6 +19,7 @@ mtime, raw body (markdown-style code-block on the SPA side).
 The body is capped at 64 KiB to keep the response small. Any of
 these files larger than that is structurally suspicious anyway.
 """
+from core.skills.feature_flags_skill import feature_flags_skill
 from __future__ import annotations
 
 import os
