@@ -633,6 +633,13 @@ const ROLES_CLI = bridgePaths.bridgeSharedPy('roles.py');
 // senders via dispatchReadOnlyDisclosure(), the daemon should call it
 // alongside dispatchReadOnlyConsent before maybeForwardAsObserver.
 const DISCLOSURE_CLI = bridgePaths.bridgeSharedPy('disclosure.py');
+// Phase 0.5 (ADR-0553) — proactive-contact consent. CLI wraps
+// shared/proactive_consent.py; PURPOSE-SEPARATED from consent.py (Layer-17
+// inbound observer-transcript). `/proactive on|off` grants/revokes the bot's
+// permission to contact the user out-of-band (progress pings, completion
+// notes, PCL). Identity is bound to the caller's platform uid (ctx.uid);
+// tenant is passed explicitly (ADR-0007, no env-fallback for tenant routing).
+const PROACTIVE_CLI = bridgePaths.bridgeSharedPy('proactive_consent.py');
 // Layer-20 — quota + audit-view. /quota for self + owner/admin operator
 // flows; /audit me / /audit chat for capability-gated visibility into
 // the unified hash chain.
@@ -2042,6 +2049,63 @@ function disclosureOwnerPassReply(_ctx) {
   };
 }
 
+// Phase 0.5 (ADR-0553) — `/proactive on|off`. PURPOSE-SEPARATED from /consent
+// (Layer-17 inbound observer-transcript). This gate controls whether the bot
+// may proactively contact the user out-of-band (task-progress pings,
+// completion notes, future PCL). deny-by-default; owner is intrinsically
+// contactable. tenant_id is passed explicitly (ADR-0007, no env-fallback).
+function proactiveReply(ctx, sub) {
+  const subL = (sub || '').toLowerCase();
+  const channel = String(ctx.channel || '');
+  const uid = String(ctx.uid || '');
+  const tenantId = process.env.CORVIN_TENANT_ID || '_default';
+
+  if (!subL || subL === 'help' || (subL !== 'on' && subL !== 'off')) {
+    return {
+      reply: [
+        'Proactive contact (Phase 0.5):',
+        '',
+        '  /proactive on    allow the bot to contact you out-of-band',
+        '                   (progress pings, completion notes)',
+        '  /proactive off   revoke — also drops any queued proactive messages',
+        '',
+        'Default is OFF. This is separate from /consent (inbound transcript).',
+      ].join('\n'),
+      kind: 'proactive-help',
+    };
+  }
+
+  // Owner carve-out: proactive contact to the owner is always active.
+  if (ctx.isOwner) {
+    return {
+      reply: subL === 'on'
+        ? 'Proactive contact is already active by default for you (owner).'
+        : 'You are an owner — proactive contact is intrinsic and stays active.',
+      kind: 'proactive-owner',
+    };
+  }
+
+  const cliSub = subL === 'on' ? 'on' : 'off';
+  // Pass the chat context on `off` so the hard-kill purge reaches GROUP-channel
+  // proactive envelopes (routed by chat_id, not uid), not only DMs.
+  const chatKey = String(ctx.chatKey || ctx.chat_id || '');
+  const cliArgs = [PROACTIVE_CLI, cliSub, tenantId, channel, uid];
+  if (cliSub === 'off' && chatKey) cliArgs.push(chatKey);
+  const r = spawnSync('python3', cliArgs, {
+    encoding: 'utf8', timeout: 5000,
+  });
+  if (r.error || r.status !== 0) {
+    const msg = ((r.stderr || r.stdout) || '').trim();
+    return { reply: `proactive ${cliSub} failed: ${msg.slice(0, 300)}`, kind: 'proactive-error' };
+  }
+  return {
+    reply: subL === 'on'
+      ? '✓ Proactive contact enabled — I may now message you out-of-band. Turn off any time with /proactive off.'
+      : '✓ Proactive contact disabled — I will not message you out-of-band, and any queued proactive messages were dropped.',
+    kind: subL === 'on' ? 'proactive-on' : 'proactive-off',
+  };
+}
+
 // Daemon-side hook: ctx must carry { text, channel, chatKey, uid, settingsFile }.
 // Returns:
 //   null               — text is not /join or /pass
@@ -3413,6 +3477,8 @@ function dispatch(ctx) {
     // actual action via dispatchReadOnlyDisclosure().
     if (head === '/join') return disclosureOwnerJoinReply(ctx);
     if (head === '/pass') return disclosureOwnerPassReply(ctx);
+    // Phase 0.5 (ADR-0553) — proactive-contact consent. `/proactive on|off`.
+    if (head === '/proactive') return proactiveReply(ctx, tail);
     // Layer-20 — quota + audit visibility.
     if (head === '/quota') return quotaReply(ctx, tail);
     if (head === '/audit') return auditReply(ctx, tail);
@@ -3528,5 +3594,8 @@ module.exports = {
     // /engine without going through the full dispatch() entry point.
     engineReply,
     ENGINE_SWITCH_CLI,
+    // Phase 0.5 (ADR-0553) — proactive-contact consent /proactive on|off.
+    proactiveReply,
+    PROACTIVE_CLI,
   },
 };

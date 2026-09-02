@@ -10,7 +10,7 @@ Tests verify:
 
 import pytest
 import json
-from core.learning.hybrid_context import HybridContextModel
+from core.learning.hybrid_context import HybridContextModel, CascadeDeleteResult
 
 
 class TestGDPRMinimization:
@@ -123,8 +123,9 @@ class TestGDPRErasure:
         assert "user-1" in model.injected_layers
 
         # Delete user-1
-        deleted = model.delete_user_context("user-1")
-        assert deleted["total"] > 0
+        result = model.delete_user_context("user-1")
+        assert result.total > 0
+        assert result.verification_complete is True
 
         # Verify complete removal
         assert not any(k.startswith("user-1") for k in model.base_snapshots)
@@ -155,15 +156,16 @@ class TestGDPRErasure:
         )
 
         # First delete
-        deleted1 = model.delete_user_context("user-1")
-        count1 = deleted1["total"]
+        result1 = model.delete_user_context("user-1")
+        count1 = result1.total
 
         # Second delete (should return 0)
-        deleted2 = model.delete_user_context("user-1")
-        count2 = deleted2["total"]
+        result2 = model.delete_user_context("user-1")
+        count2 = result2.total
 
         assert count1 > 0
         assert count2 == 0  # Idempotent
+        assert result2.verification_complete is True
 
 
 class TestHashChainIntegrity:

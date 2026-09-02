@@ -13,6 +13,7 @@ from core.learning.hybrid_context import (
     HybridContextModel,
     ImmutableContextBase,
     InjectedLayer,
+    CascadeDeleteResult,
 )
 
 
@@ -313,12 +314,14 @@ class TestCascadeDelete:
         assert len(model.injected_layers.get("user-1", [])) == 2
 
         # Delete
-        deleted = model.delete_user_context("user-1")
+        result = model.delete_user_context("user-1")
 
-        # Verify deletion counts
-        assert deleted["bases_deleted"] == 2
-        assert deleted["layers_deleted"] == 2
-        assert deleted["total"] == 4
+        # Verify deletion counts and verification
+        assert result.deleted_bases == 2
+        assert result.deleted_layers == 2
+        assert result.total == 4
+        assert result.verification_complete is True
+        assert len(result.errors) == 0
 
         # Verify data gone
         assert len([k for k in model.base_snapshots if k.startswith("user-1")]) == 0
@@ -338,12 +341,13 @@ class TestCascadeDelete:
             attention_budget=1000,
         )
 
-        deleted1 = model.delete_user_context("user-1")
-        assert deleted1["total"] > 0
+        result1 = model.delete_user_context("user-1")
+        assert result1.total > 0
 
-        # Delete again
-        deleted2 = model.delete_user_context("user-1")
-        assert deleted2["total"] == 0  # Idempotent
+        # Delete again (idempotent)
+        result2 = model.delete_user_context("user-1")
+        assert result2.total == 0
+        assert result2.verification_complete is True
 
 
 if __name__ == "__main__":

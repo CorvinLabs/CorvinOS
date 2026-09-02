@@ -2100,6 +2100,203 @@ def _bg_flag(flag_id: str) -> bool:
         return False
 
 
+# Bound how many self-delegated workers ONE reply may spawn, so a runaway model
+# emitting a wall of ⟦bgtask-run⟧ markers cannot fork-bomb the host. parse_run_
+# markers already dedups identical markers; this caps distinct ones per turn.
+_SELF_DELEGATION_MAX_PER_REPLY = 3
+
+
+def _spawn_detached_bg_worker(
+    *, instruction: str, channel: str, chat_id, sender, chat_key,
+    msg_id: str, want_voice: bool, origin: str,
+) -> "str | None":
+    """Spawn a DETACHED, turn-surviving ``bg_task_worker`` for *instruction* and
+    register its completion routing. Shared spawn core of the ``/task`` command
+    handler and the ADR-0553 Phase 3 self-delegation reply hook.
+
+    Mirrors the ``/task`` handler's proven sequence exactly:
+    ``completion_notify.register`` captures the origin channel/chat/sender NOW
+    (so the out-of-band completion is routable), the spec is passed via a 0600
+    temp FILE (never argv — argv leaks PII via ``/proc/<pid>/cmdline``), and the
+    worker is ``Popen``'d with ``start_new_session=True`` (+ Windows detach
+    flags) so it outlives this one-shot turn. Completion — a final Text+Voice
+    summary — is then delivered through the SAME outbox the ``/task`` completion
+    path uses, poller-independently.
+
+    Returns the task id on success, ``None`` on failure. Never raises: a spawn
+    failure is logged, the half-registered record is marked failed, and the
+    caller degrades to a normal reply.
+    """
+    try:
+        try:
+            from . import completion_notify as _cn  # type: ignore
+        except ImportError:
+            import completion_notify as _cn  # type: ignore[no-redef]
+        instruction = (instruction or "").strip()
+        if not instruction:
+            return None
+        # Concurrency cap (MB2): bound how many background tasks ONE user may
+        # have in flight so self-delegation cannot fork-bomb the host — the same
+        # protection the `/task` handler applies before its inline spawn.
+        # Best-effort: a broken count check must never break the turn.
+        try:
+            _bg_max = int(os.environ.get("CORVIN_BG_TASK_MAX", "3"))
+        except ValueError:
+            _bg_max = 3
+        try:
+            if _cn.count_active(sender=sender) >= _bg_max:
+                log(f"self-delegation cap: sender at {_bg_max} active bg tasks "
+                    f"chat={chat_key} — not spawning")
+                _audit_event(
+                    "bridge.self_delegation_spawn", channel=channel,
+                    chat_key=str(chat_key), user=sender,
+                    details={"spawned": False, "blocked": "concurrency_cap",
+                             "origin": origin},
+                )
+                return None
+        except Exception:  # noqa: BLE001 — best-effort cap, never break the turn
+            pass
+        task_id = "bgt_" + secrets.token_hex(6)
+        _spec_file = None
+        try:
+            _cn.register(
+                task_id, channel=channel, chat_id=chat_id, sender=sender,
+                to=(sender if not chat_id else None),
+                tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
+                label=instruction[:60],
+                want_voice=bool(want_voice),
+            )
+            # Resolve the chat profile like a normal turn so the background turn
+            # keeps the same persona/engine/model.
+            try:
+                _bg_profile = _resolve_chat_profile(channel, chat_key)
+                json.dumps(_bg_profile)  # serialisability probe
+            except Exception:  # noqa: BLE001
+                _bg_profile = None
+            # Session ISOLATION (ADR-0553 fix, live-proven 2026-09-03). The
+            # engine call inside the worker keys BOTH its `--resume` read and
+            # its session-id write off `_session_dir(channel, chat_key)`
+            # → `.main_session.json`. Passing the ORIGIN `chat_key` would make
+            # the detached worker resume the operator's LIVE transcript and
+            # overwrite its persisted session-id — injecting the worker's turn
+            # into the live conversation and racing the operator's next real
+            # turn (the exact collision proven on Discord). An isolated,
+            # per-TASK key gives the worker its own private session dir; keying
+            # by task_id (not the origin chat) keeps concurrent bg tasks from
+            # sharing one session dir, and stays stable across a supervised
+            # task's retries (same task_id) so a continuation resumes correctly.
+            # Origin `chat_key` stays in the spec for profile/debug only; it is
+            # NEVER used for the engine session again.
+            _engine_chat_key = f"bgtask::{chat_key}::{task_id}"
+            _spec = {
+                "task_id": task_id, "instruction": instruction,
+                "channel": channel, "chat_key": chat_key, "sender": sender,
+                "engine_chat_key": _engine_chat_key,
+                "profile": _bg_profile, "msg_id": f"{msg_id}_selfdel",
+                "want_voice": bool(want_voice),
+            }
+            import tempfile as _tf
+            _fd, _spec_file = _tf.mkstemp(prefix="bgspec_", suffix=".json")
+            with os.fdopen(_fd, "w", encoding="utf-8") as _sf:
+                json.dump(_spec, _sf, ensure_ascii=False)
+            try:
+                os.chmod(_spec_file, 0o600)
+            except OSError:
+                pass
+            _worker = str(ROOT / "bg_task_worker.py")
+            _detach_flags = 0
+            if sys.platform == "win32":
+                _detach_flags = (
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                )
+            subprocess.Popen(
+                [sys.executable, _worker, _spec_file],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True, creationflags=_detach_flags,
+            )
+            _audit_event(
+                "bridge.self_delegation_spawn", channel=channel,
+                chat_key=str(chat_key), user=sender,
+                details={"spawned": True, "task_id": task_id[:12],
+                         "origin": origin, "want_voice": bool(want_voice),
+                         "instruction_len": len(instruction)},
+            )
+            return task_id
+        except Exception as _bg_exc:  # noqa: BLE001
+            log(f"self-delegation spawn failed chat={chat_key}: {_bg_exc}")
+            if _spec_file:
+                try:
+                    os.unlink(_spec_file)
+                except OSError:
+                    pass
+            try:
+                _cn.mark_done(task_id, text=f"failed to start: {_bg_exc}",
+                              ok=False)
+            except Exception:  # noqa: BLE001
+                pass
+            _audit_event(
+                "bridge.self_delegation_spawn", channel=channel,
+                chat_key=str(chat_key), user=sender,
+                details={"spawned": False, "error": type(_bg_exc).__name__,
+                         "origin": origin},
+            )
+            return None
+    except Exception:  # noqa: BLE001 — never break a turn on the way out
+        return None
+
+
+def _maybe_self_delegate(
+    answer: str, *, channel: str, chat_id, sender, chat_key, msg_id: str,
+) -> "list[str]":
+    """ADR-0553 Phase 3 reply hook (ship-dark, ``bridge_self_delegation``, OFF).
+
+    When the flag is ON and *answer* carries one or more
+    ``⟦bgtask-run:<label>|<instruction>⟧`` markers, spawn ONE detached
+    ``bg_task_worker`` per DISTINCT marker (``parse_run_markers`` dedups, so the
+    same marker repeated in one reply never double-spawns), bounded by
+    ``_SELF_DELEGATION_MAX_PER_REPLY``. The marker itself is NOT stripped here —
+    the caller's unconditional ``strip_markers`` removes it whether the flag is
+    on OR off, so it never leaks into the channel either way.
+
+    Flag OFF ⇒ returns ``[]`` immediately, nothing is parsed, nothing spawned.
+    Returns the list of spawned task ids (empty on no-op / failure). Never
+    raises."""
+    spawned: list[str] = []
+    try:
+        if not answer or not _bg_flag("bridge_self_delegation"):
+            return spawned
+        try:
+            from . import mid_turn_heartbeat as _mth  # type: ignore
+        except ImportError:
+            import mid_turn_heartbeat as _mth  # type: ignore[no-redef]
+        runs = _mth.parse_run_markers(answer)
+        if not runs:
+            return spawned
+        # Voice preference (LB-voice): like the /task Phase 0 path, opt the
+        # completion into a spoken summary only when BOTH the ship-dark
+        # `proactive_voice_completion` flag is ON AND the user's own voice mode
+        # allows it — gating on voice_summary_mode alone drifted from the /task
+        # path (which also requires the flag), so a flag-OFF install would still
+        # synthesize voice for self-delegated completions.
+        try:
+            _pv_pref = load_settings().get("voice_summary_mode", "always") != "never"
+        except Exception:  # noqa: BLE001 — no settings → text-only
+            _pv_pref = False
+        _want_voice = bool(_bg_flag("proactive_voice_completion") and _pv_pref)
+        for _lbl, _instr in runs[:_SELF_DELEGATION_MAX_PER_REPLY]:
+            tid = _spawn_detached_bg_worker(
+                instruction=_instr, channel=channel, chat_id=chat_id,
+                sender=sender, chat_key=chat_key, msg_id=msg_id,
+                want_voice=bool(_want_voice), origin="self_delegation",
+            )
+            if tid:
+                spawned.append(tid)
+    except Exception:  # noqa: BLE001 — a broken hand-off must not break the turn
+        pass
+    return spawned
+
+
 def _check_house_rules_or_fail(
     *, prompt: str | None, persona: str | None, channel: str, chat_key: str,
     engine_id: str = "", tenant_id: str | None = None,
@@ -4403,6 +4600,24 @@ def system_prompt_for(channel: str) -> str:
             "   The system removes these markers from your reply — they are "
             "NEVER shown to the user; they only drive a slim 'still working…' "
             "status line. Use them sparingly."
+        )
+    # ADR-0553 Phase 3 — self-delegation marker (ship-dark, bridge_self_delegation
+    # default OFF). ONLY when the flag is on do we teach the model to hand LONG
+    # work off to a detached worker; the reply-hook spawns it and strips the
+    # marker. Flag off ⇒ not taught, never emitted ⇒ byte-identical turn.
+    if _bg_flag("bridge_self_delegation"):
+        _bg_marker_block += (
+            "\n\nSelf-delegation (only for genuinely LONG work — many minutes to "
+            "hours — that should keep running after this reply; otherwise just do "
+            "it inline now):\n"
+            "   - Emit ⟦bgtask-run:<short label>|<the full instruction to run>⟧ "
+            "in your reply. A detached background worker then runs <the full "
+            "instruction> to completion and messages the user here (text + a "
+            "spoken summary) when it is done — it OUTLIVES this turn.\n"
+            "   The system removes this marker from your reply (it is NEVER shown "
+            "to the user). Write the instruction as a complete, self-contained "
+            "task: the worker starts fresh and sees only that text. Use at most "
+            "one or two per reply, and only when the work truly is long-running."
         )
     return f"""You are being addressed through a {label} bridge.
 The human is verified (whitelist) and has explicitly granted you full
@@ -10390,11 +10605,30 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                         # unroutable yet still marked delivered (result lost).
                         # Stamp `to` whenever chat_id is absent so the JID-routed
                         # channels still resolve a target.
+                        # ADR-0554 Phase 0 (ship-dark: proactive_voice_completion,
+                        # default OFF). Opt this completion into a spoken SUMMARY,
+                        # gated by BOTH the flag AND the user's own voice preference
+                        # (voice_summary_mode != "never"). The detached worker
+                        # synthesizes the summary at completion time and stores its
+                        # voice_path on the record (approach (a)); deliver_ready then
+                        # ships it poller-independently. Flag off ⇒ want_voice=False ⇒
+                        # text-only, byte-identical to before this feature existed.
+                        try:
+                            _pv_pref = (
+                                load_settings().get("voice_summary_mode", "always")
+                                != "never"
+                            )
+                        except Exception:  # noqa: BLE001 — no settings → no voice
+                            _pv_pref = False
+                        _pv_want_voice = bool(
+                            _bg_flag("proactive_voice_completion") and _pv_pref
+                        )
                         _cn.register(
                             task_id, channel=channel, chat_id=chat_id, sender=sender,
                             to=(sender if not chat_id else None),
                             tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
                             label=instruction[:60],
+                            want_voice=_pv_want_voice,
                         )
                         # Resolve the chat profile like a normal turn so the
                         # background turn keeps the same persona/engine/model.
@@ -10408,6 +10642,11 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                             "channel": channel, "chat_key": chat_key,
                             "sender": sender,
                             "profile": _bg_profile, "msg_id": f"{msg_id}_bgt",
+                            # ADR-0554 Phase 0: the worker reads this to decide
+                            # whether to synthesize + attach a voice summary at
+                            # completion time (approach (a)). Mirrors the record's
+                            # want_voice set at register() above.
+                            "want_voice": _pv_want_voice,
                         }
                         # Supervised-run record (ships dark). Created BEFORE the
                         # worker starts, so a worker that dies during start-up is
@@ -11230,7 +11469,19 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                                        sender=sender, label=_lbl, status=_st)
                 for _lbl in _mth.parse_done(answer):
                     _mth.clear_task(ROOT, _mth_sk, _lbl)
-            # ALWAYS strip — flag-independent — so markers never reach the channel.
+            # ADR-0553 Phase 3 — self-delegation (ship-dark, bridge_self_delegation
+            # default OFF). A ⟦bgtask-run:<label>|<instruction>⟧ marker in the FINAL
+            # reply hands the long work off to a DETACHED bg_task_worker that
+            # outlives this turn and later delivers a final Text+Voice summary.
+            # Called BEFORE the strip so the marker is still present to parse; the
+            # spawn is internally gated on the flag (flag OFF ⇒ no-op, no spawn).
+            # never-raise. Idempotent: one worker per distinct marker.
+            _maybe_self_delegate(answer, channel=channel, chat_id=chat_id,
+                                 sender=sender, chat_key=chat_key, msg_id=str(msg_id))
+            # ALWAYS strip — flag-independent — so markers never reach the channel
+            # (both the mid-turn ⟦bg…⟧ family AND the ⟦bgtask-run⟧ marker, whether
+            # bridge_self_delegation is on or off — an off install never emits one,
+            # so an off turn is byte-identical, but a stray marker never leaks).
             answer = _mth.strip_markers(answer)
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
