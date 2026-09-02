@@ -128,6 +128,11 @@ class EventStore:
                             )
                             results.append(event)
 
+                            # FIX #21 optimization: early exit when limit+offset reached
+                            if len(results) > (offset + limit):
+                                results = results[:offset + limit]
+                                return results
+
                 except json.JSONDecodeError as e:
                     # FIX #4, #27: Log corrupted JSON + audit timestamp (not silent)
                     logger.warning(f"Corrupted JSON in {event_file}: {e} — event(s) LOST at {datetime.utcnow().isoformat()}Z")

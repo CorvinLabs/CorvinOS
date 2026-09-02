@@ -12404,14 +12404,18 @@ def main() -> int:
                     try:  # ADR-0551 C1-B — mid-turn background heartbeat
                         # Gate on the flag: toggled OFF, no residual marker
                         # should keep pinging from an earlier flag-on turn.
+                        try:
+                            from . import mid_turn_heartbeat as _mth2  # type: ignore
+                        except ImportError:
+                            import mid_turn_heartbeat as _mth2  # type: ignore[no-redef]
                         if _bg_flag("bridge_mid_turn_task_notify"):
-                            try:
-                                from . import mid_turn_heartbeat as _mth2  # type: ignore
-                            except ImportError:
-                                import mid_turn_heartbeat as _mth2  # type: ignore[no-redef]
                             hb = _mth2.deliver_due(ROOT, OUTBOX)
                             if hb:
                                 log(f"mid_turn_heartbeat: delivered {hb} heartbeat(s)")
+                        else:
+                            # Flag OFF: still GC residual markers (deliver_due, which
+                            # normally expires them, is gated) — emit nothing.
+                            _mth2.sweep(ROOT)
                     except Exception as e:
                         log(f"mid_turn_heartbeat tick failed: {e}")
                     last_cn_poll = time.monotonic()

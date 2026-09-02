@@ -313,7 +313,7 @@ class FeatureFlagsSkill:
                     "latency_ms": (time.time() - start_time) * 1000,
                 }
 
-        # Whitelist allowed operations
+        # Whitelist allowed operations (used for documentation + future strict validation)
         ALLOWED_OPERATIONS = {
             "is_enabled", "set_enabled", "describe_all", "tier_of",
             "can_promote_to", "worker_engine_mode", "set_worker_engine_mode"

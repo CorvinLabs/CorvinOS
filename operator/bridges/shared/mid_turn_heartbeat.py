@@ -56,7 +56,7 @@ _DONE_RE = re.compile(r"⟦bgdone:([^⟧]{1,80})⟧")
 # the channel. The closing ⟧ is optional and the label is unbounded up to the
 # next ⟧/newline — a marker split across chunks (no ⟧ yet) or one whose label
 # blew past the 80/120 parse caps is removed all the same.
-_ANY_RE = re.compile(r"⟦bg(?:task|step|done):[^⟧\n]*⟧?")
+_ANY_RE = re.compile(r"⟦bg(?:task|step|done):[^⟧\n⟦]*⟧?")
 # In the streaming live-scan we can advance the scan index past everything but
 # the last ~this-many chars — only a marker split across the final chunk could
 # still be incomplete, and no complete marker is longer than this (prefix
@@ -252,6 +252,38 @@ def clear_session(state_dir: str | Path, session_key: str) -> int:
 def active_count(state_dir: str | Path) -> int:
     d = _dir(state_dir)
     return len(list(d.glob("*.json"))) if d.is_dir() else 0
+
+
+def sweep(state_dir: str | Path, *, max_age_s: float = MAX_AGE_S,
+          now: float | None = None) -> int:
+    """Remove corrupt + past-``max_age_s`` marker files WITHOUT emitting anything.
+    ``deliver_due`` normally does this GC, but the adapter gates it behind the
+    flag — so when the flag is OFF, residual markers from a prior flag-ON phase
+    would otherwise linger forever. The main loop calls this in the flag-OFF
+    branch to keep the same bounded cleanup. Never raises."""
+    removed = 0
+    now = time.time() if now is None else now
+    try:
+        with _lock:
+            d = _dir(state_dir)
+            if not d.is_dir():
+                return 0
+            for p in sorted(d.glob("*.json")):
+                try:
+                    rec = _load(p)
+                    stale = rec is None or (now - float(rec.get("started_at", now))) >= max_age_s
+                    if stale:
+                        p.unlink()
+                        removed += 1
+                except Exception:  # noqa: BLE001 — a bad file: drop it, keep sweeping
+                    try:
+                        p.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
+    except Exception:  # noqa: BLE001
+        pass
+    return removed
 
 
 # ── Delivery (called from the adapter main loop) ────────────────────────────
