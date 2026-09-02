@@ -306,9 +306,12 @@ async def get_pipeline(
     # with `vibe_engineering_active` off an authored `llm_synthesis`/`toolforge` sits
     # permanently `deferred`. The editor must be able to say so instead of showing a
     # pipeline that looks armed and silently is not.
+    # Phase 1 k=2-5 refactoring: Uses os.vibe_engineering Skill instead of feature flag.
     try:
-        from .. import feature_flags as _ff  # noqa: PLC0415
-        _active = bool(_ff.is_enabled("vibe_engineering_active", rec.tenant_id))
+        from core.skills.skill_registry_phase1 import get_registry as _get_vibe_registry  # noqa: PLC0415
+        _vibe_registry = _get_vibe_registry()
+        _vibe_result = _vibe_registry.execute("os.vibe_engineering", {"tenant_id": rec.tenant_id})
+        _active = bool(_vibe_result.status == "success" and _vibe_result.output.get("enabled", False))
     except Exception:  # noqa: BLE001 — unknown → report not-active (honest default)
         _active = False
     return {

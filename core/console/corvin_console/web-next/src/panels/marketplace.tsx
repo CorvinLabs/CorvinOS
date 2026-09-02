@@ -22,7 +22,19 @@ interface Plugin {
   tier: 'buildin' | 'contributor'
   author: string
   rating?: number
-  installs?: number
+  install_count?: number
+  tags?: string[]
+}
+
+/** One record from the plugin registry surface (GET /api/v1/plugins). */
+interface InstalledPlugin {
+  plugin_id: string
+  version: string
+  display_name: string
+  plugin_type: string
+  origin: string
+  enabled: boolean
+  runtime_loaded?: boolean
 }
 
 interface PluginListResponse {
@@ -49,6 +61,8 @@ export const MarketplacePanel: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedPlugin, setSelectedPlugin] = useState<Plugin | null>(null)
+  const [installed, setInstalled] = useState<InstalledPlugin[]>([])
+  const [installedNotice, setInstalledNotice] = useState<string | null>(null)
   const [category, setCategory] = useState('')
   const [installProgress, setInstallProgress] = useState<Record<string, InstallProgress>>({})
   const [installingExtensionId, setInstallingExtensionId] = useState<string | null>(null)
@@ -98,11 +112,16 @@ export const MarketplacePanel: React.FC = () => {
     try {
       setLoading(true)
       setError(null)
-      // New ADR-0511 API: /api/v1/marketplace/plugins (with optional category/tier filters)
-      const url = new URL(`${BASE}/api/v1/marketplace/plugins`)
-      if (category) url.searchParams.append('category', category)
+      // New ADR-0511 API: /api/v1/marketplace/plugins (with optional category/tier filters).
+      // BASE is a root-relative path, so URL() cannot parse it without an origin —
+      // build the query string directly instead.
+      const params = new URLSearchParams()
+      if (category) params.set('category', category)
+      const query = params.toString()
 
-      const response = await fetch(url.toString())
+      const response = await fetch(
+        `${BASE}/api/v1/marketplace/plugins${query ? `?${query}` : ''}`
+      )
       if (!response.ok) throw new Error(`Failed: ${response.statusText}`)
       const data: PluginListResponse = await response.json()
       if (isMountedRef.current) {
@@ -121,11 +140,21 @@ export const MarketplacePanel: React.FC = () => {
     try {
       setLoading(true)
       setError(null)
-      const response = await fetch(`${BASE}/api/v2/marketplace/installed`)
+      setInstalledNotice(null)
+      const response = await fetch(`${BASE}/api/v1/plugins`)
+      if (response.status === 404) {
+        // ADR-0233: the plugin console surface ships dark; the route is mounted
+        // but 404s while the flag is off. Not an error the operator can act on.
+        if (isMountedRef.current) {
+          setInstalled([])
+          setInstalledNotice('Plugin console surface is disabled (plugin_console_surface).')
+        }
+        return
+      }
       if (!response.ok) throw new Error(`Failed: ${response.statusText}`)
       const data = await response.json()
       if (isMountedRef.current) {
-        setExtensions(data.extensions || [])
+        setInstalled(data.plugins || [])
       }
     } catch (err) {
       if (isMountedRef.current) {
@@ -135,6 +164,18 @@ export const MarketplacePanel: React.FC = () => {
       if (isMountedRef.current) setLoading(false)
     }
   }
+
+  /** Render an installed record in the marketplace detail modal. */
+  const toPluginView = (rec: InstalledPlugin): Plugin =>
+    plugins.find(p => p.id === rec.plugin_id) ?? {
+      id: rec.plugin_id,
+      name: rec.display_name || rec.plugin_id,
+      version: rec.version,
+      category: rec.plugin_type,
+      description: 'Installed plugin — no marketplace listing available.',
+      tier: rec.origin === 'builtin' ? 'buildin' : 'contributor',
+      author: rec.origin,
+    }
 
   const handleInstall = async (plugin: Plugin) => {
     // Phase 3 Task #7: Real job API wiring
@@ -341,8 +382,8 @@ export const MarketplacePanel: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredPlugins.map(ext => (
                 <div
-                  key={ext.plugin_id}
-                  onClick={() => setSelectedExtension(ext)}
+                  key={ext.id}
+                  onClick={() => setSelectedPlugin(ext)}
                   className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 p-4 cursor-pointer hover:shadow-md transition"
                 >
                   <div className="flex justify-between items-start mb-2">
@@ -358,8 +399,8 @@ export const MarketplacePanel: React.FC = () => {
                     {ext.description}
                   </p>
                   <div className="flex justify-between items-center text-xs text-slate-500">
-                    <span>{ext.download_count} downloads</span>
-                    <span>★ {ext.rating_average.toFixed(1)}</span>
+                    <span>{ext.install_count ?? 0} downloads</span>
+                    <span>★ {(ext.rating ?? 0).toFixed(1)}</span>
                   </div>
                 </div>
               ))}
@@ -382,10 +423,12 @@ export const MarketplacePanel: React.FC = () => {
             <div className="text-center py-8">
               <Loader className="w-8 h-8 animate-spin mx-auto" />
             </div>
-          ) : extensions.length === 0 ? (
+          ) : installed.length === 0 ? (
             <div className="bg-white dark:bg-slate-900 rounded-lg p-8 text-center">
               <Check className="w-12 h-12 text-green-600 mx-auto mb-3" />
-              <p className="text-slate-600 dark:text-slate-400">No installed extensions yet</p>
+              <p className="text-slate-600 dark:text-slate-400">
+                {installedNotice ?? 'No installed extensions yet'}
+              </p>
               <button
                 onClick={() => setView('browse')}
                 className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -395,21 +438,21 @@ export const MarketplacePanel: React.FC = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {extensions.map(ext => (
+              {installed.map(ext => (
                 <div key={ext.plugin_id} className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 p-4 hover:shadow-md transition-shadow">
                   <div className="flex items-start justify-between mb-3">
                     <div>
-                      <h3 className="font-semibold text-slate-900 dark:text-white">{ext.name || ext.plugin_id}</h3>
+                      <h3 className="font-semibold text-slate-900 dark:text-white">{ext.display_name || ext.plugin_id}</h3>
                       <p className="text-xs text-slate-500">{ext.version}</p>
                     </div>
                     <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200">
                       Active
                     </span>
                   </div>
-                  <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">{ext.category}</p>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">{ext.plugin_type}</p>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => setSelectedExtension(ext as any)}
+                      onClick={() => setSelectedPlugin(toPluginView(ext))}
                       className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white rounded hover:bg-slate-200 dark:hover:bg-slate-700"
                     >
                       Details
@@ -433,20 +476,20 @@ export const MarketplacePanel: React.FC = () => {
       )}
 
       {/* Detail Modal */}
-      {selectedExtension && (
+      {selectedPlugin && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white dark:bg-slate-900 rounded-lg max-w-2xl w-full my-8 max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 p-6 flex justify-between items-start">
               <div>
                 <h2 className="text-2xl font-bold text-slate-900 dark:text-white">
-                  {selectedExtension.name}
+                  {selectedPlugin.name}
                 </h2>
                 <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                  v{selectedExtension.version} • {selectedExtension.category}
+                  v{selectedPlugin.version} • {selectedPlugin.category}
                 </p>
               </div>
               <button
-                onClick={() => setSelectedExtension(null)}
+                onClick={() => setSelectedPlugin(null)}
                 className="text-2xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
               >
                 ✕
@@ -458,52 +501,52 @@ export const MarketplacePanel: React.FC = () => {
                 <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 uppercase">
                   Description
                 </h3>
-                <p className="text-slate-600 dark:text-slate-300">{selectedExtension.description}</p>
+                <p className="text-slate-600 dark:text-slate-300">{selectedPlugin.description}</p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-slate-600 dark:text-slate-400 uppercase">Author</p>
                   <p className="text-sm font-medium text-slate-900 dark:text-white">
-                    {selectedExtension.author_id}
+                    {selectedPlugin.author}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-slate-600 dark:text-slate-400 uppercase">Downloads</p>
                   <p className="text-sm font-medium text-slate-900 dark:text-white">
-                    {selectedExtension.download_count}
+                    {selectedPlugin.install_count ?? 0}
                   </p>
                 </div>
               </div>
 
               {/* Install status message */}
-              {installProgress[selectedExtension.plugin_id] && (
+              {installProgress[selectedPlugin.id] && (
                 <div className={`p-3 rounded-lg text-sm ${
-                  installProgress[selectedExtension.plugin_id].status === 'success'
+                  installProgress[selectedPlugin.id].status === 'success'
                     ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-200'
-                    : installProgress[selectedExtension.plugin_id].status === 'error'
+                    : installProgress[selectedPlugin.id].status === 'error'
                     ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-200'
                     : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-200'
                 }`}>
                   <div className="flex items-center gap-2">
-                    {installProgress[selectedExtension.plugin_id].status === 'installing' && (
+                    {installProgress[selectedPlugin.id].status === 'installing' && (
                       <Loader className="w-4 h-4 animate-spin" />
                     )}
-                    {installProgress[selectedExtension.plugin_id].status === 'success' && (
+                    {installProgress[selectedPlugin.id].status === 'success' && (
                       <Check className="w-4 h-4" />
                     )}
-                    {installProgress[selectedExtension.plugin_id].message}
+                    {installProgress[selectedPlugin.id].message}
                   </div>
                 </div>
               )}
 
               <div className="flex gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
                 <button
-                  onClick={() => handleInstall(selectedExtension)}
-                  disabled={installProgress[selectedExtension.plugin_id]?.status === 'installing'}
+                  onClick={() => handleInstall(selectedPlugin)}
+                  disabled={installProgress[selectedPlugin.id]?.status === 'installing'}
                   className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-400 font-medium flex items-center justify-center gap-2"
                 >
-                  {installProgress[selectedExtension.plugin_id]?.status === 'installing' ? (
+                  {installProgress[selectedPlugin.id]?.status === 'installing' ? (
                     <>
                       <Loader className="w-4 h-4 animate-spin" />
                       Installing...
@@ -526,10 +569,10 @@ export const MarketplacePanel: React.FC = () => {
       )}
 
       {/* Install Progress Modal (Phase 2 Week 2) */}
-      {installingExtensionId && extensions.find(e => e.plugin_id === installingExtensionId) && (
+      {installingExtensionId && plugins.find(p => p.id === installingExtensionId) && (
         <InstallProgress
           extensionId={installingExtensionId}
-          extensionName={extensions.find(e => e.plugin_id === installingExtensionId)?.name || 'Unknown'}
+          extensionName={plugins.find(p => p.id === installingExtensionId)?.name || 'Unknown'}
           onClose={handleInstallClose}
           onComplete={() => handleInstallComplete(installingExtensionId)}
         />

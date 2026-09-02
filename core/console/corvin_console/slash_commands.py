@@ -111,10 +111,18 @@ _HELP = (
 # created or consulted.
 
 def _plugin_builder_enabled(tenant_id: str) -> bool:
+    """Check if plugin builder /build command is enabled via os.plugin_builder Skill.
+
+    Phase 1 k=2-5 refactoring: Uses Skill instead of feature flag.
+    """
     try:
-        from . import feature_flags
-        return feature_flags.is_enabled("plugin_builder_enabled", tenant_id)
-    except Exception:  # noqa: BLE001 — a broken flag lookup must not break a turn
+        from core.skills.skill_registry_phase1 import get_registry
+        registry = get_registry()
+        result = registry.execute("os.plugin_builder", {"enabled": True, "tenant_id": tenant_id})
+        if result.status == "success":
+            return bool(result.output.get("enabled", False))
+        return False
+    except Exception:  # noqa: BLE001 — a broken Skill lookup must not break a turn
         return False
 
 

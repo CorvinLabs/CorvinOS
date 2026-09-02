@@ -9,7 +9,7 @@
  * - Click to view detailed metrics
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle, TrendingUp, Clock, AlertTriangle, Brain } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -283,7 +283,7 @@ export default SkillsOverviewPanel;
 // TODO: Link to Corvin-Marketplace (ADR-0511)
 // For now: show skill source + install status
 
-interface MarketplaceAction {
+export interface MarketplaceAction {
   type: "installed" | "available" | "update-available";
   source: "bundled" | "marketplace" | "custom";
 }

@@ -181,11 +181,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # why each step sits where it does.
         _plugins_loaded = _boot_platform()  # raises TripwireError -> boot aborts
 
-        # ADR-0231 Stage 2 — health polling, behind plugin_health_monitoring.
-        # Flag off (the default) means NO timer is created at all: the /plugins
+        # ADR-0231 Stage 2 — health polling, via os.plugin_health_monitoring Skill
+        # (replaces feature flag, Phase 1 k=2-5 refactoring).
+        # Skill disabled (the default) means NO timer is created at all: the /plugins
         # health route still answers from the breaker state, which costs nothing.
         try:
-            from corvin_core import feature_flags as _hflags
+            from core.skills.skill_registry_phase1 import get_registry as _get_registry
             from corvin_console.routes import plugins as _plugins_route
             from corvin_plugins.bootstrap import build_context as _build_ctx
             from corvin_plugins.health import HealthCollector as _HealthCollector
@@ -193,19 +194,24 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             from forge.tenants import current_tenant as _hc_tenant
 
             _htid = _hc_tenant()
-            if _hflags.is_enabled("plugin_health_monitoring", _htid):
+            _hm_registry = _get_registry()
+            _hm_result = _hm_registry.execute("os.plugin_health_monitoring", {"enabled": True})
+
+            if _hm_result.status == "success" and _hm_result.output.get("enabled"):
                 _hc_audit = _build_ctx(
                     plugin_id="health-collector",
                     tenant_id=_htid,
                     corvin_home=_hc_home(),
                 ).audit_emit
-                # ADR-0231 Stage 3 — self-healing, its own flag and default off.
+                # ADR-0231 Stage 3 — self-healing, its own Skill and default off.
                 # The collector is the only poller, so healing hangs off it rather
                 # than adding a second timer that would double the health load.
                 from corvin_plugins.healing import HealingOrchestrator as _Healer
+                from core.skills.skill_registry_phase1 import get_registry as _get_sh_registry
 
+                _sh_registry = _get_sh_registry()
                 _healer = _Healer(
-                    enabled=lambda: _hflags.is_enabled("plugin_self_healing", _htid),
+                    enabled=lambda: _sh_registry.execute("os.plugin_health_monitoring", {"enabled": True}).output.get("enabled", False),
                     audit_emit=_hc_audit,
                 )
                 _health_collector = _HealthCollector(
@@ -217,7 +223,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             import logging as _hc_log
             _hc_log.getLogger("corvin.plugins.health").warning(
-                "health collector not started", exc_info=True
+                "health collector not started (Skills registry unavailable?)", exc_info=True
             )
     if not hasattr(app.state, "dispatcher") or app.state.dispatcher is None:
         app.state.dispatcher = RunDispatcher()
