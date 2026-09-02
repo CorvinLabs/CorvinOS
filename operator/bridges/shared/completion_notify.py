@@ -109,6 +109,16 @@ def _pid_alive(pid: int) -> bool:
         return True  # unknown → assume alive (conservative: don't reap)
 
 
+def _pid_from_rec(pid) -> "int | None":
+    """Parse a record's ``producer_pid`` to an int, or None when it is missing /
+    malformed. A None result must be treated as "unknown → alive" by callers
+    (do NOT reap) — never let a garbage pid raise out of the reap path."""
+    try:
+        return int(pid)
+    except (TypeError, ValueError):
+        return None
+
+
 def _host_boot_id() -> str:
     """Best-effort host boot identifier so a reused pid after a reboot is not
     mistaken for a live producer. Empty string when unavailable (Windows/mac):
