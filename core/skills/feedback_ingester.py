@@ -138,18 +138,126 @@ class FeedbackIngester:
         sanitized['sha256_prev'] = prev_hash
         json_line = json.dumps(sanitized) + '\n'
 
-        # Atomic write: write to tmp, then rename
-        tmp_file = self.feedback_log.with_suffix('.tmp')
-        try:
-            with open(tmp_file, 'a') as f:
-                f.write(json_line)
-            tmp_file.replace(self.feedback_log)
-
-            # Update hash cache atomically
-            new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-            tmp_hash_file = self.last_hash_file.with_suffix('.tmp')
-            tmp_hash_file.write_text(new_hash)
-            tmp_hash_file.replace(self.last_hash_file)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
+# Atomic write: write hash FIRST
+        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
+        tmp_hash_file.write_text(new_hash)
+        tmp_hash_file.replace(self.last_hash_file)
+        
+        # THEN write feedback
+        tmp_file = self.feedback_log.with_suffix(".tmp")
+        tmp_file.write_text(json_line)
+        tmp_file.replace(self.feedback_log)
 
             return True
         except Exception as e:
