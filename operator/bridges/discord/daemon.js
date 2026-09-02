@@ -1044,7 +1044,11 @@ async function sendDiscord(payload, _fpath) {
 
   // Real reply incoming — delete the sticky progress message first so the
   // chat shows the answer cleanly without a stale status line above it.
-  if (sticky.hasProgress(chId)) {
+  // EXCEPTION: a mid-turn STATUS message (_task_progress) is a normal new
+  // message, NOT the final reply — it must not delete the liveness sticky, or a
+  // "🔧 Phase 2/4" line would wipe the "⏱️ läuft seit N min" sticky that is
+  // still tracking the in-flight task. Let it fall through to the send below.
+  if (!payload._task_progress && sticky.hasProgress(chId)) {
     const prog = sticky.getProgress(chId);
     if (prog && prog.msg) {
       try {

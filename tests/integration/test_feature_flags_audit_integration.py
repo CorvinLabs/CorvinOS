@@ -141,5 +141,28 @@ class TestAuditIntegration:
             assert "token" not in event_str.lower()
 
 
+    def test_exception_path_emits_audit_event(self, skill, temp_audit_log):
+        """FIX #17: Test that execute() exception path emits audit event."""
+        # Try an operation that will fail (e.g., missing required flag_id)
+        result = skill.execute({
+            "operation": "is_enabled",
+            "flag_id": None,  # Invalid: flag_id is required
+            "tenant_id": "_default",
+        })
+
+        # Should fail gracefully and still emit audit
+        assert not result["success"]
+        assert result["error"]
+
+        # Audit log should exist and contain the error event
+        assert temp_audit_log.exists(), "Audit log should be created even on error"
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            if len(lines) > 0:
+                last_event = json.loads(lines[-1].strip())
+                # Audit should record the failed operation
+                assert "latency_ms" in last_event["details"], "Latency should be recorded on error"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

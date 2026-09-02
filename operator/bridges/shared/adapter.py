@@ -4387,6 +4387,23 @@ def system_prompt_for(channel: str) -> str:
         _rule1 = ("1. Reply in the user's language. If they wrote in German, reply "
                   "in German; if in English, reply in English. Match their "
                   "language consistently.")
+    # ADR-0551 C1-B — mid-turn background-task markers (ship-dark, default OFF).
+    # ONLY when the flag is on do we teach the model the marker protocol; the
+    # reply-hook parses+strips these so they never reach the channel. Flag off ⇒
+    # the block is not added at all (ship-dark: no behavioral change).
+    _bg_marker_block = ""
+    if _bg_flag("bridge_mid_turn_task_notify"):
+        _bg_marker_block = (
+            "\n\nBackground-task progress markers (only for genuinely long, "
+            "multi-phase background work — otherwise omit entirely):\n"
+            "   - When you START such a task, emit ⟦bgtask:<short label>⟧.\n"
+            "   - On each phase/iteration change, emit "
+            "⟦bgstep:<label>|<short status>⟧.\n"
+            "   - When it FINISHES, emit ⟦bgdone:<label>⟧.\n"
+            "   The system removes these markers from your reply — they are "
+            "NEVER shown to the user; they only drive a slim 'still working…' "
+            "status line. Use them sparingly."
+        )
     return f"""You are being addressed through a {label} bridge.
 The human is verified (whitelist) and has explicitly granted you full
 access — you may use any tools.
@@ -4442,7 +4459,7 @@ When information is missing or unclear, ask back:
 
 The Tier 2 memory block above lists all topic files with one-line
 summaries; when a user message touches one of those topics, read the
-specific file via Read to get the full body before answering."""
+specific file via Read to get the full body before answering.""" + _bg_marker_block
 
 
 # Backwards-compat alias for any external import.

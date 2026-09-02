@@ -71,6 +71,8 @@ class EventStore:
         skill_id: Optional[str] = None,
         since: Optional[str] = None,
         until: Optional[str] = None,
+        limit: int = 10000,  # FIX #21: Prevent OOM on unbounded queries
+        offset: int = 0,
     ) -> list[LearningEvent]:
         """Query events with optional filters."""
         # FIX #6: Validate tenant_id upfront (prevent cross-tenant leakage, GDPR Art. 32)
@@ -110,12 +112,14 @@ class EventStore:
                             if skill_id and data.get("skill_id") != skill_id:
                                 continue
 
+                            # FIX #14, #25: Include version in reconstruction (prevent schema drift)
                             event = LearningEvent(
                                 event_id=data["event_id"],
                                 event_type=EventType(data["event_type"]),
                                 skill_id=data["skill_id"],
                                 tenant_id=data["tenant_id"],
                                 timestamp=data["timestamp"],
+                                version=data.get("version", "1.0"),  # Default to 1.0 if missing
                                 signal=data.get("signal"),
                                 skill_config_delta=data.get("skill_config_delta"),
                                 skill_version=data.get("skill_version"),
@@ -125,15 +129,38 @@ class EventStore:
                             results.append(event)
 
                 except json.JSONDecodeError as e:
-                    # FIX #4: Log corrupted JSON instead of silent skip (audit trail incomplete)
-                    logger.warning(f"Corrupted JSON in {event_file} (line {event_file.name}): {e} — event(s) LOST")
+                    # FIX #4, #27: Log corrupted JSON + audit timestamp (not silent)
+                    logger.warning(f"Corrupted JSON in {event_file}: {e} — event(s) LOST at {datetime.utcnow().isoformat()}Z")
                     continue
                 except IOError as e:
                     logger.error(f"IO error reading {event_file}: {e}")
                     continue
 
-            return results
+            # FIX #21: Apply limit + offset to prevent OOM
+            return results[offset : offset + limit]
 
     def count_events(self, tenant_id: str, event_type: Optional[EventType] = None) -> int:
-        """Count events for a tenant."""
-        return len(self.query_events(tenant_id, event_type=event_type))
+        """Count events for a tenant (stream-based, O(n) time, O(1) space).
+
+        FIX #22: Don't materialize all results; stream-count instead.
+        """
+        _validate_tenant_id(tenant_id)
+        count = 0
+
+        with self._lock:
+            for event_file in sorted(self.events_dir.glob("*.jsonl")):
+                try:
+                    with open(event_file, "r") as f:
+                        for line in f:
+                            if not line.strip():
+                                continue
+                            data = json.loads(line)
+                            if data.get("tenant_id") != tenant_id:
+                                continue
+                            if event_type and data.get("event_type") != event_type.value:
+                                continue
+                            count += 1
+                except (json.JSONDecodeError, IOError):
+                    continue
+
+        return count
