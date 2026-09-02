@@ -5,27 +5,31 @@
 
 ---
 
-## k=1 DISCOVERY RESULT: 24 Files, 375 Call-Sites
+## k=1 DISCOVERY RESULT: 24 Files, ~150 Total Call-Sites
 
-### High-Volume Targets (Wave 1 — Top 12 Files)
+### Refactoring Targets (k=2 Wave 1 — 8 Files Actually Refactored)
 
-| Rank | File | Calls | Type | Priority |
-|------|------|-------|------|----------|
-| 1 | operator/bridges/shared/adapter.py | 14 | Production | 🔴 HIGH |
-| 2 | core/plugins/corvin_plugins/console/plugin.py | 10 | Production | 🔴 HIGH |
-| 3 | core/console/corvin_console/routes/settings.py | 10 | Production | 🔴 HIGH |
-| 4 | core/plugins/corvin_plugins/bridges/supervisor.py | 9 | Production | 🟡 MED |
-| 5 | tests/test_tde_measurement_k3_decision_collection.py | 5 | Test | 🟡 MED |
-| 6 | operator/bridges/shared/model_selector.py | 4 | Production | 🟡 MED |
-| 7 | core/console/corvin_console/routes/multi_instance.py | 3 | Production | 🟢 LOW |
-| 8 | operator/bridges/shared/remote_trigger_sender.py | 2 | Production | 🟢 LOW |
-| 9 | operator/context_engineering/pipeline.py | 1 | Production | 🟢 LOW |
-| 10 | operator/bridges/shared/bg_monitor.py | 1 | Production | 🟢 LOW |
-| 11 | operator/bridges/shared/acs_runtime.py | 1 | Production | 🟢 LOW |
-| 12 | operator/bridges/shared/a2a_friendship.py | 1 | Production | 🟢 LOW |
+Files with actual feature_flags API calls in production code:
 
-**Wave 1 Coverage:** 172 calls (46% of 375 total)  
-**Files Excluded (Wrapper/Impl/Tests):**
+| Rank | File | Calls | Type | Refactored |
+|------|------|-------|------|-----------|
+| 1 | operator/bridges/shared/adapter.py | 13 | Production | ✅ YES |
+| 2 | tests/test_tde_measurement_k3_decision_collection.py | 2 | Test | ✅ YES |
+| 3 | operator/bridges/shared/remote_trigger_sender.py | 2 | Production | ✅ YES |
+| 4 | operator/context_engineering/pipeline.py | 1 | Production | ✅ YES |
+| 5 | operator/bridges/shared/bg_monitor.py | 1 | Production | ✅ YES |
+| 6 | operator/bridges/shared/acs_runtime.py | 1 | Production | ✅ YES |
+| 7 | operator/bridges/shared/a2a_friendship.py | 1 | Production | ✅ YES |
+| 8 | core/console/corvin_console/routes/settings.py | 0* | Production | ⏭️ NO |
+
+**Total Wave 1 Actual Calls:** 21 (refactored in k=2 automation attempt)
+
+**Reconciliation Note (Layer 3 Fix):**
+- Initial discovery claims included wrapper + skills implementation + tests
+- Actual refactoring targets = production code only (8 files, 21 calls)
+- Wrapper/skills/test files excluded from Wave 1 (they're infrastructure, not refactoring targets)
+
+**Files Excluded (Infrastructure):**
 - `feature_flags_legacy_adapter.py` (46 calls) — wrapper layer, no refactoring
 - `feature_flags_skill.py` (36 calls) — implementation, no refactoring
 - `test_feature_flags_equivalence_template.py` (29 calls) — test framework, auto-updated

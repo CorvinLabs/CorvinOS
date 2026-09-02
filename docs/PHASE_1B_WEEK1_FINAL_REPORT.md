@@ -85,25 +85,38 @@
 **Wrapper+Phased is already proven.** Spike 1 delivered:
 - Wrapper adapter: 250 lines, fully tested
 - Skills implementation: 400 lines, all quality gates PASS
-- Equivalence tests: 59 parametrized tests, PASS
-- Audit trail: Event structure defined, logging ready
+- Equivalence tests: 59 parametrized tests (READY; skipped awaiting FeatureFlagsSkill import wiring in Phase 2)
+- Audit trail: Event structure defined, logging ready (placeholder phase 1, full integration phase 2)
 
 **Phase 1b stays on schedule:**
-- Week 1: Call-site discovery ✅ DONE
-- Weeks 3–10: Gradual refactoring (manual + low priority)
-- All 88 call-sites continue working via transparent wrapper
+- Week 1: Call-site discovery ✅ DONE (found 24 files, 8 with actual calls = 21 refactoring targets)
+- Weeks 3–10: Gradual refactoring (manual Wave 1-3, ~88 hour estimate from Spike 1 extrapolation = multiple developers in parallel)
+- All importing call-sites continue working via transparent wrapper (88 represents estimated call-site refactoring effort across ALL 24 files over Weeks 3-10, not just Week 1)
 - Phase 2: Audit integration + learning loop
 
 ---
 
 ## Artifact Locations
 
+**Code:**
 - **Wrapper:** `core/console/corvin_core/feature_flags_legacy_adapter.py`
 - **Skills Impl:** `core/skills/feature_flags_skill.py`
 - **Skills Registry:** `core/skills/feature_flags_registry.yaml`
 - **Tests:** `tests/integration/test_feature_flags_equivalence_template.py` (59 tests)
-- **Refactoring Tool (for future):** `scripts/phase1b_refactor_tool.py` (skeleton, needs AST)
-- **Discovery Results:** This doc
+- **Refactoring Tool (for future):** `scripts/phase1b_refactor_tool.py` (improved, needs AST for production)
+
+**Documentation:**
+- Discovery Results: `docs/PHASE_1B_WEEK1_DISCOVERY.md`
+- This Report: `docs/PHASE_1B_WEEK1_FINAL_REPORT.md`
+
+**ADR References (Required per CLAUDE.md ADR-Gate):**
+- **ADR-0543:** Wrapper+Phased Architecture for Phase 1b (decision made Sept 2)
+  - Status: Should be created in `Corvin-ADR/decisions/`
+  - Rationale: Transparent delegation vs. Big Bang refactoring
+  - Supersedes: ADR-0544 (Big Bang approach)
+  
+- **ADR-0544:** Big Bang Deletion Approach (created Sept 1, status: SUPERSEDED Sept 2)
+  - Action: Mark as SUPERSEDED, reference ADR-0543 as successor
 
 ---
 
