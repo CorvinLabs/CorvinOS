@@ -1,5 +1,66 @@
-<svg viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1000" height="400" fill="#f5f5f5" stroke="#999" stroke-width="1"/>
-  <text x="500" y="200" font-size="20" font-weight="bold" text-anchor="middle" fill="#999">Hash-Chain Integrity Proof</text>
-  <text x="500" y="240" font-size="12" text-anchor="middle" fill="#ccc">(SVG Diagram)</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="600" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Immutable Hash Chain (Proof of Work)</text>
+  <rect x="50" y="150" width="180" height="250" class="box" rx="4"/>
+  <text x="140" y="280" text-anchor="middle" class="label">Block N-2
+
+hash:
+0xabc123...
+
+data: Skill
+Executed
+(Context
+Adapter)</text>
+  <rect x="360" y="150" width="180" height="250" class="box-green" rx="4"/>
+  <text x="450" y="280" text-anchor="middle" class="label">Block N-1
+
+prev_hash:
+0xabc123... ✅
+
+hash:
+0xdef456...
+
+data: Feedback
+Received</text>
+  <rect x="670" y="150" width="180" height="250" class="box-green" rx="4"/>
+  <text x="760" y="280" text-anchor="middle" class="label">Block N
+
+prev_hash:
+0xdef456... ✅
+
+hash:
+0xghi789...
+
+data: Config
+Optimized</text>
+  <path d="M 230 270 L 360 270" class="arrow-green" stroke-width="3"/>
+  <path d="M 540 270 L 670 270" class="arrow-green" stroke-width="3"/>
+  <text x="330" y="290" class="small">Link ✅</text>
+  <text x="640" y="290" class="small">Link ✅</text>
+  <text x="50" y="500" class="small">If any event is modified, its hash changes → next event's prev_hash no longer matches → CHAIN BROKEN ❌</text>
+  <text x="50" y="530" class="small">Operator can verify entire chain integrity daily via: corvin audit verify-chain</text>
 </svg>

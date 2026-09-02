@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 500" width="700" height="500">
   <defs>
     <style>
       .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
@@ -23,37 +23,24 @@
       <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
     </marker>
   </defs>
-  <rect width="800" height="600" fill="white"/>
-  <text x="400" y="30" text-anchor="middle" class="title">Tenant Isolation (GDPR Art. 32)</text>
-  <rect x="50" y="100" width="200" height="350" class="box" rx="4"/>
-  <text x="150" y="280" text-anchor="middle" class="label">Tenant A
-
-Audit Trail:
-- Event 1
-- Event 2
-- Event 3
-(Isolated)</text>
-  <rect x="300" y="100" width="200" height="350" class="box-green" rx="4"/>
-  <text x="400" y="280" text-anchor="middle" class="label">Tenant B
-
-Audit Trail:
-- Event 1
-- Event 2
-- Event 3
-(Isolated)</text>
-  <rect x="550" y="100" width="200" height="350" class="box" rx="4"/>
-  <text x="650" y="280" text-anchor="middle" class="label">Tenant C
-
-Audit Trail:
-- Event 1
-- Event 2
-- Event 3
-(Isolated)</text>
-  <text x="270" y="200" class="title">❌</text>
-  <text x="520" y="200" class="title">❌</text>
-  <text x="270" y="350" class="title">❌</text>
-  <text x="520" y="350" class="title">❌</text>
-  <text x="50" y="520" class="small">Every query filtered by tenant_id</text>
-  <text x="50" y="550" class="small">No cross-tenant reads allowed</text>
-  <text x="50" y="580" class="small">Violations detected by audit verification</text>
+  <rect width="700" height="500" fill="white"/>
+  <text x="350" y="30" text-anchor="middle" class="title">Old Routing Logic (Feature Flags)</text>
+  <rect x="50" y="50" width="200" height="80" class="box" rx="4"/>
+  <text x="150" y="95" text-anchor="middle" class="label">Request
+Incoming</text>
+  <path d="M 150 130 L 150 180" class="arrow"/>
+  <rect x="50" y="180" width="200" height="80" class="box" rx="4"/>
+  <text x="150" y="225" text-anchor="middle" class="label">Check:
+if FLAGS.vibe?</text>
+  <path d="M 150 260 L 80 310" class="arrow"/>
+  <path d="M 150 260 L 220 310" class="arrow"/>
+  <rect x="20" y="310" width="120" height="80" class="box-red" rx="4"/>
+  <text x="80" y="355" text-anchor="middle" class="label">❌ No
+Default
+route</text>
+  <rect x="180" y="310" width="120" height="80" class="box-green" rx="4"/>
+  <text x="240" y="355" text-anchor="middle" class="label">✅ Yes
+Vibe
+route</text>
+  <text x="50" y="450" class="small">Problems: No audit, no version, no learning feedback</text>
 </svg>

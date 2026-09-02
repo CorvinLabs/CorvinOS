@@ -1,34 +1,57 @@
-<svg viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg">
-  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Staged Rollout: Zero-Downtime Deployment</text>
-  
-  <line x1="100" y1="100" x2="900" y2="100" stroke="#333" stroke-width="2"/>
-  <text x="100" y="85" font-size="11" fill="#666">Day 1</text>
-  <text x="300" y="85" font-size="11" fill="#666">Day 2</text>
-  <text x="500" y="85" font-size="11" fill="#666">Day 3</text>
-  <text x="700" y="85" font-size="11" fill="#666">Day 5</text>
-  <text x="900" y="85" font-size="11" fill="#666">Day 7</text>
-  
-  <rect x="80" y="120" width="40" height="60" fill="#f57c00"/>
-  <text x="100" y="155" font-size="11" font-weight="bold" text-anchor="middle" fill="#1a1a1a">10%</text>
-  
-  <rect x="280" y="120" width="100" height="60" fill="#f57c00"/>
-  <text x="330" y="155" font-size="11" font-weight="bold" text-anchor="middle" fill="#fff">50%</text>
-  
-  <rect x="480" y="120" width="200" height="60" fill="#388e3c"/>
-  <text x="580" y="155" font-size="11" font-weight="bold" text-anchor="middle" fill="#fff">100%</text>
-  
-  <text x="100" y="220" font-size="11" font-weight="bold" fill="#f57c00">Phase 1: Canary</text>
-  <text x="100" y="240" font-size="10" fill="#666">Deploy v0.4 to 10%</text>
-  <text x="100" y="260" font-size="10" fill="#666">Monitor for 24h</text>
-  
-  <text x="300" y="220" font-size="11" font-weight="bold" fill="#f57c00">Phase 2: Scale</text>
-  <text x="300" y="240" font-size="10" fill="#666">If metrics OK, scale to 50%</text>
-  <text x="300" y="260" font-size="10" fill="#666">Monitor for 24h</text>
-  
-  <text x="480" y="220" font-size="11" font-weight="bold" fill="#388e3c">Phase 3: Full</text>
-  <text x="480" y="240" font-size="10" fill="#666">If metrics OK, full deployment</text>
-  <text x="480" y="260" font-size="10" fill="#666">No restart needed</text>
-  
-  <rect x="100" y="310" width="800" height="50" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" rx="3"/>
-  <text x="500" y="335" font-size="12" font-weight="bold" text-anchor="middle" fill="#388e3c">Downtime: 0 seconds | Rollback time: &lt; 30 seconds</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="1000" height="600" fill="white"/>
+  <text x="500" y="30" text-anchor="middle" class="title">Canary Rollout Timeline (7 Days)</text>
+  <line x1="100" y1="400" x2="900" y2="400" stroke="#111827" stroke-width="2"/>
+  <text x="90" y="430" class="small">Day 1</text>
+  <line x1="100" y1="395" x2="100" y2="405" stroke="#111827" stroke-width="2"/>
+  <text x="210" y="430" class="small">Day 2</text>
+  <line x1="220" y1="395" x2="220" y2="405" stroke="#111827" stroke-width="2"/>
+  <text x="330" y="430" class="small">Day 3</text>
+  <line x1="340" y1="395" x2="340" y2="405" stroke="#111827" stroke-width="2"/>
+  <text x="450" y="430" class="small">Day 4</text>
+  <line x1="460" y1="395" x2="460" y2="405" stroke="#111827" stroke-width="2"/>
+  <text x="570" y="430" class="small">Day 5</text>
+  <line x1="580" y1="395" x2="580" y2="405" stroke="#111827" stroke-width="2"/>
+  <text x="690" y="430" class="small">Day 6</text>
+  <line x1="700" y1="395" x2="700" y2="405" stroke="#111827" stroke-width="2"/>
+  <text x="810" y="430" class="small">Day 7</text>
+  <line x1="820" y1="395" x2="820" y2="405" stroke="#111827" stroke-width="2"/>
+  <rect x="11980" y="300" width="2400" height="80" fill="#10B981" opacity="0.3" stroke="#10B981" stroke-width="2"/>
+  <text x="11990" y="340" class="small">10% Canary</text>
+  <rect x="26380" y="300" width="2400" height="80" fill="#3B82F6" opacity="0.3" stroke="#3B82F6" stroke-width="2"/>
+  <text x="26390" y="340" class="small">50% Scale</text>
+  <rect x="40780" y="300" width="9600" height="80" fill="#10B981" opacity="0.3" stroke="#10B981" stroke-width="2"/>
+  <text x="40790" y="340" class="small">100% Full</text>
+  <text x="100" y="200" class="small">Latency: 45ms (✅ SLA)</text>
+  <text x="100" y="230" class="small">Error Rate: 0.2% (✅ Safe)</text>
+  <text x="100" y="260" class="small">Confidence: 0.87 (✅ High)</text>
+  <rect x="580" y="100" width="150" height="80" class="box-red" rx="4"/>
+  <text x="655" y="145" text-anchor="middle" class="label">HARD STOP
+Gate (Day 4)
+Rollback if
+metrics bad</text>
 </svg>

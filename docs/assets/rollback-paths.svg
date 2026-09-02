@@ -1,5 +1,53 @@
-<svg viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1000" height="400" fill="#f5f5f5" stroke="#999" stroke-width="1"/>
-  <text x="500" y="200" font-size="20" font-weight="bold" text-anchor="middle" fill="#999">Rollback Paths (Instant, Graceful, Emergency)</text>
-  <text x="500" y="240" font-size="12" text-anchor="middle" fill="#ccc">(SVG Diagram)</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="600" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Rollback Strategies (Recovery Paths)</text>
+  <rect x="350" y="50" width="200" height="60" class="box-red" rx="4"/>
+  <text x="450" y="85" text-anchor="middle" class="label">🚨 Issue Detected</text>
+  <polygon points="450,200 520,150 520,250 450,200" fill="#F3F4F6" stroke="#3B82F6" stroke-width="2"/>
+  <text x="440" y="200" class="small">Shallow
+safe?</text>
+  <text x="150" y="180" class="small">✅ YES: Shallow Rollback</text>
+  <path d="M 380 200 L 300 200" class="arrow-green"/>
+  <rect x="100" y="240" width="200" height="100" class="box-green" rx="4"/>
+  <text x="200" y="295" text-anchor="middle" class="label">Delete new Skill config
+
+Recovery Time: <1min
+
+Keep Skill code
+Keep audit trail</text>
+  <text x="680" y="180" class="small">❌ NO: Deep Rollback</text>
+  <path d="M 520 200 L 600 200" class="arrow-red"/>
+  <rect x="600" y="240" width="200" height="100" class="box-red" rx="4"/>
+  <text x="700" y="295" text-anchor="middle" class="label">Revert entire tag
+
+Recovery Time: 5-10min
+
+Full state restore
+Audit trail preserved</text>
+  <text x="50" y="450" class="small">Choice factors: Severity of issue, cost of old version, audit trail integrity</text>
+  <text x="50" y="480" class="small">Both paths: Audit event logged, no silent operations, operator approval required</text>
 </svg>

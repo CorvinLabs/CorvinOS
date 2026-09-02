@@ -1,21 +1,58 @@
-<svg viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg">
-  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Skill Interface Model</text>
-  
-  <rect x="50" y="80" width="900" height="300" fill="#f5f5f5" stroke="#999" stroke-width="1" rx="5"/>
-  
-  <text x="80" y="120" font-size="13" font-weight="bold" fill="#1976d2">class Skill:</text>
-  <text x="100" y="145" font-size="11" fill="#1a1a1a">id: str = "os.routing"</text>
-  <text x="100" y="165" font-size="11" fill="#1a1a1a">version: str = "1.2"</text>
-  <text x="100" y="185" font-size="11" fill="#1a1a1a">dependencies: list = ["os.vibe_engineering"]</text>
-  <text x="100" y="205" font-size="11" fill="#1a1a1a">config: dict = {"threshold": 0.65}</text>
-  
-  <line x1="80" y1="220" x2="920" y2="220" stroke="#ddd" stroke-width="1"/>
-  
-  <text x="100" y="245" font-size="11" fill="#7b1fa2">def execute(self, input: dict) -> dict:</text>
-  <text x="130" y="265" font-size="10" fill="#1a1a1a">if input["complexity"] > self.config["threshold"]:</text>
-  <text x="160" y="285" font-size="10" fill="#1a1a1a">return {"engine": "claude-opus-5"}</text>
-  <text x="130" y="305" font-size="10" fill="#1a1a1a">else:</text>
-  <text x="160" y="325" font-size="10" fill="#1a1a1a">return {"engine": "claude-haiku-4-5"}</text>
-  
-  <text x="80" y="360" font-size="10" fill="#666">✓ Input + output logged to audit trail automatically</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="800" height="600" fill="white"/>
+  <text x="400" y="30" text-anchor="middle" class="title">Skill Interface Model</text>
+  <rect x="50" y="100" width="180" height="300" class="box" rx="4"/>
+  <text x="140" y="255" text-anchor="middle" class="label">Input Dict:
+
+request: {
+  task: 'classify',
+  context: {...},
+  metadata: {...}
+}</text>
+  <rect x="320" y="150" width="160" height="200" class="box-green" rx="4"/>
+  <text x="400" y="255" text-anchor="middle" class="label">Skill
+.execute()
+
+Processing:
+- Parse input
+- Execute logic
+- Emit audit
+- Return result</text>
+  <rect x="570" y="100" width="180" height="300" class="box-green" rx="4"/>
+  <text x="660" y="255" text-anchor="middle" class="label">Output Dict:
+
+result: {
+  route: 'opus',
+  confidence: 0.87,
+  lom: 'L237',
+  audit_event: {...}
+}</text>
+  <path d="M 230 250 L 320 250" class="arrow"/>
+  <path d="M 480 250 L 570 250" class="arrow-green"/>
+  <text x="50" y="450" class="small">Properties: id, version, origin, boot_layer, dependencies, config</text>
+  <text x="50" y="480" class="small">Returns: Immutable output tuple (result, audit_event)</text>
 </svg>

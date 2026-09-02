@@ -1,52 +1,53 @@
-<svg viewBox="0 0 1000 500" xmlns="http://www.w3.org/2000/svg">
-  <!-- Title -->
-  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Skill Composition Tree (DAG)</text>
-
-  <!-- Root: os.context_adapter -->
-  <rect x="350" y="50" width="300" height="60" fill="#e3f2fd" stroke="#1976d2" stroke-width="2" rx="5"/>
-  <text x="500" y="75" font-size="14" font-weight="bold" text-anchor="middle" fill="#1976d2">os.context_adapter v2.0</text>
-  <text x="500" y="95" font-size="11" text-anchor="middle" fill="#666">Composes two Skills below</text>
-
-  <!-- Left dependency: os.delegation_router -->
-  <rect x="100" y="200" width="260" height="60" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2" rx="5"/>
-  <text x="230" y="225" font-size="13" font-weight="bold" text-anchor="middle" fill="#7b1fa2">os.delegation_router v1.2</text>
-  <text x="230" y="245" font-size="10" text-anchor="middle" fill="#666">Routes by complexity threshold</text>
-
-  <!-- Right dependency: os.vibe_engineering -->
-  <rect x="640" y="200" width="260" height="60" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" rx="5"/>
-  <text x="770" y="225" font-size="13" font-weight="bold" text-anchor="middle" fill="#388e3c">os.vibe_engineering v0.3</text>
-  <text x="770" y="245" font-size="10" text-anchor="middle" fill="#666">Analyzes user vibes</text>
-
-  <!-- Arrows from root to dependencies -->
-  <line x1="430" y1="110" x2="280" y2="200" stroke="#1976d2" stroke-width="2" marker-end="url(#arrowhead)"/>
-  <line x1="570" y1="110" x2="720" y2="200" stroke="#1976d2" stroke-width="2" marker-end="url(#arrowhead)"/>
-
-  <!-- Sub-dependencies for os.delegation_router -->
-  <!-- Left-left dependency -->
-  <rect x="30" y="340" width="180" height="60" fill="#fff3e0" stroke="#f57c00" stroke-width="2" rx="5"/>
-  <text x="120" y="365" font-size="12" font-weight="bold" text-anchor="middle" fill="#f57c00">core.complexity_scorer</text>
-  <text x="120" y="385" font-size="10" text-anchor="middle" fill="#666">Scores task complexity</text>
-
-  <!-- Left-right dependency -->
-  <rect x="270" y="340" width="180" height="60" fill="#fce4ec" stroke="#c2185b" stroke-width="2" rx="5"/>
-  <text x="360" y="365" font-size="12" font-weight="bold" text-anchor="middle" fill="#c2185b">core.model_selector</text>
-  <text x="360" y="385" font-size="10" text-anchor="middle" fill="#666">Selects best model</text>
-
-  <!-- Arrows from os.delegation_router to its dependencies -->
-  <line x1="180" y1="260" x2="120" y2="340" stroke="#7b1fa2" stroke-width="2" marker-end="url(#arrowhead)"/>
-  <line x1="260" y1="260" x2="360" y2="340" stroke="#7b1fa2" stroke-width="2" marker-end="url(#arrowhead)"/>
-
-  <!-- Execution example box -->
-  <rect x="50" y="450" width="900" height="35" fill="#f5f5f5" stroke="#999" stroke-width="1" rx="3"/>
-  <text x="500" y="472" font-size="11" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Execution Order: core.complexity_scorer → core.model_selector → os.delegation_router → os.vibe_engineering → os.context_adapter</text>
-
-  <!-- Legend -->
-  <text x="50" y="495" font-size="10" fill="#999">Topologically sorted. Each Skill waits for dependencies to complete. No circular references allowed.</text>
-
-  <!-- Arrow marker -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
   <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#666"/>
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
     </marker>
   </defs>
+  <rect width="900" height="700" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Skill Composition Tree (Dependencies)</text>
+  <rect x="350" y="50" width="200" height="60" class="box" rx="4"/>
+  <text x="450" y="85" text-anchor="middle" class="label">os.context_adapter
+v2.1</text>
+  <rect x="100" y="180" width="150" height="60" class="box-green" rx="4"/>
+  <text x="175" y="215" text-anchor="middle" class="label">os.delegation_router
+v1.2</text>
+  <rect x="650" y="180" width="150" height="60" class="box-green" rx="4"/>
+  <text x="725" y="215" text-anchor="middle" class="label">os.vibe_engineering
+v0.3</text>
+  <rect x="50" y="350" width="150" height="60" class="box" rx="4"/>
+  <text x="125" y="385" text-anchor="middle" class="label">os.session_cache
+v2.1</text>
+  <rect x="250" y="350" width="150" height="60" class="box" rx="4"/>
+  <text x="325" y="385" text-anchor="middle" class="label">os.plugin_loader
+v1.0</text>
+  <rect x="650" y="350" width="150" height="60" class="box" rx="4"/>
+  <text x="725" y="385" text-anchor="middle" class="label">os.memory_engine
+v1.5</text>
+  <path d="M 400 110 L 175 180" class="arrow"/>
+  <path d="M 500 110 L 725 180" class="arrow"/>
+  <path d="M 150 240 L 125 350" class="arrow-green"/>
+  <path d="M 175 240 L 325 350" class="arrow-green"/>
+  <path d="M 725 240 L 725 350" class="arrow-green"/>
+  <text x="50" y="500" class="small">Legend: Boxes = Skill nodes | Arrows = Dependencies | v = version</text>
+  <text x="50" y="530" class="small">DAG validated: No cycles | Topological sort: [3-adapter, 1-router, 4-loader, ...]</text>
 </svg>
