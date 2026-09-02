@@ -144,6 +144,36 @@ async function main() {
     fs.rmSync(home, { recursive: true, force: true });
   }
 
+  // ── 4. A fresh in-flight (young, pending) task is NOT a stall ────────────
+  //     Regression for the queue_stalled_s false-positive: a worker that is
+  //     still running (state=pending, young) must show up as backlog but must
+  //     NOT raise queue_stalled_s — only finished-but-undelivered or genuinely
+  //     old records do.
+  {
+    const h = mkTmpHome();
+    const nd = path.join(h, 'pending_notifications');
+    // Young, still-running task → backlog yes, stall no.
+    writeRec(nd, 'cn_running.json', {
+      id: 'cn_running', state: 'pending', created_at: now - 20, sender: 'u9',
+    });
+    let s = queueStats(h);
+    assert(s.notify_backlog === 1, `young pending counts as backlog (got ${s.notify_backlog})`);
+    assert(
+      s.queue_stalled_s === 0,
+      `young pending is NOT a stall (got queue_stalled_s=${s.queue_stalled_s})`,
+    );
+    // A young FINISHED-but-undelivered ('ready') record IS a delivery stall.
+    writeRec(nd, 'cn_ready.json', {
+      id: 'cn_ready', state: 'ready', created_at: now - 15, sender: 'u9',
+    });
+    s = queueStats(h);
+    assert(
+      s.queue_stalled_s > 0,
+      `young ready (finished, undelivered) IS a stall (got ${s.queue_stalled_s})`,
+    );
+    fs.rmSync(h, { recursive: true, force: true });
+  }
+
   if (failures) {
     console.log(`\n${failures} FAILURE(S)`);
     process.exit(1);

@@ -1010,6 +1010,11 @@ async function sendDiscord(payload, _fpath) {
   // chat with one message per tool call. On the first _progress payload we
   // send a new message and remember it; every subsequent one edits it.
   // When the real reply arrives the sticky message is deleted first.
+  //
+  // Accepted limitation (reviewed, NOT fixed — cosmetic, out of scope): the
+  // sticky slot is keyed by channel (chId), so concurrent tasks in the SAME
+  // channel contend for one slot. A real fix (per-task sticky slots) is a
+  // larger refactor; single-task-per-channel is the common case.
   if (payload._progress && payload.text) {
     const existing = sticky.getProgress(chId);
     if (existing && existing.msg) {
@@ -1044,7 +1049,11 @@ async function sendDiscord(payload, _fpath) {
 
   // Real reply incoming — delete the sticky progress message first so the
   // chat shows the answer cleanly without a stale status line above it.
-  if (sticky.hasProgress(chId)) {
+  // EXCEPTION: a mid-turn STATUS message (_task_progress) is a normal new
+  // message, NOT the final reply — it must not delete the liveness sticky, or a
+  // "🔧 Phase 2/4" line would wipe the "⏱️ läuft seit N min" sticky that is
+  // still tracking the in-flight task. Let it fall through to the send below.
+  if (!payload._task_progress && sticky.hasProgress(chId)) {
     const prog = sticky.getProgress(chId);
     if (prog && prog.msg) {
       try {

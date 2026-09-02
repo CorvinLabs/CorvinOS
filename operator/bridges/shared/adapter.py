@@ -4387,6 +4387,23 @@ def system_prompt_for(channel: str) -> str:
         _rule1 = ("1. Reply in the user's language. If they wrote in German, reply "
                   "in German; if in English, reply in English. Match their "
                   "language consistently.")
+    # ADR-0551 C1-B — mid-turn background-task markers (ship-dark, default OFF).
+    # ONLY when the flag is on do we teach the model the marker protocol; the
+    # reply-hook parses+strips these so they never reach the channel. Flag off ⇒
+    # the block is not added at all (ship-dark: no behavioral change).
+    _bg_marker_block = ""
+    if _bg_flag("bridge_mid_turn_task_notify"):
+        _bg_marker_block = (
+            "\n\nBackground-task progress markers (only for genuinely long, "
+            "multi-phase background work — otherwise omit entirely):\n"
+            "   - When you START such a task, emit ⟦bgtask:<short label>⟧.\n"
+            "   - On each phase/iteration change, emit "
+            "⟦bgstep:<label>|<short status>⟧.\n"
+            "   - When it FINISHES, emit ⟦bgdone:<label>⟧.\n"
+            "   The system removes these markers from your reply — they are "
+            "NEVER shown to the user; they only drive a slim 'still working…' "
+            "status line. Use them sparingly."
+        )
     return f"""You are being addressed through a {label} bridge.
 The human is verified (whitelist) and has explicitly granted you full
 access — you may use any tools.
@@ -4442,7 +4459,7 @@ When information is missing or unclear, ask back:
 
 The Tier 2 memory block above lists all topic files with one-line
 summaries; when a user message touches one of those topics, read the
-specific file via Read to get the full body before answering."""
+specific file via Read to get the full body before answering.""" + _bg_marker_block
 
 
 # Backwards-compat alias for any external import.
@@ -5258,6 +5275,13 @@ def _call_claude_streaming_via_engine(
                             for _lbl, _st in _steps:
                                 _current_bgstep = f"🔧 {_lbl}: {_st}"
                                 on_status(_current_bgstep, tool_name="_bgstep")
+                            # Bound the buffer: everything before _bgstep_scanned
+                            # is processed; only the tail can hold a marker split
+                            # across chunks. Drop the processed prefix so a long
+                            # streaming turn can't grow _bgstep_buf without limit.
+                            if _bgstep_scanned:
+                                _bgstep_buf = _bgstep_buf[_bgstep_scanned:]
+                                _bgstep_scanned = 0
                         except Exception as e:  # noqa: BLE001
                             log(f"bgstep live-scan failed: {e}")
                 elif ev.type == "tool_call":
@@ -11181,29 +11205,35 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             pass
 
     # ADR-0551 C1-B — mid-turn background heartbeat (ship-dark, default OFF).
-    # A fresh reply for this conversation means any prior mid-turn task is done
-    # or superseded → clear its markers; then register any ⟦bgtask:<label>⟧ this
-    # reply announces and STRIP the marker so it never reaches the channel. The
-    # main loop emits the bounded "still working" ping; completion stays with
+    # Registration (⟦bgtask⟧), step (⟦bgstep⟧) and done (⟦bgdone⟧) handling is
+    # GATED on the flag. Tasks are NOT cleared wholesale on every reply — a task
+    # ends only via its own ⟦bgdone:<label>⟧ marker or the MAX_AGE backstop; the
+    # main loop emits the bounded "still working" ping, completion stays with
     # this reply path (variant B — no bridge completion ping, no double-ping).
-    try:
-        if answer and _bg_flag("bridge_mid_turn_task_notify"):
+    # The marker STRIP, however, runs UNCONDITIONALLY (flag-independent): a
+    # ⟦bg…⟧ marker the model emitted must never leak into the channel, even with
+    # the flag off or mid-toggle. Never-raise: a broken heartbeat can't break a
+    # turn, but the strip must still happen.
+    if answer:
+        try:
             try:
                 from . import mid_turn_heartbeat as _mth  # type: ignore
             except ImportError:
                 import mid_turn_heartbeat as _mth  # type: ignore[no-redef]
-            _mth_sk = f"{channel}:{chat_id or sender}"
-            for _lbl in _mth.parse_markers(answer):
-                _mth.mark_active(ROOT, _mth_sk, channel=channel,
-                                 chat_id=chat_id, sender=sender, label=_lbl)
-            for _lbl, _st in _mth.parse_steps(answer):
-                _mth.update_status(ROOT, _mth_sk, channel=channel, chat_id=chat_id,
-                                   sender=sender, label=_lbl, status=_st)
-            for _lbl in _mth.parse_done(answer):
-                _mth.clear_task(ROOT, _mth_sk, _lbl)
+            if _bg_flag("bridge_mid_turn_task_notify"):
+                _mth_sk = f"{channel}:{chat_id or sender}"
+                for _lbl in _mth.parse_markers(answer):
+                    _mth.mark_active(ROOT, _mth_sk, channel=channel,
+                                     chat_id=chat_id, sender=sender, label=_lbl)
+                for _lbl, _st in _mth.parse_steps(answer):
+                    _mth.update_status(ROOT, _mth_sk, channel=channel, chat_id=chat_id,
+                                       sender=sender, label=_lbl, status=_st)
+                for _lbl in _mth.parse_done(answer):
+                    _mth.clear_task(ROOT, _mth_sk, _lbl)
+            # ALWAYS strip — flag-independent — so markers never reach the channel.
             answer = _mth.strip_markers(answer)
-    except Exception:  # noqa: BLE001 — never break a turn on the way out
-        pass
+        except Exception:  # noqa: BLE001 — never break a turn on the way out
+            pass
 
     # Per-channel chunk limits. Discord caps at 2000 chars/message, so
     # we stay well below it here — the daemon would otherwise re-split
@@ -12372,13 +12402,20 @@ def main() -> int:
                     except Exception as e:
                         log(f"task_progress tick failed: {e}")
                     try:  # ADR-0551 C1-B — mid-turn background heartbeat
+                        # Gate on the flag: toggled OFF, no residual marker
+                        # should keep pinging from an earlier flag-on turn.
                         try:
                             from . import mid_turn_heartbeat as _mth2  # type: ignore
                         except ImportError:
                             import mid_turn_heartbeat as _mth2  # type: ignore[no-redef]
-                        hb = _mth2.deliver_due(ROOT, OUTBOX)
-                        if hb:
-                            log(f"mid_turn_heartbeat: delivered {hb} heartbeat(s)")
+                        if _bg_flag("bridge_mid_turn_task_notify"):
+                            hb = _mth2.deliver_due(ROOT, OUTBOX)
+                            if hb:
+                                log(f"mid_turn_heartbeat: delivered {hb} heartbeat(s)")
+                        else:
+                            # Flag OFF: still GC residual markers (deliver_due, which
+                            # normally expires them, is gated) — emit nothing.
+                            _mth2.sweep(ROOT)
                     except Exception as e:
                         log(f"mid_turn_heartbeat tick failed: {e}")
                     last_cn_poll = time.monotonic()
