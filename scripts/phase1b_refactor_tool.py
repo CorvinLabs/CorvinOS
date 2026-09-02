@@ -40,7 +40,7 @@ WAVE_1_FILES = [
 def refactor_is_enabled(content):
     """Refactor is_enabled() calls to Skills API."""
     def replace_fn(match):
-        args = match.group(2)
+        args = match.group(1)
         if ',' in args:
             parts = args.split(',', 1)
             flag = parts[0].strip()
@@ -53,13 +53,14 @@ def refactor_is_enabled(content):
         return f'feature_flags_skill.execute({{"operation": "is_enabled", "flag_id": {flag}, "tenant_id": {tenant}}})["result"]["enabled"]'
 
     # Match both variable-style (_ff.is_enabled) and module-style (_feature_flags_module.is_enabled)
-    pattern = r'(?:_?(?:ff|cel_ff|pb_ff|_ff_badge)|_feature_flags_module)\.is_enabled\(([^)]+)\)'
-    return re.sub(pattern, replace_fn, content)
+    # Capturing group 1: argument list inside parentheses
+    pattern = r'(?:_?(?:ff|cel_ff|pb_ff|_ff_badge)|_feature_flags_module)\.is_enabled\(([^)]*)\)'
+    return re.sub(pattern, replace_fn, content, flags=re.DOTALL)
 
 def refactor_set_enabled(content):
     """Refactor set_enabled() calls."""
     def replace_fn(match):
-        args = match.group(2)
+        args = match.group(1)
         parts = [p.strip() for p in args.split(',')]
 
         if len(parts) == 2:
@@ -76,13 +77,13 @@ def refactor_set_enabled(content):
         return match.group(0)
 
     # Match both variable-style (_ff.set_enabled) and module-style (_feature_flags_module.set_enabled)
-    pattern = r'(?:_?ff|_feature_flags_module)\.set_enabled\(([^)]+)\)'
-    return re.sub(pattern, replace_fn, content)
+    pattern = r'(?:_?ff|_feature_flags_module)\.set_enabled\(([^)]*)\)'
+    return re.sub(pattern, replace_fn, content, flags=re.DOTALL)
 
 def refactor_worker_engine_mode(content):
     """Refactor worker_engine_mode() calls."""
     def replace_fn(match):
-        args = match.group(2)
+        args = match.group(1)
         if args.strip():
             tenant = args.strip()
             if '=' in tenant:
@@ -93,29 +94,48 @@ def refactor_worker_engine_mode(content):
 
     # Match both variable-style (_ff.worker_engine_mode) and module-style (_feature_flags_module.worker_engine_mode)
     pattern = r'(?:_?ff|_feature_flags_module)\.worker_engine_mode\(([^)]*)\)'
-    return re.sub(pattern, replace_fn, content)
+    return re.sub(pattern, replace_fn, content, flags=re.DOTALL)
 
 def add_skill_import(content):
-    """Add Skills import if not present."""
+    """Add Skills import if not present, after shebang/docstring/future imports."""
     if 'from core.skills.feature_flags_skill import feature_flags_skill' in content:
         return content
 
-    # Add after existing imports
     lines = content.split('\n')
     insert_idx = 0
-
-    # Find first import after module docstring
     in_docstring = False
     docstring_quote = None
+    found_imports = False
+
     for i, line in enumerate(lines):
-        if '"""' in line or "'''" in line:
-            if not in_docstring:
-                in_docstring = True
-                docstring_quote = '"""' if '"""' in line else "'''"
-            elif docstring_quote in line:
+        # Track docstrings (both """ and ''')
+        if not in_docstring and ('"""' in line or "'''" in line):
+            quote = '"""' if '"""' in line else "'''"
+            if line.count(quote) == 2:  # Single-line docstring
                 in_docstring = False
-        elif not in_docstring and (line.startswith('from ') or line.startswith('import ')):
-            insert_idx = i
+                continue
+            else:
+                in_docstring = True
+                docstring_quote = quote
+                continue
+
+        if in_docstring and docstring_quote in line:
+            in_docstring = False
+            continue
+
+        if in_docstring:
+            continue
+
+        # Skip shebang
+        if i == 0 and line.startswith('#!'):
+            insert_idx = i + 1
+            continue
+
+        # Track if we've seen any imports
+        if line.startswith('from ') or line.startswith('import '):
+            insert_idx = i + 1
+            found_imports = True
+        elif found_imports and not (line.startswith('from ') or line.startswith('import ')):
             break
 
     lines.insert(insert_idx, 'from core.skills.feature_flags_skill import feature_flags_skill')

@@ -85,8 +85,8 @@
 **Wrapper+Phased is already proven.** Spike 1 delivered:
 - Wrapper adapter: 250 lines, fully tested
 - Skills implementation: 400 lines, all quality gates PASS
-- Equivalence tests: 59 parametrized tests (READY; skipped awaiting FeatureFlagsSkill import wiring in Phase 2)
-- Audit trail: Event structure defined, logging ready (placeholder phase 1, full integration phase 2)
+- Equivalence tests: 59 parametrized tests (framework READY; tests SKIPPED awaiting FeatureFlagsSkill module in Phase 2)
+- Audit trail: Event structure defined, placeholder logging ready (full backend integration Phase 2)
 
 **Phase 1b stays on schedule:**
 - Week 1: Call-site discovery ✅ DONE (found 24 files, 8 with actual calls = 21 refactoring targets)
