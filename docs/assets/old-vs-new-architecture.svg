@@ -1,0 +1,41 @@
+<svg viewBox="0 0 1000 500" xmlns="http://www.w3.org/2000/svg">
+  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Before vs After: Feature Flags → Skills</text>
+  
+  <rect x="50" y="80" width="400" height="350" fill="#fff3e0" stroke="#f57c00" stroke-width="2" rx="5"/>
+  <text x="250" y="110" font-size="14" font-weight="bold" text-anchor="middle" fill="#f57c00">BEFORE: Feature Flags</text>
+  
+  <text x="70" y="140" font-size="11" font-weight="bold" fill="#1a1a1a">Problems:</text>
+  <text x="70" y="160" font-size="10" fill="#666">❌ Static (change = redeploy)</text>
+  <text x="70" y="180" font-size="10" fill="#666">❌ Opaque (why this path?)</text>
+  <text x="70" y="200" font-size="10" fill="#666">❌ Monolithic (all or nothing)</text>
+  <text x="70" y="220" font-size="10" fill="#666">❌ Not auditable</text>
+  <text x="70" y="240" font-size="10" fill="#666">❌ Not versionized</text>
+  <text x="70" y="260" font-size="10" fill="#666">❌ GDPR risk</text>
+  
+  <text x="70" y="300" font-size="11" font-weight="bold" fill="#1a1a1a">config.json:</text>
+  <rect x="70" y="310" width="350" height="100" fill="#fff" stroke="#ddd" stroke-width="1" rx="3"/>
+  <text x="80" y="330" font-size="9" fill="#666">{</text>
+  <text x="95" y="345" font-size="9" fill="#666">"routing_strategy": "opus",</text>
+  <text x="95" y="360" font-size="9" fill="#666">"context_ttl": 3600,</text>
+  <text x="95" y="375" font-size="9" fill="#666">"features": {"new_ui": false}</text>
+  <text x="80" y="390" font-size="9" fill="#666">}</text>
+  
+  <rect x="550" y="80" width="400" height="350" fill="#e3f2fd" stroke="#1976d2" stroke-width="2" rx="5"/>
+  <text x="750" y="110" font-size="14" font-weight="bold" text-anchor="middle" fill="#1976d2">AFTER: Skills Registry</text>
+  
+  <text x="570" y="140" font-size="11" font-weight="bold" fill="#1a1a1a">Benefits:</text>
+  <text x="570" y="160" font-size="10" fill="#666">✅ Dynamic (no redeploy)</text>
+  <text x="570" y="180" font-size="10" fill="#666">✅ Transparent (audit trail)</text>
+  <text x="570" y="200" font-size="10" fill="#666">✅ Composable (mix & match)</text>
+  <text x="570" y="220" font-size="10" fill="#666">✅ Auditable (every decision logged)</text>
+  <text x="570" y="240" font-size="10" fill="#666">✅ Versionized (instant rollback)</text>
+  <text x="570" y="260" font-size="10" fill="#666">✅ GDPR compliant</text>
+  
+  <text x="570" y="300" font-size="11" font-weight="bold" fill="#1a1a1a">registry:</text>
+  <rect x="570" y="310" width="350" height="100" fill="#fff" stroke="#ddd" stroke-width="1" rx="3"/>
+  <text x="580" y="330" font-size="9" fill="#666">os.delegation_router v1.2</text>
+  <text x="580" y="345" font-size="9" fill="#666">os.context_adapter v2.0</text>
+  <text x="580" y="360" font-size="9" fill="#666">os.vibe_engineering v0.3</text>
+  <text x="580" y="375" font-size="9" fill="#666">custom.my_skill v1.0</text>
+  <text x="580" y="390" font-size="9" fill="#666">... (all versionized, callable)</text>
+</svg>

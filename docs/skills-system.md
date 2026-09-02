@@ -1,659 +1,261 @@
-# CorvinOS Skills System
+# Skills System: The Core Unit
 
-A **Skill** is a versioned, composable, self-learning program that performs a specific function in CorvinOS. Every Skill:
-- Has a clear purpose and unique ID
-- Declares its dependencies (other Skills)
-- Executes deterministically with inputs/outputs
-- Receives feedback and improves over time
-- Logs every decision immutably (audit trail)
+A **Skill** is a versioned, auditable program that makes a decision or performs an action.
 
-This guide explains how Skills work, how to use them, and how to write your own.
+![Skill Lifecycle](docs/assets/skill-lifecycle.svg)
 
 ---
 
 ## What is a Skill?
 
-### Definition
-A Skill is a Python class + metadata that encapsulates a repeatable business logic:
+Think of a Skill like an "app" on your phone:
+- Each app has a name, version, author
+- Each app does one job (routing, prioritizing, caching, etc.)
+- You can update one app without restarting your phone
+- All app actions are logged (for debugging + compliance)
 
-```python
-from corvin_skills.base import Skill
-
-@Skill.register
-class DelegationRouter(Skill):
-    skill_id = "os.delegation_router"
-    version = "1.0.0"
-    depends_on = ["classify_content", "estimate_complexity"]
-    
-    def execute(self, request: dict) -> dict:
-        # Compose other Skills
-        classified = self.call_skill("classify_content", request)
-        estimated = self.call_skill("estimate_complexity", classified)
-        
-        # Route based on complexity
-        if estimated["complexity"] > 0.7:
-            route = "opus"  # Complex: use large model
-        else:
-            route = "haiku"  # Simple: use fast model
-        
-        return {
-            "route_to": route,
-            "confidence": estimated.get("confidence", 0.5),
-            "reasoning": estimated.get("reasoning", "")
-        }
-```
-
-### Core Properties
-Every Skill has:
-
-| Property | Type | Description |
-|---|---|---|
-| **skill_id** | str | Unique identifier (e.g., `os.delegation_router`) |
-| **version** | str | Semantic version (e.g., `1.0.0`) |
-| **origin** | str | `builtin` \| `vetted` \| `community` |
-| **boot_layer** | str | `meta` \| `core` \| `bundled` \| `installed` |
-| **depends_on** | list[str] | Skills this Skill calls (optional) |
+A Skill is exactly that for CorvinOS.
 
 ---
 
 ## Skill Lifecycle
 
-```svg
-<svg viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background -->
-  <rect width="900" height="600" fill="#F9FAFB"/>
-  
-  <!-- Title -->
-  <text x="450" y="30" font-size="22" font-weight="bold" text-anchor="middle" fill="#1F2937">
-    Skill Lifecycle: Registration → Execution → Feedback → Optimization
-  </text>
-  
-  <!-- Stage 1: Registration -->
-  <rect x="50" y="80" width="160" height="80" rx="4" fill="#DBEAFE" stroke="#3B82F6" stroke-width="2"/>
-  <text x="130" y="110" font-size="12" font-weight="bold" text-anchor="middle" fill="#1E40AF">
-    1. Registration
-  </text>
-  <text x="130" y="135" font-size="10" text-anchor="middle" fill="#1E40AF">
-    Skill loaded,
-  </text>
-  <text x="130" y="150" font-size="10" text-anchor="middle" fill="#1E40AF">
-    metadata validated
-  </text>
-  
-  <!-- Arrow 1 -->
-  <path d="M 210 120 L 270 120" stroke="#6B7280" stroke-width="2" fill="none" marker-end="url(#arrowhead)"/>
-  
-  <!-- Stage 2: Execution -->
-  <rect x="270" y="80" width="160" height="80" rx="4" fill="#DCFCE7" stroke="#10B981" stroke-width="2"/>
-  <text x="350" y="110" font-size="12" font-weight="bold" text-anchor="middle" fill="#065F46">
-    2. Execution
-  </text>
-  <text x="350" y="135" font-size="10" text-anchor="middle" fill="#065F46">
-    Process input,
-  </text>
-  <text x="350" y="150" font-size="10" text-anchor="middle" fill="#065F46">
-    produce output
-  </text>
-  
-  <!-- Arrow 2 -->
-  <path d="M 430 120 L 490 120" stroke="#6B7280" stroke-width="2" fill="none" marker-end="url(#arrowhead)"/>
-  
-  <!-- Stage 3: Audit -->
-  <rect x="490" y="80" width="160" height="80" rx="4" fill="#FEE2E2" stroke="#EF4444" stroke-width="2"/>
-  <text x="570" y="110" font-size="12" font-weight="bold" text-anchor="middle" fill="#DC2626">
-    3. Audit
-  </text>
-  <text x="570" y="135" font-size="10" text-anchor="middle" fill="#DC2626">
-    Log event,
-  </text>
-  <text x="570" y="150" font-size="10" text-anchor="middle" fill="#DC2626">
-    hash-chain link
-  </text>
-  
-  <!-- Arrow 3 -->
-  <path d="M 650 120 L 710 120" stroke="#6B7280" stroke-width="2" fill="none" marker-end="url(#arrowhead)"/>
-  
-  <!-- Stage 4: Feedback -->
-  <rect x="710" y="80" width="160" height="80" rx="4" fill="#FEF3C7" stroke="#F59E0B" stroke-width="2"/>
-  <text x="790" y="110" font-size="12" font-weight="bold" text-anchor="middle" fill="#92400E">
-    4. Feedback
-  </text>
-  <text x="790" y="135" font-size="10" text-anchor="middle" fill="#92400E">
-    User evaluates
-  </text>
-  <text x="790" y="150" font-size="10" text-anchor="middle" fill="#92400E">
-    outcome
-  </text>
-  
-  <!-- Feedback loop back -->
-  <path d="M 790 160 L 790 200 L 350 200 L 350 170" stroke="#F59E0B" stroke-width="2" fill="none" marker-end="url(#arrowhead-orange)" stroke-dasharray="5,5"/>
-  
-  <!-- Stage 5: Optimization (bottom) -->
-  <rect x="280" y="280" width="160" height="80" rx="4" fill="#E0E7FF" stroke="#6366F1" stroke-width="2"/>
-  <text x="360" y="310" font-size="12" font-weight="bold" text-anchor="middle" fill="#312E81">
-    5. Optimization
-  </text>
-  <text x="360" y="335" font-size="10" text-anchor="middle" fill="#312E81">
-    Tune parameters,
-  </text>
-  <text x="360" y="350" font-size="10" text-anchor="middle" fill="#312E81">
-    improve confidence
-  </text>
-  
-  <!-- Arrow to Execution (cycle) -->
-  <path d="M 360 280 L 360 160" stroke="#6366F1" stroke-width="2" fill="none" marker-end="url(#arrowhead-indigo)" stroke-dasharray="5,5"/>
-  
-  <!-- Convergence tracker (right side) -->
-  <rect x="550" y="280" width="240" height="150" rx="4" fill="#F0F9FF" stroke="#0369A1" stroke-width="2"/>
-  <text x="670" y="305" font-size="12" font-weight="bold" text-anchor="middle" fill="#0369A1">
-    Convergence Tracking
-  </text>
-  
-  <!-- Mini chart inside -->
-  <polyline points="580,380 600,370 620,360 640,345 660,330 680,310 700,295 720,280 740,270 760,265" 
-            fill="none" stroke="#10B981" stroke-width="2"/>
-  <text x="670" y="425" font-size="10" text-anchor="middle" fill="#065F46">
-    Confidence → 95% target
-  </text>
-  <text x="670" y="440" font-size="10" text-anchor="middle" fill="#065F46">
-    Week 1: 60% → Week 4: 92%
-  </text>
-  
-  <!-- Timeline labels -->
-  <text x="50" y="500" font-size="11" fill="#6B7280">
-    ⏱ Week 1: Registration + Execution + Audit + Feedback collected
-  </text>
-  <text x="50" y="525" font-size="11" fill="#6B7280">
-    ⏱ Week 2-4: Feedback processed, parameters tuned, confidence improves
-  </text>
-  <text x="50" y="550" font-size="11" fill="#6B7280">
-    ⏱ Week 4+: Skill converged to ~95% confidence, minimal tuning needed
-  </text>
-  
-  <!-- Arrow marker -->
-  <defs>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#6B7280"/>
-    </marker>
-    <marker id="arrowhead-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#F59E0B"/>
-    </marker>
-    <marker id="arrowhead-indigo" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#6366F1"/>
-    </marker>
-  </defs>
-</svg>
-```
-
-### Stage Details
-
-1. **Registration**
-   - Skill loaded and metadata validated
-   - Dependencies verified (all referenced Skills exist)
-   - Boot layer determined (meta → core → bundled → installed)
-   - Audit event: `skill_loaded`
-
-2. **Execution**
-   - Input validated (type-checked)
-   - Skill's `execute()` method called
-   - Output produced
-   - Latency measured
-
-3. **Audit**
-   - Event logged immutably: `skill_executed`
-   - Hash-chained to previous event
-   - LoM (Line of Moral Responsibility) recorded
-   - Tenant ID verified (no cross-tenant data)
-
-4. **Feedback**
-   - User evaluates the output (yes/no/maybe/other)
-   - Feedback event logged: `skill_feedback`
-   - Confidence score calculated
-
-5. **Optimization**
-   - Weekly optimizer runs
-   - Tunes Skill parameters based on feedback
-   - Updates config: `skill_config_updated`
-   - Confidence improves over time
+1. **Registration** → Skill registered in registry (immutable once registered)
+2. **Execution** → Input → Skill.execute() → Output (+ audit event)
+3. **Audit** → Event logged to immutable audit trail
+4. **Feedback** → User rates the decision (good/bad/other)
+5. **Optimization** → Optimizer reads feedback → tunes Skill config
+6. **Learning** → Confidence score improves over time
 
 ---
 
 ## Skill Metadata
 
-### Required Fields
+Every Skill has:
 
 ```python
-@Skill.register
-class MySkill(Skill):
-    skill_id = "namespace.skill_name"     # Unique identifier
-    version = "1.0.0"                     # Semantic version
-    origin = "builtin"                    # builtin | vetted | community
-    boot_layer = "core"                   # meta | core | bundled | installed
-```
-
-### Optional Fields
-
-```python
-@Skill.register
-class MySkill(Skill):
-    depends_on = ["other.skill", "third.skill"]    # Skills I call
-    description = "Brief description of what this Skill does"
-    author = "author@example.com"
-    tags = ["routing", "classification", "learning"]
-    config_schema = {...}                          # JSON Schema for parameters
+class Skill:
+    id: str                    # "os.delegation_router"
+    version: str               # "1.2" (semver)
+    name: str                  # "Delegation Router"
+    description: str           # "Routes tasks by complexity"
+    origin: str                # "builtin" | "vetted" | "community"
+    boot_layer: str            # "compliance" | "core" | "bundled" | "installed"
+    dependencies: list[str]    # ["os.vibe_engineering@0.3"]
+    required_checks: list[str] # ["consent_gate", "audit_trail"]
+    config: dict               # Default configuration
 ```
 
 ---
 
 ## Skill Interface
 
-Every Skill must implement the `execute()` method:
+Every Skill implements:
 
 ```python
-def execute(self, request: dict) -> dict:
-    """
-    Process input and return output.
-    
-    Args:
-        request: Input dict with required keys
-        
-    Returns:
-        dict: Output with results + metadata
-        
-    Raises:
-        SkillExecutionError: If execution fails
-    """
-    # Your logic here
-    result = process(request)
-    return {
-        "result": result,
-        "confidence": 0.92,
-        "reasoning": "..."
-    }
+def execute(self, input: dict) -> dict:
+    """Execute the Skill's logic."""
+    # Deterministic Python
+    if input["complexity"] > self.config["threshold"]:
+        return {"engine": "claude-opus-5"}
+    else:
+        return {"engine": "claude-haiku-4-5"}
 ```
 
-### Accessing SkillContext
-
-Inside `execute()`, you have access to context:
-
-```python
-def execute(self, request: dict) -> dict:
-    # Call another Skill
-    classified = self.call_skill("classify_content", request)
-    
-    # Get current tenant (GDPR isolation)
-    tenant_id = self.context.tenant_id
-    
-    # Get config (may be tuned by optimizer)
-    config = self.get_config()
-    
-    # Get feedback history (for debugging)
-    feedback = self.get_feedback_history(limit=100)
-    
-    return {...}
-```
+**Audit integration is automatic:**
+- Input + output logged
+- LoM binding added (code identity proof)
+- Hash-chain verified
+- Tenant isolation enforced
 
 ---
 
-## Creating Custom Skills
-
-### Step 1: Define the Skill Class
+## Creating a Custom Skill
 
 ```python
-from corvin_skills.base import Skill
+from core.skills.skill_interface import Skill
+from core.skills.skill_registry_phase1 import skill_registry
 
-@Skill.register
-class ContentClassifier(Skill):
-    skill_id = "custom.content_classifier"
-    version = "1.0.0"
+class VotingRouterSkill(Skill):
+    id = "custom.voting_router"
+    version = "1.0"
+    description = "Routes by majority vote of three sub-skills"
     origin = "community"
-    boot_layer = "installed"
-    description = "Classify content into categories"
+    dependencies = ["os.delegation_router@1.2", "os.vibe_engineering@0.3"]
     
-    def execute(self, request: dict) -> dict:
-        content = request.get("content", "")
-        
-        # Simple classification logic
-        if len(content) < 100:
-            category = "short"
-        elif "question" in content.lower():
-            category = "question"
-        else:
-            category = "article"
-        
-        return {
-            "category": category,
-            "confidence": 0.85
-        }
-```
+    def execute(self, input: dict) -> dict:
+        # Call other Skills (composition)
+        vote1 = skill_registry.execute("os.delegation_router", input)
+        vote2 = skill_registry.execute("os.vibe_engineering", input)
+        # ... voting logic ...
+        return result
 
-### Step 2: Add to Registry
+# Register it
+skill_registry.register(VotingRouterSkill())
 
-```bash
-# Place your Skill in: core/skills/custom_skills/content_classifier.py
-# The registry auto-discovers it on boot
-```
-
-### Step 3: Test Locally
-
-```bash
-python -c "
-from core.skills.skill_registry import get_skill
-skill = get_skill('custom.content_classifier')
-result = skill.execute({'content': 'What is CorvinOS?'})
-print(result)
-"
-```
-
-### Step 4: Add Unit + E2E Tests
-
-```python
-# tests/skills/test_content_classifier.py
-import pytest
-from core.skills.custom_skills.content_classifier import ContentClassifier
-
-def test_execute_short_content():
-    skill = ContentClassifier()
-    result = skill.execute({"content": "Hi"})
-    assert result["category"] == "short"
-
-def test_execute_question():
-    skill = ContentClassifier()
-    result = skill.execute({"content": "What is the meaning of life?"})
-    assert result["category"] == "question"
-
-def test_e2e_skill_execution():
-    """Prove the Skill is reachable end-to-end"""
-    from core.skills.skill_registry import execute_skill
-    
-    result = execute_skill("custom.content_classifier", {
-        "content": "This is a test article with more than 100 characters to test"
-    })
-    assert result["category"] == "article"
-    assert "confidence" in result
-```
-
-### Step 5: Request Feedback Integration
-
-Optionally, configure how users provide feedback:
-
-```python
-class ContentClassifier(Skill):
-    # ... (as before)
-    
-    def get_feedback_schema(self) -> dict:
-        """Describe what feedback looks like"""
-        return {
-            "type": "object",
-            "properties": {
-                "correct": {"type": "boolean"},
-                "actual_category": {"type": "string"}
-            }
-        }
+# Use it
+result = skill_registry.execute("custom.voting_router", input)
 ```
 
 ---
 
 ## Skill Composition
 
-Skills call other Skills. Dependencies are **declared and verified**.
+Skills can call other Skills (like Python imports):
 
-### Example: Router that Composes Three Skills
-
-```python
-@Skill.register
-class DelegationRouter(Skill):
-    skill_id = "os.delegation_router"
-    version = "1.0.0"
-    depends_on = ["classify_content", "estimate_complexity", "select_engine"]
-    
-    def execute(self, request: dict) -> dict:
-        # Call Skill 1: Classify
-        classified = self.call_skill("classify_content", request)
-        
-        # Call Skill 2: Estimate complexity
-        estimated = self.call_skill(
-            "estimate_complexity",
-            classified
-        )
-        
-        # Call Skill 3: Select best engine
-        selected = self.call_skill(
-            "select_engine",
-            {**classified, **estimated}
-        )
-        
-        return selected
-```
-
-### Handling Errors
-
-If a Skill fails, the whole composition fails (fail-closed):
+![Skill Composition Tree](docs/assets/skill-composition-tree.svg)
 
 ```python
-def execute(self, request: dict) -> dict:
-    try:
-        classified = self.call_skill("classify_content", request)
-    except SkillExecutionError as e:
-        # Skill failed; propagate error
-        self.log_error(f"Classify failed: {e}")
-        raise
+# os.context_adapter composes routing + vibe
+class ContextAdapter(Skill):
+    dependencies = ["os.delegation_router", "os.vibe_engineering"]
     
-    # If we get here, classified succeeded
-    return {
-        "category": classified["category"],
-        "confidence": classified.get("confidence", 0.0)
-    }
+    def execute(self, input: dict) -> dict:
+        # Call Skill 1
+        vibe_priority = skill_registry.execute("os.vibe_engineering", input)
+        
+        # Use result in Skill 2
+        input_with_priority = {**input, "priority": vibe_priority}
+        engine = skill_registry.execute("os.delegation_router", input_with_priority)
+        
+        return {"engine": engine, "priority": vibe_priority}
 ```
+
+**Benefits:**
+- ✅ Single change propagates (update os.vibe_engineering → context_adapter sees it)
+- ✅ Versioning per-Skill (no monolithic updates)
+- ✅ Reusable components (write once, compose many ways)
+- ✅ DAG validation (no circular references)
 
 ---
 
 ## Versioning & Semver
 
-### Version Format
+Skills follow semantic versioning:
 
-Skills use semantic versioning: `MAJOR.MINOR.PATCH`
+```
+os.vibe_engineering@0.1  → os.vibe_engineering@0.2  (backward compatible)
+                             (bug fix, backward compatible)
 
-| Version | When to Use | Example |
-|---|---|---|
-| **PATCH** | Bug fix, internal refactor | `1.0.0` → `1.0.1` |
-| **MINOR** | New feature, backward-compatible | `1.0.1` → `1.1.0` |
-| **MAJOR** | Breaking change to input/output | `1.1.0` → `2.0.0` |
+os.vibe_engineering@0.2  → os.vibe_engineering@1.0  (breaking change)
+                             (new algorithm, breaking API)
+```
 
-### Backward Compatibility
+**Rollback is instant:**
 
-When you change a Skill:
+```bash
+# Rollback to previous version
+corvin skills rollback os.vibe_engineering --to 0.2
 
-- ✅ **Safe:** Add optional fields to output, rename internal variables
-- ⚠️ **Minor version bump:** Add optional input parameter
-- ❌ **Major version bump (or don't do it):** Remove required field, change meaning of a field
+# Downtime: 0 seconds
+# Old version is pinned again
+```
 
 ---
 
 ## Skill Registry API
 
-### Registering a Skill
-
 ```python
-# Automatic: @Skill.register decorator
-@Skill.register
-class MySkill(Skill):
-    skill_id = "my.skill"
-    ...
+# Register a Skill
+registry.register(MySkill())
 
-# Manual: If you need custom registration
-from core.skills.skill_registry import register_skill
-register_skill(MySkill())
+# Execute a Skill
+result = registry.execute("my.skill", input={"key": "value"})
+
+# List all Skills
+skills = registry.list_all()
+
+# Get one Skill
+skill = registry.get("os.vibe_engineering")
+
+# Check if enabled
+is_enabled = registry.is_enabled("os.vibe_engineering")
+
+# Get confidence + feedback
+confidence = registry.get("os.vibe_engineering").get_confidence()
+feedback = registry.get("os.vibe_engineering").get_feedback_history()
 ```
 
-### Executing a Skill
+---
 
-```python
-from core.skills.skill_registry import execute_skill
+## Audit Trail (Automatic)
 
-result = execute_skill(
-    skill_id="my.skill",
-    input={"key": "value"},
-    tenant_id="_default"
-)
+Every Skill execution is logged:
+
+```json
+{
+  "event_type": "SKILL_EXECUTED",
+  "skill_id": "os.delegation_router",
+  "skill_version": "1.2",
+  "input": {"complexity": 10, "task_type": "analysis"},
+  "output": {"engine": "claude-opus-5"},
+  "timestamp": "2026-09-02T12:34:56.789Z",
+  "tenant_id": "_default",
+  "lom": "os_delegation_router.py:156",
+  "lom_hash": "sha256(...)",
+  "hash": "sha256(...)",
+  "prev_hash": "sha256(...)"
+}
 ```
 
-### Listing All Skills
-
-```python
-from core.skills.skill_registry import list_all_skills
-
-skills = list_all_skills()
-for skill in skills:
-    print(f"{skill.skill_id} ({skill.version})")
-```
-
-### Getting a Single Skill
-
-```python
-from core.skills.skill_registry import get_skill
-
-skill = get_skill("my.skill")
-print(f"Version: {skill.version}")
-print(f"Depends on: {skill.depends_on}")
-```
-
-### Checking if Enabled
-
-```python
-from core.skills.skill_registry import is_enabled
-
-if is_enabled("my.skill"):
-    print("Skill is active")
-else:
-    print("Skill is disabled")
-```
+**No configuration needed.** Audit is built-in.
 
 ---
 
 ## Examples
 
-### Example 1: Simple Skill (No Dependencies)
+### Example 1: Simple Routing Skill
 
 ```python
-@Skill.register
-class RandomNumberSkill(Skill):
-    skill_id = "demo.random_number"
-    version = "1.0.0"
-    origin = "community"
-    boot_layer = "installed"
+class SimpleRouter(Skill):
+    id = "examples.simple_router"
+    version = "1.0"
     
-    def execute(self, request: dict) -> dict:
-        import random
-        max_val = request.get("max", 100)
-        return {
-            "number": random.randint(0, max_val),
-            "confidence": 1.0
-        }
+    def execute(self, input: dict) -> dict:
+        if input["urgency"] == "high":
+            return {"engine": "claude-opus-5"}
+        else:
+            return {"engine": "claude-haiku-4-5"}
+
+registry.register(SimpleRouter())
+result = registry.execute("examples.simple_router", {"urgency": "high"})
+# Output: {"engine": "claude-opus-5"}
 ```
 
-### Example 2: Skill with Dependencies
+### Example 2: Composable Skill (calls other Skills)
 
-```python
-@Skill.register
-class Summarizer(Skill):
-    skill_id = "demo.summarizer"
-    version = "1.0.0"
-    depends_on = ["demo.text_cleaner", "demo.extract_key_points"]
-    
-    def execute(self, request: dict) -> dict:
-        text = request.get("text", "")
-        
-        # Clean text
-        cleaned = self.call_skill("demo.text_cleaner", {"text": text})
-        
-        # Extract points
-        points = self.call_skill(
-            "demo.extract_key_points",
-            {"text": cleaned["cleaned_text"]}
-        )
-        
-        return {
-            "summary": " ".join(points["points"]),
-            "point_count": len(points["points"])
-        }
-```
+See [Composable Programs](composable-programs.md) for detailed examples.
 
-### Example 3: Skill with Learning
+### Example 3: Tracking Confidence
 
-```python
-@Skill.register
-class Classifier(Skill):
-    skill_id = "demo.classifier"
-    version = "2.0.0"
-    
-    def execute(self, request: dict) -> dict:
-        text = request.get("text", "")
-        
-        # Get current config (may be tuned)
-        config = self.get_config()
-        threshold = config.get("threshold", 0.5)
-        
-        # Classify
-        score = calculate_score(text)
-        category = "positive" if score > threshold else "negative"
-        
-        return {
-            "category": category,
-            "score": score,
-            "confidence": abs(score - threshold)
-        }
-    
-    def get_feedback_schema(self) -> dict:
-        return {
-            "type": "object",
-            "properties": {
-                "correct": {"type": "boolean"},
-                "actual_category": {"type": "string", "enum": ["positive", "negative"]}
-            }
-        }
-```
+See [Learning Loop](learning-loop.md) for feedback integration.
 
 ---
 
-## Debugging Skills
+## FAQ
 
-### View Execution History
+**Q: What if a Skill execution fails?**  
+A: Error is caught, logged to audit trail, and re-raised. Callers handle the exception.
 
-```bash
-corvin audit show-task <task_id> --skill-only
-```
+**Q: Can I update a Skill without restarting CorvinOS?**  
+A: Yes! Register a new version (v1.1). Pinned dependencies use the old version until you explicitly upgrade.
 
-### Get Skill Feedback
+**Q: What if two Skills depend on each other (circular)?**  
+A: Dependency DAG is validated at registration time. Circular dependencies are rejected.
 
-```bash
-corvin skill feedback <skill_id> --last 50
-```
+**Q: Is there a way to disable a Skill?**  
+A: Yes, but only for bundled/installed Skills (not compliance meta-Skills). Use registry.disable().
 
-### Check Convergence
+**Q: How do I know if my Skill is being called?**  
+A: Check audit trail: `corvin audit trace skill my.skill --task=<task_id>`. Must see SKILL_EXECUTED events.
 
-```bash
-corvin skill convergence <skill_id>
-# Output: Confidence: 92% (target: 95%)
-```
-
-### Trace Composition Chain
-
-```bash
-corvin skill trace <skill_id> --task <task_id>
-# Output: skill_a → skill_b → skill_c → result
-```
+**Q: Can multiple Skills with the same ID exist?**  
+A: No. `id` is globally unique. You can have multiple versions (v1.0, v1.1), but only one is active.
 
 ---
 
 ## Next Steps
 
-- **[Composable Programs](composable-programs.md)** — Write complex behavior by composing Skills
-- **[Learning Loop](learning-loop.md)** — Understand how Skills improve over time
-- **[Audit Trail](audit-trail.md)** — See how every decision is logged immutably
-- **[ACP Vision](acp-vision.md)** — Learn about replacing L-Layers with Skills
-- **[Skills API Reference](skills-api-reference.md)** — Complete API documentation
-
----
-
-**Skills are the heart of CorvinOS.** Every subsystem is a Skill. Every Skill learns. Every decision is audited.
+- **[Composable Programs](composable-programs.md)** — Write Skills that call other Skills
+- **[Skills API Reference](skills-api-reference.md)** — Full API reference
+- **[Learning Loop](learning-loop.md)** — How Skills improve through feedback
