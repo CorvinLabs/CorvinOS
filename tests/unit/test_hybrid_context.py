@@ -352,3 +352,104 @@ class TestCascadeDelete:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class MockDecisionAdapter:
+    """Mock Phase 3 DecisionHistoryStore adapter."""
+
+    def __init__(self, decisions: list[dict]):
+        self.decisions = decisions
+
+    def get_recent_decisions(self, user_id: str, tenant_id: str, limit: int = 10) -> list[dict]:
+        """Return mock decisions."""
+        return self.decisions[:limit]
+
+
+class MockOutcomeAdapter:
+    """Mock Phase 3 OutcomeFeedbackStore adapter."""
+
+    def __init__(self, success_rate: float):
+        self.success_rate = success_rate
+
+    def get_success_rate(self, user_id: str, tenant_id: str) -> float:
+        """Return mock success rate."""
+        return self.success_rate
+
+
+class MockProfileAdapter:
+    """Mock Phase 3 UserProfileManager adapter."""
+
+    def __init__(self, profile: dict):
+        self.profile = profile
+
+    def get_profile(self, user_id: str, tenant_id: str) -> dict:
+        """Return mock profile."""
+        return self.profile
+
+
+class TestPhase3Integration:
+    """Integration tests with mocked Phase 3 adapters."""
+
+    def test_snapshot_with_phase3_adapters(self):
+        """Snapshot using Phase 3 adapters (k=4 integration)."""
+        # Create mock adapters
+        decisions_adapter = MockDecisionAdapter([{"d_id": "d1", "choice": "a"}])
+        outcome_adapter = MockOutcomeAdapter(0.85)
+        profile_adapter = MockProfileAdapter({"style": "verbose"})
+
+        # Initialize model with adapters
+        model = HybridContextModel(
+            "tenant-1",
+            decision_adapter=decisions_adapter,
+            outcome_adapter=outcome_adapter,
+            profile_adapter=profile_adapter,
+        )
+
+        # Snapshot should still work via direct calls
+        base_hash = model.snapshot_base_context(
+            user_id="user-1",
+            session_id="s1",
+            decisions=decisions_adapter.get_recent_decisions("user-1", "tenant-1"),
+            profile=profile_adapter.get_profile("user-1", "tenant-1"),
+            success_rate=outcome_adapter.get_success_rate("user-1", "tenant-1"),
+            attention_budget=1000,
+        )
+
+        # Verify snapshot captured Phase 3 data
+        assert base_hash is not None
+        base = model.base_snapshots["user-1:s1"]
+        assert base.success_rate == 0.85
+        assert base.user_profile == {"style": "verbose"}
+        assert len(base.recent_decisions) == 1
+
+    def test_cascade_delete_with_adapters(self):
+        """Cascade delete with adapters initialized (k=4 integration)."""
+        model = HybridContextModel(
+            "tenant-1",
+            decision_adapter=MockDecisionAdapter([]),
+            outcome_adapter=MockOutcomeAdapter(0.5),
+            profile_adapter=MockProfileAdapter({}),
+        )
+
+        # Create context
+        model.snapshot_base_context(
+            user_id="user-1",
+            session_id="s1",
+            decisions=[],
+            profile={},
+            success_rate=0.5,
+            attention_budget=1000,
+        )
+        model.inject_layer(
+            user_id="user-1",
+            layer_name="test_layer",
+            data={"v": 1},
+            lom="test.py:L1",
+        )
+
+        # Delete
+        result = model.delete_user_context("user-1")
+
+        # Verify
+        assert result.verification_complete is True
+        assert result.total > 0
