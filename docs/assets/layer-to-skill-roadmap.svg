@@ -1,0 +1,25 @@
+<svg viewBox="0 0 1000 600" xmlns="http://www.w3.org/2000/svg">
+  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#1a1a1a">L-Layer → Skill Transformation Roadmap</text>
+  
+  <text x="50" y="80" font-size="13" font-weight="bold" fill="#1a1a1a">Phase 1 (Weeks 1-4): Foundation</text>
+  <rect x="50" y="95" width="880" height="100" fill="#e3f2fd" stroke="#1976d2" stroke-width="2" rx="5"/>
+  <text x="70" y="120" font-size="11" fill="#1a1a1a">✅ L5 Routing → os.delegation_router v1.2 (COMPLETE)</text>
+  <text x="70" y="145" font-size="11" fill="#1a1a1a">✅ L10 Context → os.context_adapter v2.0 (COMPLETE)</text>
+  <text x="70" y="170" font-size="11" fill="#1a1a1a">✅ Testing: 25 E2E, 12 adversarial (all green)</text>
+  
+  <text x="50" y="230" font-size="13" font-weight="bold" fill="#1a1a1a">Phase 2 (Weeks 5-10): Learning Loop</text>
+  <rect x="50" y="245" width="880" height="100" fill="#fff3e0" stroke="#f57c00" stroke-width="2" rx="5"/>
+  <text x="70" y="270" font-size="11" fill="#1a1a1a">⏳ L16 Security → os.security_orchestrator (IN PROGRESS)</text>
+  <text x="70" y="295" font-size="11" fill="#1a1a1a">⏳ L22 Workflow → os.workflow_optimizer (STARTING)</text>
+  <text x="70" y="320" font-size="11" fill="#1a1a1a">⏳ Learning loop integration (ADR-0314)</text>
+  
+  <text x="50" y="380" font-size="13" font-weight="bold" fill="#1a1a1a">Phase 3 (Weeks 11-24): Scale & Ecosystem</text>
+  <rect x="50" y="395" width="880" height="120" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2" rx="5"/>
+  <text x="70" y="420" font-size="11" fill="#1a1a1a">⏳ L34 Data Flow → os.flow_guard (QUEUED)</text>
+  <text x="70" y="445" font-size="11" fill="#1a1a1a">⏳ Marketplace integration: Skills as discoverable OS subsystems</text>
+  <text x="70" y="470" font-size="11" fill="#1a1a1a">⏳ Community contribution gate + skill author checklist</text>
+  <text x="70" y="495" font-size="11" fill="#1a1a1a">⏳ v2.0 production-ready release</text>
+  
+  <rect x="50" y="535" width="880" height="40" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" rx="3"/>
+  <text x="500" y="562" font-size="11" font-weight="bold" text-anchor="middle" fill="#388e3c">Goal: Every L-layer is a Skill | Every Skill is learnable | Every decision is auditable</text>
+</svg>

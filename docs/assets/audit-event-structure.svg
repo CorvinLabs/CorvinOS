@@ -1,0 +1,51 @@
+<svg viewBox="0 0 1000 600" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Audit Event Structure (Hash-Chained)</text>
+
+  <!-- JSON Event Box -->
+  <rect x="50" y="60" width="900" height="480" fill="#f5f5f5" stroke="#666" stroke-width="1" rx="5"/>
+
+  <!-- Event 1 -->
+  <rect x="80" y="90" width="840" height="140" fill="#fff" stroke="#ddd" stroke-width="1" rx="3"/>
+  <text x="100" y="110" font-size="12" font-weight="bold" fill="#1976d2">{</text>
+  <text x="130" y="110" font-size="11" fill="#1a1a1a">"event_type": "SKILL_EXECUTED",</text>
+  <text x="130" y="130" font-size="11" fill="#1a1a1a">"skill_id": "os.delegation_router",</text>
+  <text x="130" y="150" font-size="11" fill="#1a1a1a">"input": {"complexity": 10, "task_type": "analysis"},</text>
+  <text x="130" y="170" font-size="11" fill="#1a1a1a">"output": {"engine": "claude-opus-5"},</text>
+  <text x="130" y="190" font-size="11" fill="#1a1a1a">"timestamp": "2026-09-02T12:34:56.789Z",</text>
+  <text x="130" y="210" font-size="11" fill="#1a1a1a">"tenant_id": "_default",</text>
+  <text x="130" y="230" font-size="11" fill="#1a1a1a">"lom": "os_delegation_router.py:156",</text>
+  <text x="100" y="250" font-size="12" font-weight="bold" fill="#1976d2">},</text>
+
+  <!-- Hash arrow and signature -->
+  <line x1="920" y1="170" x2="920" y2="280" stroke="#388e3c" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="925" y="215" font-size="10" fill="#388e3c" font-weight="bold">Hash:</text>
+
+  <!-- Event 2 (with hash chain) -->
+  <rect x="80" y="280" width="840" height="160" fill="#fff" stroke="#ddd" stroke-width="1" rx="3"/>
+  <text x="100" y="300" font-size="12" font-weight="bold" fill="#388e3c">{</text>
+  <text x="130" y="300" font-size="11" fill="#1a1a1a">"event_type": "SKILL_EXECUTED",</text>
+  <text x="130" y="320" font-size="11" fill="#1a1a1a">"skill_id": "os.vibe_engineering",</text>
+  <text x="130" y="340" font-size="11" fill="#1a1a1a">"input": {"user_id": "user_123", ...},</text>
+  <text x="130" y="360" font-size="11" fill="#1a1a1a">"timestamp": "2026-09-02T12:34:57.123Z",</text>
+  <text x="130" y="380" font-size="11" fill="#1a1a1a">"prev_hash": "sha256(event_1)", ← Link to previous</text>
+  <text x="130" y="400" font-size="11" fill="#1a1a1a">"hash": "sha256(this_event)", ← This event's hash</text>
+  <text x="130" y="420" font-size="11" fill="#1a1a1a">"lom_hash": "sha256(code_identity)", ← Proof of code</text>
+  <text x="100" y="440" font-size="12" font-weight="bold" fill="#388e3c">},</text>
+
+  <!-- Key properties annotation box -->
+  <rect x="80" y="470" width="840" height="60" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" rx="3"/>
+  <text x="100" y="490" font-size="12" font-weight="bold" fill="#388e3c">✓ Immutable:</text>
+  <text x="280" y="490" font-size="11" fill="#666">Once written, cannot be changed</text>
+  <text x="100" y="510" font-size="12" font-weight="bold" fill="#388e3c">✓ Hash-Chained:</text>
+  <text x="280" y="510" font-size="11" fill="#666">Each event links to previous (tamper detection)</text>
+  <text x="100" y="530" font-size="12" font-weight="bold" fill="#388e3c">✓ Tenant-Scoped:</text>
+  <text x="280" y="530" font-size="11" fill="#666">All reads/writes filtered by tenant_id (GDPR compliance)</text>
+
+  <!-- Arrow marker -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#388e3c"/>
+    </marker>
+  </defs>
+</svg>
