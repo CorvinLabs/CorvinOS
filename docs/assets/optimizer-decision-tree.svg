@@ -1,5 +1,63 @@
-<svg viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1000" height="400" fill="#f5f5f5" stroke="#999" stroke-width="1"/>
-  <text x="500" y="200" font-size="20" font-weight="bold" text-anchor="middle" fill="#999">Optimizer Decision Tree</text>
-  <text x="500" y="240" font-size="12" text-anchor="middle" fill="#ccc">(SVG Diagram)</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="700" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Optimizer Decision Logic (Feedback → Action)</text>
+  <rect x="350" y="50" width="200" height="60" class="box" rx="4"/>
+  <text x="450" y="85" text-anchor="middle" class="label">Feedback Received</text>
+  <rect x="80" y="180" width="180" height="60" class="box" rx="4"/>
+  <text x="170" y="215" text-anchor="middle" class="label">Confidence
+< 0.5?</text>
+  <rect x="360" y="180" width="180" height="60" class="box" rx="4"/>
+  <text x="450" y="215" text-anchor="middle" class="label">Error Rate
+> 2%?</text>
+  <rect x="640" y="180" width="180" height="60" class="box" rx="4"/>
+  <text x="730" y="215" text-anchor="middle" class="label">Latency
+> SLA?</text>
+  <path d="M 400 110 L 170 180" class="arrow"/>
+  <path d="M 450 110 L 450 180" class="arrow"/>
+  <path d="M 500 110 L 730 180" class="arrow"/>
+  <rect x="30" y="350" width="150" height="80" class="box-green" rx="4"/>
+  <text x="105" y="395" text-anchor="middle" class="label">Lower
+Threshold
+(↓ 0.05)</text>
+  <rect x="250" y="350" width="150" height="80" class="box-green" rx="4"/>
+  <text x="325" y="395" text-anchor="middle" class="label">Increase
+Timeout
+(↑ 500ms)</text>
+  <rect x="470" y="350" width="150" height="80" class="box-green" rx="4"/>
+  <text x="545" y="395" text-anchor="middle" class="label">Tune
+Buffer Size
+(↑ 20%)</text>
+  <rect x="690" y="350" width="150" height="80" class="box-green" rx="4"/>
+  <text x="765" y="395" text-anchor="middle" class="label">Cache
+Strategy
+(Hot tier)</text>
+  <path d="M 170 240 L 105 350" class="arrow-green"/>
+  <path d="M 450 240 L 325 350" class="arrow-green"/>
+  <path d="M 730 240 L 545 350" class="arrow-green"/>
+  <path d="M 640 240 L 765 350" class="arrow-green"/>
+  <text x="50" y="550" class="small">Each path: Config delta logged → Audit event → Next execution uses new config</text>
 </svg>

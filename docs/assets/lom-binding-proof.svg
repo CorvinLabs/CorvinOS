@@ -1,5 +1,59 @@
-<svg viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1000" height="400" fill="#f5f5f5" stroke="#999" stroke-width="1"/>
-  <text x="500" y="200" font-size="20" font-weight="bold" text-anchor="middle" fill="#999">LoM Binding: Cryptographic Code Identity</text>
-  <text x="500" y="240" font-size="12" text-anchor="middle" fill="#ccc">(SVG Diagram)</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="600" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">LoM Cryptographic Binding (Proof of Responsibility)</text>
+  <rect x="50" y="150" width="200" height="200" class="box" rx="4"/>
+  <text x="150" y="255" text-anchor="middle" class="label">Source Code
+
+os_delegation
+_router.py:156
+
+def classify(...)
+  return route</text>
+  <path d="M 250 250 L 300 250" class="arrow"/>
+  <text x="275" y="235" class="small">SHA256()</text>
+  <rect x="300" y="150" width="200" height="200" class="box-green" rx="4"/>
+  <text x="400" y="255" text-anchor="middle" class="label">Code Hash
+
+lom_hash:
+0x1a2b3c4d
+5e6f7a8b
+9c0d1e2f
+3a4b5c6d</text>
+  <path d="M 500 250 L 550 250" class="arrow-green"/>
+  <rect x="550" y="150" width="250" height="200" class="box-green" rx="4"/>
+  <text x="675" y="255" text-anchor="middle" class="label">Audit Event
+
+lom: 'L156:delegate.py'
+lom_hash: 0x1a2b3c4d...
+
+Verification:
+Computed != Stored
+→ SPOOFING DETECTED ❌</text>
+  <text x="50" y="450" class="small">Prevents: Someone changing source code but claiming same responsibility</text>
+  <text x="50" y="480" class="small">Integration: Every audit event carries lom_hash for verification</text>
+  <text x="50" y="510" class="small">Enforcement: Verification runs on audit read (fail-closed)</text>
 </svg>

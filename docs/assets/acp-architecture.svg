@@ -1,76 +1,54 @@
-<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
-  <!-- Title -->
-  <text x="500" y="30" font-size="26" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Agentic Control Plane (ACP) Architecture</text>
-
-  <!-- Center: Skills Registry -->
-  <rect x="350" y="200" width="300" height="150" fill="#e3f2fd" stroke="#1976d2" stroke-width="3" rx="10"/>
-  <text x="500" y="235" font-size="18" font-weight="bold" text-anchor="middle" fill="#1976d2">Skills Registry</text>
-  <text x="500" y="260" font-size="12" text-anchor="middle" fill="#666">os.delegation_router v1.2</text>
-  <text x="500" y="280" font-size="12" text-anchor="middle" fill="#666">os.context_adapter v2.0</text>
-  <text x="500" y="300" font-size="12" text-anchor="middle" fill="#666">os.vibe_engineering v0.3</text>
-  <text x="500" y="320" font-size="11" text-anchor="middle" fill="#999">+ all other Skills</text>
-
-  <!-- Top-left: API -->
-  <rect x="50" y="100" width="180" height="120" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2" rx="5"/>
-  <text x="140" y="135" font-size="14" font-weight="bold" text-anchor="middle" fill="#7b1fa2">API</text>
-  <text x="140" y="160" font-size="11" text-anchor="middle" fill="#666">execute(skill_id, input)</text>
-  <text x="140" y="180" font-size="11" text-anchor="middle" fill="#666">list_all()</text>
-  <text x="140" y="200" font-size="11" text-anchor="middle" fill="#666">register(skill)</text>
-
-  <!-- Arrow from API to Registry -->
-  <line x1="230" y1="160" x2="350" y2="260" stroke="#7b1fa2" stroke-width="2" marker-end="url(#arrowhead)"/>
-
-  <!-- Top-right: Meta-Skills (Audit, Consent, etc.) -->
-  <rect x="770" y="100" width="180" height="120" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" rx="5"/>
-  <text x="860" y="135" font-size="14" font-weight="bold" text-anchor="middle" fill="#388e3c">Meta-Skills</text>
-  <text x="860" y="160" font-size="11" text-anchor="middle" fill="#666">Audit (immutable)</text>
-  <text x="860" y="180" font-size="11" text-anchor="middle" fill="#666">Consent (fail-closed)</text>
-  <text x="860" y="200" font-size="11" text-anchor="middle" fill="#666">House-Rules</text>
-
-  <!-- Arrow from Meta-Skills to Registry -->
-  <line x1="770" y1="160" x2="650" y2="260" stroke="#388e3c" stroke-width="2" marker-end="url(#arrowhead)"/>
-
-  <!-- Bottom-left: Audit Trail -->
-  <rect x="50" y="480" width="180" height="140" fill="#fff3e0" stroke="#f57c00" stroke-width="2" rx="5"/>
-  <text x="140" y="520" font-size="14" font-weight="bold" text-anchor="middle" fill="#f57c00">Audit Trail</text>
-  <text x="140" y="545" font-size="11" text-anchor="middle" fill="#666">Event log (immutable)</text>
-  <text x="140" y="565" font-size="11" text-anchor="middle" fill="#666">Hash-chained</text>
-  <text x="140" y="585" font-size="11" text-anchor="middle" fill="#666">Tenant-scoped</text>
-  <text x="140" y="605" font-size="11" text-anchor="middle" fill="#666">GDPR compliant</text>
-
-  <!-- Arrow from Registry to Audit -->
-  <line x1="380" y1="350" x2="190" y2="480" stroke="#f57c00" stroke-width="2" marker-end="url(#arrowhead)"/>
-
-  <!-- Bottom-center: Learning Loop -->
-  <rect x="350" y="480" width="300" height="140" fill="#fce4ec" stroke="#c2185b" stroke-width="2" rx="5"/>
-  <text x="500" y="520" font-size="14" font-weight="bold" text-anchor="middle" fill="#c2185b">Learning Loop</text>
-  <text x="500" y="545" font-size="11" text-anchor="middle" fill="#666">Feedback → Optimizer</text>
-  <text x="500" y="565" font-size="11" text-anchor="middle" fill="#666">Config tuning</text>
-  <text x="500" y="585" font-size="11" text-anchor="middle" fill="#666">Confidence scoring</text>
-  <text x="500" y="605" font-size="11" text-anchor="middle" fill="#666">ADR-0314 integration</text>
-
-  <!-- Arrow from Registry to Learning -->
-  <line x1="500" y1="350" x2="500" y2="480" stroke="#c2185b" stroke-width="2" marker-end="url(#arrowhead)"/>
-
-  <!-- Bottom-right: Versioning & Rollback -->
-  <rect x="770" y="480" width="180" height="140" fill="#e1f5fe" stroke="#0277bd" stroke-width="2" rx="5"/>
-  <text x="860" y="520" font-size="14" font-weight="bold" text-anchor="middle" fill="#0277bd">Versioning</text>
-  <text x="860" y="545" font-size="11" text-anchor="middle" fill="#666">Semver (v1.0, v2.0)</text>
-  <text x="860" y="565" font-size="11" text-anchor="middle" fill="#666">Instant rollback</text>
-  <text x="860" y="585" font-size="11" text-anchor="middle" fill="#666">Zero downtime</text>
-  <text x="860" y="605" font-size="11" text-anchor="middle" fill="#666">Dependency pins</text>
-
-  <!-- Arrow from Registry to Versioning -->
-  <line x1="620" y1="350" x2="810" y2="480" stroke="#0277bd" stroke-width="2" marker-end="url(#arrowhead)"/>
-
-  <!-- Composition box at bottom -->
-  <rect x="350" y="650" width="300" height="40" fill="#f5f5f5" stroke="#999" stroke-width="1" rx="3"/>
-  <text x="500" y="675" font-size="12" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Skills compose: A calls B calls C (Python-like imports)</text>
-
-  <!-- Arrow markers -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
   <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#666"/>
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
     </marker>
   </defs>
+  <rect width="900" height="700" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Agentic Control Plane (ACP) Architecture</text>
+  <rect x="350" y="250" width="200" height="100" class="box" rx="4"/>
+  <text x="450" y="305" text-anchor="middle" class="label">Skills
+Registry
+v2.1</text>
+  <rect x="50" y="100" width="150" height="80" class="box-green" rx="4"/>
+  <text x="125" y="145" text-anchor="middle" class="label">API
+Layer</text>
+  <rect x="700" y="100" width="150" height="80" class="box-red" rx="4"/>
+  <text x="775" y="145" text-anchor="middle" class="label">Compliance
+Gates</text>
+  <rect x="50" y="450" width="150" height="80" class="box" rx="4"/>
+  <text x="125" y="495" text-anchor="middle" class="label">Audit
+Trail</text>
+  <rect x="700" y="450" width="150" height="80" class="box-green" rx="4"/>
+  <text x="775" y="495" text-anchor="middle" class="label">Learning
+Loop</text>
+  <rect x="400" y="550" width="100" height="80" class="box-red" rx="4"/>
+  <text x="450" y="595" text-anchor="middle" class="label">Meta-Skills
+(Locked)</text>
+  <path d="M 450 250 L 200 140" class="arrow"/>
+  <path d="M 550 250 L 700 140" class="arrow"/>
+  <path d="M 350 350 L 150 450" class="arrow"/>
+  <path d="M 550 350 L 750 450" class="arrow"/>
+  <path d="M 450 350 L 450 550" class="arrow"/>
+  <path d="M 125 350 L 125 450" class="arrow-green"/>
+  <path d="M 125 450 L 125 350" class="arrow-green"/>
 </svg>

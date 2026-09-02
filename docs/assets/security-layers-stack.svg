@@ -24,30 +24,22 @@
     </marker>
   </defs>
   <rect width="900" height="700" fill="white"/>
-  <text x="450" y="30" text-anchor="middle" class="title">Zero-Downtime Skill Update (v0.2 → v1.0)</text>
-  <rect x="50" y="100" width="200" height="150" class="box" rx="4"/>
-  <text x="150" y="180" text-anchor="middle" class="label">v0.2 (Old)
-
-os.delegation_router
-v0.2
-
-Serving 100% traffic</text>
-  <rect x="650" y="100" width="200" height="150" class="box-green" rx="4"/>
-  <text x="750" y="180" text-anchor="middle" class="label">v1.0 (New)
-
-os.delegation_router
-v1.0
-
-Loading in parallel</text>
-  <text x="350" y="300" class="label">Traffic Shift (No downtime)</text>
-  <path d="M 150 250 L 300 300" class="arrow"/>
-  <text x="325" y="280" class="small">Requests: v0.2</text>
-  <path d="M 700 250 L 550 300" class="arrow-green"/>
-  <text x="525" y="280" class="small">Requests: v1.0</text>
-  <text x="50" y="450" class="label">Timeline:</text>
-  <text x="50" y="490" class="small">t=0s:    v1.0 code loaded, config validated</text>
-  <text x="50" y="520" class="small">t=0.5s: Traffic split: 50% old, 50% new (canary phase)</text>
-  <text x="50" y="550" class="small">t=3s:   All requests → v1.0 (full rollover)</text>
-  <text x="50" y="580" class="small">t=5s:   v0.2 kept as rollback snapshot</text>
-  <text x="50" y="610" class="small">Downtime: 0ms ✅</text>
+  <text x="450" y="30" text-anchor="middle" class="title">Security Layers Stack (All 5 Critical Layers)</text>
+  <text x="50" y="80" class="label">Compliance Stack (Bottom-Up)</text>
+  <rect x="50" y="500" width="800" height="70" fill="#10B981" opacity="0.2" stroke="#10B981" stroke-width="2"/>
+  <text x="70" y="535" class="small">Layer 5: Meta-Skills (Locked)
+Audit chain, disclosure, consent</text>
+  <rect x="50" y="420" width="800" height="70" fill="#10B981" opacity="0.2" stroke="#10B981" stroke-width="2"/>
+  <text x="70" y="455" class="small">Layer 4: Learning Loop (Audited)
+Feedback processing, optimization</text>
+  <rect x="50" y="340" width="800" height="70" fill="#3B82F6" opacity="0.2" stroke="#3B82F6" stroke-width="2"/>
+  <text x="70" y="375" class="small">Layer 3: Skills Registry (Versioned)
+Compiled, deployed, rolled back</text>
+  <rect x="50" y="260" width="800" height="70" fill="#3B82F6" opacity="0.2" stroke="#3B82F6" stroke-width="2"/>
+  <text x="70" y="295" class="small">Layer 2: Audit Trail (Hash-Chained)
+Every event signed and linked</text>
+  <rect x="50" y="180" width="800" height="70" fill="#EF4444" opacity="0.2" stroke="#EF4444" stroke-width="2"/>
+  <text x="70" y="215" class="small">Layer 1: Compliance Gates (Fail-Closed)
+Consent, house-rules, disclosure</text>
+  <text x="50" y="600" class="small">Invariant: Each layer builds on previous; each is independently verifiable</text>
 </svg>

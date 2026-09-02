@@ -1,40 +1,48 @@
-<svg viewBox="0 0 1000 500" xmlns="http://www.w3.org/2000/svg">
-  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Feedback Types Matrix (ADR-0314)</text>
-  
-  <rect x="50" y="80" width="900" height="380" fill="#f5f5f5" stroke="#999" stroke-width="1" rx="5"/>
-  
-  <text x="70" y="120" font-size="12" font-weight="bold" fill="#1a1a1a">Feedback Type</text>
-  <text x="300" y="120" font-size="12" font-weight="bold" fill="#1a1a1a">Signal Format</text>
-  <text x="550" y="120" font-size="12" font-weight="bold" fill="#1a1a1a">What It Measures</text>
-  
-  <line x1="50" y1="140" x2="950" y2="140" stroke="#ddd" stroke-width="1"/>
-  
-  <text x="70" y="170" font-size="11" fill="#1976d2">outcome_feedback</text>
-  <text x="300" y="170" font-size="10" fill="#666">yes/no/other</text>
-  <text x="550" y="170" font-size="10" fill="#666">Was the decision correct?</text>
-  
-  <line x1="50" y1="190" x2="950" y2="190" stroke="#ddd" stroke-width="1"/>
-  
-  <text x="70" y="220" font-size="11" fill="#7b1fa2">preference_feedback</text>
-  <text x="300" y="220" font-size="10" fill="#666">LLM / deterministic / neither</text>
-  <text x="550" y="220" font-size="10" fill="#666">User's style preference</text>
-  
-  <line x1="50" y1="240" x2="950" y2="240" stroke="#ddd" stroke-width="1"/>
-  
-  <text x="70" y="270" font-size="11" fill="#388e3c">confidence_score</text>
-  <text x="300" y="270" font-size="10" fill="#666">0.0 to 1.0</text>
-  <text x="550" y="270" font-size="10" fill="#666">P(Skill makes correct decision)</text>
-  
-  <line x1="50" y1="290" x2="950" y2="290" stroke="#ddd" stroke-width="1"/>
-  
-  <text x="70" y="320" font-size="11" fill="#f57c00">metric_observed</text>
-  <text x="300" y="320" font-size="10" fill="#666">latency_ms, error_rate, cost</text>
-  <text x="550" y="320" font-size="10" fill="#666">Performance metrics</text>
-  
-  <line x1="50" y1="340" x2="950" y2="340" stroke="#ddd" stroke-width="1"/>
-  
-  <rect x="70" y="360" width="830" height="80" fill="#e8f5e9" stroke="#388e3c" stroke-width="1" rx="3"/>
-  <text x="90" y="385" font-size="11" font-weight="bold" fill="#388e3c">Processing:</text>
-  <text x="90" y="405" font-size="10" fill="#666">All feedback types read by Optimizer → Skill config adjusted → Next invocation uses tuned config</text>
-  <text x="90" y="425" font-size="10" fill="#666">No code commit. No restart. Just learned.</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="600" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Feedback Signal Matrix</text>
+  <line x1="150" y1="100" x2="150" y2="500" stroke="#111827" stroke-width="2"/>
+  <line x1="150" y1="300" x2="850" y2="300" stroke="#111827" stroke-width="2"/>
+  <line x1="500" y1="100" x2="500" y2="500" stroke="#111827" stroke-width="2"/>
+  <line x1="150" y1="100" x2="850" y2="100" stroke="#111827" stroke-width="2"/>
+  <line x1="150" y1="500" x2="850" y2="500" stroke="#111827" stroke-width="2"/>
+  <text x="75" y="300" class="label">Outcome</text>
+  <text x="500" y="530" class="label">Yes ← → No</text>
+  <text x="330" y="90" class="label">Preference: Like ← → Dislike</text>
+  <text x="325" y="200" class="small">Q1: Outcome Good
+Preference Like
+→ Reinforce</text>
+  <text x="675" y="200" class="small">Q2: Outcome Good
+Preference Dislike
+→ Investigate</text>
+  <text x="325" y="400" class="small">Q3: Outcome Bad
+Preference Like
+→ Adjust strategy</text>
+  <text x="675" y="400" class="small">Q4: Outcome Bad
+Preference Dislike
+→ Learn error</text>
 </svg>
