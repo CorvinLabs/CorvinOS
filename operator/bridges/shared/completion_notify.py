@@ -469,9 +469,11 @@ def deliver_ready(
                 # later finished (mark_done found it DELIVERED). Unclaimed records
                 # are left to the CN_PENDING_MAX_AGE prune instead. A claimed
                 # record is reaped only when its host rebooted or its pid is dead.
-                producer_gone = bool(pid) and (
+                pid_int = _pid_from_rec(pid)
+                # An unparseable pid → treat as unknown/alive (don't reap).
+                producer_gone = bool(pid) and pid_int is not None and (
                     (boot and boot != _host_boot_id())
-                    or not _pid_alive(int(pid))
+                    or not _pid_alive(pid_int)
                 )
                 # A SUPERVISED run has an owner for exactly this situation:
                 # task_supervisor will relaunch the worker. Reaping it here
@@ -483,14 +485,35 @@ def deliver_ready(
                 if producer_gone and _supervised(rec.get("id")):
                     producer_gone = False
                 if producer_gone:
-                    rec["state"] = _STATE_READY
-                    rec["ok"] = False
-                    rec["text"] = ("the background worker stopped without "
-                                   "reporting a result (it was killed or the "
-                                   "host restarted).")
-                    rec["ready_at"] = now
-                    _atomic_write(path, rec)
-                    # fall through into the ready-delivery path below this poll
+                    # TOCTOU guard: a real mark_done() may have flipped this
+                    # record to READY (with a genuine result) between the _read()
+                    # at the top of the loop and here. Take the SAME per-record
+                    # O_EXCL lock the delivery path uses, RE-READ under it, and
+                    # only write the abort record if it is STILL pending — a
+                    # real completion must NEVER be overwritten by the reaper.
+                    lock = path.with_suffix(".json.lock")
+                    try:
+                        fd = os.open(str(lock),
+                                     os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    except OSError:
+                        continue  # someone else holds it — leave the record be
+                    try:
+                        os.close(fd)
+                        rec2 = _read(path)
+                        if rec2 is not None and rec2.get("state") == _STATE_PENDING:
+                            rec2["state"] = _STATE_READY
+                            rec2["ok"] = False
+                            rec2["text"] = ("the background worker stopped without "
+                                            "reporting a result (it was killed or "
+                                            "the host restarted).")
+                            rec2["ready_at"] = now
+                            _atomic_write(path, rec2)
+                            # fall through into the ready-delivery path below
+                    finally:
+                        try:
+                            os.unlink(str(lock))
+                        except OSError:
+                            pass
             continue
         if state != _STATE_READY:
             continue
@@ -638,10 +661,15 @@ def reap_orphan_pending(
             pid = rec.get("producer_pid")
             boot = rec.get("producer_boot")
             if pid:
-                producer_gone = (
-                    (boot and boot != _host_boot_id())
-                    or not _pid_alive(int(pid))
-                )
+                pid_int = _pid_from_rec(pid)
+                if pid_int is None:
+                    # Unparseable pid → unknown/alive; don't reap.
+                    producer_gone = False
+                else:
+                    producer_gone = (
+                        (boot and boot != _host_boot_id())
+                        or not _pid_alive(pid_int)
+                    )
             else:
                 # Never claimed: past the (generous) deadline with no live
                 # producer signal at all — treat as abandoned. THIS is the
@@ -649,13 +677,32 @@ def reap_orphan_pending(
                 producer_gone = True
             if not producer_gone:
                 continue
-            rec["state"] = _STATE_READY
-            rec["ok"] = False
-            rec["text"] = CN_ORPHAN_TEXT
-            rec["voice_text"] = None
-            rec["ready_at"] = now
-            _atomic_write(path, rec)
-            reaped += 1
+            # TOCTOU guard (mirrors deliver_ready's dead-producer reap): take the
+            # per-record O_EXCL lock and RE-READ before writing the abort record,
+            # so a genuine mark_done() READY completion that landed between the
+            # _read() above and here is never overwritten with CN_ORPHAN_TEXT.
+            lock = path.with_suffix(".json.lock")
+            try:
+                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except OSError:
+                continue  # someone else holds it — leave the record be
+            try:
+                os.close(fd)
+                rec2 = _read(path)
+                if rec2 is None or rec2.get("state") != _STATE_PENDING:
+                    continue  # completed/delivered/gone under us — do not clobber
+                rec2["state"] = _STATE_READY
+                rec2["ok"] = False
+                rec2["text"] = CN_ORPHAN_TEXT
+                rec2["voice_text"] = None
+                rec2["ready_at"] = now
+                _atomic_write(path, rec2)
+                reaped += 1
+            finally:
+                try:
+                    os.unlink(str(lock))
+                except OSError:
+                    pass
         except Exception as e:  # noqa: BLE001 — per-record isolation, never raise
             print(f"completion_notify: orphan reap failed {path.name}: {e}",
                   file=sys.stderr)

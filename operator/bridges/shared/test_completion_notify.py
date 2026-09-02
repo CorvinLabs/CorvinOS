@@ -235,6 +235,90 @@ def test_claimed_live_producer_not_reaped() -> None:
         print("PASS: claimed live-producer record not reaped")
 
 
+def test_reap_does_not_overwrite_a_racing_real_completion() -> None:
+    """#13 (TOCTOU) — if a genuine mark_done() lands a READY result between the
+    reaper's top-of-loop read and its abort-write, the reap must RE-READ under
+    the O_EXCL lock and NOT overwrite the real completion with 'worker stopped'.
+    We inject the race deterministically: _pid_alive (called while computing
+    producer_gone) calls mark_done() with the real result as a side effect."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        cn.CN_PENDING_REAP = 0.0
+        tid = cn.register(channel="discord", chat_id="9", sender="u9",
+                          tenant_id="acme", label="race")
+        p = cn._record_path(tid)
+        r = cn._read(p)
+        r["producer_pid"] = 424242  # a pid we'll report dead
+        r["producer_boot"] = cn._host_boot_id()
+        cn._atomic_write(p, r)
+        _age_record(cn, tid, 100)
+
+        orig = cn._pid_alive
+
+        def racing_pid_alive(pid):
+            # The producer finishes for real exactly during the liveness probe.
+            cn.mark_done(tid, text="REAL RESULT — do not lose me", ok=True)
+            return False  # report the (old) pid dead → reap would fire
+
+        cn._pid_alive = racing_pid_alive
+        try:
+            cn.deliver_ready(outbox)
+        finally:
+            cn._pid_alive = orig
+
+        rec = cn._read(p)
+        # The record must carry the REAL result, not the abort text, and be ok.
+        assert rec is not None
+        assert rec.get("ok") is True, "real completion was clobbered by the reaper"
+        assert "REAL RESULT" in (rec.get("text") or ""), \
+            f"reaper overwrote the genuine result: {rec.get('text')!r}"
+        # And the real result still delivers.
+        assert cn.deliver_ready(outbox) == 1
+        print("PASS: reaper does not overwrite a racing real completion")
+
+
+def test_reap_unparseable_pid_is_not_reaped_and_never_raises() -> None:
+    """#14 — a garbage producer_pid must be treated as unknown/alive (not reaped)
+    and must never raise a ValueError out of deliver_ready."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        cn.CN_PENDING_REAP = 0.0
+        tid = cn.register(channel="discord", chat_id="8", sender="u8",
+                          tenant_id="acme", label="badpid")
+        p = cn._record_path(tid)
+        r = cn._read(p)
+        r["producer_pid"] = "not-an-int"  # malformed
+        r["producer_boot"] = cn._host_boot_id()
+        cn._atomic_write(p, r)
+        _age_record(cn, tid, 100)
+        # Must not raise.
+        cn.deliver_ready(outbox)
+        assert cn._read(p)["state"] == "pending", \
+            "record with unparseable pid was wrongly reaped"
+        print("PASS: unparseable pid not reaped, no raise")
+
+
+def test_orphan_reaper_does_not_overwrite_real_completion() -> None:
+    """#13 (TOCTOU, reap_orphan_pending) — the opt-in orphan reaper must also
+    re-read under lock and never clobber a genuine READY completion."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        tid = cn.register(channel="discord", chat_id="7", sender="u7",
+                          tenant_id="acme", label="orphan-race")
+        # Unclaimed (pid=None) + past deadline → the flagged UNCLAIMED branch.
+        _age_record(cn, tid, 10000)
+        # A real result arrives before the reaper writes its abort record.
+        assert cn.mark_done(tid, text="ORPHAN REAL RESULT", ok=True) is True
+        n = cn.reap_orphan_pending(enabled=True, deadline=1.0)
+        assert n == 0, "orphan reaper reaped an already-completed record"
+        rec = cn._read(cn._record_path(tid))
+        assert rec.get("ok") is True and "ORPHAN REAL RESULT" in (rec.get("text") or "")
+        print("PASS: orphan reaper does not overwrite a real completion")
+
+
 # ── ADR-0189: want_voice / synthesize_voice ──────────────────────────────
 
 def test_want_voice_attaches_voice_path_when_synthesizer_given() -> None:
@@ -448,6 +532,9 @@ def main() -> int:
         test_unclaimed_long_job_not_reaped_result_delivers,
         test_claimed_dead_producer_reaped,
         test_claimed_live_producer_not_reaped,
+        test_reap_does_not_overwrite_a_racing_real_completion,
+        test_reap_unparseable_pid_is_not_reaped_and_never_raises,
+        test_orphan_reaper_does_not_overwrite_real_completion,
         test_want_voice_attaches_voice_path_when_synthesizer_given,
         test_no_synthesizer_delivers_text_only_even_with_want_voice,
         test_want_voice_false_never_calls_synthesizer,
