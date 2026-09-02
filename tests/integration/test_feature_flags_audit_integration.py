@@ -48,19 +48,20 @@ class TestAuditIntegration:
 
         assert result["success"]
 
-        # Verify event was written to audit log
-        if temp_audit_log.exists():
-            with open(temp_audit_log, "r") as f:
-                lines = f.readlines()
-                assert len(lines) > 0, "No audit events found"
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
 
-                # Parse last event (most recent)
-                last_event = json.loads(lines[-1].strip())
-                assert last_event["event_type"] == "skill_executed"
-                assert last_event["details"]["operation"] == "is_enabled"
-                assert last_event["details"]["flag_id"] == "vibe_engineering"
-                assert last_event["tenant_id"] == "_default"
-                assert "hash" in last_event  # Hash-chained
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            assert len(lines) > 0, "No audit events found"
+
+            # Parse last event (most recent)
+            last_event = json.loads(lines[-1].strip())
+            assert last_event["event_type"] == "skill_executed"
+            assert last_event["details"]["operation"] == "is_enabled"
+            assert last_event["details"]["flag_id"] == "vibe_engineering"
+            assert last_event["tenant_id"] == "_default"
+            assert "hash" in last_event  # Hash-chained
 
     def test_set_enabled_emits_audit_event(self, skill, temp_audit_log):
         """Test that set_enabled() call emits SKILL_EXECUTED event."""
@@ -73,13 +74,14 @@ class TestAuditIntegration:
 
         assert result["success"]
 
-        # Verify event was written
-        if temp_audit_log.exists():
-            with open(temp_audit_log, "r") as f:
-                lines = f.readlines()
-                last_event = json.loads(lines[-1].strip())
-                assert last_event["details"]["operation"] == "set_enabled"
-                assert last_event["details"]["flag_id"] == "test_flag"
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
+
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            last_event = json.loads(lines[-1].strip())
+            assert last_event["details"]["operation"] == "set_enabled"
+            assert last_event["details"]["flag_id"] == "test_flag"
 
     def test_audit_events_are_hash_chained(self, skill, temp_audit_log):
         """Test that audit events are hash-chained (GDPR Art. 30, 32)."""
@@ -87,18 +89,19 @@ class TestAuditIntegration:
         skill.execute({"operation": "is_enabled", "flag_id": "flag1", "tenant_id": "_default"})
         skill.execute({"operation": "is_enabled", "flag_id": "flag2", "tenant_id": "_default"})
 
-        # Verify hash-chain
-        if temp_audit_log.exists():
-            with open(temp_audit_log, "r") as f:
-                lines = f.readlines()
-                assert len(lines) >= 2, "Expected at least 2 events"
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
 
-                event1 = json.loads(lines[-2].strip())
-                event2 = json.loads(lines[-1].strip())
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            assert len(lines) >= 2, "Expected at least 2 events"
 
-                # Event 2 should reference Event 1's hash
-                assert event2.get("prev_hash") == event1.get("hash"), f"Hash chain broken: event2.prev_hash={event2.get('prev_hash')} != event1.hash={event1.get('hash')}"
-                assert event2.get("hash") is not None
+            event1 = json.loads(lines[-2].strip())
+            event2 = json.loads(lines[-1].strip())
+
+            # FIX #16: Event 2 should reference Event 1's hash (equality check)
+            assert event2.get("prev_hash") == event1.get("hash"), f"Hash chain broken: event2.prev_hash={event2.get('prev_hash')} != event1.hash={event1.get('hash')}"
+            assert event2.get("hash") is not None
 
     def test_audit_events_contain_tenant_id(self, skill, temp_audit_log):
         """Test that every audit event includes tenant_id (GDPR requirement)."""
@@ -108,11 +111,13 @@ class TestAuditIntegration:
             "tenant_id": "tenant_test",
         })
 
-        if temp_audit_log.exists():
-            with open(temp_audit_log, "r") as f:
-                lines = f.readlines()
-                event = json.loads(lines[-1].strip())
-                assert event["tenant_id"] == "tenant_test"
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
+
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            event = json.loads(lines[-1].strip())
+            assert event["tenant_id"] == "tenant_test"
 
     def test_audit_events_contain_no_pii(self, skill, temp_audit_log):
         """Test that audit events contain no PII (flag values only, no user data)."""
@@ -123,15 +128,17 @@ class TestAuditIntegration:
             "tenant_id": "_default",
         })
 
-        if temp_audit_log.exists():
-            with open(temp_audit_log, "r") as f:
-                lines = f.readlines()
-                event_str = lines[-1]
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
 
-                # Verify no PII patterns (emails, phone numbers, etc.)
-                assert "@" not in event_str  # No email addresses
-                assert "password" not in event_str.lower()
-                assert "token" not in event_str.lower()
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            event_str = lines[-1]
+
+            # Verify no PII patterns (emails, phone numbers, etc.)
+            assert "@" not in event_str  # No email addresses
+            assert "password" not in event_str.lower()
+            assert "token" not in event_str.lower()
 
 
 if __name__ == "__main__":
