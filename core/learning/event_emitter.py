@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from typing import Optional
 
 from core.learning.learning_events import LearningEvent, EventType
 from core.learning.event_store import EventStore
+
+logger = logging.getLogger(__name__)
 
 
 class EventEmitter:
@@ -30,7 +33,8 @@ class EventEmitter:
                 try:
                     self.store.write_event(event)
                 except Exception as e:
-                    pass  # Silent fail (fire-and-forget)
+                    # FIX #12: Log data loss instead of silent fail
+                    logger.error(f"Failed to write learning event (LOST): {event.event_id} — {e}")
             except queue.Empty:
                 pass
 
@@ -40,10 +44,16 @@ class EventEmitter:
         Returns:
             True if queued, False if queue full (dropped)
         """
+        # FIX #7: Validate tenant_id scope (GDPR Art. 32 — no mixed-tenant queue)
+        if not event.tenant_id or not isinstance(event.tenant_id, str):
+            logger.error(f"Rejected event: invalid tenant_id={event.tenant_id!r}")
+            return False
+
         try:
             self._queue.put_nowait(event)
             return True
         except queue.Full:
+            logger.warning(f"Queue full, dropping event {event.event_id}")
             return False  # Queue full, drop event
 
     def stop(self) -> None:
