@@ -127,6 +127,26 @@ def test_liveness_is_sticky_progress_status_is_new_message(tmp_path):
     assert status and status[0].get("_task_progress") is True and "_progress" not in status[0]
 
 
+# ── live-scan of the streaming token buffer ─────────────────────────────────
+
+def test_scan_new_steps_surfaces_only_new_complete_markers():
+    buf = "arbeite ⟦bgstep:T|Phase 1/3⟧ weiter"
+    steps, idx = mth.scan_new_steps(buf, 0)
+    assert steps == [("T", "Phase 1/3")]
+    # No new complete marker past idx → nothing more.
+    assert mth.scan_new_steps(buf, idx) == ([], idx)
+
+
+def test_scan_new_steps_handles_marker_split_across_chunks():
+    # A marker arriving in pieces must not fire until it is complete.
+    a = "text ⟦bgstep:T|Pha"
+    steps, idx = mth.scan_new_steps(a, 0)
+    assert steps == [] and idx == 0          # partial → not yet
+    b = a + "se 2/3⟧ more"
+    steps, idx = mth.scan_new_steps(b, idx)
+    assert steps == [("T", "Phase 2/3")]     # completed → fires once
+
+
 # ── E2E wiring reachability: real adapter surfaces call the hooks ────────────
 
 def test_adapter_wires_heartbeat_on_live_paths():
@@ -138,3 +158,11 @@ def test_adapter_wires_heartbeat_on_live_paths():
         "reply hook must register tasks and update their status")
     assert ".strip_markers(" in src, "reply hook must strip the markers"
     assert ".deliver_due(ROOT, OUTBOX)" in src, "main loop must deliver due heartbeats"
+
+
+def test_streaming_path_live_scans_bgstep():
+    """The synchronous streaming path must live-scan the token stream for steps
+    and fold the current step into the alive heartbeat."""
+    src = (Path(__file__).resolve().parent / "adapter.py").read_text()
+    assert ".scan_new_steps(" in src, "streaming path must live-scan the token buffer"
+    assert "_current_bgstep" in src, "alive heartbeat must fold in the current step"

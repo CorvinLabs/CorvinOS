@@ -163,6 +163,11 @@ class FeatureFlagsAudit:
         - Immutable (append-only)
         - Fail-safe (exceptions don't crash operation)
         """
+        # FIX #5: Validate tenant_id before creating audit event (GDPR Art. 32)
+        if not tenant_id or not isinstance(tenant_id, str):
+            logger.error(f"Audit event rejected: invalid tenant_id={tenant_id}")
+            return
+
         writer = FeatureFlagsAudit._get_writer()
         if not writer:
             logger.debug(f"Audit disabled; skipping event for {operation}({flag_id})")
@@ -236,6 +241,7 @@ class FeatureFlagsSkill:
                 "success": bool,
                 "result": dict (operation-specific),
                 "error": str (if failed),
+                "latency_ms": float (always present),
             }
         """
         import time
@@ -244,6 +250,29 @@ class FeatureFlagsSkill:
         operation = input_data.get("operation", "is_enabled")
         flag_id = input_data.get("flag_id")
         tenant_id = input_data.get("tenant_id", "_default")
+
+        # Validate inputs (GDPR Art. 32: tenant isolation)
+        if not tenant_id or not isinstance(tenant_id, str):
+            return {
+                "operation": operation,
+                "success": False,
+                "error": "Invalid tenant_id (must be non-empty string)",
+                "latency_ms": (time.time() - start_time) * 1000,
+            }
+
+        if flag_id and not isinstance(flag_id, str):
+            return {
+                "operation": operation,
+                "success": False,
+                "error": "Invalid flag_id (must be string)",
+                "latency_ms": (time.time() - start_time) * 1000,
+            }
+
+        # Whitelist allowed operations
+        ALLOWED_OPERATIONS = {
+            "is_enabled", "set_enabled", "describe_all", "tier_of",
+            "can_promote_to", "worker_engine_mode", "set_worker_engine_mode"
+        }
 
         try:
             # Dispatch to operation handler
@@ -272,14 +301,27 @@ class FeatureFlagsSkill:
                 result = self._set_worker_engine_mode(mode, tenant_id)
 
             else:
+                # FIX #2: Emit audit for rejected operations (GDPR Art. 30)
+                latency_ms = (time.time() - start_time) * 1000
+                self.audit.emit_event(
+                    operation=operation,
+                    flag_id=flag_id or "",
+                    input_data=input_data,
+                    output_data={"error": f"Unknown operation: {operation}"},
+                    tenant_id=tenant_id,
+                    latency_ms=latency_ms,
+                )
                 return {
                     "operation": operation,
                     "success": False,
                     "error": f"Unknown operation: {operation}",
+                    "latency_ms": latency_ms,
                 }
 
-            # Emit audit event
+            # Calculate latency
             latency_ms = (time.time() - start_time) * 1000
+
+            # FIX #1: Emit audit on ALL paths including error (GDPR Art. 30)
             self.audit.emit_event(
                 operation=operation,
                 flag_id=flag_id or "",
@@ -297,11 +339,22 @@ class FeatureFlagsSkill:
             }
 
         except Exception as e:
+            # FIX #1: Emit audit on exception (GDPR Art. 30)
+            latency_ms = (time.time() - start_time) * 1000
+            self.audit.emit_event(
+                operation=operation,
+                flag_id=flag_id or "",
+                input_data=input_data,
+                output_data={"error": str(e)},
+                tenant_id=tenant_id,
+                latency_ms=latency_ms,
+            )
             logger.error(f"Skill execution failed: {e}")
             return {
                 "operation": operation,
                 "success": False,
                 "error": str(e),
+                "latency_ms": latency_ms,  # FIX #3: Include latency on error
             }
 
     # ─── OPERATION HANDLERS ──────────────────────────────────────────────────

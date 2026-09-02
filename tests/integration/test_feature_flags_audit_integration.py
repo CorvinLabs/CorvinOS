@@ -97,7 +97,7 @@ class TestAuditIntegration:
                 event2 = json.loads(lines[-1].strip())
 
                 # Event 2 should reference Event 1's hash
-                assert event2.get("prev_hash") or "hash" in event1
+                assert event2.get("prev_hash") == event1.get("hash"), f"Hash chain broken: event2.prev_hash={event2.get('prev_hash')} != event1.hash={event1.get('hash')}"
                 assert event2.get("hash") is not None
 
     def test_audit_events_contain_tenant_id(self, skill, temp_audit_log):

@@ -5171,6 +5171,17 @@ def _call_claude_streaming_via_engine(
     last_event_type = ""  # type of the most recent stream event
     last_alive_hb = start_t
     rc: int = 0
+    # ADR-0551 C1-B — live bgstep parsing (ship-dark). Surface a synchronous
+    # turn's current step from the token stream, folded into the alive heartbeat
+    # so the operator sees "current phase + elapsed time" in ONE updating line.
+    _bgstep_on = _bg_flag("bridge_mid_turn_task_notify")
+    _bgstep_buf = ""
+    _bgstep_scanned = 0
+    _current_bgstep = ""
+    try:
+        from . import mid_turn_heartbeat as _mth_s  # type: ignore
+    except ImportError:  # pragma: no cover
+        import mid_turn_heartbeat as _mth_s  # type: ignore[no-redef]
 
     try:
         try:
@@ -5208,8 +5219,11 @@ def _call_claude_streaming_via_engine(
                         m, s = divmod(elapsed, 60)
                         label = f"{m}m {s}s" if m else f"{s}s"
                         try:
+                            _hb_text = (f"{_current_bgstep} · ⏳ {label}"
+                                        if _current_bgstep
+                                        else f"⏳ Noch dabei … ({label})")
                             on_status(
-                                f"⏳ Noch dabei … ({label})",
+                                _hb_text,
                                 tool_name="_alive",
                             )
                         except Exception as e:  # noqa: BLE001
@@ -5233,9 +5247,19 @@ def _call_claude_streaming_via_engine(
                     _captured_session_id = (ev.raw or {}).get("session_id") or ""
                 elif ev.type == "text_delta":
                     # Incremental assistant text — final value comes via
-                    # turn_completed; legacy path doesn't fire on_status
-                    # for text_delta either (parity).
-                    pass
+                    # turn_completed. ADR-0551 C1-B: live-scan it for bgstep
+                    # markers so a long synchronous turn surfaces its current
+                    # step live (ship-dark; flag off ⇒ no-op).
+                    if _bgstep_on and on_status is not None:
+                        _bgstep_buf += (ev.text or "")
+                        try:
+                            _steps, _bgstep_scanned = _mth_s.scan_new_steps(
+                                _bgstep_buf, _bgstep_scanned)
+                            for _lbl, _st in _steps:
+                                _current_bgstep = f"🔧 {_lbl}: {_st}"
+                                on_status(_current_bgstep, tool_name="_bgstep")
+                        except Exception as e:  # noqa: BLE001
+                            log(f"bgstep live-scan failed: {e}")
                 elif ev.type == "tool_call":
                     msg = (ev.raw or {}).get("message") or {}
                     for block in msg.get("content") or []:
