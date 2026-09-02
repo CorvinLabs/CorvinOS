@@ -79,6 +79,25 @@ def parse_done(reply_text: str) -> "list[str]":
     return [m.strip() for m in _DONE_RE.findall(reply_text) if m.strip()]
 
 
+def scan_new_steps(buf: str, from_index: int) -> "tuple[list[tuple[str, str]], int]":
+    """Live-scan a growing token buffer for COMPLETE ``⟦bgstep:<label>|<status>⟧``
+    markers past ``from_index``. Returns ``(steps, new_index)`` where ``new_index``
+    advances only past the last *complete* marker — so a marker split across token
+    chunks (a partial trailing ``⟦bgstep:…`` with no closing ``⟧``) is left for the
+    next call once its rest arrives. Used by the streaming path to surface a
+    synchronous turn's current step live, not only at the final reply."""
+    out: list[tuple[str, str]] = []
+    end = from_index
+    if not buf:
+        return out, end
+    for m in _STEP_RE.finditer(buf, from_index):
+        lbl, status = m.group(1).strip(), m.group(2).strip()[:STATUS_CAP]
+        if lbl and status:
+            out.append((lbl, status))
+        end = m.end()
+    return out, end
+
+
 def strip_markers(reply_text: str) -> str:
     """Remove all bg markers so they never reach the channel."""
     if not reply_text:
