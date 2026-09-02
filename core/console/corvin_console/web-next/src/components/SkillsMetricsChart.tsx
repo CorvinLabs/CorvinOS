@@ -46,7 +46,8 @@ export const SkillsMetricsChart: React.FC<SkillsMetricsChartProps> = ({ data }) 
 
   // Prepare pie data (outcomes) — fix Issue 4: null check
   const pieData = useMemo(() => {
-    const feedback = metrics.feedback_breakdown.by_outcome || {};
+    const feedback = metrics.feedback_breakdown?.by_outcome || {};
+    if (!feedback || typeof feedback !== 'object') return [];
     return Object.entries(feedback).map(([name, value]) => ({
       name,
       value,
