@@ -262,6 +262,28 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("bridges", "orchestration", "notifications"),
     ),
     FeatureFlag(
+        id="bridge_mid_turn_task_notify",
+        label="Intermediate heartbeat for mid-turn background sub-agents",
+        description=(
+            "ADR-0551 C1 (variant B). A sub-agent the assistant spawns "
+            "MID-TURN never engages the durable `/task` backbone, so the user "
+            "sees nothing while it runs — the exact 'is it still working or "
+            "did it die?' gap. On, the assistant marks such work with a "
+            "`⟦bgtask:<label>⟧` marker in its reply; the adapter parses+strips "
+            "it, records an active heartbeat, and the main loop emits a bounded "
+            "'still working' ping through the SAME outbox (normal envelope, not "
+            "sticky _progress). Completion is NOT sent here — it stays with the "
+            "agent's own reply when the host re-invokes it, so there is no "
+            "double-ping. Bounded: first ping after FIRST_AFTER_S (60s), one per "
+            "INTERVAL_S (60s), at most MAX_PINGS (10) / MAX_AGE_S (30m), then a "
+            "final note and stop; a session's markers clear on its next reply. "
+            "Off means markers are ignored and nothing is written or sent."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("bridges", "orchestration", "notifications"),
+    ),
+    FeatureFlag(
         id="bridge_orphan_task_reaper",
         label="Report abandoned background tasks whose worker died",
         description=(
