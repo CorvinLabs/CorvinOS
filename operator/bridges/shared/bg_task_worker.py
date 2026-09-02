@@ -88,6 +88,52 @@ def _load_progress():
         return None
 
 
+def _maybe_voice(cn, task_id: str, *, want_voice: bool, text: str) -> bool:
+    """Best-effort: synthesize a spoken SUMMARY of *text* and stamp its
+    voice_path onto the completion record — BEFORE mark_done flips it to ready.
+
+    ADR-0554 Phase 0 (approach (a)): the summary is produced HERE, in the
+    detached worker (which already imports ``adapter`` for the engine call), so
+    ``completion_notify`` stays pure-stdlib and delivery is poller-INDEPENDENT
+    (deliver_ready attaches the stored path with no callback). Returns True when
+    a voice_path was attached.
+
+    Never raises and never touches the record's text: a TTS failure (no engine,
+    empty summary, exception) simply degrades to text-only delivery — voice is
+    an enhancement, never a delivery precondition. A ``<voice>…</voice>``
+    override in *text* is honoured (same mechanism the live turn uses).
+    """
+    if not want_voice or not (text or "").strip():
+        return False
+    # Same TTS test hook the live turn honours (adapter._synthesize_voice_for_turn):
+    # decouples tests from real OpenAI/edge/Piper latency. Harmless in production.
+    if os.environ.get("ADAPTER_DISABLE_VOICE") == "1":
+        return False
+    try:
+        sys.path.insert(0, str(HERE))
+        import adapter as _ad  # type: ignore  # cached after main()'s own import
+
+        try:
+            from voice_tag import extract_voice_override as _evo  # type: ignore
+            visible, override = _evo(str(text))
+        except Exception:  # noqa: BLE001 — override is optional, never fatal
+            visible, override = str(text), None
+        spoken = _ad.build_voice_summary(visible, override=override)
+        if not spoken:
+            return False
+        try:
+            lang = _ad._resolve_voice_output_language(spoken) or "de"
+        except Exception:  # noqa: BLE001
+            lang = "de"
+        voice_path = _ad.synthesize_voice_note(spoken, lang=lang)
+        if voice_path:
+            return bool(cn.attach_voice(task_id, str(voice_path)))
+        return False
+    except Exception as e:  # noqa: BLE001 — voice is an enhancement, never a blocker
+        print(f"bg_task_worker: voice synth failed: {e}", file=sys.stderr)
+        return False
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("bg_task_worker: missing spec-file argument", file=sys.stderr)
@@ -245,6 +291,14 @@ def main() -> int:
         # beat — the resume that fixes it, so the user would be told the task
         # failed while it was in fact still running.
         return 0
+
+    # ADR-0554 Phase 0 (approach (a)): synthesize + attach a spoken SUMMARY
+    # BEFORE mark_done, so the ready record already carries voice_path and any
+    # poller delivers it. Gated by want_voice (set at register() only when the
+    # proactive_voice_completion flag AND the user's voice preference allow it);
+    # best-effort — a failure degrades to text-only, never blocks the text.
+    _maybe_voice(cn, task_id, want_voice=bool(spec.get("want_voice")),
+                 text=(text or ""))
 
     # A gate refusal comes back as text (ok stays True) — the user still gets it.
     cn.mark_done(task_id, text=(text or "(no output)"), ok=ok)

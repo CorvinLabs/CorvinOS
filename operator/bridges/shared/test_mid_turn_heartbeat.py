@@ -320,3 +320,17 @@ def test_strip_mirrors_parser_no_wandering_edge():
     assert "⟦other⟧" in out and "⟦bgstep" not in out
     # Normal complete markers still strip cleanly.
     assert "⟦bg" not in mth.strip_markers("a ⟦bgtask:T⟧ b ⟦bgdone:T⟧ c")
+
+
+# ── LB-prov: heartbeat/status envelopes carry a provenance marking ──────────
+
+def test_envelope_carries_provenance(tmp_path):
+    """LB-prov / EU AI Act Art. 50 §4: a machine-generated heartbeat/status
+    envelope carries a `provenance` marking, consistent with the progress /
+    completion envelopes. Proven through the real deliver_due write path."""
+    state, outbox = tmp_path / "s", tmp_path / "o"
+    mth.update_status(state, "sess", channel="discord", chat_id="c",
+                      label="X", status="Phase 1/3: Recherche")
+    assert mth.deliver_due(state, outbox, first_after_s=90, now=time.time()) == 1
+    envs = _envs(outbox)
+    assert envs and "provenance" in envs[0], envs

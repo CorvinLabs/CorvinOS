@@ -21,6 +21,13 @@ import pytest
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+# corvin_core (feature_flags) + forge live outside shared/ — mirror the bridge
+# process PYTHONPATH so the flag-ON delivery-path tests can flip the REAL
+# proactive_communication flag and route through the REAL proactive gate.
+_REPO = HERE.parents[2]
+for _p in (_REPO / "core" / "console", _REPO / "operator" / "forge"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 
 @pytest.fixture()
@@ -236,6 +243,85 @@ def test_emit_never_raises(env, monkeypatch):
     monkeypatch.setattr(env["tp"], "_atomic_write",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     assert env["tp"].emit(tid, "boom") is None
+
+
+# ── ADR-0554 Phase 2 (MB1): the FLAG-ON delivery path of deliver_progress ─────
+#
+# The flag-OFF (ship-dark default) path is exercised by every test above (the
+# flag resolves OFF with no overlay). These two close the gap for the path that
+# runs in production when proactive_communication is ON: they drive the REAL
+# deliver_progress → _proactive_flag_on → _emit_via_proactive →
+# proactive.emit_proactive(solicited=True) chain, flipping the REAL flag via a
+# console overlay for the record's tenant and mocking ONLY the house_rules
+# boundary.
+
+_FLAG_ID = "proactive_communication"
+
+
+def test_flag_on_progress_delivers_via_gate_exactly_once(env, monkeypatch):
+    """MB1 gap #5: flag ON + gates pass → deliver_progress routes the update
+    THROUGH the proactive gate, writing exactly ONE `_task_progress` envelope and
+    staying exactly-once on a second poll."""
+    import proactive as P  # type: ignore
+    from corvin_core import feature_flags as ff  # type: ignore
+
+    ff._write_overlay("_default", {"flags": {_FLAG_ID: True}})
+    assert ff.is_enabled(_FLAG_ID, "_default") is True
+    monkeypatch.setattr(P, "_house_rules_allows",
+                        lambda text, *, channel, chat_key: True)
+    seen: list = []
+    real_emit = P.emit_proactive
+
+    def spy(**kw):
+        seen.append((kw.get("tenant_id"), kw.get("kind")))
+        return real_emit(**kw)
+
+    monkeypatch.setattr(P, "emit_proactive", spy)
+
+    tid = _register(env["cn"])
+    assert env["tp"].emit(tid, "phase 2 of 4 done") is not None
+
+    n = env["tp"].deliver_progress(env["outbox"])
+
+    assert n == 1
+    assert seen == [("_default", "progress")], \
+        f"update must route via the gate for its tenant as a progress kind: {seen}"
+    envs = _outbox_envelopes(env["outbox"])
+    assert len(envs) == 1
+    e = envs[0]
+    assert e["_task_progress"] is True
+    assert "phase 2 of 4 done" in e["text"]
+    assert e["chat_id"] == "123456789012345678"          # string, precision intact
+    assert e.get("_final") is not True                    # intermediate, not final
+    # exactly-once: a second poll adds nothing.
+    assert env["tp"].deliver_progress(env["outbox"]) == 0
+    assert len(_outbox_envelopes(env["outbox"])) == 1
+
+
+def test_flag_on_progress_house_deny_falls_back_direct(env, monkeypatch):
+    """MB1 gap #2 (progress analog): with the flag ON, a SOLICITED progress update
+    whose emit_proactive DENIES (house-rules fail-closed / false-positive) is
+    STILL delivered via the direct fallback — no silent loss, no eternal QUEUED,
+    no double-send."""
+    import proactive as P  # type: ignore
+    from corvin_core import feature_flags as ff  # type: ignore
+
+    ff._write_overlay("_default", {"flags": {_FLAG_ID: True}})
+    assert ff.is_enabled(_FLAG_ID, "_default") is True
+    monkeypatch.setattr(P, "_house_rules_allows",
+                        lambda text, *, channel, chat_key: False)  # gate DENIES
+
+    tid = _register(env["cn"])
+    assert env["tp"].emit(tid, "still grinding") is not None
+
+    assert env["tp"].deliver_progress(env["outbox"]) == 1     # delivered anyway
+    envs = _outbox_envelopes(env["outbox"])
+    assert len(envs) == 1
+    assert envs[0]["_task_progress"] is True
+    assert "still grinding" in envs[0]["text"]
+    # exactly-once, not stuck QUEUED.
+    assert env["tp"].deliver_progress(env["outbox"]) == 0
+    assert len(_outbox_envelopes(env["outbox"])) == 1
 
 
 # ── GDPR Art. 17 ──────────────────────────────────────────────────────────
