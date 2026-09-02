@@ -1,3 +1,4 @@
+import logging
 """Phase 2: EventStore — Learning event persistence (ADR-0314)."""
 
 from __future__ import annotations

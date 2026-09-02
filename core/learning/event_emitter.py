@@ -17,7 +17,7 @@ class EventEmitter:
         """Initialize emitter with event store."""
         self.store = event_store
         self._queue: queue.Queue[LearningEvent] = queue.Queue(maxsize=queue_size)
-        self._worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self._worker_thread = threading.Thread(target=self._worker, daemon=False)
         self._worker_thread.start()
 
     def _worker(self) -> None:
@@ -50,3 +50,5 @@ class EventEmitter:
         """Stop emitter (wait for queue to flush)."""
         self._queue.put(None)  # Sentinel
         self._worker_thread.join(timeout=5.0)
+        if self._worker_thread.is_alive():
+            raise RuntimeError("EventEmitter worker thread failed to shut down within timeout")
