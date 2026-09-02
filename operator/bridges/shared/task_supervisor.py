@@ -502,6 +502,14 @@ def _spawn_worker(rec: dict, prompt: str) -> int | None:
         "instruction": prompt,
         "channel": rec.get("channel"),
         "chat_key": rec.get("chat_key"),
+        # Session ISOLATION (ADR-0553 fix): same worker-private, per-task key the
+        # adapter mints, derived identically so a supervised RETRY resumes the
+        # worker's OWN prior isolated session (same task_id ⇒ same key) and never
+        # the operator's live chat. Stable across attempts by construction.
+        "engine_chat_key": (
+            rec.get("engine_chat_key")
+            or f"bgtask::{rec.get('chat_key')}::{rec.get('task_id')}"
+        ),
         "sender": rec.get("sender") or "",
         "profile": rec.get("profile"),
         "msg_id": rec.get("msg_id"),

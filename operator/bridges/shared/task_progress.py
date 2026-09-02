@@ -398,6 +398,93 @@ def _envelope_for(rec: dict) -> dict:
     return env
 
 
+def _proactive_flag_on(tenant_id: str) -> bool:
+    """Resolve the ship-dark ``proactive_communication`` flag for ``tenant_id``.
+
+    OFF (default / unresolved) → the migrated delivery path uses the
+    pre-migration DIRECT outbox write (byte-identical, ship-dark). ON → the
+    progress update routes through the governed gate. Never raises."""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import proactive as _p  # type: ignore
+        return bool(_p._flag_on(tenant_id or "_default"))
+    except Exception:  # noqa: BLE001 — primitive/console absent → OFF (direct write)
+        return False
+
+
+def _write_outbox_direct(env: dict, outbox: "str | Path",
+                         out_file_name: str) -> bool:
+    """Byte-identical pre-migration DIRECT outbox write (atomic tmp-replace, 0600).
+
+    Used for the ship-dark default (flag OFF) AND as the DENIED/unavailable
+    fallback under flag ON — a SOLICITED progress update belonging to an explicit
+    ``/task`` run must not be silently lost to a house-rules false-positive or a
+    broken gate. Never raises."""
+    try:
+        out_file = Path(outbox) / out_file_name
+        tmp = out_file.with_suffix(out_file.suffix + ".tmp")
+        tmp.write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)  # envelope carries routing PII
+        except OSError:
+            pass
+        tmp.replace(out_file)
+        return True
+    except Exception as ex:  # noqa: BLE001 — never raise
+        print(f"task_progress: direct outbox write failed {out_file_name}: {ex}",
+              file=sys.stderr)
+        return False
+
+
+def _emit_via_proactive(env: dict, rec: dict, *, outbox: "str | Path",
+                        out_file_name: str) -> str:
+    """Route ONE queued progress envelope through the proactive gate (ADR-0554
+    Phase 2 / ADR-0553 amendment). Only reached when the ``proactive_communication``
+    flag is ON for the record's tenant.
+
+    ``solicited=True``: an intermediate update belongs to an explicit ``/task``
+    run, so the flag / consent / disclosure gates are SKIPPED — House-rules +
+    rate/flood + the content-free ``proactive.emitted`` audit STILL apply. The
+    pre-built ``env`` (``_task_progress`` marker, provenance, ``tp_`` filename) is
+    written verbatim; progress carries no voice.
+
+    Returns a status string: ``"emitted"`` (envelope written), ``"rate_limited"``
+    (transient — leave QUEUED, retry next poll), or ``"denied"`` (house-rules
+    fail-closed / false-positive / primitive unavailable — the caller MUST fall
+    back to a direct write so the update is not lost). Never raises.
+    """
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import proactive as _p  # type: ignore
+    except Exception as e:  # noqa: BLE001 — primitive missing → deny → direct fallback
+        print(f"task_progress: proactive gate unavailable {out_file_name}: {e}",
+              file=sys.stderr)
+        return "denied"
+    try:
+        res = _p.emit_proactive(
+            channel=env.get("channel") or rec.get("channel") or "discord",
+            chat_id=rec.get("chat_id"), to=rec.get("to"),
+            tenant_id=rec.get("tenant_id") or "_default",
+            uid=str(rec.get("sender") or ""),
+            text=env.get("text") or "",
+            kind="progress", solicited=True,
+            envelope=env, out_file_name=out_file_name, outbox_dir=outbox,
+        )
+        if res == _p.EmitResult.EMITTED:
+            return "emitted"
+        if res == _p.EmitResult.RATE_LIMITED:
+            return "rate_limited"
+        return "denied"
+    except Exception as e:  # noqa: BLE001 — emit_proactive never raises; belt + braces
+        print(f"task_progress: proactive emit failed {out_file_name}: {e}",
+              file=sys.stderr)
+        return "denied"
+
+
 def deliver_progress(outbox_dir: str | Path, *, now: float | None = None) -> int:
     """Deliver queued progress updates to *outbox_dir*, rate-limited.
 
@@ -526,16 +613,29 @@ def deliver_progress(outbox_dir: str | Path, *, now: float | None = None) -> int
                 rec = _read(path)
                 if rec is None or rec.get("state") != _STATE_QUEUED:
                     continue
+                # ADR-0554 Phase 2 — SHIP-DARK (ADR-0553 amendment): build the
+                # envelope here (preserving the exact _task_progress shape). The
+                # default (proactive_communication OFF) writes it DIRECTLY
+                # (byte-identical, no silent loss). Only when the operator turned
+                # the flag ON does the update route through the governed gate; a
+                # DENIED / unavailable outcome then falls back to a direct write
+                # (a solicited update must not be dropped by a house-rules
+                # false-positive), while a transient RATE_LIMITED leaves the
+                # record QUEUED to retry next poll.
                 env = _envelope_for(rec)
-                out_file = outbox / f"tp_{rec.get('id')}_{secrets.token_hex(4)}.json"
-                tmp = out_file.with_suffix(out_file.suffix + ".tmp")
-                tmp.write_text(json.dumps(env, ensure_ascii=False),
-                               encoding="utf-8")
-                try:
-                    os.chmod(tmp, 0o600)  # envelope carries routing PII
-                except OSError:
-                    pass
-                tmp.replace(out_file)
+                out_name = f"tp_{rec.get('id')}_{secrets.token_hex(4)}.json"
+                if _proactive_flag_on(rec.get("tenant_id") or "_default"):
+                    status = _emit_via_proactive(env, rec, outbox=outbox,
+                                                 out_file_name=out_name)
+                    if status == "rate_limited":
+                        # Leave QUEUED; next poll retries. NOT marked delivered /
+                        # counted, so exactly-once (O_EXCL) is preserved.
+                        continue
+                    if status != "emitted":
+                        # DENIED / unavailable → deliver directly (never lose it).
+                        _write_outbox_direct(env, outbox, out_name)
+                else:
+                    _write_outbox_direct(env, outbox, out_name)
                 # GDPR: a concurrent purge_user may have unlinked this record
                 # between the re-read and here; don't resurrect it with PII.
                 if not path.exists():

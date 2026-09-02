@@ -312,6 +312,83 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("bridges", "orchestration", "notifications"),
     ),
     FeatureFlag(
+        id="proactive_voice_completion",
+        label="Voice summary on background /task completion",
+        description=(
+            "ADR-0554 Phase 0. Deliver a spoken SUMMARY alongside the text of a "
+            "`/task` background completion instead of text only. Off (default, "
+            "ship-dark), a completion arrives exactly as today: text only, no "
+            "voice note. On, the `/task` register opts the completion into voice "
+            "(want_voice=True) — but ONLY when the user's own voice preference "
+            "allows it (settings.voice_summary_mode != 'never'); the detached "
+            "bg_task_worker then condenses the result with build_voice_summary() "
+            "and synthesizes an OGG-Opus note with synthesize_voice_note() at "
+            "completion time, storing its path on the durable record BEFORE "
+            "mark_done, so whichever poller delivers (adapter loop OR bg_monitor "
+            "timer) attaches it — poller-independent. Best-effort / never-raise: "
+            "any TTS failure degrades to text-only delivery and NEVER blocks the "
+            "text. A `<voice>…</voice>` override in the result still wins. Off "
+            "means want_voice is never set and the completion path is "
+            "byte-identical to before this flag existed."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("bridges", "voice", "notifications"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="proactive_communication",
+        label="Proactive Communication Layer (ADR-0553)",
+        description=(
+            "ADR-0553 Phase 1. Gate all bot-initiated (proactive) out-of-band "
+            "messages through ONE governed primitive, emit_proactive(): a "
+            "fail-closed gate (proactive-consent → house-rules L44 → "
+            "bot-disclosure → rate/flood + dedup coalescing + quiet-hours) that "
+            "writes exactly ONE outbox envelope and audits every outcome "
+            "content-free (tenant/channel/kind, dedup_key as sha256, voice bool, "
+            "decision + reason-code — never the message text). Off (default, "
+            "ship-dark): emit_proactive returns `denied` (reason flag-off) and "
+            "writes NOTHING to the outbox, so no proactive message can leave the "
+            "system through this primitive. On: a caller (Phase 2 migrates the "
+            "existing producers) can emit a governed proactive message. "
+            "never-raise: any internal failure degrades to `error` + no send. "
+            "Phase 1 does NOT migrate producers — it lands the primitive + gate "
+            "+ tests only; existing producers still write their own envelopes."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("bridges", "notifications", "proactive"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="bridge_self_delegation",
+        description=(
+            "ADR-0553 Phase 3. Let the assistant hand LONG background work off to "
+            "itself: when its FINAL reply carries a ⟦bgtask-run:<label>|"
+            "<instruction>⟧ marker, the adapter reply-hook spawns a DETACHED, "
+            "turn-surviving bg_task_worker for <instruction> (the SAME detached "
+            "backbone `/task` uses: completion_notify.register captures the "
+            "origin channel/chat, a 0600 spec file is passed to the worker, and "
+            "the worker is Popen'd with start_new_session=True). The worker runs "
+            "the instruction through the fully-gated engine path and, at "
+            "completion, delivers a final Text+Voice summary through the SAME "
+            "outbox the /task completion path uses (poller-independent). "
+            "Idempotent: identical markers in one reply spawn ONE worker. "
+            "never-raise: a broken spawn degrades to a normal reply, never "
+            "breaks the turn. Off (default, ship-dark): the ⟦bgtask-run⟧ marker "
+            "is STRIPPED (so it never leaks into the channel) but NOTHING is "
+            "spawned — and because the emission-side system-prompt block that "
+            "teaches the marker is itself gated on this flag, an off install "
+            "never emits one, so the turn is byte-identical to before this "
+            "feature existed."
+        ),
+        label="Self-delegation: hand long background work to a detached worker",
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("bridges", "orchestration", "voice", "proactive"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
         id="bridge_big_data_delegation",
         label="Big-data delegation on messenger bridges",
         description=(

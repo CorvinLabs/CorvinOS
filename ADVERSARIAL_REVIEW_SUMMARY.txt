@@ -1,0 +1,204 @@
+================================================================================
+ADVERSARIAL SECURITY REVIEW: SKILL-DRIVEN RICHNESS CONTEXT MODEL
+================================================================================
+
+VERDICT: SALVAGEABLE ⚠️ (5 MEDIUM gaps, fixable within 3 weeks)
+
+ATTACK SURFACE:
+- Skill-based context selector (os.context_selector) chooses which ADRs/memory to inject
+- Full-text injection model (no cached Refs)
+- Learning loop can adjust Skill behavior via feedback (ADR-0314)
+
+================================================================================
+FINDINGS
+================================================================================
+
+REAL ATTACKS (Bypass Current Audit Trail)
+──────────────────────────────────────────
+
+1. SELECTION SPOOFING (HIGH impact, REAL)
+   ✗ Skill output: ["ADR-0532", "ADR-0535"]
+   ✗ Actually injected: ["ADR-0532", "ADR-0535", "ADR-0999_confidential"]
+   ✗ Audit logs Skill output, NOT what LLM received
+   ✗ Operator has no way to verify: "Did the LLM really see only [0532, 0535]?"
+
+   Fix: Add CONTEXT_LOADED audit event with actually_loaded_adr_ids + content hashes
+   ETA: 1 week
+
+2. SKILL VERSION ATTACK (MEDIUM impact, REAL)
+   ✗ Two versions of os.context_selector exist (v1.0 safe, v1.1 malicious)
+   ✗ No version pinning manifest
+   ✗ v1.1 loads by default; audit logs it ran but not WHY that version was chosen
+   ✗ No operator control over rollout
+
+   Fix: Create skills/manifest.yaml with pinned versions + signature verification
+   ETA: 2 weeks
+
+3. LEARNING DATA POISONING (MEDIUM impact, REAL)
+   ✗ Attacker floods feedback: "needed ADR-0999" (1000 signals)
+   ✗ Optimizer learns to always select 0999 for future tasks
+   ✗ Feedback events NOT audited; config changes NOT audited
+   ✗ No anomaly detection for poisoning
+
+   Fix: Audit SKILL_FEEDBACK_RECEIVED + SKILL_CONFIG_UPDATED events + anomaly detection
+   ETA: 2 weeks
+
+MITIGATED ATTACKS (Blocked by Existing Infrastructure)
+──────────────────────────────────────────────────────
+
+4. SKILL TAMPERING (MITIGATED by audit hash-chain)
+   ✓ Attacker modifies Skill code to always select sensitive ADRs
+   ✓ Audit logs Skill execution with version + LoM hash
+   ⚠️  Gap: Audit includes output but not input → can't verify "output is wrong for this input"
+
+   Fix: Add input_hash to SkillExecutionResult audit schema
+   ETA: 1 week (easy, low-risk)
+
+5. MEMORY INJECTION (MITIGATED by tenant isolation)
+   ✓ Wrong user's profile loads due to race condition
+   ✓ MemoryCoordinator, ContextAPI, audit backend all filter by tenant_id
+   ⚠️  Gap: Audit schema has tenant_id but NOT user_id → can't trace per-user leakage
+
+   Fix: Add user_id to context loading audit events
+   ETA: 1 week (easy)
+
+6. AUDIT FORGERY (MITIGATED by hash-chain)
+   ✓ Hash-chain prevents insertion + tampering of audit events
+   ✓ Deletion prevented by filesystem immutability + daily corvin audit verify-chain
+   ✓ No fix needed, keep current design
+
+7. TOCTOU RACE (MITIGATED by immutability + permissions)
+   ✓ ADR file replaced between selection (T0) and load (T2)
+   ✓ Requires root access; audit chain doesn't retroactively disappear
+   ⚠️  Gap: No content verification (git commit hash in Skill output)
+
+   Fix: Include commit hash in Skill output; loader verifies git show <hash>:ADR-<id>
+   ETA: 3 weeks (medium complexity)
+
+================================================================================
+CRITICAL PATH TO ROBUST (3 weeks)
+================================================================================
+
+WEEK 1 (Phase 1 - BLOCKING ATTACKS 1 & 4)
+  [ ] Implement CONTEXT_SELECTED_AND_LOADED audit event
+      - Fired after ADRs loaded, before LLM injection
+      - Payload: skill_id, version, requested_adr_ids, actually_loaded_adr_ids, hashes
+      - Blocks Selection Spoofing attack
+      - Test: test_context_loaded_event_catches_spoofing()
+
+  [ ] Add input_hash field to SkillExecutionResult
+      - Hash of input dict included in audit
+      - Enables verification: "Why did Skill return 0999 for this input?"
+      - Test: test_skill_input_hash_audited()
+
+  [ ] Add user_id to context loading audit events
+      - Breaks MEDIUM impact of Memory Injection
+      - Easy: 3-line change to payload
+
+WEEK 2 (Phase 2 - BLOCKING ATTACKS 2 & 3)
+  [ ] Create skills/manifest.yaml with version pinning
+      - skill_id -> version (pinned)
+      - skill_id -> allowed_versions (no upgrades without approval)
+      - skill_id -> signature (source code hash)
+      - Test: test_version_manifest_prevents_malicious_upgrade()
+
+  [ ] Audit feedback + optimizer decisions
+      - New event: SKILL_FEEDBACK_RECEIVED (source_user_id, signal, timestamp)
+      - New event: SKILL_CONFIG_UPDATED (before_state, after_state, feedback_count)
+      - Both tenant-scoped, audit-logged
+      - Test: test_feedback_audit_events_enable_poisoning_detection()
+
+  [ ] Add anomaly detection dashboard
+      - Flag: Feedback spike (>100 events for one ADR per hour)
+      - Flag: Optimizer drift (config change rate >10% per hour)
+      - Alert: Version mismatch (selected v1.0, loaded v1.1)
+
+WEEK 3 (Phase 3 - OPTIONAL HARDENING)
+  [ ] Content verification via git commit hashes
+      - Skill output: ["ADR-0532:commit-abc", "ADR-0535:commit-def"]
+      - Loader: git show abc:ADR-0532, verify hash matches on-disk
+      - Test: test_adr_commit_hash_verification()
+
+  [ ] Daily verify-chain ops
+      - corvin audit verify-chain --tenant=_default
+      - Detects any tampering + insertion attempts
+      - Keep this as operational SOP
+
+================================================================================
+AUDIT SCHEMA AMENDMENTS REQUIRED
+================================================================================
+
+New Event Types:
+  - CONTEXT_SELECTED_AND_LOADED
+    {skill_id, skill_version, requested_adr_ids, actually_loaded_adr_ids,
+     loaded_adr_hashes, load_timestamp, tenant_id}
+
+  - SKILL_VERSION_SELECTED
+    {skill_id, selected_version, available_versions, selection_reason, tenant_id}
+
+  - SKILL_FEEDBACK_RECEIVED
+    {skill_id, feedback_type, signal, source_user_id, timestamp, tenant_id}
+
+  - SKILL_CONFIG_UPDATED
+    {skill_id, before_state, after_state, feedback_count, reason, tenant_id}
+
+New Fields to Add:
+  - SkillExecutionResult: input_hash (SHA256 of input dict)
+  - All context events: user_id (not just tenant_id)
+  - All Skill events: signature_valid (boolean, verification result)
+
+================================================================================
+DESIGN ASSESSMENT
+================================================================================
+
+ROBUST ELEMENTS ✅
+  • Audit hash-chain: prevents tampering + insertion (ADR-0232/0233)
+  • Tenant isolation: enforced at MemoryCoordinator, ContextAPI, audit backend
+  • LoM binding: every Skill execution includes source code hash (EU AI Act Art. 50)
+  • Learning queue: non-blocking, tenant-isolated grading (ADR-0314)
+
+VULNERABLE ELEMENTS ⚠️
+  • Audit schema gaps: no input_hash, user_id, CONTEXT_LOADED, SKILL_FEEDBACK_RECEIVED events
+  • No version pinning manifest for Skills
+  • No content verification (git commit hash)
+  • No anomaly detection for feedback poisoning
+
+================================================================================
+RISK MATRIX
+================================================================================
+
+Attack Vector         | Real? | Impact  | Mitigated? | Fix Complexity
+──────────────────────┼───────┼─────────┼────────────┼──────────────────
+Selection Spoofing    | REAL  | HIGH    | NO         | MEDIUM (audit event)
+Version Attack        | REAL  | MEDIUM  | NO         | MEDIUM (manifest)
+Poisoning             | REAL  | MEDIUM  | NO         | LOW (audit events)
+Skill Tampering       | REAL  | MEDIUM  | PARTIAL    | LOW (audit field)
+Memory Injection      | REAL  | MEDIUM  | PARTIAL    | LOW (audit field)
+Audit Forgery         | REAL  | LOW     | YES        | N/A
+TOCTOU Race           | THEORY| LOW     | PARTIAL    | MEDIUM (git verify)
+
+================================================================================
+RECOMMENDATION
+================================================================================
+
+✓ PROCEED with Phase 1 implementation (2-3 weeks)
+✓ Re-review after Phase 1 is deployed
+✓ Add Phase 1 test cases to CI/CD pipeline
+✓ Document version rollout procedure in operator runbook
+
+DO NOT DEPLOY this context model to production until:
+  1. CONTEXT_SELECTED_AND_LOADED event implemented + tested
+  2. Version pinning manifest + signature verification live
+  3. Feedback audit events live
+  4. Daily verify-chain operational SOP established
+
+Estimated Time to ROBUST: 3-4 weeks with concurrent work on Phases 1-3.
+
+================================================================================
+FULL DETAILS
+================================================================================
+
+See: /home/shumway/projects/CorvinOS/ADVERSARIAL_REVIEW_RICHNESS_CONTEXT_MODEL.md
+     (Complete with attack walkthroughs, mitigation patterns, test cases, code examples)
+
+================================================================================

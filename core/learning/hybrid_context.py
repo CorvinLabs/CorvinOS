@@ -15,6 +15,11 @@ GDPR Compliance:
 - Layers hash-chained (Art. 32)
 - Cascade delete on erasure (Art. 17)
 - Fail-closed on any validation failure
+
+Integration with Phase 3:
+- Accepts Phase 3 adapters (DecisionAdapter, OutcomeAdapter, ProfileAdapter)
+- Snapshot interfaces decouple implementation from Phase 3 storage
+- Cascade delete verification step (GDPR Art. 17)
 """
 
 from __future__ import annotations
@@ -23,10 +28,52 @@ import hashlib
 import json
 import logging
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, field
-from typing import Optional, Any
+from typing import Optional, Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+
+# Phase 3 Adapter Interfaces (decouple HybridContextModel from Phase 3 storage)
+
+class DecisionAdapter(Protocol):
+    """Adapter for reading decisions from Phase 3 DecisionHistoryStore."""
+
+    def get_recent_decisions(self, user_id: str, tenant_id: str, limit: int = 10) -> list[dict]:
+        """Get recent decisions for a user."""
+        ...
+
+
+class OutcomeAdapter(Protocol):
+    """Adapter for reading outcomes from Phase 3 OutcomeFeedbackStore."""
+
+    def get_success_rate(self, user_id: str, tenant_id: str) -> float:
+        """Get success rate (small-n suppressed)."""
+        ...
+
+
+class ProfileAdapter(Protocol):
+    """Adapter for reading profiles from Phase 3 UserProfileManager."""
+
+    def get_profile(self, user_id: str, tenant_id: str) -> dict:
+        """Get learned user preferences."""
+        ...
+
+
+@dataclass
+class CascadeDeleteResult:
+    """Result of cascade delete operation with verification."""
+
+    user_id: str
+    deleted_bases: int
+    deleted_layers: int
+    verification_complete: bool  # True if all deletions verified
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return self.deleted_bases + self.deleted_layers
 
 
 @dataclass(frozen=True)
@@ -66,11 +113,29 @@ class InjectedLayer:
 class HybridContextModel:
     """Hybrid context = immutable base + injected layers (versioned, fail-closed)."""
 
-    def __init__(self, tenant_id: str):
-        """Initialize hybrid context model for a tenant."""
+    def __init__(
+        self,
+        tenant_id: str,
+        decision_adapter: Optional[DecisionAdapter] = None,
+        outcome_adapter: Optional[OutcomeAdapter] = None,
+        profile_adapter: Optional[ProfileAdapter] = None,
+    ):
+        """Initialize hybrid context model for a tenant.
+
+        Args:
+            tenant_id: Tenant identifier
+            decision_adapter: Adapter for reading Phase 3 decisions (optional)
+            outcome_adapter: Adapter for reading Phase 3 outcomes (optional)
+            profile_adapter: Adapter for reading Phase 3 profiles (optional)
+
+        When adapters are not provided, Phase 3 snapshots must be injected manually.
+        """
         self.tenant_id = tenant_id
-        self.base_snapshots: dict[str, ImmutableContextBase] = {}  # user_id -> base
-        self.injected_layers: dict[str, list[InjectedLayer]] = {}  # layer_name -> history
+        self.decision_adapter = decision_adapter
+        self.outcome_adapter = outcome_adapter
+        self.profile_adapter = profile_adapter
+        self.base_snapshots: dict[str, ImmutableContextBase] = {}  # user_id:session_id -> base
+        self.injected_layers: dict[str, list[InjectedLayer]] = {}  # user_id -> history
 
     def get_context(
         self, user_id: str, session_id: str
@@ -285,41 +350,75 @@ class HybridContextModel:
 
         return base_hash
 
-    def delete_user_context(self, user_id: str) -> dict[str, int]:
+    def delete_user_context(self, user_id: str) -> CascadeDeleteResult:
         """Delete all context (base + layers) for a user (GDPR Art. 17).
 
-        Cascades across all sessions and layers.
+        Cascades across all sessions and layers with verification step.
+        Idempotent: second call returns 0 for all counts.
+
+        Args:
+            user_id: User to erase
 
         Returns:
-            {"bases_deleted": N, "layers_deleted": N, "total": N}
+            CascadeDeleteResult with verification_complete flag
+
+        Raises:
+            ValueError: if user_id is empty
         """
         if not user_id:
             raise ValueError("user_id required")
 
+        errors: list[str] = []
         deleted_bases = 0
         deleted_layers = 0
 
-        # Delete all base snapshots for this user
+        # Step 1: Delete all base snapshots for this user
         keys_to_delete = [k for k in self.base_snapshots if k.startswith(user_id)]
         for key in keys_to_delete:
-            del self.base_snapshots[key]
-            deleted_bases += 1
+            try:
+                del self.base_snapshots[key]
+                deleted_bases += 1
+            except Exception as e:
+                errors.append(f"Failed to delete base {key}: {e}")
 
-        # Delete all injected layers for this user
+        # Step 2: Delete all injected layers for this user
         if user_id in self.injected_layers:
-            deleted_layers = len(self.injected_layers[user_id])
-            del self.injected_layers[user_id]
+            try:
+                deleted_layers = len(self.injected_layers[user_id])
+                del self.injected_layers[user_id]
+            except Exception as e:
+                errors.append(f"Failed to delete layers for user {user_id}: {e}")
 
-        logger.info(
-            f"Deleted context for user {user_id}: "
-            f"{deleted_bases} bases, {deleted_layers} layers"
+        # Step 3: Verify deletion (fail-closed)
+        verification_complete = True
+        if any(k.startswith(user_id) for k in self.base_snapshots):
+            errors.append(f"Verification failed: base snapshots still present for {user_id}")
+            verification_complete = False
+
+        if user_id in self.injected_layers:
+            errors.append(f"Verification failed: layers still present for {user_id}")
+            verification_complete = False
+
+        # Log result
+        result = CascadeDeleteResult(
+            user_id=user_id,
+            deleted_bases=deleted_bases,
+            deleted_layers=deleted_layers,
+            verification_complete=verification_complete,
+            errors=errors,
         )
 
-        return {
-            "bases_deleted": deleted_bases,
-            "layers_deleted": deleted_layers,
-            "total": deleted_bases + deleted_layers,
-        }
+        if verification_complete:
+            logger.info(
+                f"Cascade delete verified for user {user_id}: "
+                f"{deleted_bases} bases, {deleted_layers} layers"
+            )
+        else:
+            logger.error(
+                f"Cascade delete INCOMPLETE for user {user_id}: {errors}"
+            )
+
+        return result
 
     # Private helpers
 

@@ -16,8 +16,15 @@ the originating messenger (channel + chat_id) — exactly once.
 Input: a single argv arg = path to a 0600 JSON spec FILE (NOT the JSON itself —
 argv is world-readable in /proc/<pid>/cmdline, so the instruction/PII must not
 live there):
-    {"task_id", "instruction", "channel", "chat_key", "profile"?, "msg_id"?}
+    {"task_id", "instruction", "channel", "chat_key", "engine_chat_key"?,
+     "profile"?, "msg_id"?, "want_voice"?, "sender"?}
 The spec file is unlinked immediately after reading.
+
+``chat_key`` is the ORIGIN chat (used only for the persona ``profile`` the adapter
+already resolved, and for debug). ``engine_chat_key`` is a worker-private,
+per-task key the adapter mints so the engine call runs in an ISOLATED session —
+it never resumes or overwrites the operator's live chat transcript (ADR-0553 fix,
+live-proven 2026-09-03). Absent (older spec) ⇒ derived here, never the origin.
 
 A wall-clock deadline (CORVIN_BG_TASK_TIMEOUT, default 1800s) bounds the turn:
 a wedged engine that streams/loops forever is stopped and reported, so a
@@ -88,6 +95,52 @@ def _load_progress():
         return None
 
 
+def _maybe_voice(cn, task_id: str, *, want_voice: bool, text: str) -> bool:
+    """Best-effort: synthesize a spoken SUMMARY of *text* and stamp its
+    voice_path onto the completion record — BEFORE mark_done flips it to ready.
+
+    ADR-0554 Phase 0 (approach (a)): the summary is produced HERE, in the
+    detached worker (which already imports ``adapter`` for the engine call), so
+    ``completion_notify`` stays pure-stdlib and delivery is poller-INDEPENDENT
+    (deliver_ready attaches the stored path with no callback). Returns True when
+    a voice_path was attached.
+
+    Never raises and never touches the record's text: a TTS failure (no engine,
+    empty summary, exception) simply degrades to text-only delivery — voice is
+    an enhancement, never a delivery precondition. A ``<voice>…</voice>``
+    override in *text* is honoured (same mechanism the live turn uses).
+    """
+    if not want_voice or not (text or "").strip():
+        return False
+    # Same TTS test hook the live turn honours (adapter._synthesize_voice_for_turn):
+    # decouples tests from real OpenAI/edge/Piper latency. Harmless in production.
+    if os.environ.get("ADAPTER_DISABLE_VOICE") == "1":
+        return False
+    try:
+        sys.path.insert(0, str(HERE))
+        import adapter as _ad  # type: ignore  # cached after main()'s own import
+
+        try:
+            from voice_tag import extract_voice_override as _evo  # type: ignore
+            visible, override = _evo(str(text))
+        except Exception:  # noqa: BLE001 — override is optional, never fatal
+            visible, override = str(text), None
+        spoken = _ad.build_voice_summary(visible, override=override)
+        if not spoken:
+            return False
+        try:
+            lang = _ad._resolve_voice_output_language(spoken) or "de"
+        except Exception:  # noqa: BLE001
+            lang = "de"
+        voice_path = _ad.synthesize_voice_note(spoken, lang=lang)
+        if voice_path:
+            return bool(cn.attach_voice(task_id, str(voice_path)))
+        return False
+    except Exception as e:  # noqa: BLE001 — voice is an enhancement, never a blocker
+        print(f"bg_task_worker: voice synth failed: {e}", file=sys.stderr)
+        return False
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("bg_task_worker: missing spec-file argument", file=sys.stderr)
@@ -109,6 +162,16 @@ def main() -> int:
     instruction = spec.get("instruction") or ""
     channel = spec.get("channel") or "discord"
     chat_key = spec.get("chat_key") or "anon"
+    # Session ISOLATION (ADR-0553 fix, live-proven 2026-09-03). The engine call
+    # keys BOTH its `--resume` read and its session-id write off
+    # `_session_dir(channel, chat_key)`. Running under the ORIGIN chat_key made
+    # the detached worker resume + overwrite the operator's LIVE Discord session
+    # (transcript pollution + next-turn collision). Use the isolated per-task key
+    # the adapter minted; fall back to deriving it here so an older 0600 spec (no
+    # `engine_chat_key`) is still isolated, never resuming the live chat.
+    engine_chat_key = spec.get("engine_chat_key") or (
+        f"bgtask::{chat_key}::{task_id}" if task_id else f"bgtask::{chat_key}"
+    )
 
     cn = _load_cn()
     if not task_id or not instruction:
@@ -195,7 +258,11 @@ def main() -> int:
         def _watchdog() -> None:
             timed_out["v"] = True
             try:
-                adapter._cancel_chat(chat_key)
+                # Cancel the ISOLATED engine session, not the origin chat — the
+                # origin chat has no live engine in this detached process, and
+                # cancelling by origin key would be a no-op that leaves the real
+                # (isolated) engine subprocess running past the deadline.
+                adapter._cancel_chat(engine_chat_key)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -206,7 +273,7 @@ def main() -> int:
             text = adapter.call_claude_streaming(
                 prompt=instruction,
                 channel=channel,
-                chat_key=chat_key,
+                chat_key=engine_chat_key,
                 # Supervised runs relay live status through task_progress;
                 # unsupervised ones keep the original silence (on_status=None).
                 on_status=on_status,
@@ -245,6 +312,14 @@ def main() -> int:
         # beat — the resume that fixes it, so the user would be told the task
         # failed while it was in fact still running.
         return 0
+
+    # ADR-0554 Phase 0 (approach (a)): synthesize + attach a spoken SUMMARY
+    # BEFORE mark_done, so the ready record already carries voice_path and any
+    # poller delivers it. Gated by want_voice (set at register() only when the
+    # proactive_voice_completion flag AND the user's voice preference allow it);
+    # best-effort — a failure degrades to text-only, never blocks the text.
+    _maybe_voice(cn, task_id, want_voice=bool(spec.get("want_voice")),
+                 text=(text or ""))
 
     # A gate refusal comes back as text (ok stays True) — the user still gets it.
     cn.mark_done(task_id, text=(text or "(no output)"), ok=ok)

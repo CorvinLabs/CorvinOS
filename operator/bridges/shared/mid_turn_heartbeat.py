@@ -52,6 +52,14 @@ STATUS_CAP = 120        # max chars of a status line
 _MARKER_RE = re.compile(r"⟦bgtask:([^⟧]{1,80})⟧")
 _STEP_RE = re.compile(r"⟦bgstep:([^|⟧]{1,80})\|([^⟧]{1,120})⟧")
 _DONE_RE = re.compile(r"⟦bgdone:([^⟧]{1,80})⟧")
+# ADR-0553 Phase 3 — self-delegation SPAWN marker. Distinct from the DISPLAY
+# family above: ⟦bgtask-run:<label>|<instruction>⟧ asks the adapter reply-hook
+# to SPAWN a detached bg_task_worker for <instruction> (gated by
+# bridge_self_delegation, default OFF). The `-run` infix makes it impossible to
+# confuse with ⟦bgtask:<label>⟧ — every DISPLAY regex requires `:` immediately
+# after the verb (bgtask/bgstep/bgdone), so none of them ever match `bgtask-`.
+# label [^|⟧]{1,80}, instruction [^⟧]{1,2000}; newline-guarded like the others.
+_RUN_RE = re.compile(r"⟦bgtask-run:([^|⟧\n]{1,80})\|([^⟧\n]{1,2000})⟧")
 # Strips COMPLETE, PARTIAL, empty AND oversized markers so nothing leaks into
 # the channel. The closing ⟧ is optional and the label is unbounded up to the
 # next ⟧/newline — a marker split across chunks (no ⟧ yet) or one whose label
@@ -63,9 +71,16 @@ _ANY_RE = re.compile(
     # _DONE_RE, so a literal ⟦ inside a status is stripped WITH its marker),
     # then a conservative partial/malformed opener that stops at the next ⟦ so
     # it never swallows an independent ⟦…⟧ that follows an unterminated marker.
-    r"⟦bgtask:[^⟧\n]{1,80}⟧"
+    # Self-delegation run marker FIRST — its label may itself contain no `|`,
+    # and the complete form must strip whole (label + `|` + instruction). It is
+    # matched ahead of the display family so `⟦bgtask-run:…⟧` never falls through
+    # to a shorter alternative. A partial/malformed `⟦bgtask-run:…` opener is
+    # covered by the conservative last alternative (stops at the next ⟦).
+    r"⟦bgtask-run:[^|⟧\n]{1,80}\|[^⟧\n]{1,2000}⟧"
+    r"|⟦bgtask:[^⟧\n]{1,80}⟧"
     r"|⟦bgstep:[^|⟧\n]{1,80}\|[^⟧\n]{1,120}⟧"
     r"|⟦bgdone:[^⟧\n]{1,80}⟧"
+    r"|⟦bgtask-run:[^⟧\n⟦]*⟧?"
     r"|⟦bg(?:task|step|done):[^⟧\n⟦]*⟧?"
 )
 # In the streaming live-scan we can advance the scan index past everything but
@@ -107,6 +122,28 @@ def parse_done(reply_text: str) -> "list[str]":
     if not isinstance(reply_text, str) or not reply_text:
         return []
     return [m.strip() for m in _DONE_RE.findall(reply_text) if m.strip()]
+
+
+def parse_run_markers(reply_text: str) -> "list[tuple[str, str]]":
+    """Self-delegation SPAWN markers: ``(label, instruction)`` from
+    ``⟦bgtask-run:<label>|<instruction>⟧`` (ADR-0553 Phase 3).
+
+    A plain DISPLAY marker ``⟦bgtask:<label>⟧`` is deliberately NOT matched (it
+    has no ``|`` and no ``-run``), so the two families never collide. Deduped on
+    the whole ``(label, instruction)`` pair, so the same marker repeated in one
+    reply yields exactly ONE spawn request (idempotency within a turn). The
+    label/instruction are stripped and length-capped to the parser bounds.
+    Never raises."""
+    if not isinstance(reply_text, str) or not reply_text:
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for lbl, instr in _RUN_RE.findall(reply_text):
+        lbl, instr = lbl.strip()[:80], instr.strip()[:2000]
+        if lbl and instr and (lbl, instr) not in seen:
+            seen.add((lbl, instr))
+            out.append((lbl, instr))
+    return out
 
 
 def scan_new_steps(buf: str, from_index: int) -> "tuple[list[tuple[str, str]], int]":
@@ -321,6 +358,20 @@ def _envelope(rec: dict, text: str, kind: str, seq) -> dict:
         env["_task_progress"] = True
     if rec.get("sender") and not rec.get("chat_id"):
         env["to"] = rec.get("sender")
+    # LB-prov / EU AI Act Art. 50 §4 — a heartbeat/status line is machine-
+    # generated content delivered to a human, so it carries the same provenance
+    # marking the progress/completion envelopes do. Best-effort: a missing
+    # sibling module must never drop the ping.
+    try:
+        import sys as _sys
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in _sys.path:
+            _sys.path.insert(0, _here)
+        from provenance import build_provenance  # type: ignore
+        env["provenance"] = build_provenance(
+            env["channel"], rec.get("chat_id") or rec.get("sender") or "")
+    except Exception:  # noqa: BLE001 — marking is stamped where available only
+        pass
     return env
 
 
