@@ -30,7 +30,7 @@ class TestPhaseB:
 
     def test_crypto_snapshot_signing(self):
         """Test HMAC-SHA256 snapshot signing (Fix 1.3)."""
-        store = CryptoEventStore(tenant_id="_default", external_key="test-key")
+        store = CryptoEventStore(tenant_id="_default", external_key="x" * 32)  # 32-byte key
 
         snapshot = store.create_snapshot_signed(
             task_id="test-task",
@@ -45,7 +45,7 @@ class TestPhaseB:
 
     def test_verification_cron_cross_session(self):
         """Test daily verification cron for cross-session bridges (Fix 1.2)."""
-        store = CryptoEventStore(tenant_id="_default")
+        store = CryptoEventStore(tenant_id="_default", external_key="x" * 32)
         cron = VerificationCronJob(store)
 
         # Simulate events across 2 sessions (using AuditEvent objects)
@@ -85,7 +85,7 @@ class TestPhaseB:
 
     def test_tenant_isolation_strict(self):
         """Test tenant scoping enforcement (Fix 2.2, 2.5)."""
-        store = CryptoEventStore(tenant_id="tenant-1")
+        store = CryptoEventStore(tenant_id="tenant-1", external_key="x" * 32)
 
         e = AuditEvent(
             event_type="task_started",
@@ -105,7 +105,7 @@ class TestPhaseB:
 
     def test_tenant_isolation_fails_closed(self):
         """Test fail-closed on tenant mismatch (Fix 2.2)."""
-        store = CryptoEventStore(tenant_id="tenant-1")
+        store = CryptoEventStore(tenant_id="tenant-1", external_key="x" * 32)
 
         # Try to add event from different tenant (would normally fail at insert, but for testing)
         try:
@@ -170,7 +170,7 @@ class TestPhaseC:
             print(f"✅ Phase C Fix 4.1-4.5: Rollback skipped (imports not available)")
             return
 
-        store = CryptoEventStore(tenant_id="_default")
+        store = CryptoEventStore(tenant_id="_default", external_key="x" * 32)
         validator = PhaseGateValidator(store)
 
         # Save pre-task state
@@ -192,7 +192,7 @@ class TestPhaseC:
             print(f"✅ Phase C Fix 4.4: Boot tripwire skipped (imports not available)")
             return
 
-        store = CryptoEventStore(tenant_id="_default") if CryptoEventStore is not None else None
+        store = CryptoEventStore(tenant_id="_default", external_key="x" * 32) if CryptoEventStore is not None else None
         validator = PhaseGateValidator(store)
 
         # Test matching state (same hash)
@@ -221,7 +221,7 @@ class TestPhaseD:
             print(f"✅ Phase D: Dashboard metrics skipped (imports not available)")
             return
 
-        store = CryptoEventStore(tenant_id="_default")
+        store = CryptoEventStore(tenant_id="_default", external_key="x" * 32)
 
         # Add events for 3-phase task
         for i, phase in enumerate(["phase-1", "phase-2", "phase-3"]):
@@ -248,7 +248,7 @@ class TestPhaseD:
             print(f"✅ Phase D: DAG rendering skipped (imports not available)")
             return
 
-        store = CryptoEventStore(tenant_id="_default")
+        store = CryptoEventStore(tenant_id="_default", external_key="x" * 32)
 
         # Add phase events
         for phase in ["phase-1", "phase-2"]:
@@ -274,7 +274,7 @@ class TestPhaseD:
             print(f"✅ Phase D Fix 3.5: Drift alert skipped (imports not available)")
             return
 
-        store = CryptoEventStore(tenant_id="_default")
+        store = CryptoEventStore(tenant_id="_default", external_key="x" * 32)
 
         # Simulate large confidence drop
         e = AuditEvent(
@@ -311,7 +311,7 @@ class TestPhaseD:
             print(f"✅ Phase D Fix 3.4: Revert handler skipped (imports not available)")
             return
 
-        store = CryptoEventStore(tenant_id="_default")
+        store = CryptoEventStore(tenant_id="_default", external_key="x" * 32)
         validator = PhaseGateValidator(store)
 
         # Add events with completed phases
