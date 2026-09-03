@@ -25,9 +25,7 @@ import {
 } from '@/types/audit-graph';
 import { getSkillIdFromEvent } from '../hooks/useAuditQuery';
 import { Loader2, ZoomIn, ZoomOut, RefreshCw, Filter, X } from 'lucide-react';
-
-// Lazy-load Cytoscape (large library)
-const cytoscape = require('cytoscape');
+import cytoscape from 'cytoscape';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -63,14 +61,6 @@ const NODE_COLORS: Record<AuditEventType, string> = {
   decision: '#f59e0b', // Amber
   context_snapshot: '#8b5cf6', // Purple
   error: '#ef4444', // Red
-};
-
-const NODE_SHAPES: Record<AuditEventType, string> = {
-  skill_executed: 'circle',
-  learning_event: 'diamond',
-  decision: 'square',
-  context_snapshot: 'hexagon',
-  error: 'circle',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,13 +110,12 @@ export function AuditChainGraph({
       style: getCytoscapeStylesheet(),
       layout: {
         name: 'breadthFirstSearch',
-        directed: true,
-        roots: rootNodeId ? '#' + rootNodeId : undefined, // Start from first (newest) event, or auto-detect if empty
+        roots: rootNodeId ? '#' + rootNodeId : undefined,
         circle: false,
         spacingFactor: 1.75,
         avoidOverlap: true,
         animationDuration: 300,
-      },
+      } as any,
     });
 
     cyRef.current = cy;
@@ -404,26 +393,63 @@ export function AuditChainGraph({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getCytoscapeStylesheet() {
+  const baseNodeStyle = {
+    'content': 'data(label)',
+    'text-valign': 'center',
+    'text-halign': 'center',
+    'width': '40px',
+    'height': '40px',
+    'font-size': '10px',
+    'font-weight': 'bold',
+    'color': '#fff',
+    'text-outline-width': '1px',
+    'text-outline-color': '#000',
+    'border-width': '2px',
+    'border-color': '#fff',
+    'transition-property': 'all',
+    'transition-duration': '200ms',
+  };
+
   return [
+    // Base node style
     {
       selector: 'node',
+      style: baseNodeStyle,
+    },
+    // Type-specific styles
+    {
+      selector: 'node[type="skill_executed"]',
       style: {
-        'content': 'data(label)',
-        'text-valign': 'center',
-        'text-halign': 'center',
-        'background-color': (node: any) => NODE_COLORS[node.data('type') as AuditEventType] || '#666',
-        'shape': (node: any) => NODE_SHAPES[node.data('type') as AuditEventType] || 'circle',
-        'width': '40px',
-        'height': '40px',
-        'font-size': '10px',
-        'font-weight': 'bold',
-        'color': '#fff',
-        'text-outline-width': '1px',
-        'text-outline-color': '#000',
-        'border-width': '2px',
-        'border-color': '#fff',
-        'transition-property': 'all',
-        'transition-duration': '200ms',
+        'background-color': '#3b82f6',
+        'shape': 'circle',
+      },
+    },
+    {
+      selector: 'node[type="learning_event"]',
+      style: {
+        'background-color': '#22c55e',
+        'shape': 'diamond',
+      },
+    },
+    {
+      selector: 'node[type="decision"]',
+      style: {
+        'background-color': '#f59e0b',
+        'shape': 'square',
+      },
+    },
+    {
+      selector: 'node[type="context_snapshot"]',
+      style: {
+        'background-color': '#8b5cf6',
+        'shape': 'hexagon',
+      },
+    },
+    {
+      selector: 'node[type="error"]',
+      style: {
+        'background-color': '#ef4444',
+        'shape': 'circle',
       },
     },
     {
@@ -454,5 +480,5 @@ function getCytoscapeStylesheet() {
         'line-color': '#d1d5db',
       },
     },
-  ];
+  ] as any;
 }
