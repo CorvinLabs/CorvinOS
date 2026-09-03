@@ -35,12 +35,14 @@ class ConfidenceEvent:
     skill_id: str  # "os.delegation_router", "os.context_adapter", etc.
     tenant_id: str  # Tenant scope (GDPR requirement)
     timestamp: str  # ISO 8601 UTC
-    version: str = "1.0"  # Schema version
 
     # Confidence metrics
     relevance_score: float  # 0.0-1.0 (how relevant to task)
     reliability_score: float  # 0.0-1.0 (how confident in decision)
     combined_score: float  # 0.0-1.0 (weighted: 0.4*relevance + 0.6*reliability)
+
+    # Schema version (defaulted fields must follow all required fields)
+    version: str = "1.0"
 
     # Context
     decision_id: str = ""  # Links to LearningEvent that was scored

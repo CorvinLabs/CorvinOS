@@ -1,93 +1,97 @@
-"""RouterBackend registry and default implementation (ADR-0033).
+"""SummaryProvider registry and default implementation (ADR-0033).
 
 Usage (plugin on_load):
-    ctx.router_registry.set_active(self)
+    ctx.summary_registry.set_active(self)
 
 Usage (caller):
-    from corvin_plugins.providers.router_backend import get_active
-    result = get_active().route(text, personas, model=m, mode="heuristic",
-                                tenant_id=tid)
+    from corvin_plugins.providers.summary_provider import get_active
+    spoken = get_active().summarize(long_text, lang="de", tenant_id=tid)
 """
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from corvin_plugins.protocol import RouterBackend as _RBProto
+    from corvin_plugins.protocol import SummaryProvider as _SPProto
 
-_log = logging.getLogger("corvin.router")
+_log = logging.getLogger("corvin.summary")
 
 
 # ── Default implementation ────────────────────────────────────────────────────
 
-class ChainRouterBackend:
-    """Default: delegate to operator/bridges/shared/router.py (ADR-0033).
+class ClaudeCliSummaryProvider:
+    """Default: delegate to operator/voice/scripts/summarize.py via subprocess.
 
-    Wraps the existing fake → heuristic → embeddings → Anthropic SDK → CLI
-    chain with zero behavior change.  All parameters (model, mode, timeout,
-    min_confidence) are passed through so the chain can use them.
-    Must NOT raise (ADR-0033 must-NOT).
+    Mirrors the existing call site in the adapter — same CLI contract,
+    same naive-truncation fallback when the script is unavailable.
+    Must NOT import the anthropic SDK directly (ADR-0033 must-NOT).
     """
 
-    def _router_mod(self):  # type: ignore[return]
-        try:
-            import router as _r  # type: ignore[import]
-            return _r
-        except ImportError:
-            pass
-        _shared = (
-            Path(__file__).resolve().parents[6]
-            / "operator/bridges/shared"
-        )
-        if str(_shared) not in sys.path:
-            sys.path.insert(0, str(_shared))
-        try:
-            import router as _r  # type: ignore[import]
-            return _r
-        except ImportError:
-            return None
+    def _script_path(self) -> str | None:
+        from pathlib import Path
+        candidates = [
+            # core/plugins/corvin_plugins/providers/summary_provider.py ->
+            # parents[4] is the repo root (providers/corvin_plugins/plugins/
+            # core/<root>). Was parents[6] (2026-07-30 fix) — resolved to
+            # /home/<user>, silently making the path never exist and this
+            # provider permanently fall back to naive-truncation with no
+            # error signal.
+            Path(__file__).resolve().parents[4]
+            / "operator/voice/scripts/summarize.py",
+        ]
+        for p in candidates:
+            if p.exists():
+                return str(p)
+        return None
 
-    def route(
+    def summarize(
         self,
         text: str,
-        personas: list[dict],
         *,
-        model: str = "",
-        min_confidence: float = 0.5,
-        timeout: float = 12.0,
-        mode: str = "heuristic",
+        lang: str = "de",
+        max_chars: int = 400,
         tenant_id: str = "_default",
-    ) -> dict | None:
+    ) -> str:
+        script = self._script_path()
+        if script is None:
+            _log.debug("summarize.py not found — naive truncation fallback")
+            return text[:max_chars]
         try:
-            m = self._router_mod()
-            if m is None:
-                return None
-            kwargs: dict = {"min_confidence": min_confidence, "mode": mode}
-            if model:
-                kwargs["model"] = model
-            if timeout != 12.0:
-                kwargs["timeout"] = timeout
-            return m.route(text, personas, **kwargs)
+            result = subprocess.run(
+                # sys.executable, not "python3": the latter is absent on Windows
+                # and can be a different interpreter than the one with the deps
+                # (path-audit 2026-07-07 round-2).
+                [sys.executable, script, "--lang", lang, "--max-chars", str(max_chars)],
+                input=text,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+            _log.warning("summarize.py exited %d: %s", result.returncode, result.stderr[:200])
+        except subprocess.TimeoutExpired:
+            _log.warning("summarize.py timed out — naive truncation fallback")
         except Exception as exc:
-            _log.debug("router.route failed: %s", exc)
-            return None
+            _log.warning("summarize.py failed: %s", exc)
+        return text[:max_chars]
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 
-class RouterBackendRegistry:
-    """Holds the active RouterBackend for this process.  Thread-safe."""
+class SummaryProviderRegistry:
+    """Holds the active SummaryProvider for this process.  Thread-safe."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._owner_plugin_id: str | None = None
-        self._active: _RBProto = ChainRouterBackend()  # type: ignore[assignment]
+        self._active: _SPProto = ClaudeCliSummaryProvider()  # type: ignore[assignment]
 
-    def set_active(self, provider: _RBProto) -> None:
+    def set_active(self, provider: _SPProto) -> None:
         """Install ``provider`` as the active one for this process.
 
         Records WHICH PLUGIN did it (``loading.current()``), so the slot can
@@ -110,7 +114,7 @@ class RouterBackendRegistry:
                 self._owner_plugin_id = _who.plugin_id
             self._active = provider
 
-    def get_active(self) -> _RBProto:
+    def get_active(self) -> _SPProto:
         with self._lock:
             return self._active
 
@@ -127,7 +131,7 @@ class RouterBackendRegistry:
             if self._owner_plugin_id is None or self._owner_plugin_id != plugin_id:
                 return False
             self._owner_plugin_id = None
-            self._active = ChainRouterBackend()  # type: ignore[assignment]
+            self._active = ClaudeCliSummaryProvider()  # type: ignore[assignment]
             return True
 
     def owner_plugin_id(self) -> str | None:
@@ -139,7 +143,7 @@ class RouterBackendRegistry:
         """Restore the bundled default provider."""
         with self._lock:
             self._owner_plugin_id = None
-            self._active = ChainRouterBackend()  # type: ignore[assignment]
+            self._active = ClaudeCliSummaryProvider()  # type: ignore[assignment]
 
     def clear_if_active(self, provider: object) -> bool:
         """Restore the default only if ``provider`` is the one installed.
@@ -153,18 +157,18 @@ class RouterBackendRegistry:
             if self._active is not provider:
                 return False
             self._owner_plugin_id = None
-            self._active = ChainRouterBackend()  # type: ignore[assignment]
+            self._active = ClaudeCliSummaryProvider()  # type: ignore[assignment]
             return True
 
 
-_registry: RouterBackendRegistry = RouterBackendRegistry()
+_registry: SummaryProviderRegistry = SummaryProviderRegistry()
 
 
-def get_active() -> _RBProto:
+def get_active() -> _SPProto:
     return _registry.get_active()
 
 
-def set_active(provider: _RBProto) -> None:
+def set_active(provider: _SPProto) -> None:
     _registry.set_active(provider)
 
 

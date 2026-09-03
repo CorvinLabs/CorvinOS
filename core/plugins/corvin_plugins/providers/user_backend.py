@@ -1,247 +1,278 @@
-"""User backend provider - ADR-0233.
+"""UserBackend registry — an external directory, deny-on-anything-else (ADR-0233).
 
-Singleton registry for user authentication + consent validation.
-Implements per-user credential validation and consent gates.
+Three states, deliberately distinct:
+
+* **no backend installed** — ``get_active()`` returns ``None``.  Core auth is
+  responsible; nothing changed about how this install authenticates.
+* **backend says no** — ``authenticate()`` returns ``None`` → deny.
+* **backend broke** — raises or times out → deny.
+
+There is **no default backend**.  A default that denied everything would lock out
+every install the moment a call site appeared; a default that admitted anything
+would be an auth bypass.  Absence is the honest third state, and
+:func:`authenticate` below makes the deny path the only reachable one for the two
+failure states.
+
+Usage (plugin on_load):
+    ctx.user_registry.set_active(self)
+
+Usage (caller):
+    from corvin_plugins.providers import user_backend
+    result = await user_backend.authenticate(creds)      # None => deny
+    if result is None and not user_backend.is_installed():
+        ...fall through to core auth...
 """
+from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
-from typing import Optional, Protocol
 import threading
+from typing import TYPE_CHECKING
 
-_logger = logging.getLogger(__name__)
+from corvin_plugins import circuit_breaker as _breakers
 
-# Thread-safe singleton
-_lock = threading.Lock()
-_active_backend: Optional['UserBackend'] = None
+if TYPE_CHECKING:
+    from corvin_plugins.protocol import UserBackend as _UBProto
 
-
-@dataclass(frozen=True)
-class UserCredential:
-    """User authentication credential."""
-    user_id: str
-    tenant_id: str
-    auth_type: str  # "local", "oauth", "token"
-    verified: bool = False
-    expires_at: Optional[str] = None
+_log = logging.getLogger("corvin.auth.backend")
 
 
-@dataclass(frozen=True)
-class UserConsent:
-    """User consent record."""
-    user_id: str
-    tenant_id: str
-    consent_type: str  # "telemetry", "learning", "healing_traces", "geo_tracking"
-    granted: bool
-    granted_at: Optional[str] = None
-    expires_at: Optional[str] = None
+def _plugin_id(backend: object, owner: str | None = None) -> str:
+    """Breaker key for a backend instance.
+
+    ``owner`` — the plugin that installed the slot — wins when known. Keying on
+    the OBJECT gave a plugin two identities: a plugin that installs a helper
+    (``set_active(self._sink)``) produced the key ``anonymous:Sink``, which the
+    registry has never heard of, so ``get_breaker()`` could not see its boot
+    layer and the compliance exemption silently did not apply.
+
+    Falls back to the object's own id, then to the class name: a breaker keyed
+    on the class is still per-backend, and refusing to guard an unlabelled
+    backend would be worse than an imperfect key.
+    """
+    return (
+        owner
+        or getattr(backend, "plugin_id", None)
+        or f"anonymous:{type(backend).__name__}"
+    )
+
+#: Hard ceiling for a backend call.  A directory that hangs must not hold an auth
+#: request open — a timeout is a deny, not a wait.
+DEFAULT_TIMEOUT_S = 10.0
 
 
-class UserBackend(Protocol):
-    """Protocol for user backend implementations."""
+class UserBackendRegistry:
+    """Holds the active UserBackend for this process.  Thread-safe."""
 
-    async def verify_credential(self, credential: UserCredential) -> bool:
-        """Verify a user credential.
-
-        Args:
-            credential: The credential to verify
-
-        Returns:
-            True if credential is valid, False otherwise
-        """
-        ...
-
-    async def get_user_id(self, tenant_id: str, auth_header: Optional[str] = None) -> Optional[str]:
-        """Get user_id from auth context.
-
-        Args:
-            tenant_id: The tenant context
-            auth_header: Optional auth header value
-
-        Returns:
-            user_id if authenticated, None otherwise
-        """
-        ...
-
-    async def grant_consent(self, consent: UserConsent) -> bool:
-        """Grant user consent for a feature/capability.
-
-        Args:
-            consent: The consent record
-
-        Returns:
-            True if granted, False if denied/revoked
-        """
-        ...
-
-    async def check_consent(self, user_id: str, tenant_id: str, consent_type: str) -> bool:
-        """Check if user has granted consent.
-
-        Args:
-            user_id: The user
-            tenant_id: The tenant
-            consent_type: Type of consent to check
-
-        Returns:
-            True if consent granted and not expired, False otherwise
-        """
-        ...
-
-    async def revoke_consent(self, user_id: str, tenant_id: str, consent_type: str) -> bool:
-        """Revoke user consent (GDPR Art. 7).
-
-        Args:
-            user_id: The user
-            tenant_id: The tenant
-            consent_type: Type of consent to revoke
-
-        Returns:
-            True if revoked, False if not found/already revoked
-        """
-        ...
-
-    async def health_check(self) -> bool:
-        """Check backend health."""
-        ...
-
-
-class DefaultUserBackend:
-    """Default in-process user backend."""
-
-    def __init__(self):
-        """Initialize the user backend."""
-        # In-memory stores for testing/local development
-        self._credentials: dict[str, UserCredential] = {}
-        self._consents: dict[tuple[str, str, str], UserConsent] = {}  # (user_id, tenant_id, type) -> consent
+    def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._owner_plugin_id: str | None = None
+        self._active: _UBProto | None = None
 
-    async def verify_credential(self, credential: UserCredential) -> bool:
-        """Verify a user credential."""
-        try:
-            with self._lock:
-                # For local-only mode, accept any non-empty user_id
-                if credential.auth_type == "local" and credential.user_id:
-                    return True
+    def set_active(self, provider: _UBProto) -> None:
+        """Install ``provider`` as the active one for this process.
 
-                # Check if credential is in store
-                key = f"{credential.tenant_id}:{credential.user_id}"
-                stored = self._credentials.get(key)
+        Records WHICH PLUGIN did it (``loading.current()``), so the slot can
+        later be released by plugin identity rather than by matching the
+        object or guessing from ``plugin_type``. A plugin that installs a
+        helper object still owns the slot.
+        """
+        from .. import loading as _loading
 
-                if not stored:
-                    return False
+        _who = _loading.current()
+        with self._lock:
+            # Only a plugin that is LOADING may claim ownership. A set_active()
+            # from anywhere else (a request handler, a thread a plugin spawned,
+            # a timer) used to write None here — which not only left the new
+            # occupant unowned, it ERASED the previous legitimate owner, so the
+            # slot could never be released by anyone again. Keeping the old
+            # owner is the lesser wrong: the slot still belongs to whoever took
+            # it during a load, and unloading them releases it.
+            if _who is not None:
+                self._owner_plugin_id = _who.plugin_id
+            self._active = provider
 
-                # Check expiration
-                if stored.expires_at:
-                    expires = datetime.fromisoformat(stored.expires_at)
-                    if expires < datetime.now(timezone.utc):
-                        return False
+    def clear(self) -> None:
+        with self._lock:
+            self._owner_plugin_id = None
+            self._active = None
 
-                return stored.verified
-        except Exception as e:
-            _logger.error(f"Credential verification failed: {e}")
-            return False
+    def clear_if_active(self, provider: object) -> bool:
+        """Detach only if ``provider`` is the one currently installed.
 
-    async def get_user_id(self, tenant_id: str, auth_header: Optional[str] = None) -> Optional[str]:
-        """Get user_id from auth context."""
-        try:
-            # For local-only mode, derive from TCP peer or return default
-            if not auth_header:
-                # Local mode: return a default user
-                return f"user@{tenant_id}"
-            # Future: Parse OAuth / token headers
-            return None
-        except Exception as e:
-            _logger.error(f"Failed to get user_id: {e}")
-            return None
-
-    async def grant_consent(self, consent: UserConsent) -> bool:
-        """Grant user consent."""
-        try:
-            with self._lock:
-                key = (consent.user_id, consent.tenant_id, consent.consent_type)
-                self._consents[key] = consent
-                _logger.info(f"Consent granted: {consent.user_id}/{consent.consent_type}")
-                return True
-        except Exception as e:
-            _logger.error(f"Failed to grant consent: {e}")
-            return False
-
-    async def check_consent(self, user_id: str, tenant_id: str, consent_type: str) -> bool:
-        """Check if user has granted consent."""
-        try:
-            with self._lock:
-                key = (user_id, tenant_id, consent_type)
-                consent = self._consents.get(key)
-
-                if not consent:
-                    # No consent record = deny (fail-closed)
-                    return False
-
-                if not consent.granted:
-                    # Explicitly revoked
-                    return False
-
-                # Check expiration
-                if consent.expires_at:
-                    expires = datetime.fromisoformat(consent.expires_at)
-                    if expires < datetime.now(timezone.utc):
-                        return False
-
-                return True
-        except Exception as e:
-            _logger.error(f"Consent check failed: {e}")
-            return False
-
-    async def revoke_consent(self, user_id: str, tenant_id: str, consent_type: str) -> bool:
-        """Revoke user consent."""
-        try:
-            with self._lock:
-                key = (user_id, tenant_id, consent_type)
-                if key in self._consents:
-                    # Mark as revoked
-                    old = self._consents[key]
-                    self._consents[key] = UserConsent(
-                        user_id=old.user_id,
-                        tenant_id=old.tenant_id,
-                        consent_type=old.consent_type,
-                        granted=False,
-                        granted_at=old.granted_at,
-                        expires_at=datetime.now(timezone.utc).isoformat()
-                    )
-                    _logger.info(f"Consent revoked: {user_id}/{consent_type}")
-                    return True
+        Instance-checked: a plugin unloading must not evict a provider that a
+        DIFFERENT plugin installed after it.
+        """
+        with self._lock:
+            if self._active is not provider:
                 return False
-        except Exception as e:
-            _logger.error(f"Consent revocation failed: {e}")
-            return False
+            self._owner_plugin_id = None
+            self._active = None
+            return True
 
-    async def health_check(self) -> bool:
-        """Check backend health."""
-        try:
-            # Simple check: can we verify a test credential?
-            test_cred = UserCredential(
-                user_id="test",
-                tenant_id="__health_check__",
-                auth_type="local"
+    def get_active(self) -> _UBProto | None:
+        with self._lock:
+            return self._active
+
+    def release_owned_by(self, plugin_id: str) -> bool:
+        """Release the slot if ``plugin_id`` is the plugin that took it.
+
+        Identity-based, which is the point: the object in the slot may be a
+        helper the plugin created rather than the plugin itself, and the
+        plugin's ``plugin_type`` may not even name this registry. Ownership is
+        recorded at ``set_active`` time and is the only thing that answers
+        "is this slot yours" correctly.
+        """
+        with self._lock:
+            if self._owner_plugin_id is None or self._owner_plugin_id != plugin_id:
+                return False
+            self._owner_plugin_id = None
+            self._active = None
+            return True
+
+    def owner_plugin_id(self) -> str | None:
+        """The plugin that installed the current provider, if it is known."""
+        with self._lock:
+            return self._owner_plugin_id
+
+    def is_installed(self) -> bool:
+        return self.get_active() is not None
+
+
+_registry: UserBackendRegistry = UserBackendRegistry()
+
+
+def get_active() -> _UBProto | None:
+    return _registry.get_active()
+
+
+def set_active(provider: _UBProto) -> None:
+    _registry.set_active(provider)
+
+
+def clear() -> None:
+    _registry.clear()
+
+
+def is_installed() -> bool:
+    """True when a plugin has claimed authentication for this process."""
+    return _registry.is_installed()
+
+
+async def authenticate(
+    credentials: dict, *, timeout_s: float = DEFAULT_TIMEOUT_S
+) -> dict | None:
+    """Authenticate through the installed backend.  Returns None on ANY failure.
+
+    Deny-on-error is structural here rather than left to each call site: an
+    exception, a timeout, a non-dict return and a missing ``user_id`` all collapse
+    to ``None``.  A caller can therefore never accidentally admit a session by
+    forgetting one of those branches.
+
+    ``None`` does NOT distinguish "no backend" from "denied" — use
+    :func:`is_installed` for that, and only to decide whether to fall through to
+    core auth, never to admit.
+    """
+    backend = _registry.get_active()
+    if backend is None:
+        return None
+
+    # The breaker contains an unreachable directory. It is driven by INFRASTRUCTURE
+    # outcomes only — see _plugin_id() note below.
+    breaker = _breakers.get_breaker(_plugin_id(backend, _registry.owner_plugin_id()))
+    try:
+        breaker.guard()
+    except _breakers.CircuitOpen:
+        _log.error("user backend circuit open — denying without calling the directory")
+        return None
+
+    try:
+        result = await asyncio.wait_for(
+            backend.authenticate(credentials), timeout=timeout_s
+        )
+    except asyncio.TimeoutError as exc:
+        breaker.record_failure(exc)
+        _log.error("user backend authenticate timed out after %.1fs — denying", timeout_s)
+        return None
+    except Exception as exc:  # noqa: BLE001 — a broken directory must deny, not admit
+        breaker.record_failure(exc)
+        # Class name only: str(exc) on an LDAP/OIDC error routinely contains the
+        # bind DN, the server URL or the submitted username.
+        _log.error("user backend authenticate failed (%s) — denying", type(exc).__name__)
+        return None
+
+    # A REJECTED credential is a working backend, not a failure. Counting denials
+    # as breaker failures would turn three wrong passwords into a 30-second
+    # outage for every user — a self-inflicted DoS. Only exceptions and timeouts
+    # above may open this breaker.
+    breaker.record_success()
+
+    if not isinstance(result, dict) or not result.get("user_id"):
+        if result is not None:
+            _log.error(
+                "user backend returned a malformed principal (%s) — denying",
+                type(result).__name__,
             )
-            return await self.verify_credential(test_cred)
-        except Exception:
-            return False
+        return None
+
+    # A backend must not hand back credential material; drop it before the
+    # principal travels further into the session layer or a log line.
+    for secret_key in ("password", "password_hash", "token", "secret", "client_secret"):
+        result.pop(secret_key, None)
+    return result
 
 
-def get_active() -> UserBackend:
-    """Get the currently active user backend."""
-    global _active_backend
-    with _lock:
-        if _active_backend is None:
-            _active_backend = DefaultUserBackend()
-        return _active_backend
+async def get_user(user_id: str, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> dict | None:
+    """Look a user up.  Returns None when absent, on error, or with no backend."""
+    backend = _registry.get_active()
+    if backend is None:
+        return None
+    try:
+        result = await asyncio.wait_for(backend.get_user(user_id), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        _log.error("user backend get_user timed out after %.1fs", timeout_s)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        _log.error("user backend get_user failed (%s)", type(exc).__name__)
+        return None
+    return result if isinstance(result, dict) else None
 
 
-def set_active(backend: UserBackend) -> None:
-    """Set the active user backend (for testing)."""
-    global _active_backend
-    with _lock:
-        _active_backend = backend
+async def enforce_quota(
+    user_id: str, resource: str, *, timeout_s: float = DEFAULT_TIMEOUT_S
+) -> None:
+    """Ask the backend to enforce a quota.
+
+    Re-raises whatever the backend raises (that is how a quota denial travels),
+    but converts an unreachable backend into a denial too: if the quota check
+    cannot be performed, the resource is not granted.  Fail-closed — a directory
+    outage must not become unlimited quota.
+    """
+    backend = _registry.get_active()
+    if backend is None:
+        return  # core quota logic applies
+    try:
+        await asyncio.wait_for(backend.enforce_quota(user_id, resource), timeout=timeout_s)
+    except asyncio.TimeoutError as exc:
+        _log.error("user backend enforce_quota timed out after %.1fs — denying", timeout_s)
+        raise QuotaUndeterminedError(resource) from exc
+
+
+class QuotaUndeterminedError(RuntimeError):
+    """The quota could not be evaluated, so the resource is denied (fail-closed)."""
+
+    def __init__(self, resource: str):
+        super().__init__(f"quota for {resource!r} could not be determined")
+        self.resource = resource
+
+
+def clear_if_active(provider: object) -> bool:
+    return _registry.clear_if_active(provider)
+
+
+def release_owned_by(plugin_id: str) -> bool:
+    return _registry.release_owned_by(plugin_id)
+
+
+def owner_plugin_id() -> str | None:
+    return _registry.owner_plugin_id()
