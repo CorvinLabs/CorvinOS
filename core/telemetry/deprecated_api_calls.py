@@ -137,8 +137,8 @@ class DeprecatedAPICallLogger:
                 audit_writer.write_event_dict(
                     event_type="deprecated_api_call",
                     tenant_id=tenant_id,
-                    task_id=task_id,
-                    details=event.to_dict()
+                    user_id=user_id,
+                    details={**event.to_dict(), "task_id": task_id}
                 )
             except Exception as audit_error:
                 logger.error(f"Audit trail write failed: {audit_error}", exc_info=True)
