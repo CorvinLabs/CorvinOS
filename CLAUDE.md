@@ -538,6 +538,11 @@ a panel that is deliberately not in the sidebar goes in that test's `NAV_EXEMPT`
 reason. A `requiredFlag` must ALSO be listed in `GATED_FLAGS`
 (`core/console/corvin_console/routes/capabilities.py`) or it resolves to false and the entry
 stays hidden forever.
+The ADR-0561 console manifest (`/v1/console/capabilities/manifest`) is **additive** to
+`NAV_GROUPS`: `mergeManifestNav()` in `layout.tsx` appends manifest-only panels (plugins,
+skills, installed) and never removes a static entry. Rendering the sidebar FROM the
+manifest hid ~30 core panels on 2026-09-03, because the backend enumerates only the
+panels it knows about. Keep the static list complete; let the manifest extend it.
 
 **A sibling FILE silently shadows a page DIRECTORY.** `import("@/pages/foo")` resolves
 `src/pages/foo.tsx` BEFORE `src/pages/foo/index.tsx` — file beats directory, with no
