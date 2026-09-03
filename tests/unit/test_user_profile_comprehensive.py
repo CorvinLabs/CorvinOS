@@ -342,7 +342,8 @@ class TestUserProfileManager:
         event = call_args[0][0] if call_args[0] else None
         assert event is not None
         # Should have payload with feedback keys
-        assert "payload" in dir(event) or hasattr(event, "payload")
+        # learning_events envelope: feedback lands in ``signal`` (kind=preference_updated)
+        assert hasattr(event, "signal") and event.signal.get("kind") == "preference_updated"
 
     def test_manager_set_override_gdpr_art21(self, manager_with_events):
         """set_override() implements Right to Object (test 9)."""
@@ -587,7 +588,8 @@ class TestPersistence:
         manager_with_events.get_profile("user_1", "_default")
 
         # Should create a JSON file
-        profile_file = temp_profiles_dir / "user_1.json"
+        # Profiles are tenant-partitioned on disk: <profiles_dir>/<tenant_id>/<user>.json
+        profile_file = temp_profiles_dir / "_default" / "user_1.json"
         assert profile_file.exists(), f"Profile file not created at {profile_file}"
 
         # Verify it's valid JSON

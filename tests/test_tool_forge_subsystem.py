@@ -29,6 +29,25 @@ from core.orchestration.subsystems.tool_forge_subsystem import (
 # ============================================================================
 
 
+
+@pytest.fixture(autouse=True)
+def _sandbox_corvin_home(tmp_path, monkeypatch):
+    """Quota counters (ADR-0365) and learning stores are per-CORVIN_HOME on disk;
+    isolate every test so daily forge quotas never leak between tests or into a
+    live install (the free tier allows 3 forges/day — the 4th test failed)."""
+    home = tmp_path / "corvin_home"
+    (home / "tenants" / "_default" / "global").mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    # A sandbox home has no license → free tier (3 forges/day). These tests
+    # exercised the subsystem, not the quota (they silently relied on the
+    # maintainer's license in ~/.corvin); the gate has its own tests.
+    import core.orchestration.quota_gate as _qg
+
+    monkeypatch.setattr(_qg, "increment_and_check", lambda *a, **k: None)
+    yield home
+
+
 class TestAsyncForgeRegistryBasicOps:
     """Group 1: Basic operations (20 tests)."""
 
@@ -3094,7 +3113,7 @@ class TestToolExecutedLearningEvents:
         hub.get_service = MagicMock(return_value=None)  # No event_emitter from hub
 
         # Mock event_emitter
-        mock_emitter = AsyncMock()
+        mock_emitter = MagicMock()
         subsystem.event_emitter = mock_emitter
 
         subsystem.startup(hub)
@@ -3133,7 +3152,7 @@ class TestToolExecutedLearningEvents:
         hub.get_service = MagicMock(return_value=None)
 
         # Mock event_emitter
-        mock_emitter = AsyncMock()
+        mock_emitter = MagicMock()
         subsystem.event_emitter = mock_emitter
 
         subsystem.startup(hub)
@@ -3163,10 +3182,11 @@ class TestToolExecutedLearningEvents:
         # Mock event_emitter and capture emitted event
         emitted_events = []
 
-        async def capture_emit(event):
+        def capture_emit(event):
             emitted_events.append(event)
 
-        mock_emitter = AsyncMock(side_effect=capture_emit)
+        mock_emitter = MagicMock()
+        mock_emitter.emit.side_effect = capture_emit  # the producer calls .emit(event)
         subsystem.event_emitter = mock_emitter
 
         subsystem.startup(hub)
@@ -3194,9 +3214,9 @@ class TestToolExecutedLearningEvents:
         # Verify event contains context
         assert len(emitted_events) == 1
         event = emitted_events[0]
-        assert event.session_id == "session_777"
-        assert event.payload["task_id"] == "task_999"
-        assert event.payload["turn_id"] == "turn_888"
+        assert event.signal["session_id"] == "session_777"
+        assert event.signal["task_id"] == "task_999"
+        assert event.signal["turn_id"] == "turn_888"
 
     @pytest.mark.asyncio
     async def test_tool_executed_event_latency_overhead_acceptable(self):
@@ -3210,7 +3230,7 @@ class TestToolExecutedLearningEvents:
         hub.get_service = MagicMock(return_value=None)
 
         # Mock event_emitter (async, non-blocking)
-        mock_emitter = AsyncMock()
+        mock_emitter = MagicMock()
         subsystem.event_emitter = mock_emitter
 
         subsystem.startup(hub)
@@ -3284,9 +3304,12 @@ class TestToolExecutedLearningEvents:
         cost_100ms = subsystem._calculate_execution_cost(100)
         cost_1000ms = subsystem._calculate_execution_cost(1000)
 
+        # Integer cents at ~0.01 cent/ms: 10 ms and 100 ms both floor to the
+        # 1-cent minimum; strict growth is only observable from 100 ms upward.
         assert cost_10ms >= 1  # Minimum
-        assert cost_100ms > cost_10ms
+        assert cost_100ms >= cost_10ms
         assert cost_1000ms > cost_100ms
+        assert subsystem._calculate_execution_cost(10_000) > cost_1000ms
 
     @pytest.mark.asyncio
     async def test_tool_executed_event_tenant_isolation(self):
@@ -3299,8 +3322,8 @@ class TestToolExecutedLearningEvents:
         hub.get_service = MagicMock(return_value=None)
 
         # Mock emitters for both
-        emitter_a = AsyncMock()
-        emitter_b = AsyncMock()
+        emitter_a = MagicMock()
+        emitter_b = MagicMock()
 
         subsystem_a.event_emitter = emitter_a
         subsystem_b.event_emitter = emitter_b
@@ -3388,11 +3411,12 @@ class TestToolExecutedLearningEvents:
         # Capture emitted event
         captured_event = None
 
-        async def capture_emit(event):
+        def capture_emit(event):
             nonlocal captured_event
             captured_event = event
 
-        mock_emitter = AsyncMock(side_effect=capture_emit)
+        mock_emitter = MagicMock()
+        mock_emitter.emit.side_effect = capture_emit  # the producer calls .emit(event)
         subsystem.event_emitter = mock_emitter
 
         subsystem.startup(hub)
@@ -3418,7 +3442,7 @@ class TestToolExecutedLearningEvents:
 
         # Verify payload structure
         assert captured_event is not None
-        payload = captured_event.payload
+        payload = captured_event.signal
         assert "tool_name" in payload
         assert "status" in payload
         assert "latency_ms" in payload
@@ -3435,7 +3459,7 @@ class TestToolExecutedLearningEvents:
         hub.publish_event = MagicMock()
         hub.get_service = MagicMock(return_value=None)
 
-        mock_emitter = AsyncMock()
+        mock_emitter = MagicMock()
         subsystem.event_emitter = mock_emitter
 
         subsystem.startup(hub)
