@@ -25,14 +25,36 @@ Integration with Phase 3:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, field
+from pathlib import Path
 from typing import Optional, Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+def _get_lom() -> str:
+    """Get line of moral responsibility (caller's file:function:line)."""
+    frame = inspect.currentframe()
+    if frame and frame.f_back:
+        caller_frame = frame.f_back
+        return f"{caller_frame.f_code.co_filename}:{caller_frame.f_code.co_name}:{caller_frame.f_lineno}"
+    return "unknown"
+
+# Tier 1 immutable fields that layers cannot override (GDPR Art. 5)
+TIER1_IMMUTABLE_KEYS = {
+    "tenant_id", "user_id", "session_id",
+    "timestamp_utc", "base_hash", "prev_base_hash",
+    "recent_decisions", "user_profile", "success_rate", "attention_budget_remaining"
+}
+
+# Audit chain writer (lazy singleton)
+_audit_writer_lock = threading.Lock()
+_audit_writer: Optional[Any] = None
 
 
 # Phase 3 Adapter Interfaces (decouple HybridContextModel from Phase 3 storage)
@@ -236,6 +258,27 @@ class HybridContextModel:
             f"(hash={layer_hash[:8]}..., lom={lom})"
         )
 
+        # Write audit event (hash-chained)
+        writer = self._get_audit_writer()
+        if writer is not None:
+            try:
+                writer.write_event_dict(
+                    event_type="tier2_layer_injected",
+                    tenant_id=self.tenant_id,
+                    user_id=user_id,
+                    details={
+                        "layer_name": layer_name,
+                        "version": version,
+                        "hash": layer_hash,
+                        "prev_hash": prev_hash,
+                        "lom": lom,
+                        "lom_audit_write": _get_lom(),
+                    },
+                    severity="INFO"
+                )
+            except Exception as e:
+                logger.error(f"Failed to write layer injection audit event: {e}")
+
         return layer_hash
 
     def merge_with_fallback(
@@ -271,6 +314,13 @@ class HybridContextModel:
                 # Validate no PII (fail-closed)
                 self._validate_no_pii(layer_data)
 
+                # Validate that layer doesn't attempt to override Tier 1 immutable fields
+                for key in layer_data.keys():
+                    if key in TIER1_IMMUTABLE_KEYS:
+                        raise ValueError(
+                            f"Layer {layer_name} attempted to override immutable Tier 1 field '{key}'"
+                        )
+
                 # Merge layer into context
                 merged[layer_name] = layer_data
                 logger.debug(f"Merged layer {layer_name}")
@@ -286,12 +336,13 @@ class HybridContextModel:
                 f"{failed_layers}"
             )
 
-        # Emit audit event
+        # Emit audit event (hash-chained)
         self._emit_merge_event(
             base.user_id,
             base.session_id,
             len(layers),
             len(failed_layers),
+            base.tenant_id,
         )
 
         return merged
@@ -348,6 +399,27 @@ class HybridContextModel:
             f"attention_budget={attention_budget})"
         )
 
+        # Write audit event (hash-chained)
+        writer = self._get_audit_writer()
+        if writer is not None:
+            try:
+                writer.write_event_dict(
+                    event_type="tier1_base_snapshotted",
+                    tenant_id=self.tenant_id,
+                    user_id=user_id,
+                    details={
+                        "session_id": session_id,
+                        "base_hash": base_hash,
+                        "prev_hash": prev_hash,
+                        "decisions_count": len(decisions),
+                        "attention_budget": attention_budget,
+                        "lom_audit_write": _get_lom(),
+                    },
+                    severity="INFO"
+                )
+            except Exception as e:
+                logger.error(f"Failed to write base snapshot audit event: {e}")
+
         return base_hash
 
     def delete_user_context(self, user_id: str) -> CascadeDeleteResult:
@@ -372,8 +444,9 @@ class HybridContextModel:
         deleted_bases = 0
         deleted_layers = 0
 
-        # Step 1: Delete all base snapshots for this user
-        keys_to_delete = [k for k in self.base_snapshots if k.startswith(user_id)]
+        # Step 1: Delete all base snapshots for this user (exact match, not prefix)
+        # Key format is "user_id:session_id", so match only keys starting with "user_id:"
+        keys_to_delete = [k for k in self.base_snapshots if k.startswith(user_id + ":")]
         for key in keys_to_delete:
             try:
                 del self.base_snapshots[key]
@@ -391,7 +464,7 @@ class HybridContextModel:
 
         # Step 3: Verify deletion (fail-closed)
         verification_complete = True
-        if any(k.startswith(user_id) for k in self.base_snapshots):
+        if any(k.startswith(user_id + ":") for k in self.base_snapshots):
             errors.append(f"Verification failed: base snapshots still present for {user_id}")
             verification_complete = False
 
@@ -417,6 +490,26 @@ class HybridContextModel:
             logger.error(
                 f"Cascade delete INCOMPLETE for user {user_id}: {errors}"
             )
+
+        # Write audit event (hash-chained, GDPR Art. 17)
+        writer = self._get_audit_writer()
+        if writer is not None:
+            try:
+                writer.write_event_dict(
+                    event_type="user_context_cascade_deleted",
+                    tenant_id=self.tenant_id,
+                    user_id=user_id,
+                    details={
+                        "deleted_bases": deleted_bases,
+                        "deleted_layers": deleted_layers,
+                        "verification_complete": verification_complete,
+                        "errors": errors,
+                        "lom_audit_write": _get_lom(),
+                    },
+                    severity="INFO" if verification_complete else "ERROR"
+                )
+            except Exception as e:
+                logger.error(f"Failed to write cascade delete audit event: {e}")
 
         return result
 
@@ -451,11 +544,56 @@ class HybridContextModel:
                 )
 
     @staticmethod
+    def _get_audit_writer() -> Optional[Any]:
+        """Get or initialize audit chain writer (lazy singleton)."""
+        global _audit_writer, _audit_writer_lock
+
+        if _audit_writer is not None:
+            return _audit_writer
+
+        with _audit_writer_lock:
+            if _audit_writer is not None:
+                return _audit_writer
+
+            try:
+                from core.compliance.audit_chain_writer import AuditChainWriter
+
+                # Initialize writer with ~/.corvin/audit.jsonl path
+                home = Path.home()
+                audit_path = home / ".corvin" / "audit.jsonl"
+                _audit_writer = AuditChainWriter(audit_path)
+                return _audit_writer
+            except Exception as e:
+                logger.warning(f"Could not initialize AuditChainWriter: {e}")
+                return None
+
+    @staticmethod
     def _emit_merge_event(
-        user_id: str, session_id: str, total_layers: int, failed_count: int
+        user_id: str, session_id: str, total_layers: int, failed_count: int,
+        tenant_id: str = "_default"
     ) -> None:
-        """Emit audit event for merge operation."""
+        """Emit audit event for merge operation (hash-chained, GDPR Art. 30/32)."""
+        # Log locally
         logger.info(
             f"hybrid_context_merge: user={user_id}, session={session_id}, "
             f"total_layers={total_layers}, failed={failed_count}"
         )
+
+        # Write to audit chain
+        writer = HybridContextModel._get_audit_writer()
+        if writer is not None:
+            try:
+                writer.write_event_dict(
+                    event_type="hybrid_context_merge",
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    details={
+                        "session_id": session_id,
+                        "total_layers": total_layers,
+                        "failed_count": failed_count,
+                        "lom_audit_write": _get_lom(),
+                    },
+                    severity="INFO"
+                )
+            except Exception as e:
+                logger.error(f"Failed to write merge audit event: {e}")
