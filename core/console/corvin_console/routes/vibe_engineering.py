@@ -714,7 +714,35 @@ async def get_token_metrics(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ADR-0564 Phase 5: Audit Chain Graph Visualization
+# ADR-0564 Phase 5: Audit Chain Graph Visualization — Helper Functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _map_event_type(raw_type: str) -> str:
+    """Map real audit event_type to VibeDashboard event types."""
+    if "skill" in raw_type.lower() or "execution" in raw_type.lower():
+        return "skill_executed"
+    elif "learning" in raw_type.lower() or "feedback" in raw_type.lower():
+        return "learning_event"
+    elif "decision" in raw_type.lower() or "route" in raw_type.lower():
+        return "decision"
+    elif "context" in raw_type.lower() or "snapshot" in raw_type.lower() or "hybrid_context" in raw_type.lower():
+        return "context_snapshot"
+    elif "error" in raw_type.lower() or "failed" in raw_type.lower():
+        return "error"
+    else:
+        return "decision"  # Default
+
+
+def _extract_lom_hash(lom_str: str) -> str:
+    """Extract LoM hash from audit write path (ADR-0537)."""
+    if not lom_str:
+        return ""
+    import hashlib
+    return hashlib.sha256(lom_str.encode()).hexdigest()[:16]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/audit")
@@ -831,27 +859,3 @@ async def get_audit_chain(
         "hasMore": False,
         "snapshotFreshness_ms": 0,
     }
-
-
-def _map_event_type(raw_type: str) -> str:
-    """Map real audit event_type to VibeDashboard event types."""
-    if "skill" in raw_type.lower() or "execution" in raw_type.lower():
-        return "skill_executed"
-    elif "learning" in raw_type.lower() or "feedback" in raw_type.lower():
-        return "learning_event"
-    elif "decision" in raw_type.lower() or "route" in raw_type.lower():
-        return "decision"
-    elif "context" in raw_type.lower() or "snapshot" in raw_type.lower() or "hybrid_context" in raw_type.lower():
-        return "context_snapshot"
-    elif "error" in raw_type.lower() or "failed" in raw_type.lower():
-        return "error"
-    else:
-        return "decision"  # Default
-
-
-def _extract_lom_hash(lom_str: str) -> str:
-    """Extract LoM hash from audit write path (ADR-0537)."""
-    if not lom_str:
-        return ""
-    import hashlib
-    return hashlib.sha256(lom_str.encode()).hexdigest()[:16]
