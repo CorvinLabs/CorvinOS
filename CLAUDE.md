@@ -551,6 +551,16 @@ a directory, DELETE the same-named file in the same commit — never keep both �
 which one loads with a marker string only the new code contains
 (`scripts/console-deploy.sh --marker '<string>'`), not by reading the diff.
 
+**Children of `<Routes>` must be `<Route>` elements — never a component that returns them.**
+react-router walks the `<Routes>` tree statically (`createRoutesFromChildren`) and throws
+for any child whose type is not `Route`/`Fragment`. A `<PanelRoutes />` component in that
+position type-checks, lints and builds, then kills the ENTIRE console at first render with a
+message-less `Uncaught Error` (the invariant text is stripped in prod) — blank page, and it
+presents like a stale bundle. It happened on 2026-09-03 (`<ManifestPanelRoutes />` in
+`src/App.tsx`). Compute the routes in a hook that returns an array and splice `{routes}`
+in. `tests/unit/app-routes-static.test.tsx` renders the real `<App />` and fails on the
+next one.
+
 **Must NOT do:** declare a frontend change "done"/"live" on a correct source diff alone ·
 run `npm run build` without clearing `dist/` + `node_modules/.vite/` first · skip the
 `grep` + `curl` proof that the served hashes are the new ones · report the change without
