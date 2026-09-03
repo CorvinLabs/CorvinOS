@@ -407,3 +407,144 @@ class TestValidationErrorHandling:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestEdgeCases:
+    """Edge cases for production-ready behavior."""
+
+    def test_empty_user_snapshot(self):
+        """Edge case 1: Empty user (no decisions/outcomes) still snapshots."""
+        model = HybridContextModel("tenant-1")
+
+        # Snapshot with no decisions, empty profile
+        base_hash = model.snapshot_base_context(
+            user_id="empty-user",
+            session_id="s1",
+            decisions=[],  # Empty
+            profile={},    # Empty
+            success_rate=0.5,  # Default suppression
+            attention_budget=0,  # No budget
+        )
+
+        assert base_hash is not None
+        base = model.base_snapshots["empty-user:s1"]
+        assert len(base.recent_decisions) == 0
+        assert base.user_profile == {}
+        assert base.success_rate == 0.5
+
+    def test_concurrent_layer_isolation(self):
+        """Edge case 2: Concurrent layer injection, per-user isolation."""
+        model = HybridContextModel("tenant-1")
+
+        # User 1 injects "user_style"
+        hash1 = model.inject_layer(
+            user_id="user-1",
+            layer_name="user_style",
+            data={"tone": "verbose"},
+            lom="test.py:L1",
+        )
+
+        # User 2 injects same layer name
+        hash2 = model.inject_layer(
+            user_id="user-2",
+            layer_name="user_style",
+            data={"tone": "concise"},
+            lom="test.py:L2",
+        )
+
+        # Verify isolation: different hashes, different data
+        assert hash1 != hash2
+        assert model.injected_layers["user-1"][0].data["tone"] == "verbose"
+        assert model.injected_layers["user-2"][0].data["tone"] == "concise"
+
+    def test_merge_preserves_small_n_suppression(self):
+        """Edge case 3: Merge preserves small-n suppression from Phase 3."""
+        model = HybridContextModel("tenant-1")
+
+        # Snapshot with suppressed success_rate (< 10 outcomes)
+        model.snapshot_base_context(
+            user_id="user-1",
+            session_id="s1",
+            decisions=[{"d": 1}],
+            profile={"learned": True},
+            success_rate=0.5,  # Suppressed (from Phase 3)
+            attention_budget=1000,
+        )
+
+        base = model.base_snapshots["user-1:s1"]
+        layers = []
+
+        # Merge should preserve suppressed rate
+        merged = model.merge_with_fallback(base, layers)
+
+        assert merged["success_rate"] == 0.5  # Not modified
+        assert merged["user_profile"]["learned"] is True
+
+    def test_delete_with_pending_layers_complete(self):
+        """Edge case 4: Delete user with layers, guarantee complete removal."""
+        model = HybridContextModel("tenant-1")
+
+        # Create base
+        model.snapshot_base_context(
+            user_id="user-1",
+            session_id="s1",
+            decisions=[],
+            profile={},
+            success_rate=0.5,
+            attention_budget=1000,
+        )
+
+        # Inject multiple layers
+        for i in range(5):
+            model.inject_layer(
+                user_id="user-1",
+                layer_name=f"layer_{i}",
+                data={"v": i},
+                lom=f"test.py:L{i}",
+            )
+
+        # Verify data exists
+        assert len(model.injected_layers.get("user-1", [])) == 5
+
+        # Delete
+        result = model.delete_user_context("user-1")
+
+        # Verify COMPLETE removal
+        assert result.verification_complete is True
+        assert result.deleted_layers == 5
+        assert len(model.injected_layers.get("user-1", [])) == 0
+
+    def test_snapshot_overwrite_chain_validity(self):
+        """Edge case 5: Snapshot overwrite preserves chain validity."""
+        model = HybridContextModel("tenant-1")
+
+        # First snapshot
+        hash1 = model.snapshot_base_context(
+            user_id="user-1",
+            session_id="s1",
+            decisions=[{"d": 1}],
+            profile={"v": 1},
+            success_rate=0.5,
+            attention_budget=1000,
+        )
+
+        base1 = model.base_snapshots["user-1:s1"]
+        assert base1.base_hash == hash1
+
+        # Overwrite with different data
+        hash2 = model.snapshot_base_context(
+            user_id="user-1",
+            session_id="s1",
+            decisions=[{"d": 1}, {"d": 2}],  # Different
+            profile={"v": 2},  # Different
+            success_rate=0.6,  # Different
+            attention_budget=2000,  # Different
+        )
+
+        base2 = model.base_snapshots["user-1:s1"]
+
+        # Verify overwrite
+        assert hash1 != hash2  # Different hashes
+        assert len(base2.recent_decisions) == 2  # New data
+        assert base2.base_hash == hash2
+        assert base2.prev_base_hash == hash1  # Chain link preserved
