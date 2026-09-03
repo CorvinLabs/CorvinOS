@@ -70,6 +70,17 @@ def _sign_manifest(manifest: dict, priv_key) -> dict:
     return signed
 
 
+
+@pytest.fixture(autouse=True)
+def _sandbox_corvin_home(tmp_path, monkeypatch):
+    """Never let the (now real) registry write touch a live .corvin."""
+    home = tmp_path / "corvin_home"
+    (home / "tenants" / "_default" / "global").mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    yield home
+
+
 class TestSignatureGeneration:
     """Test creating and verifying signatures."""
 
@@ -83,6 +94,7 @@ class TestSignatureGeneration:
             "version": "1.0.0",
             "origin": "vetted",
             "boot_layer": "bundled",
+            "plugin_type": "data_connector",  # required: registry.yaml records need an extension point
         }
 
         signed_manifest = _sign_manifest(manifest, priv_key)
@@ -140,7 +152,7 @@ class TestSignatureGeneration:
 class TestVettedPluginInstall:
     """Test installing vetted plugins with signature verification."""
 
-    def test_install_signed_plugin(self, tmp_path):
+    def test_install_signed_plugin(self, tmp_path, monkeypatch):
         """Test installing a properly signed plugin."""
         priv_key = _get_test_keypair()
 
@@ -155,6 +167,7 @@ class TestVettedPluginInstall:
             "version": "1.0.0",
             "origin": "vetted",
             "boot_layer": "bundled",
+            "plugin_type": "data_connector",  # registry.yaml records need an extension point
         }
 
         signed_manifest = _sign_manifest(manifest, priv_key)
@@ -169,6 +182,12 @@ class TestVettedPluginInstall:
 
         corvin_home = Path.home() / ".corvin"
         anchors = load_trust_anchors(corvin_home)
+        if not anchors:
+            pytest.skip("no maintainer trust anchors on this machine")
+        # install_plugin reads anchors from the (sandboxed) CORVIN_HOME — hand the
+        # real ones over through the documented env override instead of pointing
+        # the CLI at the live home.
+        monkeypatch.setenv("CORVIN_PLUGIN_TRUST_ANCHORS", ",".join(anchors))
 
         config = {"spec": {"plugins": {"installed": []}}}
 

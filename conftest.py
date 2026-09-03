@@ -156,3 +156,39 @@ def _live_state_tripwire(request: pytest.FixtureRequest):
             + "\n  ".join(violations),
             pytrace=False,
         )
+
+
+# ── Gateway suite: loopback peer for TestClient (adversarial review E-09) ───────
+# ``corvin_gateway.app._jwt_guard`` requires a Bearer JWT from every NON-loopback
+# peer; Starlette's TestClient reports ("testclient", 50000), which the guard
+# treats fail-closed as remote. The gateway suite models the local deployment,
+# so every TestClient created from a test under core/gateway/tests/ defaults to
+# ("127.0.0.1", 50000); an explicit ``client=`` always wins. Lives here (scoped
+# by path) because a conftest.py inside core/gateway/tests/ collides with
+# tests/conftest.py — both packages are named ``tests`` on sys.path.
+import pytest as _pytest  # noqa: E402
+
+_GATEWAY_TESTS = Path(__file__).resolve().parent / "core" / "gateway" / "tests"
+_LOOPBACK_PEER = ("127.0.0.1", 50000)
+
+
+@_pytest.fixture(autouse=True)
+def _gateway_loopback_test_client(request, monkeypatch):
+    try:
+        under_gateway = Path(str(request.node.fspath)).resolve().is_relative_to(_GATEWAY_TESTS)
+    except Exception:  # noqa: BLE001
+        under_gateway = False
+    if not under_gateway:
+        yield
+        return
+    from starlette.testclient import TestClient
+
+    original_init = TestClient.__init__
+
+    def _init(self, *args, **kwargs):
+        if "client" not in kwargs:
+            kwargs["client"] = _LOOPBACK_PEER
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(TestClient, "__init__", _init)
+    yield
