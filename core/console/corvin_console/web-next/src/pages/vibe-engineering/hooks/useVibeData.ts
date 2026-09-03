@@ -106,6 +106,7 @@ export function useVibeData(pollIntervalMs = 5000): VibeData {
     },
     quality_gate_policy: 'tier_1',
     loading: true,
+    error: undefined,
   });
 
   useEffect(() => {
