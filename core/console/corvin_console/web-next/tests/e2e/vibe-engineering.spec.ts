@@ -57,13 +57,13 @@ test.describe('VibeDashboard (Tab-Based Unified View — ADR-0561 Phase 4)', () 
     // Click Brain Monitor tab
     await page.locator(`button:has-text("Brain Monitor")`).click();
 
-    // Should show loading spinner briefly, then content
-    const brainContent = page.locator('[class*="BrainMonitor"]');
-    // Wait for lazy-loaded component to appear (no need to check spinner, it's fast)
+    // Wait for lazy-loaded component to appear
     await page.waitForTimeout(1000);
 
-    // Component should be in the DOM (even if still loading data)
-    expect(await brainContent.count()).toBeGreaterThanOrEqual(0);
+    // Verify tab is now active
+    const brainTab = page.locator(`button:has-text("Brain Monitor")`).first();
+    const ariaSelected = await brainTab.getAttribute('aria-selected');
+    expect(ariaSelected).toBe('true');
   });
 
   test('context intelligence tab loads', async ({ page }) => {
