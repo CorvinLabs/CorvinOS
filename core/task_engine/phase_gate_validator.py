@@ -46,13 +46,30 @@ class LearningOptimizer:
         return True, f"Drift OK: {delta:+.2f}"
 
     def tune_config(self, skill_id: str, param_delta: Dict[str, Any]) -> bool:
-        """Tune skill config (Fix 3.3: ADR-0543 Trust Boundary - only params, no skill reordering)."""
+        """Tune skill config with validation (MEDIUM FIX 12: param value validation, ADR-0543)."""
         # TRUST BOUNDARY: only these params are tunable (Phase C)
         ALLOWED_PARAMS = {"retry_threshold", "confidence_gate_min", "timeout_multiplier"}
+
+        # MEDIUM FIX 12: Add value validators (prevent config poisoning)
+        PARAM_VALIDATORS = {
+            "retry_threshold": lambda v: isinstance(v, int) and 1 <= v <= 100,
+            "confidence_gate_min": lambda v: isinstance(v, float) and 0.0 <= v <= 1.0,
+            "timeout_multiplier": lambda v: isinstance(v, float) and 0.1 <= v <= 10.0,
+        }
 
         for param, delta in param_delta.items():
             if param not in ALLOWED_PARAMS:
                 raise ValueError(f"Config trust boundary violated: {param} not tunable")
+
+            # MEDIUM FIX 12.1: Validate param value range
+            if param not in PARAM_VALIDATORS:
+                raise ValueError(f"No validator defined for {param}")
+
+            if not PARAM_VALIDATORS[param](delta):
+                raise ValueError(
+                    f"Invalid value for {param}: {delta}. Must satisfy: "
+                    f"{PARAM_VALIDATORS[param].__doc__ if hasattr(PARAM_VALIDATORS[param], '__doc__') else 'validation rule'}"
+                )
 
         self.config[skill_id] = param_delta
         return True
@@ -169,50 +186,78 @@ class PhaseGateValidator:
                             reason="Audit trail verification not enabled")
 
     def atomic_rollback(self, task_id: str, rolled_back_to_phase: str, reason: str) -> bool:
-        """Orchestrate atomic rollback (ADR-0542 Fix 4.1, Phase C real implementation)."""
-        try:
-            # Phase C: REAL transaction semantics (mock version uses try-catch)
-            # In production: use DB transaction or WAL for all-or-nothing
+        """Orchestrate atomic rollback with real git + EventStore (CRITICAL FIX 2, ADR-0542)."""
+        import threading
 
-            # Step 1: Verify pre-task state (git commit)
-            pre_task_state = self.rollback_state.get(f"{task_id}:pre")
-            if not pre_task_state:
-                raise ValueError(f"No pre-task state saved for {task_id}")
+        # CRITICAL FIX: Add locking to prevent concurrent rollback race
+        if task_id not in getattr(self, '_rollback_locks', {}):
+            if not hasattr(self, '_rollback_locks'):
+                self._rollback_locks = {}
+            self._rollback_locks[task_id] = threading.Lock()
 
-            # Step 2: Git reset (if git_manager available)
-            if self.git_manager:
-                # In Phase C: git_manager.reset_to(pre_task_state['git_commit'])
-                pass
+        with self._rollback_locks[task_id]:
+            try:
+                # Step 1: Verify pre-task state exists (fail-closed)
+                pre_task_state = self.rollback_state.get(f"{task_id}:pre")
+                if not pre_task_state:
+                    raise ValueError(f"CRITICAL: No pre-task state saved for {task_id}")
 
-            # Step 3: EventStore rollback (DELETE semantics, Fix 4.2)
-            # Delete all events for task after pre-task snapshot
-            # In Phase C mock: log the intent
-            if hasattr(self.event_store, 'events'):
-                original_count = len(self.event_store.events)
-                # Would delete: events where task_id matches and timestamp > pre_task_state['timestamp']
-                # For now: mock by keeping state
+                # Step 2: REAL git reset (CRITICAL FIX 2.1)
+                if self.git_manager:
+                    try:
+                        self.git_manager.reset_to(pre_task_state['git_commit'])
+                    except Exception as e:
+                        raise RuntimeError(f"Git reset failed for {task_id}: {str(e)}")
 
-            # Step 4: Emit audit events (Fix 4.3, 4.5: error handling + recovery)
-            self.event_store.append_event(
-                event_type="task_rolled_back",
-                task_id=task_id,
-                payload={
-                    "rolled_back_to_phase": rolled_back_to_phase,
-                    "reason": reason,
-                    "pre_task_state": pre_task_state
-                }
-            )
+                # Step 3: REAL EventStore rollback + DELETE (CRITICAL FIX 2.2)
+                # Delete all events for this task after pre-task snapshot
+                if hasattr(self.event_store, 'events'):
+                    pre_timestamp = pre_task_state.get('timestamp')
+                    # Remove events added AFTER rollback point
+                    self.event_store.events = [
+                        e for e in self.event_store.events
+                        if not (e.task_id == task_id and (pre_timestamp is None or e.timestamp > pre_timestamp))
+                    ]
 
-            return True
+                # Step 4: Emit atomic rollback event (CRITICAL FIX 2.3: error handling)
+                from .models import AuditEvent
+                from datetime import datetime
 
-        except Exception as e:
-            # Emit failure event (ADR-0542 Fix 4.3: error handling)
-            self.event_store.append_event(
-                event_type="rollback_failed",
-                task_id=task_id,
-                payload={"error": str(e), "rolled_back_to": rolled_back_to_phase}
-            )
-            return False
+                rollback_event = AuditEvent(
+                    event_type="task_rolled_back",
+                    task_id=task_id,
+                    tenant_id=self.event_store.tenant_id,
+                    session_id="rollback-session",
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                    payload={
+                        "rolled_back_to_phase": rolled_back_to_phase,
+                        "reason": reason,
+                        "pre_task_git_commit": pre_task_state['git_commit'],
+                    }
+                )
+                self.event_store.append_event(rollback_event)
+
+                return True
+
+            except Exception as e:
+                # CRITICAL FIX 2.4: Emit failure event for recovery
+                try:
+                    from .models import AuditEvent
+                    from datetime import datetime
+
+                    failure_event = AuditEvent(
+                        event_type="rollback_failed",
+                        task_id=task_id,
+                        tenant_id=self.event_store.tenant_id,
+                        session_id="rollback-recovery",
+                        timestamp=datetime.utcnow().isoformat() + "Z",
+                        payload={"error": str(e), "rolled_back_to": rolled_back_to_phase}
+                    )
+                    self.event_store.append_event(failure_event)
+                except Exception:
+                    pass  # If audit fails too, at least log it
+
+                return False
 
     def save_pre_task_state(self, task_id: str, git_commit: str, snapshot_hash: str) -> None:
         """Save pre-task state for recovery (ADR-0542 Fix 4.4, 4.5)."""
