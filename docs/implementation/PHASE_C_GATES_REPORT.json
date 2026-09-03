@@ -1,29 +1,11 @@
 {
-  "timestamp": "2026-09-03T16:32:11.548141",
-  "overall_passed": true,
+  "timestamp": "2026-09-03T16:34:55.002120",
+  "overall_passed": false,
   "gates": {
     "Gate 1: Learning Stability": {
-      "passed": true,
+      "passed": false,
       "evidence": {
-        "confidence_samples": 10,
-        "confidence_range": [
-          0.82,
-          0.89
-        ],
-        "last_10_scores": [
-          0.82,
-          0.84,
-          0.85,
-          0.86,
-          0.87,
-          0.88,
-          0.89,
-          0.88,
-          0.87,
-          0.86
-        ],
-        "threshold": 0.85,
-        "pass_criteria": "confidence >= 0.85 AND no_regression_14d"
+        "reason": "no_data"
       }
     },
     "Gate 2: Old-Code Unreachability": {
@@ -64,12 +46,12 @@
       }
     },
     "Gate 4: Plugin Migration": {
-      "passed": true,
+      "passed": false,
       "evidence": {
         "pass_criteria": "migration_rate >= 95%",
         "pass_threshold": 95,
-        "current_rate": 98.0,
-        "laggard_count": 2,
+        "current_rate": 0.0,
+        "laggard_count": 0,
         "laggard_deadline": "week 7 EOD"
       }
     },

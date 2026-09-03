@@ -27,6 +27,9 @@ class OldCodeUnreachabilityGate:
         "core.context_engineering",
     ]
 
+    def __init__(self, audit_jsonl_path: str = "~/.corvin/audit.jsonl"):
+        self.audit_path = audit_jsonl_path.replace("~", "/home/shumway")
+
     def execute(self) -> OldCodeUnreachabilityResult:
         """
         Run Gate 2: Old-Code Unreachability
