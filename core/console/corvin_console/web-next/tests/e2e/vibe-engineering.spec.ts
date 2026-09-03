@@ -1,9 +1,13 @@
 import { test, expect } from '@playwright/test';
+import { setupMockApis } from '../fixtures/mock-api';
 
 test.describe('VibeDashboard (Tab-Based Unified View — ADR-0561 Phase 4)', () => {
   test.beforeEach(async ({ page }) => {
-    // Navigate to Vibe Engineering with cache-busting query
-    await page.goto('http://localhost:8765/console/app/vibe-engineering', { waitUntil: 'networkidle' });
+    // Setup comprehensive mocked API responses (no live backend required)
+    await setupMockApis(page);
+
+    // Navigate to Vibe Engineering (baseURL is configured in playwright.config.ts)
+    await page.goto('/app/vibe-engineering', { waitUntil: 'networkidle' });
     // Wait for initial render
     await page.waitForSelector('h1', { timeout: 5000 });
   });
@@ -109,7 +113,7 @@ test.describe('VibeDashboard (Tab-Based Unified View — ADR-0561 Phase 4)', () 
 
   test('direct URL navigation to specific tab works', async ({ page }) => {
     // Navigate directly to learning-hub tab
-    await page.goto('http://localhost:8765/console/app/vibe-engineering?tab=learning-hub', { waitUntil: 'networkidle' });
+    await page.goto('/app/vibe-engineering?tab=learning-hub', { waitUntil: 'networkidle' });
 
     // Verify Learning Hub tab is active
     const tab = page.locator(`button:has-text("Learning Hub")`).first();
@@ -144,7 +148,7 @@ test.describe('VibeDashboard (Tab-Based Unified View — ADR-0561 Phase 4)', () 
     page.on('pageerror', err => errors.push(err.message));
 
     // Trigger initial load + tab switch
-    await page.goto('http://localhost:8765/console/app/vibe-engineering', { waitUntil: 'networkidle' });
+    await page.goto('/app/vibe-engineering', { waitUntil: 'networkidle' });
     await page.locator(`button:has-text("Brain Monitor")`).click();
     await page.waitForTimeout(2000);
 
@@ -179,7 +183,7 @@ test.describe('VibeDashboard (Tab-Based Unified View — ADR-0561 Phase 4)', () 
 
   test('back/forward navigation works with tab state', async ({ page }) => {
     // Start at dashboard
-    await page.goto('http://localhost:8765/console/app/vibe-engineering?tab=dashboard', { waitUntil: 'networkidle' });
+    await page.goto('/app/vibe-engineering?tab=dashboard', { waitUntil: 'networkidle' });
 
     // Click to Brain Monitor
     await page.locator(`button:has-text("Brain Monitor")`).click();
