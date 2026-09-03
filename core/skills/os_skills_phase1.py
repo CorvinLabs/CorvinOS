@@ -5,12 +5,13 @@ This module implements builtin Corvin OS Skills that replace feature flags.
 Skills implemented:
 - os.delegation_router: Route tasks by complexity, engine type, etc.
 - os.vibe_engineering: Apply vibe-informed heuristics
-- os.context_adapter: Compose routing + vibe info
+- os.context_adapter: 3-tier hybrid context (ADR-0555)
 
 Compliance:
 - GDPR Art. 30: All executions logged
 - GDPR Art. 32: Immutable results
 - EU AI Act Art. 50: LoM binding in every execution
+- ADR-0555: Hybrid Context Model (3-tier)
 - ADR-0544: Phase 1 big bang feature flags refactoring
 """
 
@@ -18,10 +19,176 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 import logging
+from dataclasses import dataclass
 
 from .skill_registry_phase1 import Skill, SkillMetadata, SkillOrigin
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class HybridContextTier:
+    """Immutable context tier (one of 3: base, injected, merged)."""
+    tier_name: str  # "base", "injected", "merged"
+    engine: str
+    priority: int
+    context_fields: Dict[str, Any]
+    metadata: Dict[str, Any]  # Source tracking, timestamp, etc.
+
+
+class HybridContextModel:
+    """3-tier context model (ADR-0555): Base → Injected → Merged.
+
+    TIER 1 (Base): Immutable Phase 3 context
+    - recent_decisions: List of recent decisions (read-only)
+    - user_profile: User style/preferences (from Phase 3 learning)
+    - success_rate: Small-n suppressed metrics
+    - attention_budget: Remaining tokens
+
+    TIER 2 (Injected): Learned layers (can fail without breaking)
+    - vibe_score: Engagement level (from VibeEngineeringSkill)
+    - priority_adjustment: Relative priority change
+    - style_preference: Learned user style (if available)
+    - attention_boost: Dynamically allocated
+
+    TIER 3 (Merged): Fail-closed merge
+    - If Tier 2 generation fails: use Tier 1 only
+    - If merge logic fails: use Tier 1 only
+    - Never return partially-merged context (safe by default)
+    """
+
+    @staticmethod
+    def build_base_tier(
+        task_type: str,
+        priority_hint: int,
+        user_context: Dict[str, Any],
+    ) -> HybridContextTier:
+        """Build Tier 1 (immutable base, Phase 3 origin).
+
+        Args:
+            task_type: Task type identifier
+            priority_hint: User-suggested priority (1-10)
+            user_context: Optional user/task context
+
+        Returns:
+            Immutable base tier (Phase 3 data)
+        """
+        return HybridContextTier(
+            tier_name="base",
+            engine="unknown",  # Will be filled by routing skill
+            priority=priority_hint,
+            context_fields={
+                "task_type": task_type,
+                "priority_hint": priority_hint,
+                "recent_decisions": user_context.get("recent_decisions", []),
+                "user_profile": user_context.get("user_profile", {}),
+                "success_rate": user_context.get("success_rate"),
+                "attention_budget": user_context.get("attention_budget", 100000),
+            },
+            metadata={
+                "origin": "phase3_immutable",
+                "immutable": True,
+                "gdpr_compliant": True,
+            },
+        )
+
+    @staticmethod
+    def build_injected_tier(
+        base_tier: HybridContextTier,
+        vibe_score: float,
+        priority_adjustment: int,
+        user_style: Optional[str] = None,
+    ) -> Optional[HybridContextTier]:
+        """Build Tier 2 (learned/injected, can fail gracefully).
+
+        Args:
+            base_tier: Base tier (for context)
+            vibe_score: Engagement level (0.0-1.0)
+            priority_adjustment: Priority delta (-5 to +5)
+            user_style: Learned user style (optional)
+
+        Returns:
+            Injected tier, or None if generation fails (fail-closed)
+        """
+        try:
+            final_priority = base_tier.priority + priority_adjustment
+            final_priority = max(1, min(10, final_priority))  # Clamp 1-10
+
+            return HybridContextTier(
+                tier_name="injected",
+                engine=base_tier.engine,
+                priority=final_priority,
+                context_fields={
+                    "vibe_score": vibe_score,
+                    "priority_adjustment": priority_adjustment,
+                    "user_style": user_style or "neutral",
+                    "attention_boost": int(vibe_score * 10000),  # Boost tokens by vibe
+                },
+                metadata={
+                    "origin": "learned_layers",
+                    "immutable": False,
+                    "vibe_driven": True,
+                    "fallible": True,  # Can be dropped if generation fails
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Injected tier generation failed: {e}. Using base tier only.")
+            return None
+
+    @staticmethod
+    def merge_tiers_fail_closed(
+        base_tier: HybridContextTier,
+        injected_tier: Optional[HybridContextTier],
+    ) -> HybridContextTier:
+        """Merge tiers with fail-closed semantics (ADR-0555).
+
+        Rules:
+        - If injected_tier is None: return base_tier (safe default)
+        - If merge logic fails: return base_tier (never partial)
+        - Always prefer immutable base over risky learned layers
+
+        Args:
+            base_tier: Immutable base tier
+            injected_tier: Optional learned tier
+
+        Returns:
+            Merged tier (frozen, audit-ready)
+        """
+        if injected_tier is None:
+            # Injected layer failed: use base only
+            logger.info("Injected tier unavailable. Using base context only (fail-closed).")
+            return HybridContextTier(
+                tier_name="merged",
+                engine=base_tier.engine,
+                priority=base_tier.priority,
+                context_fields=base_tier.context_fields.copy(),
+                metadata={
+                    "origin": "base_only_failclosed",
+                    "immutable": True,
+                    "injected_used": False,
+                },
+            )
+
+        try:
+            # Merge: base + injected (injected overrides if present)
+            merged_fields = {**base_tier.context_fields}
+            merged_fields.update(injected_tier.context_fields)
+
+            return HybridContextTier(
+                tier_name="merged",
+                engine=base_tier.engine,
+                priority=injected_tier.priority,  # Use injected priority (more up-to-date)
+                context_fields=merged_fields,
+                metadata={
+                    "origin": "merged_base_injected",
+                    "immutable": True,  # Result is frozen after merge
+                    "injected_used": True,
+                    "merge_successful": True,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Merge failed: {e}. Falling back to base tier (fail-closed).")
+            return base_tier  # Ultimate fallback: immutable base
 
 
 class DelegationRouterSkill(Skill):
@@ -366,75 +533,131 @@ class CapabilitiesSkill(Skill):
 
 
 class ContextAdapterSkill(Skill):
-    """Compose delegation router + vibe engineering decisions.
+    """3-tier Hybrid Context Model (ADR-0555).
 
-    This Skill orchestrates multiple other Skills to provide a comprehensive
-    decision on task routing + prioritization.
+    Orchestrates DelegationRouter + VibeEngineering to build immutable,
+    learned, and merged context tiers for agent decision-making.
 
     Input:
-        complexity: int
-        task_type: str
-        task_description: str
-        priority_hint: int
-        user_context: dict
+        complexity: int (1-10)
+        task_type: str (e.g., "analysis", "code", "chat")
+        task_description: str (full task text)
+        priority_hint: int (1-10, user-suggested)
+        user_context: dict (optional, includes recent_decisions, user_profile, etc.)
 
     Output:
-        routing_decision: dict (from DelegationRouter)
-        vibe_analysis: dict (from VibeEngineering)
-        final_routing: dict (combined decision)
+        {
+            "base_tier": HybridContextTier (immutable Phase 3),
+            "injected_tier": HybridContextTier | None (learned layers, can be None if failed),
+            "merged_tier": HybridContextTier (fail-closed merge result),
+            "routing_decision": dict (from DelegationRouter),
+            "vibe_analysis": dict (from VibeEngineering),
+        }
+
+    Compliance:
+    - GDPR Art. 5: Immutable base tier (Phase 3)
+    - GDPR Art. 32: Fail-closed merge (never partial context)
+    - ADR-0555: 3-tier hybrid context model
     """
 
     def __init__(self, skills_registry: Optional[Any] = None):
         metadata = SkillMetadata(
             id="os.context_adapter",
             name="Context Adapter",
-            description="Compose routing + vibe decisions for comprehensive task analysis",
-            version="0.1.0",
+            description="3-tier Hybrid Context Model (base/injected/merged, fail-closed)",
+            version="1.0.0",  # Major version bump for ADR-0555
             origin=SkillOrigin.BUILTIN,
             owner="corvin-os-team",
-            tags=["routing", "vibe", "composition"],
+            tags=["context", "routing", "vibe", "hybrid-model", "adr-0555"],
         )
         super().__init__(metadata)
         self.skills_registry = skills_registry
 
     def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute context adaptation.
+        """Execute 3-tier context adaptation (ADR-0555).
 
         Args:
-            input: Comprehensive task input
+            input: Dict with complexity, task_type, task_description, priority_hint, user_context
 
         Returns:
-            Dictionary with routing + vibe decisions
+            Dict with base_tier, injected_tier, merged_tier (all immutable)
         """
-        # For Phase 1, we implement this as a direct composition
-        # In future phases, this would use the Skills registry to call
-        # DelegationRouter + VibeEngineering Skills
+        task_type = input.get("task_type", "general")
+        task_description = input.get("task_description", "")
+        priority_hint = input.get("priority_hint", 5)
+        user_context = input.get("user_context", {})
+        complexity = input.get("complexity", 5)
 
+        # Get routing + vibe decisions (external Skills)
         router_skill = DelegationRouterSkill()
         vibe_skill = VibeEngineeringSkill()
 
         routing_decision = router_skill.execute(input)
         vibe_analysis = vibe_skill.execute(input)
 
-        # Combine decisions
-        final_routing = {
-            "engine": routing_decision["engine"],
-            "confidence": routing_decision["confidence"],
-            "vibe_priority_boost": vibe_analysis["priority_adjustment"],
-            "final_priority": input.get("priority_hint", 5) + vibe_analysis[
-                "priority_adjustment"
-            ],
-        }
+        # TIER 1: Build immutable base tier (Phase 3, GDPR-locked)
+        base_tier = HybridContextModel.build_base_tier(
+            task_type=task_type,
+            priority_hint=priority_hint,
+            user_context=user_context,
+        )
+        # Attach engine from routing decision
+        base_tier = HybridContextTier(
+            tier_name=base_tier.tier_name,
+            engine=routing_decision["engine"],
+            priority=base_tier.priority,
+            context_fields=base_tier.context_fields,
+            metadata=base_tier.metadata,
+        )
+
+        # TIER 2: Build injected tier (learned, can fail gracefully)
+        injected_tier = HybridContextModel.build_injected_tier(
+            base_tier=base_tier,
+            vibe_score=vibe_analysis.get("vibe_score", 0.5),
+            priority_adjustment=vibe_analysis.get("priority_adjustment", 0),
+            user_style=user_context.get("user_style"),
+        )
+
+        # TIER 3: Merge with fail-closed semantics (never partial)
+        merged_tier = HybridContextModel.merge_tiers_fail_closed(
+            base_tier=base_tier,
+            injected_tier=injected_tier,
+        )
 
         logger.info(
-            f"ContextAdapter: routing={final_routing['engine']}, "
-            f"priority={final_routing['final_priority']}"
+            f"ContextAdapter: base={base_tier.engine}, "
+            f"injected={'present' if injected_tier else 'failed'}, "
+            f"merged_priority={merged_tier.priority} (ADR-0555)"
         )
 
         return {
+            "base_tier": {
+                "tier_name": base_tier.tier_name,
+                "engine": base_tier.engine,
+                "priority": base_tier.priority,
+                "context_fields": base_tier.context_fields,
+                "metadata": base_tier.metadata,
+            },
+            "injected_tier": (
+                {
+                    "tier_name": injected_tier.tier_name,
+                    "engine": injected_tier.engine,
+                    "priority": injected_tier.priority,
+                    "context_fields": injected_tier.context_fields,
+                    "metadata": injected_tier.metadata,
+                }
+                if injected_tier
+                else None
+            ),
+            "merged_tier": {
+                "tier_name": merged_tier.tier_name,
+                "engine": merged_tier.engine,
+                "priority": merged_tier.priority,
+                "context_fields": merged_tier.context_fields,
+                "metadata": merged_tier.metadata,
+            },
             "routing_decision": routing_decision,
             "vibe_analysis": vibe_analysis,
-            "final_routing": final_routing,
         }
 
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -28,6 +29,15 @@ from typing import Any, Callable, Dict, List, Optional, Type
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
+
+# PII Patterns (GDPR Art. 32 redaction)
+_PII_PATTERNS = {
+    "password": re.compile(r"(password|passwd|pwd)\s*[:=]", re.IGNORECASE),
+    "api_key": re.compile(r"(api[_-]?key|token|secret)\s*[:=]", re.IGNORECASE),
+    "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
+    "credit_card": re.compile(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b"),
+    "ssn": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+}
 
 
 class SkillOrigin(str, Enum):
@@ -138,19 +148,22 @@ class SkillsRegistry:
     - ADR-0537: LoM binding in all events
     """
 
-    def __init__(self, audit_backend: Optional[Any] = None, tenant_id: str = "_default"):
+    def __init__(self, audit_backend: Optional[Any] = None, tenant_id: str = "_default", learning_backend: Optional[Any] = None):
         """Initialize Skills registry.
 
         Args:
             audit_backend: Audit trail backend (implements write_event)
             tenant_id: Tenant scope for isolation
+            learning_backend: Learning event backend (ADR-0314, optional)
         """
         self._skills: Dict[str, Skill] = {}
         self._metadata_by_id: Dict[str, SkillMetadata] = {}
         self.audit_backend = audit_backend
+        self.learning_backend = learning_backend
         self.tenant_id = tenant_id
         self._failure_count: Dict[str, int] = {}  # Track consecutive failures
         self._auto_disabled: set = set()  # Skills auto-disabled after 3+ failures
+        self._allowed_tenants: set = {"_default"}  # Tenant isolation whitelist
 
     def register(self, skill: Skill) -> None:
         """Register a Skill in the registry.
@@ -184,6 +197,64 @@ class SkillsRegistry:
         """List all registered Skills."""
         return list(self._metadata_by_id.values())
 
+    def add_tenant(self, tenant_id: str) -> None:
+        """Register a tenant for isolation (GDPR Art. 5, 6).
+
+        Args:
+            tenant_id: Tenant identifier to allow
+        """
+        self._allowed_tenants.add(tenant_id)
+        logger.info(f"Tenant {tenant_id} added to Skills registry whitelist")
+
+    def _validate_tenant_id(self, tenant_id: str) -> bool:
+        """Validate tenant_id is in whitelist (fail-closed GDPR enforcement).
+
+        Args:
+            tenant_id: Tenant to validate
+
+        Returns:
+            True if valid, False otherwise
+        """
+        if not tenant_id or tenant_id not in self._allowed_tenants:
+            logger.warning(f"Tenant isolation violation: {tenant_id} not in whitelist")
+            return False
+        return True
+
+    @staticmethod
+    def _scrub_pii_from_output(output: Any) -> Any:
+        """Redact PII from Skill output (GDPR Art. 32).
+
+        Args:
+            output: Skill execution output (dict, list, or scalar)
+
+        Returns:
+            PII-scrubbed copy of output
+        """
+        if isinstance(output, dict):
+            scrubbed = {}
+            for key, value in output.items():
+                if any(pattern.search(key) for pattern in _PII_PATTERNS.values()):
+                    scrubbed[key] = "[REDACTED_PII]"
+                elif isinstance(value, (dict, list)):
+                    scrubbed[key] = SkillsRegistry._scrub_pii_from_output(value)
+                elif isinstance(value, str):
+                    scrubbed_value = value
+                    for pattern in _PII_PATTERNS.values():
+                        scrubbed_value = pattern.sub("[REDACTED_PII]", scrubbed_value)
+                    scrubbed[key] = scrubbed_value
+                else:
+                    scrubbed[key] = value
+            return scrubbed
+        elif isinstance(output, list):
+            return [SkillsRegistry._scrub_pii_from_output(item) for item in output]
+        elif isinstance(output, str):
+            scrubbed = output
+            for pattern in _PII_PATTERNS.values():
+                scrubbed = pattern.sub("[REDACTED_PII]", scrubbed)
+            return scrubbed
+        else:
+            return output
+
     def is_enabled(self, skill_id: str, version: Optional[str] = None) -> bool:
         """Check if a Skill is enabled.
 
@@ -213,6 +284,7 @@ class SkillsRegistry:
         input: Dict[str, Any],
         timeout_ms: int = 5000,
         lom: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> SkillExecutionResult:
         """Execute a Skill.
 
@@ -221,6 +293,7 @@ class SkillsRegistry:
             input: Input dictionary
             timeout_ms: Execution timeout in milliseconds
             lom: Line of moral responsibility (source code location)
+            tenant_id: Override registry tenant_id for multi-tenant (validated)
 
         Returns:
             SkillExecutionResult with audit metadata
@@ -229,8 +302,23 @@ class SkillsRegistry:
             - Logs all executions to audit trail
             - Auto-disables Skill after 3+ consecutive failures
             - Immutable result (frozen dataclass)
+            - Tenant isolation (fail-closed, GDPR Art. 5, 6)
         """
         start_time = datetime.utcnow()
+        effective_tenant_id = tenant_id or self.tenant_id
+
+        # Validate tenant isolation (GDPR Art. 5, 6 — fail-closed)
+        if not self._validate_tenant_id(effective_tenant_id):
+            result = SkillExecutionResult(
+                skill_id=skill_id,
+                status="error",
+                error_message=f"Tenant isolation violation: {effective_tenant_id} not authorized",
+                execution_time_ms=0.0,
+                tenant_id=effective_tenant_id,
+                lom=lom,
+            )
+            self._emit_audit_event(result)
+            return result
 
         # Check if Skill exists
         if skill_id not in self._skills:
@@ -239,7 +327,7 @@ class SkillsRegistry:
                 status="error",
                 error_message=f"Skill not found: {skill_id}",
                 execution_time_ms=0.0,
-                tenant_id=self.tenant_id,
+                tenant_id=effective_tenant_id,
                 lom=lom,
             )
             self._emit_audit_event(result)
@@ -252,7 +340,7 @@ class SkillsRegistry:
                 status="error",
                 error_message=f"Skill auto-disabled after 3+ failures: {skill_id}",
                 execution_time_ms=0.0,
-                tenant_id=self.tenant_id,
+                tenant_id=effective_tenant_id,
                 lom=lom,
             )
             self._emit_audit_event(result)
@@ -277,7 +365,7 @@ class SkillsRegistry:
                 output=output,
                 execution_time_ms=execution_time_ms,
                 timestamp=end_time.isoformat(),
-                tenant_id=self.tenant_id,
+                tenant_id=effective_tenant_id,
                 lom=lom,
                 lom_hash=lom,  # TODO: compute actual SHA256 of source code
             )
@@ -285,6 +373,7 @@ class SkillsRegistry:
             # Reset failure count on success
             self._failure_count[skill_id] = 0
             self._emit_audit_event(result)
+            self._emit_learning_event(result)  # ADR-0314 learning loop
             return result
 
         except asyncio.TimeoutError:
@@ -297,12 +386,13 @@ class SkillsRegistry:
                 error_message=f"Skill execution timeout after {timeout_ms}ms",
                 execution_time_ms=execution_time_ms,
                 timestamp=end_time.isoformat(),
-                tenant_id=self.tenant_id,
+                tenant_id=effective_tenant_id,
                 lom=lom,
             )
 
             self._track_failure(skill_id)
             self._emit_audit_event(result)
+            self._emit_learning_event(result)  # ADR-0314
             return result
 
         except Exception as e:
@@ -315,12 +405,13 @@ class SkillsRegistry:
                 error_message=str(e),
                 execution_time_ms=execution_time_ms,
                 timestamp=end_time.isoformat(),
-                tenant_id=self.tenant_id,
+                tenant_id=effective_tenant_id,
                 lom=lom,
             )
 
             self._track_failure(skill_id)
             self._emit_audit_event(result)
+            self._emit_learning_event(result)  # ADR-0314
             return result
 
     async def _execute_async(self, skill: Skill, input: Dict[str, Any]) -> Any:
@@ -337,19 +428,65 @@ class SkillsRegistry:
             )
             self._auto_disabled.add(skill_id)
 
-    def _emit_audit_event(self, result: SkillExecutionResult) -> None:
-        """Emit audit event for Skill execution.
+    def _emit_learning_event(self, result: SkillExecutionResult) -> None:
+        """Emit learning event for Skill execution (ADR-0314).
 
-        Compliance: GDPR Art. 30 (processing records)
+        Converts SkillExecutionResult → LearningEvent for optimizer loop.
+
+        Compliance: GDPR Art. 6 (feedback loop consent), Art. 32 (data security)
         """
+        if not self.learning_backend:
+            return  # Learning backend not configured (optional)
+
+        try:
+            # Convert execution result to learning event
+            learning_event = {
+                "event_type": "skill_executed",
+                "skill_id": result.skill_id,
+                "status": result.status,
+                "execution_time_ms": result.execution_time_ms,
+                "timestamp": result.timestamp,
+                "tenant_id": result.tenant_id,
+                "lom": result.lom,
+                # Confidence scoring (for optimization)
+                "confidence_score": {
+                    "skill_id": result.skill_id,
+                    "reliability": 0.95 if result.status == "success" else 0.0,
+                    "relevance": 0.8,  # TODO: derive from user feedback
+                    "combined": 0.8 if result.status == "success" else 0.0,
+                } if result.status in ("success", "timeout", "error") else None,
+            }
+
+            self.learning_backend.emit_event(learning_event)
+        except Exception as e:
+            logger.error(f"Failed to emit learning event: {e}")
+
+    def _emit_audit_event(self, result: SkillExecutionResult) -> None:
+        """Emit audit event for Skill execution (PII-scrubbed, GDPR Art. 32).
+
+        Compliance: GDPR Art. 30 (processing records) + Art. 32 (security)
+        """
+        # Scrub PII from output before audit emission (fail-closed)
+        scrubbed_result = SkillExecutionResult(
+            skill_id=result.skill_id,
+            status=result.status,
+            output=self._scrub_pii_from_output(result.output) if result.output else None,
+            execution_time_ms=result.execution_time_ms,
+            error_message=result.error_message,  # Errors may contain PII, but we keep them for debugging
+            timestamp=result.timestamp,
+            lom=result.lom,
+            lom_hash=result.lom_hash,
+            tenant_id=result.tenant_id,
+        )
+
         if self.audit_backend:
             try:
-                self.audit_backend.write_event(result.to_audit_event())
+                self.audit_backend.write_event(scrubbed_result.to_audit_event())
             except Exception as e:
                 logger.error(f"Failed to write audit event: {e}")
         else:
-            # Fallback: log to application logger
-            event = result.to_audit_event()
+            # Fallback: log to application logger (also scrubbed)
+            event = scrubbed_result.to_audit_event()
             logger.info(f"SKILL_EXECUTED: {event}")
 
     @staticmethod
