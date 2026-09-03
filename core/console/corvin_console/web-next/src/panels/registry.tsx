@@ -27,6 +27,8 @@ import {
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
+import { GenericPluginInspector } from "@/components/GenericPluginInspector";
+import { SkillInspector } from "@/components/SkillInspector";
 
 // ─ Manifest rendering support (ADR-0561) ────────────────────────────────────
 
@@ -201,7 +203,7 @@ export function panelRoutes(panels: readonly ConsolePanel[] = PANELS) {
 }
 
 /**
- * Render manifest-driven panels as <Route> elements (ADR-0561, Phase 2).
+ * Render manifest-driven panels as <Route> elements (ADR-0561, Phase 2-3).
  *
  * Converts PanelDescriptor[] (from backend manifest) to React Routes.
  * Resolves component names to actual components via COMPONENTS_BY_NAME registry.
@@ -210,7 +212,8 @@ export function panelRoutes(panels: readonly ConsolePanel[] = PANELS) {
  * - "react-component": lookup from COMPONENTS_BY_NAME
  * - "react": async import (deferred; TODO P3)
  * - "iframe": sandboxed PanelHost
- * - "skill-inspector" / "plugin-inspector": deferred (TODO P3)
+ * - "plugin-inspector": GenericPluginInspector (ADR-0561 P3)
+ * - "skill-inspector": SkillInspector (ADR-0561 P3)
  */
 export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
   return panels.map((p) => {
@@ -235,7 +238,36 @@ export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
           element={<PanelHost src={p.element.src} sandbox="allow-scripts allow-same-origin" />} />
       );
     }
-    // skill-inspector, plugin-inspector: deferred for P3
+    if (p.element.kind === "plugin-inspector") {
+      // ADR-0561 P3: Generic plugin panel (config + audit + enable/disable)
+      const pluginElement = p.element as any;
+      return (
+        <Route key={p.id} path={p.route}
+          element={
+            <GenericPluginInspector
+              pluginId={pluginElement.plugin_id}
+              title={p.title}
+              version={p.version}
+              enabled={true}
+              onToggleEnabled={() => {}}
+            />
+          } />
+      );
+    }
+    if (p.element.kind === "skill-inspector") {
+      // ADR-0561 P3: Generic skill panel (learning + audit + config)
+      const skillElement = p.element as any;
+      return (
+        <Route key={p.id} path={p.route}
+          element={
+            <SkillInspector
+              skillId={skillElement.skill_id}
+              title={p.title}
+              version={p.version}
+            />
+          } />
+      );
+    }
     return null;
   });
 }
