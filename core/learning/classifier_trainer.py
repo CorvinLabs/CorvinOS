@@ -286,8 +286,11 @@ class ClassifierTrainer:
         Returns:
             TrainingDataset with keyword-classifier labels
         """
-        # Use late import to avoid namespace collision
-        from operator.context_engineering.task_classifier import classify
+        # Late import via the registered top-level package (stdlib ``operator``
+        # shadows the ``operator/`` directory — see classifier_model.import_context_engineering)
+        from .classifier_model import import_context_engineering
+        import_context_engineering()
+        from context_engineering.task_classifier import classify
 
         dataset = TrainingDataset(version="0.0.0-bootstrap")
         dataset.source_files.append("keyword_classifier_bootstrap")

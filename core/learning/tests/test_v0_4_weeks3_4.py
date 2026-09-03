@@ -451,8 +451,10 @@ class TestWeek34Integration:
                 f"Feedback {i}",
             )
 
-            # Some failures
-            if i % 5 == 0:
+            # Some failures — 3 of them (i = 0, 4, 8): PatternDetector needs
+            # ``min_observations=3`` (its documented default) before a pattern
+            # forms; the old ``i % 5`` produced only 2 (N-07 test-data bug).
+            if i % 4 == 0:
                 obs = ErrorObservation(
                     f"t{i}",
                     "code_gen",

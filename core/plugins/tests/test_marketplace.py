@@ -121,8 +121,13 @@ class TestPluginMetadata:
         )
         assert plugin.is_discoverable() is False
 
-    def test_builtin_plugins_not_discoverable(self):
-        """Builtin plugins not discoverable in marketplace."""
+    def test_builtin_plugins_are_discoverable_when_listed(self):
+        """ADR-0511: a LISTED builtin is discoverable (admin install flow).
+
+        The old expectation (builtin → never discoverable) predates the
+        marketplace indexing the bundled ``buildin/`` hierarchy; ``listed`` is
+        the one switch, for every origin.
+        """
         plugin = PluginMetadata(
             plugin_id="builtin-test",
             name="Builtin Test",
@@ -137,7 +142,7 @@ class TestPluginMetadata:
             long_description="Test",
             listed=True,
         )
-        assert plugin.is_discoverable() is False
+        assert plugin.is_discoverable() is True
 
 
 class TestPluginInstallation:
@@ -270,10 +275,18 @@ class TestPluginMarketplace:
     """Test marketplace operations."""
 
     def test_marketplace_creation(self):
-        """Create marketplace."""
+        """Create marketplace.
+
+        ADR-0511: a default-constructed marketplace PRELOADS the plugins it
+        discovers under ``buildin/`` + ``contributor/`` (15 at the time of
+        writing), so it is never empty on this tree. Pin the preload's shape
+        (every entry has a provenance the loader assigned) rather than the
+        exact count, which moves with every plugin added.
+        """
         mp = PluginMarketplace()
         assert mp is not None
-        assert len(mp.plugins) == 0
+        assert len(mp.plugins) > 0, "ADR-0511 directory discovery preloads the index"
+        assert {p.origin for p in mp.plugins.values()} <= {PluginOrigin.BUILTIN, PluginOrigin.COMMUNITY}
 
     def test_register_plugin(self):
         """Register plugin in marketplace."""

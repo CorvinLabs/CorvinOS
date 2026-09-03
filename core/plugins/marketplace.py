@@ -22,6 +22,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 import json
+import os
 import logging
 
 try:
@@ -323,9 +324,19 @@ class PluginMarketplace:
 
     def _load_registry_from_defaults(self) -> None:
         """Load registry from default locations and plugin directories (ADR-0511)."""
-        default_paths = [
-            Path('/home/shumway/projects/Corvin-Marketplace/registry.json'),
-            Path.home() / '.corvin/marketplace/registry.json',
+        # Resolution order: explicit env override → the tenant-independent
+        # <CORVIN_HOME>/marketplace/registry.json → a registry.json in cwd.
+        # A developer's absolute checkout path used to be the FIRST entry and
+        # shipped in the public wheel (2026-09-03 review, F5); a maintainer
+        # working against a local Corvin-Marketplace clone points
+        # CORVIN_MARKETPLACE_REGISTRY at it instead.
+        corvin_home = Path(os.environ.get('CORVIN_HOME') or (Path.home() / '.corvin'))
+        default_paths = []
+        env_registry = os.environ.get('CORVIN_MARKETPLACE_REGISTRY')
+        if env_registry:
+            default_paths.append(Path(env_registry).expanduser())
+        default_paths += [
+            corvin_home / 'marketplace' / 'registry.json',
             Path.cwd() / 'registry.json',
         ]
         registry_loaded = False

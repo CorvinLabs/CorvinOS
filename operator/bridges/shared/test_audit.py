@@ -164,7 +164,7 @@ def test_tampered_audit_fails_verify():
 # ---------- (3) — graceful no-op when forge is absent --------------------
 
 def test_audit_silent_noop_when_forge_missing(monkeypatch=None):
-    print("\n[forge not importable → audit_event is a silent no-op, verify=ok]")
+    print("\n[forge not importable → audit_event is a silent no-op, verify=REFUSED]")
     # Simulate by reloading audit.py with _se forced to None
     import importlib
     saved = sys.modules.get("audit")
@@ -189,8 +189,13 @@ def test_audit_silent_noop_when_forge_missing(monkeypatch=None):
                 t("no audit file written when forge missing",
                   not (td / "audit.jsonl").exists())
                 ok, problems = audit_mod.verify_audit()
-                t("verify returns (True, []) when forge missing",
-                  ok and problems == [])
+                # 2026-09-03 finding A1: an absent writer is NOT "verifies" —
+                # the boot tripwire reads this, and (True, []) booted a
+                # platform whose audit trail went nowhere.
+                t("verify returns (False, [writer_unavailable]) when forge missing",
+                  ok is False and problems == [{"reason": "writer_unavailable"}])
+                t("writer_available() is False when forge missing",
+                  audit_mod.writer_available() is False)
             finally:
                 os.environ.pop("VOICE_AUDIT_PATH", None)
                 audit_mod._se = old_se
@@ -299,32 +304,34 @@ def test_forge_broken_import_indistinguishable_from_absent():
     t("present-but-broken forge -> _se is None (SAME outward state as absence)",
       mod_broken._se is None)
 
-    # The bug: a genuine packaging regression (forge dir present, import
-    # raises RuntimeError) is NOT flagged any differently than the
-    # legitimate "forge was never installed" case -- no CRITICAL/distinct
-    # signal exists anywhere to tell the two apart.
+    # A genuine packaging regression (forge dir present, import raises
+    # RuntimeError) and a legitimate "forge was never installed" still share
+    # one outward state (_se is None) — but since 2026-09-03 (finding A1) that
+    # state is no longer an "all clear": writer_available() is False, the
+    # verifiers REFUSE, and the boot tripwire refuses to boot on it.
     t("genuinely-absent forge logs NO warning at all (silent by design)",
       len(cap_absent.records) == 0)
-    t("present-but-broken forge logs the SAME reassuring "
-      "'not an error in standalone mode' message -- a real regression is "
-      "mislabeled as intentional standalone behaviour",
+    t("present-but-broken forge logs a warning that names the consequence "
+      "(tripwire refuses), not a reassuring standalone-mode message",
       len(cap_broken.records) == 1
-      and "not an error in standalone mode" in cap_broken.records[0].getMessage())
+      and "REFUSES" in cap_broken.records[0].getMessage()
+      and "not an error in standalone mode" not in cap_broken.records[0].getMessage())
 
-    # Downstream consumers collapse both causes to an identical "all clear".
+    t("writer_available() is False for both causes",
+      mod_absent.writer_available() is False and mod_broken.writer_available() is False)
+
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "audit.jsonl"
         result_absent = mod_absent.verify_audit(p)
         result_broken = mod_broken.verify_audit(p)
-        t("verify_audit() gives an IDENTICAL 'all clear' result for both "
-          "causes (genuine absence vs. broken import) -- no differentiation",
-          result_absent == result_broken == (True, []))
+        t("verify_audit() REFUSES (writer_unavailable) for both causes -- "
+          "never an 'all clear' for a writer that is not there",
+          result_absent == result_broken == (False, [{"reason": "writer_unavailable"}]))
 
         health_absent = mod_absent.audit_health_check(p)
         health_broken = mod_broken.audit_health_check(p)
-        t("audit_health_check() also gives an IDENTICAL clean result for "
-          "both causes -- a broken forge install never surfaces as CRITICAL",
-          health_absent == health_broken == (True, 0))
+        t("audit_health_check() is not clean for either cause",
+          health_absent == health_broken == (False, 1))
 
 
 def test_audit_health_check_reuses_shared_lock_helper() -> None:

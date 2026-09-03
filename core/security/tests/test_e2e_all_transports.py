@@ -4,18 +4,30 @@ import pytest
 from ..entry_points_phase1 import ENTRY_POINT_REGISTRY, TOTAL_ENTRY_POINTS
 
 
-def test_registry_has_50_entry_points():
-    """Verify 50 entry points registered."""
-    assert TOTAL_ENTRY_POINTS == 38  # 20 Flask + 5 CLI + 2 Bridge + 1 Plugin + 5 Forge + 5 others
-    assert len(ENTRY_POINT_REGISTRY.entries) >= 38
+def test_registry_entry_point_count_is_consistent():
+    """The registry's summary count MUST equal what was actually registered.
+
+    Drift fixed 2026-09-03: this asserted a hard-coded ``38`` (docstring said
+    50) while ``entry_points_phase1.py`` registers 25 — the number was never a
+    contract, the consistency is. ``TOTAL_ENTRY_POINTS`` is derived from the
+    same lists that get registered, so the two can only disagree if a list is
+    registered but not counted (or vice versa).
+    """
+    assert TOTAL_ENTRY_POINTS == len(ENTRY_POINT_REGISTRY.entries)
+    assert TOTAL_ENTRY_POINTS >= 25
 
 
 def test_entry_points_all_categories():
-    """Verify entry points across all categories."""
-    by_cat = ENTRY_POINT_REGISTRY.by_category
-    assert len(by_cat(ENTRY_POINT_REGISTRY.entries_by_category.get('FLASK_ROUTE'))) > 0
-    assert len(by_cat(ENTRY_POINT_REGISTRY.entries_by_category.get('CLI_COMMAND'))) > 0
-    assert len(by_cat(ENTRY_POINT_REGISTRY.entries_by_category.get('BRIDGE_HANDLER'))) > 0
+    """Verify entry points across the categories Phase 1 registers."""
+    # Filter on the category VALUE: the registry indexes by the enum object, and
+    # the enum can be imported under two module paths (``core.pipeline...`` vs
+    # the ``security`` package's relative import) — same value, different identity.
+    def by_value(value: str):
+        return [ep for ep in ENTRY_POINT_REGISTRY.entries.values() if ep.category.value == value]
+
+    assert len(by_value("flask_route")) > 0
+    assert len(by_value("cli_command")) > 0
+    assert len(by_value("bridge_handler")) > 0
 
 
 def test_entry_points_have_capabilities():

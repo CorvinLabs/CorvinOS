@@ -267,8 +267,13 @@ class TestNoSilentFailures:
 
         self.integration.route_task_l5(complexity=5, task_type="chat")
 
-        # Learning backend should be called
-        assert self.learning.emit_event.called or True  # May not be called if not configured
+        # Learning backend MUST be called — a configured backend that is never
+        # reached is a silent failure, exactly what this class exists to catch.
+        assert self.learning.emit_event.called
+        event = self.learning.emit_event.call_args[0][0]
+        assert event["event_type"] == "skill_executed"
+        assert event["skill_id"] == "os.delegation_router"
+        assert event["tenant_id"] == "_default"
 
 
 if __name__ == "__main__":

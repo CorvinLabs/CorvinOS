@@ -119,15 +119,18 @@ class VibeBrainAdapter:
                 tenant_id=self.tenant_id,
             )
 
-            result = self.router_skill.execute(
-                context=task_context,
-                tenant_id=self.tenant_id,
-            )
+            with skill_call_timeout(seconds=5):  # CRITICAL-5 FIX: fail-closed timeout
+                result = self.router_skill.execute(
+                    context=task_context,
+                    tenant_id=self.tenant_id,
+                )
 
-            if result.status != "success":
-                raise RuntimeError(f"Skill failed: {result.error}")
-
-            return result.output.get("decision", "default")
+            # CRITICAL-4 FIX: execute() returns dict, not SkillExecutionResult
+            if isinstance(result, dict):
+                # Skill returns decision dict (successful case)
+                return result.get("decision", "default")
+            else:
+                raise RuntimeError(f"Skill returned unexpected type: {type(result)}")
 
         except Exception as e:
             log_deprecated_error(

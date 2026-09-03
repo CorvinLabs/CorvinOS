@@ -22,9 +22,9 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from .event_schema import LearningEvent, LearningEventType
-from .event_store import EventStore
 from .event_emitter import EventEmitter
+from .event_store import EventStore
+from .learning_events import EventType, LearningEvent
 
 logger = logging.getLogger(__name__)
 
@@ -231,26 +231,30 @@ class SkillAttributionEngine:
             if payload.reasoning:
                 event_payload["reasoning"] = payload.reasoning
 
-            # Emit METRIC_AGGREGATED event (existing type for composites)
-            # We'll eventually have a dedicated SKILL_ATTRIBUTION type in ADR-0323
-            event = LearningEvent(
-                event_type=LearningEventType.METRIC_AGGREGATED,
+            # ONE wire format (N-05): learning_events.LearningEvent(OUTCOME,
+            # skill_id="strategy:<id>", signal={kind: "skill_attribution", ...})
+            # persisted by the sync EventEmitter / event_store.EventStore. The
+            # previous event_schema record + ``await`` on the sync emitter made
+            # the worker raise ``AttributeError: timestamp`` — data lost.
+            event = LearningEvent.create(
+                event_type=EventType.OUTCOME,
+                skill_id=f"strategy:{payload.strategy_id}",
                 tenant_id=self.tenant_id,
-                instance_id="skill_attribution_engine",
-                skill_name=None,  # Multi-skill, not single-skill
-                session_id="",  # Will be filled by caller
-                timestamp_utc=datetime.utcnow(),
-                payload=event_payload,
-                tags=["attribution", "skill_composite", self.model.value],
+                signal={
+                    "kind": "skill_attribution",
+                    **event_payload,
+                    "tags": ["attribution", "skill_composite", self.model.value],
+                },
+                lom="core.learning.skill_attribution:SkillAttributionEngine.attribute_outcome",
             )
 
-            # Attempt to emit (fire-and-forget on error)
-            # Prefer EventEmitter (async, non-blocking) — ADR-0314
+            # Prefer EventEmitter (sync, non-blocking) — ADR-0314
             if self.event_emitter is not None:
-                await self.event_emitter.emit(event)
+                if not self.event_emitter.emit(event):
+                    raise RuntimeError("attribution event dropped (queue full / emitter stopped)")
             else:
-                # Fallback: Direct EventStore.write_event (blocking, legacy path)
-                await self.event_store.write_event(event)
+                # Fallback: direct write to the SAME sync store the emitter wraps
+                self.event_store.write_event(event)
             logger.debug(
                 f"Emitted attribution event {payload.attribution_id} "
                 f"for strategy {payload.strategy_id} (model: {self.model.value})"

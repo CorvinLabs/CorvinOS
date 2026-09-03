@@ -1,5 +1,6 @@
 """GitHub API wrapper for skill synchronization."""
 
+import re
 import subprocess
 import json
 from pathlib import Path
@@ -34,6 +35,23 @@ class GitPullResult:
             self.conflicts = []
 
 
+
+_HTTPS_URL_RE = re.compile(r"^https://[A-Za-z0-9.\-]+(?::\d+)?/[A-Za-z0-9._~/\-]+$")
+_SSH_URL_RE = re.compile(r"^ssh://[A-Za-z0-9.\-_]+@[A-Za-z0-9.\-]+(?::\d+)?/[A-Za-z0-9._~/\-]+$")
+_SCP_URL_RE = re.compile(r"^[A-Za-z0-9.\-_]+@[A-Za-z0-9.\-]+:[A-Za-z0-9._~/\-]+$")
+
+
+def _validate_repo_url(repo_url: str) -> str:
+    """Accept https:// or ssh (scp-like / ssh://) repository URLs only."""
+    if not isinstance(repo_url, str) or not repo_url or repo_url.startswith("-"):
+        raise ValueError(f"invalid repository URL: {repo_url!r}")
+    if _HTTPS_URL_RE.match(repo_url) or _SSH_URL_RE.match(repo_url) or _SCP_URL_RE.match(repo_url):
+        return repo_url
+    raise ValueError(
+        f"repository URL must be https:// or ssh (git@host:path / ssh://): {repo_url!r}"
+    )
+
+
 class GitClient:
     """Wrapper around git CLI for GitHub operations."""
 
@@ -51,7 +69,13 @@ class GitClient:
         # TENANT-002 FIX: Validate tenant_id before using in path construction
         validate_tenant_id(tenant_id)
 
-        self.repo_url = repo_url
+        # Argv-injection guard (D-17): the URL is operator input placed on a git
+        # command line. Only https:// and ssh (git@host:path / ssh://) forms are
+        # accepted — never an option-shaped string (``--upload-pack=...``), a
+        # local path or an ext:: transport.
+        self.repo_url = _validate_repo_url(repo_url)
+        if not isinstance(branch, str) or not branch or branch.startswith("-") or ".." in branch:
+            raise ValueError(f"invalid branch name: {branch!r}")
         self.branch = branch
         self.tenant_id = tenant_id
 
@@ -66,7 +90,8 @@ class GitClient:
             # Clone
             try:
                 subprocess.run(
-                    ["git", "clone", "--branch", self.branch, self.repo_url, str(self.local_repo_path)],
+                    ["git", "clone", "--branch", self.branch, "--",
+                     self.repo_url, str(self.local_repo_path)],
                     check=True,
                     capture_output=True,
                     timeout=30
@@ -79,7 +104,7 @@ class GitClient:
             # Pull
             try:
                 subprocess.run(
-                    ["git", "-C", str(self.local_repo_path), "pull", "origin", self.branch],
+                    ["git", "-C", str(self.local_repo_path), "pull", "--", "origin", self.branch],
                     check=True,
                     capture_output=True,
                     timeout=30

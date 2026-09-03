@@ -9,10 +9,13 @@ from typing import Optional, List, Dict, Any
 import json
 from pathlib import Path
 from datetime import datetime
+import logging
 from corvin_core.feature_flags import is_enabled
 
 from .. import auth as session_auth
-from ..deps import require_csrf
+from ..deps import require_csrf, require_session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/multi-instance", tags=["multi-instance"])
 
@@ -90,14 +93,21 @@ class SyncHealth:
     next_scheduled_sync: datetime
 
 
-# Paths (from Tenant-Shumway)
-TENANT_SHUMWAY = Path.home() / "projects" / "Tenant-Shumway"
-MERGED_STATE = TENANT_SHUMWAY / "merged-state"
+def _merged_state_dir(tenant_id: str) -> Path:
+    """``<tenant_home>/cross_device/merged-state/`` — the tenant's own merge output.
+
+    Adversarial review E-10 (2026-09-03): this used to be a hard-coded
+    operator-personal checkout path under ``~/projects/`` shipped as product
+    code, and the registry loader fabricated personal instance names + a user
+    id when the file was absent. Both are gone: an absent file now reports an
+    EMPTY, uninitialised state.
+    """
+    return _sync_cache_dir(tenant_id).parent / "merged-state"
 
 
-def load_merged_state() -> Dict[str, Any]:
-    """Load user-profile.json from merged-state."""
-    profile_path = MERGED_STATE / "user-profile.json"
+def load_merged_state(tenant_id: str) -> Dict[str, Any]:
+    """Load user-profile.json from the tenant's merged-state."""
+    profile_path = _merged_state_dir(tenant_id) / "user-profile.json"
 
     if not profile_path.exists():
         return {
@@ -107,48 +117,32 @@ def load_merged_state() -> Dict[str, Any]:
             "status": "uninitialized"
         }
 
-    with open(profile_path) as f:
+    with open(profile_path, encoding="utf-8") as f:
         return json.load(f)
 
 
-def load_instance_registry() -> Dict[str, Any]:
-    """Load instance-registry.json (or create stub)."""
-    registry_path = MERGED_STATE / "instance-registry.json"
+def load_instance_registry(tenant_id: str) -> Dict[str, Any]:
+    """Load instance-registry.json; an absent file is an EMPTY registry."""
+    registry_path = _merged_state_dir(tenant_id) / "instance-registry.json"
 
     if not registry_path.exists():
-        return {
-            "user_id": "shumway-corvin",
-            "instances": [
-                {
-                    "instance_id": "home-laptop-ubuntu",
-                    "instance_name": "Home Laptop",
-                    "status": "active",
-                    "last_seen": datetime.utcnow().isoformat() + "Z",
-                    "is_primary": True
-                },
-                {
-                    "instance_id": "work-pc-windows",
-                    "instance_name": "Work PC",
-                    "status": "active",
-                    "last_seen": "2026-08-09T18:00:00Z",
-                    "is_primary": False
-                }
-            ]
-        }
+        return {"user_id": None, "instances": []}
 
-    with open(registry_path) as f:
+    with open(registry_path, encoding="utf-8") as f:
         return json.load(f)
 
 
 # Routes
 
 @router.get("/status")
-async def get_multi_instance_status() -> Dict[str, Any]:
+async def get_multi_instance_status(
+    rec: "session_auth.SessionRecord" = Depends(require_session),
+) -> Dict[str, Any]:
     """Get overall multi-instance sync status."""
 
     try:
-        merged = load_merged_state()
-        registry = load_instance_registry()
+        merged = load_merged_state(rec.tenant_id)
+        registry = load_instance_registry(rec.tenant_id)
 
         # Compute freshness
         merged_at = merged.get("merged_at", "unknown")
@@ -165,20 +159,23 @@ async def get_multi_instance_status() -> Dict[str, Any]:
             "merged_patterns": merged.get("n_patterns", 0),
             "merged_at": merged.get("merged_at"),
             "freshness": freshness,
-            "github_repo": "https://github.com/veegee82/tenent-shumway",
+            "github_repo": _configured_remote(rec.tenant_id),
             "sync_frequency": "weekly",
-            "auto_load_repo_enabled": is_enabled("auto_load_github_repo")
+            "auto_load_repo_enabled": is_enabled("auto_load_github_repo", rec.tenant_id)
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("multi-instance status failed")
+        raise HTTPException(status_code=500, detail="multi-instance status unavailable") from e
 
 
 @router.get("/patterns")
-async def get_learned_patterns() -> Dict[str, Any]:
+async def get_learned_patterns(
+    rec: "session_auth.SessionRecord" = Depends(require_session),
+) -> Dict[str, Any]:
     """Get all learned patterns from merged-state."""
 
     try:
-        merged = load_merged_state()
+        merged = load_merged_state(rec.tenant_id)
         patterns = []
 
         for pattern_id, pattern_data in merged.get("patterns", {}).items():
@@ -195,16 +192,19 @@ async def get_learned_patterns() -> Dict[str, Any]:
             "count": len(patterns),
             "merged_at": merged.get("merged_at")
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("multi-instance patterns failed")
+        raise HTTPException(status_code=500, detail="learned patterns unavailable") from e
 
 
 @router.get("/instances")
-async def get_instance_status() -> Dict[str, Any]:
+async def get_instance_status(
+    rec: "session_auth.SessionRecord" = Depends(require_session),
+) -> Dict[str, Any]:
     """Get status of all paired instances."""
 
     try:
-        registry = load_instance_registry()
+        registry = load_instance_registry(rec.tenant_id)
 
         instances = []
         for inst in registry.get("instances", []):
@@ -221,16 +221,19 @@ async def get_instance_status() -> Dict[str, Any]:
             "instances": instances,
             "count": len(instances)
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("multi-instance instances failed")
+        raise HTTPException(status_code=500, detail="instance registry unavailable") from e
 
 
 @router.get("/conflicts")
-async def get_merge_conflicts() -> Dict[str, Any]:
+async def get_merge_conflicts(
+    rec: "session_auth.SessionRecord" = Depends(require_session),
+) -> Dict[str, Any]:
     """Get recent merge conflicts from merge-log."""
 
     try:
-        merge_log_path = MERGED_STATE / "merge-log.jsonl"
+        merge_log_path = _merged_state_dir(rec.tenant_id) / "merge-log.jsonl"
 
         conflicts = []
         if merge_log_path.exists():
@@ -253,8 +256,9 @@ async def get_merge_conflicts() -> Dict[str, Any]:
             "conflicts": conflicts[-10:] if conflicts else [],  # Last 10
             "count": len(conflicts)
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("multi-instance conflicts failed")
+        raise HTTPException(status_code=500, detail="merge conflicts unavailable") from e
 
 
 @router.post("/sync")

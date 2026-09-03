@@ -3,216 +3,145 @@ Production E2E Test for CRITICAL-001 Remediation — Dual-Gate Middleware Wiring
 
 This test verifies that:
 1. The dual-gate middleware protects real Console API endpoints
-2. All 45+ entry points are wired (no 404s on protected routes)
-3. Authorization gates are enforced (403 on unauthorized access)
+2. The entry points are wired (no 404s on protected routes)
+3. Authorization gates are enforced (401 anonymous / 403 denied)
 4. Audit events are recorded for all protected access
 5. No regressions in route functionality
 
-Real HTTP requests (not mocked) via FastAPI TestClient.
+Real HTTP requests (not mocked) via FastAPI TestClient against a scratch
+``CORVIN_HOME``. The principal is the console SESSION (adversarial review
+E-05, 2026-09-03) — ``X-User-ID`` / ``X-Tenant-ID`` headers are not an
+authentication mechanism and are ignored by the middleware.
 """
+from __future__ import annotations
+
+import os
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from pathlib import Path
-import sys
-from unittest.mock import patch, MagicMock
 
-# Add core to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+pytestmark = pytest.mark.filterwarnings("ignore")
 
-from core.console.corvin_console.standalone import create_app
+TENANT = "_default"
 
 
-@pytest.fixture(scope="session")
-def app():
-    """Create console app with dual-gate middleware."""
-    return create_app()
+class _StubPipeline:
+    def __init__(self):
+        self.calls: list[dict] = []
+        self.audits: list[dict] = []
+
+    def check_capability(self, *, actor, capability, tenant_id):
+        self.calls.append({"actor": actor, "capability": capability, "tenant_id": tenant_id})
+        return True
+
+    def record_audit(self, **kw):
+        self.audits.append(kw)
+
+
+@pytest.fixture(scope="module")
+def sb(tmp_path_factory):
+    home = tmp_path_factory.mktemp("crit_home")
+    for sub in ("global/auth", "global/forge", "global/console/sessions"):
+        (home / "tenants" / TENANT / sub).mkdir(parents=True)
+    prev = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID")}
+    os.environ["CORVIN_HOME"] = str(home)
+    os.environ.pop("CORVIN_TENANT_ID", None)
+    try:
+        from corvin_console import auth as session_auth
+        from corvin_console.standalone import create_app
+
+        app = create_app()
+        rec = session_auth.create_session(tenant_id=TENANT, token_fingerprint="")
+        anon = TestClient(app, raise_server_exceptions=False)
+        authed = TestClient(app, raise_server_exceptions=False)
+        authed.cookies.set(session_auth.COOKIE_NAME, rec.sid)
+        yield SimpleNamespace(app=app, anon=anon, authed=authed, rec=rec)
+    finally:
+        for k, v in prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 @pytest.fixture
-def client(app):
-    """FastAPI test client (without lifespan context for now).
+def pipeline():
+    from core.pipeline import wiring
 
-    Note: For a proper production E2E test, this should use TestClient as a
-    context manager to trigger lifespan startup and initialize the
-    DualGatePipeline. However, the test environment doesn't have a valid
-    audit.jsonl, so the boot tripwire would fail. For now, we're testing
-    with the middleware but without full pipeline initialization.
-
-    TODO(K=2): Fix the audit chain test setup or provide a test bootstrap mode.
-    """
-    return TestClient(app)
+    stub = _StubPipeline()
+    wiring.set_global_pipeline(stub)
+    try:
+        yield stub
+    finally:
+        wiring.set_global_pipeline(None)
 
 
 class TestCritical001RouteWiring:
-    """Verify CRITICAL-001: All 45+ routes are wired and protected (not dead code)."""
+    """Verify CRITICAL-001: the routes are wired and protected (not dead code)."""
 
-    def test_chat_list_sessions_wired(self, client):
-        """GET /v1/console/chat/sessions is wired (not 404)."""
-        response = client.get("/v1/console/chat/sessions")
-        # Should not be 404 (route exists and is wired)
-        # May be 401 (auth required) or 200 (if allowed) but NOT 404
-        assert response.status_code != 404, \
-            f"Route not wired: /v1/console/chat/sessions returned {response.status_code}"
-
-    def test_chat_create_session_wired(self, client):
-        """POST /v1/console/chat/sessions is wired."""
-        response = client.post("/v1/console/chat/sessions", json={"title": "Test"})
-        assert response.status_code != 404
-
-    def test_chat_delete_session_wired(self, client):
-        """DELETE /v1/console/chat/sessions/{sid} is wired."""
-        response = client.delete("/v1/console/chat/sessions/test-sid")
-        assert response.status_code != 404
-
-    def test_tasks_list_wired(self, client):
-        """GET /v1/console/tasks is wired."""
-        response = client.get("/v1/console/tasks")
-        assert response.status_code != 404
-
-    def test_plugins_list_wired(self, client):
-        """GET /v1/console/plugins is wired."""
-        response = client.get("/v1/console/plugins")
-        assert response.status_code != 404
-
-    def test_audit_layers_wired(self, client):
-        """GET /v1/console/audit/layers is wired."""
-        response = client.get("/v1/console/audit/layers")
-        assert response.status_code != 404
-
-    def test_voice_sessions_wired(self, client):
-        """POST /v1/console/voice/sessions is wired."""
-        response = client.post("/v1/console/voice/sessions")
-        assert response.status_code != 404
-
-    def test_settings_get_wired(self, client):
-        """GET /v1/console/settings is wired."""
-        response = client.get("/v1/console/settings")
-        assert response.status_code != 404
-
-    def test_audit_tail_wired(self, client):
-        """GET /v1/console/audit/tail is wired."""
-        response = client.get("/v1/console/audit/tail")
-        assert response.status_code != 404
-
-    def test_settings_stream_wired(self, client):
-        """GET /v1/console/settings/stream is wired."""
-        response = client.get("/v1/console/settings/stream")
-        assert response.status_code != 404
-
-    def test_multiple_routes_wired(self, client):
-        """Verify batch of routes are all wired (not 404)."""
-        routes = [
-            ("/v1/console/chat/sessions", "GET"),
-            ("/v1/console/tasks", "GET"),
-            ("/v1/console/plugins", "GET"),
-            ("/v1/console/audit/layers", "GET"),
-            ("/v1/console/settings", "GET"),
-            ("/v1/console/voice/sessions", "POST"),
-        ]
-        for path, method in routes:
-            response = None
-            if method == "GET":
-                response = client.get(path)
-            elif method == "POST":
-                response = client.post(path, json={})
-
-            assert response.status_code != 404, \
-                f"Route {method} {path} not wired (404)"
+    @pytest.mark.parametrize("method,path", [
+        ("GET", "/v1/console/chat/sessions"),
+        ("POST", "/v1/console/chat/sessions"),
+        ("DELETE", "/v1/console/chat/sessions/test-sid"),
+        ("GET", "/v1/console/tasks"),
+        ("GET", "/v1/console/plugins"),
+        ("GET", "/v1/console/audit/layers"),
+        ("GET", "/v1/console/settings"),
+        ("GET", "/v1/console/audit/tail"),
+        ("GET", "/v1/console/settings/stream"),
+        ("GET", "/v1/console/voice/status"),
+        ("POST", "/v1/console/voice/tts"),
+    ])
+    def test_route_is_wired(self, sb, method, path):
+        r = sb.anon.request(method, path, json={} if method != "GET" else None)
+        assert r.status_code != 404, f"{method} {path} not wired (404)"
+        # every one of these is a session route: anonymous → 401
+        assert r.status_code == 401, (method, path, r.status_code)
 
 
 class TestMiddlewareProtectsRoutes:
-    """Verify middleware is enforcing gates on all protected routes."""
+    def test_anonymous_request_denied_at_the_gate(self, sb, pipeline):
+        # a spoofed header is NOT a credential
+        r = sb.anon.get("/v1/console/chat/sessions", headers={"X-User-ID": "root"})
+        assert r.status_code == 401
+        assert pipeline.calls == []
 
-    def test_unauthorized_request_denied_with_403(self, client):
-        """Request without auth headers should be denied (403), not allowed."""
-        # Remove auth headers → middleware should deny
-        response = client.get(
-            "/v1/console/chat/sessions",
-            headers={"X-User-ID": ""}  # Empty user = unauthorized
-        )
-        # Should be 403 (denied by middleware), not 200 (allowed)
-        assert response.status_code in (401, 403), \
-            f"Unauthorized request should be denied (401/403), got {response.status_code}"
+    def test_authenticated_request_allowed_through_the_gate(self, sb, pipeline):
+        r = sb.authed.get("/v1/console/chat/sessions")
+        assert r.status_code == 200, r.text
+        assert pipeline.calls[-1]["actor"] == sb.rec.sid_fingerprint
+        assert pipeline.calls[-1]["tenant_id"] == TENANT
 
-    def test_authorized_request_allowed(self, client):
-        """Request with auth headers should be allowed through middleware."""
-        response = client.get(
-            "/v1/console/chat/sessions",
-            headers={
-                "X-User-ID": "test-actor",
-                "X-Tenant-ID": "test-tenant"
-            }
-        )
-        # Should not be 403 (middleware denied) — may fail auth later, but not gate denied
-        # Status should be 200 or 401/500 (app errors), not 403 (gate denied)
-        assert response.status_code != 403, \
-            "Middleware gate denied authorized request"
+    def test_healthz_bypasses_middleware(self, sb, pipeline):
+        assert sb.anon.get("/v1/console/healthz").status_code == 200
+        assert pipeline.calls == []
 
-    def test_healthz_bypasses_middleware(self, client):
-        """Healthz endpoint should bypass dual-gate middleware."""
-        response = client.get("/healthz")
-        # Should be 200 (no gate required for healthz)
-        assert response.status_code == 200, \
-            f"Healthz should bypass middleware: {response.status_code}"
-
-    def test_static_files_bypass_middleware(self, client):
-        """Static file paths should bypass middleware."""
-        response = client.get("/static/test.js")
-        # Should not be 403 (gate denied); may be 404 (not found) but not gated
-        assert response.status_code != 403, \
-            "Middleware gated static file path (should be skipped)"
+    def test_static_files_bypass_middleware(self, sb, pipeline):
+        r = sb.anon.get("/static/test.js")
+        assert r.status_code != 403 and r.status_code != 401
+        assert pipeline.calls == []
 
 
 class TestAuditLogging:
-    """Verify audit events are recorded for all protected access."""
+    def test_successful_access_logged(self, sb, pipeline):
+        sb.authed.get("/v1/console/chat/sessions")
+        ev = pipeline.audits[-1]
+        assert ev["event_type"] == "route_access" and ev["result"] == "success"
+        assert ev["actor"] == sb.rec.sid_fingerprint and ev["tenant_id"] == TENANT
 
-    def test_successful_access_logged(self, client):
-        """Successful route access should be logged to audit trail."""
-        # This is hard to test without direct audit backend access,
-        # but we can verify no exceptions thrown
-        response = client.get(
-            "/v1/console/chat/sessions",
-            headers={"X-User-ID": "test-user"}
-        )
-        # Should not error (audit logging is silent)
-        assert response.status_code in (200, 401, 403, 404, 500)
-
-    def test_denied_access_logged(self, client):
-        """Denied access (403) should be audited."""
-        # This is also hard to test, but we verify no exceptions
-        response = client.get(
-            "/v1/console/chat/sessions",
-            headers={"X-User-ID": ""}  # Unauthorized
-        )
-        # Should not error even if denied
-        assert response.status_code in (200, 401, 403, 404, 500)
+    def test_denied_access_logged(self, sb, pipeline):
+        sb.anon.get("/v1/console/chat/sessions")
+        ev = pipeline.audits[-1]
+        assert ev["event_type"] == "capability_denied" and ev["actor"] == "anonymous"
+        assert ev["tenant_id"] == TENANT  # never a header-chosen tenant
 
 
 class TestMiddlewareFailClosed:
-    """Verify middleware enforces fail-closed semantics (errors deny access)."""
+    def test_malformed_headers_are_irrelevant(self, sb, pipeline):
+        r = sb.anon.get("/v1/console/chat/sessions", headers={"X-User-ID": "\x01\x02"})
+        assert r.status_code == 401
 
-    def test_malformed_headers_denied(self, client):
-        """Malformed auth headers should result in denial (fail-closed)."""
-        response = client.get(
-            "/v1/console/chat/sessions",
-            headers={"X-User-ID": "\x00\x01\x02"}  # Null bytes = malformed
-        )
-        # May reject as 403 or 500, but not allow as 200
-        if response.status_code == 200:
-            pytest.fail("Malformed headers were allowed (should be fail-closed)")
-
-    def test_missing_tenant_header_defaults_safely(self, client):
-        """Missing X-Tenant-ID header should use safe default."""
-        response = client.get(
-            "/v1/console/chat/sessions",
-            headers={"X-User-ID": "test"}
-            # X-Tenant-ID not provided
-        )
-        # Should not error (should default to "_default" tenant)
-        assert response.status_code in (200, 401, 403, 404, 500), \
-            "Missing tenant header caused middleware error"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-xvs"])
+    def test_header_tenant_is_ignored(self, sb, pipeline):
+        sb.authed.get("/v1/console/chat/sessions", headers={"X-Tenant-ID": "victim_tenant"})
+        assert pipeline.calls[-1]["tenant_id"] == TENANT

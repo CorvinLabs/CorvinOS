@@ -64,7 +64,7 @@ class ContextInitializer:
             # that the core audit writer was reachable or that its chain
             # verified — it only ever crashed on its own import, and this whole
             # startup path was dead as a result.
-            from core.compliance.corvin_compliance_reports.tripwire import assert_all
+            from corvin_compliance_reports.tripwire import assert_all
             assert_all()
             logger.info("Compliance tripwire passed — core audit mechanisms reachable")
         except Exception as e:

@@ -287,8 +287,10 @@ class TestGDPRErasure:
         assert deleted == 0, "Wrong tenant deletion must not affect other tenants"
 
         # Verify user-1 data still exists in tenant-1
-        retrieved = store.get_outcome(outcome.outcome_id)
+        retrieved = store.get_outcome(outcome.outcome_id, tenant_id="tenant-1")
         assert retrieved is not None
+        # L-14: the same id is invisible from the other tenant
+        assert store.get_outcome(outcome.outcome_id, tenant_id="tenant-2") is None
 
 
 class TestHashChainIntegrity:

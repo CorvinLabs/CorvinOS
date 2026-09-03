@@ -12,7 +12,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from core.skills.corvin_skills.resolver import SkillDependencyResolver
+from core.skills.corvin_skills.resolver import resolver_for
 from core.skills.corvin_skills.hardening import SkillServiceHardening
 
 
@@ -37,7 +37,7 @@ def skills_group():
 def cache_stats(tenant: str, format: str):
     """Display cache hit-rate, size, eviction metrics."""
     try:
-        resolver = SkillDependencyResolver(tenant_id=tenant)
+        resolver = resolver_for(tenant)
         stats = resolver.stats()
 
         if format == "json":
@@ -72,7 +72,7 @@ def cache_stats(tenant: str, format: str):
 def cache_clear(tenant: str):
     """Clear cache for a tenant."""
     try:
-        resolver = SkillDependencyResolver(tenant_id=tenant)
+        resolver = resolver_for(tenant)
         stats_before = resolver.stats()
         resolver.invalidate()
 

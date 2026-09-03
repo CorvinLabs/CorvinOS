@@ -78,7 +78,7 @@ def test_decision_history_e2e():
             assert decision_id == decision.decision_id
 
             print("\n[E2E PHASE 5] Retrieve decision from store...")
-            retrieved = store.get_decision(decision_id)
+            retrieved = store.get_decision(decision_id, tenant_id="_default")
             assert retrieved is not None
             assert retrieved.choice_type == "skill_selection"
             assert retrieved.chosen == "skill-a"
@@ -157,7 +157,7 @@ def test_decision_history_e2e():
             print(f"✅ GDPR erasure: deleted {deleted} decision(s) for user-123")
 
             # Verify deletion
-            verify = store.get_decision(decision_user.decision_id)
+            verify = store.get_decision(decision_user.decision_id, tenant_id="_default")
             assert verify is None
             print(f"✅ Verification: decision no longer exists")
 

@@ -14,6 +14,7 @@
 import { useState, useEffect } from 'react'
 import { Github, CheckCircle, AlertCircle, Loader, Trash2 } from 'lucide-react'
 import { fetchConsoleJson, fetchConsoleApi } from '@/lib/api-utils'
+import { useAuth } from '@/lib/auth'
 
 interface GitHubStatus {
   connected: boolean
@@ -44,6 +45,9 @@ interface VerifyResult {
 }
 
 export default function GitHubIntegrationPanel() {
+  // Every mutation below carries the session's CSRF token (backend: require_csrf).
+  const { session } = useAuth()
+  const csrf = session?.csrf_token ?? ''
   const [url, setUrl] = useState('')
   const [token, setToken] = useState('')
   const [showToken, setShowToken] = useState(false)
@@ -118,7 +122,7 @@ export default function GitHubIntegrationPanel() {
     try {
       const result: VerifyResult = await fetchConsoleJson('/v1/console/github/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
         body: JSON.stringify({ url, token: token || undefined })
       })
 
@@ -145,7 +149,10 @@ export default function GitHubIntegrationPanel() {
     }
 
     try {
-      const response = await fetchConsoleApi('/v1/console/github/config', { method: 'DELETE' })
+      const response = await fetchConsoleApi('/v1/console/github/config', {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': csrf },
+      })
       if (response.ok) {
         setUrl('')
         setToken('')

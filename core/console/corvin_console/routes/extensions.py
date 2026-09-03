@@ -109,7 +109,7 @@ def validate_manifest(
 @router.post("/extensions/validate")
 def validate_manifest_post(
     body: ValidateRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """POST variant of the validator (body carries the YAML). Read-only."""
     return _validate_yaml(body.manifest_yaml, rec.tenant_id)

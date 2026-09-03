@@ -149,7 +149,7 @@ class TestPluginResponse:
 
     def test_error_response(self):
         """Error response."""
-        resp = PluginResponse.error("Something went wrong", code="ERROR_001")
+        resp = PluginResponse.failure("Something went wrong", code="ERROR_001")
         assert resp.status == "error"
         assert resp.error == "Something went wrong"
         assert resp.error_code == "ERROR_001"
@@ -242,9 +242,14 @@ class TestPluginBase:
     @pytest.mark.asyncio
     async def test_plugin_init_required(self):
         """Plugin init() is abstract and must be implemented."""
+        class BadPlugin(PluginBase):
+            pass  # Missing init()
+
+        # ABC enforcement fires at INSTANTIATION, not at class definition —
+        # the old form (the class statement inside `raises`) never raised and
+        # only passed while the whole class was already failing for A7.
         with pytest.raises(TypeError):
-            class BadPlugin(PluginBase):
-                pass  # Missing init()
+            BadPlugin()
 
 
 class TestPluginExceptions:

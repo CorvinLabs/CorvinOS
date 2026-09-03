@@ -7,24 +7,31 @@ Provides REST API for observability:
   - WS /api/learning/stream — real-time WebSocket updates
 
 Tenant isolation enforced. All queries audit-logged.
+
+Auth (adversarial review N-06): every route depends on the REAL console
+session (``deps.require_session`` → 401 without a live cookie) and the tenant
+is ``rec.tenant_id`` from the authenticated ``SessionRecord`` — never an env
+var, never an anonymous default. The previous version fell back to a NO-OP
+dependency that returned an anonymous ``{"tenant_id": "_default"}`` user.
+The console session IS the tenant operator (local login, credential-less,
+CLAUDE.md § user_backend), so tenant-scoped reads are authorised by it.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
-from typing import Dict, Any, Optional
+from __future__ import annotations
+
+from typing import Annotated, Any, Dict, Optional
 from datetime import datetime
+from pathlib import Path
 import json
 import logging
 
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+
 from core.learning.dashboard import LearningDashboard, DashboardMetrics, SkillPerformance
 from core.learning.event_store import EventStore
-from pathlib import Path
 
-# Fallback auth stub
-try:
-    from core.console.corvin_console.auth import get_current_user
-except ImportError:
-    async def get_current_user():
-        return {"user_id": "default", "tenant_id": "_default"}
+from .. import auth as session_auth
+from ..deps import require_session
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +41,21 @@ router = APIRouter(prefix="/api/learning", tags=["learning"])
 _dashboards: Dict[str, LearningDashboard] = {}
 
 
-def get_dashboard(tenant_id: str = "_default", audit_backend=None) -> LearningDashboard:
-    """Get or initialize dashboard for tenant."""
+def _tenant_home(tenant_id: str) -> Path:
+    """``<corvin_home>/tenants/<tenant_id>/`` — honours CORVIN_HOME (never a bare ~/.corvin)."""
+    from forge.tenants import tenant_home  # type: ignore[import-not-found]
+
+    return Path(tenant_home(tenant_id))
+
+
+def get_dashboard(tenant_id: str, audit_backend=None) -> LearningDashboard:
+    """Get or initialize dashboard for tenant.
+
+    The store is ``event_store.EventStore(tenant_home)`` — the SAME store the
+    EventEmitter writes to (``<tenant_home>/learning/events/``).
+    """
     if tenant_id not in _dashboards:
-        # Initialize EventStore from tenant home
-        tenant_home = Path.home() / ".corvin" / "tenants" / tenant_id / "global"
-        event_store = EventStore(tenant_home=tenant_home)
+        event_store = EventStore(tenant_home=_tenant_home(tenant_id))
 
         _dashboards[tenant_id] = LearningDashboard(
             tenant_id=tenant_id,
@@ -52,7 +68,7 @@ def get_dashboard(tenant_id: str = "_default", audit_backend=None) -> LearningDa
 
 @router.get("/summary", summary="Get system-wide learning metrics")
 async def get_learning_summary(
-    current_user=Depends(get_current_user),
+    rec: session_auth.SessionRecord = Depends(require_session),
     since: Optional[str] = Query(None, description="ISO 8601 timestamp (min date)"),
     until: Optional[str] = Query(None, description="ISO 8601 timestamp (max date)"),
 ) -> Dict[str, Any]:
@@ -67,7 +83,7 @@ async def get_learning_summary(
 
     Tenant isolation enforced (users only see their own data).
     """
-    tenant_id = current_user.get("tenant_id", "_default")
+    tenant_id = rec.tenant_id
     dashboard = get_dashboard(tenant_id)
 
     try:
@@ -85,7 +101,7 @@ async def get_learning_summary(
 @router.get("/skills/{skill_name}", summary="Get per-skill performance metrics")
 async def get_skill_metrics(
     skill_name: str,
-    current_user=Depends(get_current_user),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ) -> Dict[str, Any]:
     """Get performance metrics for a specific skill.
 
@@ -99,7 +115,7 @@ async def get_skill_metrics(
 
     Tenant isolation enforced.
     """
-    tenant_id = current_user.get("tenant_id", "_default")
+    tenant_id = rec.tenant_id
     dashboard = get_dashboard(tenant_id)
 
     try:
@@ -116,7 +132,7 @@ async def get_skill_metrics(
 @router.get("/user/{user_id}", summary="Get user-scoped learning metrics")
 async def get_user_metrics(
     user_id: str,
-    current_user=Depends(get_current_user),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ) -> Dict[str, Any]:
     """Get user-specific metrics (satisfaction, engagement, query complexity).
 
@@ -126,15 +142,13 @@ async def get_user_metrics(
       - Query count (total queries from this user)
       - Last query timestamp
 
-    Per-tenant isolation enforced: users only see their own metrics.
+    Per-tenant isolation enforced: the authenticated session's tenant only.
+    The console session is the tenant OPERATOR (there is no per-user console
+    login today — CLAUDE.md § user_backend), so it may read the metrics of any
+    user of its own tenant; a user of another tenant is unreachable by
+    construction (the dashboard is bound to ``rec.tenant_id``).
     """
-    tenant_id = current_user.get("tenant_id", "_default")
-
-    # GDPR Art. 21: Users can only query their own metrics
-    requesting_user_id = current_user.get("user_id", "unknown")
-    if requesting_user_id != user_id and not _is_admin(current_user):
-        raise HTTPException(status_code=403, detail="Cannot query other users' metrics")
-
+    tenant_id = rec.tenant_id
     dashboard = get_dashboard(tenant_id)
 
     try:
@@ -151,7 +165,8 @@ async def get_user_metrics(
 @router.post("/subscribe", summary="Register for WebSocket updates")
 async def subscribe_for_updates(
     user_scoped: bool = Query(False, description="Subscribe to user-scoped metrics only"),
-    current_user=Depends(get_current_user),
+    user_scoped_user_id: Optional[str] = Query(None, description="User id for a user-scoped subscription"),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ) -> Dict[str, Any]:
     """Register for real-time dashboard updates via WebSocket.
 
@@ -162,8 +177,10 @@ async def subscribe_for_updates(
     If user_scoped=True, only user-specific metrics are pushed.
     If user_scoped=False (admin only), system-wide metrics.
     """
-    tenant_id = current_user.get("tenant_id", "_default")
-    user_id = current_user.get("user_id") if user_scoped else None
+    tenant_id = rec.tenant_id
+    # A console session has no user identity of its own (operator session);
+    # a user-scoped subscription must name the user explicitly.
+    user_id = (user_scoped_user_id or None) if user_scoped else None
 
     dashboard = get_dashboard(tenant_id)
 
@@ -183,10 +200,10 @@ async def subscribe_for_updates(
 @router.post("/unsubscribe", summary="Unregister WebSocket subscriber")
 async def unsubscribe(
     subscriber_id: str,
-    current_user=Depends(get_current_user),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ) -> Dict[str, Any]:
     """Unregister from WebSocket updates."""
-    tenant_id = current_user.get("tenant_id", "_default")
+    tenant_id = rec.tenant_id
     dashboard = get_dashboard(tenant_id)
 
     try:
@@ -214,7 +231,7 @@ async def unsubscribe(
 async def websocket_dashboard_stream(
     websocket: WebSocket,
     subscriber_id: str,
-    current_user_token: Optional[str] = None,
+    corvin_console_sid: Annotated[str | None, Cookie()] = None,
 ):
     """WebSocket endpoint for real-time dashboard updates.
 
@@ -228,8 +245,17 @@ async def websocket_dashboard_stream(
         "timestamp": "2026-09-02T12:34:56Z"
       }
     """
+    # Same session gate as the HTTP routes (chat.py websocket pattern):
+    # no cookie / expired session → close 4401, never an anonymous tenant.
+    if not corvin_console_sid:
+        await websocket.close(code=4401)
+        return
+    rec = session_auth.load_session(corvin_console_sid)
+    if rec is None:
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
-    tenant_id = "_default"  # TODO: Extract from token
+    tenant_id = rec.tenant_id
 
     dashboard = get_dashboard(tenant_id)
 
@@ -286,19 +312,13 @@ async def websocket_dashboard_stream(
 # ============================================================================
 
 
-def _is_admin(current_user: Dict[str, Any]) -> bool:
-    """Check if user is admin (can view all metrics)."""
-    roles = current_user.get("roles", [])
-    return "admin" in roles or "operator" in roles
-
-
 # Optional: Health check endpoint
 @router.get("/health", summary="Dashboard health check")
 async def dashboard_health(
-    current_user=Depends(get_current_user),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ) -> Dict[str, Any]:
     """Health check for learning dashboard (test EventStore connectivity)."""
-    tenant_id = current_user.get("tenant_id", "_default")
+    tenant_id = rec.tenant_id
     dashboard = get_dashboard(tenant_id)
 
     try:

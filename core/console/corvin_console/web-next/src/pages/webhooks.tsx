@@ -11,6 +11,7 @@
 
 import { useState, useEffect } from 'react'
 import { Zap, CheckCircle, Eye, EyeOff, Send } from 'lucide-react'
+import { useAuth } from '@/lib/auth'
 
 interface WebhookStatus {
   registered: boolean
@@ -21,6 +22,9 @@ interface WebhookStatus {
 }
 
 export default function WebhookConfigPanel() {
+  // Every mutation below carries the session's CSRF token (backend: require_csrf).
+  const { session } = useAuth()
+  const csrf = session?.csrf_token ?? ''
   const [status, setStatus] = useState<WebhookStatus | null>(null)
   const [token, setToken] = useState('')
   const [secret, setSecret] = useState('')
@@ -71,7 +75,7 @@ export default function WebhookConfigPanel() {
     try {
       const response = await fetch('/v1/console/github/webhook/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
         body: JSON.stringify({
           token,
           webhook_secret: secret || undefined,
@@ -103,7 +107,7 @@ export default function WebhookConfigPanel() {
     try {
       const response = await fetch('/v1/console/github/webhook/test', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
         body: JSON.stringify({
           event_type: testEvent,
           secret: secret || undefined,

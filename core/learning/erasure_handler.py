@@ -4,9 +4,10 @@ Handles complete erasure of user context data across:
 1. Tier 1 base snapshots
 2. Tier 2 injected layers
 3. Cache invalidation
-4. Audit trail logging
+4. Audit trail logging (CORE hash-chained writer, fail-closed)
 
-All operations are immutable, hash-chained, and fully auditable.
+A tier that was NOT processed (no backend passed) is reported as NOT deleted:
+``ErasureResult.success`` must never claim an erasure that touched nothing.
 """
 
 from __future__ import annotations
@@ -17,10 +18,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, Any
 
+from .event_persistence import core_audit_event
+
 logger = logging.getLogger(__name__)
+
 
 def _get_lom() -> str:
     """Get line of moral responsibility (caller's file:function:line)."""
@@ -29,10 +32,6 @@ def _get_lom() -> str:
         caller_frame = frame.f_back
         return f"{caller_frame.f_code.co_filename}:{caller_frame.f_code.co_name}:{caller_frame.f_lineno}"
     return "unknown"
-
-# Audit chain writer (lazy singleton)
-_audit_writer_lock = threading.Lock()
-_audit_writer: Optional[Any] = None
 
 
 @dataclass
@@ -60,10 +59,11 @@ class ErasureResult:
     audit_logged: bool
     errors: list[str] = field(default_factory=list)
     completed_at: str = ""
+    skipped: list[str] = field(default_factory=list)  # tiers with no backend supplied
 
     @property
     def success(self) -> bool:
-        """True if all operations succeeded."""
+        """True only if EVERY tier was actually processed and succeeded."""
         return (
             self.tier1_deleted
             and self.tier2_deleted
@@ -80,30 +80,6 @@ class ErasureHandler:
         """Initialize erasure handler."""
         self._lock = threading.Lock()
 
-    @staticmethod
-    def _get_audit_writer() -> Optional[Any]:
-        """Get or initialize audit chain writer (lazy singleton)."""
-        global _audit_writer, _audit_writer_lock
-
-        if _audit_writer is not None:
-            return _audit_writer
-
-        with _audit_writer_lock:
-            if _audit_writer is not None:
-                return _audit_writer
-
-            try:
-                from core.compliance.audit_chain_writer import AuditChainWriter
-
-                # Initialize writer with ~/.corvin/audit.jsonl path
-                home = Path.home()
-                audit_path = home / ".corvin" / "audit.jsonl"
-                _audit_writer = AuditChainWriter(audit_path)
-                return _audit_writer
-            except Exception as e:
-                logger.warning(f"Could not initialize AuditChainWriter: {e}")
-                return None
-
     def process_erasure(
         self,
         request: ErasureRequest,
@@ -118,7 +94,13 @@ class ErasureHandler:
             cache_backend: Cache backend instance (optional, for invalidation)
 
         Returns:
-            ErasureResult with success flag and error details
+            ErasureResult. A tier whose backend was not supplied is reported as
+            NOT deleted (listed in ``skipped``) — the result is then not a
+            success, because nothing proves the data is gone.
+
+        Raises:
+            RuntimeError: if the core audit writer is unavailable / the audit
+                record did not commit (fail-closed, ADR-0232/0233)
         """
         with self._lock:
             result = ErasureResult(
@@ -133,53 +115,33 @@ class ErasureHandler:
                 completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             )
 
-            # Step 1: Delete Tier 1 base snapshots
+            # Step 1 + 2: Tier 1 base snapshots and Tier 2 layers (one cascade,
+            # verified by HybridContextModel.delete_user_context)
             if hybrid_context is not None:
                 try:
                     cascade_result = hybrid_context.delete_user_context(request.user_id)
                     result.tier1_deleted = cascade_result.verification_complete
+                    result.tier2_deleted = cascade_result.verification_complete
                     result.tier1_count = cascade_result.deleted_bases
+                    result.tier2_count = cascade_result.deleted_layers
                     if cascade_result.errors:
                         result.errors.extend(
-                            [f"Tier1: {e}" for e in cascade_result.errors]
+                            [f"Tier1/2: {e}" for e in cascade_result.errors]
                         )
                 except Exception as e:
-                    result.errors.append(f"Tier1 delete failed: {e}")
+                    result.errors.append(f"Tier1/2 delete failed: {e}")
             else:
-                # No hybrid_context provided, but mark as attempted
-                result.tier1_deleted = True
-                logger.info(
-                    f"No hybrid_context provided for Tier1 delete (user={request.user_id})"
-                )
-
-            # Step 2: Delete all Tier 2 injected layers
-            if hybrid_context is not None:
-                try:
-                    if request.user_id in hybrid_context.injected_layers:
-                        result.tier2_count = len(
-                            hybrid_context.injected_layers[request.user_id]
-                        )
-                        del hybrid_context.injected_layers[request.user_id]
-                        result.tier2_deleted = True
-                    else:
-                        result.tier2_deleted = True
-                except Exception as e:
-                    result.errors.append(f"Tier2 delete failed: {e}")
-            else:
-                # No hybrid_context provided, but mark as attempted
-                result.tier2_deleted = True
-                logger.info(
-                    f"No hybrid_context provided for Tier2 delete (user={request.user_id})"
+                result.skipped.extend(["tier1", "tier2"])
+                logger.warning(
+                    f"No hybrid_context provided — Tier1/Tier2 NOT erased (user={request.user_id})"
                 )
 
             # Step 3: Invalidate cache
             if cache_backend is not None:
                 try:
-                    # Invalidate user-specific cache keys
                     cache_key = f"context:cache:{request.tenant_id}:{request.user_id}"
                     cache_backend.delete(cache_key)
 
-                    # Also publish invalidation event for distributed cache
                     if hasattr(cache_backend, "publish"):
                         cache_backend.publish(
                             f"cache:invalidation:{request.tenant_id}",
@@ -191,39 +153,38 @@ class ErasureHandler:
                 except Exception as e:
                     result.errors.append(f"Cache invalidation failed: {e}")
             else:
-                # No cache backend provided, but mark as attempted
-                result.cache_invalidated = True
-                logger.info(
-                    f"No cache_backend provided for invalidation (user={request.user_id})"
+                result.skipped.append("cache")
+                logger.warning(
+                    f"No cache_backend provided — cache NOT invalidated (user={request.user_id})"
                 )
 
-            # Step 4: Audit log the erasure (GDPR Art. 30, 32)
-            writer = self._get_audit_writer()
-            if writer is not None:
-                try:
-                    writer.write_event_dict(
-                        event_type="user_context_erasure_cascade_complete",
-                        tenant_id=request.tenant_id,
-                        user_id=request.user_id,
-                        details={
-                            "reason": request.reason,
-                            "requestor_id": request.requestor_id,
-                            "tier1_deleted": result.tier1_deleted,
-                            "tier1_count": result.tier1_count,
-                            "tier2_deleted": result.tier2_deleted,
-                            "tier2_count": result.tier2_count,
-                            "cache_invalidated": result.cache_invalidated,
-                            "success": result.success,
-                            "errors": result.errors,
-                            "lom_audit_write": _get_lom(),
-                        },
-                        severity="CRITICAL" if not result.success else "INFO",
-                    )
-                    result.audit_logged = True
-                except Exception as e:
-                    result.errors.append(f"Audit log failed: {e}")
+            # Step 4: Audit the erasure on the CORE chain (GDPR Art. 30, 32).
+            # Counts and flags only; fail-closed — an unauditable erasure raises.
+            complete = (
+                result.tier1_deleted and result.tier2_deleted
+                and result.cache_invalidated and not result.errors
+            )
+            core_audit_event(
+                "user_context_erasure_cascade_complete",
+                tenant_id=request.tenant_id,
+                user=request.user_id,
+                details={
+                    "component": "erasure_handler",
+                    "reason": request.reason,
+                    "requestor_id": request.requestor_id,
+                    "tier1_deleted": result.tier1_deleted,
+                    "tier1_count": result.tier1_count,
+                    "tier2_deleted": result.tier2_deleted,
+                    "tier2_count": result.tier2_count,
+                    "cache_invalidated": result.cache_invalidated,
+                    "skipped": list(result.skipped),
+                    "complete": complete,
+                    "error_count": len(result.errors),
+                    "lom_audit_write": _get_lom(),
+                },
+            )
+            result.audit_logged = True
 
-            # Final log
             if result.success:
                 logger.info(
                     f"Erasure cascade completed successfully for user {request.user_id}: "
@@ -231,7 +192,8 @@ class ErasureHandler:
                 )
             else:
                 logger.error(
-                    f"Erasure cascade incomplete for user {request.user_id}: {result.errors}"
+                    f"Erasure cascade incomplete for user {request.user_id}: "
+                    f"skipped={result.skipped}, errors={result.errors}"
                 )
 
             return result

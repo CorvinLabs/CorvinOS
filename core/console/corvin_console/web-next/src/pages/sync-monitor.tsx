@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Zap, CheckCircle, AlertCircle, Loader, RotateCw, Pause, Play } from 'lucide-react'
+import { useAuth } from '@/lib/auth'
 
 interface SyncEvent {
   event: string
@@ -29,6 +30,9 @@ interface WorkerStatus {
 }
 
 export default function SyncMonitorPanel() {
+  // Worker start/stop are mutations → CSRF token (backend: require_csrf).
+  const { session } = useAuth()
+  const csrf = session?.csrf_token ?? ''
   const [events, setEvents] = useState<SyncEvent[]>([])
   const [connected, setConnected] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -122,7 +126,10 @@ export default function SyncMonitorPanel() {
 
   const handleStartWorker = async () => {
     try {
-      const response = await fetch('/v1/console/github/worker/start', { method: 'POST' })
+      const response = await fetch('/v1/console/github/worker/start', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrf },
+      })
       const result = await response.json()
       if (result.success) {
         setWorkerStatus(result.status)
@@ -137,7 +144,10 @@ export default function SyncMonitorPanel() {
 
   const handleStopWorker = async () => {
     try {
-      const response = await fetch('/v1/console/github/worker/stop', { method: 'POST' })
+      const response = await fetch('/v1/console/github/worker/stop', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrf },
+      })
       const result = await response.json()
       if (result.success) {
         setWorkerStatus((prev) => prev ? { ...prev, running: false } : null)

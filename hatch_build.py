@@ -224,7 +224,31 @@ _VENDOR_MAP: tuple[tuple[str, str], ...] = (
     ("operator/bundle/skills", "corvin_core/_vendor/operator/bundle/skills"),
     ("operator/bundle/install.sh", "corvin_core/_vendor/operator/bundle/install.sh"),
     ("operator/bundle/manifest.yaml", "corvin_core/_vendor/operator/bundle/manifest.yaml"),
+    # ADR-0405 Skill-Creator (the console's /skill-creator API). The route
+    # appends <repo>/operator to sys.path and does `from skill_creator...`;
+    # the vendored operator root ("" in _OPERATOR_SUBTREES) is already on
+    # sys.path on a wheel install, so vendoring the package is all that is
+    # needed. Without it every pip install logged "SkillCreatorOrchestrator
+    # import failed: No module named 'skill_creator'" (2026-09-03 review, F4).
+    ("operator/skill_creator", "corvin_core/_vendor/operator/skill_creator"),
 )
+
+# core/ packages the console imports by a TOP-LEVEL name that differs from
+# their packaged dotted path, reached in a checkout via repo-relative
+# sys.path tricks (parents[3] / "skills", parents[4] / "vibe_engineering").
+# `core.vibe_engineering` and `core.skills.corvin_skills` also ship at their
+# real dotted paths via `packages = ["core", ...]` (other modules import them
+# that way), so these are pruned ALIAS copies, not moves — a `sources`
+# rewrite in pyproject.toml would relocate the package and break the dotted
+# imports instead. Python-only (docs, test artifacts and requirement files
+# are dropped — see `_alias_ignore`).
+_TOPLEVEL_ALIAS_MAP: tuple[tuple[str, str], ...] = (
+    ("core/vibe_engineering", "vibe_engineering"),
+    ("core/skills/corvin_skills", "corvin_skills"),
+)
+
+# Suffixes/names never useful in an alias copy (they are import targets only).
+_ALIAS_SKIP_SUFFIXES: tuple[str, ...] = (".md", ".txt", ".json", ".html", ".log")
 
 
 # Dev-only files that must never ship in a wheel regardless of their location.
@@ -278,6 +302,13 @@ _BRIDGE_RUNTIME_SKIP: frozenset[str] = frozenset({
 _BRIDGE_WHEEL_SKIP_NAMES: frozenset[str] = frozenset({
     "settings.json",   # user credentials — only settings.json.example ships
     ".claude",         # Claude Code project files — not needed at runtime
+    # pytest / coverage artifacts: carry the developer's absolute checkout
+    # path in every entry (2026-09-03 review, F5). Mirrors the
+    # `**/test_results.json` / `**/coverage_report.json` wheel excludes in
+    # pyproject.toml, which do not reach force-included (vendored) copies.
+    "test_results.json",
+    "coverage_report.json",
+    "requirements-test.txt",
 })
 
 
@@ -405,6 +436,41 @@ class VendorOperatorHook(BuildHookInterface):
             else:
                 continue
             force_include[str(staged)] = dest_rel
+
+        for src_rel, dest_rel in _TOPLEVEL_ALIAS_MAP:
+            src = root / src_rel
+            if not src.is_dir():
+                continue
+            staged = self._stage / dest_rel
+            shutil.copytree(
+                src,
+                staged,
+                ignore=lambda d, n, _root=root, _tracked=tracked, _tracked_dirs=tracked_dirs: (
+                    self._alias_ignore(d, n, root=_root, tracked=_tracked, tracked_dirs=_tracked_dirs)
+                ),
+                dirs_exist_ok=True,
+            )
+            force_include[str(staged)] = dest_rel
+
+    @classmethod
+    def _alias_ignore(
+        cls,
+        directory: str,
+        names: list[str],
+        *,
+        root: Path | None = None,
+        tracked: frozenset[str] | None = None,
+        tracked_dirs: frozenset[str] | None = None,
+    ) -> set[str]:
+        """`_ignore` plus a Python-only filter for `_TOPLEVEL_ALIAS_MAP` copies."""
+        skip = cls._ignore(directory, names, root=root, tracked=tracked, tracked_dirs=tracked_dirs)
+        base = Path(directory)
+        for n in names:
+            if n in skip:
+                continue
+            if (base / n).is_file() and n.lower().endswith(_ALIAS_SKIP_SUFFIXES):
+                skip.add(n)
+        return skip
 
     @staticmethod
     def _build_spa(web_next: Path) -> None:

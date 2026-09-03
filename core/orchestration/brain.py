@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional, Union
 from .hub import SubsystemHub
 from .brain_startup import ContextInitializer, BrainStartupError
 from .context_bridge import ContextBridge
-from core.console.corvin_core.execution_context import ExecutionContext as ExecutionContextV1
+from corvin_core.execution_context import ExecutionContext as ExecutionContextV1
 from core.context_engineering.session_checkpoint import SessionContinuationManager
 
 logger = logging.getLogger(__name__)

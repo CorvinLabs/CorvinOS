@@ -100,6 +100,22 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         invariant="route() must NOT raise — return None on no-match or error.",
     ),
     ExtensionSurface(
+        plugin_type="web_surface",
+        # No provider registry: a WebSurface does not self-register in
+        # on_load(). The host DISCOVERS loaded web_surface plugins through the
+        # plugin registry by plugin_id / plugin_type and calls spa_dist_dir()
+        # (ADR-0356 P2.5, ADR-0365 P7); plugin_id is the identity it is found by.
+        ctx_handle="plugin_id",
+        provider_module=None,
+        template=None,
+        consumed_by="core/console/corvin_console/routes/capabilities.py",
+        dead_reason=None,
+        invariant=(
+            "spa_dist_dir() must return None (never raise) when no bundle is "
+            "built; a WebSurface never starts its own server."
+        ),
+    ),
+    ExtensionSurface(
         plugin_type="summary_provider",
         ctx_handle="summary_registry",
         provider_module="summary_provider",

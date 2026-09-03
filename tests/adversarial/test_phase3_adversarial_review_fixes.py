@@ -40,8 +40,8 @@ class TestCascadingDelete:
         decision_store, outcome_store, profile_manager = stores
 
         # Create test data
-        d_recorder = DRecorder("tenant-1")
-        o_recorder = ORecorder("tenant-1")
+        d_recorder = DRecorder("tenant_1")
+        o_recorder = ORecorder("tenant_1")
 
         decision = d_recorder.create_decision(
             choice_type="skill_selection",
@@ -61,15 +61,15 @@ class TestCascadingDelete:
         outcome_store.record_outcome(outcome)
 
         # Get a user profile (creates default)
-        profile = profile_manager.get_profile("user-to-delete", "tenant-1")
+        profile = profile_manager.get_profile("user-to-delete", "tenant_1")
 
         # Verify data exists
-        assert decision_store.get_decision(decision.decision_id) is not None
-        assert outcome_store.get_outcome(outcome.outcome_id) is not None
+        assert decision_store.get_decision(decision.decision_id, tenant_id="tenant_1") is not None
+        assert outcome_store.get_outcome(outcome.outcome_id, tenant_id="tenant_1") is not None
 
         # Erase using coordinator (C1 fix)
         coordinator = GDPRErasureCoordinator(decision_store, outcome_store, profile_manager)
-        deleted = coordinator.erase_user("tenant-1", "user-to-delete")
+        deleted = coordinator.erase_user("tenant_1", "user-to-delete")
 
         # Verify cascade deleted outcomes + decisions
         assert deleted["outcomes"] >= 1, "Outcomes should be deleted"
@@ -80,15 +80,15 @@ class TestCascadingDelete:
         decision_store, outcome_store, profile_manager = stores
 
         # Get/create profile
-        profile = profile_manager.get_profile("user-to-delete", "tenant-1")
+        profile = profile_manager.get_profile("user-to-delete", "tenant_1")
         assert profile is not None
 
         # Verify profile file exists
-        profile_path = profile_manager._get_profile_path("user-to-delete", "tenant-1")
+        profile_path = profile_manager._get_profile_path("user-to-delete", "tenant_1")
         assert profile_path.exists(), "Profile file should exist after get_profile()"
 
         # Delete using new method (C2 fix)
-        deleted_count = profile_manager.delete_user_profiles("user-to-delete", "tenant-1")
+        deleted_count = profile_manager.delete_user_profiles("user-to-delete", "tenant_1")
         assert deleted_count == 1, "Should delete exactly 1 profile"
 
         # Verify deletion
@@ -99,7 +99,7 @@ class TestCascadingDelete:
         decision_store, outcome_store, profile_manager = stores
 
         # Create data
-        d_recorder = DRecorder("tenant-1")
+        d_recorder = DRecorder("tenant_1")
         decision = d_recorder.create_decision(
             choice_type="skill_selection",
             candidates=["a", "b"],
@@ -112,12 +112,12 @@ class TestCascadingDelete:
         coordinator = GDPRErasureCoordinator(decision_store, outcome_store, profile_manager)
 
         # First delete
-        deleted1 = coordinator.erase_user("tenant-1", "user-delete-twice")
+        deleted1 = coordinator.erase_user("tenant_1", "user-delete-twice")
         total1 = deleted1["total"]
         assert total1 > 0, "First erasure should delete data"
 
         # Second delete (idempotent)
-        deleted2 = coordinator.erase_user("tenant-1", "user-delete-twice")
+        deleted2 = coordinator.erase_user("tenant_1", "user-delete-twice")
         total2 = deleted2["total"]
         assert total2 == 0, "Second erasure should delete 0 (idempotent)"
 
@@ -134,7 +134,7 @@ class TestPIISafeguardsHFixes:
 
     def test_h1_smooth_suppression_no_cliff(self, store):
         """H1 Fix: No precision cliff at N=10 boundary (Laplace smoothing)."""
-        o_recorder = ORecorder("tenant-1")
+        o_recorder = ORecorder("tenant_1")
 
         # Record 9 successes
         for i in range(9):
@@ -145,7 +145,7 @@ class TestPIISafeguardsHFixes:
             )
             store.record_outcome(outcome)
 
-        rate_n9 = store.compute_success_rate("tenant-1")
+        rate_n9 = store.compute_success_rate("tenant_1")
         assert rate_n9 == 0.5, "N=9 should return suppressed 0.5"
 
         # Add one more (now N=10)
@@ -154,7 +154,7 @@ class TestPIISafeguardsHFixes:
         )
         store.record_outcome(outcome)
 
-        rate_n10 = store.compute_success_rate("tenant-1")
+        rate_n10 = store.compute_success_rate("tenant_1")
         # Should not be exactly 1.0 (cliff) — might have Laplace noise
         assert 0.8 <= rate_n10 <= 1.0, "N=10 should be in range [0.8, 1.0] (with noise)"
 
@@ -165,12 +165,12 @@ class TestPIISafeguardsHFixes:
             )
             store.record_outcome(outcome)
 
-        rate_n50 = store.compute_success_rate("tenant-1")
+        rate_n50 = store.compute_success_rate("tenant_1")
         assert rate_n50 >= 0.95, "N=50 all-success should be 1.0 (unlocked)"
 
     def test_h2_outcome_id_anonymization(self, store):
         """H2 Fix: CSV export anonymizes outcome_ids (not just decision_ids)."""
-        o_recorder = ORecorder("tenant-1")
+        o_recorder = ORecorder("tenant_1")
 
         # Record 3 outcomes
         for i in range(3):
@@ -185,7 +185,7 @@ class TestPIISafeguardsHFixes:
         # Export with anonymization
         with tempfile.TemporaryDirectory() as tmpdir:
             csv_path = Path(tmpdir) / "outcomes.csv"
-            store.export_training_data_csv("tenant-1", csv_path, anonymize_ids=True)
+            store.export_training_data_csv("tenant_1", csv_path, anonymize_ids=True)
 
             with open(csv_path, "r") as f:
                 content = f.read()
@@ -204,7 +204,7 @@ class TestPIISafeguardsHFixes:
 
     def test_h3_secret_detection_expanded(self):
         """H3 Fix: Secret detection patterns expanded (AWS, JWT, SSH, DB URLs)."""
-        o_recorder = ORecorder("tenant-1")
+        o_recorder = ORecorder("tenant_1")
 
         secret_feedbacks = [
             "Called with AKIA1234567890ABCDEF AWS key",  # AWS key
@@ -255,7 +255,7 @@ class TestAdversarialReviewStatusFinal:
         # H3: Expanded secret patterns
         from core.learning.outcome_feedback import OutcomeRecorder
 
-        recorder = OutcomeRecorder("tenant-1")
+        recorder = OutcomeRecorder("tenant_1")
         assert hasattr(recorder, "_contains_potential_secret"), "H3: secret detection missing"
 
 

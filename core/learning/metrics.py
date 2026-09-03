@@ -602,3 +602,59 @@ class MetricsAggregator:
             "timestamp": aggregated.timestamp_utc.isoformat(),
             "instance_id": instance_id,
         }
+
+
+# ── TreeOfThoughts execution metrics (Phase 2) ──────────────────────────────
+# ``ExecutionMetrics`` + its recorder were dropped from this module by the
+# ADR-0320 rewrite (55a264ae) while ``integration.LearningIntegration`` and
+# ``corvin_console.chat_learning_wrapper`` kept referencing them — every
+# LearningIntegration call therefore ended in NameError. Restored here, on the
+# TreeOfThoughts store (``storage.LearningEventStore``), separate from the
+# ADR-0320 ``MetricsCollector`` above.
+
+
+@dataclass
+class ExecutionMetrics:
+    """Metrics from a single pattern/method execution."""
+
+    subject_id: str  # pattern_id or method_id
+    latency_ms: float
+    cost_tokens: int = 0
+    success: bool = True
+    error_type: Optional[str] = None
+    context: dict = field(default_factory=dict)  # {task_id, user_id, stage}
+
+
+class ExecutionMetricsRecorder:
+    """Turn ExecutionMetrics into TreeOfThoughts LearningEvents (used/failed)."""
+
+    def __init__(self, store):
+        self.store = store  # storage.LearningEventStore
+
+    def record(self, metrics: ExecutionMetrics) -> None:
+        """Record execution metrics and append the matching LearningEvent."""
+        from .models import LearningEvent as _TreeEvent
+
+        if metrics.success:
+            event_type, confidence_delta, reason = "used", +0.05, "succeeded in production"
+        else:
+            event_type, confidence_delta = "failed", -0.15
+            reason = f"failed with {metrics.error_type}"
+
+        event = _TreeEvent(
+            subject_id=metrics.subject_id,
+            event_type=event_type,
+            confidence_delta=confidence_delta,
+            reason=reason,
+            context={
+                **metrics.context,
+                "latency_ms": metrics.latency_ms,
+                "cost_tokens": metrics.cost_tokens,
+                "error_type": metrics.error_type,
+            },
+        )
+        self.store.append_event(metrics.subject_id, event)
+
+        node = self.store.get_node(metrics.subject_id)
+        if node:
+            node.calls_in_production += 1

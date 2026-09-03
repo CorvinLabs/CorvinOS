@@ -215,7 +215,12 @@ class TestV06FullIntegration:
         )
 
         engine.record_snapshot(snapshot)
-        learner.record_task("code_gen", success=True, latency_ms=500, quality_score=0.85)
+        # ``get_strong_tasks`` requires confidence ≥ 0.7, which needs
+        # ``min_samples`` (10) outcomes — a single task is small-n
+        # (confidence 0.34) by design, the same N < 10 rule as ADR-0317.
+        # The old test recorded ONE task (N-07 test-data bug).
+        for _ in range(learner.min_samples):
+            learner.record_task("code_gen", success=True, latency_ms=500, quality_score=0.85)
 
         # Operator is strong at code_gen
         strong = learner.get_strong_tasks(threshold=0.75)

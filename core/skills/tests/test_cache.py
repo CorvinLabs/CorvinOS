@@ -25,7 +25,7 @@ class TestSkillCacheLRU:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
                 max_size=256,
             )
@@ -35,7 +35,7 @@ class TestSkillCacheLRU:
                 cache.get(f"skill_{i}")
 
             # Cache should not exceed max_size
-            assert cache._stats["size"] <= 256
+            assert cache.stats()["size"] <= 256
             # But first entries should be evicted
             assert cache._stats["evictions"] > 0
 
@@ -52,7 +52,7 @@ class TestSkillCacheLRU:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
                 max_size=256,
             )
@@ -81,7 +81,7 @@ class TestSkillCacheTTL:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
                 ttl_minutes=0,  # Immediate expiry
             )
@@ -117,7 +117,7 @@ class TestSkillCacheInvalidation:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
             )
 
@@ -150,7 +150,7 @@ class TestSkillCacheThreadSafety:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
             )
 
@@ -189,7 +189,7 @@ class TestSkillCacheStats:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
             )
 
@@ -211,7 +211,7 @@ class TestSkillCacheStats:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
                 max_size=256,
             )
@@ -234,7 +234,7 @@ class TestSkillCacheFallback:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
             )
 
@@ -253,26 +253,28 @@ class TestSkillCacheFallback:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
             )
 
             result = cache.get("nonexistent")
             assert result is None
 
-    def test_corrupted_manifest_returns_none(self):
-        """get() gracefully handles corrupted manifest."""
+    def test_corrupted_manifest_fails_loud(self):
+        """get() raises on a corrupted manifest (a broken install must not read as 'no skills')."""
+        from core.skills.corvin_skills.cache import SkillManifestCorrupted
+
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "manifest.json"
             manifest_path.write_text("INVALID JSON {{{")
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
             )
 
-            result = cache.get("skill_a")
-            assert result is None
+            with pytest.raises(SkillManifestCorrupted):
+                cache.get("skill_a")
 
 
 class TestSkillCacheIntegration:
@@ -288,7 +290,7 @@ class TestSkillCacheIntegration:
             manifest_path.write_text(json.dumps(manifest))
 
             cache = SkillCache(
-                tenant_id="test",
+                tenant_id="test_tenant",
                 manifest_path=str(manifest_path),
                 max_size=256,
             )

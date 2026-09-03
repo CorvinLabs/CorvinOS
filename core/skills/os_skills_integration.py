@@ -15,6 +15,7 @@ Design:
 from __future__ import annotations
 
 import logging
+import sys
 from typing import Any, Dict, Optional
 
 from .skill_registry_phase1 import (
@@ -30,6 +31,18 @@ from .os_skills_phase1 import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LOM_FILE = "core/skills/os_skills_integration.py"
+
+
+def _lom(func_name: str) -> str:
+    """Line of Moral Responsibility for the CALLER's current line (ADR-0537).
+
+    Derived from the live frame, so the LoM hash binds to the real source line
+    instead of a hand-maintained ``:L120`` that drifted on the first edit.
+    """
+    return f"{_LOM_FILE}:{func_name}:L{sys._getframe(1).f_lineno}"
+
 
 # Global singleton for Skills integration
 _integration_instance: Optional[SkillsIntegrationLayer] = None
@@ -51,15 +64,22 @@ class SkillsIntegrationLayer:
     - EU AI Act Art. 50: LoM binding in all decisions
     """
 
-    def __init__(self, audit_backend: Optional[Any] = None, tenant_id: str = "_default"):
+    def __init__(
+        self,
+        audit_backend: Optional[Any] = None,
+        tenant_id: str = "_default",
+        learning_backend: Optional[Any] = None,
+    ):
         """Initialize Skills integration layer.
 
         Args:
             audit_backend: Audit trail backend (implements write_event)
-            tenant_id: Tenant scope for execution
+            tenant_id: Tenant scope for execution (whitelisted in the registry)
+            learning_backend: Learning backend (implements emit_event, ADR-0314)
         """
-        self.registry = initialize_registry(audit_backend, tenant_id)
+        self.registry = initialize_registry(audit_backend, tenant_id, learning_backend)
         self.audit_backend = audit_backend
+        self.learning_backend = learning_backend
         self.tenant_id = tenant_id
         self._boot_skills()
 
@@ -100,7 +120,8 @@ class SkillsIntegrationLayer:
 
         Fallback (on Skill error): deterministic hardcoded routing
         """
-        effective_tenant_id = tenant_id or self.tenant_id
+        # ``None`` → integration tenant; an EMPTY tenant is a violation (fail-closed)
+        effective_tenant_id = self.tenant_id if tenant_id is None else tenant_id
         user_context = user_context or {}
 
         # Try Skill execution
@@ -113,7 +134,7 @@ class SkillsIntegrationLayer:
             "os.delegation_router",
             input_data,
             timeout_ms=5000,
-            lom="os_skills_integration:route_task_l5:L120",
+            lom=_lom("route_task_l5"),
             tenant_id=effective_tenant_id,
         )
 
@@ -176,7 +197,7 @@ class SkillsIntegrationLayer:
         - GDPR Art. 32: Fail-closed merge (never partial context)
         - ADR-0555: 3-tier hybrid context model
         """
-        effective_tenant_id = tenant_id or self.tenant_id
+        effective_tenant_id = self.tenant_id if tenant_id is None else tenant_id
         user_context = user_context or {}
 
         # Try Skill execution (ContextAdapterSkill now returns 3-tier structure)
@@ -191,7 +212,7 @@ class SkillsIntegrationLayer:
             "os.context_adapter",
             input_data,
             timeout_ms=5000,
-            lom="os_skills_integration:adapt_context_l10:L175",
+            lom=_lom("adapt_context_l10"),
             tenant_id=effective_tenant_id,
         )
 
@@ -279,11 +300,13 @@ class SkillsIntegrationLayer:
 
 
 def initialize_integration(
-    audit_backend: Optional[Any] = None, tenant_id: str = "_default"
+    audit_backend: Optional[Any] = None,
+    tenant_id: str = "_default",
+    learning_backend: Optional[Any] = None,
 ) -> SkillsIntegrationLayer:
     """Initialize global Skills integration layer at boot."""
     global _integration_instance
-    _integration_instance = SkillsIntegrationLayer(audit_backend, tenant_id)
+    _integration_instance = SkillsIntegrationLayer(audit_backend, tenant_id, learning_backend)
     logger.info("OS-Skills integration layer initialized (Phase 1 L5 + L10 wiring)")
     return _integration_instance
 

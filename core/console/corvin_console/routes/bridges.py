@@ -1446,7 +1446,7 @@ class ExchangeSlackCodeResponse(BaseModel):
 @router.post("/slack/oauth/generate-url", response_model=GenerateSlackOAuthURLResponse)
 async def generate_slack_oauth_url(
     body: GenerateSlackOAuthURLRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> GenerateSlackOAuthURLResponse:
     """NOT IMPLEMENTED — returns 501.
 
@@ -1466,7 +1466,7 @@ async def generate_slack_oauth_url(
 @router.post("/slack/oauth/exchange-code", response_model=ExchangeSlackCodeResponse)
 async def exchange_slack_code(
     body: ExchangeSlackCodeRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> ExchangeSlackCodeResponse:
     """NOT IMPLEMENTED — returns 501.
 
@@ -1512,7 +1512,7 @@ class ExchangeTeamsCodeResponse(BaseModel):
 @router.post("/teams/oauth/generate-url", response_model=GenerateTeamsOAuthURLResponse)
 async def generate_teams_oauth_url(
     body: GenerateTeamsOAuthURLRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> GenerateTeamsOAuthURLResponse:
     """NOT IMPLEMENTED — returns 501.
 
@@ -1532,7 +1532,7 @@ async def generate_teams_oauth_url(
 @router.post("/teams/oauth/exchange-code", response_model=ExchangeTeamsCodeResponse)
 async def exchange_teams_code(
     body: ExchangeTeamsCodeRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> ExchangeTeamsCodeResponse:
     """NOT IMPLEMENTED — returns 501.
 
@@ -1580,7 +1580,7 @@ class EmailCodeExchangeResponse(BaseModel):
 @router.post("/email/oauth/generate-url", response_model=EmailOAuthResponse)
 async def generate_email_oauth_url(
     body: EmailOAuthRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> EmailOAuthResponse:
     """NOT IMPLEMENTED — returns 501.
 
@@ -1600,7 +1600,7 @@ async def generate_email_oauth_url(
 @router.post("/email/oauth/exchange-code", response_model=EmailCodeExchangeResponse)
 async def exchange_email_code(
     body: EmailCodeExchangeRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> EmailCodeExchangeResponse:
     """NOT IMPLEMENTED — returns 501.
 
@@ -1653,7 +1653,7 @@ class SignalPollResponse(BaseModel):
 @router.post("/signal/poll-link", response_model=SignalPollResponse)
 async def poll_signal_link(
     body: BaseModel,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> SignalPollResponse:
     """NOT IMPLEMENTED — returns 501.
 
@@ -1706,7 +1706,7 @@ class WhatsAppPollResponse(BaseModel):
 @router.post("/whatsapp/poll-scan", response_model=WhatsAppPollResponse)
 async def poll_whatsapp_scan(
     body: BaseModel,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> WhatsAppPollResponse:
     """NOT IMPLEMENTED — returns 501.
 

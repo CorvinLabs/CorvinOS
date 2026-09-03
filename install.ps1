@@ -2,16 +2,36 @@
 param(
     [Alias("e")]
     [string]$Editable = "",
-    [switch]$NoHermes
+    [switch]$NoHermes,
+    # Open TCP 8765 in Windows Defender Firewall for LAN A2A pairing. Off by
+    # default: the console binds 127.0.0.1 unless a2a_lan_bind is enabled, so
+    # a firewall rule on every install pre-exposed the port before any consent
+    # step (2026-09-03 adversarial review, F10).
+    [switch]$Lan
 )
 # install.ps1 -- CorvinOS installer for Windows (PowerShell 5.1+).
 # Usage:
 #   irm https://corvin-labs.com/install.ps1 | iex
 #   .\install.ps1 -Editable C:\path\to\CorvinOS   # dev install from a local clone
+#   .\install.ps1 -Lan                            # also add the firewall rule
 #
 # ZERO prerequisites: it bootstraps `uv` (a single binary that also manages its
 # own Python), so you need NO Python, NO pip, NO package manager pre-installed.
 # `irm | iex` uses no shell operators, so it works in PowerShell 5.1 AND 7 alike.
+#
+# Supply-chain pins (2026-09-03 adversarial review, F9):
+#   * uv    -- PINNED. The installer for exactly $UvPinVersion is downloaded
+#             from the immutable GitHub release asset, its SHA-256 is compared
+#             with $UvInstallerSha256 BEFORE it runs (Get-FileHash), and that
+#             script verifies the uv binary against its own embedded checksums.
+#             No `irm | iex` of a moving target.
+#   * corvinos -- a version FLOOR (corvinos>=$CorvinMinVersion), deliberately
+#             NOT an exact pin (INST-1 below): an exact pin lands in the uv
+#             receipt and freezes `uv tool upgrade` -- the supervisor's
+#             auto-update -- forever. Kept equal to pyproject.toml's version by
+#             tests/test_wheel_content_guard.py.
+#   * Ollama -- installed through winget (Ollama.Ollama), i.e. a signed,
+#             package-manager-verified installer; nothing is piped from a URL.
 
 $ErrorActionPreference = "Stop"
 
@@ -34,6 +54,11 @@ trap {
     Pause-AndExit 1
 }
 $Package = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
+# Keep $CorvinMinVersion equal to `version` in pyproject.toml (guarded by test).
+$CorvinMinVersion = "1.0.0"
+$UvPinVersion = "0.12.9"
+$UvInstallerUrl = "https://github.com/astral-sh/uv/releases/download/$UvPinVersion/uv-installer.ps1"
+$UvInstallerSha256 = "69de475bf929f1ac248efb5a85189177a45517e2346cd68762bde453fec10a6b"
 
 function Write-Step { param($m) Write-Host "  $m" }
 function Write-Ok   { param($m) Write-Host "  $m" -ForegroundColor Green }
@@ -57,12 +82,26 @@ if ($Editable -ne "") {
 
 # ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Step "Bootstrapping the uv runtime (brings its own Python) ..."
+    Write-Step "Bootstrapping the uv $UvPinVersion runtime (brings its own Python) ..."
+    # Pinned + checksummed (see header): download the versioned installer to a
+    # temp file, verify its SHA-256, and only then run it -- never `irm | iex`.
+    $UvInstallerFile = Join-Path ([System.IO.Path]::GetTempPath()) "uv-installer-$UvPinVersion.ps1"
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $UvInstallerUrl -OutFile $UvInstallerFile -TimeoutSec 300 -ErrorAction Stop
+    } catch {
+        Write-Fail "could not download $UvInstallerUrl ($_)"
+    }
+    $UvActualSha256 = (Get-FileHash -Algorithm SHA256 -Path $UvInstallerFile).Hash.ToLowerInvariant()
+    if ($UvActualSha256 -ne $UvInstallerSha256) {
+        Remove-Item -Force $UvInstallerFile -ErrorAction SilentlyContinue
+        Write-Fail "uv installer checksum mismatch (expected $UvInstallerSha256, got $UvActualSha256) -- refusing to run it"
+    }
     # Run the uv installer in a child powershell.exe process.
     # Any `exit` call inside the uv installer terminates the CHILD process,
     # not our session.  [scriptblock]::Create and iex both propagate `exit`
     # up to the parent session in PS 5.1 -- only a real child process is safe.
-    powershell -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
+    powershell -ExecutionPolicy Bypass -File $UvInstallerFile
+    Remove-Item -Force $UvInstallerFile -ErrorAction SilentlyContinue
     # uv installs to %USERPROFILE%\.local\bin -- make it usable in THIS session.
     $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
 }
@@ -153,12 +192,14 @@ if ($EditablePath -ne "") {
     # PowerShell does not parse `[browser]` as an index expression.
     uv tool install --force --editable "$($EditablePath)[browser]"
 } else {
-    # INST-1: install UNPINNED. `uv tool install corvinos==<ver>` writes that
+    # INST-1: NO exact pin. `uv tool install corvinos==<ver>` writes that
     # exact pin into the uv receipt, after which `uv tool upgrade corvinos`
     # (the supervisor's per-logon auto-update below, and serve_backend.py)
     # honours the pin forever and exits 0 "Nothing to upgrade" -- permanently
     # freezing auto-update, and on Windows feeding the exit-before-uvicorn
-    # relaunch loop. The PyPI JSON query is now used ONLY for a log line.
+    # relaunch loop. A version FLOOR (>= the release this script shipped with)
+    # keeps the receipt upgradeable while refusing a stale or downgraded index.
+    # The PyPI JSON query is used ONLY for a log line.
     $LatestVersion = ""
     try {
         $pypiInfo = Invoke-RestMethod -Uri "https://pypi.org/pypi/$Package/json" -TimeoutSec 10
@@ -177,7 +218,11 @@ if ($EditablePath -ne "") {
     # [browser] puts playwright into the uv receipt itself: a plain pip-inject
     # would be wiped by the next `uv tool upgrade` (rebuilds the venv from the
     # receipt), silently killing agent browsing after the first auto-update.
-    uv tool install --force --refresh "$Package[browser]"
+    if ($Package -eq "corvinos") {
+        uv tool install --force --refresh "$Package[browser]>=$CorvinMinVersion"
+    } else {
+        uv tool install --force --refresh "$Package[browser]"   # CORVIN_PKG override: no floor
+    }
 }
 if ($LASTEXITCODE -ne 0) {
     # Re-enable the autostart task we disabled above before bailing out —
@@ -492,7 +537,7 @@ while (`$true) {
     # pre-start healthz guard). Standby cycles do not consume restart budget.
     `$portBusy = `$false
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/healthz" -TimeoutSec 3 -ErrorAction Stop | Out-Null
+        Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/v1/console/healthz" -TimeoutSec 3 -ErrorAction Stop | Out-Null
         `$portBusy = `$true
     } catch {
         if (`$_.Exception.Response) {
@@ -682,14 +727,20 @@ try {
     }
 }
 
-# ── 3b2. Firewall: allow LAN peers to reach the console/A2A port ────────────
-# Best-effort, never blocks install -- Settings -> A2A still works locally
-# either way, and a manual firewall exception can always be added later.
-try {
-    Install-CorvinFirewallRule -Port $ConsolePort
-    Write-Ok "Firewall: allowed inbound connections to the console/A2A port ($ConsolePort) for pairing with devices on this network."
-} catch {
-    Write-Warn "Could not add a firewall rule ($_) -- if pairing with another device on your network shows the peer as 'unreachable', allow inbound TCP $ConsolePort in Windows Defender Firewall manually."
+# ── 3b2. Firewall: allow LAN peers to reach the console/A2A port (-Lan) ─────
+# OPT-IN via -Lan (F10): the console listens on 127.0.0.1 by default, so an
+# inbound allow-rule on every install pre-exposed the port before the operator
+# ever enabled a2a_lan_bind. Best-effort, never blocks install -- Settings ->
+# A2A still works locally either way, and a manual exception can be added later.
+if ($Lan) {
+    try {
+        Install-CorvinFirewallRule -Port $ConsolePort
+        Write-Ok "Firewall: allowed inbound connections to the console/A2A port ($ConsolePort) for pairing with devices on this network."
+    } catch {
+        Write-Warn "Could not add a firewall rule ($_) -- if pairing with another device on your network shows the peer as 'unreachable', allow inbound TCP $ConsolePort in Windows Defender Firewall manually."
+    }
+} else {
+    Write-Hint "Firewall untouched (console listens on 127.0.0.1). For A2A pairing over your LAN re-run with -Lan or allow inbound TCP $ConsolePort yourself."
 }
 
 # ── 3c. Desktop shortcut ──────────────────────────────────────────────────

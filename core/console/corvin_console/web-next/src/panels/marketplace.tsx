@@ -12,6 +12,7 @@ import { InstallProgress } from '@/components/install-progress'
 import { CustomRepositoriesSection } from '@/components/CustomRepositoriesSection'
 import { useProgressPolling } from '@/hooks/useProgressPolling'
 import { BASE } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth'
 
 interface Plugin {
   id: string
@@ -54,6 +55,9 @@ interface InstallProgress {
 }
 
 export const MarketplacePanel: React.FC = () => {
+  // Install is a mutation → CSRF token (backend: require_csrf, tenant from session).
+  const { session } = useAuth()
+  const csrf = session?.csrf_token ?? ''
   const queryClient = useQueryClient()
   const [view, setView] = useState<'browse' | 'installed' | 'custom'>('browse')
   const [plugins, setPlugins] = useState<Plugin[]>([])
@@ -192,13 +196,11 @@ export const MarketplacePanel: React.FC = () => {
 
       // Real API call: POST /api/v1/marketplace/plugins/{id}/install (future phase 4)
       // For now, this is a placeholder; Phase 4 will wire the install API
-      const response = await fetch(`${BASE}/api/v1/marketplace/plugins/${extensionId}/install`, {
+      const response = await fetch(`${BASE}/api/v1/marketplace/plugins/${encodeURIComponent(extensionId)}/install`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          version: plugin.version,
-          tenant_id: 'default'
-        })
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+        // tenant is the authenticated session's — the backend ignores a body tenant_id
+        body: JSON.stringify({ version: plugin.version })
       })
 
       if (!response.ok) {

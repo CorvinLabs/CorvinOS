@@ -28,6 +28,20 @@ except ImportError:
     HAS_ANTHROPIC = False
 
 
+TENANT = "_default"  # valid tenant id — a hyphen ("tenant-default") is rejected
+
+
+@pytest.fixture(autouse=True)
+def sandbox(tmp_path: Path, monkeypatch):
+    """N-04: the model audits through the REAL core writer (fail-closed), so run
+    against a temp chain (``VOICE_AUDIT_PATH``), the matching tenant context and a
+    temp ``CORVIN_HOME`` — never the live install."""
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "chain" / "audit.jsonl"))
+    monkeypatch.setenv("CORVIN_TENANT_ID", TENANT)
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    return tmp_path
+
+
 # Metrics collector
 class E2EMetricsCollector:
     """Collect E2E test metrics for analysis."""
@@ -81,15 +95,15 @@ class E2EMetricsCollector:
 
 
 @pytest.fixture
-def metrics_collector():
-    """Provide metrics collector."""
-    return E2EMetricsCollector()
+def metrics_collector(tmp_path):
+    """Provide metrics collector (writes under the test's tmp dir, not the repo)."""
+    return E2EMetricsCollector(str(tmp_path / "outputs" / "phase4_e2e_metrics.jsonl"))
 
 
 @pytest.fixture
 def hybrid_context():
-    """Provide hybrid context model."""
-    return HybridContextModel("tenant-default")
+    """Provide hybrid context model (valid, sandboxed tenant)."""
+    return HybridContextModel(TENANT)
 
 
 @pytest.fixture

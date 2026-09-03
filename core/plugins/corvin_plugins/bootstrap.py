@@ -169,15 +169,30 @@ def _assert_core_audit_inline() -> list[Any]:
     """Minimal fail-closed check: the core audit chain must be usable.
 
     Mirrors ``tripwire.audit_writer_reachable`` + ``audit_chain_intact`` without
-    depending on the compliance package.  An absent audit module means audit is
-    a documented no-op for that layout (standalone bridge mode), which is not a
-    compliance failure; an audit module whose chain does NOT verify is.
+    depending on the compliance package.  Fail-closed on every branch: an absent
+    audit module, an audit module without a loaded writer, and a chain that does
+    not verify are all :class:`CoreAuditUnavailable`.  "Audit is a documented
+    no-op for this layout" was the old reading of the first two, and it is the
+    compliance-off mode the baseline forbids, one ImportError deep (findings A1,
+    A8): a platform whose audit trail goes nowhere must not boot.
     """
     try:
         import audit as _audit  # type: ignore[import-not-found]
-    except ImportError:
-        log.warning("audit module unavailable — audit writes are no-ops in this layout")
-        return []
+    except ImportError as exc:
+        raise CoreAuditUnavailable(
+            "core audit module not importable — refusing to boot without an audit trail"
+        ) from exc
+
+    writer_available = getattr(_audit, "writer_available", None)
+    if not callable(writer_available):
+        raise CoreAuditUnavailable(
+            "audit module exposes no writer_available() — not the core audit module"
+        )
+    if not writer_available():
+        raise CoreAuditUnavailable(
+            "core audit writer unavailable (forge.security_events not loaded) — "
+            "audit_event() would be a silent no-op"
+        )
 
     try:
         path = Path(_audit.audit_path())
@@ -1023,6 +1038,9 @@ def _tenant_scope_permits(
 
     Never raises.  A refusal costs one plugin its slot; an exception here would
     cost the boot, and the check exists to protect data, not to stop the platform.
+    An evaluator that RAISES refuses (fail-closed, audited): "allowing" on an
+    exception let any plugin take a process-wide provider slot on a multi-tenant
+    install the moment the check broke (2026-09-03 finding A4).
     """
     plugin_type = getattr(instance, "plugin_type", "") or ""
     try:
@@ -1031,11 +1049,21 @@ def _tenant_scope_permits(
         decision = tenant_scope.evaluate(
             plugin_type=plugin_type, origin=origin, corvin_home=corvin_home
         )
-    except Exception:  # noqa: BLE001 - a broken check must not brick the boot
-        log.exception(
-            "plugin %r: tenant-scope evaluation failed — allowing", plugin_id
+    except Exception as exc:  # noqa: BLE001 - a broken check costs the slot, not the boot
+        log.error(
+            "plugin %r (type=%s): tenant-scope evaluation failed (%s) — refusing "
+            "the provider slot (fail-closed)",
+            plugin_id, plugin_type, type(exc).__name__,
         )
-        return True
+        _audit_degradation(tenant_id, "plugin.provider_slot_refused", {
+            "plugin_id": plugin_id,
+            "plugin_type": plugin_type,
+            "origin": origin or "unknown",
+            "tenant_id": tenant_id,
+            "reason": "evaluation_failed",
+            "error_type": type(exc).__name__,
+        })
+        return False
 
     if decision.allowed:
         return True
@@ -1104,14 +1132,20 @@ def _register_instance(
     try:
         register(instance, ctx, boot_layer=boot_layer)
     except Exception as exc:  # noqa: BLE001
+        from .registry import PluginLoadTimeout
+
+        # An on_load that overran LOAD_DEADLINE_S is a load failure with its own
+        # reason code, so an operator can tell "raised" from "hung" in the chain.
+        reason = "on_load_timeout" if isinstance(exc, PluginLoadTimeout) else "register_failed"
         log.error(
-            "plugin %r failed to register (%s) — skipping",
+            "plugin %r failed to register (%s, %s) — skipping",
             plugin_id,
+            reason,
             type(exc).__name__,
         )
         _audit_degradation(tenant_id, "plugin.load_failed", {
             "plugin_id": plugin_id, "tenant_id": tenant_id,
-            "reason": "register_failed", "error_type": type(exc).__name__,
+            "reason": reason, "error_type": type(exc).__name__,
         })
         return False
     return True
@@ -1201,9 +1235,21 @@ def _trust_permits(
             tenant_id=tenant_id,
             enforcement=enforcement,
         )
-    except Exception:  # noqa: BLE001 - trust must not break the boot
-        log.exception("plugin %r: trust evaluation failed — allowing", record.plugin_id)
-        return True
+    except Exception as exc:  # noqa: BLE001 - trust must not break the boot: it costs the plugin
+        # Fail-closed (finding A4): an evaluator that cannot answer has not
+        # answered "yes". Audited, because a plugin that never loads with only a
+        # log line is the failure mode this module keeps producing.
+        log.error(
+            "plugin %r: trust evaluation failed (%s) — refusing to load (fail-closed)",
+            record.plugin_id, type(exc).__name__,
+        )
+        _audit_degradation(tenant_id, "plugin.load_refused", {
+            "plugin_id": record.plugin_id,
+            "tenant_id": tenant_id,
+            "reason": "trust_evaluation_failed",
+            "error_type": type(exc).__name__,
+        })
+        return False
 
     if decision.allowed:
         if decision.verdict is trust.Verdict.FORGED:
@@ -1349,6 +1395,7 @@ def boot_platform() -> list[str]:
     advance_registration_epoch()
 
     loaded: list[str] = []
+    _tid = "_default"
     try:
         from corvin_core import feature_flags as _flags  # noqa: PLC0415
         from forge.paths import corvin_home as _corvin_home  # noqa: PLC0415
@@ -1368,7 +1415,21 @@ def boot_platform() -> list[str]:
         # without the compliance plugin machinery still boots.
         if type(exc).__name__ == "GlobalComplianceLoadFailed":
             raise
+        # Into the chain, not only the log (finding A9): a platform that booted
+        # with ZERO plugins because bootstrap_all() raised must be
+        # distinguishable, in the audit trail, from one that had none declared.
+        _audit_degradation(_tid, "plugin.bootstrap_skipped", {
+            "tenant_id": _tid, "error_type": type(exc).__name__,
+        })
         log.warning("plugin bootstrap skipped", exc_info=True)
+
+    # 2b. ACP Skills registry (ADR-0532/0544). The global Skills registry that
+    # the gateway health collector, the console headless check, /build, the vibe
+    # pipeline route and /capabilities all read from was never POPULATED by any
+    # host until 2026-09-03 — every consumer got "Skill not found" and fell back
+    # to off. It is wired here, in the one shared sequence, with the same audit
+    # writer the plugins receive, so Skill decisions join the hash chain.
+    _boot_skills_registry()
 
     try:
         from corvin_compliance_reports.tripwire import (  # noqa: PLC0415
@@ -1381,13 +1442,214 @@ def boot_platform() -> list[str]:
     if _assert_post_boot is not None:
         _assert_post_boot()  # raises TripwireError -> boot aborts
 
+    # 4. ADR-0231 Stage 2/3 — health polling + self-healing. Started HERE, in
+    # the shared sequence, after the post-boot tripwire has accepted the boot:
+    # until 2026-09-03 the collector and healer were wired only in the gateway
+    # lifespan, so the standalone console (corvinos-serve, install.sh) booted
+    # every plugin and never polled one (finding A6).
+    start_health_monitoring(loaded)
+
     return loaded
 
 
+# ── ADR-0231 Stage 2/3 — health monitoring, shared by every host ─────────────
+
+#: The one running collector for this process, or None. Held here so
+#: :func:`shutdown` (and the hosts' lifespans) can stop it without each host
+#: keeping its own reference — a second copy is how the console lost it.
+_HEALTH_COLLECTOR: Any | None = None
+
+
+def health_collector() -> Any | None:
+    """The running :class:`~corvin_plugins.health.HealthCollector`, or None."""
+    return _HEALTH_COLLECTOR
+
+
+def _self_healing_enabled(tenant_id: str) -> bool:
+    """Lazy per-tenant read of the ``plugin_self_healing`` flag (default OFF).
+
+    Read on every healing decision, never cached, so toggling it in the Console
+    takes effect without a restart. Absent or broken flag registry reads as
+    off — an autonomous actor that restarts plugins must be switched ON by an
+    operator, never assumed.
+    """
+    try:
+        from corvin_core import feature_flags as _flags  # noqa: PLC0415
+
+        return bool(_flags.is_enabled("plugin_self_healing", tenant_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def start_health_monitoring(plugin_ids: Iterable[str]) -> Any | None:
+    """Start the plugin health collector (+ healer) for this process, once.
+
+    Gated on the ``os.plugin_health_monitoring`` Skill (ADR-0532 ACP), which
+    :func:`_boot_skills_registry` populates earlier in :func:`boot_platform`.
+    Skill off (the default) means NO timer is created at all: the ``/plugins``
+    health route still answers from the breaker state, which costs nothing.
+
+    Requires a running asyncio loop — both shipped hosts call
+    :func:`boot_platform` from inside an async lifespan. A synchronous caller
+    (a probe, a CLI) gets ``None`` and a log line, not a crash: monitoring is a
+    runtime service, not a compliance mechanism.
+
+    Returns the collector, or ``None`` when monitoring was not started. Never
+    raises. The Console's ``/plugins`` route receives the collector through a
+    lazy, ImportError-guarded import so this helper works on a headless core.
+    """
+    global _HEALTH_COLLECTOR
+
+    if _HEALTH_COLLECTOR is not None:
+        return _HEALTH_COLLECTOR
+
+    import asyncio  # noqa: PLC0415
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        log.info(
+            "plugin health monitoring not started: no running event loop "
+            "(synchronous boot_platform caller)"
+        )
+        return None
+
+    try:
+        from core.skills.skill_registry_phase1 import get_registry as _get_registry  # noqa: PLC0415
+        from forge.paths import corvin_home as _hc_home  # noqa: PLC0415
+        from forge.tenants import current_tenant as _hc_tenant  # noqa: PLC0415
+
+        from .healing import HealingOrchestrator  # noqa: PLC0415
+        from .health import HealthCollector  # noqa: PLC0415
+
+        tenant_id = _hc_tenant()
+        result = _get_registry().execute(
+            "os.plugin_health_monitoring", {"tenant_id": tenant_id}
+        )
+        enabled = result.status == "success" and bool(
+            (result.output or {}).get("enabled")
+        )
+        if not enabled:
+            log.info(
+                "plugin health monitoring off (os.plugin_health_monitoring: %s)",
+                getattr(result, "status", "?"),
+            )
+            return None
+
+        audit_emit = build_context(
+            plugin_id="health-collector",
+            tenant_id=tenant_id,
+            corvin_home=_hc_home(),
+        ).audit_emit
+        # ADR-0231 Stage 3 — self-healing hangs off the collector (the only
+        # poller) rather than a second timer; gated on its OWN flag, lazily.
+        healer = HealingOrchestrator(
+            enabled=lambda: _self_healing_enabled(tenant_id),
+            audit_emit=audit_emit,
+        )
+        collector = HealthCollector(audit_emit=audit_emit, healer=healer)
+        collector.start()
+        _HEALTH_COLLECTOR = collector
+    except Exception:  # noqa: BLE001 - monitoring must not cost the boot
+        log.warning(
+            "plugin health collector not started (Skills registry unavailable?)",
+            exc_info=True,
+        )
+        return None
+
+    _publish_collector(collector)
+    log.info(
+        "plugin health monitoring started for %d plugin(s)", len(list(plugin_ids))
+    )
+    return collector
+
+
+def _publish_collector(collector: Any | None) -> None:
+    """Hand the collector to the Console's ``/plugins`` route, if the Console
+    package is present. Headless core (ADR-0241): absent Console is not an error."""
+    try:
+        from corvin_console.routes import plugins as _plugins_route  # noqa: PLC0415
+    except ImportError:
+        return
+    try:
+        _plugins_route.set_collector(collector)
+    except Exception:  # noqa: BLE001
+        log.warning("could not publish the health collector to the Console route", exc_info=True)
+
+
+async def stop_health_monitoring() -> None:
+    """Stop the collector started by :func:`start_health_monitoring` (awaits it).
+
+    Call BEFORE :func:`shutdown`: a poll must not land on a plugin that is
+    halfway through ``on_unload()``. Idempotent; never raises.
+    """
+    global _HEALTH_COLLECTOR
+
+    collector, _HEALTH_COLLECTOR = _HEALTH_COLLECTOR, None
+    if collector is None:
+        return
+    try:
+        await collector.stop()
+    except Exception:  # noqa: BLE001
+        log.warning("health collector did not stop cleanly", exc_info=True)
+    _publish_collector(None)
+
+
+def _stop_health_monitoring_sync() -> None:
+    """Synchronous best-effort stop, for a :func:`shutdown` caller that did not
+    await :func:`stop_health_monitoring` first: signals the loop, cancels the
+    task, clears the handles. Cannot await the task from here."""
+    global _HEALTH_COLLECTOR
+
+    collector, _HEALTH_COLLECTOR = _HEALTH_COLLECTOR, None
+    if collector is None:
+        return
+    try:
+        stop_event = getattr(collector, "_stop", None)
+        if stop_event is not None:
+            stop_event.set()
+        task = getattr(collector, "_task", None)
+        if task is not None:
+            task.cancel()
+    except Exception:  # noqa: BLE001
+        pass
+    _publish_collector(None)
+
+
+def _boot_skills_registry() -> list[str]:
+    """Populate the ACP Skills registry for the boot tenant (best-effort, logged).
+
+    Absent ``core.skills`` (stripped install) is tolerated like an absent plugin
+    package; a present-but-failing registration is logged at ERROR so the
+    "Skill not found" fallbacks downstream are never silent again.
+    """
+    try:
+        from core.skills.boot import boot_skills  # noqa: PLC0415
+    except ImportError:
+        log.debug("core.skills absent — ACP Skills registry not populated")
+        return []
+    try:
+        from forge.tenants import current_tenant as _current_tenant  # noqa: PLC0415
+
+        tenant_id = _current_tenant()
+    except Exception:  # noqa: BLE001
+        tenant_id = "_default"
+    try:
+        return boot_skills(tenant_id=tenant_id, audit_emit=_default_audit_emit(tenant_id))
+    except Exception:  # noqa: BLE001
+        log.error("ACP Skills registry boot FAILED — Skill consumers will fall back to off", exc_info=True)
+        return []
+
+
 def shutdown(plugin_ids: Iterable[str]) -> None:
-    """Unregister plugins on graceful shutdown, detaching their provider slots."""
+    """Unregister plugins on graceful shutdown, detaching their provider slots.
+
+    Stops health monitoring first (best-effort, synchronous) if the host did not
+    already ``await stop_health_monitoring()``.
+    """
     from .registry import unregister
 
+    _stop_health_monitoring_sync()
     for plugin_id in plugin_ids:
         try:
             unregister(plugin_id)
@@ -1407,7 +1669,10 @@ __all__ = [
     "bootstrap_global",
     "bootstrap_tenant",
     "build_context",
+    "health_collector",
     "load_tenant_spec",
     "register_global_plugin",
     "shutdown",
+    "start_health_monitoring",
+    "stop_health_monitoring",
 ]

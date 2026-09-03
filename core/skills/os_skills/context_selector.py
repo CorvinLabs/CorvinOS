@@ -39,8 +39,7 @@ def _get_lom() -> str:
     return "unknown"
 
 # Audit chain writer (lazy singleton)
-_audit_writer_lock = threading.Lock()
-_audit_writer: Optional[Any] = None
+from core.skills.skill_audit import emit_skill_audit
 
 
 class QualityMode(Enum):
@@ -274,30 +273,6 @@ class ContextSelectorSkill:
         }
 
     @staticmethod
-    def _get_audit_writer() -> Optional[Any]:
-        """Get or initialize audit chain writer (lazy singleton)."""
-        global _audit_writer, _audit_writer_lock
-
-        if _audit_writer is not None:
-            return _audit_writer
-
-        with _audit_writer_lock:
-            if _audit_writer is not None:
-                return _audit_writer
-
-            try:
-                from core.compliance.audit_chain_writer import AuditChainWriter
-
-                # Initialize writer with ~/.corvin/audit.jsonl path
-                home = Path.home()
-                audit_path = home / ".corvin" / "audit.jsonl"
-                _audit_writer = AuditChainWriter(audit_path)
-                return _audit_writer
-            except Exception as e:
-                logger.warning(f"Could not initialize AuditChainWriter: {e}")
-                return None
-
-    @staticmethod
     def _emit_audit_event(
         decision: ContextSelectionDecision, user_id: str, tenant_id: str = "_default"
     ) -> None:
@@ -308,28 +283,23 @@ class ContextSelectorSkill:
             f"adrs={len(decision.selected_adr_ids)}, memory={len(decision.selected_memory_ids)}"
         )
 
-        # Write to audit chain
-        writer = ContextSelectorSkill._get_audit_writer()
-        if writer is not None:
-            try:
-                writer.write_event_dict(
-                    event_type="skill_executed",
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    details={
-                        "skill_id": "os.context_selector",
-                        "quality_mode": decision.quality_mode.value,
-                        "selected_adrs": decision.selected_adr_ids,
-                        "selected_memory": decision.selected_memory_ids,
-                        "confidence": decision.confidence,
-                        "execution_time_ms": decision.execution_time_ms,
-                        "reasoning": decision.reasoning,
-                        "lom_audit_write": _get_lom(),
-                    },
-                    severity="INFO"
-                )
-            except Exception as e:
-                logger.error(f"Failed to write context selection audit event: {e}")
+        # Write to the TENANT core audit chain (metadata only — ids, counts,
+        # timings; never the selected content). The previous writer targeted a
+        # hard-coded ~/.corvin/audit.jsonl that ignored CORVIN_HOME and the
+        # tenant, in a record format the chain verifier does not read (D-07).
+        emit_skill_audit(
+            tenant_id, "skill.executed", tool="os.context_selector",
+            details={
+                "skill_id": "os.context_selector",
+                "status": "success",
+                "quality_mode": decision.quality_mode.value,
+                "selected_adr_count": len(decision.selected_adr_ids),
+                "selected_memory_count": len(decision.selected_memory_ids),
+                "confidence": round(float(decision.confidence), 4),
+                "latency_ms": round(float(decision.execution_time_ms), 3),
+                "lom": decision.audit_event.get("lom", "context_selector.py:execute"),
+            },
+        )
 
 
 # Global instance (singleton for ACP)

@@ -257,16 +257,17 @@ exclude = [
     "**/__pycache__/**",
     "**/*.pyc",
     # Ship ONLY the pre-built SPA (force-included below as web-next/dist), never
-    # the frontend source tree, CI test artifacts, or build config. `sources`
-    # maps core/console to the wheel root, which would otherwise glob the whole
+    # the frontend source tree, CI test artifacts, or build config. The
+    # `sources` mapping of corvin_console would otherwise glob the whole
     # web-next/ tree (TS src, playwright-report/, test-results/, *.config.*) —
     # ~2.8 MB of source + gitignored E2E screenshots — into a PUBLIC wheel. The
     # force-include of web-next/dist bypasses this exclude, so dist still ships
     # exactly once.
     "**/web-next/**",
-    # core/console and core/license both map to wheel root via sources "".
-    # Any file at the same relative path in both dirs collides. Strip all
-    # non-package content (dev files, tests, dotfiles, docs).
+    # Strip all non-package content (dev files, tests, dotfiles, docs). Before
+    # the per-package `sources` mapping, core/console and core/license both
+    # mapped to the wheel root and any file at the same relative path in both
+    # dirs collided; the generic excludes below predate that fix and stay.
     "**/.gitignore",
     "**/.pytest_cache/**",
     "**/.venv/**",
@@ -279,11 +280,12 @@ exclude = [
     "**/requirements.txt",
     "**/bootstrap.sh",
     "**/install-systemd.sh",
-    # Internal test suites must never ship in the wheel. Several subtrees
-    # (core/gateway, core/console, core/license) map to the wheel root via
-    # [tool.hatch.build.targets.wheel.sources], so an un-excluded core/<x>/tests/
-    # would pollute a top-level `tests` namespace in site-packages. Exclude all
-    # test content generically rather than enumerating each subtree.
+    # Internal test suites must never ship in the wheel. Until 2026-09-03 several
+    # subtrees (core/gateway, core/console, core/license) mapped to the wheel
+    # root via [tool.hatch.build.targets.wheel.sources], so an un-excluded
+    # core/<x>/tests/ polluted a top-level `tests` namespace in site-packages.
+    # The mapping is per package now, but exclude all test content generically
+    # anyway rather than enumerating each subtree.
     "**/tests/**",
     "**/test_*.py",
     "**/conftest.py",
@@ -299,6 +301,34 @@ exclude = [
     "**/*.go",
     "**/install.sh",
     "**/install.ps1",
+    # Non-package content of core/console, core/gateway and core/license. With
+    # the per-package `sources` mapping below these would no longer land at the
+    # wheel ROOT, but they would still ship as dead weight under
+    # core/console/... and core/gateway/... in site-packages (dev script, a
+    # nested pyproject + lockfile, Helm chart, Dockerfile, unmounted route
+    # files, two abandoned frontend trees). Nothing in the wheel imports them.
+    "core/console/dev.sh",
+    "core/console/frontend/**",
+    "core/console/ui/**",
+    "core/console/routes/**",
+    "core/console/config/**",
+    "core/gateway/Dockerfile",
+    "core/gateway/pyproject.toml",
+    "core/gateway/uv.lock",
+    "core/gateway/chart/**",
+    "core/gateway/scripts/**",
+    "core/gateway/routes/**",
+    "core/gateway/systemd/**",
+    "core/gateway/*.egg-info/**",
+    # Git-tracked pytest/coverage artifacts under core/vibe_engineering/. They
+    # carry the developer's absolute checkout path (/home/<user>/projects/...)
+    # in every entry and shipped in the public wheel (2026-09-03 review, F5).
+    # The maintainer should also `git rm` the two tracked files
+    # (core/vibe_engineering/test_results.json, coverage_report.json); this
+    # exclude keeps them out of the wheel until then and afterwards.
+    "**/test_results.json",
+    "**/coverage_report.json",
+    "**/requirements-test.txt",
 ]
 
 # Custom build hook that vendors pruned operator subtrees into the wheel
@@ -307,12 +337,24 @@ exclude = [
 path = "hatch_build.py"
 
 [tool.hatch.build.targets.wheel.sources]
-"core/console" = ""
-"core/gateway" = ""
+# Mapped per PACKAGE, never per parent directory. Until 2026-09-03 these three
+# read `"core/console" = ""`, `"core/gateway" = ""`, `"core/license" = ""`,
+# which lifted EVERYTHING in those directories to the site-packages ROOT:
+# core/gateway/pyproject.toml, uv.lock, Dockerfile, core/console/dev.sh,
+# github_client.py, and the top-level dirs routes/, scripts/, chart/,
+# frontend/, ui/, systemd/. Two consequences beyond clutter: (1) a top-level
+# `routes` namespace package appeared in every environment that installed
+# the wheel, and (2) the stray site-packages/pyproject.toml made
+# corvinOS/installer/core.py believe every wheel install was a source
+# checkout (adversarial installation review 2026-09-03, F1/F2).
+# tests/test_wheel_content_guard.py asserts the wheel root stays clean.
+"core/console/corvin_console" = "corvin_console"
+"core/console/corvin_core" = "corvin_core"
+"core/gateway/corvin_gateway" = "corvin_gateway"
 # corvin_license plugin (RS256 JWT gate) is imported as top-level `corvin_license`
 # throughout the codebase — remap so it lands at the wheel root rather than
 # core/license/corvin_license/ (which would break `from corvin_license.verifier import …`).
-"core/license" = ""
+"core/license/corvin_license" = "corvin_license"
 
 # ── Every other core/<area>/<pkg> that is imported as a TOP-LEVEL module ──────
 # Without these the package files ship (they are under `packages = [... "core" ...]`)

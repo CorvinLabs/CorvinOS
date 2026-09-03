@@ -52,7 +52,7 @@ Shows token bucket state for a specific client/user.
 - rate_limit_per_minute (default: 1000)
 - quota_status (GREEN > 50%, YELLOW 0–50%, RED exhausted)
 
-**Per-minute refill:** 1000 / 60 ≈ 16.7 tokens/sec. At 1000 req/min, each request costs ~1 token.
+**Per-minute refill:** 1000 / 60 ≈ 16.7 tokens/sec, accounted FRACTIONALLY (a client polling faster than one token interval still refills — the previous integer truncation starved it). `tokens` in the rate-limiter output is therefore a float; `last_refill` is a monotonic-clock reading, not a wall-clock timestamp.
 
 ## Recovery Procedures
 
@@ -216,7 +216,8 @@ Look for:
 | ttl_minutes | 30 min | 15–60 | TTL too short → cache churn; too long → stale manifests |
 | rate_limit_per_minute | 1000 req/min | 500–2000 | Too low → users rate-limited; too high → possible cascading failures |
 | circuit_breaker failure_threshold | 5 failures | 3–10 | Too low → false positives (single glitch opens); too high → slow to fail-fast |
-| recovery_timeout_seconds | 60 sec | 30–120 | Too short → aggressive retry; too long → slow recovery |
+| recovery_timeout_seconds | 60 sec | 30–120 | Too short → aggressive retry; too long → slow recovery. In HALF_OPEN exactly ONE probe is in flight at a time; a probe that never reports back is presumed lost after this many seconds |
+| request_timeout_seconds | 5 sec | 1–30 | ENFORCED: `resolve()` runs on a worker thread and is abandoned (counted as a breaker failure) when it overruns. Too short → healthy slow disks trip the breaker |
 
 **Tuning guide:**
 - **High-traffic install:** Increase max_size to 512, rate_limit to 2000

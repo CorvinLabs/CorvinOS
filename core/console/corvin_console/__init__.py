@@ -40,4 +40,34 @@ _sys.modules[__name__ + "._operator_bootstrap"] = _ob
 _sys.modules[__name__ + "._wincompat"] = _wc
 _sys.modules[__name__ + "._bootstrap"] = _bs
 
-__version__ = "0.1.4"
+
+
+def _resolve_version() -> str:
+    """The installed distribution's version, or the checkout's pyproject one.
+
+    A hardcoded literal here drifted to "0.1.4" while pyproject.toml said
+    1.0.0, so /v1/console/healthz reported a version no release ever had
+    (2026-09-03 review, F8). Wheel/editable installs carry dist metadata; a
+    bare checkout on sys.path without an install falls back to parsing the
+    `version = "..."` line of the repo's pyproject.toml.
+    """
+    try:
+        from importlib.metadata import version as _dist_version
+
+        return _dist_version("corvinos")
+    except Exception:  # noqa: BLE001 — PackageNotFoundError or broken metadata
+        pass
+    try:
+        import re as _re
+        from pathlib import Path as _Path
+
+        _pyproject = _Path(__file__).resolve().parents[3] / "pyproject.toml"
+        _m = _re.search(r'^version\s*=\s*"([^"]+)"', _pyproject.read_text(encoding="utf-8"), _re.M)
+        if _m:
+            return _m.group(1)
+    except Exception:  # noqa: BLE001
+        pass
+    return "0.0.0+unknown"
+
+
+__version__ = _resolve_version()

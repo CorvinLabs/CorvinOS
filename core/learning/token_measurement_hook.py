@@ -196,6 +196,7 @@ def _autoinit_token_hook() -> Optional[TokenMeasurementHook]:
         from pathlib import Path  # noqa: PLC0415
 
         from core.learning.event_emitter import EventEmitter  # noqa: PLC0415
+        from core.learning.event_store import EventStore as _LearningEventStore  # noqa: PLC0415
         from core.learning.token_metrics_db import TokenMetricsDB  # noqa: PLC0415
         from core.learning.token_metrics_store import TokenMetricsStore  # noqa: PLC0415
 
@@ -206,7 +207,7 @@ def _autoinit_token_hook() -> Optional[TokenMeasurementHook]:
         except Exception:  # noqa: BLE001
             tenant_dir = Path.home() / ".corvin" / "tenants" / tenant_id
 
-        emitter = EventEmitter(Path(tenant_dir), tenant_id)
+        emitter = EventEmitter(_LearningEventStore(Path(tenant_dir)))
         _hook = TokenMeasurementHook(TokenMetricsStore(emitter, db=TokenMetricsDB()), emitter)
         logger.info("Token measurement hook auto-initialized")
     except Exception as exc:  # noqa: BLE001

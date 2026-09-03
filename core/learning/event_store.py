@@ -129,9 +129,8 @@ class EventStore:
                             results.append(event)
 
                             # FIX #21 optimization: early exit when limit+offset reached
-                            if len(results) > (offset + limit):
-                                results = results[:offset + limit]
-                                return results
+                            if len(results) >= (offset + limit):
+                                return results[offset:offset + limit]
 
                 except json.JSONDecodeError as e:
                     # FIX #4, #27: Log corrupted JSON + audit timestamp (not silent)

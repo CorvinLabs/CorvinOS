@@ -90,13 +90,61 @@ def cmd_tasks(args) -> int:
     return 0
 
 
+def _sessions_roots() -> list[Path]:
+    """Every ``sessions/`` dir: tenant-native ``<home>/tenants/<tid>/sessions``
+    plus the legacy ``<home>/sessions`` alias, de-duplicated by real path
+    (the alias is a symlink onto ``tenants/_default/sessions``)."""
+    home = corvin_home()
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for base in [home / "sessions", *sorted((home / "tenants").glob("*/sessions"))]:
+        if not base.is_dir():
+            continue
+        key = base.resolve()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(base)
+    return out
+
+
+def _session_skill_forge_roots() -> list[tuple[str, Path]]:
+    """``(label, <sessions>/<chan>/skill-forge)`` for every session workspace."""
+    out: list[tuple[str, Path]] = []
+    for base in _sessions_roots():
+        for child in sorted(base.iterdir()):
+            sf = child / "skill-forge"
+            if child.is_dir() and sf.exists():
+                out.append((f"session/{child.name}", sf))
+    return out
+
+
+def _project_skill_forge_root() -> Path | None:
+    """The project-scope workspace, ONLY when the operator names the repo.
+
+    Project scope lives inside a repository (``<repo>/.corvin/skill-forge``);
+    this script cannot enumerate repositories. ``<corvin_home>/skill-forge``
+    — which the previous version pruned as "project" — is the USER scope in
+    the tenant-native layout (``<tenant_home>/skill-forge``; the compat
+    symlink made it look like a home-level dir). User scope is NEVER pruned.
+    """
+    root = os.environ.get("CORVIN_PROJECT_ROOT", "").strip()
+    if not root:
+        return None
+    from forge.scope import scope_root  # noqa: PLC0415
+    return scope_root("project", tenant_id="_default", project_root=Path(root)).parent / "skill-forge"
+
+
 def cmd_sessions(args) -> int:
     ttl = args.ttl_days * 86400
-    root = corvin_home() / "sessions"
-    print(f"[skill sessions cleanup]  root={root}  ttl={args.ttl_days}d  "
-          f"dry-run={args.dry_run}")
-    d, k = _prune_dir(root, max_age_seconds=ttl, dry_run=args.dry_run)
-    print(f"  done — deleted={d} kept={k}")
+    d_total = k_total = 0
+    for root in _sessions_roots():
+        print(f"[skill sessions cleanup]  root={root}  ttl={args.ttl_days}d  "
+              f"dry-run={args.dry_run}")
+        d, k = _prune_dir(root, max_age_seconds=ttl, dry_run=args.dry_run)
+        d_total += d
+        k_total += k
+    print(f"  done — deleted={d_total} kept={k_total}")
     return 0
 
 
@@ -149,24 +197,19 @@ def cmd_ungraded(args) -> int:
                 purged_total += p
                 kept_total += k
 
-    # session scope: <corvin_home>/sessions/<chan>/skill-forge/
-    sess_root = corvin_home() / "sessions"
-    if sess_root.is_dir():
-        for child in sorted(sess_root.iterdir()):
-            if child.is_dir() and (child / "skill-forge").exists():
-                p, k = _ungraded_in(
-                    child / "skill-forge",
-                    max_age_seconds=ttl, dry_run=args.dry_run,
-                    scope_label=f"session/{child.name}",
-                )
-                purged_total += p
-                kept_total += k
+    # session scope: <corvin_home>/tenants/<tid>/sessions/<chan>/skill-forge/
+    for label, sf_root in _session_skill_forge_roots():
+        p, k = _ungraded_in(
+            sf_root, max_age_seconds=ttl, dry_run=args.dry_run,
+            scope_label=label,
+        )
+        purged_total += p
+        kept_total += k
 
-    # project scope: <corvin_home>/skill-forge/ — see forge.scope.scope_root
-    # The forge layout puts project workspace at <corvin_home>/forge,
-    # so we sit alongside it at <corvin_home>/skill-forge.
-    proj_root = corvin_home() / "skill-forge"
-    if proj_root.is_dir():
+    # project scope: <repo>/.corvin/skill-forge — only when CORVIN_PROJECT_ROOT
+    # names the repo (see _project_skill_forge_root).
+    proj_root = _project_skill_forge_root()
+    if proj_root is not None and proj_root.is_dir():
         p, k = _ungraded_in(
             proj_root, max_age_seconds=ttl, dry_run=args.dry_run,
             scope_label="project",
@@ -174,7 +217,7 @@ def cmd_ungraded(args) -> int:
         purged_total += p
         kept_total += k
 
-    # NOTE: user scope (~/.corvin/global/skill-forge/) is intentionally
+    # NOTE: user scope (<tenant_home>/skill-forge/) is intentionally
     # NEVER pruned — those are durable, operator-blessed skills.
     print(f"  done — purged={purged_total} kept={kept_total}")
     return 0

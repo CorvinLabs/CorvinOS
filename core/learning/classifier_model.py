@@ -28,15 +28,51 @@ from core.learning.task_features import TaskFeatureExtractor, FeatureVector
 
 logger = logging.getLogger(__name__)
 
-# Import from operator subpackage - using late import to avoid namespace collision
+def import_context_engineering():
+    """Return the ``context_engineering`` package (operator/context_engineering).
+
+    ``operator/`` has no ``__init__.py`` and always loses to the stdlib
+    ``operator`` module, so ``from operator.context_engineering ...`` can NEVER
+    resolve (ADR-0215 F1). The package is importable under its own top-level
+    name once it has been registered — the console does this at boot
+    (``corvin_console.chat_runtime``); outside the console, load it from the
+    source tree the same way (spec_from_file_location), never via a dotted
+    ``operator.`` path.
+    """
+    import importlib
+    import sys
+    try:
+        return importlib.import_module("context_engineering")
+    except ImportError:
+        pass
+    import importlib.util as _ilu
+    from pathlib import Path
+
+    cel_dir = Path(__file__).resolve().parents[2] / "operator" / "context_engineering"
+    init = cel_dir / "__init__.py"
+    if not init.is_file():
+        raise ImportError("context_engineering package not found (operator/context_engineering)")
+    spec = _ilu.spec_from_file_location(
+        "context_engineering", str(init), submodule_search_locations=[str(cel_dir)]
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("context_engineering package could not be loaded")
+    module = _ilu.module_from_spec(spec)
+    sys.modules["context_engineering"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _get_task_complexity():
-    """Import TaskComplexity to avoid namespace collision at module load time."""
-    from operator.context_engineering.task_classifier import TaskComplexity
+    """Import TaskComplexity (late import — see import_context_engineering)."""
+    import_context_engineering()
+    from context_engineering.task_classifier import TaskComplexity
     return TaskComplexity
 
 def _get_keyword_classifier():
-    """Import keyword classifier to avoid namespace collision at module load time."""
-    from operator.context_engineering.task_classifier import classify as keyword_classify
+    """Import keyword classifier (late import — see import_context_engineering)."""
+    import_context_engineering()
+    from context_engineering.task_classifier import classify as keyword_classify
     return keyword_classify
 
 

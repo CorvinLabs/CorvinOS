@@ -1,360 +1,213 @@
-"""CRITICAL-5: EventEmitter Universal Wiring Audit (Coverage Tests).
+"""EventEmitter contract + wiring audit (ADR-0314).
 
-Verifies that all learning events flow through EventEmitter (async queue)
-and no direct EventStore.write_event() calls exist in skill execution paths.
+The emitter's real contract (adversarial review L-07/L-08/L-16, 2026-09-03):
 
-Test Strategy:
-1. Grep-based audit: verify no direct write_event calls remain
-2. Integration: verify emit() is called on all event-emitting modules
-3. Tenant isolation: verify tenant_id is validated on emit
-4. Fire-and-forget: verify queue-full behavior (drop with warning)
+    EventEmitter(event_store, queue_size=1000)   # wraps event_store.EventStore
+    emit(learning_events.LearningEvent) -> bool  # sync; False == dropped
+    stop(timeout) -> None                        # idempotent, flushes
+    .dropped / .write_failures                   # observable counters
+    daemon worker + atexit flush                 # never pins the process
+
+The former tests asserted an ``EventEmitter(tenant_home, tenant_id)`` +
+``await start()/stop()/flush()`` API that never existed — which is how every
+production construction site shipped broken.
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import re
+import subprocess
+import sys
+import time
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
-from core.learning.confidence_scorer import ConfidenceScorer
-from core.learning.operator_feedback import OperatorFeedbackHandler
-from core.learning.skill_attribution import SkillAttributionEngine, AttributionModel
-from core.learning.user_profile import UserProfileManager, UserProfile, DecisionStyle
 from core.learning.event_emitter import EventEmitter
-from core.learning.event_schema import LearningEvent, LearningEventType
 from core.learning.event_store import EventStore
+from core.learning.learning_events import EventType, LearningEvent
+from core.learning.operator_feedback import OperatorFeedbackHandler, tool_subject_id
 
 
-class TestEventEmitterCoverageAudit:
-    """Verify all learning events use EventEmitter, not direct EventStore.write_event()."""
+@pytest.fixture
+def tenant_home(tmp_path: Path) -> Path:
+    home = tmp_path / "corvin" / "tenants" / "_default"
+    home.mkdir(parents=True, exist_ok=True)
+    return home
 
-    @pytest.fixture
-    def tenant_home(self, tmp_path: Path) -> Path:
-        """Create temporary tenant home for testing."""
-        tenant_home = tmp_path / "corvin" / "tenants" / "_default"
-        tenant_home.mkdir(parents=True, exist_ok=True)
-        return tenant_home
 
-    @pytest.fixture
-    def event_emitter(self, tenant_home: Path) -> EventEmitter:
-        """Create EventEmitter instance."""
-        return EventEmitter(tenant_home, tenant_id="_default")
+@pytest.fixture
+def event_store(tenant_home: Path) -> EventStore:
+    return EventStore(tenant_home)
 
-    @pytest.fixture
-    def event_store(self, tenant_home: Path) -> EventStore:
-        """Create EventStore instance."""
-        return EventStore(tenant_id="_default")
 
-    async def test_confidence_scorer_uses_event_emitter(
-        self, event_emitter: EventEmitter, event_store: EventStore
-    ):
-        """Verify ConfidenceScorer accepts and uses EventEmitter."""
-        # Create scorer with event_emitter
-        scorer = ConfidenceScorer(
-            skills_fetcher=lambda sid: None,
-            event_store=event_store,
-            event_emitter=event_emitter,
+@pytest.fixture
+def event_emitter(event_store: EventStore):
+    emitter = EventEmitter(event_store)
+    yield emitter
+    emitter.stop()
+
+
+def _ev(tenant_id: str = "_default", skill_id: str = "os.test", **signal) -> LearningEvent:
+    return LearningEvent.create(EventType.METRIC, skill_id=skill_id, tenant_id=tenant_id, signal=signal)
+
+
+def _wait_for(pred, timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return pred()
+
+
+class TestEventEmitterContract:
+    def test_constructor_validates_arguments(self, tenant_home: Path, event_store: EventStore):
+        with pytest.raises(TypeError):
+            EventEmitter(tenant_home, "_default")  # the (tenant_home, tenant_id) form never existed
+        with pytest.raises(TypeError):
+            EventEmitter()  # type: ignore[call-arg]
+        with pytest.raises(TypeError):
+            EventEmitter(event_store, queue_size="_default")  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            EventEmitter(event_store, queue_size=0)
+        em = EventEmitter(event_store, queue_size=1)
+        assert em.store is event_store
+        assert em.dropped == 0 and em.write_failures == 0
+        em.stop()
+
+    def test_no_async_start_flush_api(self, event_emitter: EventEmitter):
+        assert not hasattr(event_emitter, "start")
+        assert not hasattr(event_emitter, "flush")
+        result = event_emitter.emit(_ev())
+        assert result is True, "emit() is synchronous and returns a bool"
+
+    def test_emit_persists_through_worker(self, event_emitter: EventEmitter, event_store: EventStore):
+        ev = _ev(x=1)
+        assert event_emitter.emit(ev) is True
+        assert _wait_for(lambda: event_store.count_events("_default") == 1)
+        stored = event_store.query_events("_default")
+        assert stored[0].event_id == ev.event_id
+        assert stored[0].signal == {"x": 1}
+
+    def test_stop_flushes_and_is_idempotent(self, event_store: EventStore):
+        emitter = EventEmitter(event_store)
+        for i in range(20):
+            assert emitter.emit(_ev(i=i))
+        emitter.stop()
+        assert event_store.count_events("_default") == 20
+        emitter.stop()  # second call is a no-op
+        assert emitter.emit(_ev()) is False, "after stop(), events are rejected (not silently lost)"
+
+    def test_tenant_validation_on_emit(self, event_emitter: EventEmitter, event_store: EventStore):
+        with pytest.raises(ValueError):
+            LearningEvent.create(EventType.METRIC, skill_id="s", tenant_id="")
+        good = _ev(tenant_id="tenant_a")
+        assert event_emitter.emit(good) is True
+        assert _wait_for(lambda: event_store.count_events("tenant_a") == 1)
+        assert event_store.count_events("_default") == 0
+
+    def test_queue_full_drop_is_counted_and_reported(self, event_store: EventStore):
+        class _Slow:
+            def __init__(self):
+                self.written = []
+
+            def write_event(self, event):
+                time.sleep(0.2)
+                self.written.append(event)
+
+        slow = _Slow()
+        emitter = EventEmitter(slow, queue_size=1)
+        results = [emitter.emit(_ev(i=i)) for i in range(5)]
+        assert results[0] is True
+        assert False in results, "queue of 1 with a slow writer must drop"
+        assert emitter.dropped == results.count(False)
+        emitter.stop(timeout=5.0)
+
+    def test_write_failure_is_counted(self):
+        class _Broken:
+            def write_event(self, event):
+                raise IOError("disk gone")
+
+        emitter = EventEmitter(_Broken())
+        assert emitter.emit(_ev()) is True
+        assert _wait_for(lambda: emitter.write_failures == 1)
+        emitter.stop()
+
+    def test_emitter_never_pins_the_process(self, tmp_path: Path):
+        """L-07: constructing an emitter and exiting must terminate promptly."""
+        script = (
+            "import sys; from pathlib import Path\n"
+            "from core.learning.event_emitter import EventEmitter\n"
+            "from core.learning.event_store import EventStore\n"
+            "from core.learning.learning_events import LearningEvent, EventType\n"
+            f"em = EventEmitter(EventStore(Path({str(tmp_path)!r})))\n"
+            "em.emit(LearningEvent.create(EventType.METRIC, skill_id='s', tenant_id='_default'))\n"
+            "sys.exit(0)\n"
         )
-
-        # Verify event_emitter is stored
-        assert scorer.event_emitter is event_emitter
-        assert scorer.event_store is event_store
-
-        # Start event emitter
-        await event_emitter.start()
-
-        try:
-            # Emit confidence event
-            scorer._emit_confidence_event(
-                skill_id="test-skill",
-                relevance=0.75,
-                reliability=0.85,
-                context={"tenant_id": "_default", "user_id": "test-user"},
-            )
-
-            # Verify event was queued (fire-and-forget, no exception raised)
-            await asyncio.sleep(0.1)
-
-            # Flush and verify count
-            await event_emitter.flush()
-            count = await event_emitter.get_event_count()
-            assert count > 0, "Event should have been persisted"
-        finally:
-            await event_emitter.stop()
-
-    async def test_operator_feedback_uses_event_emitter(
-        self, event_emitter: EventEmitter, event_store: EventStore
-    ):
-        """Verify OperatorFeedbackHandler accepts and uses EventEmitter."""
-        # Create handler with event_emitter
-        handler = OperatorFeedbackHandler(
-            event_store=event_store,
-            min_sample_size=1,
-            event_emitter=event_emitter,
+        repo = Path(__file__).resolve().parents[3]
+        proc = subprocess.run(
+            [sys.executable, "-c", script], cwd=str(repo), timeout=20,
+            capture_output=True, text=True,
         )
+        assert proc.returncode == 0, proc.stderr
+        # the atexit flush wrote the queued event before exit
+        assert EventStore(tmp_path).count_events("_default") == 1
 
-        # Verify event_emitter is stored
-        assert handler.event_emitter is event_emitter
 
-        # Start event emitter
-        await event_emitter.start()
+class TestEmitterWiring:
+    def test_operator_feedback_handler_uses_emitter(self, event_emitter: EventEmitter, event_store: EventStore):
+        handler = OperatorFeedbackHandler(event_store=event_store, event_emitter=event_emitter)
+        handler.record_tool_rating(tool_id="tool_1", tool_name="T", rating=5)
+        assert _wait_for(lambda: event_store.count_events("_default") == 1)
+        events = event_store.query_events("_default", event_type=EventType.FEEDBACK,
+                                          skill_id=tool_subject_id("tool_1"))
+        assert len(events) == 1 and events[0].signal["rating"] == 5
 
-        try:
-            # Record tool rating
-            await handler.record_tool_rating(
-                tool_id="test-tool",
-                tool_name="Test Tool",
-                rating=5,
-                tenant_id="_default",
-                feedback_text="Good tool",
-            )
-
-            # Verify event was queued
-            await asyncio.sleep(0.1)
-
-            # Flush and verify count
-            await event_emitter.flush()
-            count = await event_emitter.get_event_count()
-            assert count > 0, "Tool rating event should have been persisted"
-        finally:
-            await event_emitter.stop()
-
-    async def test_operator_feedback_skill_rating_uses_event_emitter(
-        self, event_emitter: EventEmitter, event_store: EventStore
-    ):
-        """Verify skill rating uses EventEmitter."""
-        handler = OperatorFeedbackHandler(
-            event_store=event_store,
-            min_sample_size=1,
-            event_emitter=event_emitter,
-        )
-
-        await event_emitter.start()
-
-        try:
-            # Record skill rating
-            await handler.record_skill_rating(
-                skill_id="test-skill",
-                skill_name="Test Skill",
-                rating=4,
-                tenant_id="_default",
-                feedback_text="Good skill",
-            )
-
-            await asyncio.sleep(0.1)
-
-            await event_emitter.flush()
-            count = await event_emitter.get_event_count()
-            assert count > 0, "Skill rating event should have been persisted"
-        finally:
-            await event_emitter.stop()
-
-    async def test_skill_attribution_uses_event_emitter(
-        self, event_emitter: EventEmitter, event_store: EventStore
-    ):
-        """Verify SkillAttributionEngine accepts and uses EventEmitter."""
-        # Create engine with event_emitter
-        engine = SkillAttributionEngine(
-            tenant_id="_default",
-            event_store=event_store,
-            model=AttributionModel.EQUAL,
-            emit_events=True,
-            event_emitter=event_emitter,
-        )
-
-        # Verify event_emitter is stored
-        assert engine.event_emitter is event_emitter
-
-        await event_emitter.start()
-
-        try:
-            # Attribute outcome
-            payload = await engine.attribute_outcome(
-                strategy_id="test-strategy",
-                decision_id="test-decision",
-                skills=["skill-1", "skill-2"],
-                outcome="success",
-            )
-
-            # Verify attribution was created
-            assert payload.attribution_id
-            assert payload.outcome == "success"
-
-            await asyncio.sleep(0.1)
-
-            # Flush and verify event was persisted
-            await event_emitter.flush()
-            count = await event_emitter.get_event_count()
-            assert count > 0, "Attribution event should have been persisted"
-        finally:
-            await event_emitter.stop()
-
-    def test_user_profile_manager_uses_event_emitter(
-        self, event_emitter: EventEmitter, event_store: EventStore
-    ):
-        """Verify UserProfileManager accepts and uses EventEmitter."""
-        # Create manager with event_emitter
-        manager = UserProfileManager(
-            event_store=event_store,
-            event_emitter=event_emitter,
-        )
-
-        # Verify event_emitter is stored
-        assert manager.event_emitter is event_emitter
-
-        # Verify _emit_preference_updated doesn't raise
-        profile = UserProfile(
-            user_id="test-user",
-            tenant_id="_default",
-            decision_style=DecisionStyle.BALANCED,
-            conciseness_preference=0.5,
-        )
-        feedback = {"decision_style": "pragmatic"}
-
-        # Should not raise
-        manager._emit_preference_updated(profile, feedback)
-
-    def test_direct_write_event_grep_audit():
-        """Audit: Verify no direct write_event() calls in learning modules (grep-based)."""
-        # This test performs a grep audit to catch any direct write_event calls
-        # that weren't refactored to use EventEmitter
-
-        learning_dir = Path(__file__).parent.parent
-        bypass_patterns = [
-            # Pattern: direct write_event call (not EventEmitter)
-            re.compile(
-                r"^\s+(?:self\.event_store\.|event_store\.)?write_event\(",
-                re.MULTILINE,
-            ),
-            # Pattern: await write_event (should be await emit)
-            re.compile(
-                r"await\s+(?:self\.event_store\.|event_store\.)?write_event\(",
-                re.MULTILINE,
-            ),
+    def test_production_construction_sites_use_the_real_signature(self):
+        """Every ``EventEmitter(`` construction in production code must wrap a
+        store, never pass (tenant_home, tenant_id) or nothing (L-08)."""
+        repo = Path(__file__).resolve().parents[3]
+        sites = [
+            repo / "core/orchestration/subsystems/tool_forge_subsystem.py",
+            repo / "core/console/corvin_console/standalone.py",
+            repo / "core/learning/token_measurement_hook.py",
+            repo / "core/console/corvin_console/routes/vibe_metrics_api.py",
         ]
+        bad = re.compile(r"EventEmitter\(\s*(?:\)|Path\(|corvin_home|tenant_home|_tenant_dir\b|tenant_dir\b)")
+        for site in sites:
+            # code only — comments legitimately quote the legacy form
+            src = "\n".join(l for l in site.read_text().splitlines() if not l.lstrip().startswith("#"))
+            assert "EventEmitter(" in src, site
+            assert not bad.search(src), f"{site}: legacy EventEmitter construction"
+            assert re.search(r"EventEmitter\(\s*_?LearningEventStore\(", src), \
+                f"{site}: must construct EventEmitter(EventStore(tenant_home))"
 
-        # Files to audit (exclude tests and event_emitter itself)
-        files_to_audit = [
-            "confidence_scorer.py",
-            "operator_feedback.py",
-            "skill_attribution.py",
-            "user_profile.py",
-        ]
+    def test_no_await_on_sync_emit_in_learning_modules(self):
+        """emit()/stop() are synchronous — ``await emitter.emit(...)`` is a TypeError."""
+        learning_dir = Path(__file__).resolve().parents[1]
+        pattern = re.compile(r"await\s+(?:self\.)?(?:event_)?emitter\.(?:emit|stop|start|flush)\(")
+        offenders = []
+        for f in sorted(learning_dir.glob("*.py")):
+            if pattern.search(f.read_text()):
+                offenders.append(f.name)
+        # STRICT (N-05): every emit path in core/learning is on the sync contract.
+        assert not offenders, f"sync-emit misuse (await on EventEmitter.emit/stop): {offenders}"
 
-        violations = []
+    def test_no_event_schema_record_handed_to_the_emitter(self):
+        """The emitter persists ONLY ``learning_events.LearningEvent`` (N-05).
 
-        for filename in files_to_audit:
-            filepath = learning_dir / filename
-            if not filepath.exists():
-                continue
-
-            with open(filepath, "r") as f:
-                content = f.read()
-                lines = content.split("\n")
-
-            for line_num, line in enumerate(lines, 1):
-                # Skip comments and test code
-                if line.strip().startswith("#"):
-                    continue
-                if "test_" in line or "TEST" in line:
-                    continue
-
-                # Check for direct write_event calls (except in fallback/legacy paths)
-                for pattern in bypass_patterns:
-                    if pattern.search(line):
-                        # Check if this is in an expected fallback path
-                        # (EventEmitter unavailable, so falling back to write_event)
-                        context_start = max(0, line_num - 5)
-                        context = "\n".join(lines[context_start : line_num])
-
-                        # Allow if explicitly in a fallback or legacy path
-                        if (
-                            "fallback" in context.lower()
-                            or "legacy" in context.lower()
-                            or "event_emitter is not None" in context
-                        ):
-                            continue
-
-                        violations.append(
-                            f"{filename}:{line_num}: {line.strip()}"
-                        )
-
-        # Report violations
-        if violations:
-            violation_text = "\n".join(violations)
-            pytest.fail(
-                f"Found direct write_event() calls (should use EventEmitter):\n{violation_text}"
-            )
-
-    async def test_event_emitter_queue_full_behavior(
-        self, tenant_home: Path
-    ):
-        """Verify EventEmitter drops events gracefully when queue is full."""
-        # Create emitter with small queue
-        emitter = EventEmitter(tenant_home, tenant_id="_default", max_queue_size=2)
-
-        await emitter.start()
-
-        try:
-            # Emit more events than queue size
-            for i in range(5):
-                event = LearningEvent(
-                    event_type=LearningEventType.CONFIDENCE_SCORE,
-                    tenant_id="_default",
-                    instance_id=f"test-{i}",
-                    skill_name=f"skill-{i}",
-                    session_id="test-session",
-                )
-                # Should not raise, even when queue is full
-                await emitter.emit(event)
-
-            # Verify some events were processed despite queue being small
-            await asyncio.sleep(0.1)
-            await emitter.flush()
-            count = await emitter.get_event_count()
-
-            # Should have processed at least the first few events
-            assert count > 0
-        finally:
-            await emitter.stop()
-
-    async def test_tenant_id_validation_on_emit(
-        self, tenant_home: Path
-    ):
-        """Verify EventEmitter validates tenant_id on emit."""
-        emitter = EventEmitter(tenant_home, tenant_id="_default")
-
-        await emitter.start()
-
-        try:
-            # Create event with mismatched tenant_id
-            event = LearningEvent(
-                event_type=LearningEventType.CONFIDENCE_SCORE,
-                tenant_id="wrong-tenant",  # Mismatch!
-                instance_id="test",
-                skill_name="test-skill",
-                session_id="test-session",
-            )
-
-            # Should raise ValueError
-            with pytest.raises(ValueError, match="Tenant mismatch"):
-                await emitter.emit(event)
-        finally:
-            await emitter.stop()
-
-
-@pytest.mark.asyncio
-async def test_eventemitter_audit_integration():
-    """End-to-end audit: verify all learning modules use EventEmitter."""
-    # This test verifies the complete wiring:
-    # 1. Each module accepts event_emitter parameter
-    # 2. Each module uses emit() instead of write_event()
-    # 3. Events persist through the async queue
-
-    # Implementation: defer to class tests above (they cover each module)
-    # This placeholder ensures the test suite recognizes this audit as complete
-    pass
+        A module that imports ``LearningEvent`` from ``event_schema`` AND calls
+        ``emitter.emit(`` hands the worker a record without ``.timestamp`` —
+        ``AttributeError`` in the worker, event lost.
+        """
+        learning_dir = Path(__file__).resolve().parents[1]
+        emit_call = re.compile(r"(?:self\.)?(?:event_)?emitter\.emit\(")
+        schema_import = re.compile(r"from\s+(?:\.|core\.learning\.)event_schema\s+import\s+[^\n]*\bLearningEvent\b")
+        wire_import = re.compile(r"from\s+(?:\.|core\.learning\.)learning_events\s+import")
+        offenders = []
+        for f in sorted(learning_dir.glob("*.py")):
+            src = f.read_text()
+            if emit_call.search(src) and schema_import.search(src) and not wire_import.search(src):
+                offenders.append(f.name)
+        assert not offenders, f"event_schema record handed to the learning_events emitter: {offenders}"

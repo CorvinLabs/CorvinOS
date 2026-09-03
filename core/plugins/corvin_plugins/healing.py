@@ -302,17 +302,11 @@ class HealingOrchestrator:
         open, which is the level-1 state — never a half-initialised plugin still
         receiving traffic.
         """
-        from .registry import get_registry
+        from .registry import PluginNotFound, get_registry
 
         registry = get_registry()
         try:
-            plugin = registry.get(plugin_id)
-            ctx = registry._contexts.get(plugin_id)  # same context, by design
-            # ADR-0243: the boot layer lives in the registry, not on the
-            # plugin object, and unregister() drops it. Re-registering without
-            # it would silently demote a compliance plugin to `installed` —
-            # after which an operator disable of the audit writer would succeed.
-            boot_layer = registry.boot_layer_of(plugin_id)
+            registry.get(plugin_id)
         except Exception:  # noqa: BLE001
             return self._record(
                 plugin_id, HealingAction.NOOP, "not_registered", succeeded=False
@@ -326,23 +320,18 @@ class HealingOrchestrator:
                 plugin_id, HealingAction.NOOP, "compliance_boot_layer", succeeded=False
             )
 
+        # ONE registry operation, not unregister()+register(): the public pair
+        # is what the ADR-0233 D5 same-epoch guard calls a thread-escape, so it
+        # demoted every restarted boot_layer=core plugin to `installed`. The
+        # registry's own restart() keeps the layer it recorded (finding A5).
         try:
-            registry.unregister(plugin_id)
-        except Exception as exc:  # noqa: BLE001
-            log.error("soft-restart unload of %r failed (%s)", plugin_id, type(exc).__name__)
+            registry.restart(plugin_id)
+        except PluginNotFound:
             return self._record(
-                plugin_id, HealingAction.SOFT_RESTART, "unload_failed", succeeded=False
+                plugin_id, HealingAction.NOOP, "not_registered", succeeded=False
             )
-
-        if ctx is None:
-            return self._record(
-                plugin_id, HealingAction.SOFT_RESTART, "no_context", succeeded=False
-            )
-
-        try:
-            registry.register(plugin, ctx, boot_layer=boot_layer)
         except Exception as exc:  # noqa: BLE001
-            log.error("soft-restart load of %r failed (%s)", plugin_id, type(exc).__name__)
+            log.error("soft-restart of %r failed (%s)", plugin_id, type(exc).__name__)
             _breakers.get_breaker(plugin_id).record_failure(exc)
             return self._record(
                 plugin_id, HealingAction.SOFT_RESTART, "load_failed", succeeded=False

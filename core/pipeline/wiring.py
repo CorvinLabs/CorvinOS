@@ -53,6 +53,42 @@ def get_pipeline_from_app(app_state: Any) -> Any:
 
 
 # ============================================================================
+# Principal resolution — session cookie only
+# ============================================================================
+
+ANONYMOUS_ACTOR = "anonymous"
+DEFAULT_TENANT = "_default"
+
+
+def _resolve_principal(request) -> tuple[str, str]:
+    """Return ``(actor, tenant_id)`` for the request, from the session cookie ONLY.
+
+    * A valid ``corvin_console_sid`` cookie → ``(sid_fingerprint, rec.tenant_id)``.
+      The fingerprint (not the sid) is the audit actor, matching every other
+      ``console.*`` audit event.
+    * No cookie / expired / auth module unavailable → ``(ANONYMOUS_ACTOR,
+      DEFAULT_TENANT)``. Fail-closed: the caller denies capability for the
+      anonymous actor, so a broken auth import can never widen access.
+
+    Request headers are never consulted (E-05).
+    """
+    try:
+        from corvin_console import auth as _session_auth  # lazy: pipeline ≠ console
+    except Exception:  # noqa: BLE001 — console package absent → anonymous
+        return ANONYMOUS_ACTOR, DEFAULT_TENANT
+    sid = request.cookies.get(_session_auth.COOKIE_NAME)
+    if not sid:
+        return ANONYMOUS_ACTOR, DEFAULT_TENANT
+    try:
+        rec = _session_auth.load_session(sid)
+    except Exception:  # noqa: BLE001 — store unreadable → anonymous
+        return ANONYMOUS_ACTOR, DEFAULT_TENANT
+    if rec is None:
+        return ANONYMOUS_ACTOR, DEFAULT_TENANT
+    return rec.sid_fingerprint, rec.tenant_id
+
+
+# ============================================================================
 # FastAPI Middleware — Automatic Dual-Gate Protection for All Routes
 # ============================================================================
 
@@ -63,14 +99,18 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
         skip_paths = ['/healthz', '/static/', '/ws-live/', '/.well-known/']
 
     def should_skip(path: str) -> bool:
+        if path == "/":
+            return True  # root redirect into local-login; no data (deps.PUBLIC_ROUTES)
         for skip_pattern in skip_paths:
             if path.startswith(skip_pattern):
                 return True
         return False
 
     async def dual_gate_middleware(request, call_next):
+        in_route = False
         try:
             if should_skip(request.url.path):
+                in_route = True
                 return await call_next(request)
 
             # Ship-dark: when the DualGatePipeline feature is off (the default),
@@ -84,25 +124,29 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
             try:
                 pipeline = get_global_pipeline()
             except RuntimeError:
-                return await call_next(request)
+                pipeline = None
             if pipeline is None:
+                in_route = True
                 return await call_next(request)
 
-            actor = request.headers.get("X-User-ID", "")
-            if not actor:
-                # Extract session ID (first 8 chars, with bounds checking)
-                sid = request.cookies.get("sid", "unknown")
-                actor = sid[:8] if len(sid) >= 8 else sid
-            actor = actor or "unknown"
-
-            tenant_id = request.headers.get("X-Tenant-ID", "_default")
+            # Principal from the AUTHENTICATED console session cookie — never
+            # from request headers (adversarial review E-05, 2026-09-03: the
+            # previous ``X-User-ID`` / ``X-Tenant-ID`` headers let any caller
+            # choose the actor the capability gate judged AND the tenant the
+            # audit chain attributed the request to). No session → anonymous,
+            # tenant ``_default`` for the audit record, and the capability
+            # decision is a fail-closed deny (CLAUDE.md § Multi-tenant Axis:
+            # tenant only from SessionRecord).
+            actor, tenant_id = _resolve_principal(request)
             capability = _infer_capability_from_request(request)
             action = _infer_action_from_request(request)
             resource = _infer_resource_from_request(request)
 
             # Gate 1: Capability Check (fail-closed)
             try:
-                has_cap = pipeline.check_capability(
+                # An anonymous principal never reaches the checker: denied
+                # here, unconditionally (fail-closed).
+                has_cap = actor != ANONYMOUS_ACTOR and pipeline.check_capability(
                     actor=actor,
                     capability=capability,
                     tenant_id=tenant_id,
@@ -130,14 +174,24 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
                         logger.exception(f"Failed to audit denial: {audit_err}")
 
                     from starlette.responses import JSONResponse
-                    return JSONResponse({"error": "Unauthorized"}, status_code=403)
+                    # Anonymous → 401 (no credential presented); an
+                    # authenticated principal lacking the capability → 403.
+                    return JSONResponse(
+                        {"error": "Unauthorized"},
+                        status_code=401 if actor == ANONYMOUS_ACTOR else 403,
+                    )
             except Exception as gate_err:
                 logger.exception(f"Capability gate error: {gate_err}")
                 from starlette.responses import JSONResponse
                 return JSONResponse({"error": "Unauthorized"}, status_code=403)
 
-            # Proceed to route handler
+            # Proceed to route handler. An exception raised by the ROUTE is an
+            # application error, not a gate failure: it is re-raised so the
+            # app-level handler answers it (500 + correlation id, E-11) instead
+            # of the catch-all below swallowing it as a bare "Server error".
+            in_route = True
             response = await call_next(request)
+            in_route = False
 
             # Post-Audit: Record successful access (fail-closed on audit error)
             try:
@@ -163,6 +217,8 @@ def create_dual_gate_middleware(skip_paths: Optional[list[str]] = None):
             return response
 
         except Exception as e:
+            if in_route:
+                raise
             logger.exception(f"Middleware error: {e}")
             from starlette.responses import JSONResponse
             return JSONResponse({"error": "Server error"}, status_code=500)
@@ -388,9 +444,8 @@ def _extract_context_from_starlette_request(
     tenant_id = "_default"
 
     if request:
-        # Extract user from request headers or session
-        actor = request.headers.get("X-User-ID", "unknown")
-        tenant_id = request.headers.get("X-Tenant-ID", "_default")
+        # Session cookie only — never request headers (E-05).
+        actor, tenant_id = _resolve_principal(request)
 
     resource = resource_extractor() if resource_extractor else resource
 

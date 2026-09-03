@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { BASE } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth'
 
 export interface CustomRepository {
   repo_url: string
@@ -38,6 +39,9 @@ let cachedRepositories: CustomRepository[] | null = null
 let cacheTimestamp = 0
 
 export function useCustomRepositories(): UseCustomRepositoriesResult {
+  // refresh / toggle / remove are mutations → CSRF token (backend: require_csrf).
+  const { session } = useAuth()
+  const csrf = session?.csrf_token ?? ''
   const [repositories, setRepositories] = useState<CustomRepository[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -117,7 +121,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
         `${BASE}/api/v1/marketplace/custom-repositories/refresh`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
           body: JSON.stringify({ repo_url: repoUrl })
         }
       )
@@ -135,7 +139,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
     } catch (err) {
       throw err instanceof Error ? err : new Error('Failed to refresh repository')
     }
-  }, [fetchRepositories])
+  }, [fetchRepositories, csrf])
 
   // Toggle repository enable/disable
   const toggle = useCallback(async (repoUrl: string) => {
@@ -144,7 +148,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
         `${BASE}/api/v1/marketplace/custom-repositories`,
         {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
           body: JSON.stringify({
             repo_url: repoUrl,
             enabled: !repositories.find(r => r.repo_url === repoUrl)?.enabled
@@ -165,7 +169,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
     } catch (err) {
       throw err instanceof Error ? err : new Error('Failed to toggle repository')
     }
-  }, [repositories, fetchRepositories])
+  }, [repositories, fetchRepositories, csrf])
 
   // Remove repository
   const remove = useCallback(async (repoUrl: string) => {
@@ -174,7 +178,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
         `${BASE}/api/v1/marketplace/custom-repositories`,
         {
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
           body: JSON.stringify({ repo_url: repoUrl })
         }
       )
@@ -192,7 +196,7 @@ export function useCustomRepositories(): UseCustomRepositoriesResult {
     } catch (err) {
       throw err instanceof Error ? err : new Error('Failed to remove repository')
     }
-  }, [fetchRepositories])
+  }, [fetchRepositories, csrf])
 
   return {
     repositories,

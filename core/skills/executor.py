@@ -11,7 +11,8 @@ This module implements:
 
 Compliance Notes:
 - GDPR Art. 32: Timeout prevents resource exhaustion (safety)
-- Execution telemetry is audit-logged (GDPR Art. 30)
+- Every execution emits a metadata-only ``skill.executed`` event to the
+  tenant core audit chain (GDPR Art. 30) via ``core.skills.skill_audit``
 - No PII in error messages (fail-closed by default)
 - Tenant isolation enforced on all stats (GDPR Art. 32)
 """
@@ -26,6 +27,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+
+from core.skills.skill_audit import emit_skill_audit
 
 
 class ErrorClass(str, Enum):
@@ -230,7 +233,10 @@ class SkillExecutor:
             - All errors are classified and logged
             - Per-tenant execution history is maintained
         """
-        skill_name = getattr(skill, "name", getattr(skill, "id", skill.__name__))
+        # Identifier first: ``id`` is the stats/audit key; ``name`` may be a
+        # display string ("Test Skill"), ``__name__`` the bare function.
+        skill_name = getattr(skill, "id", None) or getattr(skill, "name", None) \
+            or getattr(skill, "__name__", "skill")
         start_time = time.time()
 
         try:
@@ -331,6 +337,20 @@ class SkillExecutor:
             self._execution_history[tenant_id][skill_name] = []
 
         self._execution_history[tenant_id][skill_name].append(result)
+
+        # GDPR Art. 30 — every execution is a link in the tenant core audit
+        # chain. METADATA ONLY: identifiers, status, timing, error CLASS —
+        # never context, output or the error message text.
+        emit_skill_audit(
+            tenant_id, "skill.executed", tool=str(skill_name),
+            details={
+                "skill_id": str(skill_name),
+                "status": result.status,
+                "latency_ms": round(result.execution_time_ms, 3),
+                "error_class": result.error_class.value if result.error_class else None,
+            },
+            severity="WARNING" if result.status != "success" else None,
+        )
 
         # Keep only last 1000 executions per skill per tenant (memory-bounded)
         if len(self._execution_history[tenant_id][skill_name]) > 1000:

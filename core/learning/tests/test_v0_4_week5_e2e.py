@@ -47,10 +47,11 @@ class TestV04FullLearningFlywheel:
         alert_count = 0
 
         for i in range(100):
-            # Task outcome (accuracy improves over time)
-            accuracy = 0.65 + (i * 0.0002)  # 65% → 85%
-            if i > 50:
-                accuracy = min(0.85, accuracy)  # Plateau at 85%
+            # Task outcome (accuracy improves over time): 65% → 85% over the
+            # first 50 tasks, plateau at 85%. The old slope (0.0002/step) only
+            # reached 67% — the test's own input contradicted its "> 75%"
+            # assertion (N-07 test-data bug, not a learner regression).
+            accuracy = min(0.85, 0.65 + (i * 0.004))
 
             # Record task
             outcome = TaskOutcome(

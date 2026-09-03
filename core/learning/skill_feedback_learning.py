@@ -23,6 +23,7 @@ class SkillFeedbackWithLearning:
         decision_id: str,
         feedback_text: str,
         rating: int = 3,  # 1-5
+        session_id: str = "none",
     ) -> None:
         """Record user feedback and capture outcome signal.
 
@@ -49,6 +50,7 @@ class SkillFeedbackWithLearning:
         # Capture outcome via learning hook
         await self.hooks.on_skill_outcome(
             decision_id=decision_id,
+            session_id=session_id,
             outcome=outcome,
             user_feedback=feedback_text,
             rating=rating,

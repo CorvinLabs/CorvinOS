@@ -13,8 +13,12 @@ from core.learning.migration import MigrationPlanner
 def test_e2e_full_pipeline():
     """E2E: Register pattern → execute → learn → verify chain."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Phase 1+2: Setup
-        store = LearningEventStore(Path(tmpdir) / "events")
+        # Phase 1+2: Setup. TreeNodes live in the store INSTANCE (in-memory
+        # cache, not persisted), so the pattern must be registered on the same
+        # store the integration executes against — a second LearningEventStore
+        # on the same directory never sees it.
+        integration = LearningIntegration(Path(tmpdir) / "events")
+        store = integration.store
         audit = AuditTrail(Path(tmpdir) / "audit")
         
         # Register pattern
@@ -28,7 +32,6 @@ def test_e2e_full_pipeline():
         store.register_node(pattern)
         
         # Phase 3: Execute with learning
-        integration = LearningIntegration(Path(tmpdir) / "events")
         
         async def test_method():
             return {"success": True, "data": "e2e"}
@@ -78,8 +81,14 @@ def test_e2e_confidence_convergence():
             update_confidence(node, event)
         
         node = store.get_node("pattern_convergence")
-        # After 10 successes, confidence should converge toward ~0.8-0.85
-        assert node.confidence > 0.7, f"Confidence after 10 successes should be > 0.7 (got {node.confidence})"
+        # Documented update (docs/TREE_OF_THOUGHTS_DESIGN.md, "Bayesian blend:
+        # 70% prior + 30% new evidence", alpha = 0.3):
+        #   new = 0.7·old + 0.3·clip(old + delta)  ⇒  +0.3·0.05 = +0.015 per success
+        # so 10 successes move 0.5 → 0.65. The old "> 0.7 (~0.8-0.85)" bar
+        # contradicted the design's own arithmetic (N-07 test contract drift).
+        expected = 0.5 + 10 * 0.3 * 0.05
+        assert abs(node.confidence - expected) < 1e-9, f"got {node.confidence}, expected {expected}"
+        assert node.confidence > 0.6
         print(f"✓ Convergence test: confidence = {node.confidence} after 10 successes")
 
 

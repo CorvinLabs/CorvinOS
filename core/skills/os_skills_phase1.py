@@ -191,6 +191,28 @@ class HybridContextModel:
             return base_tier  # Ultimate fallback: immutable base
 
 
+def _flag_state(flag_id: str, tenant_id: Optional[str], default: bool) -> tuple[bool, str]:
+    """Resolve a per-tenant feature flag through ``corvin_core.feature_flags``.
+
+    The Phase 1 refactor replaced ``is_enabled(<flag>, tenant_id)`` call sites with
+    Skills that merely ECHOED their input (``{"enabled": True}`` → ``True``), which
+    silently deleted the operator's per-tenant control (features.json overlay).
+    Skills now consult the same registry the flags always lived in; only when the
+    flags module is genuinely unavailable does the caller-supplied default apply.
+
+    Returns:
+        (enabled, source) — source is "feature_flags" or "default:<reason>"
+    """
+    try:
+        from corvin_core.feature_flags import is_enabled  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001 — stripped install without the console package
+        return default, f"default:flags_unavailable:{type(exc).__name__}"
+    try:
+        return bool(is_enabled(flag_id, tenant_id or "_default")), "feature_flags"
+    except Exception as exc:  # noqa: BLE001 — unknown flag / unreadable overlay → default
+        return default, f"default:{type(exc).__name__}"
+
+
 class DelegationRouterSkill(Skill):
     """Route tasks to appropriate engine based on complexity/type.
 
@@ -329,8 +351,11 @@ class VibeEngineeringSkill(Skill):
             priority_adjustment -= 1
             reasoning = f"{reasoning}; tight time budget"
 
-        # Vibe engineering is enabled by default
-        enabled = input.get("enabled", True)
+        # Active-state comes from the per-tenant flag (vibe_engineering_active),
+        # not from the caller's input — the caller is asking, not telling.
+        enabled, enabled_source = _flag_state(
+            "vibe_engineering_active", input.get("tenant_id"), bool(input.get("enabled", True))
+        )
 
         logger.info(
             f"VibeEngineering: vibe_score={vibe_score:.2f}, "
@@ -342,6 +367,7 @@ class VibeEngineeringSkill(Skill):
             "priority_adjustment": priority_adjustment,
             "reasoning": reasoning,
             "enabled": enabled,
+            "enabled_source": enabled_source,
         }
 
 
@@ -379,14 +405,16 @@ class PluginHealthMonitoringSkill(Skill):
         Returns:
             Dictionary with enabled status and reasoning
         """
-        # By default, health monitoring is enabled for production deployments
-        enabled = input.get("enabled", True)
+        enabled, source = _flag_state(
+            "plugin_health_monitoring", input.get("tenant_id"), bool(input.get("enabled", True))
+        )
 
-        logger.info(f"PluginHealthMonitoring: enabled={enabled}")
+        logger.info(f"PluginHealthMonitoring: enabled={enabled} ({source})")
 
         return {
             "enabled": enabled,
             "reason": "Health monitoring active" if enabled else "Health monitoring disabled",
+            "source": source,
         }
 
 
@@ -426,15 +454,18 @@ class HeadlessModeSkill(Skill):
         Returns:
             Dictionary with headless status
         """
-        headless = input.get("headless_enabled", False)
+        headless, source = _flag_state(
+            "headless_api_mode", input.get("tenant_id"), bool(input.get("headless_enabled", False))
+        )
         mode = "headless" if headless else "console"
 
-        logger.info(f"HeadlessMode: mode={mode}")
+        logger.info(f"HeadlessMode: mode={mode} ({source})")
 
         return {
             "headless_enabled": headless,
             "mode": mode,
             "reason": f"Running in {mode} mode" if mode == "headless" else "Console UI enabled",
+            "source": source,
         }
 
 
@@ -473,13 +504,16 @@ class PluginBuilderSkill(Skill):
         Returns:
             Dictionary with enabled status
         """
-        enabled = input.get("enabled", True)
+        enabled, source = _flag_state(
+            "plugin_builder_enabled", input.get("tenant_id"), bool(input.get("enabled", True))
+        )
 
-        logger.info(f"PluginBuilder: enabled={enabled}")
+        logger.info(f"PluginBuilder: enabled={enabled} ({source})")
 
         return {
             "enabled": enabled,
             "reason": "Plugin builder available" if enabled else "Plugin builder disabled",
+            "source": source,
         }
 
 
@@ -517,18 +551,24 @@ class CapabilitiesSkill(Skill):
         Returns:
             Dictionary with flags mapping
         """
-        gated_flags = input.get("gated_flags", [])
+        gated_flags = list(input.get("gated_flags", []) or [])
         tenant_id = input.get("tenant_id", "_default")
 
-        # For Phase 1, all gated flags are disabled by default
-        # Real implementation would query actual flag states
-        flags = {flag: False for flag in gated_flags}
+        # Resolve every gated flag against the per-tenant flag registry. The
+        # Phase 1 stub returned ``False`` for everything, which hid every
+        # flag-gated console panel (Vibe Dashboard, Learning Hub, Marketplace …)
+        # for every tenant, unconditionally. Unreadable → False (safe direction).
+        flags: Dict[str, bool] = {}
+        sources: Dict[str, str] = {}
+        for flag in gated_flags:
+            flags[flag], sources[flag] = _flag_state(str(flag), tenant_id, False)
 
         logger.info(f"Capabilities: tenant={tenant_id}, flags_checked={len(gated_flags)}")
 
         return {
             "flags": flags,
             "tenant_id": tenant_id,
+            "sources": sources,
         }
 
 
@@ -668,20 +708,35 @@ def register_builtin_skills(skills_registry: Any) -> None:
     Args:
         skills_registry: SkillsRegistry instance
     """
-    router_skill = DelegationRouterSkill()
-    vibe_skill = VibeEngineeringSkill()
-    context_skill = ContextAdapterSkill(skills_registry)
-    health_monitoring_skill = PluginHealthMonitoringSkill()
-    headless_skill = HeadlessModeSkill()
-    plugin_builder_skill = PluginBuilderSkill()
-    capabilities_skill = CapabilitiesSkill()
+    builtin = [
+        DelegationRouterSkill(),
+        VibeEngineeringSkill(),
+        ContextAdapterSkill(skills_registry),
+        PluginHealthMonitoringSkill(),
+        HeadlessModeSkill(),
+        PluginBuilderSkill(),
+        CapabilitiesSkill(),
+    ]
 
-    skills_registry.register(router_skill)
-    skills_registry.register(vibe_skill)
-    skills_registry.register(context_skill)
-    skills_registry.register(health_monitoring_skill)
-    skills_registry.register(headless_skill)
-    skills_registry.register(plugin_builder_skill)
-    skills_registry.register(capabilities_skill)
+    # Idempotent: a second boot in the same process (tests, hot reload) must not
+    # raise on the already-registered ids.
+    registered = 0
+    for skill in builtin:
+        if skills_registry.get(skill.metadata.id) is None:
+            skills_registry.register(skill)
+            registered += 1
 
-    logger.info("Builtin OS Skills registered (Phase 1 k=2-5 refactoring: 7 total Skills)")
+    logger.info(
+        "Builtin OS Skills registered (%d new, %d total)", registered, len(BUILTIN_SKILL_IDS)
+    )
+
+
+BUILTIN_SKILL_IDS: tuple[str, ...] = (
+    "os.delegation_router",
+    "os.vibe_engineering",
+    "os.context_adapter",
+    "os.plugin_health_monitoring",
+    "os.headless_mode",
+    "os.plugin_builder",
+    "os.capabilities",
+)

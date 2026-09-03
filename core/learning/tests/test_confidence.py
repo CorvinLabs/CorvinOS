@@ -25,14 +25,9 @@ class TestThresholdEnforcement:
 
     def test_threshold_enforcement(self):
         """Verify that scores < 0.5 are filtered."""
-        import sys
-        from pathlib import Path
-        repo_root = Path(__file__).resolve().parents[3]
-        if str(repo_root) not in sys.path:
-            sys.path.insert(0, str(repo_root))
-
-        # Mock the MemoryMatch class
-        from operator.context_engineering.rich_task_brief import MemoryMatch
+        from core.learning.classifier_model import import_context_engineering
+        import_context_engineering()
+        from context_engineering.rich_task_brief import MemoryMatch
         from core.learning.confidence import MEMORY_CONFIDENCE_THRESHOLD
 
         # Create mock matches with various scores
@@ -87,7 +82,9 @@ class TestLowConfidenceEdgeCase:
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
 
-        from operator.context_engineering.rich_task_brief import MemoryMatch
+        from core.learning.classifier_model import import_context_engineering
+        import_context_engineering()
+        from context_engineering.rich_task_brief import MemoryMatch
         from core.learning.confidence import MEMORY_CONFIDENCE_THRESHOLD
 
         # Create matches where ALL are low confidence
@@ -132,7 +129,9 @@ class TestGateDisabledViaFlag:
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
 
-        from operator.context_engineering.rich_task_brief import MemoryMatch
+        from core.learning.classifier_model import import_context_engineering
+        import_context_engineering()
+        from context_engineering.rich_task_brief import MemoryMatch
 
         # Create matches with mixed scores
         matches = [

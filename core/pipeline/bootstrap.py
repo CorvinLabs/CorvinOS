@@ -120,19 +120,36 @@ def instantiate_pipeline(
         # Step 1: Load feature flags (dark by default)
         if feature_flags is None:
             try:
-                from core.console.corvin_core.feature_flags import get_flag
+                # Top-level `corvin_core` works in the checkout AND the wheel
+                # (the old `core.console.corvin_core` path only existed in a
+                # checkout). `is_enabled` is the registry's resolver — the
+                # `get_flag` name this used to import never existed, so the
+                # flags were "Defaulting to off" in every layout (2026-09-03).
+                from corvin_core.feature_flags import is_enabled
                 feature_flags = {
-                    "dual_gate_pipeline_enabled": get_flag(
+                    "dual_gate_pipeline_enabled": is_enabled(
                         "dual_gate_pipeline_enabled"
                     ),
-                    "dual_gate_pii_detection_enabled": get_flag(
+                    "dual_gate_pii_detection_enabled": is_enabled(
                         "dual_gate_pii_detection_enabled"
                     ),
-                    "file_permissions_enabled": get_flag("file_permissions_enabled"),
+                    "file_permissions_enabled": is_enabled("file_permissions_enabled"),
                 }
             except Exception as e:
-                logger.warning(f"Could not load feature flags: {e}. Defaulting to off.")
-                feature_flags = {}
+                # FAIL-CLOSED (adversarial review E-05, 2026-09-03): a flag
+                # reader that cannot be imported used to be logged at WARNING
+                # and "defaulted to off" — which silently disabled the whole
+                # Dual-Gate pipeline the module docstring promises aborts the
+                # boot on any failure. An unreadable flag registry is a boot
+                # error, not an off switch.
+                logger.error(
+                    "Dual-Gate feature flags unavailable (%s: %s) — aborting boot "
+                    "(fail-closed; ADR-0300/0301)",
+                    type(e).__name__, e,
+                )
+                raise RuntimeError(
+                    f"dual-gate feature flags unavailable: {type(e).__name__}: {e}"
+                ) from e
 
         # Ship-dark: the DualGatePipeline is a default-OFF feature (ADR-0300,
         # ``dual_gate_pipeline_enabled``). When it is off — the default on every

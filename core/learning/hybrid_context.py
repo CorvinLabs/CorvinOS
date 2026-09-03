@@ -24,16 +24,17 @@ Integration with Phase 3:
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
 import json
 import logging
-import threading
+import re
 import time
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, field
-from pathlib import Path
 from typing import Optional, Any, Protocol
+
+from .event_persistence import core_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +54,6 @@ TIER1_IMMUTABLE_KEYS = {
     "timestamp_utc", "base_hash", "prev_base_hash",
     "recent_decisions", "user_profile", "success_rate", "attention_budget_remaining"
 }
-
-# Audit chain writer (lazy singleton)
-_audit_writer_lock = threading.Lock()
-_audit_writer: Optional[Any] = None
-
 
 # Phase 3 Adapter Interfaces (decouple HybridContextModel from Phase 3 storage)
 
@@ -82,6 +78,14 @@ class ProfileAdapter(Protocol):
 
     def get_profile(self, user_id: str, tenant_id: str) -> dict:
         """Get learned user preferences."""
+        ...
+
+
+class AttentionAdapter(Protocol):
+    """Adapter for reading the remaining attention budget (Phase 3 AttentionTracker, ADR-0319)."""
+
+    def get_remaining_budget(self, user_id: str, tenant_id: str) -> int:
+        """Remaining context tokens for this user (0 when unknown)."""
         ...
 
 
@@ -228,28 +232,28 @@ class HybridContextModel:
         if not user_id or not layer_name or not data:
             raise ValueError("user_id, layer_name, data required")
 
+        # Snapshot on ingestion: the layer is hash-chained, so it must not share
+        # storage with the caller's dict (a later caller-side mutation would
+        # silently invalidate the hash — L-05).
+        data = copy.deepcopy(data)
+
         # Validate no PII (fail-closed)
         self._validate_no_pii(data)
 
-        # Validate that layer doesn't attempt to override Tier 1 immutable fields
-        for key in data.keys():
-            if key in TIER1_IMMUTABLE_KEYS:
-                error_msg = f"Layer {layer_name} attempted to override immutable Tier 1 field '{key}'"
-                logger.error(error_msg)
-                # Emit audit event for attempted violation
-                writer = self._get_audit_writer()
-                if writer is not None:
-                    try:
-                        writer.write_event_dict(
-                            event_type="tier1_immutable_violation_attempted",
-                            tenant_id=self.tenant_id,
-                            user_id=user_id,
-                            details={"layer_name": layer_name, "field": key, "lom": lom},
-                            severity="ERROR"
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to write violation audit event: {e}")
-                raise ValueError(error_msg)
+        # Validate that the layer neither shadows a Tier 1 field by NAME (the
+        # merge writes ``merged[layer_name]`` — L-03) nor carries one as a key.
+        violation = self._tier1_violation(layer_name, data)
+        if violation is not None:
+            error_msg = (
+                f"Layer {layer_name} attempted to override immutable Tier 1 field '{violation}'"
+            )
+            logger.error(error_msg)
+            self._audit(
+                "tier1_immutable_violation_attempted",
+                user_id=user_id,
+                details={"layer_name": layer_name, "field": violation, "lom": lom},
+            )
+            raise ValueError(error_msg)
 
         # Get previous hash (for chain link)
         prev_layers = self.injected_layers.get(user_id, [])
@@ -270,7 +274,21 @@ class HybridContextModel:
             status="injected",
         )
 
-        # Append to chain (fail-closed: if append fails, exception raised)
+        # Audit FIRST (fail-closed): a layer that could not be audited is never
+        # appended to the chain (ADR-0232/0233).
+        self._audit(
+            "tier2_layer_injected",
+            user_id=user_id,
+            details={
+                "layer_name": layer_name,
+                "version": version,
+                "hash": layer_hash,
+                "prev_hash": prev_hash,
+                "lom": lom,
+                "lom_audit_write": _get_lom(),
+            },
+        )
+
         if user_id not in self.injected_layers:
             self.injected_layers[user_id] = []
         self.injected_layers[user_id].append(layer)
@@ -279,27 +297,6 @@ class HybridContextModel:
             f"Injected layer {layer_name} v{version} for user {user_id} "
             f"(hash={layer_hash[:8]}..., lom={lom})"
         )
-
-        # Write audit event (hash-chained)
-        writer = self._get_audit_writer()
-        if writer is not None:
-            try:
-                writer.write_event_dict(
-                    event_type="tier2_layer_injected",
-                    tenant_id=self.tenant_id,
-                    user_id=user_id,
-                    details={
-                        "layer_name": layer_name,
-                        "version": version,
-                        "hash": layer_hash,
-                        "prev_hash": prev_hash,
-                        "lom": lom,
-                        "lom_audit_write": _get_lom(),
-                    },
-                    severity="INFO"
-                )
-            except Exception as e:
-                logger.error(f"Failed to write layer injection audit event: {e}")
 
         return layer_hash
 
@@ -319,38 +316,64 @@ class HybridContextModel:
             merged_prompt_context (ready for LLM injection)
         """
         merged = {
-            "recent_decisions": base.recent_decisions,
-            "user_profile": base.user_profile,
+            "recent_decisions": copy.deepcopy(base.recent_decisions),
+            "user_profile": copy.deepcopy(base.user_profile),
             "success_rate": base.success_rate,
             "attention_budget_remaining": base.attention_budget_remaining,
         }
 
         failed_layers = []
+        expected_prev = ""  # hash of the last VERIFIED layer (chain continuity)
 
         # Try to merge each layer (fail-closed: if one fails, skip it)
         for layer in layers:
+            layer_name = layer.get("layer_name", "unknown")
             try:
-                layer_name = layer.get("layer_name", "unknown")
                 layer_data = layer.get("data", {})
+
+                # Verify the layer's own hash and its chain link (L-04). A layer
+                # whose hash does not recompute, or whose prev_hash does not
+                # point at the last verified layer, is forged/tampered → drop.
+                stated_hash = layer.get("hash", "")
+                recomputed = self._compute_hash(
+                    layer.get("version", ""), layer_data, layer.get("prev_hash", "")
+                )
+                if stated_hash != recomputed:
+                    raise ValueError("hash mismatch (layer content does not match its hash)")
+                if layer.get("prev_hash", "") != expected_prev:
+                    raise ValueError("chain break (prev_hash does not link to the previous layer)")
+                # Integrity verified: the chain advances even if the layer is
+                # dropped below for CONTENT reasons (PII / Tier 1) — those are
+                # policy drops, not chain breaks, and must not cascade.
+                expected_prev = stated_hash
 
                 # Validate no PII (fail-closed)
                 self._validate_no_pii(layer_data)
 
                 # Validate that layer doesn't attempt to override Tier 1 immutable fields
-                for key in layer_data.keys():
-                    if key in TIER1_IMMUTABLE_KEYS:
-                        raise ValueError(
-                            f"Layer {layer_name} attempted to override immutable Tier 1 field '{key}'"
-                        )
+                violation = self._tier1_violation(layer_name, layer_data)
+                if violation is not None:
+                    self._audit(
+                        "tier1_immutable_violation_attempted",
+                        user_id=base.user_id,
+                        details={"layer_name": layer_name, "field": violation, "stage": "merge"},
+                    )
+                    raise ValueError(
+                        f"Layer {layer_name} attempted to override immutable Tier 1 field '{violation}'"
+                    )
 
                 # Merge layer into context
-                merged[layer_name] = layer_data
+                merged[layer_name] = copy.deepcopy(layer_data)
                 logger.debug(f"Merged layer {layer_name}")
 
             except ValueError as e:
-                layer_name = layer.get("layer_name", "unknown")
                 logger.warning(f"Failed to merge layer {layer_name}: {e} (dropped)")
                 failed_layers.append((layer_name, str(e)))
+                self._audit(
+                    "tier2_layer_rejected",
+                    user_id=base.user_id,
+                    details={"layer_name": layer_name, "reason": str(e)[:200]},
+                )
 
         if failed_layers:
             logger.warning(
@@ -392,6 +415,11 @@ class HybridContextModel:
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         key = f"{user_id}:{session_id}"
 
+        # Snapshot on ingestion (L-05): the base is immutable and hashed, so it
+        # must not alias the caller's lists/dicts.
+        decisions = copy.deepcopy(decisions)
+        profile = copy.deepcopy(profile)
+
         # Compute hash of base (for chain link)
         prev_base = self.base_snapshots.get(key)
         prev_hash = prev_base.base_hash if prev_base else ""
@@ -414,33 +442,26 @@ class HybridContextModel:
             prev_base_hash=prev_hash,
         )
 
+        # Audit FIRST (fail-closed), then store.
+        self._audit(
+            "tier1_base_snapshotted",
+            user_id=user_id,
+            details={
+                "session_id": session_id,
+                "base_hash": base_hash,
+                "prev_hash": prev_hash,
+                "decisions_count": len(decisions),
+                "attention_budget": attention_budget,
+                "lom_audit_write": _get_lom(),
+            },
+        )
+
         self.base_snapshots[key] = base
         logger.info(
             f"Snapshotted base context for user {user_id} session {session_id} "
             f"(hash={base_hash[:8]}..., decisions={len(decisions)}, "
             f"attention_budget={attention_budget})"
         )
-
-        # Write audit event (hash-chained)
-        writer = self._get_audit_writer()
-        if writer is not None:
-            try:
-                writer.write_event_dict(
-                    event_type="tier1_base_snapshotted",
-                    tenant_id=self.tenant_id,
-                    user_id=user_id,
-                    details={
-                        "session_id": session_id,
-                        "base_hash": base_hash,
-                        "prev_hash": prev_hash,
-                        "decisions_count": len(decisions),
-                        "attention_budget": attention_budget,
-                        "lom_audit_write": _get_lom(),
-                    },
-                    severity="INFO"
-                )
-            except Exception as e:
-                logger.error(f"Failed to write base snapshot audit event: {e}")
 
         return base_hash
 
@@ -513,25 +534,18 @@ class HybridContextModel:
                 f"Cascade delete INCOMPLETE for user {user_id}: {errors}"
             )
 
-        # Write audit event (hash-chained, GDPR Art. 17)
-        writer = self._get_audit_writer()
-        if writer is not None:
-            try:
-                writer.write_event_dict(
-                    event_type="user_context_cascade_deleted",
-                    tenant_id=self.tenant_id,
-                    user_id=user_id,
-                    details={
-                        "deleted_bases": deleted_bases,
-                        "deleted_layers": deleted_layers,
-                        "verification_complete": verification_complete,
-                        "errors": errors,
-                        "lom_audit_write": _get_lom(),
-                    },
-                    severity="INFO" if verification_complete else "ERROR"
-                )
-            except Exception as e:
-                logger.error(f"Failed to write cascade delete audit event: {e}")
+        # Audit (hash-chained, GDPR Art. 17) — counts only.
+        self._audit(
+            "user_context_cascade_deleted",
+            user_id=user_id,
+            details={
+                "deleted_bases": deleted_bases,
+                "deleted_layers": deleted_layers,
+                "verification_complete": verification_complete,
+                "error_count": len(errors),
+                "lom_audit_write": _get_lom(),
+            },
+        )
 
         return result
 
@@ -548,74 +562,159 @@ class HybridContextModel:
         return hashlib.sha256(payload.encode()).hexdigest()
 
     @staticmethod
+    def _tier1_violation(layer_name: str, data: dict) -> Optional[str]:
+        """Return the Tier 1 field a layer would override, or None.
+
+        Both the layer NAME (``merged[layer_name] = data`` would replace the
+        Tier 1 entry) and the layer's top-level keys are checked.
+        """
+        if layer_name in TIER1_IMMUTABLE_KEYS:
+            return layer_name
+        for key in data.keys():
+            if key in TIER1_IMMUTABLE_KEYS:
+                return key
+        return None
+
+    @staticmethod
     def _validate_no_pii(data: dict) -> None:
-        """Validate that data contains no obvious PII (fail-closed).
+        """Validate that data contains no PII (fail-closed).
+
+        Two independent checks, applied recursively:
+        - VALUE shapes: email, phone, IBAN, SSN, Luhn-valid card numbers,
+          API-key / token shapes, street addresses.
+        - KEY names: whole-token match (``phone`` matches ``phone`` and
+          ``home_phone``, not ``phonetic``; ``token`` matches ``token``, not
+          ``tokens_used``; ``health`` matches ``health_data``, not
+          ``healthy_status``).
 
         Raises:
             ValueError: if PII-like patterns detected
         """
-        pii_patterns = [
-            "email", "phone", "ssn", "password", "api_key", "token",
-            "credit_card", "bank_account", "medical", "health",
-        ]
-        data_str = json.dumps(data).lower()
-        for pattern in pii_patterns:
-            if pattern in data_str:
-                raise ValueError(
-                    f"Potential PII detected in data (pattern: {pattern})"
-                )
+        hit = _find_pii(data)
+        if hit is not None:
+            raise ValueError(f"Potential PII detected in data (pattern: {hit})")
 
-    @staticmethod
-    def _get_audit_writer() -> Optional[Any]:
-        """Get or initialize audit chain writer (lazy singleton)."""
-        global _audit_writer, _audit_writer_lock
+    def _audit(self, event_type: str, *, user_id: str, details: dict) -> str:
+        """Write a hash-chained audit record via the CORE writer (fail-closed).
 
-        if _audit_writer is not None:
-            return _audit_writer
+        Raises ``RuntimeError`` when the core audit writer is unavailable or
+        the write did not commit (ADR-0232/0233) — never silently skips.
+        """
+        return core_audit_event(
+            event_type,
+            tenant_id=self.tenant_id,
+            user=user_id,
+            details={"component": "hybrid_context", **details},
+        )
 
-        with _audit_writer_lock:
-            if _audit_writer is not None:
-                return _audit_writer
-
-            try:
-                from core.compliance.audit_chain_writer import AuditChainWriter
-
-                # Initialize writer with ~/.corvin/audit.jsonl path
-                home = Path.home()
-                audit_path = home / ".corvin" / "audit.jsonl"
-                _audit_writer = AuditChainWriter(audit_path)
-                return _audit_writer
-            except Exception as e:
-                logger.warning(f"Could not initialize AuditChainWriter: {e}")
-                return None
-
-    @staticmethod
     def _emit_merge_event(
-        user_id: str, session_id: str, total_layers: int, failed_count: int,
+        self, user_id: str, session_id: str, total_layers: int, failed_count: int,
         tenant_id: str = "_default"
     ) -> None:
         """Emit audit event for merge operation (hash-chained, GDPR Art. 30/32)."""
-        # Log locally
         logger.info(
             f"hybrid_context_merge: user={user_id}, session={session_id}, "
             f"total_layers={total_layers}, failed={failed_count}"
         )
+        self._audit(
+            "hybrid_context_merge",
+            user_id=user_id,
+            details={
+                "session_id": session_id,
+                "total_layers": total_layers,
+                "failed_count": failed_count,
+                "lom_audit_write": _get_lom(),
+            },
+        )
 
-        # Write to audit chain
-        writer = HybridContextModel._get_audit_writer()
-        if writer is not None:
-            try:
-                writer.write_event_dict(
-                    event_type="hybrid_context_merge",
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    details={
-                        "session_id": session_id,
-                        "total_layers": total_layers,
-                        "failed_count": failed_count,
-                        "lom_audit_write": _get_lom(),
-                    },
-                    severity="INFO"
-                )
-            except Exception as e:
-                logger.error(f"Failed to write merge audit event: {e}")
+
+# ── PII detection (value shapes + whole-token keys) ─────────────────────────
+
+_PII_VALUE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
+    ("phone", re.compile(r"(?<![\w/])(?:\+|00)\d[\d\s\-().]{6,}\d(?!\w)")),
+    ("phone", re.compile(r"\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b")),
+    ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
+    ("iban", re.compile(r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b")),
+    ("api_key", re.compile(r"\b(?:sk|pk|rk|ak)[_-](?:live|test|prod)?[_-]?[A-Za-z0-9]{12,}\b")),
+    ("api_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("api_key", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("api_key", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("token", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,})?")),
+    ("token", re.compile(r"\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}")),
+    ("address", re.compile(
+        r"\b[A-ZÄÖÜ][\w-]+\s?(?:[Ss]tr(?:\.|aße|asse)|[Ss]treet|[Aa]venue|[Rr]oad|[Ll]ane)\s+\d{1,4}\b"
+    )),
+]
+_CARD_CANDIDATE = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
+
+_PII_KEY_TOKENS = frozenset({
+    "email", "phone", "mobile", "telephone", "ssn", "password", "passwd", "secret",
+    "token", "iban", "bic", "medical", "health", "diagnosis", "birthday", "birthdate",
+    "dob", "address", "surname", "passport",
+})
+_PII_KEY_PHRASES = frozenset({
+    ("api", "key"), ("credit", "card"), ("card", "number"), ("bank", "account"),
+    ("account", "number"), ("social", "security"), ("first", "name"), ("last", "name"),
+    ("full", "name"), ("private", "key"), ("access", "key"), ("date", "of", "birth"),
+})
+
+
+def _luhn_ok(digits: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+def _key_tokens(key: str) -> list[str]:
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key))  # camelCase → camel_Case
+    return [t for t in re.split(r"[^a-z0-9]+", spaced.lower()) if t]
+
+
+def _key_is_pii(key: str) -> bool:
+    tokens = _key_tokens(key)
+    if any(t in _PII_KEY_TOKENS for t in tokens):
+        return True
+    for phrase in _PII_KEY_PHRASES:
+        n = len(phrase)
+        if any(tuple(tokens[i:i + n]) == phrase for i in range(len(tokens) - n + 1)):
+            return True
+    return False
+
+
+def _value_pii(value: str) -> Optional[str]:
+    for name, pattern in _PII_VALUE_PATTERNS:
+        if pattern.search(value):
+            return name
+    for m in _CARD_CANDIDATE.finditer(value):
+        digits = re.sub(r"[ -]", "", m.group(0))
+        if 13 <= len(digits) <= 19 and _luhn_ok(digits):
+            return "credit_card"
+    return None
+
+
+def _find_pii(obj: Any) -> Optional[str]:
+    """Depth-first scan; returns the pattern name of the first hit, else None."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if _key_is_pii(str(key)):
+                return f"key:{key}"
+            hit = _find_pii(value)
+            if hit is not None:
+                return hit
+        return None
+    if isinstance(obj, (list, tuple, set)):
+        for item in obj:
+            hit = _find_pii(item)
+            if hit is not None:
+                return hit
+        return None
+    if isinstance(obj, str):
+        return _value_pii(obj)
+    return None

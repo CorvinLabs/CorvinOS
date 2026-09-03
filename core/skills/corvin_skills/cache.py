@@ -18,6 +18,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from threading import Lock
 import json
+import os
+
+
+class SkillManifestCorrupted(RuntimeError):
+    """The skill manifest exists but cannot be parsed (fail-loud, never silent)."""
 
 
 class SkillCache:
@@ -64,6 +69,27 @@ class SkillCache:
             "evictions": 0,
             "invalidations": 0,
         }
+        # Identity of the manifest generation the cached entries came from.
+        self._manifest_mtime_ns: Optional[tuple] = self._manifest_mtime()
+
+    def _manifest_mtime(self) -> Optional[tuple]:
+        """(mtime_ns, inode, size) — inode catches atomic-replace writes that
+        land inside one filesystem timestamp tick (mtime alone would miss them)."""
+        try:
+            st = os.stat(self.manifest_path)
+            return (st.st_mtime_ns, st.st_ino, st.st_size)
+        except OSError:
+            return None
+
+    def _invalidate_if_manifest_changed(self) -> None:
+        """Lock held by caller. Drop cached entries if manifest.json changed on disk."""
+        current = self._manifest_mtime()
+        if current != self._manifest_mtime_ns:
+            self._manifest_mtime_ns = current
+            if self._cache:
+                self._cache.clear()
+                self._ttl_map.clear()
+                self._stats["invalidations"] += 1
 
     def get(self, skill_name: str) -> Optional[Dict[str, Any]]:
         """Get skill entry from cache or manifest.
@@ -79,6 +105,12 @@ class SkillCache:
             Skill entry dict, or None if not found
         """
         with self._lock:
+            # Cross-process coherence: the registry that writes manifest.json may
+            # live in another process (MCP server, CLI). A changed mtime means a
+            # write happened behind this cache's back — drop everything cached
+            # from the previous manifest generation before serving.
+            self._invalidate_if_manifest_changed()
+
             # Check cache hit
             if skill_name in self._cache:
                 expiry = self._ttl_map.get(skill_name)
@@ -99,8 +131,15 @@ class SkillCache:
                 if entry:
                     self._insert(skill_name, entry)
                 return entry
-            except (FileNotFoundError, json.JSONDecodeError):
-                return None
+            except FileNotFoundError:
+                return None  # no manifest yet == no skills; a legitimate empty state
+            except json.JSONDecodeError as exc:
+                # A corrupted manifest is a broken install, not "skill not found".
+                # Returning None here made EVERY skill vanish silently and kept the
+                # hardening circuit breaker blind to the failure.
+                raise SkillManifestCorrupted(
+                    f"manifest {self.manifest_path} is not valid JSON: {exc.msg} (line {exc.lineno})"
+                ) from exc
 
     def _insert(self, skill_name: str, entry: Dict[str, Any]) -> None:
         """Insert entry into cache (with LRU eviction if needed).
@@ -130,6 +169,7 @@ class SkillCache:
             self._cache.clear()
             self._ttl_map.clear()
             self._stats["invalidations"] += 1
+            self._manifest_mtime_ns = self._manifest_mtime()
 
     def stats(self) -> Dict[str, Any]:
         """Return cache statistics.

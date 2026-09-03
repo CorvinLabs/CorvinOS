@@ -11,6 +11,8 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
 | Per-user consent gate (`/consent on\|off\|<ttl>`, deny-by-default) | L16 Phase 4 | GDPR Art. 6, 7 | ✅ Locked |
 | Hash-chained tamper-evident audit log (`audit.jsonl` + daily verify) | L16 | GDPR Art. 30, 32 | ✅ Locked |
 | Boot tripwire audit-chain healing — bounded, minimal-truncation, fail-closed on whole-chain failure (`tripwire.py::audit_chain_intact`) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
+| Boot tripwire asserts the audit WRITER is loaded (`audit.writer_available()`; `tripwire.py::audit_writer_reachable`, `bootstrap._assert_core_audit_inline`) — a stripped or broken forge import is a refusal to boot, and `verify_audit` never answers `(True, [])` without a writer (2026-09-03 A1/A8) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
+| Tenant-mismatched audit writes are refused, logged at ERROR and recorded as `audit.tenant_mismatch` (type/count only) under the context tenant — never dropped silently (2026-09-03 A2) | L16 / ADR-0007 | GDPR Art. 30, 32 | ✅ Locked |
 | Compliance-zone routing (`tenant.corvin.yaml::data_residency`) | ADR-0007 | EU AI Act Art. 14 | ✅ Verified |
 | Engine-policy allowlist (`allowed_engines` / `forbid_engines`) | ADR-0007 | EU AI Act Art. 14 | ✅ Verified |
 | Secret-vault capability split (vault → bwrap env, never LLM context) | L16 v3 | GDPR Art. 32 | ✅ Locked |

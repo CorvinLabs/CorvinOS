@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, list
+from typing import Optional
 
 
 @dataclass

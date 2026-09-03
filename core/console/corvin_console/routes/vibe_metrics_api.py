@@ -10,13 +10,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-# Auth dependency (assuming get_current_user exists in auth module)
-try:
-    from core.console.corvin_console.routes.auth import get_current_user
-except ImportError:
-    # Fallback: no-op user dependency (will be replaced in auth refactor)
-    async def get_current_user():
-        return {"user_id": "anonymous", "tenant_id": "default"}
+# Auth (adversarial review N-06): the REAL console session dependency —
+# 401 without a live cookie; the tenant is ``rec.tenant_id`` from the
+# authenticated SessionRecord. The previous version fell back to a NO-OP
+# dependency returning an anonymous ``{"tenant_id": "default"}`` user.
+from .. import auth as session_auth
+from ..deps import require_session
 
 from core.learning.token_metrics_store import TokenMetricsStore
 from core.learning.token_metrics_aggregator import TokenMetricsAggregator
@@ -88,11 +87,25 @@ class ComparisonSummaryResponse(BaseModel):
 # ===== Router Setup =====
 
 # Initialize module-level singletons (once at import time)
+from pathlib import Path
+
 from core.learning.event_emitter import EventEmitter
+from core.learning.event_store import EventStore as _LearningEventStore
 from core.learning.token_metrics_db import TokenMetricsDB
 
-_emitter = EventEmitter()
-_db = TokenMetricsDB()
+
+def _default_tenant_dir() -> Path:
+    try:
+        from forge.tenants import tenant_home  # type: ignore[import-not-found]
+        return Path(tenant_home("_default"))
+    except ImportError:
+        return Path.home() / ".corvin" / "tenants" / "_default"
+
+
+# EventEmitter(event_store, queue_size) — ``EventEmitter()`` raised TypeError at import.
+_emitter = EventEmitter(_LearningEventStore(_default_tenant_dir()))
+# DB under the tenant home (honours CORVIN_HOME) — never a bare ~/.corvin.
+_db = TokenMetricsDB(_default_tenant_dir() / "token_metrics.db")
 _store = TokenMetricsStore(_emitter, db=_db)
 _comparison_engine = ComparisonEngine()
 _aggregator = TokenMetricsAggregator(_store, _comparison_engine)
@@ -117,7 +130,7 @@ router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 async def get_session_metrics(
     session_id: str,
     limit: int = 100,
-    current_user: dict = Depends(get_current_user),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ):
     """Get complete metrics for a session.
 
@@ -174,7 +187,7 @@ async def get_session_metrics(
 @router.get("/session/{session_id}/summary", response_model=MetricsSummaryResponse)
 async def get_session_summary(
     session_id: str,
-    current_user: dict = Depends(get_current_user),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ):
     """Get summary stats only (lightweight endpoint).
 
@@ -204,7 +217,7 @@ async def get_session_summary(
 
 
 @router.get("/stats", response_model=dict)
-async def get_cluster_stats(current_user: dict = Depends(get_current_user)):
+async def get_cluster_stats(rec: session_auth.SessionRecord = Depends(require_session)):
     """Get cluster-wide statistics (all instances, all sessions).
 
     Returns:
@@ -230,7 +243,7 @@ async def get_cluster_stats(current_user: dict = Depends(get_current_user)):
 async def export_session_metrics(
     session_id: str,
     format: str = "csv",
-    current_user: dict = Depends(get_current_user),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ):
     """Export session metrics in specified format.
 
@@ -274,7 +287,7 @@ async def export_session_metrics(
 
 
 @router.get("/comparison/summary", response_model=ComparisonSummaryResponse)
-async def get_comparison_summary(current_user: dict = Depends(get_current_user)):
+async def get_comparison_summary(rec: session_auth.SessionRecord = Depends(require_session)):
     """Get Vibe vs Native comparison summary.
 
     Returns:

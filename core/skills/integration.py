@@ -1,4 +1,13 @@
-"""Skill System Integration — wires all modules together (K4-001 fix + ADR-0314)."""
+"""Skill System Integration — wires all modules together (K4-001 fix + ADR-0314).
+
+Learning events (ADR-0314) go through ``core.learning.event_emitter.EventEmitter``
+in its CURRENT shape — ``EventEmitter(EventStore(tenant_home))`` with a
+synchronous, non-blocking ``emit(LearningEvent) -> bool`` and ``stop()``.
+The previous version used the pre-``df125e48`` API (``EventEmitter(tenant_home,
+tenant_id)``, ``await start()/flush()/emit_confidence_score()/read_events()``):
+construction succeeded with a ``PosixPath`` as the store and every emit raised
+``TypeError`` (adversarial review D-08).
+"""
 
 from __future__ import annotations
 
@@ -8,9 +17,8 @@ from typing import Any, Optional
 
 from .backoff import BackoffConfig, SelfHealingBackoff
 from .grader import GradingManager
-from .health import GradingHealth, HealthMonitor, QueueHealth, TelemetryHealth
+from .health import GradingHealth, HealthMonitor, TelemetryHealth
 from .learning_loop import SkillLearningManager
-from .telemetry import MetricsCollector, NoOpPublisher
 from .telemetry_manager import TelemetryManager
 
 
@@ -28,7 +36,7 @@ class SkillSystemIntegration:
         self.learning = learning_manager
         self.grading = grading_manager
         self.telemetry = telemetry_manager
-        self.tenant_home = tenant_home
+        self.tenant_home = Path(tenant_home) if tenant_home is not None else None
         self.tenant_id = tenant_id
 
         # Health checks
@@ -39,12 +47,16 @@ class SkillSystemIntegration:
         # Backoff for recovery
         self.backoff = SelfHealingBackoff(BackoffConfig(base_delay_s=1.0, max_delay_s=60.0))
 
-        # Learning event emitter (ADR-0314)
+        # Learning event store + emitter (ADR-0314). The emitter's worker is a
+        # daemon thread with an atexit flush; ``stop()`` joins it explicitly.
+        self.event_store = None
         self.event_emitter = None
-        if tenant_home:
+        if self.tenant_home is not None:
             from core.learning.event_emitter import EventEmitter
+            from core.learning.event_store import EventStore
 
-            self.event_emitter = EventEmitter(tenant_home, tenant_id)
+            self.event_store = EventStore(self.tenant_home)
+            self.event_emitter = EventEmitter(self.event_store)
 
     async def run_all_loops(self) -> None:
         """Run all async loops concurrently.
@@ -55,12 +67,8 @@ class SkillSystemIntegration:
         3. Telemetry loop publishes metrics
         4. Health loop monitors system
         5. Backoff recovers on failure
-        6. Event emitter processes learning events (ADR-0314)
+        6. Event emitter persists learning events in the background (ADR-0314)
         """
-        # Start event emitter if available
-        if self.event_emitter:
-            await self.event_emitter.start()
-
         try:
             await asyncio.gather(
                 self.learning.run_grading_loop(self.grading),  # Learning → Grading
@@ -69,10 +77,7 @@ class SkillSystemIntegration:
                 return_exceptions=True,
             )
         finally:
-            # Stop event emitter cleanly
-            if self.event_emitter:
-                await self.event_emitter.stop()
-                await self.event_emitter.flush()
+            self.stop_event_emitter()
 
     async def _run_health_loop(self) -> None:
         """Health monitoring and recovery loop."""
@@ -127,29 +132,24 @@ class SkillSystemIntegration:
         skill = Skill(name=name, version=version, body=body, tags=tags or [])
         self.learning.register_skill(skill)
 
-    async def start_event_emitter(self) -> None:
-        """Start the event emitter worker loop."""
-        if self.event_emitter:
-            await self.event_emitter.start()
+    # ── Learning events (ADR-0314) ────────────────────────────────────────────
 
-    async def flush_events(self) -> None:
-        """Wait for all pending events to be persisted."""
-        if self.event_emitter:
-            await self.event_emitter.flush()
+    def stop_event_emitter(self) -> None:
+        """Flush + join the emitter worker (idempotent)."""
+        if self.event_emitter is not None:
+            self.event_emitter.stop()
 
-    async def emit_learning_event(self, event: Any) -> None:
-        """Emit a learning event asynchronously (non-blocking).
+    def emit_learning_event(self, event: Any) -> bool:
+        """Queue a ``LearningEvent`` (non-blocking).
 
-        Args:
-            event: LearningEvent to emit
-
-        Note:
-            If event_emitter not initialized, silently skips (backward-compatible).
+        Returns True when queued, False when dropped (queue full, emitter
+        stopped, or no tenant_home → emitter not configured).
         """
-        if self.event_emitter:
-            await self.event_emitter.emit(event)
+        if self.event_emitter is None:
+            return False
+        return self.event_emitter.emit(event)
 
-    async def emit_confidence_score(
+    def emit_confidence_score(
         self,
         skill_name: str,
         session_id: str,
@@ -158,60 +158,61 @@ class SkillSystemIntegration:
         combined: float,
         band: str,
         reasoning: Optional[str] = None,
-    ) -> None:
-        """Emit a confidence score learning event (ADR-0315).
+    ) -> bool:
+        """Emit a confidence score learning event (ADR-0315)."""
+        if self.event_emitter is None:
+            return False
+        from core.learning.learning_events import EventType, LearningEvent
 
-        Args:
-            skill_name: Which skill
-            session_id: Session ID
-            relevance: Relevance score (0.0–1.0)
-            reliability: Reliability score (0.0–1.0)
-            combined: Combined score (0.0–1.0)
-            band: Band name
-            reasoning: Debug info
-        """
-        if self.event_emitter:
-            await self.event_emitter.emit_confidence_score(
-                skill_name=skill_name,
-                session_id=session_id,
-                relevance=relevance,
-                reliability=reliability,
-                combined=combined,
-                band=band,
-                reasoning=reasoning,
-                instance_id=self.tenant_id,
-            )
+        event = LearningEvent.create(
+            event_type=EventType.CONFIDENCE,
+            skill_id=skill_name,
+            tenant_id=self.tenant_id,
+            signal={
+                "session_id": session_id,
+                "relevance": relevance,
+                "reliability": reliability,
+                "combined": combined,
+                "band": band,
+                "reasoning": reasoning,
+            },
+            lom="core.skills.integration:SkillSystemIntegration.emit_confidence_score",
+        )
+        return self.event_emitter.emit(event)
 
-    async def read_learning_events(
+    def read_learning_events(
         self,
         event_type: Optional[Any] = None,
         skill_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> list[Any]:
-        """Read persisted learning events with optional filtering.
+        """Read persisted learning events of THIS tenant with optional filtering.
 
-        Args:
-            event_type: Filter by event type
-            skill_name: Filter by skill name
-            session_id: Filter by session ID
-
-        Returns:
-            List of LearningEvent objects, or empty list if emitter not initialized
+        Call ``stop_event_emitter()`` (or wait) first if you need events that
+        were queued moments ago — persistence is asynchronous.
         """
-        if self.event_emitter:
-            return await self.event_emitter.read_events(
-                event_type=event_type,
-                skill_name=skill_name,
-                session_id=session_id,
-            )
-        return []
+        if self.event_store is None:
+            return []
+        events = self.event_store.query_events(
+            tenant_id=self.tenant_id,
+            event_type=event_type,
+            skill_id=skill_name,
+        )
+        if session_id is not None:
+            events = [e for e in events if (e.signal or {}).get("session_id") == session_id]
+        return events
 
     def get_system_status(self) -> dict[str, Any]:
         """Get overall system status."""
+        emitter = self.event_emitter
         return {
             "grading": self.grading.get_stats(),
             "telemetry": self.telemetry.get_stats(),
             "health": self.health_monitor.get_health_summary(),
             "backoff": self.backoff.get_status(),
-            "event_emitter": {"enabled": self.event_emitter is not None},
+            "event_emitter": {
+                "enabled": emitter is not None,
+                "dropped": getattr(emitter, "dropped", 0),
+                "write_failures": getattr(emitter, "write_failures", 0),
+            },
         }

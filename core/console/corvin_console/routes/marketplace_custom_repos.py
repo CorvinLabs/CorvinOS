@@ -30,7 +30,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..deps import require_session
+from .. import audit as console_audit
+from ..deps import require_csrf, require_session
 
 router = APIRouter(
     prefix="/api/v1/marketplace/custom-repositories",
@@ -99,6 +100,23 @@ def _manager(session: Any) -> Any:
     return RepositoryManager(tenant_id)
 
 
+def _audit(session: Any, action: str, repo_url: str) -> None:
+    """One hash-chained ``console.action_performed`` per state mutation.
+
+    The target id is a stable digest of the repository URL — never the URL
+    itself (it can name a personal GitHub account) and never the token.
+    """
+    import hashlib  # noqa: PLC0415
+
+    console_audit.action_performed(
+        tenant_id=getattr(session, "tenant_id", None) or "_default",
+        sid_fingerprint=getattr(session, "sid_fingerprint", ""),
+        action=action,
+        target_kind="marketplace_custom_repository",
+        target_id=hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:16],
+    )
+
+
 def _serialize(repo: Any) -> dict:
     """Public shape of a repository. Deliberately carries no token."""
     return {
@@ -131,14 +149,14 @@ async def list_repositories(session: Any = Depends(require_session)) -> dict:
 
 @router.post("", status_code=201)
 async def add_repository(
-    body: RepoAdd, session: Any = Depends(require_session)
+    body: RepoAdd, session: Any = Depends(require_csrf)
 ) -> dict:
     """Register a repository, storing its token encrypted when one is given."""
     manager = _manager(session)
     url = _require_url(body.repo_url)
     token = (body.token_ref or "").strip() or None
     try:
-        return _serialize(manager.add_repository(url, token))
+        result = _serialize(manager.add_repository(url, token))
     except RepositoryValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except InvalidKeyError as exc:
@@ -150,11 +168,13 @@ async def add_repository(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to add custom repository")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _audit(session, "marketplace.custom_repository_add", url)
+    return result
 
 
 @router.post("/validate")
 async def validate_repository(
-    body: RepoRef, session: Any = Depends(require_session)
+    body: RepoRef, session: Any = Depends(require_csrf)
 ) -> dict:
     """Check a URL without registering it. An invalid URL is a 200 with
     ``valid: false`` — the form asks this on every keystroke pause, and a 4xx
@@ -173,7 +193,7 @@ async def validate_repository(
 
 @router.patch("")
 async def update_repository(
-    body: RepoPatch, session: Any = Depends(require_session)
+    body: RepoPatch, session: Any = Depends(require_csrf)
 ) -> dict:
     """Rotate the stored token and/or flip the enabled state."""
     manager = _manager(session)
@@ -185,7 +205,7 @@ async def update_repository(
             manager.secrets_store.store_token(url, token, manager.tenant_id)
         if body.enabled is not None:
             repo = manager.set_enabled(url, body.enabled)
-        return _serialize(repo)
+        result = _serialize(repo)
     except RepositoryValidationError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except InvalidKeyError as exc:
@@ -197,28 +217,31 @@ async def update_repository(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to update custom repository")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _audit(session, "marketplace.custom_repository_update", url)
+    return result
 
 
 @router.delete("")
 async def remove_repository(
-    body: RepoRef, session: Any = Depends(require_session)
+    body: RepoRef, session: Any = Depends(require_csrf)
 ) -> dict:
     """Unregister a repository and drop its stored token."""
     manager = _manager(session)
     url = _require_url(body.repo_url)
     try:
         manager.remove_repository(url)
-        return {"message": "Repository removed"}
     except RepositoryValidationError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to remove custom repository")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _audit(session, "marketplace.custom_repository_remove", url)
+    return {"message": "Repository removed"}
 
 
 @router.post("/refresh")
 async def refresh_repository(
-    body: RepoRef, session: Any = Depends(require_session)
+    body: RepoRef, session: Any = Depends(require_csrf)
 ) -> dict:
     """Re-read a repository's current metadata.
 

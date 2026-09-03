@@ -55,7 +55,7 @@ class TestAttack1_CouplingAmbiguity:
             store.record_outcome(outcome)
 
         # All 3 must be retrievable
-        outcomes = store.get_outcomes_by_decision(decision_id)
+        outcomes = store.get_outcomes_by_decision(decision_id, tenant_id="_default")
         assert len(outcomes) == 3
         assert outcomes[0].quality_score == pytest.approx(0.9)
         assert outcomes[1].quality_score == pytest.approx(0.8)
@@ -77,7 +77,7 @@ class TestAttack1_CouplingAmbiguity:
             store.record_outcome(outcome)
 
         # All should be stored
-        all_outcomes = store.get_outcomes_by_decision("d-ambig")
+        all_outcomes = store.get_outcomes_by_decision("d-ambig", tenant_id="_default")
         assert len(all_outcomes) == 5
 
 
@@ -269,8 +269,10 @@ class TestAttack3_PIILeakage:
 
             # User ID must NOT appear in export
             assert "user-123" not in content
-            # But outcome_id should
-            assert outcome.outcome_id in content
+            # Ids are anonymized to sequential integers by default
+            # (anonymize_ids=True), so the raw outcome_id must NOT appear either.
+            assert outcome.outcome_id not in content
+            assert "d1" not in content.splitlines()[1:]  # decision_id anonymized too
 
 
 class TestAttack4_EventStoreIntegration:
@@ -324,7 +326,7 @@ class TestAttack4_EventStoreIntegration:
                 await loop.stop()
 
                 # Outcome should still be in local store
-                stored = store.get_outcome(outcome.outcome_id)
+                stored = store.get_outcome(outcome.outcome_id, tenant_id="_default")
                 assert stored is not None
 
         asyncio.run(test_async())

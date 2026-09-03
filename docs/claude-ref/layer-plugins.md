@@ -352,11 +352,26 @@ events.
 - SkillForge is OPTIONAL — voice, cowork and forge must not hard-import
   it. The MCP server is reached via the chat-pinned persona only.
 - Workspaces sit alongside forge: each scope_root contains both a
-  `forge/` and a `skill-forge/` directory, plus the **shared**
-  `audit.jsonl` at scope_root level. SkillForge therefore writes its
-  audit events ONE LEVEL UP from its own workspace
-  (`<scope_root>/audit.jsonl`, NOT `<scope_root>/skill-forge/audit.jsonl`)
-  so the hash-chain is unified with forge.
+  `forge/` and a `skill-forge/` directory. **Audit events go to the
+  TENANT CORE CHAIN** — `MultiSkillRegistry.audit_path()` =
+  `<tenant_home>/global/forge/audit.jsonl` (via `forge.paths`), for EVERY
+  scope (task/session/project/user). That is the chain the boot tripwire,
+  `audit_query` and the compliance reports read; the previous
+  `<scope_root>/audit.jsonl` sibling files were read by nothing
+  (adversarial review 2026-09-03, D-07). A bare `SkillRegistry(root)`
+  (standalone / tests) still defaults to `<root>/../audit.jsonl`.
+  `SkillRegistry._save` also emits the ADR-0420 `manifest.json`
+  (`{"skills": [{"name", "metadata"}]}`) next to `skills_registry.json` —
+  the file `core.skills.corvin_skills.{resolver,cache}` read, keyed on file
+  identity so cross-process writes are seen without `invalidate()`.
+- Lookup order is HIGHEST scope first (`SHADOW_ORDER` = user → project →
+  session → task): a task-scope copy never shadows the curated user-scope
+  body at injection time (D-06).
+- MCP gates: `_namespace_check` applies to `skill_create`, `skill_grade`,
+  `skill_promote` AND `skill_purge` (D-04); `skill_create` with
+  `scope=project|user` is refused for namespaced personas and requires
+  `force=True` (audited `skill.create_forced_scope`) for operator/wildcard
+  callers (D-05) — the promotion gates cannot be skipped by minting high.
 - Scope detection reuses `forge.scope.detect_scope()` and
   `forge.scope.scope_root()` — there is no skill-forge-specific
   detector. Tests must therefore set `CORVIN_FORCE_SCOPE` exactly
@@ -388,9 +403,12 @@ events.
 
 **What you must NOT do:**
 
-- Don't write to scope_root's `audit.jsonl` from skill-forge code with
-  a different schema or a separate hash-chain — the unified chain only
-  works because both plugins go through `forge.security_events.write_event`.
+- Don't write skill audit events anywhere but the tenant core chain, and
+  never with a different schema or a separate hash-chain — the unified
+  chain only works because every writer goes through
+  `forge.security_events.write_event` (skill-forge via
+  `MultiSkillRegistry.audit_path()`, `core/skills/*` via
+  `core.skills.skill_audit.emit_skill_audit`).
   If the forge package isn't on `PYTHONPATH`, SkillForge falls back to a
   plain JSONL writer (no chain) — that fallback is for standalone tests
   only and MUST NOT be the production path.
@@ -1165,8 +1183,8 @@ mechanism of ADR-0232**, seven in total:
 
 | Layer | Tripwire | Fails when |
 |---|---|---|
-| L16 | `audit_writer_reachable` | audit dir not writable |
-| L16 | `audit_chain_intact` | existing chain does not verify |
+| L16 | `audit_writer_reachable` | `audit.writer_available()` is False (forge writer not loaded → `audit_event` would be a silent no-op), the audit module has no such predicate, or the audit dir is not writable |
+| L16 | `audit_chain_intact` | existing chain does not verify (`verify_audit` answers `(False, [{"reason": "writer_unavailable"}])` with no writer — never `(True, [])`) |
 | L16 | `core_audit_owns_the_trail` | audit provider grew a trail-owning API |
 | L18 | `consent_gate_denies_by_default` | `is_granted` admits an unknown uid, or has no TTL cap |
 | L34 | `flow_guard_present` | `DataFlowGuard` / `DataFlowDenied` missing |
@@ -1232,7 +1250,7 @@ Three **reversible** actions, chosen per plugin:
 | Policy | Action | Default for |
 |---|---|---|
 | `circuit_break_only` | refuse calls for the cooldown | `audit_backend`, `user_backend`, `compute_engine`, `recall_backend`, `bridge_channel`, `data_connector` — anything that could lose state or evidence |
-| `soft_restart` | `on_unload()` → `on_load()`, same context | `stt_provider`, `summary_provider`, `notification_backend` |
+| `soft_restart` | `registry.restart()`: `on_unload()` → `on_load()`, same context, same boot layer (the public `unregister()`+`register()` pair is what the ADR-0233 D5 same-epoch guard demotes to `installed`) | `stt_provider`, `summary_provider`, `notification_backend` |
 | `disable_and_degrade` | unregister + detach the provider slot | `router_backend`, `worker_engine` — the platform runs fine without them |
 | `none` | opt out entirely | — |
 
@@ -1303,11 +1321,16 @@ Audit events: `plugin.installed`, `plugin.enabled`, `plugin.enable_denied`,
 ### Stage 2 — health collection + metrics (ADR-0231)
 
 `health.HealthCollector` polls `health_check_all()` on an interval and keeps the
-latest snapshot; the gateway lifespan starts it **only** when
-`plugin_health_monitoring` is on, and stops it before unloading plugins so a poll
-cannot land on a plugin midway through `on_unload()`. With the flag off no timer is
-created at all — the health route still answers from breaker state, which costs
-nothing.
+latest snapshot. `bootstrap.start_health_monitoring()` — called by
+`boot_platform()` after the post-boot tripwire, so BOTH shipped hosts get it (until
+2026-09-03 only the gateway lifespan wired it and the standalone console never
+polled) — starts it **only** when the `os.plugin_health_monitoring` Skill answers
+enabled; the healer hangs off it, gated lazily on `plugin_self_healing`. Hosts
+`await stop_health_monitoring()` before unloading plugins so a poll cannot land on
+a plugin midway through `on_unload()` (`shutdown()` does a synchronous best-effort
+stop if they forgot). With the Skill off no timer is created at all — the health
+route still answers from breaker state, which costs nothing. A synchronous caller
+(no running loop) gets `None`, not a crash.
 
 - **Alerting writes an audit event, not a notification.** `plugin.health_alert`
   after N consecutive failures (default 3), once per streak, plus
@@ -1721,3 +1744,23 @@ here, a test that runs the command.
 - Don't add a `plugin_type` to the classifier's keyword table that isn't in the
   live `KNOWN_PLUGIN_TYPES` — that would be exactly the second taxonomy this
   file already forbids, one layer up.
+
+### Fail-closed hardening — adversarial review 2026-09-03 (A1–A12)
+
+Twelve verified findings against the plugin system + boot path, fixed at the root
+(no compat shims). Guard tests: `core/plugins/tests/test_adversarial_fixes_2026_09_03.py`.
+
+| # | Defect | Fix (load-bearing rule) |
+|---|---|---|
+| A1 | The boot tripwire could not tell a working audit writer from a silent no-op: `audit._se = None` on ANY forge import failure, `verify_audit` → `(True, [])`, probe-file-only reachability check. | `audit.writer_available()`; `audit_writer_reachable` (tripwire) and `_assert_core_audit_inline` (bootstrap) assert it; `verify_audit` → `(False, [{"reason": "writer_unavailable"}])`, `audit_health_check` → `(False, 1)`. A stripped/broken forge is a REFUSAL to boot, never a green light. |
+| A2 | `audit_event(tenant_id=X)` under process tenant Y raised `PermissionError` (⊂ `OSError`) → swallowed by the I/O handler: every plugin lifecycle/health record for a non-env tenant was dropped silently. | `AuditTenantMismatch(ValueError)`; logged at ERROR; an `audit.tenant_mismatch` record (dropped type/severity/count only, never the details) is hash-chained under the CONTEXT tenant. `except OSError` covers real I/O only. |
+| A3 | `on_load()` ran synchronously under the op lock with no deadline; one wedged connect hung `boot_platform()` for both hosts. | `registry.LOAD_DEADLINE_S = 30`; `on_load` runs through `_call_with_deadline` (with a COPY of the caller's ContextVars so `loading.current()` still attributes); `PluginLoadTimeout` → rollback like a raise, `plugin.load_failed reason=on_load_timeout`, fatal (`GlobalComplianceLoadFailed`) on the compliance boot layer. The orphaned worker thread is abandoned, not killed — a hostile plugin still belongs in a subprocess (ADR-0241). |
+| A4 | `_tenant_scope_permits` / `_trust_permits` returned True when the evaluator raised. | Return False; audited as `plugin.provider_slot_refused reason=evaluation_failed` / `plugin.load_refused reason=trust_evaluation_failed`. |
+| A5 | Healing soft-restart = `unregister()`+`register()` in one epoch → the ADR-0233 D5 same-epoch guard demoted `boot_layer=core` to `installed`. | `PluginRegistry.restart(plugin_id)` — one operation under the op lock, keeps `_boot_layers`, clears the same-epoch mark for the restart and re-arms it if `on_load` fails; refuses the compliance layer. `HealingOrchestrator._soft_restart` uses it. |
+| A6 | Health collector + healer wired only in the gateway lifespan; the standalone console never polled. | `bootstrap.start_health_monitoring()` / `stop_health_monitoring()` / `health_collector()`, called from `boot_platform()`; gateway inline copy deleted. |
+| A7 | `PluginResponse.error` classmethod shadowed the `error` field's default → `success()` always asserted. | Factory renamed `PluginResponse.failure()`. |
+| A8 | `_assert_core_audit_inline` returned `[]` on `ImportError` of `audit`. | Raises `CoreAuditUnavailable`. |
+| A9 | A failed `bootstrap_all()` only logged. | `plugin.bootstrap_skipped {error_type}` in the chain first. |
+| A10 | `_check_audit_unification` looked at `Path.home()/.corvin`. | Derived from `forge.paths.corvin_home()` + `forge.tenants.current_tenant()` + `audit.audit_path()`; compat symlink recognised. |
+| A11 | Two perf tests put `<repo>/core` first on `sys.path` → `import audit` resolved to `core/audit` for every later test (26 order-dependent failures). | Inserts deleted; guard test asserts no such entry and no such insert in any test source. |
+| A12 | Stale tests (extension-point flag module, marketplace preload, `web_surface` surface row, healing boot wiring, install-listing import). | Tests updated to the current contracts; `web_surface` row added to `surface_map.SURFACES` (consumed by `routes/capabilities.py`); `corvin_core` added to `_FLAG_MODULES`. |

@@ -5,7 +5,7 @@ Usage
 Start directly::
 
     uvicorn corvin_console.standalone:create_app --factory \
-        --host 0.0.0.0 --port 8000 \
+        --host 127.0.0.1 --port 8000 --no-proxy-headers \
         --ws-ping-interval 20 --ws-ping-timeout 30
 
 Or simply::
@@ -28,6 +28,25 @@ local-login creates a session automatically for localhost operators and
 redirects to /console/. The SetupGate component then guides first-time
 configuration (engine key, optional bridge channel).
 
+Bind address + proxy headers (adversarial review E-08, 2026-09-03)
+------------------------------------------------------------------
+The ONLY credential behind an owner session is the TCP peer address of
+``/v1/console/auth/local-login`` (loopback → owner). Two deployment rules
+follow, and both defaults here enforce them:
+
+* **Bind ``127.0.0.1`` by default** (``__main__`` below and ``corvin serve``).
+  Binding ``0.0.0.0`` exposes every unauthenticated surface to the LAN; do it
+  only behind an authenticating reverse proxy that you control.
+* **Never trust proxy headers.** uvicorn's default ``ProxyHeadersMiddleware``
+  rewrites ``request.client`` from ``X-Forwarded-For`` whenever the peer is
+  loopback — i.e. exactly when a same-host reverse proxy or tunnel sits in
+  front of the console. A proxy that does not stamp the header would then
+  mint an owner session for every remote visitor, and one that does lets the
+  header value decide. ``__main__`` therefore runs uvicorn with
+  ``proxy_headers=False`` / ``forwarded_allow_ips=None``; pass
+  ``--no-proxy-headers`` when launching uvicorn by hand. local-login MUST NOT
+  sit behind a proxy that forwards anonymous traffic.
+
 Headless API-only mode (ADR-0241/0243, feature flag ``headless_api_mode``,
 default off) removes every browser surface from THIS app: no /console/ mount,
 no /local-stats, and / answers ``{"status": "ok", "ui": "headless"}`` instead of
@@ -38,7 +57,16 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from pathlib import Path
+
+
+class _BodyTooLarge(Exception):
+    """Raised by the streaming body guard when a chunked body exceeds its cap."""
+
+    def __init__(self, cap: int) -> None:
+        super().__init__(f"request body exceeds {cap} bytes")
+        self.cap = cap
 
 
 def _plugin_package_absent(err: ImportError) -> bool:
@@ -345,6 +373,7 @@ def create_app() -> FastAPI:
         # fails, token metrics simply won't be recorded (graceful degradation).
         try:
             from core.learning.event_emitter import EventEmitter
+            from core.learning.event_store import EventStore as _LearningEventStore
             from core.learning.token_metrics_db import TokenMetricsDB
             from core.learning.token_metrics_store import TokenMetricsStore
             from core.learning.token_measurement_hook import initialize_token_hook
@@ -358,7 +387,9 @@ def create_app() -> FastAPI:
                 # Fallback for testing environments
                 _tenant_dir = Path.home() / ".corvin" / "tenants" / _tenant_id
 
-            _emitter = EventEmitter(Path(_tenant_dir), _tenant_id)
+            # EventEmitter(event_store, queue_size) — wraps the tenant's learning
+            # EventStore; the (tenant_dir, tenant_id) form never existed.
+            _emitter = EventEmitter(_LearningEventStore(Path(_tenant_dir)))
             _db = TokenMetricsDB()  # Auto-creates ~/.corvin/token_metrics.db
             _store = TokenMetricsStore(_emitter, db=_db)
             _hook = initialize_token_hook(_store, _emitter)
@@ -516,44 +547,109 @@ def create_app() -> FastAPI:
     # (before _configure_persistent_logging above) went to a stderr nothing
     # was reading — so a real reported bug (Discord bot-token validation
     # 500) was undiagnosable without stopping the background service and
-    # re-running in a foreground terminal. The console is localhost-only
-    # (see CLAUDE.md — local-login has no remote auth path), so returning
-    # the real exception text to the caller is not a cross-tenant leak.
+    # re-running in a foreground terminal.
+    #
+    # The exception TEXT goes to the persistent log only (adversarial review
+    # E-11, 2026-09-03): the app is not guaranteed loopback-only (E-08), and an
+    # exception string can carry file paths, config values or a third-party
+    # API's error body. The client gets a correlation id that is printed in
+    # the same log line, so the operator can still find the traceback in one
+    # grep — ``grep <id> ~/.corvin/logs/console.log``.
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        log.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        correlation_id = uuid.uuid4().hex[:16]
+        log.exception(
+            "Unhandled exception on %s %s [error_id=%s]",
+            request.method, request.url.path, correlation_id,
+        )
         return JSONResponse(
             status_code=500,
-            content={"detail": f"{type(exc).__name__}: {exc}"[:500]},
+            content={
+                "detail": "internal server error",
+                "error_id": correlation_id,
+            },
         )
 
-    # Reject an oversized upload on its Content-Length, BEFORE Starlette parses
-    # the multipart body. /voice/transcribe declares a 25 MiB cap but enforced it
-    # with `if len(await audio.read()) > _MAX_AUDIO_BYTES` — after the entire body
+    # Reject an oversized body on its Content-Length, BEFORE Starlette parses
+    # it. /voice/transcribe declares a 25 MiB cap but enforced it with
+    # `if len(await audio.read()) > _MAX_AUDIO_BYTES` — after the entire body
     # was spooled to disk AND materialised in RAM, so a 2 GB POST cost 2 GB of
     # each before the 413 fired. The console is single-process, so that stalls
     # every SSE chat stream with it.
     #
-    # Deliberately PER-PATH rather than a global body cap: the file-attachment
-    # routes take legitimately large uploads and a console-wide limit would be a
-    # behaviour change well outside this fix. Paths not listed are untouched.
-    _BODY_CAPS = {"/v1/console/voice/transcribe": 25 * 1024 * 1024}
+    # Adversarial review E-12 (2026-09-03): the cap is now GLOBAL — every route
+    # that is not listed below gets ``_BODY_CAP_DEFAULT`` (2 MiB, far above any
+    # JSON body the SPA sends) — with per-route overrides for the upload
+    # surfaces that legitimately take large bodies. Before this, every
+    # ``await request.json()`` / pydantic body outside /voice/transcribe was
+    # unbounded, which together with E-02/E-03 was a pre-auth memory DoS.
+    # A request with no Content-Length (chunked) is capped by
+    # ``_LimitedBodyReceive`` below on the same budget.
+    _BODY_CAP_DEFAULT = 2 * 1024 * 1024
+    _BODY_CAPS = {
+        "/v1/console/voice/transcribe": 25 * 1024 * 1024,
+        "/v1/console/files/upload": 512 * 1024 * 1024,
+        "/v1/console/license/upload": 8 * 1024 * 1024,
+        "/v1/console/packages/upload": 256 * 1024 * 1024,
+        "/v1/console/workflows/import": 64 * 1024 * 1024,
+    }
+    _BODY_CAP_PREFIXES = {
+        # POST /chat/sessions/{sid}/attachments
+        "/v1/console/chat/sessions/": 512 * 1024 * 1024,
+    }
+
+    def _body_cap_for(path: str) -> int:
+        cap = _BODY_CAPS.get(path)
+        if cap is not None:
+            return cap
+        for prefix, pcap in _BODY_CAP_PREFIXES.items():
+            if path.startswith(prefix) and path.endswith("/attachments"):
+                return pcap
+        return _BODY_CAP_DEFAULT
 
     @app.middleware("http")
     async def _cap_request_body(request, call_next):  # noqa: ANN001, ANN202
-        cap = _BODY_CAPS.get(request.url.path)
-        if cap is not None:
-            raw_len = request.headers.get("content-length")
-            if raw_len:
-                try:
-                    if int(raw_len) > cap:
-                        return JSONResponse(
-                            status_code=413,
-                            content={"detail": f"audio exceeds {cap} bytes"},
-                        )
-                except ValueError:
-                    pass  # unparseable — let the handler's own check deal with it
-        return await call_next(request)
+        cap = _body_cap_for(request.url.path)
+        raw_len = request.headers.get("content-length")
+        if raw_len:
+            try:
+                if int(raw_len) > cap:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": f"request body exceeds {cap} bytes"},
+                    )
+            except ValueError:
+                pass  # unparseable — the streaming guard below still applies
+        # Streaming guard: a body sent without Content-Length (chunked) is
+        # counted as it arrives and cut off at the same budget.
+        received = 0
+        original_receive = request.receive
+
+        async def _limited_receive():  # noqa: ANN202
+            nonlocal received
+            message = await original_receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > cap:
+                    raise _BodyTooLarge(cap)
+            return message
+
+        request._receive = _limited_receive  # noqa: SLF001 — Starlette's own hook
+        try:
+            response = await call_next(request)
+        except _BodyTooLarge as exc:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"request body exceeds {exc.cap} bytes"},
+            )
+        if received > cap:
+            # FastAPI turns ANY error while reading a body into a 400 ("error
+            # parsing the body"); the byte count is the truth.
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"request body exceeds {cap} bytes"},
+            )
+        return response
 
     # Allow the same-origin SPA to call the API in development.
     # In production (serving SPA from the same origin) this is a no-op.
@@ -573,11 +669,15 @@ def create_app() -> FastAPI:
     from core.pipeline.wiring import create_dual_gate_middleware
 
     # Create middleware once (not on every request)
+    # skip_paths come from the SAME public-route allowlist the route-table
+    # guard test enforces (deps.PUBLIC_PATH_PREFIXES) — so the middleware can
+    # never pass an anonymous caller to a path the guard would not allow, and
+    # never block one it would. (The old inline list named a login path that
+    # does not exist, and NOT the real '/auth/local-login'.)
+    from .deps import PUBLIC_PATH_PREFIXES as _PUBLIC_PATH_PREFIXES
+
     dual_gate_middleware_fn = create_dual_gate_middleware(
-        skip_paths=[
-            '/healthz', '/v1/console/healthz', '/static/', '/ws-live/', '/.well-known/',
-            '/v1/console/login', '/v1/console/login/local'
-        ]
+        skip_paths=list(_PUBLIC_PATH_PREFIXES)
     )
 
     @app.middleware("http")
@@ -759,8 +859,12 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     uvicorn.run(
         create_app(),
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8000,
         ws_ping_interval=20,
         ws_ping_timeout=30,
+        # E-08: never let X-Forwarded-For rewrite request.client — the peer
+        # address IS the local-login credential (see module docstring).
+        proxy_headers=False,
+        forwarded_allow_ips=None,
     )

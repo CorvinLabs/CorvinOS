@@ -81,6 +81,7 @@ id: com.example.cli_test
 name: CLI Test Plugin
 version: 1.0.0
 origin: community
+plugin_type: data_connector
 boot_layer: installed
 """
         )
@@ -105,6 +106,16 @@ boot_layer: installed
         assert installed[0]["version"] == "1.0.0"
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_corvin_home(tmp_path, monkeypatch):
+    """Never let the registry write (now fail-closed and REAL) touch a live .corvin."""
+    home = tmp_path / "corvin_home"
+    (home / "tenants" / "_default" / "global").mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    yield home
+
+
 class TestInstallRealPlugin:
     """Test installing a real plugin with all steps."""
 
@@ -122,6 +133,7 @@ id: com.test.minimal
 name: Minimal Plugin
 version: 0.1.0
 origin: community
+plugin_type: data_connector
 boot_layer: installed
 """
         )
@@ -149,6 +161,7 @@ id: com.test.backend
 name: Backend Plugin
 version: 1.0.0
 origin: community
+plugin_type: data_connector
 boot_layer: bundled
 class_path: test_backend.notification:SlackNotifier
 config:
@@ -199,13 +212,12 @@ setup(
                     str(plugin_dir), no_prompt=True, force=True
                 )
 
-        assert result == 0
-
-        saved_config = mock_save.call_args[0][1]
-        entry = saved_config["spec"]["plugins"]["installed"][0]
-        assert entry["id"] == "legacy_notification"
-        assert entry["version"] == "2.1.0"
-        assert entry["origin"] == "community"  # Defaulted for legacy
+        # A setup.py-only plugin declares no plugin_type, so it cannot be
+        # registered in registry.yaml (the runtime source of truth). The install
+        # is refused fail-closed instead of leaving tenant.corvin.yaml and
+        # registry.yaml diverged (adversarial review 2026-09-03).
+        assert result == 1
+        mock_save.assert_not_called()
 
 
 class TestSignatureVerification:
@@ -223,6 +235,7 @@ id: com.test.vetted
 name: Vetted Plugin
 version: 1.0.0
 origin: vetted
+plugin_type: data_connector
 boot_layer: bundled
 signature:
   algorithm: ed25519
@@ -254,6 +267,7 @@ class TestIdempotency:
             """
 id: com.test.idempotent
 name: Idempotent Plugin
+plugin_type: data_connector
 version: 2.0.0
 """
         )
@@ -297,6 +311,7 @@ version: 2.0.0
             """
 id: com.test.no_force
 name: No Force Plugin
+plugin_type: data_connector
 version: 1.0.0
 """
         )

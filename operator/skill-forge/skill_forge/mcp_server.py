@@ -34,7 +34,7 @@ try:
 except Exception:
     _uah_write = None
 
-from .multi_registry import MultiSkillRegistry, VALID_SCOPES
+from .multi_registry import MultiSkillRegistry, VALID_SCOPES, detect_scope
 from .registry import (
     LinterError,
     PromotionGateError,
@@ -66,8 +66,17 @@ SKILL_CREATE_SCHEMA: dict[str, Any] = {
         "claim":       {"type": "object"},
         "scope":       {"type": "string", "enum": list(VALID_SCOPES)},
         "overwrite":   {"type": "boolean", "default": False},
+        # scope=project|user bypasses every promotion gate (task->session
+        # ->project->user). Only an operator/wildcard caller may mint there,
+        # and only with an explicit force=True (audited).
+        "force":       {"type": "boolean", "default": False},
     },
 }
+#: Scopes a NAMESPACED persona may mint into directly. Anything higher must
+#: be earned through skill_promote's grade gates (adversarial review D-05).
+PERSONA_CREATE_SCOPES: tuple[str, ...] = ("task", "session")
+#: Scopes that require operator/wildcard caller AND force=True on create.
+GATED_CREATE_SCOPES: tuple[str, ...] = ("project", "user")
 SKILL_PROMOTE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["name", "to"],
@@ -185,6 +194,41 @@ class SkillForgeMCPServer:
         if policy is None or policy is False:
             return True, ""  # forge package unavailable → no gate
         return policy.namespace_check(self.caller_persona, name)
+
+    def _is_namespaced_persona(self) -> bool:
+        """True when the caller persona owns a prefix (i.e. is NOT wildcard)."""
+        policy = self._get_policy()
+        if policy is None or policy is False:
+            return False
+        return policy.namespace_for(self.caller_persona) is not None
+
+    def _deny_if_outside_namespace(self, msgid: Any, name: str, *, tool: str) -> bool:
+        """Layer 9 namespace gate for EVERY mutating tool.
+
+        Returns True when the call was denied (envelope already sent). The gate
+        used to apply to skill_create only, so a ``coder`` persona could
+        zero-grade or purge ``assistant.*`` skills (adversarial review D-04).
+        """
+        if not isinstance(name, str) or not name:
+            return False
+        allowed, reason = self._namespace_check(name)
+        if allowed:
+            return False
+        policy = self._get_policy()
+        allowed_prefix = (policy.namespace_for(self.caller_persona)
+                          if policy not in (None, False) else None)
+        self._emit_audit_event(
+            "skill.namespace_denied",
+            tool=name,
+            details={
+                "reason": reason,
+                "operation": tool,
+                "caller_persona": self.caller_persona,
+                "allowed_prefix": allowed_prefix,
+            },
+        )
+        self._tool_envelope(msgid, ok=False, error=reason)
+        return True
 
     # -- transport ---------------------------------------------------------
 
@@ -309,7 +353,8 @@ class SkillForgeMCPServer:
         except ImportError:
             return
         try:
-            audit_path = self.multi._root_for("user").parent / "audit.jsonl"
+            audit_path = self.multi.audit_path()
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
             write_event(
                 audit_path, event_type,
                 tool=tool, details=details or {},
@@ -323,25 +368,44 @@ class SkillForgeMCPServer:
         # may register browser.* skills, etc. Wildcard (no caller_persona env
         # OR persona missing from policy) = legacy unrestricted behaviour.
         name = args.get("name", "")
-        if isinstance(name, str) and name:
-            allowed, reason = self._namespace_check(name)
-            if not allowed:
-                policy = self._get_policy()
-                allowed_prefix = (policy.namespace_for(self.caller_persona)
-                                  if policy not in (None, False) else None)
+        if self._deny_if_outside_namespace(msgid, name, tool="skill_create"):
+            return
+        # Scope gate — minting straight into project/user skips every
+        # promotion gate (D-05). Personas: task/session only. Operator /
+        # wildcard: project/user need an explicit, audited force=True.
+        ws_scope = args.get("scope") or detect_scope()
+        force = bool(args.get("force", False))
+        if ws_scope in GATED_CREATE_SCOPES:
+            if self._is_namespaced_persona():
+                reason = (
+                    f"scope-gate: persona {self.caller_persona!r} may only "
+                    f"create skills in {PERSONA_CREATE_SCOPES}; earn "
+                    f"{ws_scope!r} through skill_promote"
+                )
                 self._emit_audit_event(
-                    "skill.namespace_denied",
-                    tool=name,
-                    details={
-                        "reason": reason,
-                        "caller_persona": self.caller_persona,
-                        "allowed_prefix": allowed_prefix,
-                    },
+                    "skill.scope_denied", tool=name,
+                    details={"reason": reason, "operation": "skill_create",
+                             "requested_scope": ws_scope,
+                             "caller_persona": self.caller_persona},
+                )
+                self._tool_envelope(msgid, ok=False, error=reason)
+                return
+            if not force:
+                reason = (
+                    f"scope-gate: creating directly in scope {ws_scope!r} "
+                    f"bypasses the promotion gates; pass force=True "
+                    f"(operator-only, audited) or create in task/session"
+                )
+                self._emit_audit_event(
+                    "skill.scope_denied", tool=name,
+                    details={"reason": reason, "operation": "skill_create",
+                             "requested_scope": ws_scope,
+                             "caller_persona": self.caller_persona},
                 )
                 self._tool_envelope(msgid, ok=False, error=reason)
                 return
         spec = self.multi.create(
-            scope=args.get("scope"),
+            scope=ws_scope,
             name=args.get("name", ""),
             type=args.get("type", ""),
             body_md=args.get("body_md", ""),
@@ -349,6 +413,13 @@ class SkillForgeMCPServer:
             claim=args.get("claim") or {},
             overwrite=bool(args.get("overwrite", False)),
         )
+        if ws_scope in GATED_CREATE_SCOPES:
+            self._emit_audit_event(
+                "skill.create_forced_scope", tool=spec.name,
+                details={"scope": ws_scope, "force": True,
+                         "caller_persona": self.caller_persona,
+                         "sha": spec.sha256},
+            )
         self._tool_envelope(msgid, ok=True, data={
             "ok": True, "sha": spec.sha256, "scope": spec.scope,
             "name": spec.name,
@@ -371,6 +442,8 @@ class SkillForgeMCPServer:
 
     def _call_skill_promote(self, msgid: Any, args: dict) -> None:
         name = args.get("name", "")
+        if self._deny_if_outside_namespace(msgid, name, tool="skill_promote"):
+            return
         to = args.get("to", "")
         force = bool(args.get("force", False))
         from_scope = self.multi.find_scope(name)
@@ -385,8 +458,11 @@ class SkillForgeMCPServer:
         self._notify("notifications/tools/list_changed")
 
     def _call_skill_grade(self, msgid: Any, args: dict) -> None:
+        name = args.get("name", "")
+        if self._deny_if_outside_namespace(msgid, name, tool="skill_grade"):
+            return
         spec = self.multi.grade(
-            name=args.get("name", ""),
+            name=name,
             run_id=args.get("run_id", ""),
             score=float(args.get("score", 0.0)),
             notes=args.get("notes", ""),
@@ -430,6 +506,8 @@ class SkillForgeMCPServer:
 
     def _call_skill_purge(self, msgid: Any, args: dict) -> None:
         name = args.get("name", "")
+        if self._deny_if_outside_namespace(msgid, name, tool="skill_purge"):
+            return
         reason = args.get("reason", "")
         ok = self.multi.delete(name, reason=reason)
         if not ok:

@@ -89,17 +89,76 @@ def _find_repo_root() -> Path:
     (they won't exist, but the code gracefully handles missing paths).
     """
     candidate = Path(__file__).resolve().parent.parent.parent
-    # A genuine repo root always has pyproject.toml at its root.
-    if (candidate / "pyproject.toml").exists():
-        return candidate
-    # pip-wheel install: return site-packages root (best-effort).
+    # Source checkout → the repo root; pip-wheel install → the site-packages
+    # dir (best-effort). Either way the caller gets a predictable base path;
+    # `_is_source_checkout()` is what decides which of the two it is.
     return candidate
+
+
+def _pyproject_project_name(pyproject: Path) -> str | None:
+    """Return ``[project].name`` from a pyproject.toml, or ``None``.
+
+    Uses ``tomllib`` where available (3.11+) and a deliberately narrow
+    line-scanner on 3.10 — only the ``name = "..."`` key inside the
+    ``[project]`` table is read, nothing else is interpreted.
+    """
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        import tomllib  # Python 3.11+
+    except ModuleNotFoundError:  # pragma: no cover — 3.10 only
+        tomllib = None
+    if tomllib is not None:
+        try:
+            data = tomllib.loads(text)
+        except Exception:  # noqa: BLE001 — malformed file → not a checkout
+            return None
+        project = data.get("project")
+        if isinstance(project, dict) and isinstance(project.get("name"), str):
+            return project["name"]
+        return None
+    in_project = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_project = stripped == "[project]"
+            continue
+        if in_project and stripped.startswith("name"):
+            key, _, value = stripped.partition("=")
+            if key.strip() == "name":
+                return value.strip().split("#", 1)[0].strip().strip("\"'")
+    return None
+
+
+def _is_source_checkout(root: Path) -> bool:
+    """True iff ``root`` is a CorvinOS git/source checkout, not a wheel install.
+
+    A checkout is recognised by ALL of: ``pyproject.toml`` at ``root`` whose
+    ``[project].name`` is ``corvinos``, plus the ``core/`` and ``operator/``
+    source directories next to it. A single marker is not enough — until
+    2026-09-03 the wheel's ``sources`` mapping lifted core/gateway/pyproject.toml
+    to the site-packages ROOT, and the old ``pyproject.toml``-exists check then
+    took every pip install for a source tree: it ran npm frontend builds
+    against site-packages, and `corvin-uninstall` suggested ``rm -rf
+    <site-packages>`` (adversarial installation review, F2). A wheel can never
+    satisfy all three markers: it ships no ``operator/`` directory (operator
+    code is vendored under corvin_core/_vendor/) and no root pyproject.
+    """
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file():
+        return False
+    if not (root / "core").is_dir() or not (root / "operator").is_dir():
+        return False
+    return _pyproject_project_name(pyproject) == "corvinos"
 
 
 _REPO_ROOT = _find_repo_root()
 # True when running from a pip-wheel install (no source tree present).
-# Used to skip npm-based frontend builds that are already bundled in the wheel.
-_IS_WHEEL_INSTALL = not (_REPO_ROOT / "pyproject.toml").exists()
+# Used to skip npm-based frontend builds that are already bundled in the wheel,
+# and to keep `corvin-uninstall` from suggesting `rm -rf` of site-packages.
+_IS_WHEEL_INSTALL = not _is_source_checkout(_REPO_ROOT)
 
 # Systemd units that are always registered (not bridge-specific).
 # Bridge units are derived dynamically from the installer manifest.

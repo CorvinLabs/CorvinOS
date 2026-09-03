@@ -24,8 +24,8 @@ from .base import Subsystem
 from .forge_apis import NamespacePolicy, ForgeQuota
 from .forge_api_impl import ForgedToolAPIImpl
 from core.context_engineering.context_api import ContextAPI
-from core.learning.event_schema import LearningEvent, LearningEventType, ToolExecutedPayload
-from core.learning.tool_ranking import ToolRankingManager, select_tool_for_reuse
+from core.learning.event_schema import ToolExecutedPayload
+from core.learning.tool_ranking import ToolRankingManager, select_tool_for_reuse, tool_executed_event
 from core.learning.event_store import EventStore
 
 logger = logging.getLogger(__name__)
@@ -504,8 +504,10 @@ class ToolForgeSubsystem(Subsystem):
             # Fallback: Create EventEmitter if not available from hub
             if not self.event_emitter:
                 from core.learning.event_emitter import EventEmitter
-                corvin_home = Path.home() / ".corvin"
-                self.event_emitter = EventEmitter(corvin_home, self.tenant_id)
+                from core.learning.event_store import EventStore as _LearningEventStore
+                # EventEmitter(event_store, queue_size) — it wraps the tenant's
+                # learning EventStore; the (corvin_home, tenant_id) form never existed.
+                self.event_emitter = EventEmitter(_LearningEventStore(self._learning_tenant_dir()))
                 logger.info("ToolForgeSubsystem: EventEmitter created locally")
         except Exception as e:
             logger.warning(f"ToolForgeSubsystem: Failed to initialize EventEmitter: {e}")
@@ -530,9 +532,14 @@ class ToolForgeSubsystem(Subsystem):
                 self.event_store = hub.get_service('event_store')
 
             if not self.event_store:
-                corvin_home = Path.home() / ".corvin"
-                db_path = corvin_home / "tenants" / self.tenant_id / "learning.db"
-                self.event_store = EventStore(db_path)
+                # The SAME tenant-home-rooted store the emitter writes to
+                # (``<tenant_home>/learning/events/``). It used to be handed a
+                # FILE path (``.../learning.db``) as ``tenant_home`` (N-02).
+                emitter_store = getattr(self.event_emitter, "store", None)
+                if isinstance(emitter_store, EventStore):
+                    self.event_store = emitter_store
+                else:
+                    self.event_store = EventStore(self._learning_tenant_dir())
                 logger.info("ToolForgeSubsystem: EventStore created locally")
 
             # Initialize ToolRankingManager
@@ -1020,6 +1027,18 @@ class ToolForgeSubsystem(Subsystem):
         except Exception as e:
             logger.error(f"on_operator_rated_tool failed: {e}")
 
+    def _learning_tenant_dir(self) -> Path:
+        """``<corvin_home>/tenants/<tenant_id>/`` — root of the learning EventStore.
+
+        Resolved through ``forge.tenants.tenant_home`` (honours ``CORVIN_HOME``);
+        ``~/.corvin`` only when forge is not importable.
+        """
+        try:
+            from forge.tenants import tenant_home as _tenant_home  # type: ignore[import-not-found]
+            return Path(_tenant_home(self.tenant_id))
+        except ImportError:
+            return Path.home() / ".corvin" / "tenants" / self.tenant_id
+
     async def _emit_tool_executed_event(
         self,
         tool_name: str,
@@ -1086,19 +1105,25 @@ class ToolForgeSubsystem(Subsystem):
                 tags=[],  # Future: add tags like ["high_latency", "cost_overrun"]
             )
 
-            # Create learning event
-            event = LearningEvent(
-                event_type=LearningEventType.TOOL_EXECUTED,
-                tenant_id=self.tenant_id,
-                instance_id=self.instance_id,
-                skill_name="tool_forge",
+            # ONE wire format shared with the ranking reader (N-02):
+            # learning_events.LearningEvent(METRIC, skill_id="tool:<id>",
+            # signal={kind: "tool_executed", ...payload}) — PII-scrubbed there.
+            event = tool_executed_event(
+                self.tenant_id,
+                payload,
                 session_id=session_id,
-                timestamp_utc=datetime.utcnow(),
-                payload=payload.__dict__,  # Convert dataclass to dict
+                instance_id=str(self.instance_id),
+                lom="core.orchestration.subsystems.tool_forge_subsystem:_emit_tool_executed_event",
             )
 
-            # Emit event (async, non-blocking)
-            await self.event_emitter.emit(event)
+            # emit() is SYNCHRONOUS and non-blocking (bounded queue, daemon
+            # worker); it returns False when the event was dropped.
+            if not self.event_emitter.emit(event):
+                logger.warning(
+                    f"TOOL_EXECUTED event DROPPED (queue full / emitter stopped): "
+                    f"{tool_name} ({status})"
+                )
+                return
             logger.debug(
                 f"TOOL_EXECUTED event emitted: {tool_name} ({status}) in {latency_ms}ms"
             )

@@ -75,6 +75,9 @@ def main() -> int:
         os.environ["CORVIN_HOME"] = td
         os.environ["CORVIN_FORCE_SCOPE"] = "task"
         os.environ["CORVIN_TASK_ID"] = tid
+        # Project scope otherwise resolves (git rev-parse) to THIS repo's live
+        # .corvin/skill-forge registry — the demo used to leak skills into it.
+        os.environ["CORVIN_PROJECT_ROOT"] = td
 
         try:
             mr = MultiSkillRegistry(channel_id="demo", task_id=tid)
@@ -92,7 +95,7 @@ def main() -> int:
             # _resolve_tmp_tasks_root()/<tid>/{forge,skill-forge}/. Use
             # scope_root("task") to get the canonical path through the
             # Phase 1 compat resolver, then sibling-walk to skill-forge.
-            task_root = scope_root("task", task_id=tid).parent / "skill-forge"
+            task_root = scope_root("task", tenant_id="_default", task_id=tid).parent / "skill-forge"
             bad_dir = task_root / "skills" / "demo.bad"
             t("bad skill dir absent", not bad_dir.exists())
 
@@ -153,7 +156,7 @@ def main() -> int:
                 type="domain", body_md=GOOD_BODY,
                 description="never graded", claim={},
             )
-            sess_root = Path(td) / "sessions" / "demo" / "skill-forge"
+            sess_root = mr._root_for("session")   # tenant-native: <td>/tenants/_default/sessions/demo/skill-forge
             man_path = sess_root / "skills_registry.json"
             data = json.loads(man_path.read_text())
             data["demo.ungraded"]["created_at"] = time.time() - 86400 * 8
@@ -173,30 +176,24 @@ def main() -> int:
               detail=str(names))
 
             print("\n[7] hash-chain audit verifies across the lifecycle")
-            # Audit lives at <scope_root>/audit.jsonl. Check session, project,
-            # user and task — each had at least a create event.
-            for label, path in [
-                # Phase 1 strangler-fig: scope_root("task") returns the
-                # canonical or legacy /tmp tasks dir depending on disk
-                # state. Use scope_root().parent to get the task dir,
-                # then walk back to audit.jsonl.
-                ("task",    scope_root("task", task_id=tid).parent / "audit.jsonl"),
-                ("session", Path(td) / "sessions" / "demo" / "audit.jsonl"),
-                ("project", Path(td) / "audit.jsonl"),
-                ("user",    Path(td) / "global" / "audit.jsonl"),
-            ]:
-                if not path.exists():
-                    continue
-                ok, problems = verify_chain(path)
-                t(f"{label} audit chain verifies", ok,
-                  detail=f"{path}  problems={problems}")
+            # Every scope (task, session, project, user) appends to the ONE
+            # tenant core chain — <tenant_home>/global/forge/audit.jsonl (D-07).
+            chain = Path(td) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+            t("tenant core chain exists", chain.exists(), detail=str(chain))
+            assert chain.exists(), chain
+            ok, problems = verify_chain(chain)
+            t("tenant core chain verifies", ok, detail=f"problems={problems}")
+            assert ok, problems
+            kinds = [json.loads(l)["event_type"] for l in chain.read_text().splitlines() if l.strip()]
+            t("lifecycle events present", "skill.create" in kinds and "skill.promote" in kinds,
+              detail=str(sorted(set(kinds))))
         finally:
             # Always clean up /tmp task workspace
             tdir = Path("/tmp/.corvin/tasks") / tid
             if tdir.exists():
                 shutil.rmtree(tdir, ignore_errors=True)
             for k in ("CORVIN_FORCE_SCOPE", "CORVIN_TASK_ID",
-                      "CORVIN_HOME"):
+                      "CORVIN_HOME", "CORVIN_PROJECT_ROOT"):
                 os.environ.pop(k, None)
 
     print(f"\n{PASS} passed, {FAIL} failed")

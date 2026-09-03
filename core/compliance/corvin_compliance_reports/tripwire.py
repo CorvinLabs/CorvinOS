@@ -99,15 +99,38 @@ def _check_audit_unification() -> TripwireResult:
     """
     name = "audit_unification"
     try:
-        old_path = Path.home() / ".corvin" / "global" / "forge" / "audit.jsonl"
-        new_path = Path.home() / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        # Derived from the SAME resolvers the writer uses — never from
+        # ``Path.home()/.corvin``: a CORVIN_HOME/VOICE_AUDIT_PATH redirect (every
+        # test, every non-default install) left the old hard-coded check looking
+        # at a directory the running process does not write to (finding A10).
+        audit = _audit_module()
+        if audit is None:
+            return TripwireResult(name, True, "unification check skipped: audit module not importable")
+        active_path = Path(audit.audit_path())
+        try:
+            from forge.paths import corvin_home as _corvin_home  # type: ignore[import-not-found]
+
+            root = Path(_corvin_home())
+        except Exception:  # noqa: BLE001 - stripped layout: the writer's own root
+            root = Path(audit._forge_workspace_root()).parent.parent
+        try:
+            from forge.tenants import current_tenant as _current_tenant  # type: ignore[import-not-found]
+
+            tenant = _current_tenant()
+        except Exception:  # noqa: BLE001
+            tenant = "_default"
+        old_path = root / "global" / "forge" / "audit.jsonl"
+        new_path = root / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
 
         old_exists = old_path.exists()
         new_exists = new_path.exists()
 
         if not (old_exists and new_exists):
             # Only one chain, or none — no unification issue
-            return TripwireResult(name, True, "audit chain is unified")
+            return TripwireResult(name, True, f"audit chain is unified ({active_path})")
+        if old_path.resolve() == new_path.resolve():
+            # The ADR-0007 backward-compat symlink: one file, two names.
+            return TripwireResult(name, True, "audit chain is unified (compat symlink)")
 
         old_size = old_path.stat().st_size
         new_size = new_path.stat().st_size
@@ -137,16 +160,41 @@ def _check_audit_unification() -> TripwireResult:
 
 
 def audit_writer_reachable() -> TripwireResult:
-    """The core audit path must exist and be writable.
+    """The core audit WRITER must be loaded and its path must be writable.
 
-    Checked by writing and removing a probe file **next to** the audit log, never
-    by appending to the log itself — a tripwire must not add records to a GDPR
-    chain (and must not risk corrupting one).
+    Two halves, both fail-closed:
+
+    * ``audit.writer_available()`` — the hash-chained writer
+      (``forge.security_events``) is actually imported. Without this half the
+      probe below passed on a layout where ``audit_event`` was a silent no-op:
+      the directory was writable, nothing was ever written to it, and
+      ``verify_audit`` said ``(True, [])`` for the chain that did not exist
+      (2026-09-03 finding A1). An audit module that does not expose the
+      predicate is not the module this tripwire knows how to check — refuse.
+    * the path — checked by writing and removing a probe file **next to** the
+      audit log, never by appending to the log itself: a tripwire must not add
+      records to a GDPR chain (and must not risk corrupting one).
     """
     name = "audit_writer_reachable"
     audit = _audit_module()
     if audit is None:
         return TripwireResult(name, False, "audit module not importable")
+
+    writer_available = getattr(audit, "writer_available", None)
+    if not callable(writer_available):
+        return TripwireResult(
+            name, False,
+            "audit module exposes no writer_available() — not the core audit module",
+        )
+    try:
+        if not writer_available():
+            return TripwireResult(
+                name, False,
+                "audit writer unavailable (forge.security_events not loaded) — "
+                "audit_event() would be a silent no-op",
+            )
+    except Exception as exc:  # noqa: BLE001
+        return TripwireResult(name, False, f"writer_available() raised {type(exc).__name__}")
 
     try:
         path = Path(audit.audit_path())

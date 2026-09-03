@@ -3,25 +3,35 @@
 Sister plugin to `forge`: where forge generates **executable tools** (sandboxed
 code), `skill-forge` generates **skills** — markdown knowledge that gets
 prompt-injected at the persona/sub-agent level. Both share the four-scope
-mechanic (`task` / `session` / `project` / `user`) and the hash-chain audit
-log under `.corvinOS/<scope>/audit.jsonl`.
+mechanic (`task` / `session` / `project` / `user`). Every skill event is a
+link in the TENANT CORE audit chain —
+`<corvin_home>/tenants/<tid>/global/forge/audit.jsonl` — the chain the boot
+tripwire and the compliance reports verify.
 
 ## Layout per scope
 
 ```
 <scope_root>/
-├── audit.jsonl              <- shared with forge (same hash-chain)
 ├── forge/                   <- forge tool workspace (existing plugin)
 └── skill-forge/             <- this plugin's workspace
-    ├── skills_registry.json
+    ├── skills_registry.json <- canonical manifest (SkillSpec per name)
+    ├── manifest.json        <- ADR-0420 resolver manifest, same generation
+    │                           ({"skills": [{"name", "metadata"}]}) — what
+    │                           core.skills.corvin_skills.resolver reads
     └── skills/<name>/
         ├── SKILL.md
         └── meta.json
 ```
 
-`scope_root` is `forge.scope.scope_root(<scope>).parent` — i.e. the plugins
-sit side by side under each scope, so the parent dir is the natural anchor
-for the shared audit log.
+`scope_root` is `forge.scope.scope_root(<scope>).parent` — the plugins sit
+side by side under each scope. Audit does NOT live there: `MultiSkillRegistry`
+binds every scope's registry to the tenant core chain via
+`forge.paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"`
+(a bare `SkillRegistry(root)` in standalone use defaults to
+`<root>/../audit.jsonl`).
+
+Lookup order across scopes is HIGHEST first (user → project → session →
+task) so a curated user-scope skill is never shadowed by a task-scope copy.
 
 ## Lifecycle
 
@@ -42,11 +52,16 @@ for the shared audit log.
 4. **Cleanup** — `scripts/skill_cleanup.py {tasks,sessions,ungraded}`:
    - `tasks` removes `/tmp/.corvinOS/tasks/<id>/skill-forge/` older than
      `--ttl-hours` (default 1).
-   - `sessions` removes `~/.corvinOS/sessions/<chan>/skill-forge/` older
-     than `--ttl-days` (default 30).
-   - `ungraded` walks task/session/project, deletes every skill with zero
-     grades older than `--ttl-days` (default 7). User scope is never
-     pruned.
+   - `sessions` removes `<corvin_home>/tenants/<tid>/sessions/<chan>/skill-forge/`
+     (every tenant; the legacy `<corvin_home>/sessions` alias is de-duplicated
+     by real path) older than `--ttl-days` (default 30).
+   - `ungraded` walks task + every tenant's sessions (+ project ONLY when
+     `CORVIN_PROJECT_ROOT` names the repo — project scope lives in
+     `<repo>/.corvin/skill-forge`, which the script cannot enumerate), and
+     deletes every skill with zero grades older than `--ttl-days`
+     (default 7). User scope (`<tenant_home>/skill-forge`) is never pruned —
+     the previous version pruned exactly that directory under the name
+     "project" (the compat symlink made it look home-level).
 
 ## Linter
 
