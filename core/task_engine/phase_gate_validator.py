@@ -225,8 +225,8 @@ class PhaseGateValidator:
                 if hasattr(self.event_store, 'events'):
                     self.event_store.events = events_to_keep
 
-                # CRITICAL FIX 3: Append rollback event with proper prev_hash
-                # This maintains chain continuity
+                # CRITICAL FIX 3 (ROUND 4 FIX): Create rollback event WITH prev_hash at creation time
+                # This ensures hash is computed correctly (not patched after)
                 rollback_event = AuditEvent(
                     event_type="task_rolled_back",
                     task_id=task_id,
@@ -238,22 +238,21 @@ class PhaseGateValidator:
                         "reason": reason,
                         "pre_task_git_commit": pre_task_state['git_commit'],
                         "preserved_last_hash": last_hash_before_rollback,
-                    }
+                    },
+                    prev_hash=last_hash_before_rollback if last_hash_before_rollback else ""  # CRITICAL FIX: set at creation
                 )
 
-                # CRITICAL: Manually set prev_hash to maintain chain
-                if last_hash_before_rollback:
-                    object.__setattr__(rollback_event, "prev_hash", last_hash_before_rollback)
+                # CRITICAL FIX (ROUND 4): Append event FIRST (atomically with WAL)
+                # Then do git reset, so if git fails, audit trail already has the record
+                self.event_store.append_event(rollback_event)
 
-                # Git reset
+                # Now do git reset (after audit event is safe)
                 if self.git_manager:
                     try:
                         self.git_manager.reset_to(pre_task_state['git_commit'])
                     except Exception as e:
+                        # Event already appended, audit trail is safe
                         raise RuntimeError(f"Git reset failed for {task_id}: {str(e)}")
-
-                # Append rollback event (maintain chain)
-                self.event_store.append_event(rollback_event)
 
                 return True
 

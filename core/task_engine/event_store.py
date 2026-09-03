@@ -56,23 +56,29 @@ class EventStore:
 
     def create_snapshot(self, task_id: str, session_id: str, phase_id: str,
                        state: Dict[str, Any]) -> Snapshot:
-        """Create immutable snapshot at session boundary."""
-        snapshot = Snapshot(
-            task_id=task_id,
-            tenant_id=self.tenant_id,
-            session_id=session_id,
-            snapshot_timestamp=datetime.utcnow().isoformat() + "Z",
-            phase_completed=phase_id,
-            events_count=len(self.events),
-            last_event_hash=self.events[-1].hash if self.events else "",
-            state=state,
-        )
-        self.snapshots[snapshot.snapshot_hash] = snapshot
-        return snapshot
+        """Create immutable snapshot at session boundary (ROUND 4 FIX: with locking)."""
+        with self.lock:  # ROUND 4 FIX: protect snapshot creation
+            snapshot = Snapshot(
+                task_id=task_id,
+                tenant_id=self.tenant_id,
+                session_id=session_id,
+                snapshot_timestamp=datetime.utcnow().isoformat() + "Z",
+                phase_completed=phase_id,
+                events_count=len(self.events),
+                last_event_hash=self.events[-1].hash if self.events else "",
+                state=state,
+            )
+            self.snapshots[snapshot.snapshot_hash] = snapshot
+            return snapshot
 
     def get_snapshot(self, snapshot_hash: str) -> Optional[Snapshot]:
-        """Load snapshot by hash."""
-        return self.snapshots.get(snapshot_hash)
+        """Load snapshot by hash (ROUND 4 FIX: with tenant check)."""
+        with self.lock:  # ROUND 4 FIX: protect snapshot access
+            snapshot = self.snapshots.get(snapshot_hash)
+            # ROUND 4 FIX: Verify tenant isolation
+            if snapshot and snapshot.tenant_id != self.tenant_id:
+                raise ValueError(f"Tenant isolation: snapshot {snapshot_hash} not for tenant {self.tenant_id}")
+            return snapshot
 
     def query(self, task_id: Optional[str] = None, session_id: Optional[str] = None) -> List[AuditEvent]:
         """Query events by task/session (tenant-scoped)."""
