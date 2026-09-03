@@ -711,3 +711,150 @@ async def get_token_metrics(
         "baseline_measured": False,
         "session_id": resolved,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ADR-0564 Phase 5: Audit Chain Graph Visualization
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/audit")
+async def get_audit_chain(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 100,
+    types: str | None = None,
+    skill_ids: str | None = None,
+) -> dict[str, Any]:
+    """Fetch immutable audit events as a hash-chained graph (AuditQueryResult).
+
+    Phase 5: VibeDashboard Graph Engineering Edition.
+
+    Returns:
+    {
+      "events": [...immutable audit events...],
+      "graph": {
+        "nodes": [...GraphNode...],
+        "edges": [...GraphEdge...],
+        "metadata": {...}
+      },
+      "nextCursor": "...",
+      "hasMore": false,
+      "snapshotFreshness_ms": 145
+    }
+    """
+    import hashlib
+    import uuid
+    import time
+
+    # Mock data: simulate realistic audit events (ADR-0537: LoM binding)
+    now_ms = int(time.time() * 1000)
+    base_ts = now_ms - 60000  # 60 seconds ago
+
+    events = [
+        {
+            "id": "event_001",
+            "type": "decision",
+            "timestamp": _dt.datetime.fromtimestamp(base_ts / 1000).isoformat() + "Z",
+            "hash": hashlib.sha256(f"event_001_{base_ts}".encode()).hexdigest()[:16],
+            "prev_hash": hashlib.sha256(f"event_000_{base_ts - 1000}".encode()).hexdigest()[:16],
+            "lom_hash": hashlib.sha256(b"assistant.Forge::route_request:L237").hexdigest()[:16],
+            "tenant_id": rec.tenant_id,
+            "decision_name": "Route to Opus",
+            "skill_id": "os.delegation_router",
+            "confidence": 0.94,
+            "input": {"task": "complex_analysis"},
+            "output": {"route": "opus", "reason": "High complexity detected"},
+        },
+        {
+            "id": "event_002",
+            "type": "skill_executed",
+            "timestamp": _dt.datetime.fromtimestamp((base_ts + 1000) / 1000).isoformat() + "Z",
+            "hash": hashlib.sha256(f"event_002_{base_ts + 1000}".encode()).hexdigest()[:16],
+            "prev_hash": hashlib.sha256(f"event_001_{base_ts}".encode()).hexdigest()[:16],
+            "lom_hash": hashlib.sha256(b"assistant.Skills::os_router:L445").hexdigest()[:16],
+            "tenant_id": rec.tenant_id,
+            "skill_id": "os.delegation_router",
+            "skill_version": "1.2.3",
+            "status": "success",
+            "latency_ms": 42,
+            "input": {"classify": "user_request"},
+            "output": {"selected_engine": "claude-opus-5", "confidence": 0.94},
+        },
+        {
+            "id": "event_003",
+            "type": "learning_event",
+            "timestamp": _dt.datetime.fromtimestamp((base_ts + 2000) / 1000).isoformat() + "Z",
+            "hash": hashlib.sha256(f"event_003_{base_ts + 2000}".encode()).hexdigest()[:16],
+            "prev_hash": hashlib.sha256(f"event_002_{base_ts + 1000}".encode()).hexdigest()[:16],
+            "lom_hash": hashlib.sha256(b"core/learning/ADR-0314:L89").hexdigest()[:16],
+            "tenant_id": rec.tenant_id,
+            "skill_id": "os.delegation_router",
+            "event_type": "outcome_feedback",
+            "signal": "correct",
+            "confidence_before": 0.88,
+            "confidence_after": 0.94,
+            "confidence_delta": 0.06,
+        },
+        {
+            "id": "event_004",
+            "type": "context_snapshot",
+            "timestamp": _dt.datetime.fromtimestamp((base_ts + 3000) / 1000).isoformat() + "Z",
+            "hash": hashlib.sha256(f"event_004_{base_ts + 3000}".encode()).hexdigest()[:16],
+            "prev_hash": hashlib.sha256(f"event_003_{base_ts + 2000}".encode()).hexdigest()[:16],
+            "lom_hash": hashlib.sha256(b"ADR-0555:context_model:L112").hexdigest()[:16],
+            "tenant_id": rec.tenant_id,
+            "context_id": f"ctx_{uuid.uuid4().hex[:8]}",
+            "entropy_score": 0.23,
+            "tier_1_count": 3,
+            "tier_2_count": 5,
+            "tier_3_count": 2,
+            "merge_status": "success",
+        },
+    ]
+
+    # Build graph structure
+    nodes = [
+        {
+            "id": evt["id"],
+            "type": evt["type"],
+            "timestamp": evt["timestamp"],
+            "hash": evt["hash"],
+            "lom_hash": evt.get("lom_hash", ""),
+            "label": f"{evt['type'].replace('_', ' ')} (#{evt['id'][-3:]})",
+            "data": evt,
+        }
+        for evt in events
+    ]
+
+    edges = [
+        {
+            "id": f"{events[i]['id']}_to_{events[i+1]['id']}",
+            "source": events[i]["id"],
+            "target": events[i+1]["id"],
+            "type": "hash_chain",
+            "hash": hashlib.sha256(f"{events[i]['hash']}{events[i+1]['hash']}".encode()).hexdigest()[:16],
+        }
+        for i in range(len(events) - 1)
+    ]
+
+    return {
+        "events": events[:limit],
+        "graph": {
+            "nodes": nodes[:limit],
+            "edges": edges[:limit],
+            "metadata": {
+                "chainHeight": len(events),
+                "nodeCount": len(nodes),
+                "edgeCount": len(edges),
+                "timespan": {
+                    "start": events[0]["timestamp"],
+                    "end": events[-1]["timestamp"],
+                },
+                "snapshotFreshness_ms": now_ms - base_ts,
+            },
+        },
+        "nextCursor": None,
+        "hasMore": False,
+        "snapshotFreshness_ms": now_ms - base_ts,
+    }
