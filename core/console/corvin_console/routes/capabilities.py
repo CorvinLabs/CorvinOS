@@ -158,6 +158,7 @@ def _get_plugin_panels() -> list[dict]:
     """Get all auto-registered plugin panels (Phase 3 Integration).
 
     Returns panels registered by installed plugins via PluginPanelRegistry.
+    Schema matches frontend PanelDescriptor (ADR-0561 Phase 3).
     Degrades gracefully if registry is unavailable (panel registry not yet created).
     """
     try:
@@ -166,12 +167,22 @@ def _get_plugin_panels() -> list[dict]:
         panels = registry.get_all_enabled_panels()
         return [
             {
-                "id": p["panel_id"],
-                "plugin_id": p["plugin_id"],
-                "label": p["label"],
+                "id": f"plugin-{p['plugin_id']}",
+                "title": p.get("label", p["plugin_id"]),
                 "route": p["route"],
-                "icon": p["icon"],
-                "group": p["group"],
+                "icon": p.get("icon", "Package"),
+                "kind": "plugin",
+                "source": "installed",
+                "nav_group": p.get("group", "plugins"),
+                "requiredFlag": None,
+                "requiredCapability": None,
+                "element": {
+                    "kind": "plugin-inspector",
+                    "plugin_id": p["plugin_id"],
+                },
+                "version": p.get("version", "1.0.0"),
+                "audit_events": ["console_panel_opened", "plugin_executed"],
+                "tenant_scoped": True,
             }
             for p in panels
         ]
