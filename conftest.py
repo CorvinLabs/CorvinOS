@@ -169,13 +169,16 @@ def _live_state_tripwire(request: pytest.FixtureRequest):
 import pytest as _pytest  # noqa: E402
 
 _GATEWAY_TESTS = Path(__file__).resolve().parent / "core" / "gateway" / "tests"
+_CONSOLE_TESTS = Path(__file__).resolve().parent / "core" / "console" / "tests"
 _LOOPBACK_PEER = ("127.0.0.1", 50000)
 
 
 @_pytest.fixture(autouse=True)
 def _gateway_loopback_test_client(request, monkeypatch):
     try:
-        under_gateway = Path(str(request.node.fspath)).resolve().is_relative_to(_GATEWAY_TESTS)
+        _p = Path(str(request.node.fspath)).resolve()
+        # The console suite drives the gateway app too (local-deployment model).
+        under_gateway = _p.is_relative_to(_GATEWAY_TESTS) or _p.is_relative_to(_CONSOLE_TESTS)
     except Exception:  # noqa: BLE001
         under_gateway = False
     if not under_gateway:
