@@ -14,16 +14,11 @@ from pathlib import Path
 import tempfile
 from typing import Optional
 
-# Direct module import (pytest may not be available)
-import importlib.util
-import sys
-
-spec = importlib.util.spec_from_file_location(
-    "metrics",
-    Path(__file__).parent.parent.parent / "core/learning/metrics.py"
-)
-metrics = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(metrics)
+# Regular package import. The previous spec_from_file_location() loader never
+# registered the module in sys.modules, so @dataclass (which resolves
+# `from __future__ import annotations` strings via sys.modules[cls.__module__])
+# crashed at import time with AttributeError: 'NoneType' has no '__dict__'.
+from core.learning import metrics
 
 
 class TestPercentileCalculation:

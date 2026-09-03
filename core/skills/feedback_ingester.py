@@ -8,8 +8,25 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import hashlib
 import logging
+import os
+import threading
+
+try:  # POSIX: cross-process exclusive lock on the log while appending
+    import fcntl as _fcntl
+except ImportError:  # Windows: in-process lock only
+    _fcntl = None
 
 logger = logging.getLogger(__name__)
+
+
+def _lock_file(f) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+
+
+def _unlock_file(f) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
 
 
 class Sanitizer:
@@ -102,6 +119,7 @@ class FeedbackIngester:
         # If cache becomes stale (crash between writes), next event assumes genesis hash '0'*64,
         # breaking chain until manual verification. This is fail-closed: wrong hash chain > lost events.
         self.last_hash_file = skill_dir / '.last_hash'
+        self._write_lock = threading.Lock()
         self.feedback_log.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_feedback_log()
 
@@ -117,153 +135,59 @@ class FeedbackIngester:
                 f.write(json.dumps(genesis) + '\n')
 
     def ingest(self, event: Dict[str, Any]) -> bool:
-        """Ingest feedback event (atomic append, ADR-0534)."""
+        """Ingest one feedback event (true append, hash-chained, ADR-0534).
+
+        Ordering contract (fail-closed, never lossy):
+          1. sanitize (drop on PII);
+          2. append the line to ``feedback_log.jsonl`` under an exclusive file
+             lock, ``flush`` + ``fsync`` so the row is durable before we move on;
+          3. only then refresh the ``.last_hash`` cache (tmp -> rename).
+
+        A crash between 2 and 3 leaves the cache one event behind; the next
+        event then chains to the previous-but-one hash and ``verify`` reports
+        the break. That is the intended behaviour: a detectable chain break is
+        preferred over a silently dropped event. Rewriting the whole log via
+        ``tmp.replace(log)`` (the previous implementation) truncated the log to
+        the newest line on every call and must never come back.
+        """
         # Sanitize
         sanitized = Sanitizer.sanitize_outcome(event)
         if sanitized is None:
-            logger.warning(f"Event dropped (PII detected)")
+            logger.warning("Event dropped (PII detected)")
             return False
 
-        # Get previous hash from cache (O(1), no bounded-read issues)
+        # Previous hash from the O(1) cache
         try:
             if self.last_hash_file.exists():
-                prev_hash = self.last_hash_file.read_text().strip()
+                prev_hash = self.last_hash_file.read_text().strip() or '0' * 64
             else:
                 prev_hash = '0' * 64
         except Exception as e:
             logger.error(f"Failed to read last hash cache: {e}")
             prev_hash = '0' * 64
 
-        # Add hash chain
         sanitized['sha256_prev'] = prev_hash
         json_line = json.dumps(sanitized) + '\n'
 
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
-# Atomic write: write hash FIRST
-        new_hash = hashlib.sha256(json_line.encode()).hexdigest()
-        tmp_hash_file = self.last_hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(new_hash)
-        tmp_hash_file.replace(self.last_hash_file)
-        
-        # THEN write feedback
-        tmp_file = self.feedback_log.with_suffix(".tmp")
-        tmp_file.write_text(json_line)
-        tmp_file.replace(self.feedback_log)
+        try:
+            with self._write_lock:
+                with open(self.feedback_log, 'a', encoding='utf-8') as f:
+                    _lock_file(f)
+                    try:
+                        f.write(json_line)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    finally:
+                        _unlock_file(f)
 
+                # Refresh the hash cache atomically (tmp -> rename)
+                new_hash = hashlib.sha256(json_line.encode()).hexdigest()
+                tmp_hash_file = self.last_hash_file.with_suffix('.tmp')
+                tmp_hash_file.write_text(new_hash)
+                tmp_hash_file.replace(self.last_hash_file)
             return True
         except Exception as e:
             logger.error(f"Feedback write failed: {e}")
-            if tmp_file.exists():
-                tmp_file.unlink()
             return False
 
     def load_feedback_log(self, limit: int = 1000) -> List[Dict[str, Any]]:

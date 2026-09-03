@@ -1,289 +1,487 @@
-"""Audit backend provider - ADR-0232/0233.
+"""AuditBackend registry — a SECONDARY sink, never the audit trail (ADR-0233).
 
-Singleton registry for audit event persistence + chain verification.
-Implements appendix-only, hash-chained audit trail with tenant isolation.
+Core writes every audit event to its own hash-chained ``audit.jsonl`` first and
+unconditionally (GDPR Art. 30/32; ADR-0232 § mandatory core).  Only afterwards is
+:func:`fanout` called so an installed backend can forward a *copy* to an external
+system.  The ordering is the safety property: by the time a backend runs, the
+compliance-relevant write has already committed, so no plugin — buggy, slow or
+hostile — can suppress, rewrite, reorder or delay it.
+
+Usage (plugin on_load):
+    ctx.audit_registry.set_active(self)
+
+Usage (core audit writer, AFTER its own write has committed):
+    from corvin_plugins.providers import audit_backend
+    audit_backend.fanout("plugin_enabled", body, severity="INFO", tenant_id=tid)
+
+Unlike the ADR-0033 providers this registry has **no default implementation**.
+``get_active()`` returns ``None`` when no plugin is installed; a default would
+either duplicate every event into the log for no reason or invite the mistake of
+treating the backend as the trail.
 """
+from __future__ import annotations
 
-import asyncio
-import hashlib
-import json
 import logging
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional, Protocol
+import queue
 import threading
+import time
+from typing import TYPE_CHECKING
 
-_logger = logging.getLogger(__name__)
+from corvin_plugins import circuit_breaker as _breakers
 
-# Thread-safe singleton
-_lock = threading.Lock()
-_active_backend: Optional['AuditBackend'] = None
+if TYPE_CHECKING:
+    from corvin_plugins.protocol import AuditBackend as _ABProto
+
+_log = logging.getLogger("corvin.audit.fanout")
+
+#: Attribute names that would make this module capable of OWNING the audit trail
+#: instead of being a secondary sink. Declared here so the boot tripwire and its
+#: test read the SAME list — they drifted apart once already (the test forbade
+#: five names, the tripwire checked four, so adding `write_event` would have
+#: failed the test while passing the boot gate).
+TRAIL_OWNING_ATTRS: tuple[str, ...] = (
+    "set_writer",
+    "replace_writer",
+    "set_audit_path",
+    "disable_core",
+    "write_event",
+)
+
+#: Bound on the hand-off queue. The core audit path must never wait on a plugin, so
+#: fan-out is a hand-off, not a call: the caller enqueues and returns. When the sink
+#: cannot keep up the OLDEST monitoring copy is dropped — the authoritative record is
+#: already on disk, so a dropped copy is a monitoring gap, while a blocked caller is
+#: an outage of every audited action in the platform.
+#:
+#: Measured before this existed: a backend with a 400 ms fanout() added 2.07 s to
+#: five audit_event() calls, i.e. it blocked every bridge turn, login and tool use.
+#: The template asks backends to queue internally; this does not rely on that.
+MAX_QUEUED_EVENTS = 4096
+#: A sink slower than this per event is treated as a breaker failure — otherwise a
+#: merely slow (never raising) backend is invisible to the breaker.
+SLOW_SINK_S = 2.0
+
+#: How many consecutive fan-out failures are logged per backend before the module
+#: goes quiet about them.  A permanently broken sink must not turn every audited
+#: action into a log line (that would be its own availability problem), but the
+#: first failures have to be visible.
+_QUIET_AFTER = 5
 
 
-@dataclass(frozen=True)
-class AuditEvent:
-    """Immutable audit event with hash-chain binding."""
-    tenant_id: str
-    timestamp: str
-    event_type: str
-    payload: dict
-    prev_hash: str = ""
+class AuditBackendRegistry:
+    """Holds the active AuditBackend for this process.  Thread-safe.
 
-    def compute_hash(self) -> str:
-        """Compute SHA256 hash of this event."""
-        event_dict = asdict(self)
-        # Exclude the hash from computation
-        event_dict.pop('prev_hash', None)
-        json_str = json.dumps(event_dict, sort_keys=True)
-        return hashlib.sha256(json_str.encode()).hexdigest()
+    Callers MUST NOT cache ``get_active()`` across calls — a hot-reload or a
+    ``disable`` may swap or clear it.
+    """
 
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._owner_plugin_id: str | None = None
+        self._active: _ABProto | None = None
+        self._failures = 0
+        self._queue: "queue.Queue[tuple[str, dict, str, str]]" = queue.Queue(
+            maxsize=MAX_QUEUED_EVENTS
+        )
+        self._worker: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._dropped = 0
 
-class AuditBackend(Protocol):
-    """Protocol for audit backend implementations."""
+    def set_active(self, provider: _ABProto) -> None:
+        """Install ``provider`` as the active one for this process.
 
-    async def write_event(self, event: AuditEvent) -> bool:
-        """Write an event to the audit trail.
-
-        Args:
-            event: The audit event to write
-
-        Returns:
-            True if write succeeded, False otherwise
+        Records WHICH PLUGIN did it (``loading.current()``), so the slot can
+        later be released by plugin identity rather than by matching the
+        object or guessing from ``plugin_type``. A plugin that installs a
+        helper object still owns the slot.
         """
-        ...
+        from .. import loading as _loading
 
-    async def verify_chain(self, tenant_id: str, since_timestamp: Optional[str] = None) -> bool:
-        """Verify hash-chain integrity for a tenant.
+        _who = _loading.current()
+        with self._lock:
+            # Only a plugin that is LOADING may claim ownership. A set_active()
+            # from anywhere else (a request handler, a thread a plugin spawned,
+            # a timer) used to write None here — which not only left the new
+            # occupant unowned, it ERASED the previous legitimate owner, so the
+            # slot could never be released by anyone again. Keeping the old
+            # owner is the lesser wrong: the slot still belongs to whoever took
+            # it during a load, and unloading them releases it.
+            if _who is not None:
+                self._owner_plugin_id = _who.plugin_id
+            self._active = provider
+            self._failures = 0
+        self._ensure_worker()
 
-        Args:
-            tenant_id: Tenant to verify
-            since_timestamp: Optional start timestamp
-
-        Returns:
-            True if chain is valid, False if tampered/broken
-        """
-        ...
-
-    async def read_events(self, tenant_id: str, event_type: Optional[str] = None) -> list[AuditEvent]:
-        """Read events from audit trail.
-
-        Args:
-            tenant_id: Filter by tenant
-            event_type: Optional filter by event type
-
-        Returns:
-            List of audit events (appendix-only view)
-        """
-        ...
-
-    async def enforce_retention(self, tenant_id: str, max_age_days: int) -> int:
-        """Enforce retention policy (delete old events).
-
-        Args:
-            tenant_id: Tenant to clean
-            max_age_days: Delete events older than this
-
-        Returns:
-            Number of events deleted
-        """
-        ...
-
-    async def health_check(self) -> bool:
-        """Check backend health."""
-        ...
-
-
-class DefaultAuditBackend:
-    """Default in-process audit backend with file persistence."""
-
-    def __init__(self, storage_path: Optional[Path] = None):
-        """Initialize the audit backend.
-
-        Args:
-            storage_path: Path to store audit.jsonl (default: ~/.corvin/audit.jsonl)
-        """
-        if storage_path is None:
-            storage_path = Path.home() / ".corvin" / "audit.jsonl"
-
-        self.storage_path = storage_path
-        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # In-memory cache of last hash per tenant for atomic writes
-        self._last_hash_cache: dict[str, str] = {}
-        self._cache_lock = threading.Lock()
-        self._dropped_events = 0  # Atomic counter for backpressure
-
-    async def write_event(self, event: AuditEvent) -> bool:
-        """Write event atomically with hash-chain verification."""
-        try:
-            # Get last hash for this tenant
-            with self._cache_lock:
-                prev_hash = self._last_hash_cache.get(event.tenant_id, "")
-
-            # Recompute hash with correct prev_hash
-            event_with_chain = AuditEvent(
-                tenant_id=event.tenant_id,
-                timestamp=event.timestamp,
-                event_type=event.event_type,
-                payload=event.payload,
-                prev_hash=prev_hash
+    def _ensure_worker(self) -> None:
+        """Start the drain thread on first use.  Daemon: never blocks shutdown."""
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                return
+            self._stop.clear()
+            self._worker = threading.Thread(
+                target=self._drain, name="corvin-audit-fanout", daemon=True
             )
-            new_hash = event_with_chain.compute_hash()
+            self._worker.start()
 
-            # Atomic append to file
-            event_line = json.dumps({
-                **asdict(event_with_chain),
-                "hash": new_hash
-            })
+    def _drain(self) -> None:
+        """Deliver queued copies.  Runs off the caller's thread, forever.
 
-            # Thread-safe write
-            with self._cache_lock:
-                with open(self.storage_path, 'a') as f:
-                    f.write(event_line + '\n')
-                self._last_hash_cache[event.tenant_id] = new_hash
+        The loop body cannot raise: if this thread dies, every later copy sits in
+        the queue forever and monitoring goes silent WITHOUT any signal. _deliver()
+        is fully guarded, and this is the second belt.
+        """
+        while not self._stop.is_set():
+            try:
+                item = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                self._deliver(*item)
+            except Exception as exc:  # noqa: BLE001
+                _log.error(
+                    "audit fan-out worker caught %s — continuing", type(exc).__name__
+                )
+            finally:
+                # Pairs with the get() above. drain_now() waits on this counter, so a
+                # missed task_done() would hang shutdown for the full timeout.
+                self._queue.task_done()
 
-            _logger.debug(f"Audit event written: {event.event_type} for {event.tenant_id}")
-            return True
-        except Exception as e:
-            _logger.error(f"Failed to write audit event: {e}")
-            with self._cache_lock:
-                self._dropped_events += 1
-            return False
+    def drain_now(self, timeout: float = 2.0) -> int:
+        """Wait for the queue to drain.  For tests and shutdown.
 
-    async def verify_chain(self, tenant_id: str, since_timestamp: Optional[str] = None) -> bool:
-        """Verify hash-chain integrity."""
-        try:
-            if not self.storage_path.exists():
-                return True  # Empty chain is valid
+        Returns the number of copies that were still pending when we started (0 when
+        the pipeline was already empty).
 
-            prev_hash = ""
-            event_count = 0
-
-            with open(self.storage_path, 'r') as f:
-                for line in f:
-                    try:
-                        event_data = json.loads(line)
-                        if event_data.get('tenant_id') != tenant_id:
-                            continue
-
-                        if since_timestamp and event_data.get('timestamp') < since_timestamp:
-                            continue
-
-                        event_count += 1
-                        current_hash = event_data.get('hash', '')
-                        current_prev = event_data.get('prev_hash', '')
-
-                        # Verify hash chain link
-                        if current_prev != prev_hash:
-                            _logger.error(f"Chain broken at event {event_count}")
-                            return False
-
-                        prev_hash = current_hash
-                    except json.JSONDecodeError:
-                        _logger.error(f"Invalid JSON in audit trail")
-                        return False
-
-            _logger.info(f"Chain verified for {tenant_id}: {event_count} events")
-            return True
-        except Exception as e:
-            _logger.error(f"Chain verification failed: {e}")
-            return False
-
-    async def read_events(self, tenant_id: str, event_type: Optional[str] = None) -> list[AuditEvent]:
-        """Read events from audit trail (appendix-only view)."""
-        events = []
-        try:
-            if not self.storage_path.exists():
-                return events
-
-            with open(self.storage_path, 'r') as f:
-                for line in f:
-                    try:
-                        event_data = json.loads(line)
-                        if event_data.get('tenant_id') != tenant_id:
-                            continue
-                        if event_type and event_data.get('event_type') != event_type:
-                            continue
-
-                        # Remove hash fields for return (hash-chain is internal)
-                        event_data_copy = event_data.copy()
-                        event_data_copy.pop('hash', None)
-                        events.append(AuditEvent(**event_data_copy))
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-        except Exception as e:
-            _logger.error(f"Failed to read audit events: {e}")
-
-        return events
-
-    async def enforce_retention(self, tenant_id: str, max_age_days: int) -> int:
-        """Enforce retention policy."""
-        if not self.storage_path.exists():
+        The caller NEVER delivers. An earlier version pulled items and called the
+        backend on the calling thread, which made ``timeout`` a lie: it bounded the
+        loop *between* items, not a single delivery, so one wedged sink held the
+        shutdown open for as long as it felt like — measured 30 s against a 0.5 s
+        timeout. That is the outbox-poller failure class (a hanging sendFn stalled
+        delivery for 38 minutes with no log line). Delivery stays on the worker
+        thread, which is a daemon and dies with the process; this method only ever
+        waits, and the deadline is therefore real.
+        """
+        deadline = time.monotonic() + timeout
+        pending = self._queue.unfinished_tasks
+        if not pending:
             return 0
+        # The worker may have been stopped (or never started, if fanout() was never
+        # called on this registry) — without it nothing would ever drain.
+        self._ensure_worker()
+        with self._queue.all_tasks_done:
+            while self._queue.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _log.warning(
+                        "audit fan-out drain timed out with %d copy(ies) pending",
+                        self._queue.unfinished_tasks,
+                    )
+                    break
+                self._queue.all_tasks_done.wait(timeout=min(0.05, remaining))
+        return pending
 
+    def queue_depth(self) -> int:
+        return self._queue.qsize()
+
+    def dropped_count(self) -> int:
+        return self._dropped
+
+    def clear(self) -> None:
+        """Detach the backend (plugin disable / unload).  Core is unaffected.
+
+        Queued copies for the old backend are discarded: delivering them to a
+        backend the operator just detached would be worse than losing a monitoring
+        copy.
+        """
+        with self._lock:
+            self._owner_plugin_id = None
+            self._active = None
+            self._failures = 0
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                self._queue.task_done()
+
+    def clear_if_active(self, provider: object) -> bool:
+        """Detach only if ``provider`` is the one currently installed.
+
+        Instance-checked on purpose. A plugin unloading must not evict a backend
+        that a DIFFERENT plugin installed after it — clearing by type alone would
+        drop the slot while the other plugin still believes it is the sink, and
+        for audit that means a fan-out stream that silently stops.
+
+        The check and the clear are one critical section. Releasing the lock
+        between them left a window in which another plugin could take the slot
+        via ``set_active`` and then have it cleared out from under it — along
+        with its queued copies.
+        """
+        with self._lock:
+            if self._active is not provider:
+                return False
+            self._active = None
+            self._failures = 0
+            self._owner_plugin_id = None
+        self._drain_queue()
+        return True
+
+    def _drain_queue(self) -> None:
+        """Discard queued copies for a backend that is no longer installed."""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                self._queue.task_done()
+
+    def get_active(self) -> _ABProto | None:
+        with self._lock:
+            return self._active
+
+    def release_owned_by(self, plugin_id: str) -> bool:
+        """Release the slot if ``plugin_id`` is the plugin that took it.
+
+        Identity-based, which is the point: the object in the slot may be a
+        helper the plugin created rather than the plugin itself, and the
+        plugin's ``plugin_type`` may not even name this registry. Ownership is
+        recorded at ``set_active`` time and is the only thing that answers
+        "is this slot yours" correctly.
+        """
+        with self._lock:
+            if self._owner_plugin_id is None or self._owner_plugin_id != plugin_id:
+                return False
+            self._owner_plugin_id = None
+            self._active = None
+            self._failures = 0
+        # Discard queued copies, exactly as clear() and clear_if_active() do.
+        # Leaving them meant the NEXT backend installed in this slot received
+        # copies addressed to its predecessor — a sink getting events it was
+        # never configured for, which for an audit fan-out is the wrong kind of
+        # surprise.
+        self._drain_queue()
+        return True
+
+    def owner_plugin_id(self) -> str | None:
+        """The plugin that installed the current provider, if it is known."""
+        with self._lock:
+            return self._owner_plugin_id
+
+    def fanout(
+        self,
+        event_type: str,
+        details: dict,
+        *,
+        severity: str = "INFO",
+        tenant_id: str = "_default",
+    ) -> bool:
+        """HAND OFF a copy of an already-committed event.  NEVER raises, never waits.
+
+        Returns True when the copy was enqueued, False when there is no backend or
+        the queue was full. The return value is diagnostic only — a caller MUST NOT
+        branch its own audit behaviour on it, because the authoritative write has
+        already happened.
+        """
         try:
-            deleted_count = 0
-            cutoff_timestamp = datetime.now(timezone.utc)
-
-            # Read all events
-            all_events = []
-            with open(self.storage_path, 'r') as f:
-                for line in f:
-                    try:
-                        all_events.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-
-            # Filter out old events for this tenant
-            kept_events = []
-            for event in all_events:
-                if event.get('tenant_id') == tenant_id:
-                    event_time = datetime.fromisoformat(event.get('timestamp', ''))
-                    age_days = (cutoff_timestamp - event_time).days
-                    if age_days > max_age_days:
-                        deleted_count += 1
-                        continue
-                kept_events.append(event)
-
-            # Rewrite file with kept events
-            with self._cache_lock:
-                with open(self.storage_path, 'w') as f:
-                    for event in kept_events:
-                        f.write(json.dumps(event) + '\n')
-
-            _logger.info(f"Deleted {deleted_count} events for {tenant_id}")
-            return deleted_count
-        except Exception as e:
-            _logger.error(f"Retention enforcement failed: {e}")
-            return 0
-
-    async def health_check(self) -> bool:
-        """Check backend health."""
-        try:
-            # Try to write a test event
-            test_event = AuditEvent(
-                tenant_id="__health_check__",
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                event_type="health_check",
-                payload={}
+            with self._lock:
+                backend = self._active
+            if backend is None:
+                return False
+            self._ensure_worker()
+            # Shallow copy here, on the caller's thread: the core writer still holds
+            # a reference to `details` and will keep using it after we return.
+            item = (event_type, dict(details), severity, tenant_id)
+            try:
+                self._queue.put_nowait(item)
+                return True
+            except queue.Full:
+                # Drop the OLDEST, keep the newest, never block.
+                try:
+                    self._queue.get_nowait()
+                    self._queue.task_done()  # the discarded copy is accounted for
+                    self._queue.put_nowait(item)
+                except (queue.Empty, queue.Full):
+                    pass
+                self._dropped += 1
+                if self._dropped <= _QUIET_AFTER:
+                    _log.error(
+                        "audit fan-out queue full — dropped a monitoring copy "
+                        "(event_type=%s, total dropped=%d)",
+                        event_type, self._dropped,
+                    )
+                return False
+        except Exception as exc:  # noqa: BLE001
+            # Outermost belt: NOTHING may leave this method. The contract that
+            # audit.py relies on is "fanout never raises into the caller", and a
+            # leak there gets logged as "audit_event dropped" even though the core
+            # record already committed — a false compliance alarm. Reaching this
+            # handler means a code path outside _fanout_inner's own guards threw
+            # (e.g. a backend whose plugin_id property raises).
+            _log.error(
+                "audit fan-out leaked %s outside the guarded path — dropped",
+                type(exc).__name__,
             )
-            return await self.write_event(test_event)
-        except Exception:
             return False
 
+    def _deliver(
+        self,
+        event_type: str,
+        details: dict,
+        severity: str,
+        tenant_id: str,
+    ) -> bool:
+        """Actually call the backend.  Runs on the drain thread, never on a caller.
 
-def get_active() -> AuditBackend:
-    """Get the currently active audit backend."""
-    global _active_backend
-    with _lock:
-        if _active_backend is None:
-            _active_backend = DefaultAuditBackend()
-        return _active_backend
+        NEVER raises. The guard used to live in fanout(); when fan-out became a
+        hand-off the guarded body moved here, and for one commit the exception
+        escaped into the worker thread instead — which would kill the drain loop and
+        silence monitoring. Anything outside _deliver_inner's own try (a backend
+        whose plugin_id property raises, a breaker lookup) is caught here.
+        """
+        try:
+            return self._deliver_inner(event_type, details, severity, tenant_id)
+        except Exception as exc:  # noqa: BLE001
+            _log.error(
+                "audit fan-out failed outside the guarded path (%s) — dropped",
+                type(exc).__name__,
+            )
+            return False
+
+    def _deliver_inner(
+        self,
+        event_type: str,
+        details: dict,
+        severity: str,
+        tenant_id: str,
+    ) -> bool:
+        with self._lock:
+            backend = self._active
+            owner = self._owner_plugin_id
+        if backend is None:
+            return False
+
+        # Key the breaker on the OWNING PLUGIN, not on the object in the slot.
+        # `get_breaker()` decides containment from the owner's boot layer, and a
+        # plugin that installed a helper object (`set_active(self._sink)`) has no
+        # plugin_id on that helper — the key became "anonymous:Sink", which the
+        # registry has never heard of, so the compliance exemption silently did
+        # not apply and the sink could be contained after all. Two identities for
+        # one plugin is the whole defect.
+        breaker = _breakers.get_breaker(
+            owner
+            or getattr(backend, "plugin_id", None)
+            or f"anonymous:{type(backend).__name__}"
+        )
+        try:
+            breaker.guard()
+        except _breakers.CircuitOpen:
+            # A dead sink stops being called until its cooldown elapses. The
+            # authoritative record is already on disk, so this costs a monitoring
+            # copy, never a compliance record.
+            with self._lock:
+                self._failures += 1
+            return False
+
+        started = time.monotonic()
+        try:
+            backend.fanout(
+                event_type, details, severity=severity, tenant_id=tenant_id
+            )
+        except Exception as exc:  # noqa: BLE001 — a sink must never break the caller
+            breaker.record_failure(exc)
+            with self._lock:
+                self._failures += 1
+                count = self._failures
+            if count <= _QUIET_AFTER:
+                # Exception CLASS ONLY: str(exc) could carry a connection string,
+                # a path or a record fragment.  No PII in log lines.
+                _log.error(
+                    "audit backend fan-out failed (%s), event_type=%s, failure #%d",
+                    type(exc).__name__,
+                    event_type,
+                    count,
+                )
+            return False
+
+        elapsed = time.monotonic() - started
+        if elapsed > SLOW_SINK_S:
+            # A sink that never raises but takes seconds is still broken. Without
+            # this the breaker could not see it at all, because the queue absorbs
+            # the latency instead of the caller.
+            _log.warning(
+                "audit sink took %.1fs for one event — counting it as a failure",
+                elapsed,
+            )
+            breaker.record_failure(TimeoutError())
+            return False
+
+        breaker.record_success()
+        with self._lock:
+            self._failures = 0
+        return True
+
+    def failure_count(self) -> int:
+        """Consecutive fan-out failures — surfaced via health_check_all()."""
+        with self._lock:
+            return self._failures
 
 
-def set_active(backend: AuditBackend) -> None:
-    """Set the active audit backend (for testing)."""
-    global _active_backend
-    with _lock:
-        _active_backend = backend
+_registry: AuditBackendRegistry = AuditBackendRegistry()
+
+
+def get_active() -> _ABProto | None:
+    return _registry.get_active()
+
+
+def set_active(provider: _ABProto) -> None:
+    _registry.set_active(provider)
+
+
+def clear() -> None:
+    _registry.clear()
+
+
+def drain_now(timeout: float = 2.0) -> int:
+    """Deliver everything queued right now (tests, graceful shutdown)."""
+    return _registry.drain_now(timeout)
+
+
+def queue_depth() -> int:
+    return _registry.queue_depth()
+
+
+def dropped_count() -> int:
+    return _registry.dropped_count()
+
+
+def fanout(
+    event_type: str,
+    details: dict,
+    *,
+    severity: str = "INFO",
+    tenant_id: str = "_default",
+) -> bool:
+    """Module-level shorthand for :meth:`AuditBackendRegistry.fanout`."""
+    return _registry.fanout(
+        event_type, details, severity=severity, tenant_id=tenant_id
+    )
+
+
+def failure_count() -> int:
+    return _registry.failure_count()
+
+
+def clear_if_active(provider: object) -> bool:
+    return _registry.clear_if_active(provider)
+
+
+def release_owned_by(plugin_id: str) -> bool:
+    return _registry.release_owned_by(plugin_id)
+
+
+def owner_plugin_id() -> str | None:
+    return _registry.owner_plugin_id()
