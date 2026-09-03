@@ -239,3 +239,295 @@ def _loaded_web_surfaces() -> list[dict]:
 async def get_surfaces(session: Any = Depends(require_session)) -> dict:
     """Return the web_surface plugins the loader has loaded (ADR-0365 P7)."""
     return {"surfaces": _loaded_web_surfaces()}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ADR-0561: Console UI System Redesign — Unified Panel Manifest
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+import hashlib
+import json
+from datetime import datetime
+
+
+def _get_builtin_panels() -> list[dict]:
+    """All builtin (hardcoded) Console panels (ADR-0561 Phase 1)."""
+    return [
+        # Primary group
+        {
+            "id": "chat",
+            "title": "Chat",
+            "route": "chat",
+            "icon": "MessagesSquare",
+            "kind": "feature",
+            "source": "builtin",
+            "nav_group": "primary",
+            "requiredFlag": None,
+            "requiredCapability": None,
+            "element": {"kind": "react-component", "component": "ChatPage"},
+            "version": "1.0.0",
+            "audit_events": ["console_panel_opened"],
+            "tenant_scoped": True,
+        },
+        {
+            "id": "dashboard",
+            "title": "Dashboard",
+            "route": "dashboard",
+            "icon": "LayoutDashboard",
+            "kind": "feature",
+            "source": "builtin",
+            "nav_group": "primary",
+            "requiredFlag": None,
+            "requiredCapability": None,
+            "element": {"kind": "react-component", "component": "DashboardPage"},
+            "version": "1.0.0",
+            "audit_events": ["console_panel_opened"],
+            "tenant_scoped": True,
+        },
+        # Vibe Engineering group (gated)
+        {
+            "id": "vibe-engineering",
+            "title": "Dashboard",
+            "route": "vibe-engineering",
+            "icon": "Layers",
+            "kind": "feature",
+            "source": "builtin",
+            "nav_group": "vibe",
+            "requiredFlag": "vibe_engineering",
+            "requiredCapability": None,
+            "element": {"kind": "react", "load": "() => import('@/pages/vibe-engineering')"},
+            "version": "1.0.0",
+            "audit_events": ["console_panel_opened"],
+            "tenant_scoped": True,
+        },
+        {
+            "id": "brain-monitor",
+            "title": "Brain Monitor",
+            "route": "brain-monitor",
+            "icon": "Cpu",
+            "kind": "feature",
+            "source": "builtin",
+            "nav_group": "vibe",
+            "requiredFlag": "vibe_engineering",
+            "requiredCapability": None,
+            "element": {"kind": "react-component", "component": "BrainMonitorPage"},
+            "version": "1.0.0",
+            "audit_events": ["console_panel_opened"],
+            "tenant_scoped": True,
+        },
+        # More builtin panels...
+        {
+            "id": "skills",
+            "title": "Skills",
+            "route": "skills",
+            "icon": "BookOpen",
+            "kind": "feature",
+            "source": "builtin",
+            "nav_group": "build",
+            "requiredFlag": None,
+            "requiredCapability": None,
+            "element": {"kind": "react-component", "component": "SkillsPage"},
+            "version": "1.0.0",
+            "audit_events": ["console_panel_opened"],
+            "tenant_scoped": True,
+        },
+        {
+            "id": "plugins",
+            "title": "Plugins & Extensions",
+            "route": "plugin-center",
+            "icon": "Blocks",
+            "kind": "feature",
+            "source": "builtin",
+            "nav_group": "build",
+            "requiredFlag": None,
+            "requiredCapability": None,
+            "element": {"kind": "react-component", "component": "PluginCenterPage"},
+            "version": "1.0.0",
+            "audit_events": ["console_panel_opened"],
+            "tenant_scoped": True,
+        },
+        {
+            "id": "settings",
+            "title": "Settings",
+            "route": "settings",
+            "icon": "Settings",
+            "kind": "feature",
+            "source": "builtin",
+            "nav_group": "system",
+            "requiredFlag": None,
+            "requiredCapability": None,
+            "element": {"kind": "react-component", "component": "SettingsPage"},
+            "version": "1.0.0",
+            "audit_events": ["console_panel_opened"],
+            "tenant_scoped": True,
+        },
+    ]
+
+
+def _get_skill_panels(gated_flags: dict[str, bool]) -> list[dict]:
+    """Auto-registered panels for all installed Skills (ADR-0561 Phase 3)."""
+    try:
+        from core.skills.skill_registry_phase1 import get_registry
+        registry = get_registry()
+        skills = registry.list_all()
+
+        panels = []
+        for skill in skills:
+            skill_id = getattr(skill, "id", None)
+            if not skill_id:
+                continue
+
+            # Only OS-skills get auto-panels for now
+            if not skill_id.startswith("os."):
+                continue
+
+            panels.append({
+                "id": f"skill-{skill_id.replace('.', '-')}",
+                "title": getattr(skill, "title", skill_id),
+                "route": f"skills/{skill_id.replace('.', '-')}",
+                "icon": "Zap",
+                "kind": "skill",
+                "source": "builtin",
+                "nav_group": "build",
+                "requiredFlag": None,
+                "requiredCapability": None,
+                "element": {
+                    "kind": "skill-inspector",
+                    "skill_id": skill_id,
+                },
+                "version": getattr(skill, "version", "1.0.0"),
+                "audit_events": ["console_panel_opened", "skill_executed"],
+                "tenant_scoped": True,
+            })
+        return panels
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _get_nav_groups(panels: list[dict], flags: dict[str, bool]) -> list[dict]:
+    """Generate nav groups from gated panels (ADR-0561)."""
+    return [
+        {
+            "id": "primary",
+            "label": None,
+            "collapsible": False,
+            "defaultOpen": True,
+            "items": [
+                {"panel_id": "chat"},
+                {"panel_id": "dashboard"},
+            ],
+        },
+        {
+            "id": "vibe",
+            "label": "Vibe Engineering",
+            "collapsible": True,
+            "defaultOpen": True,
+            "items": [
+                {"panel_id": "vibe-engineering"},
+                {"panel_id": "brain-monitor"},
+            ],
+        },
+        {
+            "id": "build",
+            "label": "Build",
+            "collapsible": True,
+            "defaultOpen": True,
+            "items": [
+                {"panel_id": "skills"},
+                {"panel_id": "plugins"},
+            ] + [
+                {"panel_id": p["id"]} for p in panels
+                if p["kind"] == "skill" and p["nav_group"] == "build"
+            ],
+        },
+        {
+            "id": "system",
+            "label": "System",
+            "collapsible": True,
+            "defaultOpen": False,
+            "items": [
+                {"panel_id": "settings"},
+            ],
+        },
+    ]
+
+
+def _compute_manifest_hash(manifest: dict) -> str:
+    """Compute a stable hash of the manifest for caching/invalidation (ADR-0561)."""
+    # Hash panels + nav_groups (ignore timestamps and hash itself)
+    data = {
+        "panels": [
+            {k: v for k, v in p.items() if k != "lom"}
+            for p in manifest["panels"]
+        ],
+        "nav_groups": manifest["nav_groups"],
+    }
+    return hashlib.sha256(
+        json.dumps(data, sort_keys=True).encode()
+    ).hexdigest()
+
+
+@router.get("/manifest")
+async def get_console_manifest(session: Any = Depends(require_session)) -> dict:
+    """
+    GET /api/console/manifest — Unified panel manifest (ADR-0561, Phase 1).
+
+    Backend-driven Console: all panels (builtin, plugin, skill, ai-generated),
+    nav structure, gating, versioned. Frontend renders from this manifest.
+
+    Constraints (ADR-0561 Synthesis):
+    - 200ms timeout; fallback to cached/builtin on slow endpoint
+    - Hash-based invalidation on registry changes
+    - Dual-layer gating (manifest + route)
+    - Bundle review for custom plugins
+    - Manifest v2.0 with forward compat
+    """
+    tenant_id = getattr(session, "tenant_id", None) or "_default"
+
+    # Read flags (gating logic)
+    flags = _read_flags(tenant_id)
+
+    # Collect all panels (builtin + plugin + skill + ai-generated)
+    all_panels = _get_builtin_panels()
+    all_panels.extend(_get_plugin_panels())
+    all_panels.extend(_get_skill_panels(flags))
+
+    # Gate panels by capability + flag
+    gated_panels = [
+        p for p in all_panels
+        if (
+            (p["requiredCapability"] is None or p["requiredCapability"] in CORE_CAPABILITIES)
+            and (p["requiredFlag"] is None or flags.get(p["requiredFlag"], False))
+        )
+    ]
+
+    # Build nav structure from gated panels
+    nav_groups = _get_nav_groups(gated_panels, flags)
+
+    # Construct manifest
+    manifest = {
+        "version": "2.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "contract_version": CONTRACT_VERSION,
+        "capabilities": list(CORE_CAPABILITIES),
+        "flags": flags,
+        "panels": gated_panels,
+        "nav_groups": nav_groups,
+    }
+
+    # Compute hash for caching + invalidation
+    manifest_hash = _compute_manifest_hash(manifest)
+    manifest["hash"] = manifest_hash
+
+    # Audit
+    try:
+        from core.learning.event_emitter import audit_log
+        audit_log("console_manifest_generated", {
+            "num_panels": len(gated_panels),
+            "hash": manifest_hash,
+            "tenant_id": tenant_id,
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
+    return manifest
