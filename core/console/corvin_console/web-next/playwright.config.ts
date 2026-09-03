@@ -38,7 +38,10 @@ export default defineConfig({
   //
   // A spec that TESTS the login/logout flow itself must start anonymous:
   //   test.use({ storageState: { cookies: [], origins: [] } });
-  globalSetup: './tests/e2e/global-setup-adr0124.ts',
+  // Use mock global setup if PLAYWRIGHT_MOCK_AUTH env var is set (for offline testing)
+  globalSetup: process.env.PLAYWRIGHT_MOCK_AUTH
+    ? './tests/e2e/global-setup-mock.ts'
+    : './tests/e2e/global-setup-adr0124.ts',
 
   use: {
     storageState: path.join(_dirname, 'tests/e2e/auth-state.json'),
