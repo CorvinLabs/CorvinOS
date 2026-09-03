@@ -1,44 +1,75 @@
-/**
- * AppLayout — Refactored for ADR-0561 Phase 2 (Manifest-Driven)
- *
- * OLD: Hardcoded NAV_GROUPS + PANELS arrays
- * NEW: useConsoleManifest() provides nav_groups + panels from backend
- *
- * Changes:
- * - No hardcoded PANELS or NAV_GROUPS
- * - Sidebar rendered from manifest.nav_groups
- * - Routes mounted from manifest.panels
- * - Fallback: if manifest fails, show core panels only
- * - Same UX, zero behavior change
- */
+import * as React from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  Activity,
+  AudioLines,
+  BookOpen,
+  Boxes,
+  Building2,
+  ChevronDown,
+  Cloud,
+  Cpu,
+  Database,
+  FolderOpen,
+  Gauge,
+  Globe,
+  Globe2,
+  Hammer,
+  History,
+  KeyRound,
+  Layers,
+  LayoutDashboard,
+  Lightbulb,
+  Lock,
+  LogOut,
+  MessagesSquare,
+  Network,
+  GitBranch,
+  Package,
+  Plug,
+  Blocks,
+  Server,
+  Settings,
+  ShieldCheck,
+  ShoppingCart,
+  Sparkles,
+  Users,
+  UsersRound,
+  Menu,
+  RefreshCw,
+  Webhook,
+  Workflow,
+  X,
+} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { RouteErrorBoundary } from "@/components/error-boundary";
+import { ConsoleAssistant } from "@/components/assistant/ConsoleAssistant";
+import { useAuth } from "@/lib/auth";
+import { useSettingsStream } from "@/hooks/use-settings-stream";
+import { useBuildFreshness } from "@/hooks/use-build-freshness";
+import { getOsEngineSetting, getLicenseInfo } from "@/lib/api";
+import { LicenseBadge } from "@/components/license-gate";
+import { cn } from "@/lib/utils";
+import {
+  useCapabilities,
+  useConsoleManifest,
+  type CapabilityManifest,
+  type ConsoleManifest,
+} from "@/adapters/capabilities";
+import { useAiPanels } from "@/adapters/ai-panels";
 
-import * as React from "react"
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom"
-import { Loader2, LogOut, Menu, X } from "lucide-react"
-import { useQuery } from "@tanstack/react-query"
-import { Button } from "@/components/ui/button"
-import { ThemeToggle } from "@/components/theme-toggle"
-import { RouteErrorBoundary } from "@/components/error-boundary"
-import { ConsoleAssistant } from "@/components/assistant/ConsoleAssistant"
-import { useAuth } from "@/lib/auth"
-import { useSettingsStream } from "@/hooks/use-settings-stream"
-import { useBuildFreshness } from "@/hooks/use-build-freshness"
-import { getOsEngineSetting, getLicenseInfo } from "@/lib/api"
-import { LicenseBadge } from "@/components/license-gate"
-import { cn } from "@/lib/utils"
-import { useConsoleManifest } from "@/adapters/capabilities"
-import { ManifestNavRenderer } from "@/components/manifest-nav-renderer"
-import type { NavGroup, PanelDescriptor } from "@/adapters/capabilities"
-
-// ── Engine chip ─────────────────────────────────────────────────────────────
+// ── Engine chip — shows the active tenant-default engine in the header ───
 
 const ENGINE_LABELS: Record<string, string> = {
   claude_code: "Claude Code",
-  codex_cli: "Codex",
-  opencode: "OpenCode",
-  hermes: "Hermes",
-  copilot: "Copilot",
-}
+  codex_cli:   "Codex",
+  opencode:    "OpenCode",
+  hermes:      "Hermes",
+  copilot:     "Copilot",
+};
 
 function EngineChip() {
   const q = useQuery({
@@ -47,11 +78,11 @@ function EngineChip() {
     refetchInterval: 60_000,
     staleTime: 30_000,
     retry: false,
-  })
+  });
 
-  const engine = q.data?.default_engine ?? "claude_code"
-  const label = ENGINE_LABELS[engine] ?? engine
-  const isLocal = engine === "hermes"
+  const engine = q.data?.default_engine ?? "claude_code";
+  const label = ENGINE_LABELS[engine] ?? engine;
+  const isLocal = engine === "hermes";
 
   return (
     <Link
@@ -65,7 +96,7 @@ function EngineChip() {
           : "border-border bg-muted/30 text-muted-foreground",
       )}
     >
-      {isLocal ? <span>⚙️</span> : <span>☁️</span>}
+      {isLocal ? <Cpu className="h-3 w-3" /> : <Cloud className="h-3 w-3" />}
       <span className="font-medium">{label}</span>
       {isLocal && (
         <span className="rounded bg-emerald-500/15 px-1 text-[9px] font-semibold uppercase tracking-wide text-emerald-600">
@@ -73,10 +104,239 @@ function EngineChip() {
         </span>
       )}
     </Link>
-  )
+  );
 }
 
-// ── License tier footer ─────────────────────────────────────────────────────
+// ── Nav data ────────────────────────────────────────────────────────────
+
+interface NavItem {
+  to: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  end?: boolean;
+  /** Nav gating (ADR-0357 P3): shown only when the capability manifest reports the
+   *  capability present and/or the flag on. Undefined = always shown (core item).
+   *  Gating lives here in the authed shell, where the manifest loads reliably. */
+  requiredCapability?: string;
+  requiredFlag?: string;
+}
+
+interface NavGroup {
+  id: string;
+  label?: string;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "primary",
+    items: [
+      { to: "/app/chat",      label: "Chat",      icon: MessagesSquare },
+      { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    ],
+  },
+  {
+    id: "vibe",
+    label: "Vibe Engineering",
+    collapsible: true,
+    defaultOpen: true,
+    // CONSOLE_REDESIGN_UNIFIED_CONCEPT: one coherent group of five views.
+    // A panel needs BOTH registrations — panelRoutes() mounts /app/<route> from
+    // PANELS, this list makes it reachable. tests/unit/panel-nav-wiring.test.ts
+    // fails if the two drift apart.
+    items: [
+      { to: "/app/vibe-engineering",     label: "Dashboard",            icon: Boxes,     requiredFlag: "vibe_engineering" },
+      { to: "/app/brain-monitor",        label: "Brain Monitor",        icon: Cpu,       requiredFlag: "vibe_engineering" },
+      { to: "/app/context-intelligence", label: "Context Intelligence", icon: GitBranch, requiredFlag: "vibe_engineering" },
+      { to: "/app/learning-hub",         label: "Learning Hub",         icon: Lightbulb, requiredFlag: "vibe_engineering" },
+      { to: "/app/session-explorer",     label: "Session Explorer",     icon: History,   requiredFlag: "vibe_engineering" },
+    ],
+  },
+  {
+    id: "messaging",
+    label: "Messaging",
+    items: [
+      { to: "/app/bridges", label: "Channels", icon: Network },
+      { to: "/app/voice",   label: "Profile",  icon: AudioLines },
+      { to: "/app/people",  label: "People",   icon: Users },
+    ],
+  },
+  {
+    id: "intelligence",
+    label: "Assistant",
+    items: [
+      { to: "/app/engines",  label: "AI Engine", icon: Cpu },
+      { to: "/app/browser",  label: "Browser",   icon: Globe },
+      { to: "/app/personas", label: "Personas",  icon: Sparkles },
+      { to: "/app/memory",   label: "Memory",    icon: BookOpen },
+      { to: "/app/files",    label: "Files",     icon: FolderOpen },
+    ],
+  },
+  {
+    id: "build",
+    label: "Build",
+    collapsible: true,
+    defaultOpen: true,
+    items: [
+      { to: "/app/workflows",  label: "Workflows",       icon: Workflow },
+      { to: "/app/flows",      label: "Pipelines",       icon: Network },
+      { to: "/app/compute",    label: "Agentic Compute", icon: Gauge },
+      { to: "/app/forge",      label: "Tools",           icon: Hammer },
+      { to: "/app/skills",     label: "Skills",          icon: BookOpen },
+      { to: "/app/os-skills",  label: "OS Skills",       icon: Layers },
+      { to: "/app/packages",   label: "Packages",        icon: Package },
+      { to: "/app/agents",      label: "Agents",          icon: ShieldCheck },
+      // Unified hub for the three extend-CorvinOS subsystems (plugin registry,
+      // MCP tools, layer extensions) — one entry, three tabs. Replaces the former
+      // separate "Extensions" / "MCP Plugins" / "Plugins" entries, which pointed
+      // at distinct backends but read as synonyms in the sidebar.
+      { to: "/app/plugin-center", label: "Plugins & Extensions", icon: Blocks },
+      { to: "/app/marketplace",   label: "Marketplace",         icon: ShoppingCart, requiredFlag: "console_marketplace_panel" },
+    ],
+  },
+  {
+    id: "network",
+    label: "Network",
+    collapsible: true,
+    defaultOpen: true,
+    items: [
+      { to: "/app/agent-hub",  label: "Agent Hub",     icon: Globe2 },
+      { to: "/app/space",      label: "CorvinSpace",   icon: Globe },
+      { to: "/app/orgs",       label: "Organisations", icon: Building2 },
+      { to: "/app/connectors", label: "Connectors",    icon: Plug },
+      { to: "/app/sync-monitor", label: "Sync Monitor", icon: RefreshCw },
+      { to: "/app/webhooks",     label: "Webhooks",     icon: Webhook },
+    ],
+  },
+  {
+    id: "knowledge",
+    label: "Data",
+    collapsible: true,
+    defaultOpen: true,
+    items: [
+      { to: "/app/data-sources",    label: "Databases",     icon: Server },
+      { to: "/app/rag",             label: "Knowledge",     icon: Database },
+      { to: "/app/rag-hub",         label: "Knowledge Hub", icon: Globe2 },
+      { to: "/app/custom-provider", label: "Add Provider",  icon: Plug },
+    ],
+  },
+  {
+    id: "system",
+    label: "System",
+    collapsible: true,
+    defaultOpen: false,
+    items: [
+      { to: "/app/activity",        label: "Activity Feed",       icon: Activity },
+      { to: "/app/api-keys",       label: "API Keys",           icon: KeyRound },
+      { to: "/app/license",        label: "License",            icon: Lock },
+      { to: "/app/compliance",     label: "Audit & Compliance", icon: ShieldCheck },
+      { to: "/app/cowork",         label: "Auto-routing",       icon: UsersRound },
+      { to: "/app/ldd",            label: "Quality",            icon: Boxes },
+      { to: "/app/settings",       label: "Settings",           icon: Settings },
+    ],
+  },
+];
+
+// ── Collapse state persisted in localStorage ────────────────────────────
+
+function useNavCollapse(groupId: string, defaultOpen: boolean) {
+  const key = `corvin_nav_open_${groupId}`;
+  const [open, setOpen] = React.useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored !== null ? stored === "true" : defaultOpen;
+    } catch {
+      return defaultOpen;
+    }
+  });
+  const toggle = React.useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(key, String(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, [key]);
+  return [open, toggle] as const;
+}
+
+// ── Single nav link ─────────────────────────────────────────────────────
+
+function NavItemLink({ item, primary }: { item: NavItem; primary?: boolean }) {
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      className={({ isActive }) =>
+        cn(
+          "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+          primary
+            ? "text-foreground/80 hover:bg-muted hover:text-foreground"
+            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          isActive && "bg-accent/15 font-medium text-foreground",
+          primary && isActive && "bg-accent/20",
+        )
+      }
+    >
+      <item.icon className={cn("h-4 w-4 shrink-0", primary && "h-[1.05rem] w-[1.05rem]")} />
+      {item.label}
+    </NavLink>
+  );
+}
+
+// ── Group section with optional collapse ────────────────────────────────
+
+function NavGroupSection({ group }: { group: NavGroup }) {
+  const [open, toggle] = useNavCollapse(group.id, group.defaultOpen ?? true);
+  const isPrimary = !group.label;
+
+  if (isPrimary) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        {group.items.map((item) => (
+          <NavItemLink key={item.to} item={item} primary />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      {group.collapsible ? (
+        <button
+          onClick={toggle}
+          className={cn(
+            "flex w-full items-center justify-between px-3 py-1.5",
+            "text-[10.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/60",
+            "hover:text-muted-foreground transition-colors",
+          )}
+        >
+          {group.label}
+          <ChevronDown
+            className={cn(
+              "h-3 w-3 transition-transform duration-200",
+              !open && "-rotate-90",
+            )}
+          />
+        </button>
+      ) : (
+        <div className="px-3 py-1.5 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/60">
+          {group.label}
+        </div>
+      )}
+      {(!group.collapsible || open) && (
+        <div className="flex flex-col gap-0.5">
+          {group.items.map((item) => (
+            <NavItemLink key={item.to} item={item} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Licence tier badge in sidebar footer ───────────────────────────────
 
 function LicenseTierFooter() {
   const { data } = useQuery({
@@ -84,141 +344,133 @@ function LicenseTierFooter() {
     queryFn: ({ signal }) => getLicenseInfo(signal),
     staleTime: 5 * 60_000,
     retry: false,
-  })
-  if (!data) return null
+  });
+  if (!data) return null;
   return (
     <Link to="/app/license" className="flex items-center justify-between px-3 py-1.5 rounded-md hover:bg-muted/40 transition-colors">
       <span className="text-[11px] text-muted-foreground">Licence</span>
       <LicenseBadge tier={data.tier} />
     </Link>
-  )
+  );
 }
 
-// ── Collapse state ──────────────────────────────────────────────────────────
-// (Deferred: useNavCollapse will be re-enabled when nav groups have collapse UI — Phase 3+)
-/*
-function useNavCollapse(groupId: string, defaultOpen: boolean) {
-  const key = `corvin_nav_open_${groupId}`
-  const [open, setOpen] = React.useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem(key)
-      return stored !== null ? stored === "true" : defaultOpen
-    } catch {
-      return defaultOpen
-    }
-  })
-  const toggle = React.useCallback(() => {
-    setOpen((prev) => {
-      const next = !prev
-      try {
-        localStorage.setItem(key, String(next))
-      } catch {
-        // ignore
+// ── AppLayout ───────────────────────────────────────────────────────────
+
+/** Filter the nav against the capability manifest (ADR-0357 P3). An item with no
+ *  gate always shows (core nav). With no manifest yet (still loading), gated items
+ *  hide — the authed shell resolves the manifest fast, and hiding an opt-in feature
+ *  briefly beats flashing one that is off. Empty groups are dropped. */
+function gateNavGroups(groups: NavGroup[], manifest: CapabilityManifest | undefined): NavGroup[] {
+  const caps = manifest ? new Set(manifest.capabilities) : null;
+  const flags = manifest?.flags ?? {};
+  const visible = (it: NavItem): boolean => {
+    if (!it.requiredCapability && !it.requiredFlag) return true;
+    // FAIL-SAFE: no manifest yet (loading / query not ready) → show the item.
+    // Hiding on a missing manifest risks a feature never appearing if the query is
+    // slow or blocked; the backend flag is the real gate, this is only a UX hint.
+    if (!manifest) return true;
+    if (it.requiredCapability && !caps!.has(it.requiredCapability)) return false;
+    if (it.requiredFlag && !flags[it.requiredFlag]) return false;
+    return true;
+  };
+  return groups
+    .map((g) => ({ ...g, items: g.items.filter(visible) }))
+    .filter((g) => g.items.length > 0);
+}
+
+/** ADR-0561 (manifest-driven console) — ADDITIVE, never subtractive.
+ *
+ *  NAV_GROUPS above is the complete, hand-maintained sidebar for every core panel
+ *  in PANELS (tests/unit/panel-nav-wiring.test.ts keeps the two in sync). The
+ *  backend console manifest enumerates only what the backend knows about — today
+ *  seven builtin panels plus whatever plugins / skills / AI-generated panels are
+ *  registered at runtime. Rendering the sidebar FROM the manifest therefore hid
+ *  ~30 core panels (2026-09-03, the "panels are not visible" report). So the
+ *  manifest may only ADD entries the static list lacks; a panel already linked
+ *  from NAV_GROUPS (matched by route) is left exactly as it is, and a manifest
+ *  panel whose flag / capability gate fails is not added. A manifest that is
+ *  missing, slow, or of an unknown shape changes nothing. Exported for the unit test. */
+export function mergeManifestNav(groups: NavGroup[], manifest: ConsoleManifest | null | undefined): NavGroup[] {
+  if (!manifest || !Array.isArray(manifest.nav_groups) || !Array.isArray(manifest.panels)) return groups;
+  const caps = new Set(manifest.capabilities ?? []);
+  const flags = manifest.flags ?? {};
+  const panelsById = new Map(manifest.panels.map((p) => [p.id, p]));
+  const linked = new Set(groups.flatMap((g) => g.items.map((it) => it.to)));
+  const out = groups.map((g) => ({ ...g, items: [...g.items] }));
+  for (const mg of manifest.nav_groups) {
+    for (const item of mg.items) {
+      const panel = panelsById.get(item.panel_id);
+      if (!panel || !panel.route) continue;
+      const to = `/app/${panel.route}`;
+      if (linked.has(to)) continue;
+      if (panel.requiredCapability && !caps.has(panel.requiredCapability)) continue;
+      if (panel.requiredFlag && !flags[panel.requiredFlag]) continue;
+      const navItem: NavItem = { to, label: panel.title, icon: MANIFEST_ICONS[panel.icon] ?? Blocks };
+      let target = out.find((g) => g.id === mg.id);
+      if (!target) {
+        target = {
+          id: mg.id,
+          label: mg.label ?? undefined,
+          collapsible: mg.collapsible,
+          defaultOpen: mg.defaultOpen,
+          items: [],
+        };
+        out.push(target);
       }
-      return next
-    })
-  }, [key])
-  return [open, toggle] as const
+      target.items.push(navItem);
+      linked.add(to);
+    }
+  }
+  return out.filter((g) => g.items.length > 0);
 }
-*/
 
-// ── Fallback panels (if manifest fails) ──────────────────────────────────────
-
-const FALLBACK_PANELS: PanelDescriptor[] = [
-  {
-    id: "chat",
-    title: "Chat",
-    route: "chat",
-    icon: "MessagesSquare",
-    kind: "feature",
-    source: "builtin",
-    nav_group: "primary",
-    requiredFlag: null,
-    requiredCapability: null,
-    element: { kind: "react-component", component: "ChatPage" },
-    version: "1.0.0",
-    audit_events: ["console_panel_opened"],
-    tenant_scoped: true,
-  },
-  {
-    id: "dashboard",
-    title: "Dashboard",
-    route: "dashboard",
-    icon: "LayoutDashboard",
-    kind: "feature",
-    source: "builtin",
-    nav_group: "primary",
-    requiredFlag: null,
-    requiredCapability: null,
-    element: { kind: "react-component", component: "DashboardPage" },
-    version: "1.0.0",
-    audit_events: ["console_panel_opened"],
-    tenant_scoped: true,
-  },
-  {
-    id: "settings",
-    title: "Settings",
-    route: "settings",
-    icon: "Settings",
-    kind: "feature",
-    source: "builtin",
-    nav_group: "system",
-    requiredFlag: null,
-    requiredCapability: null,
-    element: { kind: "react-component", component: "SettingsPage" },
-    version: "1.0.0",
-    audit_events: ["console_panel_opened"],
-    tenant_scoped: true,
-  },
-]
-
-const FALLBACK_NAV_GROUPS: NavGroup[] = [
-  {
-    id: "primary",
-    label: null,
-    collapsible: false,
-    defaultOpen: true,
-    items: [{ panel_id: "chat" }, { panel_id: "dashboard" }],
-  },
-  {
-    id: "system",
-    label: "System",
-    collapsible: true,
-    defaultOpen: false,
-    items: [{ panel_id: "settings" }],
-  },
-]
-
-// ── AppLayout (manifest-driven) ─────────────────────────────────────────────
+/** Icon names a backend manifest may carry → the lucide icons this bundle already ships. */
+const MANIFEST_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  MessagesSquare, LayoutDashboard, Layers: Boxes, Cpu, BookOpen, Blocks, Settings,
+  Zap: Sparkles, Shield: ShieldCheck, ShieldCheck, Sparkles, Plug, Package, Globe, Network, Workflow,
+};
 
 export function AppLayout() {
-  const { session, logout } = useAuth()
-  const navigate = useNavigate()
-  const location = useLocation()
-
-  // ADR-0561: Fetch manifest (single source of truth)
-  const { data: manifest, isLoading: manifestLoading, error: manifestError } = useConsoleManifest()
-
-  // Use manifest panels/nav, or fallback if unavailable (200ms timeout)
-  const panels = manifest?.panels ?? FALLBACK_PANELS
-  const navGroups = manifest?.nav_groups ?? FALLBACK_NAV_GROUPS
-
-  const [assistantOpen, setAssistantOpen] = React.useState(false)
-  const [mobileNavOpen, setMobileNavOpen] = React.useState(false)
-  useSettingsStream()
-
+  const { session, logout } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Nav is gated against the backend capability manifest (ADR-0357 P3): the plugin
+  // system's visibility is backend-driven, so a disabled flag / absent capability
+  // hides its nav entry without an SPA rebuild. Fires in the authed shell, so the
+  // manifest loads reliably (unlike App pre-auth).
+  const { data: capabilityManifest } = useCapabilities();
+  // ADR-0561: the console manifest ADDS runtime panels (plugin / skill / installed)
+  // to the static sidebar — see mergeManifestNav. It never removes a core entry.
+  const { data: consoleManifest } = useConsoleManifest();
+  const { data: aiPanels } = useAiPanels();
+  const navGroups = React.useMemo(() => {
+    const gated = mergeManifestNav(gateNavGroups(NAV_GROUPS, capabilityManifest), consoleManifest);
+    // ADR-0366: the operator's AI-generated panels get their own nav group.
+    if (aiPanels && aiPanels.length) {
+      const linked = new Set(gated.flatMap((g) => g.items.map((it) => it.to)));
+      const items = aiPanels
+        .filter((p) => !linked.has(`/app/${p.id}`))
+        .map((p) => ({ to: `/app/${p.id}`, label: p.title, icon: Sparkles }));
+      if (items.length) gated.push({ id: "ai-panels", label: "Your panels", items });
+    }
+    return gated;
+  }, [capabilityManifest, consoleManifest, aiPanels]);
+  const [assistantOpen, setAssistantOpen] = React.useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  useSettingsStream();
+  // Closes the third cache layer: an open tab keeps running the bundle it booted
+  // with until someone hard-refreshes. Off unless the operator opts in.
   const build = useBuildFreshness(
-    Boolean(manifest?.flags?.console_auto_reload),
-  )
+    Boolean(capabilityManifest?.flags?.console_auto_reload || consoleManifest?.flags?.console_auto_reload),
+  );
 
-  React.useEffect(() => {
-    setMobileNavOpen(false)
-  }, [location.pathname])
+  // Close mobile nav on route change
+  React.useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
 
   const sidebarContent = (
     <>
       <Link to="/" className="mb-6 flex items-center gap-2.5 px-3">
-        <span className="text-xl">⚙️</span>
+        <CorvinMark />
         <div className="flex flex-col leading-tight">
           <span className="font-serif text-[1.05rem] font-semibold">Corvin</span>
           <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -226,20 +478,14 @@ export function AppLayout() {
           </span>
         </div>
       </Link>
-
-      {/* ADR-0561: Manifest-driven nav (replaced hardcoded NAV_GROUPS) */}
-      {manifestLoading ? (
-        <div className="flex justify-center py-4">
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        </div>
-      ) : manifestError ? (
-        <div className="text-xs text-muted-foreground px-3">
-          Nav loading (fallback)
-        </div>
-      ) : (
-        <ManifestNavRenderer navGroups={navGroups} panels={panels} />
-      )}
-
+      <nav className="flex flex-1 flex-col gap-4 overflow-y-auto">
+        {navGroups.map((group, i) => (
+          <React.Fragment key={group.id}>
+            {i > 0 && <div className="mx-3 border-t border-border/60" />}
+            <NavGroupSection group={group} />
+          </React.Fragment>
+        ))}
+      </nav>
       <LicenseTierFooter />
       <div className="mt-2 flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-xs">
         <div className="flex flex-col leading-snug">
@@ -252,99 +498,158 @@ export function AppLayout() {
           aria-label="Log out"
           title="Log out"
           className="h-7 w-7 text-muted-foreground hover:text-foreground"
-          onClick={async () => {
-            await logout()
-            navigate("/login", { replace: true })
-          }}
+          onClick={async () => { await logout(); navigate("/login", { replace: true }); }}
         >
           <LogOut className="h-3.5 w-3.5" />
         </Button>
       </div>
     </>
-  )
+  );
 
   return (
     <>
-      {build.stale && (
-        <div className="fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-3 bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg">
-          <span>A new console build is live.</span>
-          <button
-            type="button"
-            onClick={build.reload}
-            className="rounded-md bg-primary-foreground/15 px-3 py-1 font-medium underline-offset-2 hover:bg-primary-foreground/25"
-          >
-            Reload now
-          </button>
-        </div>
-      )}
-
-      {mobileNavOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/50 md:hidden"
-          onClick={() => setMobileNavOpen(false)}
-          aria-hidden="true"
-        />
-      )}
-
-      <aside
-        className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col overflow-hidden border-r border-border bg-card/95 px-3 py-5 backdrop-blur transition-transform duration-200 md:hidden",
-          mobileNavOpen ? "translate-x-0" : "-translate-x-full",
-        )}
-        aria-label="Mobile navigation"
-      >
+    {/* A new bundle is deployed but the operator is mid-input — never reload out
+        from under their typing; offer it instead. */}
+    {build.stale && (
+      <div className="fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-3 bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg">
+        <span>A new console build is live.</span>
         <button
-          className="mb-2 ml-auto flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
-          onClick={() => setMobileNavOpen(false)}
-          aria-label="Close menu"
+          type="button"
+          onClick={build.reload}
+          className="rounded-md bg-primary-foreground/15 px-3 py-1 font-medium underline-offset-2 hover:bg-primary-foreground/25"
         >
-          <X className="h-4 w-4" />
+          Reload now
         </button>
+      </div>
+    )}
+    {/* Mobile nav overlay */}
+    {mobileNavOpen && (
+      <div
+        className="fixed inset-0 z-40 bg-black/50 md:hidden"
+        onClick={() => setMobileNavOpen(false)}
+        aria-hidden="true"
+      />
+    )}
+    {/* Mobile slide-in sidebar */}
+    <aside
+      className={cn(
+        "fixed inset-y-0 left-0 z-50 flex w-72 flex-col overflow-hidden border-r border-border bg-card/95 px-3 py-5 backdrop-blur transition-transform duration-200 md:hidden",
+        mobileNavOpen ? "translate-x-0" : "-translate-x-full",
+      )}
+      aria-label="Mobile navigation"
+    >
+      <button
+        className="mb-2 ml-auto flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
+        onClick={() => setMobileNavOpen(false)}
+        aria-label="Close menu"
+      >
+        <X className="h-4 w-4" />
+      </button>
+      {sidebarContent}
+    </aside>
+
+    <div className="grid grid-cols-1 min-h-screen md:grid-cols-[17rem_1fr] bg-background">
+      <aside className="sticky top-0 hidden h-screen md:flex flex-col overflow-hidden border-r border-border bg-card/40 px-3 py-5">
         {sidebarContent}
       </aside>
 
-      <div className="grid grid-cols-1 min-h-screen md:grid-cols-[17rem_1fr] bg-background">
-        <aside className="sticky top-0 hidden h-screen md:flex flex-col overflow-hidden border-r border-border bg-card/40 px-3 py-5">
-          {sidebarContent}
-        </aside>
-
-        <div className="flex min-w-0 flex-col">
-          <header className="sticky top-0 z-20 flex h-13 items-center justify-between gap-4 border-b border-border bg-background/80 px-4 backdrop-blur">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <button
-                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground md:hidden"
-                onClick={() => setMobileNavOpen(true)}
-                aria-label="Open menu"
-              >
-                <Menu className="h-4 w-4" />
-              </button>
-              {location.pathname.startsWith("/app/") && (
-                <span>{location.pathname.slice(5)}</span>
+      {/* Content area */}
+      <div className="flex min-w-0 flex-col">
+        <header className="sticky top-0 z-20 flex h-13 items-center justify-between gap-4 border-b border-border bg-background/80 px-4 backdrop-blur">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <button
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground md:hidden"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open menu"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+            {/* Tenant badge — the only honest real-time signal here. A
+                hardcoded "Connected" status indicator was removed (it always
+                showed green regardless of actual gateway/SSE connectivity);
+                no readily-available connectivity hook exists to wire it to. */}
+            <Badge variant="outline" className="hidden sm:inline-flex text-[11px]">
+              {session?.tenant_id ?? "—"}
+            </Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            <EngineChip />
+            <button
+              onClick={() => setAssistantOpen((v) => !v)}
+              aria-label="Corvin Assistant"
+              title="Corvin Assistant"
+              className={cn(
+                "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-all",
+                assistantOpen
+                  ? "border-accent/50 bg-accent/10 text-accent"
+                  : "border-border bg-muted/30 text-muted-foreground hover:border-accent/30 hover:bg-muted/50 hover:text-foreground",
               )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <EngineChip />
-              <ThemeToggle />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setAssistantOpen(!assistantOpen)}
-              >
-                <span>🤖</span>
-              </Button>
-            </div>
-          </header>
-
-          <main className="flex-1 overflow-auto">
-            <RouteErrorBoundary>
-              <Outlet />
-            </RouteErrorBoundary>
-          </main>
-        </div>
+            >
+              <CorvinMarkSmall className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline font-medium">Assistant</span>
+            </button>
+            <ThemeToggle />
+          </div>
+        </header>
+        <main className="flex-1 animate-fade-in px-6 py-8">
+          <RouteErrorBoundary key={location.pathname} label={location.pathname}>
+            <Outlet />
+          </RouteErrorBoundary>
+        </main>
       </div>
-
-      {assistantOpen && <ConsoleAssistant open={assistantOpen} onClose={() => setAssistantOpen(false)} />}
+    </div>
+    <RouteErrorBoundary label="assistant"><ConsoleAssistant open={assistantOpen} onClose={() => setAssistantOpen(false)} /></RouteErrorBoundary>
     </>
-  )
+  );
 }
+
+// ── PublicLayout ────────────────────────────────────────────────────────
+
+export function PublicLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-screen flex-col bg-background">
+      <header className="flex items-center justify-between px-8 py-5">
+        <Link to="/" className="flex items-center gap-2">
+          <CorvinMark />
+          <span className="font-serif text-lg font-semibold tracking-tight">Corvin</span>
+        </Link>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+        </div>
+      </header>
+      <div className="flex-1">{children}</div>
+      <footer className="border-t border-border/60 px-8 py-6 text-xs text-muted-foreground">
+        <div className="mx-auto flex max-w-5xl items-center justify-between">
+          <span>Apache-2.0 · EU AI Act 2026 · GDPR-aligned</span>
+          <span className="font-mono">v0.1 · console:next</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+// ── CorvinMark SVG ─────────────────────────────────────────────────────
+
+function CorvinMarkSmall({ className }: { className?: string }) {
+  return (
+    <svg viewBox="12 12 96 96" aria-hidden="true" className={cn("shrink-0", className)}>
+      <path fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" d="M28 40 L56 60 L28 80"/>
+      <rect fill="currentColor" x="66" y="72" width="30" height="9" rx="2"/>
+      <circle cx="80" cy="50" r="10" fill="#C9A227"/>
+      <circle cx="80" cy="50" r="10" fill="none" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  );
+}
+
+function CorvinMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="12 12 96 96" aria-hidden="true" className={cn("h-7 w-7 text-foreground shrink-0", className)}>
+      <path fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" d="M28 40 L56 60 L28 80"/>
+      <rect fill="currentColor" x="66" y="72" width="30" height="9" rx="2"/>
+      <circle cx="80" cy="50" r="10" fill="#C9A227"/>
+      <circle cx="80" cy="50" r="10" fill="none" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  );
+}
+
+export { CorvinMark };

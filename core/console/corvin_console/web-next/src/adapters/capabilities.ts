@@ -131,7 +131,10 @@ async function fetchConsoleManifest(signal?: AbortSignal): Promise<ConsoleManife
   const timeout = setTimeout(() => controller.abort(), 200); // 200ms timeout (ADR-0561 Synthesis)
 
   try {
-    const r = await fetch(`${BASE}/manifest`, {
+    // The endpoint lives on the capabilities router (routes/capabilities.py,
+    // prefix "/capabilities") → /v1/console/capabilities/manifest. `${BASE}/manifest`
+    // 404'd on every live host and silently put the sidebar into its error branch.
+    const r = await fetch(`${BASE}/capabilities/manifest`, {
       credentials: "include",
       signal: signal || controller.signal,
     });
