@@ -1,0 +1,283 @@
+# Prometheus Configuration for CorvinOS Phase 1+2+3+4
+# Monitors all production metrics across Skills, Learning, Marketplace, Vibe Hub
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'corvin-prod'
+    region: 'multi-region'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - 'alerts.yml'
+
+scrape_configs:
+  # Phase 1+2: Core Skills Metrics
+  - job_name: 'corvin-skills'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['localhost:8765', 'skills-us-west:8765', 'skills-us-east:8765', 'skills-eu:8765']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # Phase 1: Skill Registry + Hardening
+  - job_name: 'skill-registry'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['localhost:8766']
+    metrics_path: '/metrics/skill-registry'
+
+  # Phase 2: Learning Optimizer
+  - job_name: 'learning-optimizer'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['localhost:8767']
+    metrics_path: '/metrics/learning'
+
+  # Phase 3: Marketplace
+  - job_name: 'marketplace'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['localhost:8768']
+    metrics_path: '/metrics/marketplace'
+
+  # Phase 4: Vibe Hub
+  - job_name: 'vibe-hub'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['localhost:8769']
+    metrics_path: '/metrics/vibe-hub'
+
+  # Audit Trail Metrics
+  - job_name: 'audit-trail'
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['localhost:8770']
+    metrics_path: '/metrics/audit'
+
+---
+
+# Alert Rules (alerts.yml) — included by prometheus-config.yml
+
+groups:
+  - name: corvin-phase1-hardening
+    rules:
+      - alert: SkillAuditPIIScrubbing
+        expr: skill_audit_pii_scrubbed_count > 10
+        for: 5m
+        annotations:
+          summary: "High PII scrubbing rate detected"
+          description: "{{ $value }} PII items scrubbed in last 5 minutes"
+
+      - alert: SkillAutoDisabled
+        expr: skill_auto_disabled_total > 5
+        for: 10m
+        annotations:
+          summary: "Multiple skills auto-disabled"
+          description: "{{ $value }} skills auto-disabled due to timeout"
+
+      - alert: SkillConfidenceClamping
+        expr: skill_confidence_clamped_count > 100
+        for: 5m
+        annotations:
+          summary: "High confidence clamping rate"
+          description: "{{ $value }} out-of-bounds confidence values clamped"
+
+  - name: corvin-phase2-learning
+    rules:
+      - alert: LearningFeedbackDryUp
+        expr: learning_feedback_count == 0
+        for: 360m  # 6 hours
+        annotations:
+          summary: "No learning feedback received for 6 hours"
+          description: "Learning optimizer may be stalled"
+
+      - alert: DriftDetectionFailed
+        expr: learning_drift_detected_count == 0
+        for: 1440m  # 24 hours
+        annotations:
+          summary: "No drift detected in 24 hours"
+          description: "Either learning is stable or detector is broken"
+
+      - alert: LearningConfigTuneFailure
+        expr: learning_config_tuned_count == 0
+        for: 180m  # 3 hours
+        annotations:
+          summary: "Config tuner hasn't run in 3 hours"
+          description: "Optimizer may be stuck or confidence below threshold"
+
+  - name: corvin-phase3-marketplace
+    rules:
+      - alert: ManifestValidationError
+        expr: marketplace_manifest_validation_errors > 5
+        for: 5m
+        annotations:
+          summary: "Multiple manifest validation failures"
+          description: "{{ $value }} manifests failed validation"
+
+      - alert: DAGResolutionFailure
+        expr: marketplace_dag_resolution_failures > 0
+        for: 5m
+        annotations:
+          summary: "Skill dependency resolution failed"
+          description: "DAG has unresolved dependencies"
+
+      - alert: SkillReviewQueueBacklog
+        expr: marketplace_pending_reviews > 20
+        for: 30m
+        annotations:
+          summary: "Skill review queue backlog building"
+          description: "{{ $value }} skills pending human review"
+
+  - name: corvin-phase4-vibe
+    rules:
+      - alert: VibeHubSubsystemFault
+        expr: vibe_hub_subsystem_registration_failures > 0
+        for: 5m
+        annotations:
+          summary: "Vibe Hub subsystem registration failed"
+          description: "Cannot register Skill/Plugin/Agent"
+
+      - alert: MultiAgentRoutingError
+        expr: multi_agent_routing_errors > 10
+        for: 5m
+        annotations:
+          summary: "Multi-Agent routing errors detected"
+          description: "{{ $value }} tasks failed to route to agents"
+
+      - alert: CrossSkillLearningStalled
+        expr: cross_skill_learning_shares == 0
+        for: 300m  # 5 hours
+        annotations:
+          summary: "Cross-Skill learning has stalled"
+          description: "No patterns shared between skills in 5 hours"
+
+  - name: corvin-critical
+    rules:
+      - alert: SkillP99LatencyHigh
+        expr: skill_request_p99_ms > 120
+        for: 5m
+        annotations:
+          summary: "P99 latency exceeded SLA"
+          description: "P99 latency is {{ $value }}ms (SLA: 120ms)"
+
+      - alert: SkillErrorRateHigh
+        expr: skill_error_rate > 0.15
+        for: 5m
+        annotations:
+          summary: "Error rate exceeded SLA"
+          description: "Error rate is {{ $value }}% (SLA: 0.15%)"
+
+      - alert: AuditChainBroken
+        expr: audit_chain_verification_failures > 0
+        for: 1m
+        annotations:
+          summary: "CRITICAL: Audit chain verification failed"
+          description: "Hash chain integrity compromised — immediate investigation required"
+
+      - alert: TenantIsolationBreach
+        expr: audit_tenant_isolation_violations > 0
+        for: 1m
+        annotations:
+          summary: "CRITICAL: Tenant isolation breach detected"
+          description: "Cross-tenant data access detected — immediate investigation required"
+
+---
+
+# Grafana Dashboards
+
+# Dashboard 1: Skills Health (Real-Time)
+dashboard_id: skills_health_realtime
+title: "CorvinOS Skills Health — Real-Time"
+refresh: 5s
+panels:
+  - title: "P99 Latency (ms)"
+    targets:
+      - expr: 'skill_request_p99_ms'
+  - title: "Error Rate (%)"
+    targets:
+      - expr: 'skill_error_rate * 100'
+  - title: "Feedback Rate (per hour)"
+    targets:
+      - expr: 'rate(learning_feedback_count[1h])'
+  - title: "Skill Status"
+    targets:
+      - expr: 'count(skill_enabled{tenant="default"}) by (skill_id)'
+
+# Dashboard 2: Compliance & Security (Daily)
+dashboard_id: compliance_security_daily
+title: "CorvinOS Compliance & Security — Daily"
+refresh: 1h
+panels:
+  - title: "PII Scrubbing Events"
+    targets:
+      - expr: 'increase(skill_audit_pii_scrubbed_count[1d])'
+  - title: "Auto-Disabled Skills"
+    targets:
+      - expr: 'increase(skill_auto_disabled_total[1d])'
+  - title: "Audit Chain Integrity"
+    targets:
+      - expr: 'audit_chain_verification_failures'
+  - title: "Tenant Isolation Violations"
+    targets:
+      - expr: 'audit_tenant_isolation_violations'
+
+# Dashboard 3: Learning Optimizer (Hourly)
+dashboard_id: learning_optimizer_hourly
+title: "CorvinOS Learning Optimizer — Hourly"
+refresh: 1h
+panels:
+  - title: "Drift Detection Events"
+    targets:
+      - expr: 'increase(learning_drift_detected_count[1h])'
+  - title: "Config Tuned Events"
+    targets:
+      - expr: 'increase(learning_config_tuned_count[1h])'
+  - title: "Canary Success Rate"
+    targets:
+      - expr: 'learning_canary_success_rate'
+  - title: "Optimizer Latency (ms)"
+    targets:
+      - expr: 'learning_optimizer_latency_ms'
+
+# Dashboard 4: Marketplace Activity (Daily)
+dashboard_id: marketplace_activity_daily
+title: "CorvinOS Marketplace Activity — Daily"
+refresh: 1d
+panels:
+  - title: "Submissions Received"
+    targets:
+      - expr: 'increase(marketplace_submissions_count[1d])'
+  - title: "Approval Rate (%)"
+    targets:
+      - expr: 'marketplace_skill_approval_rate * 100'
+  - title: "Avg Review Time (hours)"
+    targets:
+      - expr: 'marketplace_avg_review_time_hours'
+  - title: "Average Rating"
+    targets:
+      - expr: 'marketplace_rating_avg'
+
+# Dashboard 5: Vibe Hub Orchestration (Real-Time)
+dashboard_id: vibe_hub_realtime
+title: "CorvinOS Vibe Hub — Real-Time"
+refresh: 5s
+panels:
+  - title: "Subsystems Registered"
+    targets:
+      - expr: 'count(vibe_hub_subsystem_info) by (subsystem_type)'
+  - title: "Task Orchestration Rate"
+    targets:
+      - expr: 'rate(vibe_hub_tasks_orchestrated[1m])'
+  - title: "Multi-Agent Routing"
+    targets:
+      - expr: 'count(multi_agent_routed_tasks) by (agent_id)'
+  - title: "Cross-Skill Learning Shares"
+    targets:
+      - expr: 'increase(cross_skill_learning_shares[1h])'
