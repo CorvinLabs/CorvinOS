@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="700" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Security Layers Stack (All 5 Critical Layers)</text>
+  <text x="50" y="80" class="label">Compliance Stack (Bottom-Up)</text>
+  <rect x="50" y="500" width="800" height="70" fill="#10B981" opacity="0.2" stroke="#10B981" stroke-width="2"/>
+  <text x="70" y="535" class="small">Layer 5: Meta-Skills (Locked)
+Audit chain, disclosure, consent</text>
+  <rect x="50" y="420" width="800" height="70" fill="#10B981" opacity="0.2" stroke="#10B981" stroke-width="2"/>
+  <text x="70" y="455" class="small">Layer 4: Learning Loop (Audited)
+Feedback processing, optimization</text>
+  <rect x="50" y="340" width="800" height="70" fill="#3B82F6" opacity="0.2" stroke="#3B82F6" stroke-width="2"/>
+  <text x="70" y="375" class="small">Layer 3: Skills Registry (Versioned)
+Compiled, deployed, rolled back</text>
+  <rect x="50" y="260" width="800" height="70" fill="#3B82F6" opacity="0.2" stroke="#3B82F6" stroke-width="2"/>
+  <text x="70" y="295" class="small">Layer 2: Audit Trail (Hash-Chained)
+Every event signed and linked</text>
+  <rect x="50" y="180" width="800" height="70" fill="#EF4444" opacity="0.2" stroke="#EF4444" stroke-width="2"/>
+  <text x="70" y="215" class="small">Layer 1: Compliance Gates (Fail-Closed)
+Consent, house-rules, disclosure</text>
+  <text x="50" y="600" class="small">Invariant: Each layer builds on previous; each is independently verifiable</text>
+</svg>

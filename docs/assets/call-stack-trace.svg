@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="700" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Skill Execution Call Stack (Trace)</text>
+  <text x="50" y="80" class="label">Stack Trace (Most Recent First):</text>
+  <rect x="50" y="130" width="800" height="100" class="box" rx="4"/>
+  <text x="450" y="185" text-anchor="middle" class="label">os.vibe_engineering.execute()
+Input: {task: 'analyze'}
+Output: {route: 'opus'}
+Latency: 42ms</text>
+  <rect x="50" y="250" width="800" height="100" class="box" rx="4"/>
+  <text x="450" y="305" text-anchor="middle" class="label">  → os.context_adapter.execute()
+Input: {context: {...}}
+Output: {adapted: {...}}
+Latency: 15ms</text>
+  <rect x="50" y="370" width="800" height="100" class="box" rx="4"/>
+  <text x="450" y="425" text-anchor="middle" class="label">    → os.session_cache.execute()
+Input: {session_id: 'abc'}
+Output: {cache_hit: true}
+Latency: 2ms</text>
+  <text x="50" y="550" class="small">Total execution: 42ms | Audit events: 3 | All logged to audit trail</text>
+  <text x="50" y="580" class="small">Timestamps: Each frame timestamped for observability</text>
+  <text x="50" y="610" class="small">Operator can replay entire stack from audit logs</text>
+</svg>

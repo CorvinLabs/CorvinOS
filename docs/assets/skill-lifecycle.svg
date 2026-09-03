@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="800" height="600" fill="white"/>
+  <text x="400" y="30" text-anchor="middle" class="title">Skill Lifecycle</text>
+  <rect x="50" y="100" width="120" height="60" class="box" rx="4"/>
+  <text x="110" y="135" text-anchor="middle" class="label">Register</text>
+  <rect x="220" y="100" width="120" height="60" class="box-green" rx="4"/>
+  <text x="280" y="135" text-anchor="middle" class="label">Execute</text>
+  <rect x="390" y="100" width="120" height="60" class="box-green" rx="4"/>
+  <text x="450" y="135" text-anchor="middle" class="label">Audit</text>
+  <rect x="560" y="100" width="120" height="60" class="box" rx="4"/>
+  <text x="620" y="135" text-anchor="middle" class="label">Feedback</text>
+  <path d="M 170 130 L 220 130" class="arrow-green"/>
+  <path d="M 340 130 L 390 130" class="arrow-green"/>
+  <path d="M 510 130 L 560 130" class="arrow-green"/>
+  <path d="M 620 160 Q 400 250 280 160" class="arrow-red"/>
+  <rect x="200" y="300" width="400" height="80" class="box-green" rx="4"/>
+  <text x="400" y="345" text-anchor="middle" class="label">Optimization: Learn from Feedback
+Adjust Config → Better Performance</text>
+  <path d="M 400 160 L 400 300" class="arrow-red"/>
+  <text x="50" y="450" class="small">Status: ✅ Executing → Audit Event Logged → Feedback Received</text>
+  <text x="50" y="480" class="small">Next: Optimizer adjusts configuration for Week 2</text>
+  <text x="50" y="510" class="small">Confidence trajectory: 0.60 (Week 1) → 0.72 (Week 2) → ...</text>
+</svg>

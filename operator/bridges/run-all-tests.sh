@@ -103,6 +103,7 @@ run "Python: lang_cli malformed-profile guard (2026-07-13)" bash -c 'PYTEST="${P
 run "Python: progress dedup"     python3 shared/test_adapter_progress.py >/dev/null   || fails=$((fails+1))
 run "Python: completion notify (bg done→messenger)" python3 shared/test_completion_notify.py >/dev/null || fails=$((fails+1))
 run "Python: completion E2E (done→outbox→daemon send)" python3 shared/test_completion_e2e.py >/dev/null || fails=$((fails+1))
+run "Python: voice-on-completion (ADR-0554 Ph0, ship-dark)" python3 shared/test_voice_completion.py >/dev/null || fails=$((fails+1))
 run "Python: /task producer (detached bg worker)"   python3 shared/test_bg_task.py >/dev/null || fails=$((fails+1))
 run "Python: /plugin-builder bridge integration (ADR-0253)" python3 shared/test_adapter_plugin_builder.py >/dev/null || fails=$((fails+1))
 run "Python: provenance marking (Art.50 §4 SSOT)"   python3 shared/test_provenance.py >/dev/null || fails=$((fails+1))

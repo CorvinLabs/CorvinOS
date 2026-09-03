@@ -2173,9 +2173,25 @@ def _spawn_detached_bg_worker(
                 json.dumps(_bg_profile)  # serialisability probe
             except Exception:  # noqa: BLE001
                 _bg_profile = None
+            # Session ISOLATION (ADR-0553 fix, live-proven 2026-09-03). The
+            # engine call inside the worker keys BOTH its `--resume` read and
+            # its session-id write off `_session_dir(channel, chat_key)`
+            # → `.main_session.json`. Passing the ORIGIN `chat_key` would make
+            # the detached worker resume the operator's LIVE transcript and
+            # overwrite its persisted session-id — injecting the worker's turn
+            # into the live conversation and racing the operator's next real
+            # turn (the exact collision proven on Discord). An isolated,
+            # per-TASK key gives the worker its own private session dir; keying
+            # by task_id (not the origin chat) keeps concurrent bg tasks from
+            # sharing one session dir, and stays stable across a supervised
+            # task's retries (same task_id) so a continuation resumes correctly.
+            # Origin `chat_key` stays in the spec for profile/debug only; it is
+            # NEVER used for the engine session again.
+            _engine_chat_key = f"bgtask::{chat_key}::{task_id}"
             _spec = {
                 "task_id": task_id, "instruction": instruction,
                 "channel": channel, "chat_key": chat_key, "sender": sender,
+                "engine_chat_key": _engine_chat_key,
                 "profile": _bg_profile, "msg_id": f"{msg_id}_selfdel",
                 "want_voice": bool(want_voice),
             }

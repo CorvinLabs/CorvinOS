@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="700" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Agentic Control Plane (ACP) Architecture</text>
+  <rect x="350" y="250" width="200" height="100" class="box" rx="4"/>
+  <text x="450" y="305" text-anchor="middle" class="label">Skills
+Registry
+v2.1</text>
+  <rect x="50" y="100" width="150" height="80" class="box-green" rx="4"/>
+  <text x="125" y="145" text-anchor="middle" class="label">API
+Layer</text>
+  <rect x="700" y="100" width="150" height="80" class="box-red" rx="4"/>
+  <text x="775" y="145" text-anchor="middle" class="label">Compliance
+Gates</text>
+  <rect x="50" y="450" width="150" height="80" class="box" rx="4"/>
+  <text x="125" y="495" text-anchor="middle" class="label">Audit
+Trail</text>
+  <rect x="700" y="450" width="150" height="80" class="box-green" rx="4"/>
+  <text x="775" y="495" text-anchor="middle" class="label">Learning
+Loop</text>
+  <rect x="400" y="550" width="100" height="80" class="box-red" rx="4"/>
+  <text x="450" y="595" text-anchor="middle" class="label">Meta-Skills
+(Locked)</text>
+  <path d="M 450 250 L 200 140" class="arrow"/>
+  <path d="M 550 250 L 700 140" class="arrow"/>
+  <path d="M 350 350 L 150 450" class="arrow"/>
+  <path d="M 550 350 L 750 450" class="arrow"/>
+  <path d="M 450 350 L 450 550" class="arrow"/>
+  <path d="M 125 350 L 125 450" class="arrow-green"/>
+  <path d="M 125 450 L 125 350" class="arrow-green"/>
+</svg>

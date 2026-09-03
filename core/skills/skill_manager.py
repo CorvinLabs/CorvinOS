@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import threading
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -36,6 +37,7 @@ class SkillRegistry:
     """Maintain registry of installed skills (tenant-scoped)."""
 
     def __init__(self, registry_path: Path, tenant_id: str = None):
+        self._lock = threading.Lock()
         self.registry_path = registry_path
         # Note: tenant_id passed for context; actual isolation via registry_path scoping
         self.registry_file = registry_path / 'registry.yaml'
@@ -64,6 +66,8 @@ class SkillRegistry:
             yaml.dump(registry, f)
 
     def get_skill_path(self, skill_id: str, version: Optional[str] = None) -> Optional[Path]:
+        resolved = (self.skill_dir / skill_id).resolve()
+        assert resolved.is_relative_to(self.skill_dir.resolve()), f"Path traversal attempt: {resolved} not in {self.skill_dir}"
         """Get skill path by ID and optional version."""
         import yaml
 
@@ -99,6 +103,7 @@ class SkillExecutor:
     }
 
     def __init__(self, skill_dir: Path):
+        self._lock = threading.Lock()
         self.skill_dir = skill_dir
         self.manifest = self._load_manifest()
 
@@ -174,6 +179,7 @@ class SkillManager:
     """Manage skill lifecycle."""
 
     def __init__(self, corvin_home: Path, tenant_id: str):
+        self._lock = threading.Lock()
         self.corvin_home = corvin_home
         self.tenant_id = tenant_id
         # ADR-0007: Tenant-scoped skills directory

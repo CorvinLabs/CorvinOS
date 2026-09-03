@@ -179,10 +179,10 @@ class SessionAutoStarter:
             if not split_decision.should_split:
                 return None
 
-        logger.info(
-            f"[SessionAutoStarter] Split trigger detected: task={task_id} "
-            f"trigger={split_decision.trigger.value} reason={split_decision.reason}"
-        )
+            logger.info(
+                f"[SessionAutoStarter] Split trigger detected: task={task_id} "
+                f"trigger={split_decision.trigger.value} reason={split_decision.reason}"
+            )
 
             # Create checkpoint
             try:

@@ -40,6 +40,19 @@ import logging
 import os
 from pathlib import Path
 
+
+def _plugin_package_absent(err: ImportError) -> bool:
+    """True only when the ``corvin_plugins`` package itself is not installed.
+
+    Shared predicate for the two shipped hosts (gateway + console standalone):
+    a ``ModuleNotFoundError`` naming exactly the top-level package is a stripped
+    install and is tolerated; anything else (missing submodule, renamed symbol,
+    an exception raised while importing the package) means the compliance
+    mechanism is present but broken, and the boot must fail closed.
+    """
+    return isinstance(err, ModuleNotFoundError) and err.name == "corvin_plugins"
+
+
 # CRITICAL: Set CORVIN_HOME BEFORE any imports that call corvin_home().
 # When the console runs as a service from within a repo checkout, _forge_paths.corvin_home()
 # would detect repo context and return repo/.corvin, breaking session storage symmetry.
@@ -266,7 +279,14 @@ def create_app() -> FastAPI:
         _plugins_loaded: list[str] = []
         try:
             from corvin_plugins.bootstrap import boot_platform as _boot_platform
-        except ImportError:
+        except ImportError as _pkg_err:
+            # ADR-0232/0233 — only an ABSENT package is tolerated here. A package
+            # that is present but broken (renamed submodule, missing symbol) is a
+            # broken mechanism and must fail the boot; treating every ImportError
+            # as "absent" turned the tripwire into a no-op once (2026-09-01, when
+            # bootstrap's provider imports broke and both hosts kept serving).
+            if not _plugin_package_absent(_pkg_err):
+                raise
             _boot_platform = None  # type: ignore[assignment]
             log.debug("corvin_plugins absent — compliance tripwires not available")
         if _boot_platform is not None:

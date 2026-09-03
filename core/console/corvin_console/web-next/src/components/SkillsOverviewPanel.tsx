@@ -9,7 +9,7 @@
  * - Click to view detailed metrics
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle, TrendingUp, Clock, AlertTriangle, Brain } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -78,6 +78,8 @@ export const SkillsOverviewPanel: React.FC = () => {
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
+    .then(d => ({ ...d, error: null }))
+    .catch(e => ({ error: e, data: null }))
     queryKey: ["skills-status"],
     queryFn: () => fetchSkillsStatus(),
     refetchInterval: 5000, // Refresh every 5 seconds
@@ -243,6 +245,8 @@ class SkillDetailsErrorBoundary extends React.Component<
 
 const SkillDetailsModal: React.FC<SkillDetailsModalProps> = ({ skillId, onClose }) => {
   const { data, isLoading, error } = useQuery({
+    .then(d => ({ ...d, error: null }))
+    .catch(e => ({ error: e, data: null }))
     queryKey: ["skill-metrics", skillId],
     queryFn: async () => {
       const response = await fetch(`/api/skills/${skillId}/metrics?tenant_id=_default`);
@@ -283,7 +287,7 @@ export default SkillsOverviewPanel;
 // TODO: Link to Corvin-Marketplace (ADR-0511)
 // For now: show skill source + install status
 
-interface MarketplaceAction {
+export interface MarketplaceAction {
   type: "installed" | "available" | "update-available";
   source: "bundled" | "marketplace" | "custom";
 }

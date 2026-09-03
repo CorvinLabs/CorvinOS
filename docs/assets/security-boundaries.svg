@@ -1,0 +1,5 @@
+<svg viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1000" height="400" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
+  <text x="500" y="200" font-size="22" font-weight="bold" text-anchor="middle" fill="#1976d2">Security Boundaries (Meta-Skills)</text>
+  <text x="500" y="240" font-size="12" text-anchor="middle" fill="#666">(SVG Diagram)</text>
+</svg>

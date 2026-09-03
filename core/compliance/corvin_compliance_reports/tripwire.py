@@ -24,13 +24,14 @@ Usage (boot):
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List
+from typing import Callable, Iterator, List
 
 _log = logging.getLogger("corvin.compliance.tripwire")
 
@@ -492,8 +493,13 @@ def core_audit_owns_the_trail() -> TripwireResult:
     name = "core_audit_owns_the_trail"
     try:
         from corvin_plugins.providers import audit_backend
-    except ImportError:
-        return TripwireResult(name, True, "plugin package not installed")
+    except ModuleNotFoundError as e:
+        if e.name == "corvin_plugins":
+            return TripwireResult(name, True, "plugin package not installed")
+        # Package present, provider module missing: broken mechanism, not absence.
+        return TripwireResult(name, False, f"audit provider module missing: {e}")
+    except ImportError as e:
+        return TripwireResult(name, False, f"audit provider import broken: {e}")
 
     # Single source of truth, shared with the provider's own test suite. NO inline
     # fallback list: a second copy here is exactly the drift this consolidation
