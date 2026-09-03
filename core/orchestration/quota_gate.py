@@ -65,7 +65,14 @@ def corvin_home() -> Path:
     the REAL operator's daily counters -- a `pytest tests/` run consumed the
     free tier's tool_forge budget for the day.
     """
-    return Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
+    # Canonical resolver first (honours CORVIN_HOME AND the repo-local .corvin
+    # the console actually reads); the env/home fallback only without forge.
+    try:
+        from forge.paths import corvin_home as _canonical  # type: ignore[import-not-found]
+
+        return Path(_canonical())
+    except Exception:  # noqa: BLE001 — stripped layout without forge
+        return Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
 
 
 def increment_and_check(

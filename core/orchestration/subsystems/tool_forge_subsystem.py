@@ -493,10 +493,11 @@ class ToolForgeSubsystem(Subsystem):
             logger.warning(f"ToolForgeSubsystem: Failed to inject ContextAPI: {e}")
             self.context_api = None
 
-        # ADR-0321: Initialize EventEmitter for learning event emission (Gap 1)
+        # ADR-0321: Initialize EventEmitter for learning event emission (Gap 1).
+        # An emitter injected BEFORE startup (tests, embedding hosts) is kept;
+        # startup used to overwrite it with the hub's/its own emitter.
         try:
-            # Try to get event_emitter from hub (if available)
-            if hasattr(hub, 'get_service') and callable(hub.get_service):
+            if self.event_emitter is None and hasattr(hub, 'get_service') and callable(hub.get_service):
                 self.event_emitter = hub.get_service('event_emitter')
                 if self.event_emitter:
                     logger.info("ToolForgeSubsystem: EventEmitter injected from hub")

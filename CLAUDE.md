@@ -732,7 +732,7 @@ Phase 3 builds the learning layer on top of Phase 2 (Skill System). It enables c
 **Tenant isolation:** All queries filtered by tenant_id (per GDPR Art. 5, 6, 32).
 
 **Compliance notes:**
-- Learning events are audit-logged and hash-chained (GDPR Art. 30, 32)
+- Learning events are audit-logged and hash-chained (GDPR Art. 30, 32) — audit-FIRST and fail-closed since 2026-09-03: `event_persistence.EventStore.write_event` refuses (RuntimeError) when the core chain write does not commit, and the store is tenant-bound (ADR-0563)
 - No PII in payloads (validation in downstream ADRs)
 - 90-day retention default (ADR-0319 will enforce)
 
@@ -749,7 +749,7 @@ Phase 3 builds the learning layer on top of Phase 2 (Skill System). It enables c
 - Don't emit untyped payloads (use frozen dataclasses)
 - Don't skip tenant_id isolation (every read/write must filter)
 - Don't weaken schema immutability (LearningEvent is frozen)
-- Don't bypass audit chain (write_event always attempts audit logging)
+- Don't bypass audit chain (write_event writes the core chain FIRST; no chain commit → no disk record)
 
 → Full spec: See Corvin-ADR repo for ADR-0314 (learning-infrastructure-event-schema)
 
