@@ -63,6 +63,17 @@ def boot_skills(
     Returns:
         The registered builtin Skill ids.
     """
+    # A re-boot in the same process replaces the global registry; stop the
+    # previous learning emitter so its worker thread does not linger.
+    try:
+        from .skill_registry_phase1 import _global_registry as _previous
+
+        prev_lb = getattr(_previous, "learning_backend", None)
+        if prev_lb is not None and hasattr(prev_lb, "emitter"):
+            prev_lb.emitter.stop()
+    except Exception:  # noqa: BLE001 — nothing to stop, or already stopped
+        pass
+
     audit_backend = CoreAuditBackend(tenant_id=tenant_id, audit_emit=audit_emit)
     if learning_backend is None and wire_learning:
         learning_backend = _default_learning_backend(tenant_id)

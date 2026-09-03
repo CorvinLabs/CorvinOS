@@ -278,3 +278,78 @@ class TestNoSilentFailures:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestIteration2Hardening:
+    """Round-2 attacks on the round-1 fixes (2026-09-03)."""
+
+    def setup_method(self):
+        self.audit = MockAuditBackend()
+        self.integration = initialize_integration(audit_backend=self.audit)
+
+    def test_lom_hash_refuses_paths_outside_repo(self):
+        """A LoM must never turn the registry into a hash oracle over arbitrary files."""
+        import hashlib
+        from core.skills.skill_registry_phase1 import SkillsRegistry
+
+        for lom in ("../../../../etc/passwd:x:1", "/etc/passwd:x:1", "core/../../etc/hostname:f:1"):
+            h = SkillsRegistry._compute_lom_hash(lom)
+            assert h == hashlib.sha256(lom.encode()).hexdigest(), lom  # label hash, not file content
+
+        real = SkillsRegistry._compute_lom_hash("core/skills/boot.py:boot_skills:L1")
+        assert real != hashlib.sha256(b"core/skills/boot.py:boot_skills:L1").hexdigest()
+
+    def test_hanging_skill_cannot_leak_unbounded_threads(self):
+        """Sustained timeouts are capped per skill; the cap is audited and counts as failures."""
+        import threading
+        from core.skills.skill_registry_phase1 import Skill, SkillMetadata, SkillOrigin, SkillsRegistry
+
+        release = threading.Event()
+
+        class Hang(Skill):
+            def __init__(self):
+                super().__init__(SkillMetadata(id="test.hang", name="h", description="", version="0",
+                                               origin=SkillOrigin.COMMUNITY, owner="t"))
+
+            def execute(self, input):
+                release.wait(30)
+                return {"ok": True}
+
+        reg = self.integration.registry
+        reg.register(Hang())
+        # Auto-disable (3 strikes, per tenant) would mask the cap for a single
+        # tenant; the cap is per skill across ALL tenants, so lift the strike
+        # threshold here to exercise it directly.
+        reg.AUTO_DISABLE_THRESHOLD = 10_000
+        statuses = [reg.execute("test.hang", {}, timeout_ms=10).status for _ in range(SkillsRegistry.MAX_IN_FLIGHT_PER_SKILL)]
+        assert statuses == ["timeout"] * SkillsRegistry.MAX_IN_FLIGHT_PER_SKILL
+        saturated = reg.execute("test.hang", {}, timeout_ms=10)
+        assert saturated.status == "error" and "saturated" in saturated.error_message
+        release.set()
+        # audited, not silent
+        assert any("saturated" in (e.get("error_message") or "") for e in self.audit.events)
+
+    def test_pii_scrub_covers_camel_case_keys_jwt_and_bearer(self):
+        from core.skills.skill_registry_phase1 import SkillsRegistry
+
+        out = SkillsRegistry._scrub_pii_from_output({
+            "apiKey": "x", "userEmail": "a@b.co", "Authorization": "Bearer abcdefghijklmnopqrstuvwxyz0123",
+            "note": "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+            "header": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123",
+            "inputTokens": 12, "attention_budget": 3,
+        })
+        assert out["apiKey"] == out["userEmail"] == out["Authorization"] == "[REDACTED_PII]"
+        assert "eyJ" not in out["note"]
+        assert "abcdefghijklmnop" not in out["header"]
+        assert out["inputTokens"] == 12 and out["attention_budget"] == 3
+
+    def test_double_boot_stops_previous_emitter(self):
+        from unittest.mock import Mock
+        from core.skills.boot import boot_skills
+        from core.skills.skill_registry_phase1 import get_registry
+
+        boot_skills("_default", audit_emit=lambda *_: None, wire_learning=False)
+        fake = Mock()
+        get_registry().learning_backend = Mock(emitter=fake)
+        boot_skills("_default", audit_emit=lambda *_: None, wire_learning=False)
+        fake.stop.assert_called_once()
