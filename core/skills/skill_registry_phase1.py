@@ -343,6 +343,38 @@ class SkillsRegistry:
 
         return True
 
+    def enable_skill(self, skill_id: str, tenant_id: Optional[str] = None) -> bool:
+        """Manually re-enable an auto-disabled Skill (FIX #6).
+
+        Args:
+            skill_id: Skill identifier
+            tenant_id: Tenant ID (for audit logging)
+
+        Returns:
+            True if re-enabled, False if not registered
+        """
+        if skill_id not in self._skills:
+            return False
+
+        if skill_id in self._auto_disabled:
+            with self._failure_lock:  # Thread-safe
+                self._auto_disabled.discard(skill_id)
+                self._failure_count[skill_id] = 0
+
+            # Audit: Skill manually re-enabled
+            if self._audit_backend:
+                audit_event = {
+                    "event_type": "skill_manually_enabled",
+                    "skill_id": skill_id,
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "tenant_id": tenant_id or "unknown",
+                }
+                self._audit_backend.write_event(audit_event)
+
+            return True
+
+        return True  # Already enabled
+
     def execute(
         self,
         skill_id: str,
@@ -528,17 +560,17 @@ class SkillsRegistry:
             logger.error(f"Failed to emit learning event: {e}")
 
     def _emit_audit_event(self, result: SkillExecutionResult) -> None:
-        """Emit audit event for Skill execution (PII-scrubbed, GDPR Art. 32).
+        """Emit audit event for Skill execution (PII-scrubbed, GDPR Art. 32, FIX #4).
 
         Compliance: GDPR Art. 30 (processing records) + Art. 32 (security)
         """
-        # Scrub PII from output before audit emission (fail-closed)
+        # Scrub PII from output and error messages before audit emission (fail-closed, FIX #4)
         scrubbed_result = SkillExecutionResult(
             skill_id=result.skill_id,
             status=result.status,
             output=self._scrub_pii_from_output(result.output) if result.output else None,
             execution_time_ms=result.execution_time_ms,
-            error_message=result.error_message,  # Errors may contain PII, but we keep them for debugging
+            error_message=self._scrub_pii_from_output(result.error_message) if result.error_message else None,
             timestamp=result.timestamp,
             lom=result.lom,
             lom_hash=result.lom_hash,
