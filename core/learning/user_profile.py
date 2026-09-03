@@ -230,6 +230,31 @@ class UserProfileManager:
             if temp_path.exists():
                 temp_path.unlink()
 
+    def delete_user_profiles(self, user_id: str, tenant_id: str) -> int:
+        """Delete user profile (GDPR Art. 17 — Right to Erasure).
+
+        Args:
+            user_id: User identifier
+            tenant_id: Tenant identifier
+
+        Returns:
+            1 if deleted, 0 if not found (idempotent)
+
+        Raises:
+            ValueError: If user_id or tenant_id is missing
+        """
+        if not user_id or not tenant_id:
+            raise ValueError("user_id and tenant_id required")
+
+        path = self._get_profile_path(user_id, tenant_id)
+        if path.exists():
+            path.unlink()  # Delete file
+            print(f"[INFO] Deleted profile for user {user_id} in tenant {tenant_id}")
+            return 1
+        else:
+            print(f"[INFO] Profile not found for user {user_id} in tenant {tenant_id}")
+            return 0
+
     def get_profile(self, user_id: str, tenant_id: str) -> UserProfile:
         """Get user profile, loading from disk if needed.
 

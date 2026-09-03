@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="1000" height="600" fill="white"/>
+  <text x="500" y="30" text-anchor="middle" class="title">Feature Flags Era → Skills Era Transformation</text>
+  <text x="100" y="80" class="label">❌ Feature Flags Era (Static)</text>
+  <rect x="50" y="120" width="350" height="150" class="box-red" rx="4"/>
+  <text x="225" y="200" text-anchor="middle" class="label">config.json
+
+if FLAGS.vibe_engineering:
+  load_vibe()
+if FLAGS.skills:
+  load_skills()
+...</text>
+  <text x="50" y="320" class="small">Problems:</text>
+  <text x="70" y="350" class="small">• Hardcoded, monolithic</text>
+  <text x="70" y="380" class="small">• No versioning</text>
+  <text x="70" y="410" class="small">• No learning feedback</text>
+  <text x="70" y="440" class="small">• Audit: Hidden logic</text>
+  <text x="70" y="470" class="small">• Scale: Feature creep</text>
+  <path d="M 400 300 L 550 300" class="arrow-green" stroke-width="3"/>
+  <text x="450" y="280" class="small">Migrate</text>
+  <text x="620" y="80" class="label">✅ Skills Era (Dynamic)</text>
+  <rect x="600" y="120" width="350" height="150" class="box-green" rx="4"/>
+  <text x="775" y="200" text-anchor="middle" class="label">Skills Registry
+
+os.vibe_engineering v1.2
+os.delegation_router v1.0
+os.context_adapter v2.1
+...</text>
+  <text x="600" y="320" class="small">Benefits:</text>
+  <text x="620" y="350" class="small">• Dynamic, composable</text>
+  <text x="620" y="380" class="small">• Full versioning</text>
+  <text x="620" y="410" class="small">• Learning feedback loop</text>
+  <text x="620" y="440" class="small">• Audit: Every decision</text>
+  <text x="620" y="470" class="small">• Scale: Plugin ecosystem</text>
+</svg>

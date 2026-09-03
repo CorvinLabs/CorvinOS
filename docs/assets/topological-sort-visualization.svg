@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="600" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">DAG Topological Sort (Execution Order)</text>
+  <text x="50" y="80" class="label">Dependency Graph:</text>
+  <circle cx="150" cy="150" r="40" fill="#10B981" opacity="0.3" stroke="#10B981" stroke-width="2"/>
+  <text x="120" y="155" class="title">1: context_adapter</text>
+  <circle cx="450" cy="150" r="40" fill="#10B981" opacity="0.3" stroke="#10B981" stroke-width="2"/>
+  <text x="420" y="155" class="title">2: memory_engine</text>
+  <circle cx="750" cy="150" r="40" fill="#10B981" opacity="0.3" stroke="#10B981" stroke-width="2"/>
+  <text x="720" y="155" class="title">3: plugin_loader</text>
+  <circle cx="150" cy="350" r="40" fill="#3B82F6" opacity="0.3" stroke="#3B82F6" stroke-width="2"/>
+  <text x="120" y="355" class="title">4: session_cache</text>
+  <circle cx="450" cy="350" r="40" fill="#3B82F6" opacity="0.3" stroke="#3B82F6" stroke-width="2"/>
+  <text x="420" y="355" class="title">5: audit_emitter</text>
+  <circle cx="750" cy="350" r="40" fill="#3B82F6" opacity="0.3" stroke="#3B82F6" stroke-width="2"/>
+  <text x="720" y="355" class="title">6: vibe_engineering</text>
+  <path d="M 190 150 L 410 150" class="arrow"/>
+  <path d="M 490 150 L 710 150" class="arrow"/>
+  <path d="M 150 190 L 150 310" class="arrow-green"/>
+  <path d="M 450 190 L 450 310" class="arrow-green"/>
+  <path d="M 750 190 L 750 310" class="arrow-green"/>
+  <text x="50" y="500" class="small">Execution: 1 → 2 → 3 → 4 → 5 → 6 (respects all dependencies)</text>
+  <text x="50" y="530" class="small">If any node fails: Stop, no nodes after it execute (fail-closed)</text>
+</svg>

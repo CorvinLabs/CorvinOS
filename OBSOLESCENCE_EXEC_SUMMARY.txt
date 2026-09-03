@@ -1,0 +1,342 @@
+================================================================================
+CORVINOS OBSOLESCENCE ANALYSIS — EXECUTIVE SUMMARY
+ACP Vision (Skills 2.0 as Unified Control Plane)
+2026-09-01
+================================================================================
+
+SCOPE
+─────────────────────────────────────────────────────────────────────────────
+Systematic audit of CorvinOS components that become OBSOLETE under Skills 2.0
+control plane architecture (ACP), compared to current Phase 2/3 systems.
+
+FINDINGS SUMMARY
+─────────────────────────────────────────────────────────────────────────────
+
+Total Obsolete Code: ~57,300 lines across 205+ files
+
+BREAKDOWN BY CATEGORY:
+
+1. Feature Flags (REMOVE)
+   ├─ Lines: 4,921 lines
+   ├─ Files: 20 (core + CLI + tests + config)
+   ├─ Phase: 1 (Weeks 1–4)
+   └─ Rationale: Non-versioned, doesn't support learning/feedback loops
+                 → Replaced by Skill registry enable/disable
+
+2. Plugin System (MIGRATE)
+   ├─ Lines: ~50,000 lines
+   ├─ Files: 180+ (core, tests, sandbox, marketplace)
+   ├─ Phase: 2b–3 (Weeks 11–24)
+   └─ Rationale: In-process, not audit-first, no versioning
+                 → Replaced by sealed-module Skills with audit trail
+
+3. Hardcoded L-Layer Logic (EXTRACT → SKILLS)
+   ├─ Lines: ~5,500 lines
+   ├─ Files: 12 (routing, context, workflow, memory, flow-guard)
+   ├─ Phase: 2a–3a (Weeks 5–24)
+   └─ Rationale: Hardcoded, non-learnable, not versioned
+                 → Each L-layer becomes a versioned Skill:
+                    - L5 → os.delegation_router
+                    - L10 → os.context_adapter
+                    - L22 → os.workflow_optimizer
+                    - L28 → os.memory_recall
+                    - L34 → os.flow_guard
+
+4. Manual Wiring in app.py (REFACTOR)
+   ├─ Lines: ~8,500 lines
+   ├─ Files: 51 (1 app.py + ~50 route modules)
+   ├─ Phase: 2c (Weeks 19–24)
+   └─ Rationale: Hardcoded route imports violate dynamic discovery
+                 → Routes discovered from Skill manifests at runtime
+
+5. Admin CLI Tools (CONSOLIDATE)
+   ├─ Lines: ~2,400+ lines
+   ├─ Files: 5 (flag_commands, plugin_cmd, plugin_runtime_cmd, admin routes)
+   ├─ Phase: 1–2 (Weeks 1–8)
+   └─ Rationale: Three separate CLI systems (flags, plugins, runtime)
+                 → Single unified "corvin skills" CLI
+
+6. Session State + Context Snapshots (AUDIT-WRAP)
+   ├─ Lines: 6,000 lines (NOT deleted, just enhanced)
+   ├─ Files: 28 (session manager, context api, memory coordinator)
+   ├─ Phase: 2a (Weeks 5–10)
+   └─ Rationale: State exists but not audited
+                 → Add audit events (keep logic, wrap with logging)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+3-PHASE IMPLEMENTATION ROADMAP (24 weeks, 6 months)
+
+PHASE 1: Feature Flags Dead (Weeks 1–4) — LOW RISK
+─────────────────────────────────────────────────────
+Effort: ~40 hours | Complexity: LOW | Risk: LOW | Blocks: None
+
+✓ Create backward-compat shim (FeatureFlagLegacyAdapter)
+✓ Implement new "corvin skills" CLI (replaces "corvin flag")
+✓ Update admin routes to use Skill registry
+✓ Add migration script for operators
+✓ Achieve <5% legacy traffic by end of phase
+
+Deliverables:
+  - FeatureFlagLegacyAdapter (300 lines)
+  - Skill-based admin API (100 lines)
+  - corvin skills CLI (200 lines)
+  - Tests (300+ lines)
+  - Operator manual + migration script
+
+Success Metrics:
+  ✅ All flag calls proxied through shim
+  ✅ New CLI works end-to-end
+  ✅ <5% legacy traffic (week 4)
+  ✅ Zero audit trail breakage
+  ✅ >90% test coverage maintained
+
+PHASE 2a: Skill Infrastructure (Weeks 5–10) — MEDIUM RISK
+─────────────────────────────────────────────────────────
+Effort: ~120 hours | Complexity: MEDIUM | Risk: MEDIUM
+Blocks: ADR-0533, ADR-0534 (must be approved)
+
+✓ Build Skill manifest schema + registry (ADR-0533)
+✓ Implement Skill execution engine + DAG composition
+✓ Extract L5 routing → os.delegation_router Skill
+✓ Extract L10 context → os.context_adapter Skill
+✓ Wire ADR-0314 learning loop into Skill feedback
+✓ Add audit events to session state + context snapshots
+
+Deliverables:
+  - Skill manifest schema (400 lines)
+  - Skill registry (500 lines)
+  - Skill runtime (700 lines)
+  - os.delegation_router Skill (300 lines)
+  - os.context_adapter Skill (500 lines)
+  - Learning loop integration (400 lines)
+  - Tests (2,000+ lines)
+
+Success Metrics:
+  ✅ 45 E2E + 30 adversarial tests passing
+  ✅ L5 + L10 fully extracted to Skills
+  ✅ Every decision audited + hash-chained
+  ✅ <50ms skill execution overhead
+  ✅ ADRs 0533/0534 approved
+
+PHASE 2b: Plugin Migration (Weeks 11–18) — MEDIUM-HIGH RISK
+──────────────────────────────────────────────────────────
+Effort: ~240 hours | Complexity: MEDIUM | Risk: MEDIUM
+Blocks: Phase 2a complete + ADR-0535
+
+✓ Analyze + prioritize top 10 plugins by usage
+✓ Migrate plugins to Skills (1–2 per week)
+✓ Build backward-compat shim (PluginToSkillAdapter)
+✓ Achieve <5% legacy plugin traffic by end of phase
+✓ Canary rollout (10% → 50% → 100% users)
+
+Deliverables:
+  - Plugin analysis + prioritization
+  - 10 plugin → Skill migrations
+  - PluginToSkillAdapter shim (400 lines)
+  - Integration tests (1,500+ lines)
+  - Canary rollout plan
+
+Success Metrics:
+  ✅ Top 10 plugins migrated
+  ✅ 25 E2E tests per plugin
+  ✅ Backward-compat shim passes integration tests
+  ✅ <5% legacy plugin traffic
+  ✅ Zero audit trail breakage
+
+PHASE 3: Final Decommission (Weeks 19–24) — HIGH RISK
+───────────────────────────────────────────────────────
+Effort: ~160 hours | Complexity: HIGH | Risk: HIGH | Blocks: Phase 2 complete
+
+✓ Migrate remaining plugins
+✓ Extract L22 (workflow) → os.workflow_optimizer
+✓ Extract L28 (memory) → os.memory_recall
+✓ Extract L34 (data-flow) → os.flow_guard
+✓ Refactor app.py to use Skill-based route loader
+✓ Delete backward-compat shims
+✓ Delete 52,000+ lines of dead code
+✓ Update all layer documentation
+
+Deliverables:
+  - Remaining plugin migrations
+  - L22/L28/L34 Skill extractions
+  - Skill-based route loader (200 lines)
+  - Admin CLI consolidation (1,000 lines)
+  - Documentation updates
+  - Full test suite (>95% coverage)
+
+Success Metrics:
+  ✅ 52,000+ lines of dead code removed
+  ✅ All L-layers now Skills (5 total)
+  ✅ Zero feature flag references
+  ✅ Old plugin system deleted
+  ✅ >95% test coverage maintained
+  ✅ <50ms skill overhead measured
+
+═══════════════════════════════════════════════════════════════════════════════
+
+RISK & MITIGATION
+
+RISK                              LIKELIHOOD   IMPACT   MITIGATION
+────────────────────────────────────────────────────────────────────────────
+Plugin migration breaks deploys   MEDIUM       HIGH     - Backward-compat shim
+                                                        - Phased canary rollout
+                                                        - Blue-green deployment
+
+Skill runtime has bugs            MEDIUM       HIGH     - 45+ E2E tests
+                                                        - 30+ adversarial tests
+                                                        - Manual review first 3
+
+Feature flag removal breaks       LOW          MEDIUM   - Migration script
+config                                                  - Auto-converter tool
+                                                        - Operator manual
+
+L-layer logic changes behavior    MEDIUM       HIGH     - A/B test old vs. new
+                                                        - Gradual traffic shift
+                                                        - Telemetry + feedback
+
+Audit performance regression      LOW          HIGH     - Async event queuing
+                                                        - Batch disk writes
+                                                        - Benchmark in Phase 1
+
+Large-scale deletion breaks       HIGH         HIGH     - Extensive test suite
+unforeseen dependencies                                 - Phased rollout
+                                                        - Rollback plan ready
+
+═══════════════════════════════════════════════════════════════════════════════
+
+KEY INSIGHTS FROM ANALYSIS
+
+1. AUDIT-FIRST INFRASTRUCTURE ALREADY EXISTS
+   ✓ All admin mutations already logged
+   ✓ Plugin enable/disable compliance-protected
+   ✓ Config changes hash-verified
+   → Phase 1 cleanup has ZERO audit risk
+
+2. TEST COVERAGE IS EXCELLENT
+   ✓ 15+ feature flag tests
+   ✓ 50+ plugin tests
+   ✓ 118 test files covering admin functionality
+   → High test coverage allows aggressive refactoring
+
+3. SKILLS 2.0 PARTIALLY IMPLEMENTED
+   ✓ Skill system structure exists (core/skills/)
+   ✓ os.delegation_router already mocked in tests
+   ✓ Skill-Forge plugin builder already present
+   → Phases 2a–3 likely faster than estimated (compress by 2–4 weeks)
+
+4. ADMIN CONSOLIDATION IS CLEAN
+   ✓ All admin routes in ONE module (admin.py, 914 lines)
+   ✓ Three separate CLI files can merge into one
+   → Phase 1 is a simple consolidation, not a large refactor
+
+═══════════════════════════════════════════════════════════════════════════════
+
+DELIVERABLES (GENERATED)
+
+1. OBSOLESCENCE_ANALYSIS_2026-09-01.md
+   ├─ Full 1,500+ line analysis document
+   ├─ Category-by-category breakdown
+   ├─ 6 complete appendices
+   └─ Updated findings from Explore-Agent
+
+2. OBSOLESCENCE_ANALYSIS_SUMMARY.csv
+   ├─ 45-row table (component × phase × status)
+   ├─ Line counts + file counts
+   ├─ Replacement mapping
+   └─ Importable to Excel/Google Sheets
+
+3. DEPRECATION_ROADMAP.md
+   ├─ 24-week implementation plan (all 3 phases)
+   ├─ Week-by-week breakdown (what ships each week)
+   ├─ Risk matrix + mitigation
+   ├─ Success criteria per phase
+   ├─ Rollback plan
+   └─ Effort estimates (total: ~560 hours)
+
+4. OBSOLESCENCE_EXEC_SUMMARY.txt
+   ├─ This document
+   ├─ 2-page executive overview
+   ├─ Key insights + deliverables
+   └─ Next steps
+
+═══════════════════════════════════════════════════════════════════════════════
+
+NEXT STEPS
+
+1. [IMMEDIATE] Present analysis to architecture review
+   └─ Share OBSOLESCENCE_ANALYSIS_2026-09-01.md (full doc)
+   └─ Share DEPRECATION_ROADMAP.md (implementation timeline)
+
+2. [WEEK 1] Gate on ADR approval
+   └─ ADR-0532: OS-Skills Overview + Phases
+   └─ ADR-0533: Skill Manifest Schema
+   └─ ADR-0534: Learning Feedback Integration
+   └─ ADR-0535: Skill Composition & Dependencies
+   └─ All must be APPROVED before Phases 2a–3 start
+
+3. [WEEK 1–4] Kick off Phase 1 (Feature Flags)
+   └─ Build FeatureFlagLegacyAdapter
+   └─ Implement new "corvin skills" CLI
+   └─ No blocker; can start immediately in parallel branch
+
+4. [WEEK 5–10] Kick off Phase 2a (Skill Infrastructure)
+   └─ Requires Phase 1 + ADR approval
+   └─ Highest risk; needs experienced team
+   └─ Assign 2–3 engineers
+
+5. [WEEK 11–24] Phases 2b–3 (Plugin Migration + Cleanup)
+   └─ Repetitive work; can run in parallel
+   └─ Assign dedicated migration team
+
+═══════════════════════════════════════════════════════════════════════════════
+
+ESTIMATED EFFORT & TIMELINE
+
+Phase 1 (Feature Flags):        40 hours    4 weeks    LOW risk
+Phase 2a (Skill Core):          120 hours   6 weeks    MEDIUM risk
+Phase 2b (Plugin Migration):    240 hours   8 weeks    MEDIUM risk
+Phase 3 (Final Cleanup):        160 hours   6 weeks    HIGH risk
+                               ──────────   ─────────
+TOTAL:                          560 hours   24 weeks   (6 months)
+
+Team size: 2–3 engineers + QA (not full-time; can overlap with other work)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+COMPLIANCE & SECURITY NOTES
+
+✓ Audit-first architecture maintained throughout
+✓ No compliance mechanisms weaken (audit, consent, disclosure, path-gate always-on)
+✓ Hash-chain integrity preserved in every phase
+✓ Tenant isolation enforced (no cross-tenant data leakage)
+✓ Learning feedback loop is non-bypassed (operator can't opt-out)
+✓ All deprecations transparent (changelog + operator manual provided)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+SUCCESS DEFINITION (End of Phase 3, Week 24)
+
+✅ 52,000+ lines of dead code removed
+✅ All L-layers extracted to versioned Skills (5 Skills live)
+✅ Feature flags completely gone (zero references)
+✅ Old plugin system deleted
+✅ Manual wiring eliminated (routes discovered from Skill manifests)
+✅ >95% test coverage maintained
+✅ <50ms Skill overhead per decision (measured)
+✅ Full audit trail coverage (every decision logged + hash-chained)
+✅ Operator upgrade path smooth (migration script + manual provided)
+✅ Skills ecosystem v1.0 stable & production-ready
+
+═══════════════════════════════════════════════════════════════════════════════
+
+PREPARED BY: Claude Code (Haiku 4.5)
+DATE: 2026-09-01
+STATUS: READY FOR ARCHITECTURE REVIEW
+
+For detailed analysis, see:
+  → OBSOLESCENCE_ANALYSIS_2026-09-01.md (1,500+ lines)
+  → DEPRECATION_ROADMAP.md (1,200+ lines)
+  → OBSOLESCENCE_ANALYSIS_SUMMARY.csv (45 rows)
+
+================================================================================

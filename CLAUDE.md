@@ -1027,6 +1027,7 @@ corvin audit trace skill os.delegation_router --task=<task_id>
 # Output: every event in the chain (config → execute → feedback → optimize)
 ```
 
-→ Full audit spec: See ADR-0232/0233 (boot tripwire, chain integrity), ADR-0537 (audit event schema), RFC 3161 (TSA timestamping)
-→ Integration: Every new ADR MUST define its audit events (required frontmatter field: `audit_events`)
+→ Full audit spec: See ADR-0232/0233 (boot tripwire, chain integrity), ADR-0537 (audit event schema + LoM cryptographic binding), RFC 3161 (TSA timestamping)
+→ LoM Binding (Gap 2, MEDIUM): ADR-0537 binds each LoM cryptographically to source code via SHA256 (lom_hash field), preventing spoofing attacks
+→ Integration: Every new ADR MUST define its audit events (required frontmatter field: `audit_events`); every audit event carrying LoM must include lom_hash for verification
 

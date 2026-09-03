@@ -129,20 +129,29 @@ GATED_FLAGS: tuple[str, ...] = (
 
 
 def _read_flags(tenant_id: str) -> dict[str, bool]:
-    """Read the gated flags for a tenant. Every failure mode (module absent, flag
-    unregistered, overlay unreadable) resolves the flag to False — a panel gated on
-    an unreadable flag stays hidden, which is the safe direction."""
+    """Read the gated flags for a tenant via os.capabilities Skill.
+
+    Phase 1 k=2-5 refactoring: Uses Skill instead of feature_flags module.
+    Every failure mode (Skill unavailable, flag unregistered) resolves the flag to
+    False — a panel gated on an unreadable flag stays hidden, which is the safe direction.
+    """
     try:
-        from corvin_core.feature_flags import is_enabled  # type: ignore[import-not-found]
+        from core.skills.skill_registry_phase1 import get_registry
     except Exception:  # noqa: BLE001
         return {flag: False for flag in GATED_FLAGS}
-    out: dict[str, bool] = {}
-    for flag in GATED_FLAGS:
-        try:
-            out[flag] = bool(is_enabled(flag, tenant_id))
-        except Exception:  # noqa: BLE001 — an unreadable flag is an off flag
-            out[flag] = False
-    return out
+
+    try:
+        registry = get_registry()
+        result = registry.execute("os.capabilities", {
+            "tenant_id": tenant_id,
+            "gated_flags": list(GATED_FLAGS),
+        })
+
+        if result.status == "success":
+            return result.output.get("flags", {flag: False for flag in GATED_FLAGS})
+        return {flag: False for flag in GATED_FLAGS}
+    except Exception:  # noqa: BLE001 — Skill execution failure → all flags off
+        return {flag: False for flag in GATED_FLAGS}
 
 
 def _get_plugin_panels() -> list[dict]:

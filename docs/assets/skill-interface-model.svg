@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="800" height="600" fill="white"/>
+  <text x="400" y="30" text-anchor="middle" class="title">Skill Interface Model</text>
+  <rect x="50" y="100" width="180" height="300" class="box" rx="4"/>
+  <text x="140" y="255" text-anchor="middle" class="label">Input Dict:
+
+request: {
+  task: 'classify',
+  context: {...},
+  metadata: {...}
+}</text>
+  <rect x="320" y="150" width="160" height="200" class="box-green" rx="4"/>
+  <text x="400" y="255" text-anchor="middle" class="label">Skill
+.execute()
+
+Processing:
+- Parse input
+- Execute logic
+- Emit audit
+- Return result</text>
+  <rect x="570" y="100" width="180" height="300" class="box-green" rx="4"/>
+  <text x="660" y="255" text-anchor="middle" class="label">Output Dict:
+
+result: {
+  route: 'opus',
+  confidence: 0.87,
+  lom: 'L237',
+  audit_event: {...}
+}</text>
+  <path d="M 230 250 L 320 250" class="arrow"/>
+  <path d="M 480 250 L 570 250" class="arrow-green"/>
+  <text x="50" y="450" class="small">Properties: id, version, origin, boot_layer, dependencies, config</text>
+  <text x="50" y="480" class="small">Returns: Immutable output tuple (result, audit_event)</text>
+</svg>

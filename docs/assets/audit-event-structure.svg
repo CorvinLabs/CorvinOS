@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="800" height="600" fill="white"/>
+  <text x="400" y="30" text-anchor="middle" class="title">Audit Event JSON Structure</text>
+  <text x="50" y="80" class="label">{</text>
+  <text x="70" y="110" class="small">"tenant_id": "default",</text>
+  <text x="70" y="140" class="small">"timestamp": "2026-09-02T12:34:56Z",</text>
+  <text x="70" y="170" class="small">"event_type": "skill_executed",</text>
+  <text x="70" y="200" class="small">"skill_id": "os.delegation_router",</text>
+  <text x="70" y="230" class="small">"input": {...},</text>
+  <text x="70" y="260" class="small">"output": {...},</text>
+  <text x="70" y="290" class="small">"lom": "L237:delegate.py",  ← Line of Moral Responsibility</text>
+  <text x="70" y="320" class="small">"lom_hash": "0x1a2b3c...",  ← Cryptographic binding</text>
+  <text x="70" y="350" class="small">"hash": "sha256(0xabc...)",  ← This event hash</text>
+  <text x="70" y="380" class="small">"prev_hash": "sha256(0xdef...)"  ← Previous event</text>
+  <text x="50" y="410" class="label">}</text>
+  <text x="50" y="480" class="small">✅ Required: tenant_id, timestamp, event_type, hash, prev_hash</text>
+  <text x="50" y="510" class="small">✅ Immutable: Append-only, no updates, no deletes</text>
+  <text x="50" y="540" class="small">✅ Chained: Every event links to previous (proof of order)</text>
+</svg>

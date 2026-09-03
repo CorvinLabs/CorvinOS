@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <defs>
+    <style>
+      .box { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+      .box-green { fill: #F3F4F6; stroke: #10B981; stroke-width: 2; }
+      .box-red { fill: #F3F4F6; stroke: #EF4444; stroke-width: 2; }
+      .title { font-size: 18px; font-weight: bold; fill: #111827; font-family: sans-serif; }
+      .label { font-size: 14px; fill: #111827; font-family: sans-serif; }
+      .small { font-size: 12px; fill: #6B7280; font-family: sans-serif; }
+      .arrow { stroke: #3B82F6; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-green { stroke: #10B981; stroke-width: 2; fill: none; marker-end: url(#arrowhead-green); }
+      .arrow-red { stroke: #EF4444; stroke-width: 2; fill: none; marker-end: url(#arrowhead-red); }
+      line { stroke: #6B7280; stroke-width: 1; }
+      circle { fill: #F3F4F6; stroke: #3B82F6; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3B82F6" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10B981" />
+    </marker>
+    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#EF4444" />
+    </marker>
+  </defs>
+  <rect width="900" height="700" fill="white"/>
+  <text x="450" y="30" text-anchor="middle" class="title">Zero-Downtime Skill Update (v0.2 → v1.0)</text>
+  <rect x="50" y="100" width="200" height="150" class="box" rx="4"/>
+  <text x="150" y="180" text-anchor="middle" class="label">v0.2 (Old)
+
+os.delegation_router
+v0.2
+
+Serving 100% traffic</text>
+  <rect x="650" y="100" width="200" height="150" class="box-green" rx="4"/>
+  <text x="750" y="180" text-anchor="middle" class="label">v1.0 (New)
+
+os.delegation_router
+v1.0
+
+Loading in parallel</text>
+  <text x="350" y="300" class="label">Traffic Shift (No downtime)</text>
+  <path d="M 150 250 L 300 300" class="arrow"/>
+  <text x="325" y="280" class="small">Requests: v0.2</text>
+  <path d="M 700 250 L 550 300" class="arrow-green"/>
+  <text x="525" y="280" class="small">Requests: v1.0</text>
+  <text x="50" y="450" class="label">Timeline:</text>
+  <text x="50" y="490" class="small">t=0s:    v1.0 code loaded, config validated</text>
+  <text x="50" y="520" class="small">t=0.5s: Traffic split: 50% old, 50% new (canary phase)</text>
+  <text x="50" y="550" class="small">t=3s:   All requests → v1.0 (full rollover)</text>
+  <text x="50" y="580" class="small">t=5s:   v0.2 kept as rollback snapshot</text>
+  <text x="50" y="610" class="small">Downtime: 0ms ✅</text>
+</svg>

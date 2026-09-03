@@ -49,12 +49,18 @@ _cancelled = threading.Event()
 
 
 def _cancel_chat(chat_key):
+    _cf = os.environ.get("STUB_CANCEL_FILE")
+    if _cf:
+        open(_cf, "w", encoding="utf-8").write(str(chat_key))
     _cancelled.set()
 
 
 def call_claude_streaming(prompt, channel, chat_key, on_status=None,
                           profile=None, msg_id=None, sender=""):
     open(os.environ["STUB_PROMPT_FILE"], "w", encoding="utf-8").write(prompt)
+    _kf = os.environ.get("STUB_CHATKEY_FILE")
+    if _kf:
+        open(_kf, "w", encoding="utf-8").write(str(chat_key))
     if on_status is not None:
         for i in range(3):
             on_status(f"stub step {i}")
@@ -98,6 +104,8 @@ def _run_worker(sandbox, spec: dict, *, mode="ok", timeout_s="1800",
         "CORVIN_HOME": str(sandbox["home"]),
         "STUB_MODE": mode,
         "STUB_PROMPT_FILE": str(sandbox["tmp"] / "prompt.txt"),
+        "STUB_CHATKEY_FILE": str(sandbox["tmp"] / "chatkey.txt"),
+        "STUB_CANCEL_FILE": str(sandbox["tmp"] / "cancel.txt"),
         "CORVIN_BG_TASK_TIMEOUT": timeout_s,
         "CORVIN_BG_TASK_HEARTBEAT": heartbeat,
         "TP_MIN_INTERVAL": "0",
@@ -123,6 +131,56 @@ def _prepare(sandbox, task_id="bgt_e2e", *, supervised=True, progress=True):
     return {"task_id": task_id, "instruction": "do the long thing",
             "channel": "discord", "chat_key": "123456789012345678",
             "sender": "uid42"}
+
+
+# ── ADR-0553 fix: session isolation (live-proven 2026-09-03) ──────────────
+#
+# The detached worker MUST run the engine under its own worker-private session,
+# never the operator's live chat. call_claude_streaming keys BOTH its --resume
+# read and its session-id write off _session_dir(channel, chat_key), so passing
+# the ORIGIN chat_key resumed + overwrote the live transcript. These tests drive
+# the REAL worker and assert the key it actually hands the engine. They are the
+# mutation guard: revert the worker to `chat_key=chat_key` and they fail.
+
+
+def test_worker_runs_engine_under_isolated_session_not_origin_chat(sandbox):
+    spec = _prepare(sandbox, supervised=False, progress=False)
+    origin = spec["chat_key"]
+    spec = dict(spec, engine_chat_key=f"bgtask::{origin}::{spec['task_id']}")
+    _run_worker(sandbox, spec)
+    used = (sandbox["tmp"] / "chatkey.txt").read_text()
+    assert used != origin, (
+        "REGRESSION: worker ran the engine under the ORIGIN chat_key — it would "
+        "resume and overwrite the operator's live session (the exact bug)."
+    )
+    assert used == f"bgtask::{origin}::{spec['task_id']}"
+    assert used.startswith("bgtask::")
+
+
+def test_worker_isolates_even_when_spec_lacks_engine_chat_key(sandbox):
+    """Defense in depth: an OLD 0600 spec (pre-fix, no engine_chat_key) must
+    still be isolated by the worker's own fallback — never the origin."""
+    spec = _prepare(sandbox, supervised=False, progress=False)
+    origin = spec["chat_key"]
+    assert "engine_chat_key" not in spec
+    _run_worker(sandbox, spec)
+    used = (sandbox["tmp"] / "chatkey.txt").read_text()
+    assert used != origin
+    assert used.startswith("bgtask::")
+    assert spec["task_id"] in used
+
+
+def test_watchdog_cancels_the_isolated_session_not_the_origin(sandbox):
+    """The timeout watchdog must cancel the ISOLATED engine session; cancelling
+    the origin key would be a no-op that leaks the real engine subprocess past
+    the deadline."""
+    spec = _prepare(sandbox, supervised=False, progress=False)
+    origin = spec["chat_key"]
+    spec = dict(spec, engine_chat_key=f"bgtask::{origin}::{spec['task_id']}")
+    _run_worker(sandbox, spec, mode="hang", timeout_s="2", wait=90)
+    cancelled = (sandbox["tmp"] / "cancel.txt").read_text()
+    assert cancelled == f"bgtask::{origin}::{spec['task_id']}"
+    assert cancelled != origin
 
 
 # ── the happy path still works ────────────────────────────────────────────

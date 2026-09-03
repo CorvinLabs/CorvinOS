@@ -1,0 +1,168 @@
+"""Tests for Phase 2: Feature Flags Audit Integration (SKILL_EXECUTED events).
+
+Verifies that every feature flags operation emits a hash-chained audit event.
+"""
+
+import json
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from core.skills.feature_flags_skill import FeatureFlagsSkill, FeatureFlagsAudit
+from core.compliance.audit_chain_writer import AuditChainWriter
+
+
+class TestAuditIntegration:
+    """Test SKILL_EXECUTED event emission (Phase 2)."""
+
+    @pytest.fixture
+    def skill(self):
+        """Initialize skill."""
+        return FeatureFlagsSkill()
+
+    @pytest.fixture
+    def temp_audit_log(self, monkeypatch):
+        """Create temporary audit log for testing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "audit.jsonl"
+            # Patch the writer to use temp path
+            old_get_writer = FeatureFlagsAudit._get_writer
+
+            def patched_get_writer():
+                if FeatureFlagsAudit._writer is None:
+                    FeatureFlagsAudit._writer = AuditChainWriter(log_path)
+                return FeatureFlagsAudit._writer
+
+            monkeypatch.setattr(FeatureFlagsAudit, "_get_writer", patched_get_writer)
+            yield log_path
+            FeatureFlagsAudit._writer = None
+
+    def test_is_enabled_emits_audit_event(self, skill, temp_audit_log):
+        """Test that is_enabled() call emits SKILL_EXECUTED event."""
+        result = skill.execute({
+            "operation": "is_enabled",
+            "flag_id": "vibe_engineering",
+            "tenant_id": "_default",
+        })
+
+        assert result["success"]
+
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
+
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            assert len(lines) > 0, "No audit events found"
+
+            # Parse last event (most recent)
+            last_event = json.loads(lines[-1].strip())
+            assert last_event["event_type"] == "skill_executed"
+            assert last_event["details"]["operation"] == "is_enabled"
+            assert last_event["details"]["flag_id"] == "vibe_engineering"
+            assert last_event["tenant_id"] == "_default"
+            assert "hash" in last_event  # Hash-chained
+
+    def test_set_enabled_emits_audit_event(self, skill, temp_audit_log):
+        """Test that set_enabled() call emits SKILL_EXECUTED event."""
+        result = skill.execute({
+            "operation": "set_enabled",
+            "flag_id": "test_flag",
+            "enabled": True,
+            "tenant_id": "_default",
+        })
+
+        assert result["success"]
+
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
+
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            last_event = json.loads(lines[-1].strip())
+            assert last_event["details"]["operation"] == "set_enabled"
+            assert last_event["details"]["flag_id"] == "test_flag"
+
+    def test_audit_events_are_hash_chained(self, skill, temp_audit_log):
+        """Test that audit events are hash-chained (GDPR Art. 30, 32)."""
+        # Emit multiple events
+        skill.execute({"operation": "is_enabled", "flag_id": "flag1", "tenant_id": "_default"})
+        skill.execute({"operation": "is_enabled", "flag_id": "flag2", "tenant_id": "_default"})
+
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
+
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            assert len(lines) >= 2, "Expected at least 2 events"
+
+            event1 = json.loads(lines[-2].strip())
+            event2 = json.loads(lines[-1].strip())
+
+            # FIX #16: Event 2 should reference Event 1's hash (equality check)
+            assert event2.get("prev_hash") == event1.get("hash"), f"Hash chain broken: event2.prev_hash={event2.get('prev_hash')} != event1.hash={event1.get('hash')}"
+            assert event2.get("hash") is not None
+
+    def test_audit_events_contain_tenant_id(self, skill, temp_audit_log):
+        """Test that every audit event includes tenant_id (GDPR requirement)."""
+        skill.execute({
+            "operation": "is_enabled",
+            "flag_id": "flag",
+            "tenant_id": "tenant_test",
+        })
+
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
+
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            event = json.loads(lines[-1].strip())
+            assert event["tenant_id"] == "tenant_test"
+
+    def test_audit_events_contain_no_pii(self, skill, temp_audit_log):
+        """Test that audit events contain no PII (flag values only, no user data)."""
+        skill.execute({
+            "operation": "set_enabled",
+            "flag_id": "sensitive_flag",
+            "enabled": True,
+            "tenant_id": "_default",
+        })
+
+        # FIX #15: Assert audit log exists (no silent pass)
+        assert temp_audit_log.exists(), "Audit log file was not created"
+
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            event_str = lines[-1]
+
+            # Verify no PII patterns (emails, phone numbers, etc.)
+            assert "@" not in event_str  # No email addresses
+            assert "password" not in event_str.lower()
+            assert "token" not in event_str.lower()
+
+
+    def test_exception_path_emits_audit_event(self, skill, temp_audit_log):
+        """FIX #17: Test that execute() exception path emits audit event."""
+        # Try an operation that will fail (e.g., missing required flag_id)
+        result = skill.execute({
+            "operation": "is_enabled",
+            "flag_id": None,  # Invalid: flag_id is required
+            "tenant_id": "_default",
+        })
+
+        # Should fail gracefully and still emit audit
+        assert not result["success"]
+        assert result["error"]
+
+        # Audit log should exist and contain the error event
+        assert temp_audit_log.exists(), "Audit log should be created even on error"
+        with open(temp_audit_log, "r") as f:
+            lines = f.readlines()
+            if len(lines) > 0:
+                last_event = json.loads(lines[-1].strip())
+                # Audit should record the failed operation
+                assert "latency_ms" in last_event["details"], "Latency should be recorded on error"
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

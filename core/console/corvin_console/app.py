@@ -102,6 +102,7 @@ from .routes import (
     marketplace as marketplace_route,
     marketplace_custom_repos as marketplace_custom_repos_route,
     learning as learning_route,
+    learning_dashboard as learning_dashboard_route,
     admin as admin_route,
     data_sources as data_sources_route,
     chain_dual_track as chain_dual_track_route,
@@ -175,6 +176,7 @@ router.include_router(tools.router, tags=["console-tools"])
 router.include_router(skills.router, tags=["console-skills"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
 router.include_router(learning_route.router, tags=["console-learning"])
+router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(memory.router, tags=["console-memory"])
 # Phase D — realtime SSE streams
 router.include_router(streams.router, tags=["console-streams"])
@@ -406,7 +408,7 @@ def headless_enabled(tenant_id: str | None = None) -> bool:
     """True when this process should serve the API without a browser UI.
 
     ADR-0241/0243 "API-only" deployment. Reading a *deployment* mode out of a
-    per-tenant flag is a deliberate compromise and worth naming: the SPA mount
+    per-tenant setting is a deliberate compromise and worth naming: the SPA mount
     is a property of the PROCESS, not of a tenant, so this is resolved once for
     the boot tenant and then applies process-wide. A second tenant on the same
     process does not get its own UI back.
@@ -415,7 +417,7 @@ def headless_enabled(tenant_id: str | None = None) -> bool:
     features to be toggleable from Console → Settings → Features, and an env
     kill-flag is exactly the shape this repo has ruled out elsewhere. If
     per-process configuration ever becomes a real requirement it needs its own
-    mechanism, not a second meaning for this flag.
+    mechanism, not a second meaning for this setting.
 
     Every failure mode resolves to False (= today's behaviour, UI mounted).
 
@@ -423,26 +425,34 @@ def headless_enabled(tenant_id: str | None = None) -> bool:
     for): ``corvinos run`` starts uvicorn with the ``create_app_headless`` factory,
     which calls ``set_headless_override(True)`` INSIDE the serving process before the
     app is built. That is not the rejected env-var kill-flag — it is the factory the
-    operator explicitly launched — and it takes precedence over the per-tenant flag
+    operator explicitly launched — and it takes precedence over the per-tenant setting
     so a headless launch never depends on tenant config being pre-set.
+
+    Phase 1 k=2-5 refactoring: Uses os.headless_mode Skill instead of feature flag.
     """
     if _HEADLESS_OVERRIDE is not None:
         return _HEADLESS_OVERRIDE
     try:
-        from .feature_flags import is_enabled
-    except Exception:  # noqa: BLE001 — no flag registry means no headless mode
+        from core.skills.skill_registry_phase1 import get_registry
+    except Exception:  # noqa: BLE001 — no Skills registry means no headless mode
         return False
     try:
         if tenant_id is None:
             from forge.tenants import current_tenant  # type: ignore[import-not-found]
 
             tenant_id = current_tenant()
-        return bool(is_enabled(HEADLESS_FLAG_ID, tenant_id))
-    except Exception:  # noqa: BLE001 — an unreadable flag is an off flag
+
+        registry = get_registry()
+        result = registry.execute("os.headless_mode", {"headless_enabled": False})
+
+        if result.status == "success":
+            return bool(result.output.get("headless_enabled", False))
+        return False
+    except Exception:  # noqa: BLE001 — an unreadable Skill is an off Skill
         import logging
 
         logging.getLogger(__name__).debug(
-            "%s could not be read — serving the UI as usual", HEADLESS_FLAG_ID
+            "os.headless_mode could not be read — serving the UI as usual"
         )
         return False
 
@@ -551,9 +561,8 @@ def create_app() -> FastAPI:
     """Create the Console FastAPI app with all routers mounted."""
     # ADR-0511: Configure marketplace index (JSON source of truth)
     try:
-        from .routes.marketplace import set_marketplace_index_path
-        marketplace_index_path = Path.cwd() / "operator" / "marketplace" / "index" / "plugins.json"
-        set_marketplace_index_path(marketplace_index_path)
+        from .routes.marketplace import resolve_index_path, set_marketplace_index_path
+        set_marketplace_index_path(resolve_index_path())
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f"Failed to set marketplace index path: {e}")

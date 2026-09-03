@@ -3,12 +3,48 @@
 import json
 import shutil
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List, Optional, Dict
 from dataclasses import dataclass
 from enum import Enum
 
 from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002
+
+
+class UnsafeTarMember(ValueError):
+    """A tarball member would escape the extraction directory or is not a plain file/dir.
+
+    Raised BEFORE any extraction happens (D-F1 tar-slip fix): the importer
+    never partially extracts a tarball that contains an unsafe member.
+    """
+
+
+def check_tar_members(tar: tarfile.TarFile) -> None:
+    """Reject tar members that could escape or alias outside the target dir.
+
+    Fail-closed pre-extraction gate (D-F1). Rejects, for every member:
+    - absolute paths (``/etc/passwd``) and drive-rooted paths
+    - any ``..`` path component
+    - symlinks and hardlinks (their targets are outside our control)
+    - device nodes and FIFOs (never legitimate skill content)
+
+    ``tar.extractall(filter="data")`` is applied as a second, independent
+    layer; this explicit check exists so a rejection is reported as a
+    clear ``UnsafeTarMember`` and so nothing is extracted at all.
+    """
+    for member in tar.getmembers():
+        name = member.name
+        pure = PurePosixPath(name)
+        if pure.is_absolute() or name.startswith(("/", "\\")) or (len(name) > 1 and name[1] == ":"):
+            raise UnsafeTarMember(f"absolute path in tarball: {name!r}")
+        if ".." in pure.parts:
+            raise UnsafeTarMember(f"path traversal in tarball: {name!r}")
+        if member.issym() or member.islnk():
+            raise UnsafeTarMember(f"link member in tarball (not allowed): {name!r}")
+        if member.isdev() or member.isfifo():
+            raise UnsafeTarMember(f"device/fifo member in tarball (not allowed): {name!r}")
+        if not (member.isfile() or member.isdir()):
+            raise UnsafeTarMember(f"unsupported member type in tarball: {name!r}")
 
 
 class ConflictResolution(Enum):
@@ -42,12 +78,17 @@ class ImportResult:
 class GitHubImporter:
     """Import skills from GitHub tarball."""
 
-    def __init__(self, tenant_id: str = "_default"):
+    def __init__(self, tenant_id: str = "_default", base_path: Optional[Path] = None):
         # TENANT-002 FIX: Validate tenant_id before using in path construction
         validate_tenant_id(tenant_id)
 
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        # ``base_path`` lets tests (and embedders) target a tmp root instead of
+        # the live ~/.corvin tree. Default is unchanged.
+        self.base_path = (
+            Path(base_path) if base_path is not None
+            else Path.home() / ".corvin" / "tenants" / tenant_id
+        )
 
     def import_from_tarball(
         self,
@@ -66,8 +107,12 @@ class GitHubImporter:
 
         try:
             with tarfile.open(tarball_path, "r:gz") as tar:
-                tar.extractall(temp_dir)
+                # D-F1 tar-slip fix: explicit member gate (fail-closed, nothing
+                # extracted on rejection) + stdlib "data" filter as 2nd layer.
+                check_tar_members(tar)
+                tar.extractall(temp_dir, filter="data")
         except Exception as e:
+            shutil.rmtree(temp_dir, ignore_errors=True)
             return ImportResult(
                 success=False,
                 imported_skills=[],
