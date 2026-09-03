@@ -27,6 +27,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Type
 from functools import lru_cache
+from pathlib import Path
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +164,7 @@ class SkillsRegistry:
         self.learning_backend = learning_backend
         self.tenant_id = tenant_id
         self._failure_count: Dict[str, int] = {}  # Track consecutive failures
+        self._failure_lock = Lock()  # FIX #3: Prevent TOCTOU race on failure counter
         self._auto_disabled: set = set()  # Skills auto-disabled after 3+ failures
         self._allowed_tenants: set = {"_default"}  # Tenant isolation whitelist
 
@@ -206,6 +209,51 @@ class SkillsRegistry:
         self._allowed_tenants.add(tenant_id)
         logger.info(f"Tenant {tenant_id} added to Skills registry whitelist")
 
+    @staticmethod
+    def _compute_lom_hash(lom: Optional[str]) -> Optional[str]:
+        """Compute SHA256 hash of source code at LoM (Line of Moral Responsibility).
+
+        Args:
+            lom: LoM string (format: "file:function:line")
+
+        Returns:
+            SHA256 hash of source line, or None if lom is None
+        """
+        if not lom:
+            return None
+
+        try:
+            parts = lom.split(":")
+            if len(parts) < 3:
+                return None
+
+            file_path, func_name, line_str = parts[0], parts[1], parts[2]
+            line_num = int(line_str)
+
+            # Read source file
+            source_path = Path(file_path)
+            if not source_path.is_absolute():
+                # Assume relative to CorvinOS root
+                source_path = Path("/home/shumway/projects/CorvinOS") / source_path
+
+            if not source_path.exists():
+                logger.warning(f"LoM source file not found: {source_path}")
+                return hashlib.sha256(lom.encode()).hexdigest()  # Fallback: hash the LoM string
+
+            source_code = source_path.read_text(encoding="utf-8", errors="ignore")
+            lines = source_code.split("\n")
+
+            if line_num > len(lines):
+                logger.warning(f"LoM line {line_num} exceeds file length {len(lines)}")
+                return hashlib.sha256(lom.encode()).hexdigest()
+
+            target_line = lines[line_num - 1] if line_num > 0 else ""
+            return hashlib.sha256(target_line.encode()).hexdigest()
+
+        except Exception as e:
+            logger.warning(f"Failed to compute LoM hash for '{lom}': {e}")
+            return hashlib.sha256(lom.encode()).hexdigest()  # Fallback
+
     def _validate_tenant_id(self, tenant_id: str) -> bool:
         """Validate tenant_id is in whitelist (fail-closed GDPR enforcement).
 
@@ -221,22 +269,35 @@ class SkillsRegistry:
         return True
 
     @staticmethod
-    def _scrub_pii_from_output(output: Any) -> Any:
-        """Redact PII from Skill output (GDPR Art. 32).
+    def _scrub_pii_from_output(output: Any, visited: Optional[set] = None, depth: int = 0) -> Any:
+        """Redact PII from Skill output (GDPR Art. 32, FIX #2: circular ref protection).
 
         Args:
             output: Skill execution output (dict, list, or scalar)
+            visited: Set of object IDs already visited (prevents circular refs)
+            depth: Current recursion depth (prevents stack overflow)
 
         Returns:
             PII-scrubbed copy of output
         """
+        if depth > 100:  # FIX #2: Depth limit for DoS protection
+            return "[REDACTED_DEEP_NESTING]"
+
+        if visited is None:
+            visited = set()
+
+        obj_id = id(output)
+        if obj_id in visited:  # FIX #2: Circular reference detected
+            return "[REDACTED_CIRCULAR_REF]"
+
         if isinstance(output, dict):
+            visited.add(obj_id)
             scrubbed = {}
             for key, value in output.items():
                 if any(pattern.search(key) for pattern in _PII_PATTERNS.values()):
                     scrubbed[key] = "[REDACTED_PII]"
                 elif isinstance(value, (dict, list)):
-                    scrubbed[key] = SkillsRegistry._scrub_pii_from_output(value)
+                    scrubbed[key] = SkillsRegistry._scrub_pii_from_output(value, visited, depth+1)
                 elif isinstance(value, str):
                     scrubbed_value = value
                     for pattern in _PII_PATTERNS.values():
@@ -244,9 +305,13 @@ class SkillsRegistry:
                     scrubbed[key] = scrubbed_value
                 else:
                     scrubbed[key] = value
+            visited.discard(obj_id)
             return scrubbed
         elif isinstance(output, list):
-            return [SkillsRegistry._scrub_pii_from_output(item) for item in output]
+            visited.add(obj_id)
+            result = [SkillsRegistry._scrub_pii_from_output(item, visited, depth+1) for item in output]
+            visited.discard(obj_id)
+            return result
         elif isinstance(output, str):
             scrubbed = output
             for pattern in _PII_PATTERNS.values():
@@ -367,7 +432,7 @@ class SkillsRegistry:
                 timestamp=end_time.isoformat(),
                 tenant_id=effective_tenant_id,
                 lom=lom,
-                lom_hash=lom,  # TODO: compute actual SHA256 of source code
+                lom_hash=self._compute_lom_hash(lom),  # ADR-0537: cryptographic LoM binding
             )
 
             # Reset failure count on success
@@ -420,13 +485,14 @@ class SkillsRegistry:
 
     def _track_failure(self, skill_id: str) -> None:
         """Track consecutive failures; auto-disable after 3+."""
-        self._failure_count[skill_id] = self._failure_count.get(skill_id, 0) + 1
+        with self._failure_lock:  # FIX #3: Prevent async TOCTOU race
+            self._failure_count[skill_id] = self._failure_count.get(skill_id, 0) + 1
 
-        if self._failure_count[skill_id] >= 3:
-            logger.error(
-                f"Skill {skill_id} auto-disabled after 3+ consecutive failures"
-            )
-            self._auto_disabled.add(skill_id)
+            if self._failure_count[skill_id] >= 3:
+                logger.error(
+                    f"Skill {skill_id} auto-disabled after 3+ consecutive failures"
+                )
+                self._auto_disabled.add(skill_id)
 
     def _emit_learning_event(self, result: SkillExecutionResult) -> None:
         """Emit learning event for Skill execution (ADR-0314).
