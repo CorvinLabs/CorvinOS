@@ -223,7 +223,7 @@ class TestWhitelistRouteE2E(unittest.TestCase):
             self.assertFalse(_ff.is_enabled("browser_automation", "_default"))
 
             # Operator whitelists the feature over HTTP.
-            r = client.post("/v1/console/features/toggle",
+            r = client.post("/v1/console/features/toggle", headers={"X-CSRF-Token": _csrf},
                             json={"feature_id": "browser_automation", "enabled": True})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertIn("browser_automation", r.json()["whitelist"])
@@ -238,9 +238,9 @@ class TestWhitelistRouteE2E(unittest.TestCase):
 
     def test_toggle_off_removes_from_whitelist(self):
         with _sandbox(Path(self._tmp)) as (client, _csrf):
-            client.post("/v1/console/features/toggle",
+            client.post("/v1/console/features/toggle", headers={"X-CSRF-Token": _csrf},
                         json={"feature_id": "browser_automation", "enabled": True})
-            r = client.post("/v1/console/features/toggle",
+            r = client.post("/v1/console/features/toggle", headers={"X-CSRF-Token": _csrf},
                             json={"feature_id": "browser_automation", "enabled": False})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertNotIn("browser_automation", r.json()["whitelist"])
@@ -250,7 +250,7 @@ class TestWhitelistRouteE2E(unittest.TestCase):
 
     def test_toggle_rejects_unregistered_flag(self):
         with _sandbox(Path(self._tmp)) as (client, _csrf):
-            r = client.post("/v1/console/features/toggle",
+            r = client.post("/v1/console/features/toggle", headers={"X-CSRF-Token": _csrf},
                             json={"feature_id": "house_rules_off", "enabled": True})
             # feature_flags.flag() raises UnknownFlagError (a KeyError subclass);
             # the route does not catch it, so FastAPI returns a 500 — the point

@@ -132,13 +132,17 @@ class PersistentLoggingTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 500)
         body = resp.json()
-        self.assertIn("test-marker-boom-42", body["detail"])
-        self.assertIn("RuntimeError", body["detail"])
+        # Adversarial review E-11 (2026-09-03): exception text never reaches the
+        # client — only a correlation id that the log line carries as well.
+        self.assertNotIn("test-marker-boom-42", body["detail"])
+        self.assertNotIn("RuntimeError", body["detail"])
+        self.assertTrue(body.get("error_id"), body)
 
         log_path = Path(self._tmp.name) / "logs" / "console.log"
         content = log_path.read_text(encoding="utf-8")
         self.assertIn("test-marker-boom-42", content)
         self.assertIn("Unhandled exception", content)
+        self.assertIn(body["error_id"], content)
 
 
 if __name__ == "__main__":

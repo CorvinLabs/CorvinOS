@@ -148,6 +148,7 @@ class TestTaskGraphApiAuth(unittest.TestCase):
 
             rec_b = session_auth.create_session(tenant_id="tenantb")
             client.cookies.set("corvin_console_sid", rec_b.sid)
+            client.headers.update({"X-CSRF-Token": session_auth.derive_csrf_token(rec_b.csrf_secret, rec_b.sid)})  # mutations need CSRF (E-06)
 
             # Tenant B tries to read tenant A's graph on every task endpoint
             # -> not found (isolated), never tenant A's data.
@@ -170,6 +171,7 @@ class TestTaskGraphApiAuth(unittest.TestCase):
 
             rec_a = session_auth.create_session(tenant_id="tenanta")
             client.cookies.set("corvin_console_sid", rec_a.sid)
+            client.headers.update({"X-CSRF-Token": session_auth.derive_csrf_token(rec_a.csrf_secret, rec_a.sid)})  # mutations need CSRF (E-06)
 
             for method, tmpl, kw in _TASK_ENDPOINTS:
                 path = tmpl.format(tid="task-xyz")

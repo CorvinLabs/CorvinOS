@@ -803,12 +803,27 @@ def initialize_registry(
 def get_registry() -> SkillsRegistry:
     """Get the global Skills registry (lazy init on first call).
 
-    A lazily created registry is EMPTY — ``core.skills.boot.boot_skills`` (called
-    from ``corvin_plugins.bootstrap.boot_platform``) is what populates it.
+    A lazily created registry carries the builtin OS Skills (they are pure
+    functions of the per-tenant flag registry), but NO core audit backend —
+    events go to the application logger until ``core.skills.boot.boot_skills``
+    (called from ``corvin_plugins.bootstrap.boot_platform``) replaces it with the
+    audited registry. This matters because consumers run BEFORE the lifespan
+    boots the platform: ``mount_static()`` asks ``os.headless_mode`` while the
+    app is being built, and an empty registry there meant "Skill not found" →
+    headless mode could never engage (adversarial review 2026-09-03).
     """
     global _global_registry
     if _global_registry is None:
-        initialize_registry()
+        with _global_lock:
+            if _global_registry is None:
+                registry = SkillsRegistry()
+                try:
+                    from .os_skills_phase1 import register_builtin_skills  # noqa: PLC0415
+
+                    register_builtin_skills(registry)
+                except Exception as exc:  # noqa: BLE001 — never block a consumer on import trouble
+                    logger.error("builtin Skills could not be registered lazily: %s", exc)
+                _global_registry = registry
     return _global_registry
 
 
