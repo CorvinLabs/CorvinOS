@@ -9,8 +9,12 @@ Transparent routing: old delegate_to_persona() calls → new Skill.
 """
 
 from typing import Optional, Any, Dict
-from core.telemetry.deprecated_api_calls import log_deprecated_call, log_deprecated_error
-from core.skills.os_skills.delegation_router import DelegationRouterSkill
+from core.telemetry.deprecated_api_calls import (
+    log_deprecated_call,
+    log_deprecated_error,
+    skill_call_timeout
+)
+from core.skills.os_skills_phase1 import DelegationRouterSkill
 
 
 def delegate_to_persona(
@@ -43,25 +47,26 @@ def delegate_to_persona(
     Raises:
         Exception: If Skill call fails (fail-closed: never silent fallback)
     """
-    try:
-        # Log deprecated call
-        event = log_deprecated_call(
-            api_name="delegate_to_persona",
-            module="core.vibe_engineering.routing",
-            tenant_id=tenant_id,
-            user_id=user_id,
-        )
+    # Log deprecated call (CRITICAL-2 FIX: audit trail integration)
+    event = log_deprecated_call(
+        api_name="delegate_to_persona",
+        module="core.vibe_engineering.routing",
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
-        # Call new Skill
+    try:
+        # Call new Skill with timeout (CRITICAL-5 FIX: fail-closed guarantee)
         skill = DelegationRouterSkill()
-        result = skill.execute(
-            request=request,
-            task_type=task_type,
-            tenant_id=tenant_id,
-        )
+        with skill_call_timeout(seconds=5):  # Explicit timeout, fail-closed
+            result = skill.execute(
+                request=request,
+                task_type=task_type,
+                tenant_id=tenant_id,
+            )
 
         if result.status != "success":
-            raise RuntimeError(f"Skill failed: {result.error}")
+            raise RuntimeError(f"Skill failed: {result.error_message}")
 
         # Return in old shape (transparent to caller)
         return result.output.get("engine_id", "default")

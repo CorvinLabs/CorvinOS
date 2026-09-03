@@ -12,11 +12,35 @@ Events are tenant-scoped, immutable, and hash-chained per ADR-0232/0233.
 import logging
 import traceback
 import inspect
+import signal
 from datetime import datetime
 from typing import Any, Optional
 from dataclasses import dataclass, asdict
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+
+# Try to import audit writer (may not be available in all contexts)
+try:
+    from core.compliance.audit_chain_writer import get_audit_writer
+    AUDIT_WRITER_AVAILABLE = True
+except ImportError:
+    AUDIT_WRITER_AVAILABLE = False
+
+
+@contextmanager
+def skill_call_timeout(seconds=5):
+    """Timeout handler for Skill calls (fail-closed guarantee)."""
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Skill call timed out after {seconds}s")
+
+    original_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, original_handler)
 
 
 @dataclass(frozen=True)
@@ -74,7 +98,7 @@ class DeprecatedAPICallLogger:
         **kwargs
     ) -> DeprecatedAPIEvent:
         """
-        Log a deprecated API call.
+        Log a deprecated API call (CRITICAL-2 FIX: now writes to audit trail).
 
         Args:
             api_name: e.g., "get_session_context"
@@ -106,7 +130,22 @@ class DeprecatedAPICallLogger:
             error_message=kwargs.get("error_message"),
         )
 
-        # Log to structured logger (feeds telemetry + audit trail)
+        # CRITICAL-2 FIX: Write to immutable audit trail
+        if AUDIT_WRITER_AVAILABLE:
+            try:
+                audit_writer = get_audit_writer()
+                audit_writer.write_event_dict(
+                    event_type="deprecated_api_call",
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    details=event.to_dict()
+                )
+            except Exception as audit_error:
+                logger.error(f"Audit trail write failed: {audit_error}", exc_info=True)
+                # Fail-closed: re-raise so caller knows audit failed
+                raise
+
+        # Log to structured logger (telemetry)
         logger.warning(
             f"DEPRECATED_API_CALL: {api_name} ({module})",
             extra={
