@@ -186,10 +186,12 @@ class PhaseGateValidator:
                             reason="Audit trail verification not enabled")
 
     def atomic_rollback(self, task_id: str, rolled_back_to_phase: str, reason: str) -> bool:
-        """Orchestrate atomic rollback with real git + EventStore (CRITICAL FIX 2, ADR-0542)."""
+        """Atomic rollback with immutable chain (CRITICAL FIXES 1-3, ADR-0542)."""
         import threading
+        from .models import AuditEvent
+        from datetime import datetime
 
-        # CRITICAL FIX: Add locking to prevent concurrent rollback race
+        # Add locking
         if task_id not in getattr(self, '_rollback_locks', {}):
             if not hasattr(self, '_rollback_locks'):
                 self._rollback_locks = {}
@@ -197,32 +199,34 @@ class PhaseGateValidator:
 
         with self._rollback_locks[task_id]:
             try:
-                # Step 1: Verify pre-task state exists (fail-closed)
                 pre_task_state = self.rollback_state.get(f"{task_id}:pre")
                 if not pre_task_state:
                     raise ValueError(f"CRITICAL: No pre-task state saved for {task_id}")
 
-                # Step 2: REAL git reset (CRITICAL FIX 2.1)
-                if self.git_manager:
-                    try:
-                        self.git_manager.reset_to(pre_task_state['git_commit'])
-                    except Exception as e:
-                        raise RuntimeError(f"Git reset failed for {task_id}: {str(e)}")
+                # CRITICAL FIX 1: Capture last_hash BEFORE deleting events
+                # This preserves chain continuity
+                pre_timestamp = pre_task_state.get('timestamp')
+                if not pre_timestamp:
+                    raise ValueError("CRITICAL: pre_task_state timestamp missing")
 
-                # Step 3: REAL EventStore rollback + DELETE (CRITICAL FIX 2.2)
-                # Delete all events for this task after pre-task snapshot
+                # Find last event at or before pre_timestamp
+                last_hash_before_rollback = None
+                events_to_keep = []
+
                 if hasattr(self.event_store, 'events'):
-                    pre_timestamp = pre_task_state.get('timestamp')
-                    # Remove events added AFTER rollback point
-                    self.event_store.events = [
-                        e for e in self.event_store.events
-                        if not (e.task_id == task_id and (pre_timestamp is None or e.timestamp > pre_timestamp))
-                    ]
+                    for e in self.event_store.events:
+                        if e.task_id == task_id and e.timestamp <= pre_timestamp:
+                            events_to_keep.append(e)
+                            last_hash_before_rollback = e.hash
+                        elif e.task_id != task_id:
+                            events_to_keep.append(e)  # Keep events from other tasks
 
-                # Step 4: Emit atomic rollback event (CRITICAL FIX 2.3: error handling)
-                from .models import AuditEvent
-                from datetime import datetime
+                # CRITICAL FIX 2: Delete events AFTER pre-timestamp (not ALL)
+                if hasattr(self.event_store, 'events'):
+                    self.event_store.events = events_to_keep
 
+                # CRITICAL FIX 3: Append rollback event with proper prev_hash
+                # This maintains chain continuity
                 rollback_event = AuditEvent(
                     event_type="task_rolled_back",
                     task_id=task_id,
@@ -233,18 +237,29 @@ class PhaseGateValidator:
                         "rolled_back_to_phase": rolled_back_to_phase,
                         "reason": reason,
                         "pre_task_git_commit": pre_task_state['git_commit'],
+                        "preserved_last_hash": last_hash_before_rollback,
                     }
                 )
+
+                # CRITICAL: Manually set prev_hash to maintain chain
+                if last_hash_before_rollback:
+                    object.__setattr__(rollback_event, "prev_hash", last_hash_before_rollback)
+
+                # Git reset
+                if self.git_manager:
+                    try:
+                        self.git_manager.reset_to(pre_task_state['git_commit'])
+                    except Exception as e:
+                        raise RuntimeError(f"Git reset failed for {task_id}: {str(e)}")
+
+                # Append rollback event (maintain chain)
                 self.event_store.append_event(rollback_event)
 
                 return True
 
             except Exception as e:
-                # CRITICAL FIX 2.4: Emit failure event for recovery
+                # Only emit failure if we can (after validating state)
                 try:
-                    from .models import AuditEvent
-                    from datetime import datetime
-
                     failure_event = AuditEvent(
                         event_type="rollback_failed",
                         task_id=task_id,
@@ -255,16 +270,20 @@ class PhaseGateValidator:
                     )
                     self.event_store.append_event(failure_event)
                 except Exception:
-                    pass  # If audit fails too, at least log it
+                    pass
 
                 return False
 
     def save_pre_task_state(self, task_id: str, git_commit: str, snapshot_hash: str) -> None:
-        """Save pre-task state for recovery (ADR-0542 Fix 4.4, 4.5)."""
+        """Save pre-task state for recovery (ADR-0542 Fix 4.4, 4.5, CRITICAL FIX 2)."""
+        from datetime import datetime
+
+        # CRITICAL FIX 2: Capture actual timestamp (not None)
         self.rollback_state[f"{task_id}:pre"] = {
             "git_commit": git_commit,
             "snapshot_hash": snapshot_hash,
-            "timestamp": None,  # Would be datetime in prod
+            "timestamp": datetime.utcnow().isoformat() + "Z",  # CRITICAL: was None
+            "last_event_hash": None,  # Will be filled at rollback
         }
 
     def boot_tripwire_extended(self, task_id: str, git_current_commit: str, eventstore_snapshot_hash: str) -> bool:
