@@ -486,6 +486,32 @@ class TestTenantIsolation(_Base):
             )
 
     def test_audit_events_carry_the_tenant(self):
+        # The chain accepts a record only under the PROCESS tenant (ADR-0007),
+        # so the lifecycle for tenant-b must run in a tenant-b process context.
+        # Without this the write was refused — and until 2026-09-03 (finding
+        # A2) refused SILENTLY, which made this test skip itself as "writer
+        # unavailable" instead of ever asserting anything.
+        prev = os.environ.get("CORVIN_TENANT_ID")
+        os.environ["CORVIN_TENANT_ID"] = "tenant-b"
+        try:
+            other = PluginLifecycle(
+                tenant_id="tenant-b", corvin_home_path=self.home, lifecycle_enabled=True
+            )
+            other.install(_record(), installed_by="operator")
+        finally:
+            if prev is None:
+                os.environ.pop("CORVIN_TENANT_ID", None)
+            else:
+                os.environ["CORVIN_TENANT_ID"] = prev
+        text = self._audit_text()
+        if not text:
+            self.skipTest("audit writer unavailable in this layout")
+        self.assertIn("tenant-b", text)
+        self.assertNotIn("audit.tenant_mismatch", text)
+
+    def test_a_foreign_tenant_write_is_refused_and_recorded(self):
+        # The other half of the isolation: the same install from the wrong
+        # process tenant does NOT enter the chain, and the refusal is on record.
         other = PluginLifecycle(
             tenant_id="tenant-b", corvin_home_path=self.home, lifecycle_enabled=True
         )
@@ -493,7 +519,8 @@ class TestTenantIsolation(_Base):
         text = self._audit_text()
         if not text:
             self.skipTest("audit writer unavailable in this layout")
-        self.assertIn("tenant-b", text)
+        self.assertIn('"event_type": "audit.tenant_mismatch"', text)
+        self.assertNotIn('"event_type": "plugin.installed"', text)
 
 
 # ── Load order ────────────────────────────────────────────────────────────────

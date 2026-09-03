@@ -413,17 +413,36 @@ class TestBootWiring(unittest.TestCase):
     the wiring fails here instead of silently disabling the feature.
     """
 
+    # Since 2026-09-03 (finding A6) the collector + healer are wired in the ONE
+    # shared boot sequence, corvin_plugins.bootstrap.start_health_monitoring(),
+    # called by boot_platform() — so the standalone console gets them too. The
+    # gateway lifespan only holds the handle. These read THAT source.
+
+    def _boot_source(self) -> str:
+        boot = _REPO / "core" / "plugins" / "corvin_plugins" / "bootstrap.py"
+        return boot.read_text(encoding="utf-8")
+
     def _lifespan_source(self) -> str:
         app = _REPO / "core" / "gateway" / "corvin_gateway" / "app.py"
         return app.read_text(encoding="utf-8")
 
     def test_the_orchestrator_is_constructed_at_boot(self):
-        source = self._lifespan_source()
+        source = self._boot_source()
         self.assertIn("HealingOrchestrator", source)
-        self.assertIn("healer=_healer", source, "the collector must receive it")
+        self.assertIn("healer=healer", source, "the collector must receive it")
+
+    def test_boot_platform_starts_monitoring_and_the_gateway_has_no_inline_copy(self):
+        boot = self._boot_source()
+        # boot_platform() itself calls the helper — not only defines it.
+        body = boot.split("def boot_platform(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("start_health_monitoring(loaded)", body)
+        app = self._lifespan_source()
+        self.assertNotIn("HealthCollector(", app, "the gateway must not keep an inline copy")
+        self.assertNotIn("HealingOrchestrator", app, "the gateway must not keep an inline copy")
+        self.assertIn("stop_health_monitoring", app, "the gateway must stop it before unloading")
 
     def test_healing_is_gated_on_its_own_flag(self):
-        source = self._lifespan_source()
+        source = self._boot_source()
         self.assertIn('plugin_self_healing', source)
         # The flag must be read lazily (a lambda), so toggling it in the Console
         # takes effect without a restart.
@@ -439,10 +458,10 @@ class TestBootWiring(unittest.TestCase):
         self.assertTrue(flag.target_release)
 
     def test_collector_and_healer_share_one_audit_sink(self):
-        source = self._lifespan_source()
-        self.assertIn("_hc_audit", source)
+        source = self._boot_source()
+        helper = source.split("def start_health_monitoring(", 1)[1].split("\ndef ", 1)[0]
         self.assertGreaterEqual(
-            source.count("audit_emit=_hc_audit"), 2,
+            helper.count("audit_emit=audit_emit"), 2,
             "collector and healer must both audit through the real chain",
         )
 

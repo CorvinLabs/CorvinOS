@@ -13,16 +13,9 @@ import pytest
 import json
 import os
 from unittest.mock import Mock, patch, MagicMock
-from core.legacy_compat.brain_compat import get_session_context
+from core.legacy_compat.brain_compat import get_session_context, recall_recent_sessions
+from core.legacy_compat.vibe_compat import delegate_to_persona, VibeBrainAdapter
 from core.telemetry.deprecated_api_calls import DeprecatedAPIEvent
-
-
-class MockSkillResult:
-    """Mock SkillExecutionResult for testing."""
-    def __init__(self, status="success", output=None, error_message=None):
-        self.status = status
-        self.output = output or {"user_id": "test_user", "context": {}}
-        self.error_message = error_message
 
 
 class TestPhaseBAuditTrailReal:
@@ -32,12 +25,13 @@ class TestPhaseBAuditTrailReal:
     @patch("core.telemetry.deprecated_api_calls.get_audit_writer")
     def test_brain_compat_writes_audit_event(self, mock_audit_writer, mock_skill_class):
         """Brain compat call WRITES to audit trail (not just logs)."""
-        # Setup mock Skill
+        # Setup mock Skill — returns DICT (not old SkillExecutionResult)
         mock_skill = Mock()
-        mock_skill.execute.return_value = MockSkillResult(
-            status="success",
-            output={"user_id": "test_123", "context": {"data": "value"}}
-        )
+        mock_skill.execute.return_value = {
+            "base_tier": {"user_id": "test_123"},
+            "injected_tier": {"context": {"data": "value"}},
+            "merged_tier": {"user_id": "test_123", "context": {"data": "value"}},
+        }
         mock_skill_class.return_value = mock_skill
 
         # Setup mock audit writer
@@ -55,18 +49,17 @@ class TestPhaseBAuditTrailReal:
 
         # VERIFY: Skill was called
         assert mock_skill.execute.called, "Skill should be invoked"
-        assert result == {"user_id": "test_123", "context": {"data": "value"}}
+        # Result is dict (new API)
+        assert isinstance(result, dict)
+        assert "base_tier" in result
 
     @patch("core.legacy_compat.brain_compat.ContextAdapterSkill")
     @patch("core.telemetry.deprecated_api_calls.get_audit_writer")
     def test_brain_compat_error_propagates_fails_closed(self, mock_audit_writer, mock_skill_class):
-        """On Skill error, exception propagates (fail-closed, no fallback)."""
-        # Setup mock Skill that fails
+        """On Skill error (exception), exception propagates (fail-closed, no fallback)."""
+        # Setup mock Skill that raises exception
         mock_skill = Mock()
-        mock_skill.execute.return_value = MockSkillResult(
-            status="error",
-            error_message="Skill call failed"
-        )
+        mock_skill.execute.side_effect = RuntimeError("Skill call failed")
         mock_skill_class.return_value = mock_skill
 
         # Setup mock audit writer
@@ -74,7 +67,7 @@ class TestPhaseBAuditTrailReal:
         mock_audit_writer.return_value = mock_writer
 
         # Call deprecated API and expect error
-        with pytest.raises(RuntimeError, match="Skill failed"):
+        with pytest.raises(RuntimeError, match="Skill call failed"):
             get_session_context(task_id="test_123")
 
         # VERIFY: Error was logged to audit trail
@@ -89,7 +82,7 @@ class TestPhaseBAuditTrailReal:
         mock_timeout.return_value.__exit__ = Mock(return_value=None)
 
         mock_skill = Mock()
-        mock_skill.execute.return_value = MockSkillResult()
+        mock_skill.execute.return_value = {"data": "test"}  # Return dict (new API)
         mock_skill_class.return_value = mock_skill
 
         mock_writer = Mock()
@@ -108,7 +101,7 @@ class TestPhaseBAuditTrailReal:
     def test_brain_compat_tenant_scoped(self, mock_audit_writer, mock_skill_class):
         """All audit events are tenant-scoped (GDPR Art. 5)."""
         mock_skill = Mock()
-        mock_skill.execute.return_value = MockSkillResult()
+        mock_skill.execute.return_value = {"data": "test"}  # Return dict (new API)
         mock_skill_class.return_value = mock_skill
 
         mock_writer = Mock()
@@ -153,7 +146,7 @@ class TestPhaseCAuditChainReadiness:
         mock_audit_writer.return_value = mock_writer
 
         with patch("core.legacy_compat.brain_compat.ContextAdapterSkill") as mock_skill:
-            mock_skill.return_value.execute.return_value = MockSkillResult()
+            mock_skill.return_value.execute.return_value = {"data": "test"}  # Return dict (new API)
             get_session_context(task_id="gate_test", tenant_id="test_tenant")
 
         # Verify event has all Phase C gate requirements
@@ -190,6 +183,112 @@ class TestPhaseBAuditToJsonl:
         assert parsed["api_name"] == "get_session_context"
         assert parsed["tenant_id"] == "tenant_x"
         assert "stack_trace" in parsed
+
+
+class TestPhaseBAuditTrailRecallSessions:
+    """Tests for recall_recent_sessions() — CRITICAL-4 FIX VERIFICATION"""
+
+    @patch("core.legacy_compat.brain_compat.ContextAdapterSkill")
+    @patch("core.telemetry.deprecated_api_calls.get_audit_writer")
+    def test_recall_recent_sessions_writes_audit_event(self, mock_audit_writer, mock_skill_class):
+        """recall_recent_sessions() must return dict (new API) and write audit trail."""
+        # Setup mock Skill — returns DICT with sessions field
+        mock_skill = Mock()
+        mock_skill.execute.return_value = {
+            "sessions": [
+                {"id": "sess_1", "timestamp": "2026-09-03T10:00:00Z"},
+                {"id": "sess_2", "timestamp": "2026-09-03T11:00:00Z"},
+            ]
+        }
+        mock_skill_class.return_value = mock_skill
+
+        # Setup mock audit writer
+        mock_writer = Mock()
+        mock_audit_writer.return_value = mock_writer
+
+        # Call deprecated API
+        result = recall_recent_sessions(user_id="user_123", limit=2, tenant_id="tenant_a")
+
+        # VERIFY: Returns list (old API contract)
+        assert isinstance(result, list), "recall_recent_sessions should return list"
+        assert len(result) == 2, "Should return 2 sessions"
+        assert result[0]["id"] == "sess_1"
+
+        # VERIFY: Audit trail was written
+        assert mock_writer.write_event_dict.called, "Audit trail should be written"
+        call_args = mock_writer.write_event_dict.call_args
+        assert call_args[1]["tenant_id"] == "tenant_a"
+
+
+class TestPhaseBAuditTrailDelegateToPersona:
+    """Tests for delegate_to_persona() — CRITICAL-4 FIX VERIFICATION"""
+
+    @patch("core.legacy_compat.vibe_compat.DelegationRouterSkill")
+    @patch("core.telemetry.deprecated_api_calls.get_audit_writer")
+    def test_delegate_to_persona_writes_audit_event(self, mock_audit_writer, mock_skill_class):
+        """delegate_to_persona() must return str (engine_id) and write audit trail."""
+        # Setup mock Skill — returns DICT with engine_id field
+        mock_skill = Mock()
+        mock_skill.execute.return_value = {
+            "engine_id": "opus",
+            "routing_decision": "complex_task",
+            "confidence": 0.95,
+        }
+        mock_skill_class.return_value = mock_skill
+
+        # Setup mock audit writer
+        mock_writer = Mock()
+        mock_audit_writer.return_value = mock_writer
+
+        # Call deprecated API
+        result = delegate_to_persona(
+            request={"prompt": "test"},
+            task_type="complex",
+            tenant_id="tenant_b",
+        )
+
+        # VERIFY: Returns str (old API contract)
+        assert isinstance(result, str), "delegate_to_persona should return str"
+        assert result == "opus", "Should return engine_id"
+
+        # VERIFY: Audit trail was written
+        assert mock_writer.write_event_dict.called, "Audit trail should be written"
+        call_args = mock_writer.write_event_dict.call_args
+        assert call_args[1]["tenant_id"] == "tenant_b"
+
+
+class TestPhaseBAuditTrailVibeBrainAdapter:
+    """Tests for VibeBrainAdapter.do_decide() — CRITICAL-4 FIX VERIFICATION"""
+
+    @patch("core.legacy_compat.vibe_compat.DelegationRouterSkill")
+    @patch("core.telemetry.deprecated_api_calls.get_audit_writer")
+    def test_vibe_brain_adapter_do_decide_writes_audit_event(self, mock_audit_writer, mock_skill_class):
+        """VibeBrainAdapter.do_decide() must return str (decision) and write audit trail."""
+        # Setup mock Skill — returns DICT with decision field
+        mock_skill = Mock()
+        mock_skill.execute.return_value = {
+            "decision": "route_to_agent_a",
+            "confidence": 0.92,
+            "reasoning": "complex task detected",
+        }
+        mock_skill_class.return_value = mock_skill
+
+        # Setup mock audit writer
+        mock_writer = Mock()
+        mock_audit_writer.return_value = mock_writer
+
+        # Call deprecated API
+        adapter = VibeBrainAdapter(tenant_id="tenant_c")
+        result = adapter.do_decide(task_context={"type": "complex"})
+
+        # VERIFY: Returns str (old API contract)
+        assert isinstance(result, str), "do_decide should return str"
+        assert result == "route_to_agent_a", "Should return decision"
+
+        # VERIFY: Audit trail was written
+        assert mock_writer.write_event_dict.called, "Audit trail should be written"
+        call_args = mock_writer.write_event_dict.call_args
+        assert call_args[1]["tenant_id"] == "tenant_c"
 
 
 if __name__ == "__main__":

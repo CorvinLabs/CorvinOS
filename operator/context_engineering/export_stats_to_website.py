@@ -2,14 +2,19 @@
 """
 Export ADR-0274 measurement data to Corvin-Website stats JSON
 
-Reads aggregated measurement data and writes to:
-  /home/shumway/projects/Corvin-Website/api/v1/telemetry/measurements/latest.json
+Reads aggregated measurement data and writes <output_dir>/latest.json plus one
+JSON file per track. The output directory is the Corvin-Website checkout's
+``api/v1/telemetry/measurements/`` directory, given EXPLICITLY via the
+``CORVIN_WEBSITE_STATS_DIR`` environment variable (or the ``output_dir``
+argument) — there is no default: a developer's absolute checkout path used to
+be hardcoded here and shipped in the public wheel (2026-09-03 review, F5).
 
 This is called by Railway every hour to sync Week 6 data.
 """
 
 import json
 import logging
+import os
 from pathlib import Path
 from datetime import datetime
 from api_server import MeasurementReader
@@ -36,7 +41,14 @@ def export_measurements_to_website(
         measurements_dir = Path.home() / ".corvin" / "measurement"
 
     if output_dir is None:
-        output_dir = Path.home() / "projects" / "Corvin-Website" / "api" / "v1" / "telemetry" / "measurements"
+        env_dir = os.environ.get("CORVIN_WEBSITE_STATS_DIR")
+        if not env_dir:
+            logger.error(
+                "✗ No output directory: pass output_dir or set CORVIN_WEBSITE_STATS_DIR "
+                "to the Corvin-Website api/v1/telemetry/measurements directory"
+            )
+            return False
+        output_dir = Path(env_dir).expanduser()
 
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)

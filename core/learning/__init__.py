@@ -19,7 +19,10 @@ from .storage import LearningEventStore
 from .confidence import update_confidence, apply_decay
 from .decorators import e2e_for
 from .reachability import ReachabilityMonitor
-from .metrics import MetricsCollector, MetricRecord, MetricType, AggregatedMetrics
+from .metrics import (
+    MetricsCollector, MetricRecord, MetricType, AggregatedMetrics,
+    ExecutionMetrics, ExecutionMetricsRecorder,
+)
 from .attention_budget import AttentionBudget, AttentionTracker, AttentionUsage, BudgetStatus, BudgetStats
 from .active_loop import ActiveLearningLoop
 from .integration import LearningIntegration
@@ -54,6 +57,8 @@ __all__ = [
     "MetricRecord",
     "MetricType",
     "AggregatedMetrics",
+    "ExecutionMetrics",
+    "ExecutionMetricsRecorder",
     "ActiveLearningLoop",
     "LearningIntegration",
     "AuditTrail",

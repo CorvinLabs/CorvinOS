@@ -93,6 +93,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import ValidationError
 
 from fastapi.responses import PlainTextResponse
+import ipaddress as _ipaddress
 
 from . import __version__
 from . import audit_metrics as _audit_metrics
@@ -113,19 +114,62 @@ from .runs import (
 from .sse import format_sse_frame
 
 
-# ── Optional JWT guard ───────────────────────────────────────────────
+# ── JWT guard ────────────────────────────────────────────────────────
 #
-# For local deployments: no Authorization header → pass through.
-# For cloud deployments: a JWT (OAuth/OIDC) is validated if present;
-# an invalid/expired JWT returns 401 to prevent token downgrade attacks.
+# Adversarial review E-09 (2026-09-03). Two rules, both fail-closed:
+#
+# 1. **Loopback peer → local operator.** A request arriving from 127.0.0.0/8
+#    or ::1 without a Bearer header is the local deployment's owner (the
+#    loopback binding is the security boundary, as documented below). ANY
+#    other peer — a LAN/Internet address, a proxy-rewritten address, or an
+#    unparseable one — MUST present a valid JWT; without one the request is
+#    401 before any tenant route runs. Previously a missing Bearer header
+#    passed through regardless of peer, so binding the gateway to a
+#    non-loopback address exposed every ``/v1/tenants/{tid}/*`` route
+#    (SCIM, runs, metrics) unauthenticated.
+# 2. **Path tenant is bound to the principal.** When a JWT is presented, the
+#    ``tid`` path parameter must equal the tenant the token resolved to
+#    (``resolve_jwt`` takes it from the issuer's ``tenant_claim``); a mismatch
+#    is 403. A token for tenant A can never read or write tenant B by
+#    choosing B in the URL.
+#
+# A present-but-invalid/expired JWT is always 401 (token-downgrade guard).
 # Static atlr_* tokens have been removed entirely.
+
+_LOOPBACK_HOSTS = frozenset({"localhost"})
+
+
+def _peer_is_loopback(request: HTTPConnection) -> bool:
+    """True only for a parseable loopback peer address. Fail-closed otherwise."""
+    client = request.client
+    if client is None:
+        return False
+    host = (client.host or "").strip()
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return _ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 async def _jwt_guard(request: HTTPConnection) -> None:
-    """Global dependency: validate JWT when present, allow auth-free requests."""
+    """Global dependency (see the rules above).
+
+    Stores the resolved token on ``request.state.principal`` (``None`` for a
+    loopback caller without a token) so route handlers can attribute work.
+    """
     auth_header = request.headers.get("authorization", "")
+    path_tid = request.path_params.get("tid") if request.path_params else None
     if not auth_header.lower().startswith("bearer "):
-        return  # no Bearer header → local deployment, allow through
+        if _peer_is_loopback(request):
+            request.state.principal = None
+            return  # loopback peer, no Bearer → local operator
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"reason": "bearer-required-for-non-loopback-peer"},
+            headers={"WWW-Authenticate": 'Bearer realm="corvin-gateway"'},
+        )
     presented = auth_header[7:].strip()
     if not presented or not looks_like_jwt(presented):
         raise HTTPException(
@@ -140,6 +184,12 @@ async def _jwt_guard(request: HTTPConnection) -> None:
             detail={"reason": "invalid-jwt"},
             headers={"WWW-Authenticate": 'Bearer realm="corvin-gateway"'},
         )
+    if path_tid is not None and path_tid != resolved.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"reason": "tenant-mismatch"},
+        )
+    request.state.principal = resolved
 
 
 # ── Lifespan + app instance ──────────────────────────────────────────
@@ -201,50 +251,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # why each step sits where it does.
         _plugins_loaded = _boot_platform()  # raises TripwireError -> boot aborts
 
-        # ADR-0231 Stage 2 — health polling, via os.plugin_health_monitoring Skill
-        # (replaces feature flag, Phase 1 k=2-5 refactoring).
-        # Skill disabled (the default) means NO timer is created at all: the /plugins
-        # health route still answers from the breaker state, which costs nothing.
-        try:
-            from core.skills.skill_registry_phase1 import get_registry as _get_registry
-            from corvin_console.routes import plugins as _plugins_route
-            from corvin_plugins.bootstrap import build_context as _build_ctx
-            from corvin_plugins.health import HealthCollector as _HealthCollector
-            from forge.paths import corvin_home as _hc_home
-            from forge.tenants import current_tenant as _hc_tenant
+        # ADR-0231 Stage 2/3 — health polling + self-healing are started BY
+        # boot_platform() (corvin_plugins.bootstrap.start_health_monitoring),
+        # so the standalone console gets them too. This lifespan only keeps
+        # the handle for the shutdown ordering below.
+        from corvin_plugins.bootstrap import health_collector as _health_collector_handle
 
-            _htid = _hc_tenant()
-            _hm_registry = _get_registry()
-            _hm_result = _hm_registry.execute("os.plugin_health_monitoring", {"enabled": True})
-
-            if _hm_result.status == "success" and _hm_result.output.get("enabled"):
-                _hc_audit = _build_ctx(
-                    plugin_id="health-collector",
-                    tenant_id=_htid,
-                    corvin_home=_hc_home(),
-                ).audit_emit
-                # ADR-0231 Stage 3 — self-healing, its own Skill and default off.
-                # The collector is the only poller, so healing hangs off it rather
-                # than adding a second timer that would double the health load.
-                from corvin_plugins.healing import HealingOrchestrator as _Healer
-                from core.skills.skill_registry_phase1 import get_registry as _get_sh_registry
-
-                _sh_registry = _get_sh_registry()
-                _healer = _Healer(
-                    enabled=lambda: _sh_registry.execute("os.plugin_health_monitoring", {"enabled": True}).output.get("enabled", False),
-                    audit_emit=_hc_audit,
-                )
-                _health_collector = _HealthCollector(
-                    audit_emit=_hc_audit,
-                    healer=_healer,
-                )
-                _health_collector.start()
-                _plugins_route.set_collector(_health_collector)
-        except Exception:
-            import logging as _hc_log
-            _hc_log.getLogger("corvin.plugins.health").warning(
-                "health collector not started (Skills registry unavailable?)", exc_info=True
-            )
+        _health_collector = _health_collector_handle()
     if not hasattr(app.state, "dispatcher") or app.state.dispatcher is None:
         app.state.dispatcher = RunDispatcher()
     if not hasattr(app.state, "rate_limiter") or app.state.rate_limiter is None:
@@ -419,10 +432,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # halfway through on_unload().
         if _health_collector is not None:
             try:
-                await _health_collector.stop()
-                from corvin_console.routes import plugins as _pr
+                from corvin_plugins.bootstrap import stop_health_monitoring as _stop_hm
 
-                _pr.set_collector(None)
+                await _stop_hm()
             except Exception:
                 pass
         # Flush the audit fan-out BEFORE unloading: fan-out is a hand-off, so copies
@@ -778,8 +790,13 @@ async def a2a_friendship_ack(request: Request) -> JSONResponse:
 # ── Auth note ────────────────────────────────────────────────────────
 #
 # Static atlr_* token auth has been removed. For local deployments the
-# loopback binding (127.0.0.1) is the security boundary. OIDC/JWT via
-# resolve_jwt() is available and will be enforced in the cloud phase.
+# loopback binding (127.0.0.1) is the security boundary — and ``_jwt_guard``
+# now ENFORCES it: a non-loopback peer must present a valid OIDC JWT
+# (E-09). Run the gateway with ``--no-proxy-headers`` unless a trusted
+# reverse proxy stamps ``X-Forwarded-For`` for every request; with proxy
+# headers on, a proxy that omits the header makes remote callers look
+# loopback (the same hazard as the console's local-login, see
+# ``corvin_console.standalone``).
 
 
 # ── Endpoints ────────────────────────────────────────────────────────

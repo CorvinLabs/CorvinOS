@@ -280,8 +280,12 @@ def test_bootstrap_consults_trust_before_importing_the_plugin():
     )
 
 
-def test_trust_failure_degrades_to_allowing_rather_than_breaking_boot(monkeypatch, tmp_path):
-    """A broken trust config must not cost the platform its boot."""
+def test_trust_failure_refuses_the_plugin_rather_than_breaking_boot(monkeypatch, tmp_path):
+    """A broken trust config must not cost the platform its boot — it costs the
+    PLUGIN. Fail-closed since 2026-09-03 (finding A4): an evaluator that raised
+    used to answer "allowed", which let an unsigned community plugin load the
+    moment the trust store broke. The refusal is audited (plugin.load_refused,
+    reason=trust_evaluation_failed) rather than raised."""
     from corvin_plugins import bootstrap
 
     def _boom(*a, **kw):
@@ -297,4 +301,4 @@ def test_trust_failure_degrades_to_allowing_rather_than_breaking_boot(monkeypatc
 
     assert bootstrap._trust_permits(
         _Rec(), tenant_id="_default", corvin_home=tmp_path
-    ) is True
+    ) is False

@@ -1,9 +1,18 @@
 """Multi-scope skill registry.
 
-Lookup-Order on list/get: task -> session -> project -> user
-(higher scope shadows lower). create() defaults to ``detect_scope()``
-from forge.scope (ws_scope axis only — there is no permission-scope axis
-for skills).
+Lookup-Order on list/get: user -> project -> session -> task
+(HIGHER scope shadows lower). The previous iteration order returned the
+FIRST hit in ``VALID_SCOPES`` (task first), so a throwaway task-scope skill
+replaced the body of a curated user-scope skill at injection time
+(``skill_inject.collect_active_skills`` consumes ``list_with_scope()``) —
+adversarial review D-06. create() defaults to ``detect_scope()`` from
+forge.scope (ws_scope axis only — there is no permission-scope axis for
+skills).
+
+Audit: every scope's registry appends to the TENANT CORE CHAIN
+(``<tenant_home>/global/forge/audit.jsonl`` via ``forge.paths``) — the chain
+the boot tripwire, ``audit_query`` and the compliance reports read. Events
+used to land in ``<scope_root>/audit.jsonl``, which nothing verified (D-07).
 
 Promotion gates (LDD twist over forge):
   task    -> session: requires >=1 grade with score > 0
@@ -31,6 +40,9 @@ def _import_forge_scope():
 
 
 VALID_SCOPES, detect_scope, scope_root = _import_forge_scope()
+
+#: Resolution order — highest scope first, so the curated copy wins.
+SHADOW_ORDER: tuple[str, ...] = tuple(reversed(VALID_SCOPES))
 
 # Promotion target -> minimum bar
 _PROMOTE_GATES: dict[tuple[str, str], str] = {
@@ -72,11 +84,15 @@ class MultiSkillRegistry:
         self._registries: dict[str, SkillRegistry] = {}
 
     # forge.scope.scope_root returns "<...>/forge" — we strip the trailing
-    # forge/ and append skill-forge/ so the two plugins SHARE the parent
-    # (audit.jsonl lives in the parent).
+    # forge/ and append skill-forge/ so the two plugins SHARE the parent.
     def _root_for(self, scope: str) -> Path:
         forge_root = scope_root(scope, **self._kwargs)
         return forge_root.parent / self.SUBDIR
+
+    def audit_path(self) -> Path:
+        """``<tenant_home>/global/forge/audit.jsonl`` — the tenant core chain."""
+        from forge.paths import tenant_global_dir  # forge on sys.path via _import_forge_scope
+        return tenant_global_dir(self.tenant_id) / "forge" / "audit.jsonl"
 
     def _registry(self, scope: str) -> SkillRegistry:
         if scope not in VALID_SCOPES:
@@ -88,6 +104,7 @@ class MultiSkillRegistry:
             root.mkdir(parents=True, exist_ok=True)
             self._registries[scope] = SkillRegistry(
                 root, hash_chain=self._hash_chain,
+                audit_path=self.audit_path(),
             )
         return self._registries[scope]
 
@@ -117,8 +134,33 @@ class MultiSkillRegistry:
             created_by=created_by,
         )
 
+    def update_body(
+        self, name: str, *, scope: str, body_md: str, description: str | None = None,
+    ) -> SkillSpec:
+        """Replace the body of an existing skill IN PLACE (same scope).
+
+        Grades, type, claim and created_by are preserved; ``meta.updated_at``
+        is stamped. Lint + content-hash + ``skill.create`` audit run through
+        ``SkillRegistry.create(overwrite=True)`` exactly as for a new skill.
+        """
+        import time as _time
+        reg = self._registry(scope)
+        old = reg.get(name)
+        if old is None:
+            raise KeyError(name)
+        reg.create(
+            name=name, type=old.type, body_md=body_md,
+            description=description if description is not None else old.description,
+            claim=old.claim, scope=scope, overwrite=True,
+            created_by=old.created_by,
+            meta={**(old.meta or {}), "updated_at": _time.time()},
+        )
+        if old.grades:
+            reg.set_grades(name, list(old.grades))
+        return reg.get(name)  # type: ignore[return-value]
+
     def get(self, name: str) -> SkillSpec | None:
-        for ws_scope in VALID_SCOPES:
+        for ws_scope in SHADOW_ORDER:
             spec = self._registry(ws_scope).get(name)
             if spec:
                 return spec
@@ -128,7 +170,7 @@ class MultiSkillRegistry:
         return self._registry(scope).get(name)
 
     def find_scope(self, name: str) -> str | None:
-        for ws_scope in VALID_SCOPES:
+        for ws_scope in SHADOW_ORDER:
             if self._registry(ws_scope).get(name):
                 return ws_scope
         return None
@@ -141,7 +183,7 @@ class MultiSkillRegistry:
 
     def list(self) -> list[SkillSpec]:
         seen: dict[str, SkillSpec] = {}
-        for ws_scope in VALID_SCOPES:
+        for ws_scope in SHADOW_ORDER:
             for spec in self._registry(ws_scope).list():
                 if spec.name not in seen:
                     seen[spec.name] = spec
@@ -149,7 +191,7 @@ class MultiSkillRegistry:
 
     def list_with_scope(self) -> list[tuple[str, SkillSpec]]:
         seen: dict[str, tuple[str, SkillSpec]] = {}
-        for ws_scope in VALID_SCOPES:
+        for ws_scope in SHADOW_ORDER:
             for spec in self._registry(ws_scope).list():
                 if spec.name not in seen:
                     seen[spec.name] = (ws_scope, spec)
@@ -158,9 +200,11 @@ class MultiSkillRegistry:
     def delete(
         self, name: str, *, scope: str | None = None, reason: str = "",
     ) -> bool:
+        """Delete the copy ``get()`` would return (highest scope) unless
+        ``scope`` pins one."""
         if scope is not None:
             return self._registry(scope).delete(name, reason=reason)
-        for ws_scope in VALID_SCOPES:
+        for ws_scope in SHADOW_ORDER:
             reg = self._registry(ws_scope)
             if reg.get(name):
                 return reg.delete(name, reason=reason)
@@ -214,15 +258,20 @@ class MultiSkillRegistry:
             created_by=spec.created_by,
         )
         # Carry over grades so subsequent promotion gates can see the
-        # accumulated history. (forge.promote doesn't have grades — for
-        # SkillForge they are the gate's only signal.)
-        for g in spec.grades:
-            self._registry(to).grade(
-                spec.name,
-                run_id=g.get("run_id", ""),
-                score=float(g.get("score", 0.0)),
-                notes=g.get("notes", ""),
-            )
+        # accumulated history. Copied verbatim — NOT re-graded: re-running
+        # grade() wrote N fresh skill.grade audit records with the original
+        # run_ids and new timestamps (D-18). The move is audited ONCE below.
+        target = self._registry(to)
+        if spec.grades:
+            target.set_grades(spec.name, list(spec.grades))
+        target._audit(
+            "skill.promote", target.get(spec.name) or new_spec,
+            extra={
+                "from_scope": from_scope, "to_scope": to,
+                "force": bool(force), "n_grades": spec.n_grades,
+                "mean_score": round(spec.mean_score, 4),
+            },
+        )
         # MOVE semantics: drop the source-scope copy so subsequent
         # find_scope() reports the new (higher) scope and the next
         # promotion gate is evaluated against the right (from, to) pair.

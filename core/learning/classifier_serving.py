@@ -151,7 +151,9 @@ class ClassifierService:
 
     def _keyword_fallback(self, task_text: str) -> PredictionResult:
         """Fallback to keyword classifier."""
-        from operator.context_engineering.task_classifier import classify
+        from .classifier_model import import_context_engineering
+        import_context_engineering()
+        from context_engineering.task_classifier import classify
         result = classify(task_text)
         return PredictionResult(
             complexity=result.complexity.value,

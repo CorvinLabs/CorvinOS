@@ -110,12 +110,31 @@ _PROVIDER_MODULE_NAMES: tuple[str, ...] = (
 #: "must not block for more than 2 s"; this is what makes the sentence true.
 HEALTH_CHECK_DEADLINE_S = 2.0
 
+#: Wall-clock ceiling for one ``on_load()``.  ``register()`` ran ``on_load``
+#: synchronously under the plugin's operation lock with no deadline, so a wedged
+#: network connect inside one plugin's ``on_load`` held ``boot_platform()`` —
+#: and with it both shipped hosts — forever (2026-09-03 finding A3).  A load
+#: that does not return in time is a FAILED load: rolled back like a raise, and
+#: fatal on the compliance boot layer like every other compliance load failure.
+LOAD_DEADLINE_S = 30.0
+
 
 class HealthCheckTimeout(TimeoutError):
     """A plugin's ``health_check()`` did not answer within its deadline."""
 
 
-def _call_with_deadline(fn: "Callable[[], Any]", deadline_s: float, plugin_id: str):
+class PluginLoadTimeout(TimeoutError):
+    """A plugin's ``on_load()`` did not return within :data:`LOAD_DEADLINE_S`."""
+
+
+def _call_with_deadline(
+    fn: "Callable[[], Any]",
+    deadline_s: float,
+    plugin_id: str,
+    *,
+    what: str = "health_check",
+    timeout_exc: "type[TimeoutError]" = HealthCheckTimeout,
+):
     """Run ``fn`` and give up waiting after ``deadline_s``.
 
     The breaker counts raises and cooperative ``ok=False`` — a health check that
@@ -128,21 +147,27 @@ def _call_with_deadline(fn: "Callable[[], Any]", deadline_s: float, plugin_id: s
     kill a thread. Abandoning it costs one stuck thread; waiting on it costs the
     admin API. A plugin that wedges repeatedly therefore leaks threads, which is
     the visible symptom of a bug it already has.
+
+    ``fn`` runs inside a COPY of the caller's ``contextvars`` context: a bare
+    worker thread does not inherit ContextVars, and ``loading.current()`` — the
+    attribution every provider registry reads during ``on_load`` — is one. The
+    same helper serves ``on_load`` (``what="on_load"``, :class:`PluginLoadTimeout`).
     """
     import concurrent.futures as _futures
+    import contextvars as _contextvars
 
     # NOT a context manager: ThreadPoolExecutor.__exit__ joins its worker, which
     # is precisely what must not happen when the worker is wedged — the deadline
     # would then be a lie. shutdown(wait=False) abandons it instead.
     pool = _futures.ThreadPoolExecutor(
-        max_workers=1, thread_name_prefix=f"health-{plugin_id[:24]}"
+        max_workers=1, thread_name_prefix=f"{what[:12]}-{plugin_id[:24]}"
     )
-    future = pool.submit(fn)
+    future = pool.submit(_contextvars.copy_context().run, fn)
     try:
         return future.result(timeout=deadline_s)
     except _futures.TimeoutError:
-        raise HealthCheckTimeout(
-            f"health_check for {plugin_id!r} exceeded {deadline_s:.1f}s"
+        raise timeout_exc(
+            f"{what} for {plugin_id!r} exceeded {deadline_s:.1f}s"
         ) from None
     finally:
         # An earlier version cleared `concurrent.futures.thread._threads_queues`
@@ -508,8 +533,21 @@ class PluginRegistry:
             # registries and the extension bus read this instead of trying to
             # work out the caller from an object or a plugin_type — see
             # `loading.py` for the three defects that came from guessing.
+            #
+            # Bounded by LOAD_DEADLINE_S (finding A3): on_load runs on a worker
+            # that carries a copy of this context (so `loading.current()` still
+            # attributes it); a load that overruns raises PluginLoadTimeout and
+            # is rolled back below exactly like a load that raised. The worker
+            # is abandoned, not killed — an on_load that later "finishes" in
+            # that orphan thread finds its registry slot already released.
             with _loading.loading(plugin.plugin_id, ctx.tenant_id):
-                plugin.on_load(ctx)
+                _call_with_deadline(
+                    lambda: plugin.on_load(ctx),
+                    LOAD_DEADLINE_S,
+                    plugin.plugin_id,
+                    what="on_load",
+                    timeout_exc=PluginLoadTimeout,
+                )
         except Exception:
             # on_load failed — roll back EVERYTHING it managed to take, not just
             # the registry maps. A half-loaded plugin can already hold a provider
@@ -687,6 +725,51 @@ class PluginRegistry:
             if plugin_id not in self._plugins:
                 return True
             return self._boot_layers.get(plugin_id, BootLayer.INSTALLED) is not BootLayer.COMPLIANCE
+
+    def restart(self, plugin_id: str) -> None:
+        """Unload and reload ``plugin_id`` in place, keeping its boot layer.
+
+        The healing orchestrator's soft restart used to be ``unregister()`` then
+        ``register(boot_layer=<what it was>)``.  Those two are a public API pair,
+        and the ADR-0233 D5 same-epoch guard treats exactly that sequence as the
+        thread-escape attack it was written for — so every soft restart of a
+        ``boot_layer=core`` plugin was "downgraded to installed" by the guard,
+        silently (2026-09-03 finding A5).  A restart is ONE operation on a plugin
+        the registry already granted the layer to; it is performed here, under
+        the plugin's operation lock, and the same-epoch mark is cleared for it
+        because it is not a re-registration.
+
+        Machinery only: the compliance boot layer is refused outright — a window
+        in which the audit writer is unregistered is not something an automatic
+        actor may open (the same refusal ``HealingOrchestrator`` makes before it
+        gets here).  Raises ``PluginNotFound`` if not registered; a failed
+        ``on_load`` leaves the plugin UNREGISTERED (the level-1 state) with the
+        same-epoch mark restored, never half-loaded.
+        """
+        if not self.can_disable(plugin_id):
+            raise PluginDisableRefused(
+                f"{plugin_id!r} is on the compliance boot layer and cannot be restarted"
+            )
+        with self._op_lock(plugin_id):
+            with self._lock:
+                plugin = self._plugins.get(plugin_id)
+                ctx = self._contexts.get(plugin_id)
+                boot_layer = self._boot_layers.get(plugin_id, BootLayer.INSTALLED)
+            if plugin is None or ctx is None:
+                raise PluginNotFound(plugin_id)
+            self._unregister_locked(plugin_id, operator_initiated=False)
+            # Not a re-registration: this plugin is being put back with the
+            # layer the registry itself recorded for it.
+            with self._lock:
+                self._unregistered_this_epoch.pop(plugin_id, None)
+            try:
+                self._register_locked(plugin, ctx, boot_layer)
+            except BaseException:
+                # The plugin is unregistered again; re-arm the guard so a thread
+                # that outlived the failed on_load cannot use the gap.
+                with self._lock:
+                    self._unregistered_this_epoch[plugin_id] = self._registration_epoch
+                raise
 
     def disable(self, plugin_id: str) -> None:
         """Operator-facing unload.  Refuses the compliance boot layer.
@@ -927,6 +1010,10 @@ def unregister(plugin_id: str, *, operator_initiated: bool = False) -> None:
 
 def disable(plugin_id: str) -> None:
     _registry.disable(plugin_id)
+
+
+def restart(plugin_id: str) -> None:
+    _registry.restart(plugin_id)
 
 
 def can_disable(plugin_id: str) -> bool:

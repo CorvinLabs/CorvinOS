@@ -7,12 +7,14 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 # Adjust imports based on actual structure
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'core'))
-
-from skills.skill_manager import SkillManager, SkillExecutor, ExecutionResult
-from skills.state_manager import StateManager, RunState
-from skills.skill_validator import validate_skill_manifest
+# Import through the canonical package. The previous ``sys.path.insert(0,
+# <repo>/core)`` created a second module identity (``skills.skill_manager``)
+# AND put ``core/paths`` in front of every other ``paths`` module for the
+# rest of the pytest session — which broke the console imports of any test
+# collected after this file.
+from core.skills.skill_manager import SkillManager, SkillExecutor, ExecutionResult
+from core.skills.state_manager import StateManager, RunState
+from core.skills.skill_validator import validate_skill_manifest
 
 
 class TestSkillManager:
@@ -394,8 +396,9 @@ learning_signal: {}
         install_result = mgr.install_skill(skill_bundle)
         assert install_result['success'] is True
 
-        # Verify installed
-        assert (temp_corvin_home / 'skills' / 'test.skill_v1.0.0').exists()
+        # Verify installed — INTO THE TENANT skills dir (ADR-0007), never <home>/skills
+        assert (mgr.skills_dir / 'test.skill_v1.0.0').exists()
+        assert mgr.skills_dir == temp_corvin_home / 'tenants' / '_default' / 'skills'
 
 
 if __name__ == '__main__':

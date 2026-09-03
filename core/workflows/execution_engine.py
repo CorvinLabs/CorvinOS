@@ -24,12 +24,12 @@ from core.context_engineering.execution_context import (
     ContextStack,
 )
 from core.context_engineering.context_bus import ContextBus, get_current_tenant_id
-from core.workflows.corvin_workflows.runner import (
+from corvin_workflows.runner import (
     DAGRunner,
     RunResult,
     ResumeContext,
 )
-from core.workflows.corvin_workflows.storage import WorkflowDoc
+from corvin_workflows.storage import WorkflowDoc
 
 _log = logging.getLogger("core.workflows.execution_engine")
 

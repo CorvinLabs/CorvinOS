@@ -10,8 +10,8 @@ import argparse
 from dataclasses import asdict
 from typing import Optional
 
-from core.console.corvin_console.feature_flags import tier_of
-from core.console.corvin_console.promotion_daemon import AuditEvent
+from corvin_console.feature_flags import tier_of
+from corvin_console.promotion_daemon import AuditEvent
 from core.telemetry import get_flag_metrics
 
 
@@ -64,7 +64,7 @@ def cmd_status(args) -> int:
         return 0
     else:
         # Show all flags (abbreviated)
-        from core.console.corvin_console.feature_flags import REGISTRY
+        from corvin_console.feature_flags import REGISTRY
 
         print("\nFeature Flags by Tier:")
         tiers = {"alpha": [], "beta": [], "stable": [], "production": []}

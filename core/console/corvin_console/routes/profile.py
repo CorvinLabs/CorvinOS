@@ -365,7 +365,7 @@ def profile_reset(
 @router.post("/profile/preview")
 def profile_preview(
     body: ProfilePreviewRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Render the TTS-audience block for the candidate audience config
     WITHOUT persisting anything. The SPA uses this to show ‚so spräche

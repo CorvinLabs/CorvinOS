@@ -381,7 +381,7 @@ def _entries(tenant_id: str) -> dict[str, _Entry]:
     # DEFENSIVE: Also check tenant.corvin.yaml for installed plugins
     # in case registry.yaml is out of sync (e.g., installation in progress)
     try:
-        from core.plugins.corvin_plugins.manifest import PluginRecord, PluginOrigin
+        from corvin_plugins.manifest import PluginRecord, PluginOrigin
         from forge import tenants
 
         tenant_home = tenants.tenant_home(tenant_id)

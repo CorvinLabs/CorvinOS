@@ -20,8 +20,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
-from .event_schema import LearningEvent, LearningEventType
+import logging
+
 from .event_emitter import EventEmitter
+from .learning_events import EventType, LearningEvent
+
+logger = logging.getLogger(__name__)
 
 
 class DecisionStyle(str, Enum):
@@ -464,23 +468,24 @@ class UserProfileManager:
 
         return prediction
 
-    async def _queue_preference_updated(
-        self, profile: UserProfile, feedback: dict[str, Any]
-    ) -> None:
-        """Async helper for emitting preference events via EventEmitter (ADR-0314).
+    @staticmethod
+    def preference_updated_event(profile: UserProfile, feedback: dict[str, Any]) -> LearningEvent:
+        """Build the ``preference_updated`` learning record (ADR-0318, ONE wire format).
 
-        Called from sync _emit_preference_updated via asyncio.create_task.
+        ``learning_events.LearningEvent(EventType.PREFERENCE, skill_id="os.user_profile",
+        signal={"kind": "preference_updated", ...})`` — the envelope the sync
+        ``EventEmitter`` / ``event_store.EventStore`` persist. The user id is
+        carried inside ``signal`` (pseudonymous identifier, needed for GDPR
+        Art. 17 erasure); the payload is metadata only — never free text.
         """
-        event = LearningEvent(
-            event_type=LearningEventType.PREFERENCE_SET,
+        return LearningEvent.create(
+            event_type=EventType.PREFERENCE,
+            skill_id="os.user_profile",
             tenant_id=profile.tenant_id,
-            instance_id="user-profile-manager",  # System component
-            skill_name=None,
-            session_id="system",  # Out-of-band profile update
-            timestamp_utc=datetime.now(),
-            user_id=profile.user_id,
-            payload={
-                "feedback_keys": list(feedback.keys()),
+            signal={
+                "kind": "preference_updated",
+                "user_id": profile.user_id,
+                "feedback_keys": sorted(str(k) for k in feedback.keys()),
                 "decision_style": profile.decision_style.value,
                 "conciseness": profile.conciseness_preference,
                 # Which skills the feedback touched, BY ID ONLY — never a
@@ -492,61 +497,34 @@ class UserProfileManager:
                     str(k) for k in (feedback.get("skill_feedback") or {})
                 ),
             },
-            tags=["user-preference"],
+            lom="core.learning.user_profile:UserProfileManager.update_from_feedback",
         )
-
-        try:
-            if self.event_emitter is not None:
-                await self.event_emitter.emit(event)
-            else:
-                # Fallback: Direct EventStore.write_event (blocking, legacy path)
-                self.event_store.write_event(event)
-        except Exception as e:
-            # Fail-closed: log but do not raise
-            print(f"[WARN] Failed to emit preference update event: {e}")
 
     def _emit_preference_updated(
         self, profile: UserProfile, feedback: dict[str, Any]
     ) -> None:
-        """Emit UserPreferenceUpdated learning event (non-blocking).
+        """Emit the preference_updated learning event (synchronous, non-blocking).
 
-        Logs preference change via event_store if configured.
-        Fail-closed: if emission fails, logs warning but does not raise.
+        ``EventEmitter.emit`` is SYNCHRONOUS (bounded queue + daemon worker); the
+        previous version built an ``event_schema`` event and ``await``-ed it from
+        an ``asyncio.create_task`` — the worker then raised
+        ``AttributeError: timestamp`` and every preference event was lost (N-05).
 
-        Args:
-            profile: Updated profile
-            feedback: Feedback that triggered update
+        Fail-closed for the caller: emission problems are logged, never raised.
         """
         if not self.event_store and not self.event_emitter:
             return  # Neither configured; skip emission
 
         try:
-            # Schedule async emission without blocking main thread
-            import asyncio
-            try:
-                asyncio.create_task(self._queue_preference_updated(profile, feedback))
-            except RuntimeError:
-                # No event loop running; fall back to sync write_event
-                if self.event_store:
-                    event = LearningEvent(
-                        event_type=LearningEventType.PREFERENCE_SET,
-                        tenant_id=profile.tenant_id,
-                        instance_id="user-profile-manager",
-                        skill_name=None,
-                        session_id="system",
-                        timestamp_utc=datetime.now(),
-                        user_id=profile.user_id,
-                        payload={
-                            "feedback_keys": list(feedback.keys()),
-                            "decision_style": profile.decision_style.value,
-                            "conciseness": profile.conciseness_preference,
-                            "skill_ids": sorted(
-                                str(k) for k in (feedback.get("skill_feedback") or {})
-                            ),
-                        },
-                        tags=["user-preference"],
+            event = self.preference_updated_event(profile, feedback)
+            if self.event_emitter is not None:
+                if not self.event_emitter.emit(event):
+                    logger.warning(
+                        "preference_updated event DROPPED (queue full / emitter stopped)"
                     )
-                    self.event_store.write_event(event)
+            else:
+                # Fallback: direct write to the SAME sync store the emitter wraps
+                # (``core.learning.event_store.EventStore``).
+                self.event_store.write_event(event)
         except Exception as e:
-            # Fail-closed: log but do not raise
-            print(f"[WARN] Failed to emit preference update event: {e}")
+            logger.warning(f"Failed to emit preference update event: {e}")

@@ -29,8 +29,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Add core path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "core"))
+# NO `sys.path.insert(0, <repo>/core)` here (2026-09-03 finding A11): with
+# core/ first on sys.path, `import audit` resolved to core/audit instead of
+# operator/bridges/shared/audit.py for every test collected AFTER this file,
+# and 26 tests went red order-dependently. Package imports only — see
+# test_adversarial_fixes_2026_09_03.py::test_no_test_puts_core_first_on_sys_path.
 
 
 @dataclass

@@ -575,21 +575,27 @@ class PerformanceAggregator:
         if not self.event_emitter:
             return
 
+        from .learning_events import EventType as _WireEventType
+        from .learning_events import LearningEvent as _WireEvent
+
         for tool_id, metrics in tool_metrics.items():
             try:
-                event = LearningEvent(
-                    event_type=LearningEventType.METRIC_AGGREGATED,
+                # ONE wire format (N-05): the emitter persists ONLY
+                # learning_events records — METRIC / "tool:<id>" /
+                # signal={kind: "tool_metrics_aggregated", ...}. emit() is sync.
+                event = _WireEvent.create(
+                    event_type=_WireEventType.METRIC,
+                    skill_id=f"tool:{tool_id}",
                     tenant_id=metrics.tenant_id,
-                    instance_id="aggregator",
-                    skill_name=None,
-                    session_id="batch-job",
-                    timestamp_utc=datetime.now(timezone.utc),
-                    payload={
+                    signal={
+                        "kind": "tool_metrics_aggregated",
                         "metric_type": "tool_performance",
                         "tool_id": tool_id,
                         **metrics.to_event_payload(),
                     },
+                    lom="core.learning.performance_aggregation:PerformanceAggregator.aggregate_all_metrics",
                 )
-                await self.event_emitter.emit(event)
+                if not self.event_emitter.emit(event):
+                    logger.warning(f"Aggregation event for {tool_id} DROPPED (queue full / emitter stopped)")
             except Exception as e:
                 logger.warning(f"Failed to emit aggregation event for {tool_id}: {e}")

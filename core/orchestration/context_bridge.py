@@ -13,7 +13,7 @@ Key design principles:
 from typing import Optional, Any, Dict
 from dataclasses import dataclass
 
-from core.console.corvin_core.execution_context import (
+from corvin_core.execution_context import (
     ExecutionContext as ExecutionContextV1,
     EngineId,
     ModelSource,

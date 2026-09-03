@@ -281,21 +281,28 @@ class DecisionHistoryStore:
             finally:
                 conn.close()
 
-    def get_decision(self, decision_id: str) -> Optional[DecisionRecord]:
-        """Retrieve a single decision by ID.
+    def get_decision(self, decision_id: str, *, tenant_id: str) -> Optional[DecisionRecord]:
+        """Retrieve a single decision by ID (tenant-scoped, GDPR Art. 32).
 
         Args:
             decision_id: Decision identifier
+            tenant_id: Tenant identifier (required; a row of another tenant is
+                never returned, even when the decision_id is known)
 
         Returns:
-            DecisionRecord or None if not found
+            DecisionRecord or None if not found in this tenant
         """
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         with self._lock:
             conn = self._get_conn()
             cursor = conn.cursor()
 
             try:
-                cursor.execute("SELECT * FROM decisions WHERE decision_id = ?", (decision_id,))
+                cursor.execute(
+                    "SELECT * FROM decisions WHERE decision_id = ? AND tenant_id = ?",
+                    (decision_id, tenant_id),
+                )
                 row = cursor.fetchone()
 
                 if not row:
@@ -429,16 +436,21 @@ class DecisionHistoryStore:
             finally:
                 conn.close()
 
-    def get_decisions_by_session(self, session_id: str, limit: int = 1000) -> list[DecisionRecord]:
-        """Query all decisions in a session.
+    def get_decisions_by_session(
+        self, session_id: str, *, tenant_id: str, limit: int = 1000
+    ) -> list[DecisionRecord]:
+        """Query all decisions in a session (tenant-scoped, GDPR Art. 32).
 
         Args:
             session_id: Session identifier
+            tenant_id: Tenant identifier (required)
             limit: Max results
 
         Returns:
             List of DecisionRecord
         """
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         with self._lock:
             conn = self._get_conn()
             cursor = conn.cursor()
@@ -447,11 +459,11 @@ class DecisionHistoryStore:
                 cursor.execute(
                     """
                     SELECT * FROM decisions
-                    WHERE session_id = ?
+                    WHERE session_id = ? AND tenant_id = ?
                     ORDER BY timestamp_utc ASC
                     LIMIT ?
                     """,
-                    (session_id, limit),
+                    (session_id, tenant_id, limit),
                 )
                 rows = cursor.fetchall()
 

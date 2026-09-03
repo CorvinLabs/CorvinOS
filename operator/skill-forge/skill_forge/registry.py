@@ -4,6 +4,9 @@ Workspace layout (per scope root, e.g. <scope_root>/skill-forge/):
 
     <root>/
     ├── skills_registry.json     manifest of all skills in this scope
+    ├── manifest.json            ADR-0420 resolver manifest (same data,
+    │                            {"skills": [{"name", "metadata"}]} shape —
+    │                            what core.skills.corvin_skills reads)
     ├── skills/<name>/
     │   ├── SKILL.md             body with YAML front-matter
     │   └── meta.json            {sha256, created_at, ..., grades:[]}
@@ -253,15 +256,37 @@ class SkillRegistry:
     # ends up at ``<scope_root>/audit.jsonl``.
     AUDIT_NAME = "audit.jsonl"
 
-    def __init__(self, root: Path, *, hash_chain: bool = True):
+    # ADR-0420 unified manifest — the file ``core.skills.corvin_skills``
+    # (resolver / cache / hardening / console monitoring / ``corvin skills``)
+    # reads. Emitted on every ``_save`` so the resolver never reads a file
+    # nothing writes (adversarial review D-11).
+    RESOLVER_MANIFEST_NAME = "manifest.json"
+
+    def __init__(
+        self, root: Path, *, hash_chain: bool = True,
+        audit_path: Path | None = None,
+    ):
+        """``audit_path`` overrides the default ``<root>/../audit.jsonl``.
+
+        ``MultiSkillRegistry`` passes the TENANT CORE CHAIN
+        (``<tenant_home>/global/forge/audit.jsonl`` — what the boot tripwire,
+        ``audit_query`` and the compliance reports read) so SkillForge events
+        are links in the same verifiable chain as every other tenant event.
+        A bare ``SkillRegistry(root)`` (standalone / tests) keeps the sibling
+        default.
+        """
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / self.SKILLS_DIR).mkdir(exist_ok=True)
         self.manifest_path = self.root / self.MANIFEST_NAME
+        self.resolver_manifest_path = self.root / self.RESOLVER_MANIFEST_NAME
         self.lock_path = self.root / ".lock"
         self.hash_chain = hash_chain
+        self._audit_path_override = Path(audit_path) if audit_path is not None else None
         if not self.manifest_path.exists():
             self._atomic_write_text(self.manifest_path, "{}\n")
+        if not self.resolver_manifest_path.exists():
+            self._write_resolver_manifest({})
 
     # -- locking + atomic IO ----------------------------------------------
 
@@ -309,6 +334,79 @@ class SkillRegistry:
         self._atomic_write_text(
             self.manifest_path, json.dumps(data, indent=2) + "\n"
         )
+        # Same generation, second shape: the ADR-0420 resolver manifest.
+        self._write_resolver_manifest(data)
+
+    def _write_resolver_manifest(self, data: dict[str, dict]) -> None:
+        """Emit ``manifest.json`` in the shape ``SkillCache`` expects.
+
+        ``{"skills": [{"name": ..., "metadata": {...}}], ...}`` — one entry
+        per registered skill, metadata = the SkillSpec fields (grades kept as
+        counts + mean, never the notes). Atomic replace, so a reader either
+        sees the previous generation or this one; the resolver cache keys on
+        the file identity and drops stale entries on the next lookup.
+        """
+        skills = []
+        for name, d in sorted(data.items()):
+            try:
+                spec = SkillSpec.from_dict(d)
+            except TypeError:
+                continue
+            skills.append({
+                "name": name,
+                "origin": "skill-forge",
+                "lifecycle": "active",
+                "quality_score": round(spec.mean_score, 4),
+                "metadata": {
+                    "type": spec.type,
+                    "description": spec.description,
+                    "scope": spec.scope,
+                    "created_at": spec.created_at,
+                    "created_by": spec.created_by,
+                    "sha256": spec.sha256,
+                    "n_grades": spec.n_grades,
+                    "mean_score": round(spec.mean_score, 4),
+                    "content_hash_sha256": d.get("content_hash_sha256", ""),
+                },
+            })
+        self._atomic_write_text(
+            self.resolver_manifest_path,
+            json.dumps({
+                "schema": "ADR-0420",
+                "generated_at": time.time(),
+                "skills": skills,
+            }, indent=2) + "\n",
+        )
+
+    def set_grades(self, name: str, grades: list[dict[str, Any]]) -> SkillSpec:
+        """Replace a skill's grade history WITHOUT emitting per-grade audit.
+
+        Used by ``MultiSkillRegistry.promote`` to carry grades into the target
+        scope: the grades were already audited when they were given; re-running
+        ``grade()`` produced N fresh ``skill.grade`` records with old run_ids
+        and new timestamps (adversarial review D-18). The promotion itself is
+        audited once by the caller.
+        """
+        with self._locked():
+            data = self._load()
+            if name not in data:
+                raise KeyError(name)
+            clean = [asdict(Grade(
+                run_id=str(g.get("run_id", "")),
+                score=float(g.get("score", 0.0)),
+                ts=float(g.get("ts", time.time())),
+                notes=str(g.get("notes", "")),
+            )) for g in grades]
+            data[name]["grades"] = clean
+            self._save(data)
+            meta_path = self.root / self.SKILLS_DIR / name / "meta.json"
+            if meta_path.exists():
+                meta = json.loads(meta_path.read_text())
+                meta["grades"] = clean
+                self._atomic_write_text(
+                    meta_path, json.dumps(meta, indent=2) + "\n"
+                )
+            return SkillSpec.from_dict(data[name])
 
     # -- public API --------------------------------------------------------
 
@@ -456,6 +554,7 @@ class SkillRegistry:
         scope: str = "session",
         overwrite: bool = False,
         created_by: str = "",
+        meta: dict[str, Any] | None = None,
     ) -> SkillSpec:
         # Name validation — same shape as forge.registry.create
         if not name or len(name) > 128:
@@ -497,6 +596,7 @@ class SkillRegistry:
                 created_by=created_by or os.environ.get("SKILL_FORGE_PERSONA", ""),
                 sha256=sha,
                 grades=[],
+                meta=dict(meta or {}),
             )
 
             # Write SKILL.md atomically with front-matter, then meta.json
@@ -597,8 +697,14 @@ class SkillRegistry:
     # -- audit -------------------------------------------------------------
 
     def audit_path(self) -> Path:
-        """Shared audit lives ONE LEVEL UP, alongside (sibling to) the
-        forge workspace — so both plugins extend the same hash-chain."""
+        """The chain this registry appends to.
+
+        With an ``audit_path`` override (MultiSkillRegistry): the tenant core
+        chain. Without: ONE LEVEL UP, sibling to the forge workspace — the
+        standalone layout.
+        """
+        if self._audit_path_override is not None:
+            return self._audit_path_override
         return self.root.parent / self.AUDIT_NAME
 
     def _audit(

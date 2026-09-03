@@ -4,332 +4,227 @@ Verifies:
 1. Audit trail isolation: emit() respects tenant_id parameter
 2. Learning events isolation: EventStore uses tenant-scoped paths
 3. Emission routing: emit() passes tenant_id through all code paths
+
+Contracts these tests are written against (drift fixed 2026-09-03):
+
+* ``core.tenants.validate_tenant_id`` accepts ``^[a-z0-9_]{1,64}$`` — tenant
+  ids are ``tenant_a``-shaped, never hyphenated.
+* ``core.paths.tenant_*`` resolve under ``Path.home()/.corvin`` (NOT
+  ``CORVIN_HOME`` — a known divergence from ``forge.paths.corvin_home()``,
+  flagged in the 2026-09-03 review). The tests therefore point ``HOME`` at a
+  scratch directory and clear the ``VOICE_AUDIT_PATH`` / ``FORGE_AUDIT_PATH``
+  overrides that the repo-root conftest installs, so the tenant-scoped path
+  logic is what gets exercised.
+* ``EventStore(tenant_id)`` is bound to ONE tenant; ``write_event(event,
+  tenant_id)`` / ``read_events(tenant_id=...)`` reject any other tenant.
+* ``EventEmitter(event_store)`` takes a store, not a path + tenant.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
-import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator
 
 import pytest
 
 from core.learning.event_emitter import EventEmitter
 from core.learning.event_persistence import EventStore
 from core.learning.event_schema import LearningEvent, LearningEventType
-from core.paths import tenant_audit_file, tenant_learning_dir
+
+
+@pytest.fixture
+def scratch_home(tmp_path: Path, monkeypatch) -> Path:
+    """``Path.home()`` → tmp; no audit-path env override; CORVIN_HOME aligned."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CORVIN_HOME", str(home / ".corvin"))
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_AUDIT_PATH", raising=False)
+    return home / ".corvin"
+
+
+def _events(path: Path) -> list[dict]:
+    return [json.loads(l) for l in path.read_text().strip().split("\n") if l.strip()]
 
 
 class TestAuditPathTenantAwareness:
     """Test 1: Audit path construction respects tenant_id."""
 
-    def test_audit_path_default_tenant(self) -> None:
-        """Default tenant audit path."""
+    def test_audit_path_default_tenant(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import _audit_path
 
-        # Default tenant
         path = _audit_path()
-        assert "tenants/_default" in str(path)
-        assert path.name == "audit.jsonl"
+        assert path == scratch_home / "tenants" / "_default" / "audit.jsonl"
 
-    def test_audit_path_custom_tenant(self) -> None:
-        """Custom tenant audit path."""
+    def test_audit_path_custom_tenant(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import _audit_path
 
-        # Custom tenant
-        path = _audit_path("tenant-acme")
-        assert "tenants/tenant-acme" in str(path)
-        assert path.name == "audit.jsonl"
+        path = _audit_path("tenant_acme")
+        assert path == scratch_home / "tenants" / "tenant_acme" / "audit.jsonl"
 
-    def test_audit_path_isolation(self) -> None:
-        """Different tenants have different audit paths."""
+    def test_audit_path_isolation(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import _audit_path
 
-        path_default = _audit_path("_default")
-        path_acme = _audit_path("tenant-acme")
-        path_beta = _audit_path("tenant-beta")
+        paths = {_audit_path(t) for t in ("_default", "tenant_acme", "tenant_beta")}
+        assert len(paths) == 3
 
-        # All different
-        assert path_default != path_acme
-        assert path_default != path_beta
-        assert path_acme != path_beta
+    def test_hyphenated_tenant_id_is_rejected(self, scratch_home: Path) -> None:
+        from core.tenants import validate_tenant_id
+
+        with pytest.raises(ValueError):
+            validate_tenant_id("tenant-acme")
 
 
 class TestAuditEmissionWithTenantId:
-    """Test 2: emit() function routes events to correct tenant audit file."""
+    """Test 2: emit() routes events to the correct tenant audit file."""
 
-    def test_emit_writes_to_tenant_specific_path(self, tmp_path: Path) -> None:
-        """emit() writes to tenant-specific audit file."""
+    def test_emit_writes_to_tenant_specific_path(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import emit
 
-        # Mock CORVIN_HOME to tmp_path
-        old_env = os.environ.get("CORVIN_HOME")
-        try:
-            os.environ["CORVIN_HOME"] = str(tmp_path)
+        emit("test.event_a", tenant_id="tenant_a", data="test_a")
+        emit("test.event_b", tenant_id="tenant_b", data="test_b")
 
-            # Emit event for tenant A
-            emit("test.event_a", tenant_id="tenant-a", data="test_a")
+        file_a = scratch_home / "tenants" / "tenant_a" / "audit.jsonl"
+        file_b = scratch_home / "tenants" / "tenant_b" / "audit.jsonl"
+        assert file_a.exists(), f"Tenant A audit file not found: {file_a}"
+        assert file_b.exists(), f"Tenant B audit file not found: {file_b}"
 
-            # Emit event for tenant B
-            emit("test.event_b", tenant_id="tenant-b", data="test_b")
+        events_a, events_b = _events(file_a), _events(file_b)
+        assert len(events_a) == 1 and len(events_b) == 1
+        assert events_a[0]["event_type"] == "test.event_a"
+        assert events_b[0]["event_type"] == "test.event_b"
 
-            # Check both files exist and are isolated
-            file_a = tmp_path / "tenants" / "tenant-a" / "audit.jsonl"
-            file_b = tmp_path / "tenants" / "tenant-b" / "audit.jsonl"
-
-            assert file_a.exists(), f"Tenant A audit file not found: {file_a}"
-            assert file_b.exists(), f"Tenant B audit file not found: {file_b}"
-
-            # Parse events
-            events_a = [json.loads(line) for line in file_a.read_text().strip().split("\n") if line.strip()]
-            events_b = [json.loads(line) for line in file_b.read_text().strip().split("\n") if line.strip()]
-
-            # Each file should have only its own events
-            assert len(events_a) == 1
-            assert len(events_b) == 1
-            assert events_a[0]["event_type"] == "test.event_a"
-            assert events_b[0]["event_type"] == "test.event_b"
-        finally:
-            if old_env:
-                os.environ["CORVIN_HOME"] = old_env
-            else:
-                os.environ.pop("CORVIN_HOME", None)
-
-    def test_emit_default_tenant(self, tmp_path: Path) -> None:
-        """emit() defaults to _default tenant when tenant_id not specified."""
+    def test_emit_default_tenant(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import emit
 
-        old_env = os.environ.get("CORVIN_HOME")
-        try:
-            os.environ["CORVIN_HOME"] = str(tmp_path)
+        emit("test.default", package="test")
+        default_file = scratch_home / "tenants" / "_default" / "audit.jsonl"
+        assert default_file.exists()
+        events = _events(default_file)
+        assert len(events) == 1 and events[0]["event_type"] == "test.default"
 
-            # Emit without specifying tenant_id
-            emit("test.default", package="test")
-
-            # Should write to _default
-            default_file = tmp_path / "tenants" / "_default" / "audit.jsonl"
-            assert default_file.exists()
-
-            events = [json.loads(line) for line in default_file.read_text().strip().split("\n") if line.strip()]
-            assert len(events) == 1
-            assert events[0]["event_type"] == "test.default"
-        finally:
-            if old_env:
-                os.environ["CORVIN_HOME"] = old_env
-            else:
-                os.environ.pop("CORVIN_HOME", None)
-
-    def test_emit_cross_tenant_isolation(self, tmp_path: Path) -> None:
-        """emit() isolates events between tenants."""
+    def test_emit_cross_tenant_isolation(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import emit
 
-        old_env = os.environ.get("CORVIN_HOME")
-        try:
-            os.environ["CORVIN_HOME"] = str(tmp_path)
+        for i in range(5):
+            emit(f"test.event_{i}", tenant_id="tenant_x", seq=i)
+            emit(f"test.event_{i}", tenant_id="tenant_y", seq=i)
 
-            # Emit many events across multiple tenants
-            for i in range(5):
-                emit(f"test.event_{i}", tenant_id="tenant-x", seq=i)
-                emit(f"test.event_{i}", tenant_id="tenant-y", seq=i)
-
-            # Verify isolation
-            file_x = tmp_path / "tenants" / "tenant-x" / "audit.jsonl"
-            file_y = tmp_path / "tenants" / "tenant-y" / "audit.jsonl"
-
-            events_x = [json.loads(line) for line in file_x.read_text().strip().split("\n") if line.strip()]
-            events_y = [json.loads(line) for line in file_y.read_text().strip().split("\n") if line.strip()]
-
-            # Each tenant should have exactly 5 events
-            assert len(events_x) == 5
-            assert len(events_y) == 5
-
-            # Events should be tenant-specific
-            assert all(f"test.event_" in e["event_type"] for e in events_x)
-            assert all(f"test.event_" in e["event_type"] for e in events_y)
-
-            # Verify no cross-contamination
-            x_only = [e for e in events_x if e["event_type"] not in [e2["event_type"] for e2 in events_y]]
-            y_only = [e for e in events_y if e["event_type"] not in [e2["event_type"] for e2 in events_x]]
-            # Both should be empty since event types are the same, but that's OK
-            # The key is they're in different files
-            assert len(events_x) > 0 and len(events_y) > 0
-        finally:
-            if old_env:
-                os.environ["CORVIN_HOME"] = old_env
-            else:
-                os.environ.pop("CORVIN_HOME", None)
+        events_x = _events(scratch_home / "tenants" / "tenant_x" / "audit.jsonl")
+        events_y = _events(scratch_home / "tenants" / "tenant_y" / "audit.jsonl")
+        assert len(events_x) == 5 and len(events_y) == 5
+        assert all(e["event_type"].startswith("test.event_") for e in events_x + events_y)
 
 
 class TestEventStorePathIsolation:
     """Test 3: EventStore uses tenant-scoped paths, not hardcoded global paths."""
 
-    def test_eventstore_uses_tenant_learning_dir(self) -> None:
-        """EventStore initializes with tenant_id, not tenant_home."""
-        store = EventStore("tenant-test")
+    def test_eventstore_uses_tenant_learning_dir(self, scratch_home: Path) -> None:
+        store = EventStore("tenant_test")
+        assert store.tenant_id == "tenant_test"
+        assert store.events_dir == scratch_home / "tenants" / "tenant_test" / "learning" / "events"
+        assert "global" not in store.events_dir.parts, "Store should not use 'global' path"
 
-        # Verify store has tenant_id
-        assert store.tenant_id == "tenant-test"
+    def test_eventstore_rejects_hyphenated_tenant(self, scratch_home: Path) -> None:
+        with pytest.raises(ValueError):
+            EventStore("tenant-test")
 
-        # Verify events_dir uses tenant-scoped path
-        assert "tenant-test" in str(store.events_dir)
-        assert "learning" in str(store.events_dir)
-        assert "global" not in str(store.events_dir), "Store should not use 'global' path"
-
-    def test_eventstore_different_tenants_different_dirs(self) -> None:
-        """Different tenant IDs create different event directories."""
-        store_a = EventStore("tenant-a")
-        store_b = EventStore("tenant-b")
-
+    def test_eventstore_different_tenants_different_dirs(self, scratch_home: Path) -> None:
+        store_a, store_b = EventStore("tenant_a"), EventStore("tenant_b")
         assert store_a.events_dir != store_b.events_dir
-        assert "tenant-a" in str(store_a.events_dir)
-        assert "tenant-b" in str(store_b.events_dir)
+        assert "tenant_a" in store_a.events_dir.parts
+        assert "tenant_b" in store_b.events_dir.parts
 
     @pytest.mark.asyncio
-    async def test_eventstore_write_reads_tenant_scoped(self) -> None:
-        """EventStore writes and reads from tenant-scoped paths."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
+    async def test_eventstore_write_reads_tenant_scoped(self, scratch_home: Path, tmp_path: Path, monkeypatch) -> None:
+        # ``write_event`` commits to the CORE audit writer first (ADR-0232/0233,
+        # fail-closed) and verifies the commit through ``audit.audit_path()`` —
+        # which honours the ``VOICE_AUDIT_PATH`` override the repo conftest sets.
+        # Keep that override for this test: the learning-event DIRECTORY is what
+        # is under test here, the chain location is the writer's contract.
+        monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+        store_a, store_b = EventStore("tenant_a"), EventStore("tenant_b")
 
-            # Mock paths
-            old_home = os.environ.get("CORVIN_HOME")
-            try:
-                os.environ["CORVIN_HOME"] = str(tmp_path)
+        def _ev(tid: str, n: int, skill: str, etype: LearningEventType) -> LearningEvent:
+            return LearningEvent(
+                event_type=etype,
+                tenant_id=tid,
+                instance_id=f"test-{n}",
+                user_id=f"user{n}",
+                skill_name=skill,
+                session_id=f"session-{n}",
+                timestamp_utc=datetime.utcnow(),
+                event_id=f"event-{n}",
+                payload={"score": 0.95},
+            )
 
-                # Create stores for two tenants
-                store_a = EventStore("tenant-a")
-                store_b = EventStore("tenant-b")
+        # The core writer commits only for the CONTEXT tenant (CORVIN_TENANT_ID)
+        # and the store verifies the commit — so each tenant writes in its own
+        # context, exactly as two tenant processes would.
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_a")
+        await store_a.write_event(_ev("tenant_a", 1, "skill-a", LearningEventType.CONFIDENCE_SCORE), "tenant_a")
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_b")
+        await store_b.write_event(_ev("tenant_b", 2, "skill-b", LearningEventType.USER_FEEDBACK), "tenant_b")
 
-                # Create events
-                event_a = LearningEvent(
-                    event_type=LearningEventType.CONFIDENCE,
-                    tenant_id="tenant-a",
-                    instance_id="test-1",
-                    user_id="user1",
-                    skill_name="skill-a",
-                    session_id="session-1",
-                    timestamp_utc=datetime.utcnow(),
-                    event_id="event-1",
-                    payload={"score": 0.95},
-                )
+        events_a = await store_a.read_events(tenant_id="tenant_a", limit=10)
+        events_b = await store_b.read_events(tenant_id="tenant_b", limit=10)
+        assert len(events_a) == 1 and events_a[0].skill_name == "skill-a"
+        assert len(events_b) == 1 and events_b[0].skill_name == "skill-b"
 
-                event_b = LearningEvent(
-                    event_type=LearningEventType.FEEDBACK,
-                    tenant_id="tenant-b",
-                    instance_id="test-2",
-                    user_id="user2",
-                    skill_name="skill-b",
-                    session_id="session-2",
-                    timestamp_utc=datetime.utcnow(),
-                    event_id="event-2",
-                    payload={"feedback": "good"},
-                )
+        # a store bound to tenant_a must refuse tenant_b's data (fail-closed)
+        with pytest.raises(ValueError):
+            await store_a.read_events(tenant_id="tenant_b", limit=10)
 
-                # Write events
-                await store_a.write_event(event_a, "tenant-a")
-                await store_b.write_event(event_b, "tenant-b")
-
-                # Read back and verify isolation
-                events_a = await store_a.read_events(tenant_id="tenant-a", limit=10)
-                events_b = await store_b.read_events(tenant_id="tenant-b", limit=10)
-
-                # Each store should only see its own events
-                assert len(events_a) == 1
-                assert len(events_b) == 1
-                assert events_a[0].skill_name == "skill-a"
-                assert events_b[0].skill_name == "skill-b"
-
-                # Verify directory isolation
-                dir_a = tmp_path / "tenants" / "tenant-a" / "learning" / "events"
-                dir_b = tmp_path / "tenants" / "tenant-b" / "learning" / "events"
-                assert dir_a.exists()
-                assert dir_b.exists()
-                assert dir_a != dir_b
-            finally:
-                if old_home:
-                    os.environ["CORVIN_HOME"] = old_home
-                else:
-                    os.environ.pop("CORVIN_HOME", None)
+        dir_a = scratch_home / "tenants" / "tenant_a" / "learning" / "events"
+        dir_b = scratch_home / "tenants" / "tenant_b" / "learning" / "events"
+        assert dir_a.exists() and dir_b.exists() and dir_a != dir_b
 
 
 class TestEventEmitterTenantIntegration:
-    """Test 4: EventEmitter passes tenant_id to EventStore correctly."""
+    """Test 4: EventEmitter is bound to the tenant of the store it wraps."""
 
-    @pytest.mark.asyncio
-    async def test_emitter_initializes_store_with_tenant_id(self) -> None:
-        """EventEmitter passes tenant_id to EventStore."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
+    def test_emitter_wraps_tenant_bound_store(self, scratch_home: Path) -> None:
+        emitter_a = EventEmitter(EventStore("tenant_a"))
+        emitter_b = EventEmitter(EventStore("tenant_b"))
+        try:
+            assert emitter_a.store.tenant_id == "tenant_a"
+            assert emitter_b.store.tenant_id == "tenant_b"
+            assert emitter_a.store.events_dir != emitter_b.store.events_dir
+        finally:
+            for em in (emitter_a, emitter_b):
+                stop = getattr(em, "stop", None)
+                if callable(stop):
+                    stop()
 
-            old_home = os.environ.get("CORVIN_HOME")
-            try:
-                os.environ["CORVIN_HOME"] = str(tmp_path)
-
-                emitter_a = EventEmitter(tmp_path, "tenant-a")
-                emitter_b = EventEmitter(tmp_path, "tenant-b")
-
-                # Verify stores are initialized with tenant_id
-                assert emitter_a.store.tenant_id == "tenant-a"
-                assert emitter_b.store.tenant_id == "tenant-b"
-
-                # Verify event directories are different
-                assert emitter_a.store.events_dir != emitter_b.store.events_dir
-                assert "tenant-a" in str(emitter_a.store.events_dir)
-                assert "tenant-b" in str(emitter_b.store.events_dir)
-            finally:
-                if old_home:
-                    os.environ["CORVIN_HOME"] = old_home
-                else:
-                    os.environ.pop("CORVIN_HOME", None)
+    def test_emitter_rejects_a_path(self, scratch_home: Path) -> None:
+        with pytest.raises(TypeError):
+            EventEmitter(scratch_home)  # type: ignore[arg-type]
 
 
 class TestAuditChainHashingPerTenant:
     """Test 5: Audit chain hash integrity is maintained per tenant (no cross-contamination)."""
 
-    def test_audit_chain_separate_per_tenant(self, tmp_path: Path) -> None:
-        """Each tenant maintains its own hash chain independently."""
+    def test_audit_chain_separate_per_tenant(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import emit
 
-        old_env = os.environ.get("CORVIN_HOME")
-        try:
-            os.environ["CORVIN_HOME"] = str(tmp_path)
+        for i in range(3):
+            emit("test.event", tenant_id="tenant_x", seq=i)
+            emit("test.event", tenant_id="tenant_y", seq=i)
 
-            # Emit 3 events to each tenant
-            for i in range(3):
-                emit(f"test.event", tenant_id="tenant-x", seq=i)
-                emit(f"test.event", tenant_id="tenant-y", seq=i)
+        events_x = _events(scratch_home / "tenants" / "tenant_x" / "audit.jsonl")
+        events_y = _events(scratch_home / "tenants" / "tenant_y" / "audit.jsonl")
+        assert len(events_x) == 3 and len(events_y) == 3
 
-            # Parse files
-            file_x = tmp_path / "tenants" / "tenant-x" / "audit.jsonl"
-            file_y = tmp_path / "tenants" / "tenant-y" / "audit.jsonl"
+        chain_x = [e["hash"] for e in events_x]
+        chain_y = [e["hash"] for e in events_y]
+        assert chain_x != chain_y  # independent chains
 
-            events_x = [json.loads(line) for line in file_x.read_text().strip().split("\n") if line.strip()]
-            events_y = [json.loads(line) for line in file_y.read_text().strip().split("\n") if line.strip()]
-
-            # Extract hash chains
-            chain_x = [e["hash"] for e in events_x]
-            chain_y = [e["hash"] for e in events_y]
-
-            # Chains should be different (independent hash chains)
-            assert chain_x != chain_y
-
-            # Verify each chain is consistent
-            for i, event in enumerate(events_x):
+        for chain in (events_x, events_y):
+            for i, event in enumerate(chain):
                 if i == 0:
-                    assert event["prev_hash"] == ""
+                    assert not event.get("prev_hash"), "first record must have no predecessor"
                 else:
-                    assert event["prev_hash"] == events_x[i - 1]["hash"]
-
-            for i, event in enumerate(events_y):
-                if i == 0:
-                    assert event["prev_hash"] == ""
-                else:
-                    assert event["prev_hash"] == events_y[i - 1]["hash"]
-        finally:
-            if old_env:
-                os.environ["CORVIN_HOME"] = old_env
-            else:
-                os.environ.pop("CORVIN_HOME", None)
+                    assert event["prev_hash"] == chain[i - 1]["hash"]

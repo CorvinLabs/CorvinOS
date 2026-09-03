@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from .. import auth as session_auth
-from ..deps import require_session
+from ..deps import require_csrf, require_session
 from .. import _bootstrap
 
 _forge_paths = _bootstrap.forge_paths
@@ -555,7 +555,7 @@ async def get_graph_snapshot(
 @router.post("/{task_id}/graph/export")
 async def export_graph(
     task_id: str,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     format: str = Query("json", description="Export format: json|dot"),
 ):
     """

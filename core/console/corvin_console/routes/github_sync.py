@@ -25,7 +25,10 @@ class GitHubSyncWorker:
     
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
-        self.tenant_path = Path.home() / '.corvin' / 'tenants' / tenant_id
+        # Tenant directory through the shared resolver: honours CORVIN_HOME and
+        # the tenant axis (the previous ``Path.home()/.corvin`` ignored both —
+        # adversarial review E-02, 2026-09-03).
+        self.tenant_path = _tenant_path(tenant_id)
         self.config_file = self.tenant_path / 'github-config.json'
         self.audit_file = self.tenant_path / 'github-audit.jsonl'
         self.worker_status_file = self.tenant_path / 'github-worker-status.json'
@@ -204,12 +207,25 @@ class GitHubSyncWorker:
         return self._get_status()
 
 
-# Global worker instance
-_worker: Optional[GitHubSyncWorker] = None
+def _tenant_path(tenant_id: str) -> Path:
+    """``<corvin_home>/tenants/<tenant_id>/`` via ``forge.paths`` (SSOT)."""
+    from .. import _bootstrap  # noqa: PLC0415 — routes → console package root
+
+    return Path(_bootstrap.forge_paths.tenant_home(tenant_id))
+
+
+# One worker PER TENANT. A single process-global worker (the previous shape)
+# served whichever tenant asked first to every later caller — a cross-tenant
+# control channel.
+_workers: Dict[str, GitHubSyncWorker] = {}
+_workers_lock = threading.Lock()
+
 
 def get_worker(tenant_id: str = "_default") -> GitHubSyncWorker:
-    """Get or create the global sync worker."""
-    global _worker
-    if _worker is None:
-        _worker = GitHubSyncWorker(tenant_id)
-    return _worker
+    """Get or create the sync worker bound to *tenant_id*."""
+    with _workers_lock:
+        worker = _workers.get(tenant_id)
+        if worker is None:
+            worker = GitHubSyncWorker(tenant_id)
+            _workers[tenant_id] = worker
+        return worker

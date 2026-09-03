@@ -567,7 +567,7 @@ def _note_slow(tenant_id: str, point: str, plugin_id: str) -> bool:
 #: The flag registry lives in the Console package.  An ImportError naming one of
 #: these is "there is no Console here" (headless core, ADR-0241); an ImportError
 #: naming anything else came from INSIDE the Console and is a broken install.
-_FLAG_MODULES = frozenset({"corvin_console", "corvin_core.feature_flags"})
+_FLAG_MODULES = frozenset({"corvin_console", "corvin_core", "corvin_core.feature_flags"})
 
 
 def _flag_state(tenant_id: str) -> tuple[bool, bool]:

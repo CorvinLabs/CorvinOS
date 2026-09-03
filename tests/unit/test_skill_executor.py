@@ -30,6 +30,14 @@ from core.skills.executor import (
 # ============================================================================
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_corvin_home(tmp_path, monkeypatch):
+    """Every execution emits a ``skill.executed`` audit event to the tenant
+    core chain under CORVIN_HOME — pin it to a temp dir so the unit tests
+    never append to the live chain."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
+
+
 @pytest.fixture
 def executor():
     """Create a SkillExecutor instance."""
@@ -229,7 +237,10 @@ class TestErrorClassification:
     @pytest.mark.asyncio
     async def test_classify_timeout_error(self, executor):
         """Timeout error classified as ErrorClass.TIMEOUT (test 13)."""
-        executor.set_timeout("fast_skill", 50)
+        # The timeout is keyed by the callable's __name__ — the previous
+        # "fast_skill" key never matched, so the 30 s default applied and the
+        # assertion below could only pass by accident.
+        executor.set_timeout("slow_skill", 50)
 
         async def slow_skill():
             await asyncio.sleep(0.1)

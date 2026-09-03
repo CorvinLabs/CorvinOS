@@ -1,26 +1,26 @@
 """GDPR Art. 17 (Right to Erasure) Orchestrator — Coordinated cascade delete across modules.
 
 **Problem (C1–C3):** Separate delete methods in decision_history, outcome_feedback, user_profile
-lead to incomplete erasure if any step fails.
+and the ADR-0314 event files lead to incomplete erasure if any step is forgotten.
 
 **Solution:** Single orchestrator that:
-1. Gets all decision_ids for user (fail-fast)
-2. Deletes outcomes (linked to decisions)
-3. Deletes profile
-4. Deletes decisions
-5. Verifies complete erasure
+1. Deletes outcomes for the user (per-user, tenant-scoped)
+2. Deletes the user profile (``UserProfileManager.delete_user_profiles``)
+3. Deletes decisions for the user
+4. Erases the user's ADR-0314 learning events (partition rewrite + tombstone)
+5. Reports counts per store
 
 **Atomicity:** Not a true transaction (would need centralized DB), but retry logic ensures
 eventual consistency.
 
 **GDPR Art. 17 Compliance:**
 - Complete erasure (all related data deleted)
-- No partial erasure (verify step ensures this)
-- Fail-closed (raises exception if any delete fails without retry)
+- Fail-closed (raises exception if any delete fails after retries)
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -28,34 +28,32 @@ logger = logging.getLogger(__name__)
 
 
 class GDPRErasureCoordinator:
-    """Coordinate cascading deletion across decision_history, outcome_feedback, user_profile.
+    """Coordinate cascading deletion across decision_history, outcome_feedback,
+    user_profile and the ADR-0314 event store.
 
     Usage:
         coord = GDPRErasureCoordinator(
             decision_store=store_history,
             outcome_store=store_outcome,
-            profile_manager=manager_profile
+            profile_manager=manager_profile,
+            event_store=event_persistence.EventStore(tenant_id),
         )
-        deleted = coord.erase_user("tenant-1", "user-123")
-        # Returns total deleted rows, or raises exception if cascade fails
+        deleted = coord.erase_user("tenant_1", "user-123")
+        # Returns per-store counts, or raises if the cascade fails
     """
 
     def __init__(
         self,
         decision_store: object,  # DecisionHistoryStore
         outcome_store: object,  # OutcomeFeedbackStore
-        profile_manager: Optional[object] = None,  # UserProfileManager (optional for now)
+        profile_manager: Optional[object] = None,  # UserProfileManager
+        event_store: Optional[object] = None,  # event_persistence.EventStore (ADR-0314)
     ):
-        """Initialize coordinator with store references.
-
-        Args:
-            decision_store: DecisionHistoryStore instance
-            outcome_store: OutcomeFeedbackStore instance
-            profile_manager: UserProfileManager instance (optional)
-        """
+        """Initialize coordinator with store references."""
         self.decision_store = decision_store
         self.outcome_store = outcome_store
         self.profile_manager = profile_manager
+        self.event_store = event_store
 
     def erase_user(
         self, tenant_id: str, user_id: str, max_retries: int = 3
@@ -63,9 +61,10 @@ class GDPRErasureCoordinator:
         """Erase all user data (GDPR Art. 17).
 
         Cascades across:
-        1. Decision History
-        2. Outcome Feedback
-        3. User Profiles
+        1. Outcome Feedback
+        2. User Profiles
+        3. Decision History
+        4. ADR-0314 learning events (if an event_store was supplied)
 
         Args:
             tenant_id: Tenant identifier
@@ -73,7 +72,7 @@ class GDPRErasureCoordinator:
             max_retries: Retry count for transient failures
 
         Returns:
-            {"decisions": N, "outcomes": N, "profiles": N, "total": N}
+            {"decisions": N, "outcomes": N, "profiles": N, "events": N, "total": N}
 
         Raises:
             ValueError: If erasure fails after retries (fail-closed)
@@ -83,57 +82,42 @@ class GDPRErasureCoordinator:
 
         for attempt in range(max_retries):
             try:
-                # Step 1: Get all decision_ids for this user (verify user exists)
-                decisions = self.decision_store.get_decisions_by_type(
-                    tenant_id, choice_type="*"  # This is a hack — might not work
-                )
-                decision_ids = [d.decision_id for d in decisions if d.user_id == user_id]
-
-                deleted_outcomes = 0
-                deleted_decisions = 0
-                deleted_profiles = 0
-
-                # Step 2: Delete outcomes linked to these decisions
-                if decision_ids:
-                    for decision_id in decision_ids:
-                        outcomes = self.outcome_store.get_outcomes_by_decision(decision_id)
-                        for outcome in outcomes:
-                            if outcome.user_id == user_id:
-                                # Manually delete (no bulk method for decision cascades yet)
-                                pass  # TODO: implement outcome delete via decision_id
-
-                # For now: simple per-user delete
+                # Step 1: Outcomes (per-user, tenant-scoped delete)
                 deleted_outcomes = self.outcome_store.delete_user_outcomes(tenant_id, user_id)
 
-                # Step 3: Delete profile
-                if self.profile_manager:
-                    # TODO: implement delete_user_profiles() in UserProfileManager
-                    pass
-                    # deleted_profiles = self.profile_manager.delete_user_profiles(
-                    #     user_id, tenant_id
-                    # )
+                # Step 2: Profile
+                deleted_profiles = 0
+                if self.profile_manager is not None:
+                    deleted_profiles = self.profile_manager.delete_user_profiles(user_id, tenant_id)
 
-                # Step 4: Delete decisions
-                deleted_decisions = self.decision_store.delete_user_decisions(
-                    tenant_id, user_id
-                )
+                # Step 3: Decisions
+                deleted_decisions = self.decision_store.delete_user_decisions(tenant_id, user_id)
 
-                # Step 5: Verify (at least one module had data for user)
-                if deleted_decisions == 0 and deleted_outcomes == 0 and deleted_profiles == 0:
+                # Step 4: ADR-0314 event files (partition rewrite + tombstone + audit)
+                deleted_events = 0
+                if self.event_store is not None:
+                    deleted_events = asyncio.run(
+                        self.event_store.erase_user_events(tenant_id=tenant_id, user_id=user_id)
+                    )
+
+                total = deleted_decisions + deleted_outcomes + deleted_profiles + deleted_events
+                if total == 0:
                     logger.warning(
                         f"Erasure returned 0 rows for user {user_id} in tenant {tenant_id}"
                     )
 
                 logger.info(
                     f"Erasure complete: {deleted_decisions} decisions, "
-                    f"{deleted_outcomes} outcomes, {deleted_profiles} profiles"
+                    f"{deleted_outcomes} outcomes, {deleted_profiles} profiles, "
+                    f"{deleted_events} events"
                 )
 
                 return {
                     "decisions": deleted_decisions,
                     "outcomes": deleted_outcomes,
                     "profiles": deleted_profiles,
-                    "total": deleted_decisions + deleted_outcomes + deleted_profiles,
+                    "events": deleted_events,
+                    "total": total,
                 }
 
             except Exception as e:

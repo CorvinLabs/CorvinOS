@@ -143,8 +143,100 @@ def build_wheels() -> bool:
     return True
 
 
+# Names allowed at the site-packages ROOT of an installed wheel, besides the
+# dist-info dir. Keep in sync with tests/test_wheel_content_guard.py
+# (EXPECTED_ROOT_ENTRIES) — that test is the CI-side twin of this check.
+_EXPECTED_ROOT_ENTRIES = frozenset({
+    "corvinOS", "core", "ops",
+    "corvin_console", "corvin_core", "corvin_gateway", "corvin_license",
+    "corvin_plugins", "plugin_builder", "corvin_logging",
+    "corvin_compliance_reports", "corvin_compute", "corvin_workflows",
+    "corvin_delegate", "corvin_orchestration", "awpkg",
+    "vibe_engineering", "corvin_skills",
+    "corvinOS_path_fix.pth",
+})
+
+# Snippet run INSIDE the throwaway venv: import every console_scripts target,
+# import the console host, boot the platform (ADR-0232 tripwire) under a temp
+# CORVIN_HOME, and check the site-packages root. Exit code != 0 on any failure.
+_WHEEL_SMOKE = r"""
+import importlib, importlib.metadata as md, os, sys, sysconfig, tempfile
+from pathlib import Path
+
+expected = set(sys.argv[1].split(","))
+failures = []
+
+# 1. site-packages root contains only known names
+site = Path(sysconfig.get_paths()["purelib"])
+stray = sorted(
+    p.name for p in site.iterdir()
+    if p.name not in expected
+    and not p.name.endswith(".dist-info")
+    and not p.name.startswith("_")            # _virtualenv.pth, __pycache__
+    and p.name not in {"pip", "setuptools", "pkg_resources", "wheel", "distutils-precedence.pth"}
+    and not p.name.endswith(".pth")           # venv tooling .pth files
+    and "corvinos" not in p.name.lower()      # our own metadata dirs
+)
+# Only OUR stray files matter: filter out third-party dependency packages by
+# keeping names that came from the corvinos RECORD.
+record = md.distribution("corvinos").files or []
+ours = {str(f).split("/")[0] for f in record}
+stray = [n for n in stray if n in ours]
+if stray:
+    failures.append(f"unexpected site-packages root entries from the wheel: {stray}")
+
+# 2. every [project.scripts] target imports (module AND attribute)
+for ep in md.distribution("corvinos").entry_points:
+    if ep.group != "console_scripts":
+        continue
+    try:
+        getattr(importlib.import_module(ep.module), ep.attr)
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"entry point {ep.name} ({ep.value}) failed to import: {exc!r}")
+
+# 3. console host + tripwire boot under an isolated CORVIN_HOME
+with tempfile.TemporaryDirectory(prefix="corvin_wheel_smoke_") as home:
+    os.environ["HOME"] = home
+    os.environ["CORVIN_HOME"] = str(Path(home) / ".corvin")
+    os.environ["CORVIN_TELEMETRY_OPTIN"] = "false"
+    try:
+        import corvin_console.standalone  # noqa: F401
+        from corvin_plugins.bootstrap import boot_platform
+        boot_platform()
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"corvin_console.standalone / boot_platform() failed: {exc!r}")
+
+if failures:
+    print("\n".join("✗ " + f for f in failures))
+    sys.exit(1)
+print("✓ wheel smoke: root clean, entry points import, boot_platform() ran")
+"""
+
+
+def _wheel_contains_home_paths(wheel: Path) -> list[str]:
+    """Return wheel members whose content mentions a `/home/<user>` path."""
+    import zipfile
+
+    hits: list[str] = []
+    with zipfile.ZipFile(wheel) as zf:
+        for name in zf.namelist():
+            if name.endswith((".png", ".woff", ".woff2", ".ttf", ".ico", ".jpg", ".gz", ".pyc")):
+                continue
+            if b"/home/" in zf.read(name):
+                hits.append(name)
+    return hits
+
+
 def test_wheel() -> bool:
-    """Test the built wheel in a clean virtual environment."""
+    """Test the built wheel in a clean virtual environment.
+
+    Beyond "does one import work", this gate checks what the 2026-09-03
+    adversarial installation review found the old one-import test could
+    never catch: repo junk at the site-packages root (F1), entry points that
+    only resolve in a checkout (F3), the ADR-0232 boot tripwire being
+    reachable from the wheel (F12), and developer paths baked into shipped
+    files (F5).
+    """
     print(f"\n{'=' * 60}")
     print("Testing wheel in isolation")
     print("=" * 60)
@@ -157,6 +249,14 @@ def test_wheel() -> bool:
         return False
 
     wheel = wheels[0]
+
+    home_hits = _wheel_contains_home_paths(wheel)
+    if home_hits:
+        print("✗ wheel members contain a /home/ path (developer path leaked):")
+        for h in home_hits:
+            print(f"    {h}")
+        return False
+    print("✓ no /home/ paths inside the wheel")
 
     # Create temp venv
     import tempfile
@@ -188,6 +288,14 @@ def test_wheel() -> bool:
         if not run_command(
             [str(python_exe), "-c", "from corvinOS.installer.core import CorvinInstaller; print('✓ Import successful')"],
             "Testing import"
+        ):
+            return False
+
+        # Root cleanliness + every console_scripts target + console host +
+        # boot_platform() (tripwire) under a temp CORVIN_HOME.
+        if not run_command(
+            [str(python_exe), "-c", _WHEEL_SMOKE, ",".join(sorted(_EXPECTED_ROOT_ENTRIES))],
+            "Wheel smoke: root entries, entry points, boot_platform()"
         ):
             return False
 

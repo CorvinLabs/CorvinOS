@@ -285,11 +285,14 @@ class OutcomeFeedbackStore:
                 conn.commit()
         return outcome.outcome_id
 
-    def get_outcome(self, outcome_id: str) -> Optional[OutcomeRecord]:
-        """Retrieve a single outcome by ID."""
+    def get_outcome(self, outcome_id: str, *, tenant_id: str) -> Optional[OutcomeRecord]:
+        """Retrieve a single outcome by ID (tenant-scoped, GDPR Art. 32)."""
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
-                "SELECT * FROM outcomes WHERE outcome_id = ?", (outcome_id,)
+                "SELECT * FROM outcomes WHERE outcome_id = ? AND tenant_id = ?",
+                (outcome_id, tenant_id),
             )
             row = cursor.fetchone()
 
@@ -298,16 +301,18 @@ class OutcomeFeedbackStore:
 
         return self._row_to_outcome(row)
 
-    def get_outcomes_by_decision(self, decision_id: str) -> list[OutcomeRecord]:
-        """Get all outcomes for a decision."""
+    def get_outcomes_by_decision(self, decision_id: str, *, tenant_id: str) -> list[OutcomeRecord]:
+        """Get all outcomes for a decision (tenant-scoped, GDPR Art. 32)."""
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
                 SELECT * FROM outcomes
-                WHERE decision_id = ?
+                WHERE decision_id = ? AND tenant_id = ?
                 ORDER BY timestamp_utc
                 """,
-                (decision_id,),
+                (decision_id, tenant_id),
             )
             rows = cursor.fetchall()
 
@@ -341,25 +346,26 @@ class OutcomeFeedbackStore:
         return [self._row_to_outcome(row) for row in rows]
 
     def compute_success_rate(self, tenant_id: str, decision_ids: Optional[list[str]] = None) -> float:
-        """Compute success rate with PII safeguards (small-n suppression + smoothing).
+        """Compute success rate with small-n suppression (ADR-0317).
 
-        **PII Safeguard (ADR-0317 Synthesis):**
+        **PII Safeguard (ADR-0317 contract, ``test_success_rate_unlocked_at_threshold``):**
         - N < 10: Returns 0.5 (neutral) to prevent fingerprinting attacks
-        - 10 <= N < 50: Adds Laplace noise (ε=0.1) for smoother suppression
-        - N >= 50: Returns actual rate (sufficient data for privacy)
+        - N >= 10: Returns the actual rate
 
-        This prevents precision leakage attacks where attacker infers user count
-        via rate changes (e.g., N=9 → 0.5, N=10 → actual rate).
+        The former 10 <= N < 50 "Laplace" band drew ``gauss(0, 6.6)`` on a
+        [0, 1] value — a coin flip clamped to 0.0/1.0 that contradicted the
+        ADR's own threshold test. Correctly scaled DP noise for a mean of N
+        booleans is Laplace(sensitivity/ε) = (1/N)/ε, which at ε=0.1 is still
+        ≥ 0.2 for every N < 50 — useless to the learner — so the band is gone:
+        the contract is a hard threshold at N = 10.
 
         Args:
             tenant_id: Tenant ID
             decision_ids: Optional list to filter by decisions
 
         Returns:
-            Success rate (0-1), possibly with noise for privacy
+            Success rate (0-1)
         """
-        import random
-
         with sqlite3.connect(self.db_path) as conn:
             if decision_ids:
                 placeholders = ",".join("?" * len(decision_ids))
@@ -383,17 +389,7 @@ class OutcomeFeedbackStore:
         if n < 10:
             # Hard suppression for very small samples
             return 0.5
-        elif n < 50:
-            # Soft suppression with Laplace noise (differential privacy)
-            # Epsilon=0.1 means noise ~ Laplace(scale=1/0.1=10), clamped to [0,1]
-            epsilon = 0.1
-            laplace_scale = 1.0 / epsilon
-            noise = random.gauss(0, laplace_scale * 0.66)  # ~Laplace distribution
-            noisy_rate = min(1.0, max(0.0, actual_rate + noise))
-            return noisy_rate
-        else:
-            # Sufficient data: return actual rate
-            return actual_rate
+        return actual_rate
 
     def export_training_data_csv(
         self, tenant_id: str, output_path: str | Path, anonymize_ids: bool = True

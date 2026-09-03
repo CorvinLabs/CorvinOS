@@ -1035,10 +1035,13 @@ class TestDefensiveEdges(_Base):
         # Headless core (ADR-0241): core/plugins must import and run without
         # the Console package.  Absent Console reads as "off" — the pre-feature
         # path — never as "assume on".
-        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_console")}
+        # The flag registry is `corvin_core.feature_flags` (the Console package
+        # ships it); "absent" is simulated on THAT import, not on a
+        # `corvin_console` name the lookup never touches.
+        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_core")}
         for key in saved:
             del sys.modules[key]
-        sys.modules["corvin_console"] = None  # type: ignore[assignment]
+        sys.modules["corvin_core"] = None  # type: ignore[assignment]
         try:
             # (enabled, lookup_broken): off, and NOT broken — a layout that has
             # no flag registry is a complete answer, not a degradation, so it
@@ -1052,7 +1055,7 @@ class TestDefensiveEdges(_Base):
             )
             self.assertEqual(ep.invoke("engine.model_selection", {}, default="d"), "d")
         finally:
-            del sys.modules["corvin_console"]
+            del sys.modules["corvin_core"]
             sys.modules.update(saved)
 
     def test_a_raising_flag_lookup_is_reported_as_broken_not_as_off(self):
@@ -1152,9 +1155,9 @@ class TestDefensiveEdges(_Base):
         # but its flag registry unimportable (a broken install), and a raising
         # lookup.  The middle one is where the operator most plausibly DID
         # enable the flag, and it read as a deliberate "off".
-        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_console")}
+        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_core")}
         broken_root = Path(self._tmp.name) / "broken-console"
-        pkg = broken_root / "corvin_console"
+        pkg = broken_root / "corvin_core"
         pkg.mkdir(parents=True)
         (pkg / "__init__.py").write_text("", encoding="utf-8")
         (pkg / "feature_flags.py").write_text(
@@ -1176,7 +1179,7 @@ class TestDefensiveEdges(_Base):
             self.assertEqual(degraded[0]["point"], "workflow.workflow_gate")
         finally:
             sys.path.remove(str(broken_root))
-            for key in [k for k in sys.modules if k.startswith("corvin_console")]:
+            for key in [k for k in sys.modules if k.startswith("corvin_core")]:
                 del sys.modules[key]
             sys.modules.update(saved)
             ep._degraded_reported.clear()
@@ -1185,14 +1188,14 @@ class TestDefensiveEdges(_Base):
         # The other side of the same distinction — guarded here as well so a
         # future tightening of the import classification cannot start reporting
         # a headless layout (ADR-0241) as a degradation on every gate.
-        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_console")}
+        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_core")}
         for key in saved:
             del sys.modules[key]
-        sys.modules["corvin_console"] = None  # type: ignore[assignment]
+        sys.modules["corvin_core"] = None  # type: ignore[assignment]
         try:
             self.assertEqual(ep._flag_state("_default"), (False, False))
         finally:
-            del sys.modules["corvin_console"]
+            del sys.modules["corvin_core"]
             sys.modules.update(saved)
 
     # `test_no_call_site_is_wired_yet` stood here until 2026-07-27. It asserted

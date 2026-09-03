@@ -4,12 +4,12 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
-# Setup path for imports
-repo_root = Path(__file__).resolve().parents[3]
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+# ``operator/`` is shadowed by the stdlib module; register the package under
+# its own top-level name (same mechanism the console uses at boot).
+from core.learning.classifier_model import import_context_engineering
 
-from operator.context_engineering.rich_task_brief import MemoryMatch
+import_context_engineering()
+from context_engineering.rich_task_brief import MemoryMatch  # noqa: E402
 
 
 class TestPreviewTruncation:
@@ -84,7 +84,7 @@ class TestRenderingWithBoundedPreview:
 
     def test_rendering_with_bounded_preview(self):
         """Verify brief renders correctly with truncated preview."""
-        from operator.context_engineering.rich_task_brief import (
+        from context_engineering.rich_task_brief import (
             RichTaskBrief,
             MemoryContext,
         )
@@ -121,7 +121,7 @@ class TestRenderingWithBoundedPreview:
 
     def test_multiple_matches_with_preview(self):
         """Verify multiple matches all have bounded previews."""
-        from operator.context_engineering.rich_task_brief import MemoryContext
+        from context_engineering.rich_task_brief import MemoryContext
 
         matches = [
             MemoryMatch(

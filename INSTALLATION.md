@@ -18,8 +18,12 @@
 
 **Linux / macOS — one-liner (recommended):**
 ```bash
-curl -fsSL https://corvin-labs.com/install.sh | bash
+curl -fsSL https://corvin-labs.com/install.sh | sh
 ```
+
+(`install.sh` is POSIX `sh`; piping it into `bash` works too, but `sh` is what the script is
+written and tested for. To review before running: `curl -fsSL https://corvin-labs.com/install.sh
+-o install.sh && less install.sh && sh install.sh`.)
 
 **Windows — PowerShell one-liner:**
 ```powershell
@@ -43,7 +47,23 @@ irm https://corvin-labs.com/install.ps1 | iex
 Both one-liners bootstrap the `uv` runtime (which brings its own Python — no system Python, pip, or
 package manager needed), then `uv tool install corvinos` into an isolated tool environment and add
 it to your PATH. They also provision the local Hermes model and the voice (STT + TTS) models so the
-install is voice-ready out of the box. Equivalent to doing it manually if you already have `uv`:
+install is voice-ready out of the box.
+
+What the one-liners download, and how it is verified:
+
+| Download | Pinned? | Verification |
+|---|---|---|
+| `uv` installer | yes — exact version, immutable GitHub release asset | SHA-256 of the installer script is checked before it runs; the script then verifies the `uv` binary against its embedded checksums |
+| `corvinos` (PyPI) | version **floor** (`corvinos>=<this release>`), deliberately not an exact pin | an exact pin would land in the uv receipt and freeze `uv tool upgrade` (the console's auto-update) — see the script header (INST-1) |
+| Ollama (Linux) | no — `https://ollama.com/install.sh` is unversioned | runs only when `ollama` is absent; opt out with `--no-hermes`; its full output is kept in `$TMPDIR/corvinos-install.log` (override: `CORVIN_INSTALL_LOG`). macOS uses Homebrew, Windows uses winget (signed package) |
+
+`sudo` is used in exactly two places on Linux: to `apt-get`/`yum install curl` when neither curl nor
+wget exists, and for `--always-on` (system-level service, ADR-0184 Stufe 2). Nothing else elevates.
+The firewall is never touched unless you pass `--lan` (Linux `ufw`) / `-Lan` (Windows Defender) —
+the console listens on `127.0.0.1` by default, so no inbound rule is needed until you enable A2A
+LAN pairing.
+
+Equivalent to doing it manually if you already have `uv`:
 
 ```bash
 uv tool install corvinos
@@ -66,9 +86,12 @@ pip install corvinos
 corvinos-serve          # web console at http://localhost:8765
 ```
 
-> **Note:** `corvinos-serve` (web console + Hermes auto-detect) works fully from the pip wheel.
-> The full `corvin-install` flow — which registers messaging-bridge daemons (Discord/WhatsApp/…)
-> and their system services — requires a git checkout (see Method 3).
+> **Note:** `corvinos-serve` (web console + Hermes auto-detect) and `corvin-install` (voice model
+> provisioning, API keys, login autostart, messaging-bridge daemons + their system services) both
+> work from the pip wheel — the one-liners run `corvin-install` from the `uv tool install`, no
+> checkout involved. The bridge daemons are vendored inside the wheel
+> (`corvin_core/_vendor/operator/bridges/`) and need Node.js 20+ at runtime. A git checkout
+> (Method 3) is only needed to develop CorvinOS or rebuild the console frontend.
 
 ### Method 2: With Hermes (fully local, no API key required)
 ```bash
@@ -84,13 +107,25 @@ corvinos-serve
 # Or use the one-click bootstrap: Settings → Engine → Bootstrap Hermes
 ```
 
-### Method 3: From Source (required for bridges)
+### Method 3: From Source (development)
 ```bash
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
 pip install -e .
 corvin-install
 ```
+
+**Developer note — wheel vs. checkout.** The wheel remaps several `core/<area>/<pkg>` packages to
+top-level names (`corvin_console`, `corvin_core`, `corvin_gateway`, `corvin_license`,
+`corvin_plugins`, `corvin_compliance_reports`, `corvin_workflows`, …). Always import them by the
+top-level name — it works in both layouts; `core.console.corvin_core…` works only in a checkout and
+raises `ModuleNotFoundError` on every pip install. `tests/test_wheel_content_guard.py` fails on such
+imports, on repo junk at the wheel root, and on developer paths inside the wheel. A second
+checkout-vs-wheel asymmetry to know: on a wheel install the ADR-0232 boot tripwire
+(`corvin_plugins.bootstrap.boot_platform()`) finds its audit/consent/house-rules modules only after
+`import corvin_console` has run the vendored-operator bootstrap — both shipped hosts
+(`corvinos-serve`, `corvin-service`) do that first; a third host must too (tracked as a documented
+xfail in the guard test).
 
 ---
 
@@ -154,7 +189,7 @@ detected, the installer prints a manual install hint.
 
 **Requirements:**
 - systemd user session (`systemctl --user`)
-- No sudo required
+- No sudo required (except `--always-on`, and the curl bootstrap when neither curl nor wget is installed)
 
 **What gets installed:**
 ```
@@ -258,8 +293,8 @@ corvin-install
 
 **Health check:**
 ```powershell
-curl http://localhost:8765/healthz   # Is the console running?
-ollama list                          # Is Ollama running?
+curl http://localhost:8765/v1/console/healthz   # Is the console running? (bare /healthz is 404)
+ollama list                                     # Is Ollama running?
 ```
 
 ---
@@ -269,7 +304,7 @@ ollama list                          # Is Ollama running?
 After installation:
 
 ```
-~/.corvin/                                 # Corvin home
+~/.corvin/                                 # Corvin home (CORVIN_HOME)
 ├── bridges/
 │   ├── discord/
 │   │   ├── venv/                          # Isolated Python env
@@ -277,17 +312,32 @@ After installation:
 │   │   └── ...
 │   └── whatsapp/
 │       └── ...
+├── global/
+│   └── forge/audit.jsonl                  # Hash-chained audit log (instance-level chain)
 ├── tenants/_default/
 │   ├── global/
+│   │   └── forge/audit.jsonl              # Hash-chained audit log (per-tenant chain)
 │   ├── sessions/
 │   └── voice/
-├── logs/
-└── audit.jsonl                            # Hash-chained audit log
+├── logs/                                  # console.log etc.
+└── run/                                   # pid / session state
 
 ~/.config/corvin-voice/
 ├── installer.json                         # Installation config
 ├── config.json                            # User preferences
-└── secrets.json                           # Encrypted credentials
+└── service.env                            # API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, …)
+```
+
+`service.env` is a plain `KEY=value` file, **not encrypted**: it is created with mode `0600`
+(owner read/write only) and never made group/world-readable, which is the protection it relies on.
+Anyone with your user account or root can read it. An encrypted per-tenant store also exists
+(`corvinos secrets set KEY VALUE`, see `corvinos secrets --help`).
+
+Audit chains: `corvinos audit verify` checks the canonical chain (exit 1 if broken);
+`corvinos audit verify --path <file>` checks any other `audit.jsonl`, e.g. a tenant's
+`~/.corvin/tenants/<tenant>/global/forge/audit.jsonl`.
+
+```
 
 ~/.config/systemd/user/                    # Linux only
 └── corvin-*.service
@@ -419,10 +469,14 @@ Or use nvm (Linux/macOS): `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm
 ### Audit chain verification failed
 
 ```bash
-voice-audit verify
+corvinos audit verify                                                    # canonical chain
+corvinos audit verify --path ~/.corvin/tenants/_default/global/forge/audit.jsonl   # a tenant chain
+corvinos audit health                                                    # chain ok + record count
 ```
 
-This is a CRITICAL security event. Consult `docs/audit-and-compliance.md`.
+This is a CRITICAL security event. Consult `docs/audit-and-compliance.md`. (`voice-audit` is a
+script vendored inside the package for the bridge services, not an installed command — use
+`corvinos audit`.)
 
 ---
 
@@ -471,8 +525,8 @@ corvin-install
 1. **Configure bridges** → Settings → Bridges in the web console, or edit `~/.corvin/bridges/<bridge>/settings.json`
 2. **Test connections** → send a test message to each bridge
 3. **Check logs** → `journalctl --user -u corvin-adapter -f` (Linux) or the console Logs page
-4. **Backup** → back up `~/.corvin/` periodically
-5. **Updates** → `pip install --upgrade corvinOS`
+4. **Backup** → back up `~/.corvin/` and `~/.config/corvin-voice/` periodically
+5. **Updates** → `uv tool upgrade corvinos` (one-liner installs) or `pip install -U corvinos`; see [UPGRADE_GUIDE.md](UPGRADE_GUIDE.md)
 
 ---
 

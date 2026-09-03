@@ -41,6 +41,11 @@ def _clean_env(td):
     ):
         os.environ.pop(k, None)
     os.environ["CORVIN_HOME"] = td
+    # Project scope resolves through `git rev-parse` to THIS repo's
+    # .corvin/skill-forge — the live project registry — unless pinned. Stale
+    # p4/p5 skills from earlier runs used to leak in and, once higher-scope-
+    # wins lookup landed, masked the session copy under test.
+    os.environ["CORVIN_PROJECT_ROOT"] = td
 
 
 def _fresh_task_id() -> str:
@@ -76,17 +81,21 @@ def test_shadowing():
         _cleanup_task(tid)
 
 
-def test_audit_shared_at_scope_root():
-    print("\n[audit lives at scope_root, sibling to forge/]")
+def test_audit_lands_in_tenant_core_chain():
+    print("\n[audit lives in the tenant core chain, not at scope_root]")
     with tempfile.TemporaryDirectory() as td:
         _clean_env(td)
         mr = MultiSkillRegistry(channel_id="ch1")
         mr.create(scope="session", name="x", type="domain",
                   body_md=GOOD_BODY, description="d", claim={})
-        # forge.scope.scope_root('session') points to corvin_home/sessions/ch1/forge
-        # so audit must live at corvin_home/sessions/ch1/audit.jsonl
-        audit = Path(td) / "sessions" / "ch1" / "audit.jsonl"
-        t("audit at scope_root", audit.exists(), detail=str(audit))
+        # Every scope's registry appends to <tenant_home>/global/forge/audit.jsonl
+        # — the chain the boot tripwire and the compliance reports read (D-07).
+        audit = Path(td) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        t("audit in tenant core chain", audit.exists(), detail=str(audit))
+        assert audit.exists(), audit
+        assert mr.audit_path() == audit
+        old = Path(td) / "tenants" / "_default" / "sessions" / "ch1" / "audit.jsonl"
+        assert not old.exists(), "no per-scope sibling audit file any more"
 
 
 def test_promote_gates():
@@ -246,7 +255,7 @@ def test_invalid_target_scope():
 
 def main() -> int:
     test_shadowing()
-    test_audit_shared_at_scope_root()
+    test_audit_lands_in_tenant_core_chain()
     test_promote_gates()
     test_promote_low_mean_blocked()
     test_promote_score_exactly_zero_blocked()

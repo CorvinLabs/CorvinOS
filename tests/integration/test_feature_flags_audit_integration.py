@@ -1,167 +1,125 @@
-"""Tests for Phase 2: Feature Flags Audit Integration (SKILL_EXECUTED events).
+"""Tests for Phase 2: Feature Flags Audit Integration (skill.executed events).
 
-Verifies that every feature flags operation emits a hash-chained audit event.
+Every feature-flag operation emits a hash-chained, metadata-only event into
+the TENANT CORE AUDIT CHAIN — ``<CORVIN_HOME>/tenants/<tid>/global/forge/
+audit.jsonl`` — through ``core.skills.skill_audit`` (the one skill audit
+sink). The previous writer targeted a hard-coded ``~/.corvin/audit.jsonl``
+in a record format the chain verifier does not read (adversarial review
+D-07b), so these tests verify the chain with the REAL verifier.
 """
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
-from core.skills.feature_flags_skill import FeatureFlagsSkill, FeatureFlagsAudit
-from core.compliance.audit_chain_writer import AuditChainWriter
+from core.skills.feature_flags_skill import FeatureFlagsSkill
+
+
+def _chain(home: Path, tenant: str) -> Path:
+    return home / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
+
+
+def _events(home: Path, tenant: str) -> list[dict]:
+    p = _chain(home, tenant)
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
 
 
 class TestAuditIntegration:
-    """Test SKILL_EXECUTED event emission (Phase 2)."""
+    """Test skill.executed event emission (Phase 2)."""
 
     @pytest.fixture
     def skill(self):
-        """Initialize skill."""
         return FeatureFlagsSkill()
 
     @pytest.fixture
-    def temp_audit_log(self, monkeypatch):
-        """Create temporary audit log for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "audit.jsonl"
-            # Patch the writer to use temp path
-            old_get_writer = FeatureFlagsAudit._get_writer
+    def home(self, tmp_path, monkeypatch):
+        """Sandboxed CORVIN_HOME — events never touch the live chain."""
+        home = tmp_path / "corvin_home"
+        monkeypatch.setenv("CORVIN_HOME", str(home))
+        return home
 
-            def patched_get_writer():
-                if FeatureFlagsAudit._writer is None:
-                    FeatureFlagsAudit._writer = AuditChainWriter(log_path)
-                return FeatureFlagsAudit._writer
-
-            monkeypatch.setattr(FeatureFlagsAudit, "_get_writer", patched_get_writer)
-            yield log_path
-            FeatureFlagsAudit._writer = None
-
-    def test_is_enabled_emits_audit_event(self, skill, temp_audit_log):
-        """Test that is_enabled() call emits SKILL_EXECUTED event."""
+    def test_is_enabled_emits_audit_event(self, skill, home):
         result = skill.execute({
             "operation": "is_enabled",
             "flag_id": "vibe_engineering",
             "tenant_id": "_default",
         })
-
         assert result["success"]
 
-        # FIX #15: Assert audit log exists (no silent pass)
-        assert temp_audit_log.exists(), "Audit log file was not created"
+        events = _events(home, "_default")
+        assert events, "No audit events found in the tenant core chain"
+        last = events[-1]
+        assert last["event_type"] == "skill.executed"
+        assert last["tool"] == "os.feature_flags_system"
+        assert last["details"]["skill_id"] == "os.feature_flags_system"
+        assert last["details"]["operation"] == "is_enabled"
+        assert last["details"]["flag_id"] == "vibe_engineering"
+        assert last["details"]["tenant_id"] == "_default"
+        assert "hash" in last  # Hash-chained
 
-        with open(temp_audit_log, "r") as f:
-            lines = f.readlines()
-            assert len(lines) > 0, "No audit events found"
-
-            # Parse last event (most recent)
-            last_event = json.loads(lines[-1].strip())
-            assert last_event["event_type"] == "skill_executed"
-            assert last_event["details"]["operation"] == "is_enabled"
-            assert last_event["details"]["flag_id"] == "vibe_engineering"
-            assert last_event["tenant_id"] == "_default"
-            assert "hash" in last_event  # Hash-chained
-
-    def test_set_enabled_emits_audit_event(self, skill, temp_audit_log):
-        """Test that set_enabled() call emits SKILL_EXECUTED event."""
+    def test_set_enabled_emits_audit_event(self, skill, home):
         result = skill.execute({
             "operation": "set_enabled",
-            "flag_id": "test_flag",
+            "flag_id": "vibe_engineering",   # a REGISTERED flag — unknown ids are refused
             "enabled": True,
             "tenant_id": "_default",
         })
+        assert result["success"], result
+        last = _events(home, "_default")[-1]
+        assert last["details"]["operation"] == "set_enabled"
+        assert last["details"]["flag_id"] == "vibe_engineering"
+        assert last["details"]["enabled"] is True
 
-        assert result["success"]
-
-        # FIX #15: Assert audit log exists (no silent pass)
-        assert temp_audit_log.exists(), "Audit log file was not created"
-
-        with open(temp_audit_log, "r") as f:
-            lines = f.readlines()
-            last_event = json.loads(lines[-1].strip())
-            assert last_event["details"]["operation"] == "set_enabled"
-            assert last_event["details"]["flag_id"] == "test_flag"
-
-    def test_audit_events_are_hash_chained(self, skill, temp_audit_log):
-        """Test that audit events are hash-chained (GDPR Art. 30, 32)."""
-        # Emit multiple events
+    def test_audit_events_are_hash_chained(self, skill, home):
         skill.execute({"operation": "is_enabled", "flag_id": "flag1", "tenant_id": "_default"})
         skill.execute({"operation": "is_enabled", "flag_id": "flag2", "tenant_id": "_default"})
 
-        # FIX #15: Assert audit log exists (no silent pass)
-        assert temp_audit_log.exists(), "Audit log file was not created"
+        events = _events(home, "_default")
+        assert len(events) >= 2
+        event1, event2 = events[-2], events[-1]
+        assert event2.get("prev_hash") == event1.get("hash"), "Hash chain broken"
+        assert event2.get("hash")
 
-        with open(temp_audit_log, "r") as f:
-            lines = f.readlines()
-            assert len(lines) >= 2, "Expected at least 2 events"
+        import corvin_core._bootstrap  # noqa: F401 — forge on sys.path
+        from forge.security_events import verify_chain  # type: ignore[import-not-found]
+        ok, problems = verify_chain(_chain(home, "_default"))
+        assert ok, problems
 
-            event1 = json.loads(lines[-2].strip())
-            event2 = json.loads(lines[-1].strip())
+    def test_audit_events_are_tenant_scoped(self, skill, home):
+        skill.execute({"operation": "is_enabled", "flag_id": "flag", "tenant_id": "tenant_test"})
+        events = _events(home, "tenant_test")
+        assert events and events[-1]["details"]["tenant_id"] == "tenant_test"
+        assert not _chain(home, "_default").exists(), "no cross-tenant write"
 
-            # FIX #16: Event 2 should reference Event 1's hash (equality check)
-            assert event2.get("prev_hash") == event1.get("hash"), f"Hash chain broken: event2.prev_hash={event2.get('prev_hash')} != event1.hash={event1.get('hash')}"
-            assert event2.get("hash") is not None
-
-    def test_audit_events_contain_tenant_id(self, skill, temp_audit_log):
-        """Test that every audit event includes tenant_id (GDPR requirement)."""
-        skill.execute({
-            "operation": "is_enabled",
-            "flag_id": "flag",
-            "tenant_id": "tenant_test",
-        })
-
-        # FIX #15: Assert audit log exists (no silent pass)
-        assert temp_audit_log.exists(), "Audit log file was not created"
-
-        with open(temp_audit_log, "r") as f:
-            lines = f.readlines()
-            event = json.loads(lines[-1].strip())
-            assert event["tenant_id"] == "tenant_test"
-
-    def test_audit_events_contain_no_pii(self, skill, temp_audit_log):
-        """Test that audit events contain no PII (flag values only, no user data)."""
+    def test_audit_events_contain_no_pii(self, skill, home):
         skill.execute({
             "operation": "set_enabled",
-            "flag_id": "sensitive_flag",
+            "flag_id": "vibe_engineering",
             "enabled": True,
             "tenant_id": "_default",
         })
+        event_str = json.dumps(_events(home, "_default")[-1])
+        assert "@" not in event_str
+        assert "password" not in event_str.lower()
+        assert "token" not in event_str.lower()
+        # metadata only — no free-form input/output blobs
+        details = _events(home, "_default")[-1]["details"]
+        assert "input" not in details and "output" not in details
 
-        # FIX #15: Assert audit log exists (no silent pass)
-        assert temp_audit_log.exists(), "Audit log file was not created"
-
-        with open(temp_audit_log, "r") as f:
-            lines = f.readlines()
-            event_str = lines[-1]
-
-            # Verify no PII patterns (emails, phone numbers, etc.)
-            assert "@" not in event_str  # No email addresses
-            assert "password" not in event_str.lower()
-            assert "token" not in event_str.lower()
-
-
-    def test_exception_path_emits_audit_event(self, skill, temp_audit_log):
-        """FIX #17: Test that execute() exception path emits audit event."""
-        # Try an operation that will fail (e.g., missing required flag_id)
+    def test_exception_path_emits_audit_event(self, skill, home):
         result = skill.execute({
             "operation": "is_enabled",
             "flag_id": None,  # Invalid: flag_id is required
             "tenant_id": "_default",
         })
-
-        # Should fail gracefully and still emit audit
         assert not result["success"]
         assert result["error"]
-
-        # Audit log should exist and contain the error event
-        assert temp_audit_log.exists(), "Audit log should be created even on error"
-        with open(temp_audit_log, "r") as f:
-            lines = f.readlines()
-            if len(lines) > 0:
-                last_event = json.loads(lines[-1].strip())
-                # Audit should record the failed operation
-                assert "latency_ms" in last_event["details"], "Latency should be recorded on error"
+        events = _events(home, "_default")
+        assert events, "Audit event must be recorded even on error"
+        assert "latency_ms" in events[-1]["details"]
 
 
 if __name__ == "__main__":

@@ -256,7 +256,9 @@ class TestClassifierTrainerAndService(unittest.TestCase):
 
     def test_18d_integration_with_adaptive_budget(self):
         """Integration with adaptive budget."""
-        from operator.context_engineering.adaptive_budget import (
+        from core.learning.classifier_model import import_context_engineering
+        import_context_engineering()
+        from context_engineering.adaptive_budget import (
             AdaptiveBudget, TokenBudget
         )
         

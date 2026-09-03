@@ -24,6 +24,7 @@ class EventType(str, Enum):
     METRIC = "metric"  # Metric observed (latency, cost, error rate)
     CONFIG_UPDATED = "config_updated"  # Skill config changed by optimizer
     SKILL_EXECUTED = "skill_executed"  # Skill was executed (from audit chain)
+    DECISION = "decision"  # Skill selection decision recorded (ADR-0316, Phase 4 hooks)
 
 
 @dataclass(frozen=True)

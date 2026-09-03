@@ -22,11 +22,12 @@ class TestResolverWithRateLimiter:
     def test_resolve_respects_rate_limit(self):
         """resolve_with_hardening denies requests after rate limit exceeded."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "test_skill", "metadata": {}}]}
             manifest_path.write_text(json.dumps(manifest))
 
-            resolver = SkillDependencyResolver(tenant_id="test")
+            resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening(rate_limit_per_minute=2)
 
             # Calls 1–2: should be allowed
@@ -49,11 +50,12 @@ class TestResolverWithRateLimiter:
     def test_rate_limit_per_client(self):
         """Rate limits are per-client, not global."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "test_skill", "metadata": {}}]}
             manifest_path.write_text(json.dumps(manifest))
 
-            resolver = SkillDependencyResolver(tenant_id="test")
+            resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening(rate_limit_per_minute=1)
 
             # User 1: 1 request (allowed)
@@ -125,11 +127,12 @@ class TestResolverWithCircuitBreaker:
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "test_skill", "metadata": {}}]}
             manifest_path.write_text(json.dumps(manifest))
 
-            resolver = SkillDependencyResolver(tenant_id="test")
+            resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
 
             def failing_then_success_resolver(skill_name):
                 raise RuntimeError("Manifest load failed")
@@ -166,11 +169,12 @@ class TestCacheInvalidationWithResolver:
     def test_cache_invalidate_on_manifest_write(self):
         """When manifest changes, resolver invalidates cache."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest1 = {"skills": [{"name": "skill_a", "metadata": {"v": 1}}]}
             manifest_path.write_text(json.dumps(manifest1))
 
-            resolver = SkillDependencyResolver(tenant_id="test")
+            resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             stats1 = resolver.stats()
             assert stats1["hits"] == 0
             assert stats1["misses"] == 0
@@ -206,7 +210,8 @@ class TestFullE2EFlow:
     def test_full_resolver_lifecycle_with_hardening(self):
         """Complete flow: resolver init → cache hit/miss → rate limit → circuit breaker."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {
                 "skills": [
                     {"name": "skill_a", "metadata": {"type": "bundled"}},
@@ -216,7 +221,7 @@ class TestFullE2EFlow:
             manifest_path.write_text(json.dumps(manifest))
 
             # Create resolver and hardening
-            resolver = SkillDependencyResolver(tenant_id="test")
+            resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening(rate_limit_per_minute=5)
 
             # Phase 1: Warm cache (misses)
@@ -264,11 +269,12 @@ class TestFullE2EFlow:
     def test_health_status_reflects_component_states(self):
         """health_status() accurately reports cache + circuit-breaker state."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "skill_a", "metadata": {}}]}
             manifest_path.write_text(json.dumps(manifest))
 
-            resolver = SkillDependencyResolver(tenant_id="test")
+            resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening()
 
             # Warm cache
@@ -289,10 +295,11 @@ class TestErrorHandling:
     def test_corrupted_manifest_fails_gracefully(self):
         """Corrupted manifest doesn't crash; returns None (circuit breaks)."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest_path.write_text("INVALID JSON {{{")
 
-            resolver = SkillDependencyResolver(tenant_id="test")
+            resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening()
 
             # Should not crash; should return None
@@ -308,11 +315,12 @@ class TestErrorHandling:
     def test_missing_skill_returns_none_not_error(self):
         """Non-existent skill returns None (not error/exception)."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path = Path(tmpdir) / "skill-forge" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest = {"skills": [{"name": "skill_a", "metadata": {}}]}
             manifest_path.write_text(json.dumps(manifest))
 
-            resolver = SkillDependencyResolver(tenant_id="test")
+            resolver = SkillDependencyResolver(tenant_id="test_tenant", base_path=Path(tmpdir))
             hardening = SkillServiceHardening()
 
             # Query non-existent skill

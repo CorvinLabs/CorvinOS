@@ -39,7 +39,7 @@ from fastapi import status as http_status
 
 from .. import audit as console_audit
 from .. import feature_flags
-from ..deps import require_session
+from ..deps import require_csrf, require_session
 from .. import auth as session_auth
 
 _log = logging.getLogger(__name__)
@@ -274,7 +274,7 @@ async def get_live_models(
 
 @router.post("/models/live/refresh")
 async def trigger_live_refresh(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Trigger an immediate fetch from Anthropic and return the result.
 

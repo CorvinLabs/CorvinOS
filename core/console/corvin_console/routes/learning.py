@@ -17,11 +17,17 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core.learning import LearningEventStore, LearningIntegration
+from core.learning import LearningIntegration
 from core.learning.event_store import EventStore
 from core.learning.operator_feedback import OperatorFeedbackHandler
-import corvin_console.auth as _auth
 from ..deps import require_session
+
+
+def _tenant_home(tenant_id: str) -> Path:
+    """``<corvin_home>/tenants/<tenant_id>/`` — honours CORVIN_HOME (never a bare ~/.corvin)."""
+    from forge.tenants import tenant_home  # type: ignore[import-not-found]
+
+    return Path(tenant_home(tenant_id))
 
 router = APIRouter()
 
@@ -87,26 +93,28 @@ class FeedbackStatsResponse(BaseModel):
 
 
 def get_feedback_handler(session = Depends(require_session)) -> OperatorFeedbackHandler:
-    """Get OperatorFeedbackHandler for this tenant."""
-    # Per-tenant storage: ~/.corvin/tenants/{tenant_id}/learning/events.db
-    tenant_home = Path.home() / ".corvin" / "tenants" / session.tenant_id
-    db_path = tenant_home / "learning" / "events.db"
-    event_store = EventStore(db_path)
+    """Get OperatorFeedbackHandler for this tenant.
+
+    The store is ``event_store.EventStore(tenant_home)`` — the SAME store the
+    EventEmitter writes to — rooted at ``<corvin_home>/tenants/<tenant_id>/``
+    (events land in ``learning/events/YYYY-MM-DD.jsonl``). It used to be handed
+    a FILE path (``.../learning/events.db``) as ``tenant_home``.
+    """
+    event_store = EventStore(_tenant_home(session.tenant_id))
     return OperatorFeedbackHandler(event_store)
 
 
 def get_learning_integration(session = Depends(require_session)) -> LearningIntegration:
-    """Get LearningIntegration for this tenant."""
-    # Per-tenant storage: ~/.corvin/tenants/{tenant_id}/learning/
-    store_path = Path.home() / ".corvin" / "tenants" / session.tenant_id / "learning"
-    return LearningIntegration(store_path)
+    """Get LearningIntegration for this tenant (``<tenant_home>/learning/``)."""
+    store_path = _tenant_home(session.tenant_id) / "learning"
+    return LearningIntegration(store_path, tenant_id=session.tenant_id)
 
 
 @router.get("/learning/debug", response_model=dict)
 async def debug_learning(session = Depends(require_session)):
     """Debug endpoint — test if learning system is initialized."""
     try:
-        store_path = Path.home() / ".corvin" / "tenants" / session.tenant_id / "learning"
+        store_path = _tenant_home(session.tenant_id) / "learning"
         return {
             "tenant_id": session.tenant_id,
             "store_path": str(store_path),
@@ -240,9 +248,8 @@ async def rate_tool(
         if not 1 <= request.rating <= 5:
             raise HTTPException(status_code=400, detail="Rating must be 1-5")
 
-        # Record rating
-        import asyncio
-        await handler.record_tool_rating(
+        # Record rating (synchronous: EventEmitter.emit()/EventStore.write_event() are sync)
+        handler.record_tool_rating(
             tool_id=tool_id,
             tool_name=tool_id,  # Will be overridden by event payload if available
             rating=request.rating,
@@ -300,9 +307,8 @@ async def rate_skill(
         if not 1 <= request.rating <= 5:
             raise HTTPException(status_code=400, detail="Rating must be 1-5")
 
-        # Record rating
-        import asyncio
-        await handler.record_skill_rating(
+        # Record rating (synchronous: EventEmitter.emit()/EventStore.write_event() are sync)
+        handler.record_skill_rating(
             skill_id=skill_id,
             skill_name=skill_id,  # Will be overridden by event payload if available
             rating=request.rating,

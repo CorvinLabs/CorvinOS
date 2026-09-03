@@ -16,7 +16,8 @@ from pydantic import BaseModel
 
 from corvin_console import feature_flags
 from corvin_console.auth import SessionRecord
-from corvin_console.deps import require_session
+from corvin_console import audit as console_audit
+from corvin_console.deps import require_csrf, require_session
 from forge import paths as forge_paths
 
 router = APIRouter()
@@ -72,9 +73,14 @@ async def get_whitelist(session: SessionRecord = Depends(require_session)):
 @router.post("/features/toggle")
 async def toggle_feature(
     request: ToggleRequest,
-    session: SessionRecord = Depends(require_session),
+    session: SessionRecord = Depends(require_csrf),
 ) -> dict:
-    """Add or remove a feature from the whitelist."""
+    """Add or remove a feature from the whitelist.
+
+    Mutation → session + CSRF token, and one ``console.action_performed``
+    event in the core hash-chained audit log (adversarial review E-06/E-07,
+    2026-09-03 — this route rewrote ``tenant.corvin.yaml`` with neither).
+    """
     # Validate feature exists
     feature_flags.flag(request.feature_id)
 
@@ -102,6 +108,14 @@ async def toggle_feature(
 
     # Clear cache so next read is fresh
     feature_flags._spec_cache.clear()
+
+    console_audit.action_performed(
+        tenant_id=session.tenant_id,
+        sid_fingerprint=session.sid_fingerprint,
+        action="feature.whitelist_enable" if request.enabled else "feature.whitelist_disable",
+        target_kind="feature_flag",
+        target_id=request.feature_id,
+    )
 
     return {
         "status": "success",

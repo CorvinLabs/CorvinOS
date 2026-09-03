@@ -23,9 +23,12 @@ Default path resolution (precedence high -> low):
 
 Backed by ``forge.security_events`` when the forge plugin sits next to
 voice in this repo (the normal case). When forge is missing — voice
-deployed standalone without forge — the audit functions become no-ops.
-That preserves the legacy behaviour: voice never crashes on a missing
-optional plugin.
+deployed standalone without forge — ``audit_event`` becomes a no-op so
+the bridge never crashes on a missing optional plugin, but the ABSENCE
+IS NOT HIDDEN: ``writer_available()`` answers False and ``verify_audit``
+returns ``(False, [{"reason": "writer_unavailable"}])``, so a boot
+tripwire (ADR-0232) can tell a working hash-chained writer from a silent
+no-op and refuse to boot a platform whose audit trail would go nowhere.
 
 Public API:
     audit_event(event_type, *, channel, chat_key, user, persona, tool,
@@ -37,6 +40,12 @@ Public API:
         Returns (ok, problems). ``ok`` is True when the chain holds end
         to end. ``problems`` lists tampered/broken entries with line
         numbers — same shape as forge.security_events.verify_chain.
+        ``(False, [{"reason": "writer_unavailable"}])`` when no writer
+        is loaded — nothing can be verified, and that is not "ok".
+
+    writer_available() -> bool
+        True iff the hash-chained writer (forge.security_events) is
+        loaded, i.e. audit_event() actually appends to the chain.
 
     audit_path() -> Path
         Returns the resolved audit file path (env override or default).
@@ -123,9 +132,32 @@ except Exception:
     _se = None
     import logging as _audit_log
     _audit_log.getLogger("corvin.audit").warning(
-        "forge not importable — audit writes are no-ops; "
-        "voice-audit verify will report OK with 0 events (not an error in standalone mode)"
+        "forge not importable — audit writes are no-ops; writer_available() is "
+        "False and verify_audit() reports writer_unavailable, so a compliance "
+        "boot tripwire (ADR-0232) REFUSES to boot on this layout"
     )
+
+
+def writer_available() -> bool:
+    """True iff the hash-chained writer is loaded and ``audit_event`` appends.
+
+    The one honest answer to "is the audit trail live?". ``_se`` is None on a
+    stripped install AND on a present-but-broken forge import, and both used to
+    read as a passing tripwire because every downstream verifier answered
+    ``(True, [])`` for "nothing to verify". A tripwire must assert this, not
+    the writability of the directory next to the log.
+    """
+    return _se is not None
+
+
+class AuditTenantMismatch(ValueError):
+    """``audit_event(tenant_id=X)`` was called while the process tenant is Y.
+
+    A ``ValueError`` rather than a ``PermissionError``: ``PermissionError`` is a
+    subclass of ``OSError``, so the I/O-resilience ``except OSError: pass`` in
+    ``audit_event`` swallowed it — every plugin lifecycle/health event for a
+    non-env tenant was DROPPED with no log line and no record (GDPR Art. 30).
+    """
 
 # ── ADR-0233 — optional secondary sink (audit_backend plugin) ────────────────
 # Optional exactly like cowork/forge: the only permitted form is the
@@ -173,6 +205,10 @@ _VOICE_EVENT_SEVERITY: dict[str, str] = {
     # from a prior session. Out-of-band: written WITHOUT hash_chain so a
     # broken chain can still record its own gap.
     "audit.chain_gap_detected":   "CRITICAL",
+    # ADR-0007 tenant isolation: an audit_event() carrying another tenant's id
+    # is refused; this record (type/count only, no details) makes the drop
+    # observable in the CONTEXT tenant's chain instead of silent.
+    "audit.tenant_mismatch":      "ERROR",
     # ADR-0169 — boot-time gate-pipeline invariant self-test. A mis-ordered
     # security chain (e.g. egress before classification) is a CRITICAL defect,
     # not an INFO note (security review 2026-06-27).
@@ -277,11 +313,20 @@ def audit_event(
         body["tenant_id"] = tenant_id
     effective_severity = (severity.upper() if severity else None) or _VOICE_EVENT_SEVERITY.get(event_type) or "INFO"
     core_write_committed = False
+    context_tenant: str | None = None
     try:
         if tenant_id:
+            # Tenant isolation (ADR-0007): a record may only enter the chain
+            # under the process's own tenant. A DEDICATED ValueError subclass,
+            # never PermissionError — that one is an OSError and fell into the
+            # I/O-resilience handler below, which dropped the event in silence.
             from forge.tenants import current_tenant
-            if tenant_id != current_tenant():
-                raise PermissionError(f"tenant_id {tenant_id!r} does not match context tenant")
+            context_tenant = current_tenant()
+            if tenant_id != context_tenant:
+                raise AuditTenantMismatch(
+                    f"audit_event({event_type}) refused: tenant_id does not "
+                    f"match the process tenant — event dropped"
+                )
         _se.write_event(
             path, event_type,
             severity=effective_severity,
@@ -289,6 +334,10 @@ def audit_event(
             details=body, hash_chain=True,
         )
         core_write_committed = True
+    except AuditTenantMismatch as exc:
+        # Logic refusal, not an fs condition: it is logged at ERROR and
+        # RECORDED in the chain (type/count only) so the drop is observable.
+        _record_tenant_mismatch(path, event_type, effective_severity, context_tenant, exc)
     except OSError:
         # I/O resilience contract: a write-protected / full fs must never
         # crash the bridge. Prefer silence + missing entry over a crash-loop.
@@ -324,11 +373,61 @@ def audit_event(
             pass
 
 
+def _record_tenant_mismatch(
+    path: Path, event_type: str, severity: str, context_tenant: str | None,
+    exc: AuditTenantMismatch,
+) -> None:
+    """Log and chain-record a tenant-mismatched audit call (never raises).
+
+    The dropped event's TYPE and severity are recorded, never its details — the
+    details belonged to another tenant's context and must not cross into this
+    chain. Written under the CONTEXT tenant so the record is attributable to
+    the process that refused, and hash-chained like every other record.
+    """
+    try:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "audit_event(%s): DROPPED — %s: %s", event_type, type(exc).__name__, exc
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _se.write_event(
+            path, "audit.tenant_mismatch",
+            severity="ERROR", tool="", run_id="",
+            details={
+                "dropped_event_type": event_type,
+                "dropped_severity": severity,
+                "dropped_count": 1,
+                "reason": type(exc).__name__,
+                "channel": "", "chat_key": "", "user": "", "persona": "",
+                **({"tenant_id": context_tenant} if context_tenant else {}),
+            },
+            hash_chain=True,
+        )
+    except OSError:
+        pass  # same I/O resilience contract as the primary write
+    except Exception:  # noqa: BLE001
+        try:
+            import logging as _logging
+            _logging.getLogger(__name__).error(
+                "audit.tenant_mismatch record could not be written (%s)",
+                sys.exc_info()[0].__name__,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def verify_audit(path: Path | None = None) -> tuple[bool, list[dict]]:
-    """Verify the bridge audit log's hash chain. (True, []) when forge
-    is missing — there's nothing to verify, no chain exists."""
+    """Verify the bridge audit log's hash chain.
+
+    ``(False, [{"reason": "writer_unavailable"}])`` when forge is missing: there
+    is no writer, so nothing on disk is being maintained and "verifies" would be
+    a claim about a mechanism that is not there. A boot tripwire that reads this
+    as green is the ADR-0232 defect class (2026-09-03 finding A1).
+    """
     if _se is None:
-        return True, []
+        return False, [{"reason": "writer_unavailable"}]
     target = path if path is not None else audit_path()
     return _se.verify_chain(target)
 
@@ -344,10 +443,12 @@ def audit_health_check(path: Path | None = None) -> tuple[bool, int]:
     being absent.
 
     Returns ``(ok, problem_count)``. Silent on filesystem errors so the
-    bridge never crashes on a read-only fs.
+    bridge never crashes on a read-only fs. ``(False, 1)`` when no writer is
+    loaded — consistent with :func:`verify_audit`: an absent mechanism is not
+    a healthy one.
     """
     if _se is None:
-        return True, 0
+        return False, 1
     target = path if path is not None else audit_path()
     try:
         # Acquire a shared read-lock before verify_chain reads the file so that

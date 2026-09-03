@@ -58,6 +58,7 @@ class MidstreamRouter:
         result = RoutingResult(
             event_id=classification.event_id,
             guidance_class=classification.guidance_class.value,
+            primary_target=None,  # assigned below once targets are resolved
         )
 
         if not targets:

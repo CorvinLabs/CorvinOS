@@ -92,7 +92,7 @@ def test_outcome_feedback_e2e():
             print(f"✅ Hash-chain verified: chain is intact")
 
             print("\n[E2E PHASE 6] Retrieve outcomes by decision...")
-            retrieved = store.get_outcomes_by_decision("d1")
+            retrieved = store.get_outcomes_by_decision("d1", tenant_id="_default")
             assert len(retrieved) == 3
             print(f"✅ Retrieved {len(retrieved)} outcomes for decision d1")
 
@@ -183,7 +183,7 @@ def test_outcome_feedback_e2e():
             print(f"✅ GDPR erasure: deleted {deleted} outcome(s) for user-123")
 
             # Verify deletion
-            verify = store.get_outcome(outcome_user.outcome_id)
+            verify = store.get_outcome(outcome_user.outcome_id, tenant_id="_default")
             assert verify is None
             print(f"✅ Verification: outcome no longer exists")
 

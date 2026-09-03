@@ -18,7 +18,8 @@ import pytest
 import yaml
 
 from core.gateway.corvin_gateway.plugin_cmd import install_plugin
-from core.plugins.corvin_plugins.manifest import PluginMetadata, BootLayer, PluginOrigin
+from core.plugins.corvin_plugins.manifest import BootLayer, PluginOrigin
+from core.plugins.marketplace import PluginMetadata  # the registry entry type lives in the marketplace module
 from core.plugins.corvin_plugins.state import TenantRegistry
 
 
@@ -39,6 +40,7 @@ def temp_corvin_home():
         config_path = home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
         with open(config_path, "w") as f:
             yaml.dump(tenant_config, f)
+        config_path.chmod(0o600)  # the loader refuses group/world-readable tenant config
 
         yield home, "_default"
 
@@ -55,9 +57,9 @@ def temp_plugin():
             "name": "Test Plugin",
             "version": "1.0.0",
             "description": "Test plugin for installation sync",
-            "origin": "installed",
-            "boot_layer": "installed",
-            "plugin_type": "generic",
+            "origin": "community",   # provenance axis (builtin|vetted|community)
+            "boot_layer": "installed",  # load-order axis — the two are orthogonal
+            "plugin_type": "data_connector",  # must be a known extension point
             "class_path": "test_plugin.TestPlugin",
         }
 
@@ -82,6 +84,12 @@ def test_installed_plugin_immediately_visible_in_listing(
     """
     home, tenant_id = temp_corvin_home
     plugin_dir = temp_plugin
+    # tenant_config resolves through the canonical resolver (forge.paths → CORVIN_HOME)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("CORVIN_TENANT_ID", tenant_id)
+    from corvin_core.feature_flags import set_enabled
+
+    set_enabled("plugin_runtime_lifecycle", True, tenant_id)  # registry.yaml path is flag-gated (ADR-0030)
 
     # Patch corvin_home path for installation
     with mock.patch("core.gateway.corvin_gateway.plugin_cmd._get_corvin_home", return_value=home):
@@ -110,7 +118,7 @@ def test_installed_plugin_immediately_visible_in_listing(
     )
 
     record = registry.records["com.example.test-plugin"]
-    assert record.name == "Test Plugin"
+    assert record.display_name == "Test Plugin"
     assert record.version == "1.0.0"
     assert not record.enabled, "Installed plugins are disabled by default"
 
@@ -175,6 +183,11 @@ def test_installation_writes_to_both_tenant_config_and_registry(
     """
     home, tenant_id = temp_corvin_home
     plugin_dir = temp_plugin
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("CORVIN_TENANT_ID", tenant_id)
+    from corvin_core.feature_flags import set_enabled
+
+    set_enabled("plugin_runtime_lifecycle", True, tenant_id)  # registry.yaml path is flag-gated (ADR-0030)
 
     with mock.patch("core.gateway.corvin_gateway.plugin_cmd._get_corvin_home", return_value=home):
         with mock.patch("core.gateway.corvin_gateway.plugin_cmd._tenants_module") as mock_tenants:

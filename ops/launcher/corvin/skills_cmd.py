@@ -36,15 +36,23 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 from datetime import datetime
 
-# These imports will be available once the Skill infrastructure is built (Phase 2a)
-# For now, they're mocked in tests.
-try:
-    from core.skills.skill_registry import SkillRegistry
-    from core.skills.skill_manifest import SkillManifest
-except ImportError:
-    # Phase 1: Skill infrastructure not yet built; mock it for CLI testing
-    SkillRegistry = None
-    SkillManifest = None
+# The OS-Skill registry this CLI manages (enable/disable/config of L-layer
+# Skills, ADR-0532) is NOT built yet. The previous version imported two
+# modules that do not exist (``core.skills.skill_registry``,
+# ``core.skills.skill_manifest``), swallowed the ImportError and served a
+# MockSkillRegistry with fabricated data — ``corvin skills list`` printed
+# skills that were never installed (adversarial review D-19). Every command
+# now fails honestly (exit 1) until the registry exists; nothing is mocked.
+SkillRegistry = None
+SkillManifest = None
+NOT_AVAILABLE_MSG = (
+    "corvin skills: the OS-Skill registry (ADR-0532 Phase 2a) is not available "
+    "in this build — no Skills can be listed or configured yet. "
+    "SkillForge skills are managed through the console (/skills) and the "
+    "skill-forge MCP tools; cache/health diagnostics live in the skills "
+    "diagnostics CLI (ops/launcher/corvin/skills_cli.py: cache-stats, health, "
+    "circuit-breaker)."
+)
 
 
 @dataclass
@@ -358,77 +366,14 @@ def show_skill(skill_id: str, audit_trail: bool, metrics: bool):
 
 
 def get_skill_registry() -> "SkillRegistry":
-    """
-    Get the global Skill registry instance.
+    """Return the OS-Skill registry — or fail honestly.
 
-    Mocked in Phase 1 (will return real registry once Phase 2a builds it).
+    Raises ``click.ClickException`` (exit code 1) while the registry does not
+    exist. Never returns a mock.
     """
-    # TODO: Wire to real SkillRegistry once available
-    # For Phase 1, return a mock that demonstrates the API shape
     if SkillRegistry is None:
-        # Return mock registry
-        click.secho(
-            "⚠️  Warning: Skill registry not yet available (Phase 2a in progress)",
-            fg="yellow",
-            err=True
-        )
-        return MockSkillRegistry()
+        raise click.ClickException(NOT_AVAILABLE_MSG)
     return SkillRegistry()
-
-
-class MockSkillRegistry:
-    """Mock Skill registry for Phase 1 (before Phase 2a is built)."""
-
-    def list_skills(self) -> List[SkillSummary]:
-        """Return mock Skills."""
-        return [
-            SkillSummary(
-                id="os.delegation_router",
-                name="Delegation Router",
-                version="0.1.0",
-                enabled=False,  # Not yet enabled; Phase 2a will enable
-                description="Routes tasks to appropriate engine based on complexity",
-                origin="builtin",
-                confidence=None
-            ),
-            SkillSummary(
-                id="os.context_adapter",
-                name="Context Adapter",
-                version="0.1.0",
-                enabled=False,
-                description="Adapts context based on agent type and learns from feedback",
-                origin="builtin",
-                confidence=None
-            ),
-        ]
-
-    def get_skill(self, skill_id: str) -> Optional[SkillSummary]:
-        """Get a single Skill."""
-        for skill in self.list_skills():
-            if skill.id == skill_id:
-                return skill
-        return None
-
-    def enable_skill(self, skill_id: str) -> None:
-        click.secho(f"[MOCK] Enabling {skill_id}", fg="gray")
-
-    def disable_skill(self, skill_id: str) -> None:
-        click.secho(f"[MOCK] Disabling {skill_id}", fg="gray")
-
-    def update_skill_config(self, skill_id: str, key: str, value: Any) -> None:
-        click.secho(f"[MOCK] Updating {skill_id}.{key} = {value}", fg="gray")
-
-    def get_audit_trail(self, skill_id: str, limit: int = 10) -> List[Dict]:
-        return [
-            {
-                "timestamp": datetime.now().isoformat(),
-                "event_type": "SKILL_ENABLED",
-                "reason": "Phase 1 testing"
-            }
-        ]
-
-    def get_learning_metrics(self, skill_id: str) -> Optional[Dict]:
-        return None  # No learning metrics yet; Phase 2a will add this
 
 
 # Register the skills group with the main CLI

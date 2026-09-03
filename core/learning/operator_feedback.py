@@ -1,38 +1,45 @@
 """Operator Feedback Loop Integration (Gap 7, ADR-0327).
 
 Integrates operator ratings (tools and skills) into the learning system:
-1. Collects OPERATOR_RATED_TOOL and OPERATOR_RATED_SKILL events
+1. Records operator ratings as ``EventType.FEEDBACK`` learning events
 2. Aggregates feedback (average rating, sample size, outlier detection)
 3. Feeds aggregated feedback to auto-promotion mechanisms
 4. Stores feedback metadata for audit trail
 
-Modules:
-1. FeedbackAggregator: Aggregates ratings by entity (tool/skill) and time window
-2. OutlierDetector: Rejects statistical outliers (e.g., single 1-star rating vs 100 5-stars)
-3. OperatorFeedbackHandler: Subsystem interface for integration
-4. Auto-promotion threshold adjustment based on feedback sentiment
+Storage contract (ONE pair, never mixed): events are
+``core.learning.learning_events.LearningEvent`` persisted by
+``core.learning.event_store.EventStore`` (the store ``EventEmitter`` writes
+to). A rating is a FEEDBACK event whose ``skill_id`` is ``tool:<tool_id>`` /
+``skill:<skill_id>`` and whose ``signal`` carries the rating.
 
-Tenant-scoped: all queries respect tenant_id (GDPR Art. 5, 32).
+Tenant-scoped: every query goes through ``EventStore.query_events(tenant_id)``
+(GDPR Art. 5, 32).
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from statistics import mean, stdev
 
-from .event_schema import (
-    LearningEvent,
-    LearningEventType,
-    OperatorRatedToolPayload,
-    OperatorRatedSkillPayload,
-)
+from .learning_events import LearningEvent, EventType
 from .event_store import EventStore
 from .event_emitter import EventEmitter
 
 logger = logging.getLogger(__name__)
+
+RATING_KIND_TOOL = "operator_rated_tool"
+RATING_KIND_SKILL = "operator_rated_skill"
+
+
+def tool_subject_id(tool_id: str) -> str:
+    return f"tool:{tool_id}"
+
+
+def skill_subject_id(skill_id: str) -> str:
+    return f"skill:{skill_id}"
 
 
 @dataclass(frozen=True)
@@ -80,18 +87,8 @@ class OutlierDetector:
         existing_ratings: List[int],
         minimum_sample_size: int = 5,
     ) -> OutlierStats:
-        """Detect if a rating is an outlier.
-
-        Args:
-            rating: Rating to check (1-5)
-            existing_ratings: Previous ratings for the entity
-            minimum_sample_size: Minimum samples before outlier detection kicks in
-
-        Returns:
-            OutlierStats with detection result
-        """
+        """Detect if a rating is an outlier."""
         if len(existing_ratings) < minimum_sample_size:
-            # Not enough history to detect outliers
             return OutlierStats(
                 is_outlier=False,
                 z_score=None,
@@ -104,24 +101,20 @@ class OutlierDetector:
             sigma = stdev(existing_ratings)
 
             if sigma == 0:
-                # No variance in existing data
                 if abs(rating - avg) > 1:
-                    # New rating differs significantly from uniform data
                     return OutlierStats(
                         is_outlier=True,
                         z_score=None,
                         reason=f"New rating {rating} differs from uniform existing ratings (all {avg})",
-                        should_exclude=False,  # Flag as outlier but include for visibility
-                    )
-                else:
-                    return OutlierStats(
-                        is_outlier=False,
-                        z_score=None,
-                        reason="Existing ratings have no variance",
                         should_exclude=False,
                     )
+                return OutlierStats(
+                    is_outlier=False,
+                    z_score=None,
+                    reason="Existing ratings have no variance",
+                    should_exclude=False,
+                )
 
-            # Compute Z-score
             z_score = (rating - avg) / sigma
 
             if abs(z_score) > OutlierDetector.Z_SCORE_THRESHOLD:
@@ -129,15 +122,14 @@ class OutlierDetector:
                     is_outlier=True,
                     z_score=z_score,
                     reason=f"Z-score {z_score:.2f} exceeds threshold {OutlierDetector.Z_SCORE_THRESHOLD}",
-                    should_exclude=False,  # Flag but include for audit trail
-                )
-            else:
-                return OutlierStats(
-                    is_outlier=False,
-                    z_score=z_score,
-                    reason=None,
                     should_exclude=False,
                 )
+            return OutlierStats(
+                is_outlier=False,
+                z_score=z_score,
+                reason=None,
+                should_exclude=False,
+            )
 
         except Exception as e:
             logger.warning(f"Outlier detection failed: {e}")
@@ -150,15 +142,7 @@ class OutlierDetector:
 
 
 class FeedbackAggregator:
-    """Aggregate operator feedback ratings by entity and time window.
-
-    Computes:
-    - Average rating (with confidence interval based on sample size)
-    - Median rating
-    - Standard deviation
-    - Trend (recent vs historical)
-    - Sentiment classification
-    """
+    """Aggregate operator feedback ratings by entity and time window."""
 
     # Confidence model: maps sample_count -> confidence_score (0.0-1.0)
     CONFIDENCE_THRESHOLDS = {
@@ -173,10 +157,7 @@ class FeedbackAggregator:
 
     @staticmethod
     def compute_confidence(sample_count: int) -> float:
-        """Compute confidence score based on sample count.
-
-        Uses threshold table: more samples = higher confidence.
-        """
+        """Compute confidence score based on sample count."""
         for threshold, confidence in sorted(FeedbackAggregator.CONFIDENCE_THRESHOLDS.items()):
             if sample_count <= threshold:
                 return confidence
@@ -184,13 +165,7 @@ class FeedbackAggregator:
 
     @staticmethod
     def classify_sentiment(average_rating: float) -> str:
-        """Classify sentiment based on average rating.
-
-        1.0-2.0: negative
-        2.0-3.0: neutral
-        3.0-4.0: positive
-        4.0-5.0: very_positive
-        """
+        """Classify sentiment based on average rating."""
         if average_rating < 2.0:
             return "negative"
         elif average_rating < 3.0:
@@ -208,20 +183,8 @@ class FeedbackAggregator:
         ratings: List[int],  # All 1-5 ratings
         window_days: int = 7,
     ) -> FeedbackStats:
-        """Aggregate feedback ratings into statistics.
-
-        Args:
-            entity_id: Tool or skill ID
-            entity_type: "tool" or "skill"
-            entity_name: Human-readable name
-            ratings: List of 1-5 ratings
-            window_days: Aggregation window size
-
-        Returns:
-            FeedbackStats with aggregated metrics
-        """
+        """Aggregate feedback ratings into statistics."""
         if not ratings:
-            # No ratings yet
             return FeedbackStats(
                 entity_id=entity_id,
                 entity_type=entity_type,
@@ -241,9 +204,8 @@ class FeedbackAggregator:
         sorted_ratings = sorted(ratings)
         sample_count = len(ratings)
         average = mean(ratings)
-        median = sorted_ratings[sample_count // 2] if sample_count > 0 else 3.0
+        median = sorted_ratings[sample_count // 2]
 
-        # Compute standard deviation (None if only 1 sample)
         if sample_count < 2:
             std_dev = None
         else:
@@ -272,16 +234,48 @@ class FeedbackAggregator:
         )
 
 
-class OperatorFeedbackHandler:
-    """Subsystem for collecting and processing operator feedback.
+def build_rating_event(
+    *,
+    kind: str,
+    entity_id: str,
+    entity_name: str,
+    rating: int,
+    tenant_id: str,
+    feedback_text: Optional[str] = None,
+    task_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    instance_id: str = "unknown",
+    lom: Optional[str] = None,
+) -> LearningEvent:
+    """Build the FEEDBACK learning event for an operator rating."""
+    if kind == RATING_KIND_TOOL:
+        subject = tool_subject_id(entity_id)
+        id_key, name_key = "tool_id", "tool_name"
+    elif kind == RATING_KIND_SKILL:
+        subject = skill_subject_id(entity_id)
+        id_key, name_key = "skill_id", "skill_name"
+    else:
+        raise ValueError(f"unknown rating kind {kind!r}")
+    return LearningEvent.create(
+        event_type=EventType.FEEDBACK,
+        skill_id=subject,
+        tenant_id=tenant_id,
+        signal={
+            "kind": kind,
+            id_key: entity_id,
+            name_key: entity_name,
+            "rating": rating,
+            "feedback_text": feedback_text,
+            "task_id": task_id,
+            "session_id": session_id,
+            "instance_id": instance_id,
+        },
+        lom=lom,
+    )
 
-    Integrates with EventStore to:
-    1. Collect OPERATOR_RATED_TOOL and OPERATOR_RATED_SKILL events
-    2. Aggregate feedback by entity (tool/skill) and time window
-    3. Detect outliers and flag suspicious patterns
-    4. Feed aggregated feedback to auto-promotion mechanisms
-    5. Maintain audit trail (who rated what, when, with what sentiment)
-    """
+
+class OperatorFeedbackHandler:
+    """Subsystem for collecting and processing operator feedback."""
 
     def __init__(
         self,
@@ -292,10 +286,13 @@ class OperatorFeedbackHandler:
         """Initialize feedback handler.
 
         Args:
-            event_store: EventStore instance for querying feedback events
+            event_store: ``event_store.EventStore`` (tenant_home-based) for queries
+                and — when no emitter is given — for writes.
             min_sample_size: Minimum ratings needed before aggregation (default 3)
-            event_emitter: EventEmitter for non-blocking event emission (ADR-0314).
-                          If None, event_store is used directly.
+            event_emitter: EventEmitter (non-blocking queue in front of the SAME
+                store, ADR-0314). ``emit()`` is synchronous and returns ``False``
+                when the event was dropped; a drop is an error here — a rating
+                the operator entered must never vanish silently.
         """
         self.event_store = event_store
         self.event_emitter = event_emitter
@@ -304,7 +301,18 @@ class OperatorFeedbackHandler:
         self._cache_timestamp: Optional[datetime] = None
         self._cache_ttl_seconds = 300  # 5-minute cache TTL
 
-    async def record_tool_rating(
+    # ── record ──────────────────────────────────────────────────────────
+
+    def _persist(self, event: LearningEvent) -> None:
+        if self.event_emitter is not None:
+            if not self.event_emitter.emit(event):
+                raise RuntimeError(
+                    f"learning event {event.event_id} dropped by EventEmitter (queue full or stopped)"
+                )
+        else:
+            self.event_store.write_event(event)
+
+    def record_tool_rating(
         self,
         tool_id: str,
         tool_name: str,
@@ -314,48 +322,25 @@ class OperatorFeedbackHandler:
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
         instance_id: str = "unknown",
-    ) -> None:
-        """Record an operator rating for a tool.
-
-        Args:
-            tool_id: Tool identifier
-            tool_name: Human-readable tool name
-            rating: Rating (1-5)
-            tenant_id: Tenant ID
-            feedback_text: Optional feedback comment
-            task_id: Optional task ID
-            session_id: Optional session ID
-            instance_id: Instance identifier
-        """
+    ) -> LearningEvent:
+        """Record an operator rating for a tool. Returns the persisted event."""
         if not 1 <= rating <= 5:
             raise ValueError(f"Rating must be 1-5, got {rating}")
 
-        # Create and emit event
-        event = LearningEvent(
-            event_type=LearningEventType.OPERATOR_RATED_TOOL,
+        event = build_rating_event(
+            kind=RATING_KIND_TOOL,
+            entity_id=tool_id,
+            entity_name=tool_name,
+            rating=rating,
             tenant_id=tenant_id,
+            feedback_text=feedback_text,
+            task_id=task_id,
+            session_id=session_id,
             instance_id=instance_id,
-            skill_name=None,
-            session_id=session_id or "unknown",
-            timestamp_utc=datetime.utcnow(),
-            payload={
-                "tool_id": tool_id,
-                "tool_name": tool_name,
-                "rating": rating,
-                "feedback_text": feedback_text,
-                "task_id": task_id,
-                "session_id": session_id,
-                "timestamp_utc": datetime.utcnow().isoformat(),
-            },
+            lom=f"{__name__}:OperatorFeedbackHandler.record_tool_rating",
         )
-
         try:
-            # Prefer EventEmitter (async, non-blocking) — ADR-0314
-            if self.event_emitter is not None:
-                await self.event_emitter.emit(event)
-            else:
-                # Fallback: Direct EventStore.write_event (blocking, legacy path)
-                self.event_store.write_event(event)
+            self._persist(event)
             logger.info(
                 f"Recorded tool rating: tool_id={tool_id}, rating={rating}, tenant={tenant_id}"
             )
@@ -363,10 +348,10 @@ class OperatorFeedbackHandler:
             logger.error(f"Failed to record tool rating: {e}")
             raise
 
-        # Invalidate cache
         self._invalidate_cache()
+        return event
 
-    async def record_skill_rating(
+    def record_skill_rating(
         self,
         skill_id: str,
         skill_name: str,
@@ -376,48 +361,25 @@ class OperatorFeedbackHandler:
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
         instance_id: str = "unknown",
-    ) -> None:
-        """Record an operator rating for a skill.
-
-        Args:
-            skill_id: Skill identifier
-            skill_name: Human-readable skill name
-            rating: Rating (1-5)
-            tenant_id: Tenant ID
-            feedback_text: Optional feedback comment
-            task_id: Optional task ID
-            session_id: Optional session ID
-            instance_id: Instance identifier
-        """
+    ) -> LearningEvent:
+        """Record an operator rating for a skill. Returns the persisted event."""
         if not 1 <= rating <= 5:
             raise ValueError(f"Rating must be 1-5, got {rating}")
 
-        # Create and emit event
-        event = LearningEvent(
-            event_type=LearningEventType.OPERATOR_RATED_SKILL,
+        event = build_rating_event(
+            kind=RATING_KIND_SKILL,
+            entity_id=skill_id,
+            entity_name=skill_name,
+            rating=rating,
             tenant_id=tenant_id,
+            feedback_text=feedback_text,
+            task_id=task_id,
+            session_id=session_id,
             instance_id=instance_id,
-            skill_name=skill_name,
-            session_id=session_id or "unknown",
-            timestamp_utc=datetime.utcnow(),
-            payload={
-                "skill_id": skill_id,
-                "skill_name": skill_name,
-                "rating": rating,
-                "feedback_text": feedback_text,
-                "task_id": task_id,
-                "session_id": session_id,
-                "timestamp_utc": datetime.utcnow().isoformat(),
-            },
+            lom=f"{__name__}:OperatorFeedbackHandler.record_skill_rating",
         )
-
         try:
-            # Prefer EventEmitter (async, non-blocking) — ADR-0314
-            if self.event_emitter is not None:
-                await self.event_emitter.emit(event)
-            else:
-                # Fallback: Direct EventStore.write_event (blocking, legacy path)
-                self.event_store.write_event(event)
+            self._persist(event)
             logger.info(
                 f"Recorded skill rating: skill_id={skill_id}, rating={rating}, tenant={tenant_id}"
             )
@@ -425,8 +387,36 @@ class OperatorFeedbackHandler:
             logger.error(f"Failed to record skill rating: {e}")
             raise
 
-        # Invalidate cache
         self._invalidate_cache()
+        return event
+
+    # ── query ───────────────────────────────────────────────────────────
+
+    def _ratings_in_window(
+        self, *, tenant_id: str, subject: str, kind: str, id_key: str, name_key: str,
+        entity_id: str, window_days: int,
+    ) -> Tuple[List[int], str]:
+        """Collect (ratings, entity_name) for one entity inside the window."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+        events = self.event_store.query_events(
+            tenant_id, event_type=EventType.FEEDBACK, skill_id=subject, limit=10000
+        )
+        ratings: List[int] = []
+        entity_name = entity_id
+        for event in events:
+            signal = event.signal or {}
+            if signal.get("kind") != kind or signal.get(id_key) != entity_id:
+                continue
+            ts = datetime.fromisoformat(event.timestamp.rstrip("Z"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                continue
+            rating = signal.get("rating")
+            if isinstance(rating, int) and 1 <= rating <= 5:
+                ratings.append(rating)
+                entity_name = signal.get(name_key) or entity_id
+        return ratings, entity_name
 
     def get_tool_feedback_stats(
         self,
@@ -435,65 +425,15 @@ class OperatorFeedbackHandler:
         window_days: int = 7,
         use_cache: bool = True,
     ) -> FeedbackStats:
-        """Get aggregated feedback statistics for a tool.
-
-        Args:
-            tool_id: Tool identifier
-            tenant_id: Tenant ID
-            window_days: Time window for aggregation (default 7 days)
-            use_cache: Whether to use cached results
-
-        Returns:
-            FeedbackStats with aggregated metrics
-        """
-        # Check cache
+        """Get aggregated feedback statistics for a tool."""
         cache_key = f"tool:{tool_id}:{tenant_id}:{window_days}"
         if use_cache and self._is_cache_valid() and cache_key in self._aggregate_cache:
             return self._aggregate_cache[cache_key]
 
-        # Query events from EventStore
-        ratings: List[int] = []
-        tool_name = tool_id
-
-        try:
-            events = self.event_store.read_events_by_type(
-                event_type=LearningEventType.OPERATOR_RATED_TOOL,
-                limit=10000,
-            )
-
-            # Filter by tenant_id, tool_id, and time window
-            cutoff_time = datetime.now(timezone.utc) - timedelta(days=window_days)
-            for event in events:
-                if (
-                    event.tenant_id == tenant_id
-                    and event.timestamp_utc >= cutoff_time
-                    and event.payload.get("tool_id") == tool_id
-                ):
-                    rating = event.payload.get("rating")
-                    if rating and 1 <= rating <= 5:
-                        ratings.append(rating)
-                        tool_name = event.payload.get("tool_name", tool_id)
-
-        except Exception as e:
-            logger.error(f"Failed to query tool feedback events: {e}")
-            # Return empty stats on error
-            return FeedbackStats(
-                entity_id=tool_id,
-                entity_type="tool",
-                entity_name=tool_name,
-                sample_count=0,
-                average_rating=3.0,
-                median_rating=3.0,
-                std_dev=None,
-                min_rating=0,
-                max_rating=0,
-                confidence=0.0,
-                window_days=window_days,
-                timestamp_utc=datetime.now(timezone.utc),
-                feedback_sentiment="neutral",
-            )
-
-        # Aggregate feedback
+        ratings, tool_name = self._ratings_in_window(
+            tenant_id=tenant_id, subject=tool_subject_id(tool_id), kind=RATING_KIND_TOOL,
+            id_key="tool_id", name_key="tool_name", entity_id=tool_id, window_days=window_days,
+        )
         stats = FeedbackAggregator.aggregate_feedback(
             entity_id=tool_id,
             entity_type="tool",
@@ -501,12 +441,9 @@ class OperatorFeedbackHandler:
             ratings=ratings,
             window_days=window_days,
         )
-
-        # Cache result
         if use_cache:
             self._aggregate_cache[cache_key] = stats
             self._cache_timestamp = datetime.now(timezone.utc)
-
         return stats
 
     def get_skill_feedback_stats(
@@ -516,65 +453,15 @@ class OperatorFeedbackHandler:
         window_days: int = 7,
         use_cache: bool = True,
     ) -> FeedbackStats:
-        """Get aggregated feedback statistics for a skill.
-
-        Args:
-            skill_id: Skill identifier
-            tenant_id: Tenant ID
-            window_days: Time window for aggregation (default 7 days)
-            use_cache: Whether to use cached results
-
-        Returns:
-            FeedbackStats with aggregated metrics
-        """
-        # Check cache
+        """Get aggregated feedback statistics for a skill."""
         cache_key = f"skill:{skill_id}:{tenant_id}:{window_days}"
         if use_cache and self._is_cache_valid() and cache_key in self._aggregate_cache:
             return self._aggregate_cache[cache_key]
 
-        # Query events from EventStore
-        ratings: List[int] = []
-        skill_name = skill_id
-
-        try:
-            events = self.event_store.read_events_by_type(
-                event_type=LearningEventType.OPERATOR_RATED_SKILL,
-                limit=10000,
-            )
-
-            # Filter by tenant_id, skill_id, and time window
-            cutoff_time = datetime.now(timezone.utc) - timedelta(days=window_days)
-            for event in events:
-                if (
-                    event.tenant_id == tenant_id
-                    and event.timestamp_utc >= cutoff_time
-                    and event.payload.get("skill_id") == skill_id
-                ):
-                    rating = event.payload.get("rating")
-                    if rating and 1 <= rating <= 5:
-                        ratings.append(rating)
-                        skill_name = event.payload.get("skill_name", skill_id)
-
-        except Exception as e:
-            logger.error(f"Failed to query skill feedback events: {e}")
-            # Return empty stats on error
-            return FeedbackStats(
-                entity_id=skill_id,
-                entity_type="skill",
-                entity_name=skill_name,
-                sample_count=0,
-                average_rating=3.0,
-                median_rating=3.0,
-                std_dev=None,
-                min_rating=0,
-                max_rating=0,
-                confidence=0.0,
-                window_days=window_days,
-                timestamp_utc=datetime.now(timezone.utc),
-                feedback_sentiment="neutral",
-            )
-
-        # Aggregate feedback
+        ratings, skill_name = self._ratings_in_window(
+            tenant_id=tenant_id, subject=skill_subject_id(skill_id), kind=RATING_KIND_SKILL,
+            id_key="skill_id", name_key="skill_name", entity_id=skill_id, window_days=window_days,
+        )
         stats = FeedbackAggregator.aggregate_feedback(
             entity_id=skill_id,
             entity_type="skill",
@@ -582,67 +469,40 @@ class OperatorFeedbackHandler:
             ratings=ratings,
             window_days=window_days,
         )
-
-        # Cache result
         if use_cache:
             self._aggregate_cache[cache_key] = stats
             self._cache_timestamp = datetime.now(timezone.utc)
-
         return stats
+
+    # ── promotion ───────────────────────────────────────────────────────
 
     def compute_promotion_adjustment(
         self,
         feedback_stats: FeedbackStats,
         base_threshold: float = 0.7,
     ) -> Tuple[float, str]:
-        """Compute auto-promotion threshold adjustment based on feedback.
-
-        Adjusts promotion threshold based on operator sentiment:
-        - Very positive (4.0-5.0) and confident → lower threshold (easier to promote)
-        - Neutral (3.0-4.0) → no adjustment
-        - Negative (<3.0) → raise threshold (harder to promote)
-
-        Args:
-            feedback_stats: Aggregated feedback statistics
-            base_threshold: Base promotion threshold (default 0.7)
-
-        Returns:
-            Tuple of (adjusted_threshold, reason_string)
-        """
+        """Compute auto-promotion threshold adjustment based on feedback."""
         if feedback_stats.sample_count < self.min_sample_size:
-            # Not enough feedback to adjust
             return (base_threshold, "Insufficient feedback samples")
 
-        # Compute adjustment based on sentiment and confidence
         adjustment = 0.0
         reason_parts = []
 
         sentiment = feedback_stats.feedback_sentiment
         confidence = feedback_stats.confidence
-        avg_rating = feedback_stats.average_rating
 
         if sentiment == "very_positive" and confidence >= 0.5:
-            # Lower threshold: reduce by up to 0.15 based on confidence
             adjustment = -0.15 * confidence
             reason_parts.append(f"very_positive_feedback_{int(confidence*100)}pct_confidence")
-
         elif sentiment == "positive" and confidence >= 0.7:
-            # Slight adjustment: reduce by up to 0.05
             adjustment = -0.05 * confidence
             reason_parts.append(f"positive_feedback_{int(confidence*100)}pct_confidence")
-
         elif sentiment == "negative" and confidence >= 0.5:
-            # Raise threshold: increase by up to 0.15 based on confidence
             adjustment = 0.15 * confidence
             reason_parts.append(f"negative_feedback_{int(confidence*100)}pct_confidence")
 
-        # Clamp adjusted threshold to [0.3, 0.95]
         adjusted_threshold = max(0.3, min(0.95, base_threshold + adjustment))
-
         reason = ", ".join(reason_parts) or "neutral_feedback"
-        if feedback_stats.sample_count < self.min_sample_size:
-            reason += f" (only {feedback_stats.sample_count} samples)"
-
         return (adjusted_threshold, reason)
 
     def _is_cache_valid(self) -> bool:

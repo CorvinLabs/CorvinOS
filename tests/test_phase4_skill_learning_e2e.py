@@ -15,9 +15,13 @@ def tenant_id():
 
 
 @pytest.fixture
-def emitter(tenant_id):
-    """Fixture: event emitter."""
-    return EventEmitter(tenant_id=tenant_id)
+def emitter(tenant_id, tmp_path):
+    """Fixture: real EventEmitter over a date-partitioned EventStore (ADR-0314)."""
+    from core.learning.event_store import EventStore
+
+    em = EventEmitter(EventStore(tmp_path / "tenants" / tenant_id))
+    yield em
+    em.stop()  # non-daemon worker thread — must be joined or the process hangs
 
 
 @pytest.fixture
@@ -147,7 +151,7 @@ class TestPhase4SkillLearningIntegration:
             await feedback.record_feedback(
                 decision_id=decision_id,
                 feedback_text="good",
-                rating=4 + i,
+                rating=min(5, 4 + i),  # ratings are 1-5 (OutcomeRecorder validates)
             )
 
         # All cycles complete without errors ✅

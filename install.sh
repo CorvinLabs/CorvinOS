@@ -7,9 +7,43 @@
 # POSIX sh, ZERO prerequisites: it bootstraps `uv` (a single static binary that
 # also manages its own Python), so you need NO system Python, NO pip, and NO
 # package manager pre-installed. Idempotent — safe to re-run.
+#
+# Supply-chain pins (2026-09-03 adversarial review, F9):
+#   * uv    — PINNED. The installer script for exactly UV_PIN_VERSION is fetched
+#             from the immutable GitHub release asset, its SHA-256 is verified
+#             against UV_INSTALLER_SHA256 below BEFORE it runs, and that script
+#             in turn verifies the uv binary it downloads against its own
+#             embedded checksums. No `curl | sh` of a moving target.
+#   * corvinos — a version FLOOR (`corvinos>=CORVIN_MIN_VERSION`), not an exact
+#             pin, on purpose (INST-1): `uv tool install corvinos==X` writes X
+#             into the uv receipt and `uv tool upgrade corvinos` (the console's
+#             auto-update path) then honours it forever — silently freezing
+#             updates. The floor rejects a downgraded/stale index while keeping
+#             the receipt upgradeable. Kept in sync with pyproject.toml by
+#             tests/test_wheel_content_guard.py.
+#   * Ollama — NOT pinned, documented deliberately: https://ollama.com/install.sh
+#             is an unversioned script that itself downloads the current
+#             release; there is no versioned installer asset to hash, and
+#             replacing it with a raw binary download would drop the GPU-driver
+#             and service setup it performs. It runs only when `ollama` is
+#             absent, with --no-hermes / CORVIN_SKIP_HERMES=1 as the opt-out,
+#             and its full output goes to the install log (see _await) so an
+#             elevation prompt or failure is never swallowed.
 set -eu
 
 PKG="${CORVIN_PKG:-corvinos}"
+# Keep CORVIN_MIN_VERSION equal to `version` in pyproject.toml (guarded by test).
+CORVIN_MIN_VERSION="1.0.0"
+UV_PIN_VERSION="0.12.9"
+UV_INSTALLER_URL="https://github.com/astral-sh/uv/releases/download/${UV_PIN_VERSION}/uv-installer.sh"
+UV_INSTALLER_SHA256="222e006c0fe4a0d793031833e469b21df72311f4e3526ffecca0e19e6dfabc32"
+# Full output of the silent (_await) steps. Printed on any ⚠ so a hidden sudo
+# prompt / download failure inside e.g. the Ollama installer is diagnosable.
+INSTALL_LOG="${CORVIN_INSTALL_LOG:-${TMPDIR:-/tmp}/corvinos-install.log}"
+# --lan: open TCP 8765 in ufw for LAN A2A pairing. Off by default — the console
+# binds 127.0.0.1 unless a2a_lan_bind is enabled, so a firewall hole on every
+# install pre-exposed the port before any consent step (F10).
+OPEN_LAN=0
 EDITABLE=""
 SKIP_HERMES="${CORVIN_SKIP_HERMES:-0}"
 # ADR-0184: Stufe 1 (start-at-login) already runs by default on an
@@ -34,14 +68,26 @@ die() { printf '%s %s\n' "$(_red 'Error:')" "$*" >&2; exit 1; }
 # `set -e`-safe: the `if wait` swallows a non-zero exit; the caller decides what
 # a failure means. Use ONLY for silent steps — a command with its own progress
 # (ollama pull, uv sync) should run plainly so its native bar shows through.
+# stdout+stderr are APPENDED to $INSTALL_LOG (never discarded): a sudo prompt
+# raised by a child installer, or its real error, used to vanish into
+# /dev/null and the user only ever saw a bare ⚠.
 _await() {
     _aw_msg="$1"; shift
     printf '  %s %s ' "$(_dim '⏳')" "$_aw_msg"
-    "$@" >/dev/null 2>&1 &
+    printf '\n=== %s: %s ===\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || echo now)" "$_aw_msg" >>"$INSTALL_LOG" 2>/dev/null || true
+    "$@" </dev/null >>"$INSTALL_LOG" 2>&1 &
     _aw_pid=$!
     while kill -0 "$_aw_pid" 2>/dev/null; do printf '.'; sleep 1; done
     if wait "$_aw_pid"; then printf ' %s\n' "$(_green '✓')"; return 0
-    else printf ' %s\n' "$(_yellow '⚠')"; return 1; fi
+    else printf ' %s  %s\n' "$(_yellow '⚠')" "$(_dim "(details: $INSTALL_LOG)")"; return 1; fi
+}
+
+# SHA-256 of a file, whichever tool the platform has (coreutils, BSD, openssl).
+_sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$1" | awk '{print $NF}'
+    else echo ""; fi
 }
 
 # ── argument parsing ──────────────────────────────────────────────────────────
@@ -59,9 +105,11 @@ while [ $# -gt 0 ]; do
         --preset)
             [ $# -lt 2 ] && die "--preset requires an argument (minimal|standard|advanced)"
             PRESET="$2"; shift 2 ;;
+        --lan)
+            OPEN_LAN=1; shift ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>] [--no-hermes] [--autostart] [--always-on] [--preset {minimal|standard|advanced}]" ;;
+Usage: $0 [--editable|-e <path>] [--no-hermes] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}]" ;;
     esac
 done
 if [ -n "$EDITABLE" ]; then
@@ -110,15 +158,28 @@ command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
     || die "curl or wget still not available after install attempt"
 
 # ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
+# Pinned + checksummed (see header): download the versioned installer to a
+# temp file, verify SHA-256, and only then execute it. Never `curl | sh`.
 if ! command -v uv >/dev/null 2>&1; then
-    echo "  Bootstrapping the uv runtime (brings its own Python) ..."
+    echo "  Bootstrapping the uv ${UV_PIN_VERSION} runtime (brings its own Python) ..."
+    _uv_tmp="$(mktemp "${TMPDIR:-/tmp}/uv-installer.XXXXXX")" || die "mktemp failed"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL https://astral.sh/uv/install.sh | sh
+        curl -fsSL --max-time 300 -o "$_uv_tmp" "$UV_INSTALLER_URL" \
+            || { rm -f "$_uv_tmp"; die "could not download $UV_INSTALLER_URL"; }
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- https://astral.sh/uv/install.sh | sh
+        wget -qO "$_uv_tmp" "$UV_INSTALLER_URL" \
+            || { rm -f "$_uv_tmp"; die "could not download $UV_INSTALLER_URL"; }
     else
-        die "Need curl or wget to bootstrap uv. Please install one and re-run."
+        rm -f "$_uv_tmp"; die "Need curl or wget to bootstrap uv. Please install one and re-run."
     fi
+    _uv_sum="$(_sha256_of "$_uv_tmp")"
+    [ -n "$_uv_sum" ] || { rm -f "$_uv_tmp"; die "no sha256sum/shasum/openssl available to verify the uv installer"; }
+    if [ "$_uv_sum" != "$UV_INSTALLER_SHA256" ]; then
+        rm -f "$_uv_tmp"
+        die "uv installer checksum mismatch (expected $UV_INSTALLER_SHA256, got $_uv_sum) — refusing to run it"
+    fi
+    sh "$_uv_tmp"
+    rm -f "$_uv_tmp"
 fi
 # uv lands in ~/.local/bin (current) or ~/.cargo/bin (older installs)
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
@@ -134,12 +195,13 @@ if [ -n "$EDITABLE" ]; then
     # already guards against.
     uv tool install --force --editable "${EDITABLE}[browser]"
 else
-    # INST-1: install UNPINNED. A `uv tool install corvinos==<ver>` writes that
+    # INST-1: NO exact pin. A `uv tool install corvinos==<ver>` writes that
     # exact pin into the uv receipt, after which `uv tool upgrade corvinos`
     # (the auto-update path in serve_backend.py / the install.ps1 supervisor)
     # respects the pin forever and exits 0 with "Nothing to upgrade" — silently
-    # freezing auto-update. Installing unpinned keeps the receipt upgradeable.
-    # The PyPI JSON query below is now used ONLY for a friendly log line.
+    # freezing auto-update. A version FLOOR (>= the release this script shipped
+    # with) keeps the receipt upgradeable while refusing a stale or downgraded
+    # index; see the header. The PyPI JSON query below is ONLY for a log line.
     LATEST=""
     if command -v curl >/dev/null 2>&1; then
         LATEST=$(curl -fsSL --max-time 10 "https://pypi.org/pypi/${PKG}/json" 2>/dev/null \
@@ -155,7 +217,11 @@ else
     # [browser] puts playwright into the uv receipt itself: a plain pip-inject
     # would be wiped by the next `uv tool upgrade` (rebuilds the venv from the
     # receipt), silently killing agent browsing after the first auto-update.
-    uv tool install --force --refresh "${PKG}[browser]"
+    if [ "$PKG" = "corvinos" ]; then
+        uv tool install --force --refresh "${PKG}[browser]>=${CORVIN_MIN_VERSION}"
+    else
+        uv tool install --force --refresh "${PKG}[browser]"   # CORVIN_PKG override: no floor
+    fi
 fi
 uv tool update-shell >/dev/null 2>&1 || true   # persist ~/.local/bin on PATH
 
@@ -318,16 +384,19 @@ if [ "$ALWAYS_ON" = "1" ]; then
     fi
 fi
 
-# ── 3c. firewall: allow LAN peers to reach the console/A2A port ─────────────
-# Best-effort, Linux-only (ufw), and only if ufw is already active on this
-# machine -- never touches firewall state the operator hasn't turned on
-# themselves, and never invokes sudo (this script only elevates when
-# --always-on is explicitly passed above) -- so this silently no-ops for
-# anyone without passwordless root, leaving the warning below as the
-# recovery path. Fixes a real report: A2A pairing between a Windows and
-# Linux instance on the same network got stuck at "unreachable" behind
-# ufw's default-deny inbound policy.
-if [ "$(uname -s 2>/dev/null || echo unknown)" = "Linux" ] && command -v ufw >/dev/null 2>&1; then
+# ── 3c. firewall: allow LAN peers to reach the console/A2A port (--lan) ─────
+# OPT-IN via --lan. The console binds 127.0.0.1 by default (serve_entry.py /
+# service_entry.py); punching TCP 8765 through ufw on every install pre-exposed
+# the port so that the moment an operator flipped `a2a_lan_bind` there was no
+# second consent step (2026-09-03 review, F10). Best-effort, Linux-only (ufw),
+# and only if ufw is already active on this machine -- never touches firewall
+# state the operator hasn't turned on themselves. This step itself does not
+# call sudo (the script elevates only for the curl bootstrap in step 0 when
+# curl is missing, and for --always-on above), so it silently no-ops for
+# anyone without passwordless root, leaving the warning below as the recovery
+# path. Background: A2A pairing between a Windows and Linux instance on the
+# same network got stuck at "unreachable" behind ufw's default-deny policy.
+if [ "$OPEN_LAN" = "1" ] && [ "$(uname -s 2>/dev/null || echo unknown)" = "Linux" ] && command -v ufw >/dev/null 2>&1; then
     if ufw status 2>/dev/null | grep -q "Status: active"; then
         if ufw allow 8765/tcp comment "CorvinOS console/A2A" >/dev/null 2>&1; then
             printf '  %s ufw: allowed inbound TCP 8765 for pairing with devices on this network.\n' "$(_green '✓')"
@@ -336,6 +405,9 @@ if [ "$(uname -s 2>/dev/null || echo unknown)" = "Linux" ] && command -v ufw >/d
                 "$(_yellow '⚠')" "$(_bold 'sudo ufw allow 8765/tcp')"
         fi
     fi
+elif [ "$OPEN_LAN" != "1" ]; then
+    printf '  %s Firewall untouched (console listens on 127.0.0.1). For A2A pairing over your LAN re-run with %s or open TCP 8765 yourself.\n' \
+        "$(_dim 'ℹ')" "$(_bold '--lan')"
 fi
 
 # ── 4. start server + wait for readiness + auto-launch console ──────────────────

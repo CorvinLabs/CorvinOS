@@ -1,17 +1,30 @@
 """Production hardening layer for Skill System (Phase 8, ADR-0422+).
 
-Rate limiting, circuit breaker, timeout management, graceful degradation.
+Rate limiting, circuit breaker, request timeout, graceful degradation.
 
 Public API:
   - SkillServiceRateLimiter: Per-client/user rate limiting
   - SkillServiceCircuitBreaker: Fail-fast on manifest load failures
   - SkillServiceHardening: Orchestrates all hardening components
+
+Clock: every component uses ``time.monotonic()`` — wall-clock jumps (NTP,
+suspend) must neither starve a bucket nor reopen a breaker.
+
+Adversarial review 2026-09-03 (D-09/D-10):
+  * The token bucket kept FRACTIONAL tokens. The previous ``int(elapsed *
+    rate)`` truncated to 0 while ``last_refill`` was reset on every call, so a
+    client polling faster than one token interval never refilled again.
+  * ``HALF_OPEN`` admits ONE in-flight probe at a time; concurrent callers
+    are refused until that probe reports success/failure (or is presumed lost
+    after ``recovery_timeout_seconds``).
+  * ``resolve_with_hardening`` ENFORCES ``request_timeout_seconds``: the
+    resolver runs on a daemon worker thread and is abandoned on overrun. The
+    previous version measured elapsed time after the fact and called that a
+    timeout.
 """
 
-from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Callable
-from threading import Lock
-from collections import defaultdict
+from threading import Lock, Thread
 import time
 
 
@@ -20,18 +33,32 @@ class SkillServiceRateLimiter:
 
     Attributes:
         rate_limit_per_minute: Max requests per minute per client
-        cleanup_interval_seconds: How often to prune old clients
     """
 
-    def __init__(self, rate_limit_per_minute: int = 1000):
+    def __init__(self, rate_limit_per_minute: int = 1000, clock: Callable[[], float] = time.monotonic):
         """Initialize rate limiter.
 
         Args:
             rate_limit_per_minute: Default limit (e.g., 1000 req/min)
+            clock: monotonic time source (injectable for tests)
         """
         self.rate_limit_per_minute = rate_limit_per_minute
         self.token_buckets: Dict[str, Dict[str, Any]] = {}
+        self._clock = clock
         self._lock = Lock()
+
+    @property
+    def refill_rate_per_second(self) -> float:
+        return self.rate_limit_per_minute / 60.0
+
+    def _refill(self, bucket: Dict[str, Any], now: float) -> None:
+        elapsed = max(0.0, now - bucket["last_refill"])
+        # Fractional accounting: sub-token progress is never thrown away.
+        bucket["tokens"] = min(
+            float(self.rate_limit_per_minute),
+            bucket["tokens"] + elapsed * self.refill_rate_per_second,
+        )
+        bucket["last_refill"] = now
 
     def is_allowed(self, client_id: str) -> bool:
         """Check if client is within rate limit.
@@ -39,7 +66,7 @@ class SkillServiceRateLimiter:
         Token-bucket algorithm:
         - Each client gets tokens at rate_limit_per_minute / 60 per second
         - Each request consumes 1 token
-        - If no tokens available, request denied
+        - If fewer than 1 token is available, request denied
 
         Args:
             client_id: Client identifier (tenant_id or user_id)
@@ -48,46 +75,32 @@ class SkillServiceRateLimiter:
             True if request is allowed, False if rate-limited
         """
         with self._lock:
-            now = datetime.now(timezone.utc)
+            now = self._clock()
             bucket = self.token_buckets.get(client_id)
 
             if bucket is None:
-                # First request from client; initialize bucket
-                bucket = {
-                    "tokens": self.rate_limit_per_minute,
-                    "last_refill": now,
-                }
+                bucket = {"tokens": float(self.rate_limit_per_minute), "last_refill": now}
                 self.token_buckets[client_id] = bucket
+            else:
+                self._refill(bucket, now)
 
-            # Refill tokens based on elapsed time
-            elapsed = (now - bucket["last_refill"]).total_seconds()
-            refill_rate = self.rate_limit_per_minute / 60  # tokens per second
-            tokens_to_add = int(elapsed * refill_rate)
-
-            bucket["tokens"] = min(
-                self.rate_limit_per_minute,
-                bucket["tokens"] + tokens_to_add,
-            )
-            bucket["last_refill"] = now
-
-            # Consume 1 token if available
-            if bucket["tokens"] > 0:
-                bucket["tokens"] -= 1
+            if bucket["tokens"] >= 1.0:
+                bucket["tokens"] -= 1.0
                 return True
             return False
 
     def get_bucket_state(self, client_id: str) -> Dict[str, Any]:
-        """Get current token state for diagnostics.
+        """Get current token state for diagnostics (refilled to ``now``).
 
         Returns:
-            {tokens: float, last_refill: datetime}
+            {tokens: float, last_refill: float (monotonic seconds) | None}
         """
         with self._lock:
-            bucket = self.token_buckets.get(client_id, {})
-            return {
-                "tokens": bucket.get("tokens", self.rate_limit_per_minute),
-                "last_refill": bucket.get("last_refill"),
-            }
+            bucket = self.token_buckets.get(client_id)
+            if bucket is None:
+                return {"tokens": float(self.rate_limit_per_minute), "last_refill": None}
+            self._refill(bucket, self._clock())
+            return {"tokens": bucket["tokens"], "last_refill": bucket["last_refill"]}
 
 
 class SkillServiceCircuitBreaker:
@@ -96,7 +109,7 @@ class SkillServiceCircuitBreaker:
     States:
       - CLOSED: Normal operation
       - OPEN: Failing; reject requests without trying
-      - HALF_OPEN: Testing if service recovered
+      - HALF_OPEN: Testing if service recovered — ONE probe in flight at a time
 
     Attributes:
         failure_threshold: Failures to trigger OPEN
@@ -113,28 +126,30 @@ class SkillServiceCircuitBreaker:
         failure_threshold: int = 5,
         recovery_timeout_seconds: int = 60,
         success_threshold: int = 2,
+        clock: Callable[[], float] = time.monotonic,
     ):
-        """Initialize circuit breaker.
-
-        Args:
-            failure_threshold: Failures before opening (default 5)
-            recovery_timeout_seconds: Time in OPEN before trying HALF_OPEN (default 60s)
-            success_threshold: Successes in HALF_OPEN to close (default 2)
-        """
         self.failure_threshold = failure_threshold
         self.recovery_timeout_seconds = recovery_timeout_seconds
         self.success_threshold = success_threshold
+        self._clock = clock
 
         self.state = self.STATE_CLOSED
         self.failure_count = 0
         self.success_count = 0
-        self.last_failure_time: Optional[datetime] = None
+        self.last_failure_time: Optional[float] = None  # monotonic seconds
+        self._probe_in_flight = False
+        self._probe_started: Optional[float] = None
         self._lock = Lock()
+
+    def _release_probe(self) -> None:
+        self._probe_in_flight = False
+        self._probe_started = None
 
     def record_success(self) -> None:
         """Record successful operation."""
         with self._lock:
             if self.state == self.STATE_HALF_OPEN:
+                self._release_probe()
                 self.success_count += 1
                 if self.success_count >= self.success_threshold:
                     self.state = self.STATE_CLOSED
@@ -147,55 +162,74 @@ class SkillServiceCircuitBreaker:
         """Record failed operation."""
         with self._lock:
             self.failure_count += 1
-            self.last_failure_time = datetime.now(timezone.utc)
+            self.last_failure_time = self._clock()
 
-            if self.failure_count >= self.failure_threshold:
-                self.state = self.STATE_OPEN
-            elif self.state == self.STATE_HALF_OPEN:
+            if self.state == self.STATE_HALF_OPEN:
+                self._release_probe()
                 self.state = self.STATE_OPEN
                 self.success_count = 0
+            elif self.failure_count >= self.failure_threshold:
+                self.state = self.STATE_OPEN
 
     def is_request_allowed(self) -> bool:
         """Check if request should be attempted.
 
         Returns:
-            True if CLOSED or HALF_OPEN, False if OPEN (unless recovery timeout passed)
+            CLOSED → True. OPEN → False until ``recovery_timeout_seconds`` has
+            passed, then the caller becomes the single HALF_OPEN probe.
+            HALF_OPEN → True only when no probe is in flight (a probe that
+            never reported back is presumed lost after the recovery timeout).
         """
         with self._lock:
-            if self.state == self.STATE_CLOSED or self.state == self.STATE_HALF_OPEN:
+            now = self._clock()
+            if self.state == self.STATE_CLOSED:
+                return True
+
+            if self.state == self.STATE_HALF_OPEN:
+                if self._probe_in_flight and self._probe_started is not None:
+                    if now - self._probe_started < self.recovery_timeout_seconds:
+                        return False
+                self._probe_in_flight = True
+                self._probe_started = now
                 return True
 
             # OPEN: check if recovery timeout has passed
-            if self.last_failure_time:
-                elapsed = (
-                    datetime.now(timezone.utc) - self.last_failure_time
-                ).total_seconds()
-                if elapsed >= self.recovery_timeout_seconds:
+            if self.last_failure_time is not None:
+                if now - self.last_failure_time >= self.recovery_timeout_seconds:
                     self.state = self.STATE_HALF_OPEN
                     self.success_count = 0
+                    self._probe_in_flight = True
+                    self._probe_started = now
                     return True
-
             return False
 
     def state_info(self) -> Dict[str, Any]:
         """Get circuit breaker state for diagnostics."""
         with self._lock:
+            seconds_since_failure = (
+                None if self.last_failure_time is None
+                else round(self._clock() - self.last_failure_time, 3)
+            )
             return {
                 "state": self.state,
                 "failure_count": self.failure_count,
                 "success_count": self.success_count,
                 "last_failure_time": self.last_failure_time,
+                "seconds_since_last_failure": seconds_since_failure,
+                "probe_in_flight": self._probe_in_flight,
             }
 
 
 class SkillServiceHardening:
-    """Orchestrates rate limiting, circuit breaker, timeouts (Phase 8).
+    """Orchestrates rate limiting, circuit breaker, request timeout (Phase 8).
 
     Attributes:
         rate_limiter: SkillServiceRateLimiter instance
         circuit_breaker: SkillServiceCircuitBreaker instance
-        request_timeout_seconds: Timeout for resolver.resolve()
-        connection_timeout_seconds: Timeout for manifest load from disk
+        request_timeout_seconds: Enforced bound on resolver.resolve()
+        connection_timeout_seconds: Advisory bound for manifest disk I/O
+            (reported in health, not separately enforced — disk reads are
+            covered by the request timeout)
     """
 
     def __init__(
@@ -203,16 +237,16 @@ class SkillServiceHardening:
         rate_limit_per_minute: int = 1000,
         request_timeout_seconds: float = 5.0,
         connection_timeout_seconds: float = 2.0,
+        failure_threshold: int = 5,
+        recovery_timeout_seconds: int = 60,
+        success_threshold: int = 2,
     ):
-        """Initialize hardening layer.
-
-        Args:
-            rate_limit_per_minute: Rate limit per client (default 1000/min)
-            request_timeout_seconds: Timeout for resolver queries (default 5s)
-            connection_timeout_seconds: Timeout for disk I/O (default 2s)
-        """
         self.rate_limiter = SkillServiceRateLimiter(rate_limit_per_minute)
-        self.circuit_breaker = SkillServiceCircuitBreaker()
+        self.circuit_breaker = SkillServiceCircuitBreaker(
+            failure_threshold=failure_threshold,
+            recovery_timeout_seconds=recovery_timeout_seconds,
+            success_threshold=success_threshold,
+        )
         self.request_timeout_seconds = request_timeout_seconds
         self.connection_timeout_seconds = connection_timeout_seconds
 
@@ -225,60 +259,44 @@ class SkillServiceHardening:
         """Resolve skill with all hardening applied.
 
         1. Rate limit check (deny if exceeded)
-        2. Circuit breaker check (deny if OPEN)
-        3. Execute resolver with timeout
-        4. Record result (success/failure)
-
-        Args:
-            resolver_callable: resolver.resolve function
-            client_id: Client identifier (for rate limiting)
-            skill_name: Skill to resolve
+        2. Circuit breaker check (deny if OPEN / probe already in flight)
+        3. Execute resolver on a worker thread, joined with request timeout
+        4. Record result (success/failure/timeout)
 
         Returns:
-            Skill entry or None (on rate-limit/circuit-breaker deny or timeout)
+            Skill entry or None (on rate-limit/circuit-breaker deny, error or timeout)
         """
         # Step 1: Rate limit
         if not self.rate_limiter.is_allowed(client_id):
-            # Degraded: return None (client over quota)
             return None
 
         # Step 2: Circuit breaker
         if not self.circuit_breaker.is_request_allowed():
-            # Degraded: return None (service failing)
             return None
 
-        # Step 3: Execute with timeout
-        try:
-            # In production, this would use signal.SIGALRM or threading.Timer
-            # For now, synchronous call with implicit timeout assumption
-            start = time.time()
-            result = resolver_callable(skill_name)
-            elapsed = time.time() - start
+        # Step 3: Execute with an ENFORCED timeout
+        holder: Dict[str, Any] = {}
 
-            if elapsed > self.request_timeout_seconds:
-                # Timeout exceeded; record as failure
-                self.circuit_breaker.record_failure()
-                return None
+        def _runner() -> None:
+            try:
+                holder["result"] = resolver_callable(skill_name)
+            except BaseException as exc:  # noqa: BLE001 — recorded as breaker failure
+                holder["exc"] = exc
 
-            # Success
-            self.circuit_breaker.record_success()
-            return result
+        worker = Thread(target=_runner, name=f"skill-resolve:{skill_name}", daemon=True)
+        worker.start()
+        worker.join(timeout=max(self.request_timeout_seconds, 0.0))
 
-        except Exception as e:
-            # Error during resolution
+        if worker.is_alive() or "exc" in holder:
+            # Overrun (abandoned) or error during resolution
             self.circuit_breaker.record_failure()
             return None
 
-    def health_status(self) -> Dict[str, Any]:
-        """Get hardening health status for monitoring.
+        self.circuit_breaker.record_success()
+        return holder.get("result")
 
-        Returns:
-            {
-              rate_limiter: {tokens: float},
-              circuit_breaker: {state: str, failure_count: int},
-              timeouts: {request_seconds: float, connection_seconds: float}
-            }
-        """
+    def health_status(self) -> Dict[str, Any]:
+        """Get hardening health status for monitoring."""
         return {
             "rate_limiter": {
                 "rate_limit_per_minute": self.rate_limiter.rate_limit_per_minute

@@ -27,13 +27,13 @@ from core.learning.skill_attribution import (
 
 
 class MockEventStore:
-    """Mock EventStore for testing."""
+    """Mock of the SYNC ``core.learning.event_store.EventStore`` (one pair, N-05)."""
 
     def __init__(self):
         self.events = []
         self.write_error = None
 
-    async def write_event(self, event):
+    def write_event(self, event):
         """Record event; simulate write_error if set."""
         if self.write_error:
             raise RuntimeError(self.write_error)
@@ -332,15 +332,22 @@ async def test_attribution_emits_event_to_store(attribution_engine_equal, mock_e
         outcome="success",
     )
 
-    # Should have emitted an event
+    # Should have emitted ONE learning_events record (OUTCOME / strategy:<id>)
+    from core.learning.learning_events import EventType, LearningEvent
+
     assert len(mock_event_store.events) == 1
     event = mock_event_store.events[0]
-
-    assert event.payload["attribution_id"] == payload.attribution_id
-    assert event.payload["strategy_id"] == "strategy_audit"
-    assert event.payload["outcome"] == "success"
-    assert event.payload["skills"] == ["skill_a", "skill_b"]
-    assert event.payload["credits"] == {"skill_a": 0.5, "skill_b": 0.5}
+    assert isinstance(event, LearningEvent)
+    assert event.event_type == EventType.OUTCOME
+    assert event.skill_id == "strategy:strategy_audit"
+    assert event.tenant_id == "_default"
+    assert event.signal["kind"] == "skill_attribution"
+    assert event.signal["attribution_id"] == payload.attribution_id
+    assert event.signal["strategy_id"] == "strategy_audit"
+    assert event.signal["outcome"] == "success"
+    assert event.signal["skills"] == ["skill_a", "skill_b"]
+    assert event.signal["credits"] == {"skill_a": 0.5, "skill_b": 0.5}
+    assert event.lom
 
 
 @pytest.mark.asyncio
@@ -369,7 +376,7 @@ async def test_attribution_event_includes_rating(attribution_engine_equal, mock_
     )
 
     event = mock_event_store.events[0]
-    assert event.payload["rating"] == 5
+    assert event.signal["rating"] == 5
 
 
 @pytest.mark.asyncio
@@ -385,7 +392,7 @@ async def test_attribution_event_includes_reasoning(attribution_engine_equal, mo
     )
 
     event = mock_event_store.events[0]
-    assert event.payload["reasoning"] == reason
+    assert event.signal["reasoning"] == reason
 
 
 @pytest.mark.asyncio

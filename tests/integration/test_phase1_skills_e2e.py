@@ -90,8 +90,9 @@ class TestSkillsRegistryE2E:
         # Execute: list registered skills
         skills = registry.list_skills()
 
-        # Verify: should have 3 builtin skills
-        assert len(skills) == 3
+        # Verify: all 7 builtin skills (routing, vibe, context + 4 flag-backed)
+        from core.skills.os_skills_phase1 import BUILTIN_SKILL_IDS
+        assert len(skills) == len(BUILTIN_SKILL_IDS) == 7
         skill_ids = [s.id for s in skills]
         assert "os.delegation_router" in skill_ids
         assert "os.vibe_engineering" in skill_ids
@@ -186,11 +187,13 @@ class TestSkillsRegistryE2E:
         assert result.status == "success"
         assert "routing_decision" in result.output
         assert "vibe_analysis" in result.output
-        assert "final_routing" in result.output
+        # ADR-0555: 3-tier output (base / injected / merged), merged is fail-closed
+        assert "base_tier" in result.output
+        assert "merged_tier" in result.output
 
-        routing = result.output["final_routing"]
-        assert "engine" in routing
-        assert "final_priority" in routing
+        merged = result.output["merged_tier"]
+        assert merged["engine"] == result.output["routing_decision"]["engine"]
+        assert 1 <= merged["priority"] <= 10
 
         # Verify: audit trail (should log context_adapter execution)
         audit_events = mock_audit.get_events("SKILL_EXECUTED")
@@ -372,7 +375,8 @@ class TestFeatureFlagReplacement:
         test_cases = [
             {"complexity": 2, "task_type": "chat", "expected_engine": "claude-haiku-4"},
             {"complexity": 5, "task_type": "analysis", "expected_engine": "claude-sonnet-4"},
-            {"complexity": 9, "task_type": "code", "expected_engine": "claude-sonnet-4"},
+            # complexity >= 8 wins over the "code prefers Sonnet" rule (that rule is < 7 only)
+            {"complexity": 9, "task_type": "code", "expected_engine": "claude-opus-5"},
         ]
 
         for test_case in test_cases:

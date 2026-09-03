@@ -11,6 +11,36 @@ from typing import TYPE_CHECKING, Optional
 
 from core.learning.event_schema import LearningEventType, LearningEvent, TokenMetricsPayload
 from core.learning.event_emitter import EventEmitter
+from core.learning.learning_events import EventType as _WireEventType
+from core.learning.learning_events import LearningEvent as _WireEvent
+
+TOKEN_METRICS_KIND = "token_metrics"
+
+
+def token_metrics_wire_event(event: LearningEvent) -> _WireEvent:
+    """Map a TOKEN_METRICS ``event_schema`` record to the emitter's wire format.
+
+    ONE pair per call site (N-05): the emitter persists ONLY
+    ``learning_events.LearningEvent`` via ``event_store.EventStore``. The
+    ``event_schema`` record stays the in-memory / DB representation of this
+    store; what goes to the learning event log is
+    ``METRIC / skill_id=<skill or os.token_metrics> / signal={kind: token_metrics, ...}``.
+    """
+    metrics = dict((event.payload or {}).get("token_metrics", {}))
+    return _WireEvent.create(
+        event_type=_WireEventType.METRIC,
+        skill_id=event.skill_name or "os.token_metrics",
+        tenant_id=event.tenant_id,
+        signal={
+            "kind": TOKEN_METRICS_KIND,
+            "source_event_id": event.event_id,
+            "session_id": event.session_id,
+            "instance_id": event.instance_id,
+            "user_id": event.user_id,
+            **metrics,
+        },
+        lom="core.learning.token_metrics_store:TokenMetricsStore.write_token_metrics",
+    )
 
 if TYPE_CHECKING:
     from core.learning.token_metrics_db import TokenMetricsDB
@@ -93,11 +123,17 @@ class TokenMetricsStore:
             skill_name=skill_name,
         )
 
-        # Write to EventEmitter (immutable, hash-chained) — always, first.
-        # emit() is a COROUTINE: calling it bare only built an un-awaited object
-        # ("RuntimeWarning: coroutine 'EventEmitter.emit' was never awaited") and
-        # the event was silently dropped, in sync and async callers alike.
-        _dispatch(self.event_emitter.emit(event))
+        # Write to EventEmitter — always, first. emit() is SYNCHRONOUS and
+        # non-blocking (bounded queue, daemon worker) and takes the
+        # learning_events wire envelope; the previous version dispatched the
+        # event_schema record as if emit() were a coroutine (N-05).
+        try:
+            if not self.event_emitter.emit(token_metrics_wire_event(event)):
+                import logging
+                logging.warning("token metrics learning event DROPPED (queue full / emitter stopped)")
+        except Exception as exc:  # noqa: BLE001 — telemetry must not break a turn
+            import logging
+            logging.warning("token metrics learning event failed: %s", exc)
 
         # Write to DB backend if available (never fatal — telemetry must not be
         # able to break a turn). The sync branch used to log "consider making

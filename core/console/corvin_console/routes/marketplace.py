@@ -20,10 +20,20 @@ import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from .. import audit as console_audit
+from .. import auth as session_auth
+from ..deps import require_csrf, require_session
 
 logger = logging.getLogger(__name__)
 
+# Security contract (adversarial review E-03, 2026-09-03): every read requires
+# a console session; ``POST /reload`` is a mutation → session + CSRF + audit.
+# The install sub-router below carries NO prefix of its own — this prefix is
+# the only one (it used to be doubled, see marketplace_install.py).
 router = APIRouter(prefix="/api/v1/marketplace", tags=["marketplace"])
 
 
@@ -121,6 +131,7 @@ def set_marketplace_index_path(path: Path) -> None:
 
 @router.get("/plugins")
 async def list_plugins(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     category: Optional[str] = Query(None),
     tier: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
@@ -163,7 +174,10 @@ async def list_plugins(
 
 
 @router.get("/plugins/{plugin_id}")
-async def get_plugin(plugin_id: str) -> Dict[str, Any]:
+async def get_plugin(
+    plugin_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> Dict[str, Any]:
     """
     Get plugin details by ID.
 
@@ -185,7 +199,9 @@ async def get_plugin(plugin_id: str) -> Dict[str, Any]:
 
 
 @router.get("/stats")
-async def marketplace_stats() -> Dict[str, Any]:
+async def marketplace_stats(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> Dict[str, Any]:
     """
     Get marketplace statistics.
 
@@ -215,12 +231,21 @@ async def marketplace_stats() -> Dict[str, Any]:
 
 
 @router.post("/reload")
-async def reload_index() -> Dict[str, Any]:
+async def reload_index(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> Dict[str, Any]:
     """
     Reload marketplace index from disk (for development/testing).
     """
     _index_manager._index = None  # Invalidate cache
     index = _index_manager.get_index()
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="marketplace.reload_index",
+        target_kind="marketplace_index",
+        target_id=str(_index_manager._index_path or "index"),
+    )
 
     return {
         "status": "reloaded",

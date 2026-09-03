@@ -13,6 +13,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { AlertCircle, CheckCircle2, Loader } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { BASE } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth'
 
 interface CustomRepositoryFormProps {
   onRepositoryAdded?: (url: string) => void
@@ -31,6 +32,9 @@ export function CustomRepositoryForm({
   onRepositoryAdded,
   className = ''
 }: CustomRepositoryFormProps) {
+  // validate / add are POSTs → CSRF token (backend: require_csrf).
+  const { session } = useAuth()
+  const csrf = session?.csrf_token ?? ''
   const [url, setUrl] = useState('')
   const [token, setToken] = useState('')
   const [validation, setValidation] = useState<ValidationState>({ status: 'idle' })
@@ -67,7 +71,7 @@ export function CustomRepositoryForm({
     try {
       const response = await fetch(`${BASE}/api/v1/marketplace/custom-repositories/validate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
         body: JSON.stringify({
           repo_url: repositoryUrl,
           token_ref: token || null
@@ -93,7 +97,7 @@ export function CustomRepositoryForm({
         })
       }
     }
-  }, [token])
+  }, [token, csrf])
 
   // Debounced onChange handler
   const handleUrlChange = useCallback((value: string) => {
@@ -123,7 +127,7 @@ export function CustomRepositoryForm({
     try {
       const response = await fetch(`${BASE}/api/v1/marketplace/custom-repositories`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
         body: JSON.stringify({
           repo_url: url,
           token_ref: token || null
@@ -148,7 +152,7 @@ export function CustomRepositoryForm({
     } finally {
       if (isMountedRef.current) setIsSubmitting(false)
     }
-  }, [url, token, validation, onRepositoryAdded])
+  }, [url, token, validation, onRepositoryAdded, csrf])
 
   const isSubmitEnabled = validation.status === 'valid' && !isSubmitting
 

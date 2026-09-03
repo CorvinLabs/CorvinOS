@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 from flask import request, jsonify, current_app
 from core.validators.factory import ValidatorFactory, ValidationResult
-from core.compliance.corvin_compliance_reports.audit import audit_log
+from corvin_compliance_reports.audit import audit_log
 
 
 F = TypeVar("F", bound=Callable[..., Any])

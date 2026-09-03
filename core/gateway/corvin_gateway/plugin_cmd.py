@@ -18,6 +18,90 @@ from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
 
+class _TenantsModule:
+    """Lazy façade over ``forge.tenants`` (ADR-0007 resolver).
+
+    Module-level so tests can patch ``plugin_cmd._tenants_module`` and so the
+    tenant directory is derived by the canonical ``validate_tenant_id()`` →
+    ``tenant_home()`` chain instead of string-joining under ``Path.home()``.
+    """
+
+    def _mod(self):
+        from forge import tenants  # type: ignore[import-not-found]
+
+        return tenants
+
+    def validate_tenant_id(self, tenant_id: str) -> str:
+        return self._mod().validate_tenant_id(tenant_id)
+
+    def tenant_home(self, tenant_id: str) -> Path:
+        return Path(self._mod().tenant_home(tenant_id))
+
+
+_tenants_module = _TenantsModule()
+
+
+def _tenant_config_path(tenant_id: str) -> Path:
+    tid = _tenants_module.validate_tenant_id(tenant_id)
+    return _tenants_module.tenant_home(tid) / "global" / "tenant.corvin.yaml"
+
+
+class _SkipRegistry(Exception):
+    """Control flow: runtime registry path disabled by flag (declared path only)."""
+
+
+def _validate_axes(metadata: "PluginMetadata") -> Optional[str]:
+    """Reject manifests that conflate the three plugin axes (CLAUDE.md § plugin registry).
+
+    ``origin`` (builtin|vetted|community) and ``boot_layer`` (bundled|installed)
+    are orthogonal; an ``origin: installed`` manifest used to slip past the
+    tenant-config write and only blew up (as a swallowed warning) at the
+    registry write — leaving the two sources of truth diverged.
+    """
+    from corvin_plugins.manifest import BootLayer, PluginOrigin
+
+    try:
+        PluginOrigin(metadata.origin)
+    except ValueError:
+        return (
+            f"plugin.yaml origin {metadata.origin!r} is not one of "
+            f"{[o.value for o in PluginOrigin]} (origin is provenance, not boot layer)"
+        )
+    try:
+        BootLayer(metadata.boot_layer)
+    except ValueError:
+        return (
+            f"plugin.yaml boot_layer {metadata.boot_layer!r} is not one of "
+            f"{[b.value for b in BootLayer]}"
+        )
+    from corvin_plugins.manifest import KNOWN_PLUGIN_TYPES
+
+    if metadata.plugin_type not in KNOWN_PLUGIN_TYPES:
+        return (
+            f"plugin.yaml plugin_type {metadata.plugin_type!r} is not a known extension point; "
+            f"expected one of {sorted(KNOWN_PLUGIN_TYPES)}"
+        )
+    return None
+
+
+def _get_corvin_home() -> Path:
+    """Canonical runtime root (honours CORVIN_HOME and the repo-local .corvin).
+
+    The two call sites below hardcoded ``Path.home()/.corvin`` and therefore
+    wrote tenant config / read trust anchors from the wrong root whenever the
+    resolver pointed elsewhere (tests patch this name).
+    """
+    try:
+        from forge.paths import corvin_home  # type: ignore[import-not-found]
+
+        return Path(corvin_home())
+    except Exception:  # noqa: BLE001 — forge absent (stripped layout)
+        import os
+
+        env = os.environ.get("CORVIN_HOME")
+        return Path(os.path.expanduser(env)) if env else Path.home() / ".corvin"
+
+
 
 @dataclass
 class PluginMetadata:
@@ -29,6 +113,7 @@ class PluginMetadata:
     boot_layer: str  # "bundled" | "installed"
     class_path: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
+    plugin_type: str = "generic"
 
 
 def _load_plugin_yaml(path: Path) -> Optional[Dict[str, Any]]:
@@ -127,6 +212,7 @@ def extract_plugin_metadata(path: str) -> PluginMetadata:
             origin=plugin_yaml.get("origin", "community"),
             boot_layer=plugin_yaml.get("boot_layer", "installed"),
             class_path=plugin_yaml.get("class_path"),
+            plugin_type=str(plugin_yaml.get("plugin_type") or "generic"),
             config=plugin_yaml.get("config"),
         )
 
@@ -205,27 +291,57 @@ def verify_plugin_signature(
 
 
 def load_tenant_config(tenant_id: str) -> Dict[str, Any]:
-    """Load tenant.corvin.yaml."""
-    from . import tenant_config as tc_module
+    """Load ``tenant.corvin.yaml`` as the raw mapping it is on disk.
 
-    config = tc_module.load(tenant_id)
-    return config.model_dump(mode="python")
+    Adversarial review 2026-09-03: this went through ``tenant_config.load()``
+    — the gateway's strict pydantic ``TenantConfig`` (``extra="forbid"``, no
+    ``spec.plugins`` field, mandatory ``apiVersion``/``kind``/``metadata``).
+    Every real tenant file (free-form ``spec`` sections written by the console)
+    failed validation, so ``corvinos plugin install`` never worked on a live
+    install; and had it loaded, ``model_dump()`` + ``save_tenant_config`` would
+    have rewritten the file WITHOUT every section the schema does not know.
+    The plugin command only owns ``spec.plugins.installed``; everything else
+    must round-trip untouched.
+    """
+    import yaml
+
+    config_path = _tenant_config_path(tenant_id)
+    if not config_path.exists():
+        raise FileNotFoundError(f"no config for tenant {tenant_id!r}: {config_path}")
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{config_path}: top-level must be a mapping")
+    return data
 
 
 def save_tenant_config(tenant_id: str, config_dict: Dict[str, Any]) -> None:
-    """Save tenant.corvin.yaml."""
-    from . import tenant_config as tc_module
-    from pathlib import Path
+    """Write ``tenant.corvin.yaml`` atomically, preserving every foreign section.
+
+    Mode: keep the existing file's mode (the console writes 0o644-ish files
+    and reads them regardless); a brand-new file is created 0o600.
+    """
+    import os
+    import tempfile
     import yaml
 
-    corvin_home = Path.home() / ".corvin"
-    config_path = corvin_home / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
+    config_path = _tenant_config_path(tenant_id)
     config_path.parent.mkdir(parents=True, exist_ok=True)
+    mode = (config_path.stat().st_mode & 0o777) if config_path.exists() else 0o600
 
-    config_path.write_text(
-        yaml.safe_dump(config_dict, sort_keys=False, allow_unicode=True),
-        encoding="utf-8"
-    )
+    fd, tmp = tempfile.mkstemp(prefix=".tenant.corvin.", suffix=".yaml", dir=str(config_path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(yaml.safe_dump(config_dict, sort_keys=False, allow_unicode=True))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, config_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def plugin_already_installed(
@@ -331,6 +447,10 @@ def install_plugin(
     # Step 2: Extract metadata
     try:
         metadata = extract_plugin_metadata(str(plugin_path))
+        axis_error = _validate_axes(metadata) if metadata else None
+        if axis_error:
+            print(f"Error: {axis_error}", file=sys.stderr)
+            return 1
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -365,7 +485,7 @@ def install_plugin(
     if metadata.origin == "vetted":
         from corvin_plugins.trust import load_trust_anchors
 
-        corvin_home = Path.home() / ".corvin"
+        corvin_home = _get_corvin_home()
         trust_anchors = load_trust_anchors(corvin_home)
 
         # Try to load plugin manifest for signature check
@@ -405,41 +525,63 @@ def install_plugin(
     # Step 8: Add plugin to config
     add_plugin_to_config(config, metadata)
 
-    # Step 9: Save tenant config
+    # Step 9: Update registry.yaml FIRST (the runtime source of truth the Console
+    # lists from), then the declarative tenant config. Registry failure is an
+    # install failure — a warning here left the two sources of truth diverged
+    # ("installed" in tenant.corvin.yaml, absent from registry.yaml).
+    try:
+        from corvin_core.feature_flags import is_enabled as _flag_enabled  # type: ignore[import-not-found]
+
+        runtime_registry_on = bool(_flag_enabled("plugin_runtime_lifecycle", tenant_id))
+    except Exception:  # noqa: BLE001 — flags unreadable → registry path off (declared path still honoured)
+        runtime_registry_on = False
+
+    try:
+        from corvin_plugins.manifest import BootLayer, PluginOrigin, PluginRecord
+        from corvin_plugins.state import PluginLifecycle
+
+        if not runtime_registry_on:
+            # ADR-0030: the declarative spec.plugins.installed entry is always
+            # honoured at boot; registry.yaml (runtime lifecycle) is flag-gated.
+            print(
+                "Note: plugin_runtime_lifecycle is off — recorded in tenant.corvin.yaml only "
+                "(enable the flag for registry.yaml + Console lifecycle control).",
+                file=sys.stderr,
+            )
+            raise _SkipRegistry()
+
+        record = PluginRecord(
+            plugin_id=metadata.plugin_id,
+            version=metadata.version,
+            display_name=metadata.name,
+            plugin_type=metadata.plugin_type,
+            origin=PluginOrigin(metadata.origin),
+            boot_layer=BootLayer(metadata.boot_layer),
+        )
+        lifecycle = PluginLifecycle(
+            tenant_id=tenant_id,
+            corvin_home_path=_get_corvin_home(),
+            lifecycle_enabled=runtime_registry_on,  # already checked above; the gate is per instance
+        )
+        if force:
+            try:
+                lifecycle.uninstall(metadata.plugin_id)
+            except Exception:  # noqa: BLE001 — not present in the registry yet
+                pass
+        lifecycle.install(record, installed_by="cli")
+    except _SkipRegistry:
+        pass
+    except Exception as e:  # noqa: BLE001
+        print(f"Error: Failed to update registry.yaml: {e}", file=sys.stderr)
+        emit_audit_event("plugin.install_failed", metadata.plugin_id, {"stage": "registry"})
+        return 1
+
+    # Step 10: Save tenant config (declarative spec.plugins.installed)
     try:
         save_tenant_config(tenant_id, config)
     except Exception as e:
         print(f"Error: Failed to save tenant config: {e}", file=sys.stderr)
         return 1
-
-    # Step 9a: Update registry.yaml with plugin record (FIX for GitHub#XXXX)
-    # Installation writes to tenant.corvin.yaml but ALSO must update registry.yaml
-    # so that Console listing queries can find the installed plugin.
-    try:
-        from core.plugins.corvin_plugins.state import TenantRegistry
-        from core.plugins.corvin_plugins.manifest import PluginRecord, PluginOrigin
-
-        registry = TenantRegistry.load(tenant_id)
-
-        # Convert metadata to PluginRecord and install via registry
-        record = PluginRecord(
-            plugin_id=metadata.plugin_id,
-            name=metadata.name,
-            version=metadata.version,
-            description=metadata.description or "",
-            origin=PluginOrigin(metadata.origin) if isinstance(metadata.origin, str) else metadata.origin,
-            boot_layer=metadata.boot_layer,
-            plugin_type=metadata.plugin_type,
-            class_path=metadata.class_path,
-            config=metadata.config,
-            pii_risk=metadata.pii_risk,
-            settings_schema=metadata.settings_schema,
-            settings=metadata.config,
-        )
-
-        registry.install(record, installed_by="cli")
-    except Exception as e:
-        print(f"Warning: Failed to update registry.yaml: {e}", file=sys.stderr)
         # Don't fail the installation if registry update fails—plugin is still installed
         # in tenant.corvin.yaml, just not visible in Console listing until restart
 

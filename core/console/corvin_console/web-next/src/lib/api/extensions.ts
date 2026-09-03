@@ -94,10 +94,13 @@ export async function removeExtension(name: string, csrf: string): Promise<void>
 
 export async function validateExtensionManifest(
   manifestYaml: string,
+  csrf: string,
   signal?: AbortSignal,
 ): Promise<ExtensionValidateResult> {
+  // POST → CSRF token required (backend: require_csrf on every mutation-shaped route).
   return api<ExtensionValidateResult>("/extensions/validate", {
     method: "POST",
+    csrf,
     body: { manifest_yaml: manifestYaml },
     signal,
   });

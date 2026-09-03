@@ -23,6 +23,7 @@ class SkillExecutorWithLearning:
         skill_name: str,
         decision_id: str,
         *args,
+        session_id: str = "none",
         **kwargs,
     ) -> Any:
         """Execute skill and capture latency signal.
@@ -47,6 +48,7 @@ class SkillExecutorWithLearning:
         await self.hooks.on_skill_executed(
             skill_name=skill_name,
             decision_id=decision_id,
+            session_id=session_id,
             latency_ms=elapsed_ms,
         )
 

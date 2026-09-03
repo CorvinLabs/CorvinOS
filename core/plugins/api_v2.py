@@ -112,8 +112,14 @@ class PluginResponse:
         )
 
     @classmethod
-    def error(cls, message: str, code: Optional[str] = None, metadata: Optional[Dict] = None, audit_hash: str = "") -> "PluginResponse":
-        """Factory: error response."""
+    def failure(cls, message: str, code: Optional[str] = None, metadata: Optional[Dict] = None, audit_hash: str = "") -> "PluginResponse":
+        """Factory: error response.
+
+        Named ``failure`` and NOT ``error``: a classmethod called ``error`` on a
+        dataclass replaces the class attribute that IS the ``error`` field's
+        default, so every ``success()`` was born with ``error=<classmethod>`` and
+        failed its own ``__post_init__`` invariant (2026-09-03 finding A7).
+        """
         return cls(
             status="error",
             error=message,

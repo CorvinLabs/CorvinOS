@@ -188,8 +188,9 @@ class TestL10ContextWiring:
             user_context={"user_id": "test_user"},
         )
 
-        # Verify result has expected fields
-        assert "context_tiers" in result
+        # Verify result has the ADR-0555 3-tier fields
+        for key in ("base_tier", "injected_tier", "merged_tier"):
+            assert key in result
         assert "skill_executed" in result
 
         # Verify Skill was actually invoked
@@ -225,11 +226,11 @@ class TestL10ContextWiring:
         assert result["skill_executed"] is False
         assert result["error"] is not None
 
-        # Verify fallback provides safe context (base only)
-        assert "context_tiers" in result
-        assert result["context_tiers"]["injected"] is None
-        assert result["context_tiers"]["base"] is not None
-        assert result["context_tiers"]["merged"] is not None
+        # Verify fallback provides safe context (base only, fail-closed)
+        assert result["injected_tier"] is None
+        assert result["base_tier"] is not None
+        assert result["merged_tier"] is not None
+        assert result["merged_tier"]["metadata"]["adr_0555_failclosed"] is True
 
     def test_l10_three_tier_context_model(self):
         """PROOF: 3-tier context model (base/injected/merged) is used."""
@@ -241,10 +242,10 @@ class TestL10ContextWiring:
         )
 
         # Verify 3-tier structure (ADR-0555)
-        context = result["context_tiers"]
-        assert "base" in context, "ADR-0555: base tier (immutable Phase 3) required"
-        assert "injected" in context, "ADR-0555: injected tier (learned layers) required"
-        assert "merged" in context, "ADR-0555: merged tier (fail-closed merge) required"
+        assert result["base_tier"]["tier_name"] == "base", "ADR-0555: base tier (immutable Phase 3) required"
+        assert result["injected_tier"]["tier_name"] == "injected", "ADR-0555: injected tier (learned layers) required"
+        assert result["merged_tier"]["tier_name"] == "merged", "ADR-0555: merged tier (fail-closed merge) required"
+        assert result["merged_tier"]["metadata"]["immutable"] is True
 
     def test_l10_tenant_isolation(self):
         """PROOF: Tenant isolation enforced in L10."""
@@ -280,47 +281,52 @@ class TestPIIScrubbing:
         )
 
     def test_pii_scrubbing_in_audit(self):
-        """PROOF: PII is redacted from audit events (GDPR Art. 32)."""
-        # Create a Skill output containing PII
-        pii_output = {
-            "engine": "claude-opus-5",
-            "user_email": "user@example.com",
-            "api_key": "sk-12345678",
-            "confidence": 0.95,
-        }
+        """PROOF: PII is redacted from audit events (GDPR Art. 32).
 
-        # Mock Skill to return PII
-        with patch.object(
-            self.integration.registry,
-            "execute",
-            return_value=SkillExecutionResult(
-                skill_id="os.delegation_router",
-                status="success",
-                output=pii_output,
-                execution_time_ms=42.0,
-                tenant_id="_default",
-                lom="test:test:100",
-            ),
-        ):
-            # Call routing (which will audit the result)
-            self.integration.registry.execute(
-                "os.delegation_router",
-                {"complexity": 5, "task_type": "chat"},
-                lom="test:pii_scrubbing:100",
-            )
+        Registers a Skill whose output carries PII and executes it through the
+        REAL registry (the previous version patched ``registry.execute`` itself,
+        so no audit event was ever written and the assertions were vacuous).
+        """
+        from core.skills.skill_registry_phase1 import Skill, SkillMetadata
 
-        # Verify audit event has PII scrubbed
-        assert len(self.audit_backend.events) > 0
-        audit_event = self.audit_backend.events[0]
-        output = audit_event.get("output", {})
+        class LeakySkill(Skill):
+            def __init__(self):
+                super().__init__(SkillMetadata(
+                    id="test.leaky", name="Leaky", description="returns PII",
+                    version="0.0.1", origin=SkillOrigin.COMMUNITY, owner="test",
+                ))
 
-        # Email and API key should be redacted
-        if isinstance(output, dict):
-            # Check that PII fields are scrubbed
-            if "user_email" in output:
-                assert output["user_email"] == "[REDACTED_PII]"
-            if "api_key" in output:
-                assert output["api_key"] == "[REDACTED_PII]"
+            def execute(self, input):
+                return {
+                    "engine": "claude-opus-5",
+                    "user_email": "user@example.com",
+                    "api_key": "sk-12345678",
+                    "password": "hunter2",
+                    "note": "contact me at someone@example.org, token=abc123",
+                    "confidence": 0.95,
+                    "input_tokens": 42,
+                }
+
+        self.integration.registry.register(LeakySkill())
+        self.audit_backend.events.clear()
+        result = self.integration.registry.execute(
+            "test.leaky", {"complexity": 5, "task_type": "chat"}, lom="test:pii_scrubbing:100",
+        )
+        assert result.status == "success"
+
+        assert len(self.audit_backend.events) == 1
+        output = self.audit_backend.events[0]["output"]
+        assert output["user_email"] == "[REDACTED_PII]"
+        assert output["api_key"] == "[REDACTED_PII]"
+        assert output["password"] == "[REDACTED_PII]"
+        assert "someone@example.org" not in output["note"]
+        assert "abc123" not in output["note"]
+        # Non-PII survives untouched (no over-redaction of *_tokens)
+        assert output["engine"] == "claude-opus-5"
+        assert output["confidence"] == 0.95
+        assert output["input_tokens"] == 42
+        # ADR-0537: LoM hash present on every success
+        assert self.audit_backend.events[0]["lom_hash"]
 
 
 if __name__ == "__main__":

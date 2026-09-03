@@ -16,15 +16,15 @@ def update_confidence(node: TreeNode, event: LearningEvent) -> float:
     Returns: new confidence ∈ [0.0, 1.0]
     """
     old_conf = node.confidence
-    
-    # Antipattern detected in anti_when context: strong penalty
-    if event.event_type == "antipattern_detected":
-        event.confidence_delta = -0.3
-    
+
+    # Antipattern detected in anti_when context: strong penalty.
+    # LearningEvent is frozen — derive the effective delta, never assign to it.
+    delta = -0.3 if event.event_type == "antipattern_detected" else event.confidence_delta
+
     # Bayesian blend: 70% prior, 30% new evidence
     alpha = 0.3
     new_conf = (1 - alpha) * old_conf + alpha * clip(
-        old_conf + event.confidence_delta,
+        old_conf + delta,
         0.0, 1.0
     )
     

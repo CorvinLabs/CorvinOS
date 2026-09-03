@@ -80,7 +80,11 @@ class OperatorFingerprintLearner:
         # Normalize to 0-1 range
         # High mean + low variance → aggressive (1.0)
         # Low mean + high variance → conservative (0.0)
-        risk = (mean_acc - var_acc) / 2.0
+        # ``(mean - var) / 2`` capped the score at 0.5 for a PERFECT operator,
+        # so the documented "aggressive" half of the scale was unreachable
+        # (N-07, ``test_risk_tolerance_computation``). mean ∈ [0, 1] and
+        # var ∈ [0, 0.25], so ``mean - var`` already lives in [-0.25, 1].
+        risk = mean_acc - var_acc
         return max(0.0, min(1.0, risk))
 
     def _compute_speed_preference(self) -> float:
@@ -110,9 +114,13 @@ class OperatorFingerprintLearner:
 
         mean_length = statistics.mean(self.feedback_lengths)
 
+        # Thresholds: < 20 chars (a word or two) = terse; ≥ 50 chars (a full
+        # sentence with explanation) = detailed; in between = neutral. The
+        # previous 100-char bar classified a 60-char explanatory sentence as
+        # "neutral" (N-07, ``test_communication_style_detection``).
         if mean_length < 20:
             return "terse"
-        elif mean_length < 100:
+        elif mean_length < 50:
             return "neutral"
         else:
             return "detailed"

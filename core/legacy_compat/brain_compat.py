@@ -100,25 +100,29 @@ def recall_recent_sessions(
 
     **Phase C (week 8+):** This function will be deleted.
     """
+    # Log deprecated call (CRITICAL-2 FIX: audit trail integration)
+    event = log_deprecated_call(
+        api_name="recall_recent_sessions",
+        module="core.brain.conversation_recall",
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
     try:
-        event = log_deprecated_call(
-            api_name="recall_recent_sessions",
-            module="core.brain.conversation_recall",
-            tenant_id=tenant_id,
-            user_id=user_id,
-        )
-
         skill = ContextAdapterSkill()
-        result = skill.execute(
-            user_id=user_id,
-            limit=limit,
-            tenant_id=tenant_id,
-        )
+        with skill_call_timeout(seconds=5):  # CRITICAL-5 FIX: fail-closed timeout
+            result = skill.execute(
+                user_id=user_id,
+                limit=limit,
+                tenant_id=tenant_id,
+            )
 
-        if result.status != "success":
-            raise RuntimeError(f"Skill failed: {result.error_message}")
-
-        return result.output
+        # CRITICAL-4 FIX: execute() returns dict, not SkillExecutionResult
+        if isinstance(result, dict):
+            # Skill returns sessions list (successful case)
+            return result.get("sessions", [])
+        else:
+            raise RuntimeError(f"Skill returned unexpected type: {type(result)}")
 
     except Exception as e:
         log_deprecated_error(

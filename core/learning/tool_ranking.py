@@ -11,20 +11,120 @@ Modules:
 4. Scoring formula: success(0.3) + latency(0.2) + cost(0.2) + trend(0.1) - cold_start(0.2)
 
 Tenant-scoped: all queries respect tenant_id (GDPR Art. 5, 32).
+
+Wire format (ONE pair, adversarial review N-02): the producer
+(``ToolForgeSubsystem._emit_tool_executed_event``) and this reader share the
+``learning_events.LearningEvent`` envelope persisted by
+``core.learning.event_store.EventStore``:
+
+    event_type = EventType.METRIC
+    skill_id   = "tool:<tool_id>"
+    signal     = {"kind": "tool_executed", <ToolExecutedPayload fields>, session_id, instance_id}
+
+``tool_executed_event()`` below is the only constructor of that record; the
+previous producer built ``event_schema`` events and ``await``-ed the sync
+emitter, and this reader called ``EventStore.read_events_by_type`` (defined by
+no store) — ADR-0321/0322 telemetry never landed on disk.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+import re
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .event_schema import LearningEvent, LearningEventType, ToolExecutedPayload
+from .event_schema import ToolExecutedPayload
 from .event_store import EventStore
+from .learning_events import EventType, LearningEvent
 from .tool_ranking_cache import RankingCache
 
 logger = logging.getLogger(__name__)
+
+TOOL_EXECUTED_KIND = "tool_executed"
+_TOOL_SKILL_PREFIX = "tool:"
+
+# Content scrub for the free-text error field (the subsystem sanitises paths /
+# credentials first; this is the fail-closed backstop so a PII-shaped value
+# never reaches the learning store — GDPR Art. 5).
+_PII_VALUE_PATTERNS = (
+    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),  # email
+    re.compile(r"\+?\d[\d\s().-]{7,}\d"),  # phone-ish digit runs
+    re.compile(r"\b(?:sk|pk|ghp|xox[abp])[_-][A-Za-z0-9_-]{8,}\b"),  # api keys
+    re.compile(r"\bAKIA[0-9A-Z]{12,}\b"),  # AWS
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),  # JWT
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{16,}"),
+    re.compile(r"/(?:home|Users)/[^/\s]+"),  # user home paths
+)
+_ERROR_MESSAGE_MAX = 200
+
+
+def _scrub_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value)
+    for pat in _PII_VALUE_PATTERNS:
+        text = pat.sub("[REDACTED]", text)
+    return text[:_ERROR_MESSAGE_MAX]
+
+
+def tool_executed_event(
+    tenant_id: str,
+    payload: "ToolExecutedPayload | dict[str, Any]",
+    *,
+    session_id: str = "",
+    instance_id: str = "",
+    lom: Optional[str] = None,
+) -> LearningEvent:
+    """Build the ONE ``tool_executed`` learning record (ADR-0321 Gap 1).
+
+    ``payload`` is a ``ToolExecutedPayload`` (or its dict form); its fields are
+    copied into ``signal`` with ``kind="tool_executed"``. ``error_message`` is
+    scrubbed + truncated; ``tags`` are kept as a list of short strings.
+    """
+    data = asdict(payload) if is_dataclass(payload) else dict(payload)
+    tool_id = str(data.get("tool_id") or data.get("tool_name") or "unknown")
+    signal: dict[str, Any] = {"kind": TOOL_EXECUTED_KIND}
+    for key in ToolExecutedPayload.__dataclass_fields__:
+        if key in data:
+            signal[key] = data[key]
+    signal["tool_id"] = tool_id
+    signal["tool_name"] = str(data.get("tool_name") or tool_id)
+    signal["error_message"] = _scrub_text(signal.get("error_message"))
+    signal["tags"] = [str(t)[:64] for t in (signal.get("tags") or [])]
+    signal["session_id"] = session_id or ""
+    signal["instance_id"] = instance_id or ""
+    return LearningEvent.create(
+        event_type=EventType.METRIC,
+        skill_id=f"{_TOOL_SKILL_PREFIX}{tool_id}",
+        tenant_id=tenant_id,
+        signal=signal,
+        lom=lom or "core.learning.tool_ranking:tool_executed_event",
+    )
+
+
+def is_tool_executed_event(event: LearningEvent) -> bool:
+    """True for the records ``tool_executed_event`` produces."""
+    return (
+        event.event_type == EventType.METRIC
+        and isinstance(event.signal, dict)
+        and event.signal.get("kind") == TOOL_EXECUTED_KIND
+    )
+
+
+def _event_time(event: LearningEvent) -> datetime:
+    """Aware UTC datetime of a learning event (``timestamp`` is ISO-8601 'Z')."""
+    raw = event.timestamp
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        ts = datetime.fromisoformat(raw)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -174,33 +274,36 @@ class ToolRankingManager:
             cutoff_time: Only include events after this timestamp
 
         Returns:
-            List of filtered TOOL_EXECUTED events (max 10000 to prevent memory exhaustion)
+            List of filtered tool_executed events (max 10000 to prevent memory exhaustion)
         """
-        # Query from EventStore (synchronous for now)
-        # In the future, consider async EventStore queries
-        all_events = self.event_store.read_events_by_type(
-            event_type=LearningEventType.TOOL_EXECUTED,
+        if cutoff_time.tzinfo is None:
+            cutoff_time = cutoff_time.replace(tzinfo=timezone.utc)
+
+        # ``query_events`` is tenant-filtered by the store (GDPR Art. 32); the
+        # date-partition window starts at the cutoff day.
+        all_events = self.event_store.query_events(
+            tenant_id=tenant_id,
+            event_type=EventType.METRIC,
+            since=cutoff_time.strftime("%Y-%m-%d"),
             limit=10000,  # Pagination: prevent memory exhaustion
         )
 
-        # Filter by tenant_id and time window
         filtered_events = [
             e for e in all_events
-            if e.tenant_id == tenant_id
-            and e.timestamp_utc >= cutoff_time
+            if is_tool_executed_event(e) and _event_time(e) >= cutoff_time
         ]
 
         # Further filter by task_type and error_class if provided
         if task_type is not None:
             filtered_events = [
                 e for e in filtered_events
-                if e.payload.get("task_type") == task_type
+                if e.signal.get("task_type") == task_type
             ]
 
         if error_class is not None:
             filtered_events = [
                 e for e in filtered_events
-                if e.payload.get("error_class") == error_class
+                if e.signal.get("error_class") == error_class
             ]
 
         return filtered_events
@@ -225,12 +328,15 @@ class ToolRankingManager:
         metrics_by_tool: Dict[str, Dict[str, Any]] = {}
 
         for event in events:
-            payload = event.payload
+            if not is_tool_executed_event(event):
+                continue
+            payload = event.signal
+            event_time = _event_time(event)
             tool_id = payload.get("tool_id", "unknown")
             tool_name = payload.get("tool_name", tool_id)
             status = payload.get("status", "unknown")
-            latency_ms = payload.get("latency_ms", 0)
-            cost_cents = payload.get("estimated_cost_cents", 0)
+            latency_ms = payload.get("latency_ms", 0) or 0
+            cost_cents = payload.get("estimated_cost_cents", 0) or 0
 
             # Initialize tool metrics if first time seeing it
             if tool_id not in metrics_by_tool:
@@ -241,8 +347,8 @@ class ToolRankingManager:
                     "total_count": 0,
                     "latencies": [],
                     "costs": [],
-                    "first_used": event.timestamp_utc,
-                    "last_used": event.timestamp_utc,
+                    "first_used": event_time,
+                    "last_used": event_time,
                     "timestamps": [],
                 }
 
@@ -252,8 +358,9 @@ class ToolRankingManager:
                 metrics_by_tool[tool_id]["success_count"] += 1
             metrics_by_tool[tool_id]["latencies"].append(latency_ms)
             metrics_by_tool[tool_id]["costs"].append(cost_cents)
-            metrics_by_tool[tool_id]["last_used"] = event.timestamp_utc
-            metrics_by_tool[tool_id]["timestamps"].append(event.timestamp_utc)
+            metrics_by_tool[tool_id]["first_used"] = min(metrics_by_tool[tool_id]["first_used"], event_time)
+            metrics_by_tool[tool_id]["last_used"] = max(metrics_by_tool[tool_id]["last_used"], event_time)
+            metrics_by_tool[tool_id]["timestamps"].append(event_time)
 
         # Compute derived metrics for each tool
         for tool_id, metrics in metrics_by_tool.items():

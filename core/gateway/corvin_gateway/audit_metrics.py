@@ -43,6 +43,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections import OrderedDict
 from threading import Lock
 from typing import Any, Iterable, Iterator
 
@@ -893,7 +894,13 @@ def _fmt_float(v: float) -> str:
 # ── Cache + public API ──────────────────────────────────────────────
 
 
-_cache: dict[tuple[str, float | None], tuple[float, str]] = {}
+# Bounded LRU (adversarial review E-09, 2026-09-03): the cache is keyed on
+# ``(tenant, round(since))`` and used to grow by one rendered Prometheus body
+# per distinct ``?since=`` value forever — a scraper varying ``since`` each
+# second was an unbounded memory leak. ``_CACHE_MAX`` entries, least recently
+# used evicted first.
+_CACHE_MAX = 256
+_cache: "OrderedDict[tuple[str, float | None], tuple[float, str]]" = OrderedDict()
 _cache_lock = Lock()
 
 
@@ -942,10 +949,14 @@ def render(tenant_id: str, *, since: float | None = None) -> str:
     with _cache_lock:
         cached = _cache.get(key)
         if cached is not None and now - cached[0] < ttl:
+            _cache.move_to_end(key)
             return cached[1]
     body = render_prometheus(aggregate(tenant_id, since=since))
     with _cache_lock:
         _cache[key] = (now, body)
+        _cache.move_to_end(key)
+        while len(_cache) > _CACHE_MAX:
+            _cache.popitem(last=False)
     return body
 
 

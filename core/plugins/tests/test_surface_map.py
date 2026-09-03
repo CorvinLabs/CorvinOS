@@ -377,6 +377,9 @@ def test_the_unconsumed_set_is_recorded_not_incidental():
         # never have worked — by loading compute_engine plugins in the COMPUTE
         # WORKER, the process where WorkerServer actually dispatches.
         "compute_engine",
+        # ADR-0356/0365: the Console's routes/capabilities.py asks the registry
+        # for loaded web_surface plugins and calls spa_dist_dir() on them.
+        "web_surface",
     }
 
 
@@ -461,7 +464,10 @@ def test_the_worker_registration_surface_is_still_unreachable_from_a_plugin():
             "core/compute/tests/",
             "operator/bridges/shared/test_",
             "operator/bridges/shared/adapter.py",  # _register_engine, different API
-            "core/plugins/tests/",
+            # Any tests directory: a test fixture that calls its OWN
+            # `register_engine` (core/orchestration's FallbackChain has one) is
+            # not a production route into the worker.
+            "/tests/",
         ),
     )
     assert not hits, (

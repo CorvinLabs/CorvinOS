@@ -6,8 +6,8 @@ Phase 9: Pattern discovery from production failures.
 from __future__ import annotations
 from .active_loop import ActiveLearningLoop
 from .storage import LearningEventStore
-from .metrics import MetricsCollector
-from .anomaly_detector import AnomalyDetector, AnomalyAlert
+from .metrics import ExecutionMetrics, ExecutionMetricsRecorder
+from .anomaly_detector import AnomalyDetector
 from .pattern_discovery import FailureClusterer, DiscoveredPattern
 from pathlib import Path
 import time
@@ -23,11 +23,15 @@ class LearningIntegration:
 
     def __init__(self, store_path: Path = None, tenant_id: str = "_default"):
         if store_path is None:
-            store_path = Path.home() / ".corvin" / "learning"
+            from forge.tenants import tenant_home  # type: ignore[import-not-found]
+            store_path = Path(tenant_home(tenant_id)) / "learning"
+        self.tenant_id = tenant_id
         self.store = LearningEventStore(store_path)
-        self.metrics = MetricsCollector(tenant_id)  # ADR-0320: tenant-scoped metrics
+        self.metrics = ExecutionMetricsRecorder(self.store)
         self.loop = ActiveLearningLoop(self.store)
-        self.anomaly_detector = AnomalyDetector(self.store)
+        # Operator-feedback anomaly detector (window-based; takes window_size,
+        # NOT a store — passing the store made deque(maxlen=<store>) raise).
+        self.anomaly_detector = AnomalyDetector()
         self.pattern_clusterer = FailureClusterer(self.store)
     
     async def execute_method_with_learning(
@@ -137,74 +141,11 @@ class LearningIntegration:
             from .confidence import update_confidence
             update_confidence(node, event)
 
-    # Phase 8: Anomaly Detection & Auto-Recovery
-
-    def check_anomaly(
-        self,
-        subject_id: str,
-        new_confidence: float,
-        old_confidence: float,
-        reason: str = "",
-        context: dict = None,
-    ) -> Optional[AnomalyAlert]:
-        """Check if confidence change is anomalous.
-
-        Typically called after update_confidence() to detect degradation.
-
-        Args:
-            subject_id: Pattern or method ID
-            new_confidence: Current confidence value
-            old_confidence: Prior confidence value
-            reason: Why confidence changed (e.g., "failed")
-            context: Additional metadata (task_id, user_id, etc.)
-
-        Returns:
-            AnomalyAlert if anomaly detected, None otherwise.
-        """
-        return self.anomaly_detector.check_anomaly(
-            subject_id=subject_id,
-            new_confidence=new_confidence,
-            old_confidence=old_confidence,
-            reason=reason,
-            context=context,
-        )
-
-    def get_alerts(
-        self,
-        subject_id: str = None,
-        after: str = None,
-        severity: str = None,
-    ) -> list[AnomalyAlert]:
-        """Retrieve alerts from log.
-
-        Args:
-            subject_id: Filter by subject ID (optional)
-            after: Filter by timestamp ISO8601 (optional)
-            severity: Filter by "warning" or "critical" (optional)
-
-        Returns:
-            List of AnomalyAlert objects sorted by timestamp descending.
-        """
-        return self.anomaly_detector.get_alerts(
-            subject_id=subject_id,
-            after=after,
-            severity=severity,
-        )
-
-    def get_latest_alert(self, subject_id: str) -> Optional[AnomalyAlert]:
-        """Get most recent alert for a subject."""
-        return self.anomaly_detector.get_latest_alert(subject_id)
-
-    def clear_alerts_before(self, days_ago: int = 30) -> int:
-        """Remove alert logs older than N days (retention policy).
-
-        Args:
-            days_ago: Retention threshold in days
-
-        Returns:
-            Number of files deleted.
-        """
-        return self.anomaly_detector.clear_alerts_before(days_ago)
+    # Phase 8 note: the former check_anomaly/get_alerts/get_latest_alert/
+    # clear_alerts_before wrappers delegated to a file-based detector that the
+    # v0.6 rewrite replaced with the feedback-window ``AnomalyDetector``
+    # (record_feedback / get_health_status). They were unreachable — this
+    # constructor crashed before them — and are gone rather than kept as dead API.
 
     # Phase 9: Pattern Discovery
 

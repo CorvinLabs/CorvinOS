@@ -157,14 +157,29 @@ class BayesianTemplateTuner:
         Convergence criteria:
         - At least 50 observations
         - Accuracy posterior variance < 0.05
+        - Observed accuracy variance (last 50 outcomes) < 0.05
         - Latency posterior std dev < 20ms
+
+        The posterior-variance check alone is vacuous: Beta(α, β) variance is
+        at most ≈ 1/(4·N) once N ≥ 50, i.e. ≤ 0.005 for ANY mix of outcomes,
+        so a template alternating 0.9 / 0.1 accuracy "converged" (N-07,
+        ``test_convergence_check_requires_low_variance``). Convergence means
+        the estimate is stable AND the outcomes are consistent, so the sample
+        variance of the observed accuracies is checked as well.
         """
         if len(self.outcomes) < 50:
             return False
 
-        # Check accuracy convergence
+        # Check accuracy convergence (posterior)
         accuracy_variance = self.accuracy_posterior.variance()
         if accuracy_variance > 0.05:
+            return False
+
+        # Check outcome consistency (sample variance of the last 50 accuracies)
+        recent = [o.accuracy for o in self.outcomes[-50:]]
+        mean_acc = sum(recent) / len(recent)
+        sample_variance = sum((a - mean_acc) ** 2 for a in recent) / len(recent)
+        if sample_variance > 0.05:
             return False
 
         # Check latency convergence
