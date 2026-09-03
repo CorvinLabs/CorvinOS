@@ -9,6 +9,7 @@
  * - Click to view detailed metrics
  */
 
+import { api } from "@/lib/api/client";
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle, TrendingUp, Clock, AlertTriangle, Brain } from "lucide-react";
@@ -35,10 +36,13 @@ interface SkillsStatusResponse {
   error?: string;
 }
 
-async function fetchSkillsStatus(tenantId: string = "_default"): Promise<SkillsStatusResponse> {
-  const response = await fetch(`/api/skills/status?tenant_id=${tenantId}`);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
+// Through the console API client: BASE-prefixed (/v1/console/api/skills/status —
+// the bare /api/skills/status 404'd on prod AND the vite dev server) and sent with
+// the session cookie. The backend scopes the answer to the SESSION's tenant
+// (routes/skills_monitoring.py::get_skills_status); a tenant_id query param is
+// never read, so none is sent.
+function fetchSkillsStatus(signal?: AbortSignal): Promise<SkillsStatusResponse> {
+  return api<SkillsStatusResponse>("/api/skills/status", { signal });
 }
 
 const StatusBadge = ({ status }: { status: string }) => {
@@ -79,7 +83,7 @@ export const SkillsOverviewPanel: React.FC = () => {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["skills-status"],
-    queryFn: () => fetchSkillsStatus(),
+    queryFn: ({ signal }) => fetchSkillsStatus(signal),
     refetchInterval: 5000, // Refresh every 5 seconds
   });
 
