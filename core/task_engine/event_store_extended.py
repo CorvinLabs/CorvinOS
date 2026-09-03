@@ -12,10 +12,24 @@ class CryptoEventStore(EventStore):
     """EventStore with HMAC-SHA256 signing + tenant-scoped queries (Phase B)."""
 
     def __init__(self, tenant_id: str = "_default", external_key: Optional[str] = None):
-        """Initialize with crypto key."""
+        """Initialize with crypto key (CRITICAL FIX: no default key, fail-closed)."""
         super().__init__(tenant_id=tenant_id)
-        self.external_key = (external_key or "default-key-phase-b").encode()
+
+        # CRITICAL FIX 1: No hardcoded default key
+        if external_key is None:
+            raise ValueError(
+                "CryptoEventStore requires explicit external_key (from HSM/KMS, not default). "
+                "Set via TASK_ENGINE_CRYPTO_KEY environment variable or pass explicit_key='...' "
+                "at initialization."
+            )
+
+        key_bytes = external_key.encode() if isinstance(external_key, str) else external_key
+        if len(key_bytes) < 32:
+            raise ValueError(f"Crypto key must be ≥32 bytes, got {len(key_bytes)}")
+
+        self.external_key = key_bytes
         self.snapshots_signed: Dict[str, str] = {}  # snapshot_hash -> signature
+        self.key_version = 1  # For rotation support
 
     def sign_snapshot(self, snapshot: Snapshot) -> str:
         """Sign snapshot with HMAC-SHA256 (ADR-0541 Fix 1.3)."""

@@ -133,7 +133,7 @@ class VibeDashboardAdapter:
         )
 
     def render_dag_visual(self, task_id: str) -> str:
-        """Render DAG as SVG (Phase D, ADR-0545, complete)."""
+        """Render DAG as SVG with DoS protection (HIGH FIX 7, ADR-0545)."""
         try:
             events = self.event_store.query_tenant_scoped(task_id=task_id)
         except Exception:
@@ -146,12 +146,17 @@ class VibeDashboardAdapter:
                 phases[phase_id] = {"events": []}
             phases[phase_id]["events"].append(event)
 
+        # HIGH FIX 7: Cap phases to prevent SVG DoS
+        MAX_PHASES_IN_DAG = 100
+        phase_list = sorted(phases.keys())
+        overflow_count = len(phase_list) - MAX_PHASES_IN_DAG if len(phase_list) > MAX_PHASES_IN_DAG else 0
+        phase_list = phase_list[:MAX_PHASES_IN_DAG]
+
         svg_lines = [
             '<svg width="800" height="300" xmlns="http://www.w3.org/2000/svg" style="border: 1px solid #ccc;">',
             '<style>.phase-box { fill: #e3f2fd; stroke: #1976d2; stroke-width: 2; } .phase-text { font-family: monospace; font-size: 12px; } .phase-box.done { fill: #c8e6c9; }</style>',
         ]
 
-        phase_list = sorted(phases.keys())
         box_w, box_h = 100, 50
         x_spacing = 150
         y_pos = 125
@@ -161,6 +166,9 @@ class VibeDashboardAdapter:
             phase_class = "done" if i < len(phase_list) - 1 else ""
             svg_lines.append(f'  <rect class="phase-box {phase_class}" x="{x_pos}" y="{y_pos}" width="{box_w}" height="{box_h}" />')
             svg_lines.append(f'  <text class="phase-text" x="{x_pos + 5}" y="{y_pos + 32}">{ph_id}</text>')
+
+        if overflow_count > 0:
+            svg_lines.append(f'  <text x="50" y="280" style="font-size: 11px; fill: #999;">... and {overflow_count} more phases</text>')
 
         svg_lines.append('</svg>')
         return '\n'.join(svg_lines)
@@ -217,14 +225,14 @@ class VibeDashboardAdapter:
 
 
 class RevertControlHandler:
-    """Handle revert button clicks (Phase D, Fix 3.4)."""
+    """Handle revert button clicks with AUTH validation (CRITICAL FIX 3, Phase D)."""
 
     def __init__(self, validator, event_store):
         self.validator = validator
         self.event_store = event_store
 
-    def handle_revert_click(self, task_id: str) -> bool:
-        """User clicked revert button in Vibe dashboard (Phase D)."""
+    def handle_revert_click(self, task_id: str, user_id: str, tenant_id: str) -> bool:
+        """User clicked revert button in Vibe dashboard (CRITICAL FIX 3: auth + tenant validation)."""
         try:
             events = self.event_store.query_tenant_scoped(task_id=task_id)
         except Exception:
@@ -232,6 +240,20 @@ class RevertControlHandler:
 
         if not events:
             return False
+
+        # CRITICAL FIX 3.1: Verify user owns this task
+        # Task owner is recorded in first event's payload
+        first_event_owner = events[0].payload.get("user_id")
+        if first_event_owner and first_event_owner != user_id:
+            raise PermissionError(
+                f"User {user_id} does not own task {task_id} (owner: {first_event_owner})"
+            )
+
+        # CRITICAL FIX 3.2: Verify tenant match
+        if events[0].tenant_id != tenant_id:
+            raise PermissionError(
+                f"Tenant {tenant_id} does not match task tenant {events[0].tenant_id}"
+            )
 
         # Find last completed phase
         last_phase = None
@@ -243,5 +265,9 @@ class RevertControlHandler:
         if not last_phase:
             return False
 
-        # Trigger atomic rollback
-        return self.validator.atomic_rollback(task_id, last_phase, reason="User clicked revert button (Vibe dashboard)")
+        # Trigger atomic rollback with owner attribution
+        return self.validator.atomic_rollback(
+            task_id,
+            last_phase,
+            reason=f"User {user_id} clicked revert button (Vibe dashboard)"
+        )
