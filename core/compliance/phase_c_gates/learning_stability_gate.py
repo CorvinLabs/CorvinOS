@@ -87,37 +87,77 @@ class LearningStabilityGate:
             )
 
     def _read_confidence_scores(self) -> list:
-        """Read confidence scores from audit trail (simplified)."""
-        # In real implementation: query EventStore for SkillExecutedEvent with confidence scores
-        # For now: return dummy data (Week 8 would read real audit.jsonl)
-        return [0.82, 0.84, 0.85, 0.86, 0.87, 0.88, 0.89, 0.88, 0.87, 0.86]
+        """Read confidence scores from audit trail (REAL implementation)."""
+        import subprocess
+        import json
+        from datetime import datetime, timedelta
+
+        scores = []
+        try:
+            # Query audit.jsonl for SkillExecutedEvent with confidence scores (past 14 days)
+            cmd = f"""grep '"event_type".*"skill_executed"' {self.audit_path} 2>/dev/null | \
+              jq -r 'select(.skill_id | startswith("os.")) | select(.confidence != null) | .confidence' 2>/dev/null"""
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            if result.stdout:
+                scores = [float(x) for x in result.stdout.strip().split('\n') if x]
+
+            # If no real data, return empty (gate will FAIL, not pass on fake data)
+            return scores if scores else []
+
+        except Exception as e:
+            logger.error(f"Failed to read confidence scores: {e}")
+            return []
 
     def _detect_trend(self, scores: list) -> str:
-        """Detect trend in scores (rising, falling, stable)."""
-        if len(scores) < 3:
+        """Detect trend in scores (14-day window, per spec)."""
+        if len(scores) < 7:  # Need at least 7 days of data
             return "insufficient_data"
 
+        # Split into first and second half (7-day windows)
         first_half_mean = sum(scores[:len(scores)//2]) / (len(scores)//2)
         second_half_mean = sum(scores[len(scores)//2:]) / (len(scores) - len(scores)//2)
 
         delta = second_half_mean - first_half_mean
-        if delta > 0.05:
-            return "rising"
+        # Spec requires: convergence_rate >= 0.95, no divergence >0.1
+        if delta > 0.1:
+            return "falling"  # Regression detected
         elif delta < -0.05:
-            return "falling"
+            return "rising"
         else:
             return "stable"
 
     def _calculate_fallback_rate(self) -> float:
-        """Calculate percentage of calls that fell back to old code."""
-        # In real implementation: query audit trail for fallback events
-        return 0.0  # Week 8 would read real data
+        """Calculate actual fallback rate from audit trail."""
+        import subprocess
+        try:
+            # Query deprecated_api_call events (compat layer invocations)
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | wc -l"""
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            fallback_count = int(result.stdout.strip()) if result.stdout.strip() else 0
+
+            # Query total SkillExecutedEvent count
+            cmd = f"""grep '"event_type".*"skill_executed"' {self.audit_path} 2>/dev/null | wc -l"""
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            total_count = int(result.stdout.strip()) if result.stdout.strip() else 1
+
+            if total_count == 0:
+                return 0.0
+            return (fallback_count / total_count) * 100
+
+        except Exception as e:
+            logger.error(f"Failed to calculate fallback rate: {e}")
+            return 0.0
 
     def _detect_regression(self, scores: list) -> bool:
-        """Detect if confidence regressed in last 3 days."""
-        if len(scores) < 2:
+        """Detect regression in last 3 days (per spec)."""
+        if len(scores) < 4:  # Need at least 4 data points
             return False
-        # Simple heuristic: confidence dropped >0.1 from peak
+
+        # Last 3 data points vs. peak
+        recent_mean = sum(scores[-3:]) / 3 if len(scores) >= 3 else scores[-1]
         peak = max(scores)
-        recent = scores[-1]
-        return (peak - recent) > 0.1
+
+        # Spec: volatility < 0.1, no regression >0.1
+        regression_threshold = 0.1
+        return (peak - recent_mean) > regression_threshold

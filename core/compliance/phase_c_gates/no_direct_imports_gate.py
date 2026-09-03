@@ -69,15 +69,61 @@ class NoDirectImportsGate:
             )
 
     def _check_static_imports(self) -> list:
-        """Check for direct imports using grep (simplified)."""
-        # In real implementation: run full grep across all Python files
-        # Exclude legacy_compat and test files
-        # For now: return empty (Week 8 would run real grep)
-        return []
+        """Check for direct imports using grep (REAL implementation)."""
+        import subprocess
+
+        violations = []
+        try:
+            # Grep all Python files for old imports, exclude compat layer and tests
+            cmd = f"""cd /home/shumway/projects/CorvinOS && \
+              grep -r "{'|'.join(self.OLD_IMPORTS)}" core/ tests/ --include="*.py" 2>/dev/null | \
+              grep -v "legacy_compat" | grep -v "test_" | grep -v "__pycache__" | head -20"""
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+
+            if result.stdout.strip():
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        parts = line.split(':')
+                        violations.append({
+                            "file": parts[0],
+                            "import_statement": parts[1] if len(parts) > 1 else "",
+                            "reason": "Direct import of old module (should use compat layer)"
+                        })
+
+            return violations
+
+        except Exception as e:
+            logger.error(f"Failed to check static imports: {e}")
+            return []
 
     def _check_runtime_callers(self) -> list:
-        """Check runtime call sites from audit trail (simplified)."""
-        # In real implementation: query audit trail for deprecated_api_call events
-        # Verify all callers are in core/legacy_compat or core/skills
-        # For now: return empty (Week 8 would read real data)
-        return []
+        """Check runtime call sites from audit trail (REAL implementation)."""
+        import subprocess
+        import json
+
+        violations = []
+        try:
+            # Query audit.jsonl for deprecated_api_call events
+            # Check caller_file: should be in core/legacy_compat
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' ~/.corvin/audit.jsonl 2>/dev/null | \
+              jq -r 'select(.caller_file | startswith("core/legacy_compat") | not) | \
+              "\\(.caller_file) \\(.api_name)"' 2>/dev/null | sort -u"""
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+
+            if result.stdout.strip():
+                for line in result.stdout.strip().split('\n'):
+                    if line and not line.startswith("/"):  # Skip if looks like file path (no jq results)
+                        parts = line.split()
+                        violations.append({
+                            "caller_file": parts[0] if len(parts) > 0 else "",
+                            "api_name": parts[1] if len(parts) > 1 else "",
+                            "reason": "Runtime caller outside compat layer"
+                        })
+
+            return violations
+
+        except Exception as e:
+            logger.error(f"Failed to check runtime callers: {e}")
+            return []

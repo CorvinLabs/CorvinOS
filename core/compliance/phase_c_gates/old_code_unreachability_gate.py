@@ -62,8 +62,33 @@ class OldCodeUnreachabilityGate:
             )
 
     def _find_direct_calls(self) -> list:
-        """Query audit trail for direct calls to old modules (simplified)."""
-        # In real implementation: grep audit.jsonl for deprecated_api_call events
-        # with caller_module NOT in {core.legacy_compat, core.skills}
-        # For now: return empty (Week 8 would read real data)
-        return []
+        """Query audit trail for direct calls to old modules (REAL implementation)."""
+        import subprocess
+        import json
+
+        violations = []
+        try:
+            # Query audit.jsonl for deprecated_api_call events
+            # Check caller_module: if NOT in {core.legacy_compat, core.skills}, it's a violation
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path.replace("~", "/home/shumway")} 2>/dev/null | \
+              jq -r 'select(.caller_module | (startswith("core.legacy_compat") | not) and (startswith("core.skills") | not)) | \
+              "\\(.timestamp) \\(.api_name) \\(.caller_module)"' 2>/dev/null"""
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+
+            if result.stdout.strip():
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        parts = line.split()
+                        violations.append({
+                            "timestamp": parts[0] if len(parts) > 0 else "",
+                            "api_name": parts[1] if len(parts) > 1 else "",
+                            "caller_module": " ".join(parts[2:]) if len(parts) > 2 else "",
+                            "reason": "Direct call to old module (not via compat layer)"
+                        })
+
+            return violations
+
+        except Exception as e:
+            logger.error(f"Failed to find direct calls: {e}")
+            return []

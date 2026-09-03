@@ -26,6 +26,59 @@ import {
   BrainMonitorPage, ContextIntelligencePage, LearningHubPage, SessionExplorerPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
+import type { PanelDescriptor } from "@/adapters/capabilities";
+
+// ─ Manifest rendering support (ADR-0561) ────────────────────────────────────
+
+/** Map of component names (from manifest) to actual React components (lazy-loaded).
+ *  Used by manifestPanelRoutes() to resolve "component": "DashboardPage" strings
+ *  to actual components. Add new pages here + to lazy-pages.ts when adding panels.
+ */
+const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
+  DashboardPage,
+  SettingsPage,
+  EnginesPage,
+  BrowserPage,
+  ComputePage,
+  BridgesPage,
+  VoicePage,
+  ForgePage,
+  SkillsPage,
+  SkillsOverviewPanel: SkillsOverviewPanel as unknown as ComponentType,
+  PackagesPage,
+  CoworkPage,
+  LddPage,
+  CompliancePage,
+  FilesPage,
+  SpacePage,
+  MemoryPage,
+  AgentHubPage,
+  ConnectorsPage,
+  ApiKeysPage,
+  OrgsPage,
+  PeoplePage,
+  LicensePage,
+  RAGPage,
+  RAGHubPage,
+  CustomProviderPage,
+  DataSourcesPage,
+  FlowsPage,
+  AgentsPage,
+  ExtensionsPage,
+  McpPluginsPage,
+  PluginsPage,
+  PluginCenterPage,
+  ActivityFeedPage,
+  GitHubPage,
+  SyncMonitorPage,
+  WebhooksPage,
+  AuditPage,
+  ReleasesPage,
+  BrainMonitorPage,
+  ContextIntelligencePage,
+  LearningHubPage,
+  SessionExplorerPage,
+};
 
 const rc = (route: string, label: string, component: ComponentType,
             extra?: Partial<ConsolePanel>): ConsolePanel => ({
@@ -144,5 +197,45 @@ export function panelRoutes(panels: readonly ConsolePanel[] = PANELS) {
       );
     }
     return null; // web-component kind is vetted-only, lands with P7
+  });
+}
+
+/**
+ * Render manifest-driven panels as <Route> elements (ADR-0561, Phase 2).
+ *
+ * Converts PanelDescriptor[] (from backend manifest) to React Routes.
+ * Resolves component names to actual components via COMPONENTS_BY_NAME registry.
+ *
+ * Supports:
+ * - "react-component": lookup from COMPONENTS_BY_NAME
+ * - "react": async import (deferred; TODO P3)
+ * - "iframe": sandboxed PanelHost
+ * - "skill-inspector" / "plugin-inspector": deferred (TODO P3)
+ */
+export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
+  return panels.map((p) => {
+    if (p.element.kind === "react-component") {
+      // Resolve component name from manifest to actual React component
+      const componentName = p.element.component;
+      const C = COMPONENTS_BY_NAME[componentName];
+      if (!C) {
+        console.warn(`manifestPanelRoutes: unknown component "${componentName}" for panel "${p.id}"`);
+        return null;
+      }
+      return <Route key={p.id} path={p.route} element={<C />} />;
+    }
+    if (p.element.kind === "react") {
+      // Async import path from manifest — deferred for P3 (dynamic import resolution)
+      console.warn(`manifestPanelRoutes: "react" kind not yet supported for panel "${p.id}"`);
+      return null;
+    }
+    if (p.element.kind === "iframe") {
+      return (
+        <Route key={p.id} path={p.route}
+          element={<PanelHost src={p.element.src} sandbox="allow-scripts allow-same-origin" />} />
+      );
+    }
+    // skill-inspector, plugin-inspector: deferred for P3
+    return null;
   });
 }
