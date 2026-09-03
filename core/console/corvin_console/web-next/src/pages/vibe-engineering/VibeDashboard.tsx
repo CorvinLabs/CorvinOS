@@ -53,6 +53,18 @@ export function VibeDashboard() {
   const activeTab = searchParams.get("tab") || "dashboard";
   const vibeData = useVibeData(5000);
 
+  // Show loading state while initial data is fetching
+  if (vibeData.loading && Object.keys(vibeData).length < 10) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin" />
+          <p className="text-muted-foreground">Loading Vibe Engineering Dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
   const tabs = [
     { id: "dashboard", label: "Dashboard", icon: "📊" },
     { id: "brain-monitor", label: "Brain Monitor", icon: "🧠" },
