@@ -20,12 +20,27 @@ Integration: RequestPipeline calls this Skill to select context before merge.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Any
 from enum import Enum
+import inspect
 import logging
+import threading
 import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+def _get_lom() -> str:
+    """Get line of moral responsibility (caller's file:function:line)."""
+    frame = inspect.currentframe()
+    if frame and frame.f_back:
+        caller_frame = frame.f_back
+        return f"{caller_frame.f_code.co_filename}:{caller_frame.f_code.co_name}:{caller_frame.f_lineno}"
+    return "unknown"
+
+# Audit chain writer (lazy singleton)
+_audit_writer_lock = threading.Lock()
+_audit_writer: Optional[Any] = None
 
 
 class QualityMode(Enum):
@@ -136,8 +151,8 @@ class ContextSelectorSkill:
             ),
         )
 
-        # Emit audit event
-        self._emit_audit_event(decision, user_id)
+        # Emit audit event (hash-chained)
+        self._emit_audit_event(decision, user_id, self.tenant_id)
 
         self.execution_count += 1
         return decision
@@ -259,13 +274,62 @@ class ContextSelectorSkill:
         }
 
     @staticmethod
-    def _emit_audit_event(decision: ContextSelectionDecision, user_id: str) -> None:
-        """Emit audit event (will integrate with ADR-0232/0233)."""
+    def _get_audit_writer() -> Optional[Any]:
+        """Get or initialize audit chain writer (lazy singleton)."""
+        global _audit_writer, _audit_writer_lock
+
+        if _audit_writer is not None:
+            return _audit_writer
+
+        with _audit_writer_lock:
+            if _audit_writer is not None:
+                return _audit_writer
+
+            try:
+                from core.compliance.audit_chain_writer import AuditChainWriter
+
+                # Initialize writer with ~/.corvin/audit.jsonl path
+                home = Path.home()
+                audit_path = home / ".corvin" / "audit.jsonl"
+                _audit_writer = AuditChainWriter(audit_path)
+                return _audit_writer
+            except Exception as e:
+                logger.warning(f"Could not initialize AuditChainWriter: {e}")
+                return None
+
+    @staticmethod
+    def _emit_audit_event(
+        decision: ContextSelectionDecision, user_id: str, tenant_id: str = "_default"
+    ) -> None:
+        """Emit audit event (hash-chained, GDPR Art. 30/32)."""
         logger.info(
             f"Context selection: user={user_id}, mode={decision.quality_mode.value}, "
             f"confidence={decision.confidence:.2f}, time={decision.execution_time_ms:.1f}ms, "
             f"adrs={len(decision.selected_adr_ids)}, memory={len(decision.selected_memory_ids)}"
         )
+
+        # Write to audit chain
+        writer = ContextSelectorSkill._get_audit_writer()
+        if writer is not None:
+            try:
+                writer.write_event_dict(
+                    event_type="skill_executed",
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    details={
+                        "skill_id": "os.context_selector",
+                        "quality_mode": decision.quality_mode.value,
+                        "selected_adrs": decision.selected_adr_ids,
+                        "selected_memory": decision.selected_memory_ids,
+                        "confidence": decision.confidence,
+                        "execution_time_ms": decision.execution_time_ms,
+                        "reasoning": decision.reasoning,
+                        "lom_audit_write": _get_lom(),
+                    },
+                    severity="INFO"
+                )
+            except Exception as e:
+                logger.error(f"Failed to write context selection audit event: {e}")
 
 
 # Global instance (singleton for ACP)
