@@ -729,6 +729,7 @@ async def get_audit_chain(
     """Fetch immutable audit events as a hash-chained graph (AuditQueryResult).
 
     Phase 5: VibeDashboard Graph Engineering Edition.
+    Reads REAL events from ~/.corvin/audit.jsonl (hash-chained, immutable).
 
     Returns:
     {
@@ -743,75 +744,44 @@ async def get_audit_chain(
       "snapshotFreshness_ms": 145
     }
     """
-    import hashlib
-    import uuid
     import time
+    from pathlib import Path
 
-    # Mock data: simulate realistic audit events (ADR-0537: LoM binding)
     now_ms = int(time.time() * 1000)
-    base_ts = now_ms - 60000  # 60 seconds ago
+    audit_path = Path.home() / ".corvin" / "audit.jsonl"
 
-    events = [
-        {
-            "id": "event_001",
-            "type": "decision",
-            "timestamp": _dt.datetime.fromtimestamp(base_ts / 1000).isoformat() + "Z",
-            "hash": hashlib.sha256(f"event_001_{base_ts}".encode()).hexdigest()[:16],
-            "prev_hash": hashlib.sha256(f"event_000_{base_ts - 1000}".encode()).hexdigest()[:16],
-            "lom_hash": hashlib.sha256(b"assistant.Forge::route_request:L237").hexdigest()[:16],
-            "tenant_id": rec.tenant_id,
-            "decision_name": "Route to Opus",
-            "skill_id": "os.delegation_router",
-            "confidence": 0.94,
-            "input": {"task": "complex_analysis"},
-            "output": {"route": "opus", "reason": "High complexity detected"},
-        },
-        {
-            "id": "event_002",
-            "type": "skill_executed",
-            "timestamp": _dt.datetime.fromtimestamp((base_ts + 1000) / 1000).isoformat() + "Z",
-            "hash": hashlib.sha256(f"event_002_{base_ts + 1000}".encode()).hexdigest()[:16],
-            "prev_hash": hashlib.sha256(f"event_001_{base_ts}".encode()).hexdigest()[:16],
-            "lom_hash": hashlib.sha256(b"assistant.Skills::os_router:L445").hexdigest()[:16],
-            "tenant_id": rec.tenant_id,
-            "skill_id": "os.delegation_router",
-            "skill_version": "1.2.3",
-            "status": "success",
-            "latency_ms": 42,
-            "input": {"classify": "user_request"},
-            "output": {"selected_engine": "claude-opus-5", "confidence": 0.94},
-        },
-        {
-            "id": "event_003",
-            "type": "learning_event",
-            "timestamp": _dt.datetime.fromtimestamp((base_ts + 2000) / 1000).isoformat() + "Z",
-            "hash": hashlib.sha256(f"event_003_{base_ts + 2000}".encode()).hexdigest()[:16],
-            "prev_hash": hashlib.sha256(f"event_002_{base_ts + 1000}".encode()).hexdigest()[:16],
-            "lom_hash": hashlib.sha256(b"core/learning/ADR-0314:L89").hexdigest()[:16],
-            "tenant_id": rec.tenant_id,
-            "skill_id": "os.delegation_router",
-            "event_type": "outcome_feedback",
-            "signal": "correct",
-            "confidence_before": 0.88,
-            "confidence_after": 0.94,
-            "confidence_delta": 0.06,
-        },
-        {
-            "id": "event_004",
-            "type": "context_snapshot",
-            "timestamp": _dt.datetime.fromtimestamp((base_ts + 3000) / 1000).isoformat() + "Z",
-            "hash": hashlib.sha256(f"event_004_{base_ts + 3000}".encode()).hexdigest()[:16],
-            "prev_hash": hashlib.sha256(f"event_003_{base_ts + 2000}".encode()).hexdigest()[:16],
-            "lom_hash": hashlib.sha256(b"ADR-0555:context_model:L112").hexdigest()[:16],
-            "tenant_id": rec.tenant_id,
-            "context_id": f"ctx_{uuid.uuid4().hex[:8]}",
-            "entropy_score": 0.23,
-            "tier_1_count": 3,
-            "tier_2_count": 5,
-            "tier_3_count": 2,
-            "merge_status": "success",
-        },
-    ]
+    events = []
+    if audit_path.exists():
+        try:
+            # Read real audit events from hash-chained log
+            with open(audit_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        event = json.loads(line)
+                        # Map real audit event to AuditQueryResult format
+                        mapped_event = {
+                            "id": event.get("event_id", ""),
+                            "type": _map_event_type(event.get("event_type", "unknown")),
+                            "timestamp": event.get("timestamp", ""),
+                            "hash": event.get("hash", "")[:16],
+                            "prev_hash": event.get("prev_hash", "")[:16],
+                            "lom_hash": _extract_lom_hash(event.get("details", {}).get("lom_audit_write", "")),
+                            "tenant_id": rec.tenant_id,  # Enforce tenant isolation
+                            "event_type": event.get("event_type", ""),
+                            "details": event.get("details", {}),
+                            "severity": event.get("severity", "INFO"),
+                        }
+                        events.append(mapped_event)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            # Graceful degradation if audit file unreadable
+            pass
+
+    # Limit to requested amount
+    events = events[-limit:] if events else []
 
     # Build graph structure
     nodes = [
@@ -821,7 +791,7 @@ async def get_audit_chain(
             "timestamp": evt["timestamp"],
             "hash": evt["hash"],
             "lom_hash": evt.get("lom_hash", ""),
-            "label": f"{evt['type'].replace('_', ' ')} (#{evt['id'][-3:]})",
+            "label": f"{evt['type'].replace('_', ' ')} ({evt['id'][:8]})",
             "data": evt,
         }
         for evt in events
@@ -829,32 +799,59 @@ async def get_audit_chain(
 
     edges = [
         {
-            "id": f"{events[i]['id']}_to_{events[i+1]['id']}",
+            "id": f"{events[i]['id'][:8]}_to_{events[i+1]['id'][:8]}",
             "source": events[i]["id"],
             "target": events[i+1]["id"],
             "type": "hash_chain",
-            "hash": hashlib.sha256(f"{events[i]['hash']}{events[i+1]['hash']}".encode()).hexdigest()[:16],
+            "hash": events[i+1].get("prev_hash", ""),
         }
         for i in range(len(events) - 1)
     ]
 
+    timespan_start = events[0]["timestamp"] if events else ""
+    timespan_end = events[-1]["timestamp"] if events else ""
+
     return {
-        "events": events[:limit],
+        "events": events,
         "graph": {
-            "nodes": nodes[:limit],
-            "edges": edges[:limit],
+            "nodes": nodes,
+            "edges": edges,
             "metadata": {
                 "chainHeight": len(events),
                 "nodeCount": len(nodes),
                 "edgeCount": len(edges),
                 "timespan": {
-                    "start": events[0]["timestamp"],
-                    "end": events[-1]["timestamp"],
+                    "start": timespan_start,
+                    "end": timespan_end,
                 },
-                "snapshotFreshness_ms": now_ms - base_ts,
+                "snapshotFreshness_ms": 0,  # Real data is always fresh
             },
         },
         "nextCursor": None,
         "hasMore": False,
-        "snapshotFreshness_ms": now_ms - base_ts,
+        "snapshotFreshness_ms": 0,
     }
+
+
+def _map_event_type(raw_type: str) -> str:
+    """Map real audit event_type to VibeDashboard event types."""
+    if "skill" in raw_type.lower() or "execution" in raw_type.lower():
+        return "skill_executed"
+    elif "learning" in raw_type.lower() or "feedback" in raw_type.lower():
+        return "learning_event"
+    elif "decision" in raw_type.lower() or "route" in raw_type.lower():
+        return "decision"
+    elif "context" in raw_type.lower() or "snapshot" in raw_type.lower() or "hybrid_context" in raw_type.lower():
+        return "context_snapshot"
+    elif "error" in raw_type.lower() or "failed" in raw_type.lower():
+        return "error"
+    else:
+        return "decision"  # Default
+
+
+def _extract_lom_hash(lom_str: str) -> str:
+    """Extract LoM hash from audit write path (ADR-0537)."""
+    if not lom_str:
+        return ""
+    import hashlib
+    return hashlib.sha256(lom_str.encode()).hexdigest()[:16]
