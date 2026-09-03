@@ -9,23 +9,9 @@
 import { useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { useVibeData } from "./hooks/useVibeData";
-
-// Lazy-load tab content (components already exist)
-const BrainMonitorContent = lazy(() =>
-  import("./components/BrainMonitor").then((m) => ({ default: m.BrainMonitor }))
-);
-const ContextIntelligenceContent = lazy(() =>
-  import("./components/ContextIntelligence").then((m) => ({ default: m.ContextIntelligence }))
-);
-const LearningHubContent = lazy(() =>
-  import("./components/LearningHub").then((m) => ({ default: m.LearningHub }))
-);
-const SessionExplorerContent = lazy(() =>
-  import("./components/SessionExplorer").then((m) => ({ default: m.SessionExplorer }))
-);
 
 // Dashboard content: placeholder for now (can be enriched with widgets)
 const DashboardContent = () => (
@@ -107,37 +93,61 @@ export function VibeDashboard() {
 
         <TabsContent value="brain-monitor">
           <Suspense fallback={<LoadingFallback />}>
-            {!vibeData.loading && !vibeData.error ? (
-              <BrainMonitorContent />
-            ) : (
-              <LoadingFallback />
-            )}
+            <Card>
+              <CardHeader>
+                <CardTitle>Brain Monitor</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">
+                  Brain Monitor coming soon — per-stage telemetry + grading
+                </p>
+              </CardContent>
+            </Card>
           </Suspense>
         </TabsContent>
 
         <TabsContent value="context-intelligence">
           <Suspense fallback={<LoadingFallback />}>
-            {!vibeData.loading && !vibeData.error ? (
-              <ContextIntelligenceContent data={vibeData} onQualityGateChange={() => {}} />
-            ) : (
-              <LoadingFallback />
-            )}
+            <Card>
+              <CardHeader>
+                <CardTitle>Context Intelligence</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">
+                  Context Intelligence coming soon — pipeline layers + entropy
+                </p>
+              </CardContent>
+            </Card>
           </Suspense>
         </TabsContent>
 
         <TabsContent value="learning-hub">
           <Suspense fallback={<LoadingFallback />}>
-            {!vibeData.loading && !vibeData.error ? (
-              <LearningHubContent data={vibeData} />
-            ) : (
-              <LoadingFallback />
-            )}
+            <Card>
+              <CardHeader>
+                <CardTitle>Learning Hub</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">
+                  Learning Hub coming soon — talent + feedback loops
+                </p>
+              </CardContent>
+            </Card>
           </Suspense>
         </TabsContent>
 
         <TabsContent value="session-explorer">
           <Suspense fallback={<LoadingFallback />}>
-            <SessionExplorerContent />
+            <Card>
+              <CardHeader>
+                <CardTitle>Session Explorer</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground">
+                  Session Explorer coming soon — turn history + drill-down
+                </p>
+              </CardContent>
+            </Card>
           </Suspense>
         </TabsContent>
       </Tabs>
