@@ -295,7 +295,7 @@ def _get_builtin_panels() -> list[dict]:
             "audit_events": ["console_panel_opened"],
             "tenant_scoped": True,
         },
-        # Vibe Engineering group (gated)
+        # Vibe Engineering group (ADR-0561 Phase 4-5)
         {
             "id": "vibe-engineering",
             "title": "Dashboard",
@@ -304,9 +304,8 @@ def _get_builtin_panels() -> list[dict]:
             "kind": "feature",
             "source": "builtin",
             "nav_group": "vibe",
-            "requiredFlag": "vibe_engineering",
             "requiredCapability": None,
-            "element": {"kind": "react", "load": "() => import('@/pages/vibe-engineering')"},
+            "element": {"kind": "react-component", "component": "VibeDashboard"},
             "version": "1.0.0",
             "audit_events": ["console_panel_opened"],
             "tenant_scoped": True,
