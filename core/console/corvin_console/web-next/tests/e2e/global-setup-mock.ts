@@ -23,7 +23,7 @@ const MOCK_AUTH_STATE = {
       httpOnly: true,
       secure: false,
       sameSite: 'Strict' as const,
-      expires: Date.now() / 1000 + 86400, // 1 day
+      expires: Math.floor(Date.now() / 1000) + 86400, // 1 day (integer seconds)
     },
   ],
   origins: [
@@ -53,8 +53,12 @@ async function globalSetup() {
   console.log('[Global Setup] Mock auth state written to', authPath);
 
   return async () => {
-    // Cleanup: optional, could delete auth-state.json here
-    console.log('[Global Setup] Teardown complete');
+    // Cleanup: remove auth-state.json to prevent state leakage across test runs
+    const authPath = path.join(__dirname, 'auth-state.json');
+    if (fs.existsSync(authPath)) {
+      fs.unlinkSync(authPath);
+      console.log('[Global Setup] Cleanup: removed auth-state.json');
+    }
   };
 }
 

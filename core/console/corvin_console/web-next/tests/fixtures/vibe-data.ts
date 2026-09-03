@@ -99,13 +99,7 @@ export const MOCK_VIBE_DATA = {
  * Call this in test.beforeEach() to mock all /vibe-engineering/state calls
  */
 export async function setupVibeDataMock(page: any) {
-  await page.route("**/v1/console/vibe-engineering/state", (route: any) => {
-    route.abort("blockedbyclient");
-    // Instead, return mocked data
-    route.continue();
-  });
-
-  // Alternative: intercept and respond with mock data
+  // Intercept and respond with mock data (do not abort; fulfill instead)
   await page.route("**/v1/console/vibe-engineering/state", (route: any) => {
     route.fulfill({
       status: 200,
