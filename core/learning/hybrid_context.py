@@ -40,10 +40,12 @@ logger = logging.getLogger(__name__)
 def _get_lom() -> str:
     """Get line of moral responsibility (caller's file:function:line)."""
     frame = inspect.currentframe()
-    if frame and frame.f_back:
-        caller_frame = frame.f_back
-        return f"{caller_frame.f_code.co_filename}:{caller_frame.f_code.co_name}:{caller_frame.f_lineno}"
-    return "unknown"
+    if frame is None:
+        return "unknown"  # Frame introspection failed
+    caller_frame = frame.f_back
+    if caller_frame is None:
+        return "unknown"  # No caller frame (shouldn't happen)
+    return f"{caller_frame.f_code.co_filename}:{caller_frame.f_code.co_name}:{caller_frame.f_lineno}"
 
 # Tier 1 immutable fields that layers cannot override (GDPR Art. 5)
 TIER1_IMMUTABLE_KEYS = {
@@ -228,6 +230,26 @@ class HybridContextModel:
 
         # Validate no PII (fail-closed)
         self._validate_no_pii(data)
+
+        # Validate that layer doesn't attempt to override Tier 1 immutable fields
+        for key in data.keys():
+            if key in TIER1_IMMUTABLE_KEYS:
+                error_msg = f"Layer {layer_name} attempted to override immutable Tier 1 field '{key}'"
+                logger.error(error_msg)
+                # Emit audit event for attempted violation
+                writer = self._get_audit_writer()
+                if writer is not None:
+                    try:
+                        writer.write_event_dict(
+                            event_type="tier1_immutable_violation_attempted",
+                            tenant_id=self.tenant_id,
+                            user_id=user_id,
+                            details={"layer_name": layer_name, "field": key, "lom": lom},
+                            severity="ERROR"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to write violation audit event: {e}")
+                raise ValueError(error_msg)
 
         # Get previous hash (for chain link)
         prev_layers = self.injected_layers.get(user_id, [])
