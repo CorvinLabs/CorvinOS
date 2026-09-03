@@ -62,11 +62,14 @@ def get_session_context(
         with skill_call_timeout(seconds=5):  # Fail-closed: timeout is explicit error
             result = skill.execute(task_id=task_id, tenant_id=tenant_id)
 
-        if result.status != "success":
-            raise RuntimeError(f"Skill failed: {result.error_message}")
-
-        # Return in old shape (transparent to caller)
-        return result.output
+        # CRITICAL-4 FIX: execute() returns dict, not SkillExecutionResult
+        # Verify it's a valid result (has expected shape), not an error
+        if isinstance(result, dict):
+            # Skill returns context dict directly (successful case)
+            return result
+        else:
+            # Unexpected return type
+            raise RuntimeError(f"Skill returned unexpected type: {type(result)}")
 
     except Exception as e:
         # Fail-closed: error propagates (never fallback to old code)

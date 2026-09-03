@@ -65,11 +65,12 @@ def delegate_to_persona(
                 tenant_id=tenant_id,
             )
 
-        if result.status != "success":
-            raise RuntimeError(f"Skill failed: {result.error_message}")
-
-        # Return in old shape (transparent to caller)
-        return result.output.get("engine_id", "default")
+        # CRITICAL-4 FIX: execute() returns dict, not SkillExecutionResult
+        if isinstance(result, dict):
+            # Skill returns routing decision dict (successful case)
+            return result.get("engine_id", "default")
+        else:
+            raise RuntimeError(f"Skill returned unexpected type: {type(result)}")
 
     except Exception as e:
         # Fail-closed: error propagates
