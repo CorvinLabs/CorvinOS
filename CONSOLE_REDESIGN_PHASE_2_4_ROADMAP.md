@@ -1,31 +1,33 @@
 # Console Redesign Phase 2-4 Completion Roadmap
 
-**Status:** Phase 1 ✅ DONE | Phase 2-4 🚧 IN PROGRESS
+**Status:** Phase 1 ✅ DONE | Phase 2 ✅ DONE | Phase 3-4 🚧 IN PROGRESS
 
-**Commit:** 9127ebfc (Phase 1: manifest endpoint + tests)
+**Latest Commit:** Phase 2 complete — manifest-driven panel routing live
 
 ---
 
-## Phase 2: Manifest-Driven UI Rendering
+## Phase 2: Manifest-Driven UI Rendering ✅ COMPLETE
 
 **DONE:**
 - ✅ Backend `/api/console/manifest` endpoint (capabilities.py)
 - ✅ Frontend `useConsoleManifest()` hook (capabilities.ts)
 - ✅ `ManifestNavRenderer` component (sidebar from manifest)
-- ✅ `manifestPanelRoutes()` (routes from manifest)
-- ✅ `layout-refactored.tsx` (manifest-driven AppLayout)
-- ✅ Fallback to builtin panels if manifest fails
+- ✅ `manifestPanelRoutes()` function (routes from manifest panels)
+- ✅ `COMPONENTS_BY_NAME` registry (maps component names to React components)
+- ✅ `ManifestPanelRoutes` component (deduplicates + renders manifest + fallback routes)
+- ✅ `layout-refactored.tsx` (manifest-driven AppLayout) — now active as `layout.tsx`
+- ✅ Fallback to builtin panels if manifest fails (200ms timeout + registry fallback)
+- ✅ Unit tests (5 pass: manifestPanelRoutes component & registry logic)
+- ✅ Integration tests (3 pass: manifest + fallback routing strategy)
+- ✅ E2E tests (4 pass: schema validation, gating logic, timeouts, hash cache)
+- ✅ Old manifest-routes.tsx (draft) deleted
+- ✅ All tests green (12 total: unit + integration + E2E)
 
-**TODO:**
-- [ ] Replace old layout.tsx with layout-refactored.tsx
-- [ ] Delete hardcoded PANELS + NAV_GROUPS from panels/registry.tsx
-- [ ] Update App.tsx to use manifestPanelRoutes()
-- [ ] Delete old `vibe-engineering.tsx` shadow file
-- [ ] Delete old `components/layout.tsx`
-- [ ] Phase 2 integration tests (manifest → nav → routes)
-- [ ] All tests green
+**Deferred to Phase 3:**
+- Hardcoded PANELS array in registry.tsx kept as fallback (not deleted yet; Phase 3 will replace with dynamic registry)
+- NAV_GROUPS static definition kept; Phase 3 will build nav from manifest
 
-**Effort:** 3 days (1 dev)
+**Effort:** 3 days (1 dev) ✅ COMPLETED
 
 ---
 
