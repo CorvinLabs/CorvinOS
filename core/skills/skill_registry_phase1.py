@@ -32,13 +32,17 @@ from threading import Lock
 
 logger = logging.getLogger(__name__)
 
-# PII Patterns (GDPR Art. 32 redaction)
+# PII Patterns (GDPR Art. 32 redaction, FIX #8: Enhanced domain-specific patterns)
 _PII_PATTERNS = {
     "password": re.compile(r"(password|passwd|pwd)\s*[:=]", re.IGNORECASE),
     "api_key": re.compile(r"(api[_-]?key|token|secret)\s*[:=]", re.IGNORECASE),
     "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
     "credit_card": re.compile(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b"),
     "ssn": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+    # FIX #8: Domain-specific patterns
+    "aws_access_key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS access key format
+    "github_token": re.compile(r"\b(ghp_|ghu_|ghs_|ghr_)[A-Za-z0-9_]{36,255}\b"),  # GitHub token formats
+    "phone_number": re.compile(r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b"),  # US/intl phones
 }
 
 
@@ -165,7 +169,8 @@ class SkillsRegistry:
         self.tenant_id = tenant_id
         self._failure_count: Dict[str, int] = {}  # Track consecutive failures
         self._failure_lock = Lock()  # FIX #3: Prevent TOCTOU race on failure counter
-        self._auto_disabled: set = set()  # Skills auto-disabled after 3+ failures
+        # FIX #12: Tenant-scoped auto-disable: (skill_id, tenant_id) tuples instead of global
+        self._auto_disabled: set = set()  # Tuples: {(skill_id, tenant_id), ...}
         self._allowed_tenants: set = {"_default"}  # Tenant isolation whitelist
 
     def register(self, skill: Skill) -> None:
@@ -321,19 +326,20 @@ class SkillsRegistry:
             return output
 
     def is_enabled(self, skill_id: str, version: Optional[str] = None) -> bool:
-        """Check if a Skill is enabled.
+        """Check if a Skill is enabled (backward-compatible, tenant-unaware).
 
         Args:
             skill_id: Skill identifier
             version: Optional version constraint (e.g., "0.2")
 
         Returns:
-            True if Skill is registered, enabled, and meets version constraint
+            True if Skill is registered and enabled (any tenant)
         """
         if skill_id not in self._skills:
             return False
 
-        if skill_id in self._auto_disabled:
+        # FIX #12: Check if disabled for ANY tenant (backward compat)
+        if any(skill_id == sid for sid, tid in self._auto_disabled):
             return False
 
         if version:
@@ -343,12 +349,31 @@ class SkillsRegistry:
 
         return True
 
-    def enable_skill(self, skill_id: str, tenant_id: Optional[str] = None) -> bool:
-        """Manually re-enable an auto-disabled Skill (FIX #6).
+    def _is_skill_enabled_for_tenant(self, skill_id: str, tenant_id: str) -> bool:
+        """Check if a Skill is enabled for a specific tenant (FIX #12).
 
         Args:
             skill_id: Skill identifier
-            tenant_id: Tenant ID (for audit logging)
+            tenant_id: Tenant ID
+
+        Returns:
+            True if Skill is registered and enabled for this specific tenant
+        """
+        if skill_id not in self._skills:
+            return False
+
+        # FIX #12: Tenant-scoped check
+        if (skill_id, tenant_id) in self._auto_disabled:
+            return False
+
+        return True
+
+    def enable_skill(self, skill_id: str, tenant_id: Optional[str] = None) -> bool:
+        """Manually re-enable an auto-disabled Skill (FIX #6, #12: tenant-scoped).
+
+        Args:
+            skill_id: Skill identifier
+            tenant_id: Tenant ID (required for FIX #12; defaults to registry tenant)
 
         Returns:
             True if re-enabled, False if not registered
@@ -356,9 +381,12 @@ class SkillsRegistry:
         if skill_id not in self._skills:
             return False
 
-        if skill_id in self._auto_disabled:
+        effective_tenant_id = tenant_id or self.tenant_id or "default"
+
+        # FIX #12: Tenant-scoped disable tuple
+        if (skill_id, effective_tenant_id) in self._auto_disabled:
             with self._failure_lock:  # Thread-safe
-                self._auto_disabled.discard(skill_id)
+                self._auto_disabled.discard((skill_id, effective_tenant_id))
                 self._failure_count[skill_id] = 0
 
             # Audit: Skill manually re-enabled
@@ -367,7 +395,7 @@ class SkillsRegistry:
                     "event_type": "skill_manually_enabled",
                     "skill_id": skill_id,
                     "timestamp": datetime.utcnow().isoformat() + "Z",
-                    "tenant_id": tenant_id or "unknown",
+                    "tenant_id": effective_tenant_id,
                 }
                 self._audit_backend.write_event(audit_event)
 
@@ -430,8 +458,8 @@ class SkillsRegistry:
             self._emit_audit_event(result)
             return result
 
-        # Check if Skill is auto-disabled
-        if skill_id in self._auto_disabled:
+        # FIX #12: Check if Skill is auto-disabled for THIS tenant
+        if not self._is_skill_enabled_for_tenant(skill_id, effective_tenant_id):
             result = SkillExecutionResult(
                 skill_id=skill_id,
                 status="error",
@@ -445,11 +473,14 @@ class SkillsRegistry:
 
         skill = self._skills[skill_id]
 
+        # FIX #10: Scrub PII from input before Skill execution (GDPR Art. 32)
+        scrubbed_input = self._scrub_pii_from_output(input)
+
         # Execute with timeout
         try:
             output = asyncio.run(
                 asyncio.wait_for(
-                    self._execute_async(skill, input),
+                    self._execute_async(skill, scrubbed_input),
                     timeout=timeout_ms / 1000.0,
                 )
             )
@@ -487,7 +518,7 @@ class SkillsRegistry:
                 lom=lom,
             )
 
-            self._track_failure(skill_id)
+            self._track_failure(skill_id, effective_tenant_id)
             self._emit_audit_event(result)
             self._emit_learning_event(result)  # ADR-0314
             return result
@@ -506,7 +537,7 @@ class SkillsRegistry:
                 lom=lom,
             )
 
-            self._track_failure(skill_id)
+            self._track_failure(skill_id, effective_tenant_id)
             self._emit_audit_event(result)
             self._emit_learning_event(result)  # ADR-0314
             return result
@@ -515,19 +546,44 @@ class SkillsRegistry:
         """Execute Skill asynchronously."""
         return skill.execute(input)
 
-    def _track_failure(self, skill_id: str) -> None:
-        """Track consecutive failures; auto-disable after 3+."""
+    def _track_failure(self, skill_id: str, tenant_id: Optional[str] = None) -> None:
+        """Track consecutive failures; auto-disable after 3+ (FIX #12: tenant-scoped)."""
+        effective_tenant_id = tenant_id or self.tenant_id or "default"
         with self._failure_lock:  # FIX #3: Prevent async TOCTOU race
             self._failure_count[skill_id] = self._failure_count.get(skill_id, 0) + 1
 
             if self._failure_count[skill_id] >= 3:
                 logger.error(
-                    f"Skill {skill_id} auto-disabled after 3+ consecutive failures"
+                    f"Skill {skill_id} auto-disabled for tenant {effective_tenant_id} after 3+ consecutive failures"
                 )
-                self._auto_disabled.add(skill_id)
+                # FIX #12: Add as (skill_id, tenant_id) tuple
+                self._auto_disabled.add((skill_id, effective_tenant_id))
+
+    @staticmethod
+    def _validate_confidence_score(score_dict: Dict[str, float]) -> Dict[str, float]:
+        """Validate confidence score bounds 0.0-1.0 (FIX #9).
+
+        Clamps all score fields to [0.0, 1.0] and logs out-of-bounds values.
+
+        Args:
+            score_dict: Confidence scores (reliability, relevance, combined)
+
+        Returns:
+            Clamped confidence scores with all values in [0.0, 1.0]
+        """
+        validated = {}
+        for key, value in score_dict.items():
+            if not isinstance(value, (int, float)):
+                validated[key] = value  # Keep non-numeric fields as-is (skill_id)
+            else:
+                clamped = max(0.0, min(1.0, float(value)))
+                if clamped != value:
+                    logger.warning(f"Confidence score {key}={value} out of bounds [0.0, 1.0]; clamped to {clamped}")
+                validated[key] = clamped
+        return validated
 
     def _emit_learning_event(self, result: SkillExecutionResult) -> None:
-        """Emit learning event for Skill execution (ADR-0314).
+        """Emit learning event for Skill execution (ADR-0314, FIX #7: scrubbed output).
 
         Converts SkillExecutionResult → LearningEvent for optimizer loop.
 
@@ -537,6 +593,9 @@ class SkillsRegistry:
             return  # Learning backend not configured (optional)
 
         try:
+            # FIX #7: Scrub PII from learning event (GDPR Art. 32)
+            scrubbed_output = self._scrub_pii_from_output(result.output) if result.output else None
+
             # Convert execution result to learning event
             learning_event = {
                 "event_type": "skill_executed",
@@ -546,13 +605,14 @@ class SkillsRegistry:
                 "timestamp": result.timestamp,
                 "tenant_id": result.tenant_id,
                 "lom": result.lom,
-                # Confidence scoring (for optimization)
-                "confidence_score": {
+                "output": scrubbed_output,  # FIX #7: PII-scrubbed before emission
+                # Confidence scoring (FIX #9: validate bounds 0.0-1.0)
+                "confidence_score": self._validate_confidence_score({
                     "skill_id": result.skill_id,
                     "reliability": 0.95 if result.status == "success" else 0.0,
                     "relevance": 0.8,  # TODO: derive from user feedback
                     "combined": 0.8 if result.status == "success" else 0.0,
-                } if result.status in ("success", "timeout", "error") else None,
+                }) if result.status in ("success", "timeout", "error") else None,
             }
 
             self.learning_backend.emit_event(learning_event)
