@@ -11,6 +11,17 @@ import pytest
 from corvin_gateway import plugin_cmd
 
 
+
+@pytest.fixture(autouse=True)
+def _sandbox_corvin_home(tmp_path, monkeypatch):
+    """Registry/flag reads must never touch a live .corvin (install writes are real now)."""
+    home = tmp_path / "corvin_home"
+    (home / "tenants" / "_default" / "global").mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    yield home
+
+
 class TestExtractMetadata:
     """Test metadata extraction from plugin directories."""
 
@@ -24,6 +35,7 @@ class TestExtractMetadata:
             """
 id: com.example.my_plugin
 name: My Plugin
+plugin_type: data_connector
 version: 1.0.0
 origin: community
 boot_layer: installed
@@ -197,6 +209,7 @@ class TestInstallCommand:
         plugin_yaml.write_text("""
 id: test.idempotent
 name: Test Plugin
+plugin_type: data_connector
 version: 1.0.0
 """)
 
@@ -230,6 +243,7 @@ version: 1.0.0
         plugin_yaml.write_text("""
 id: test.community
 name: Community Plugin
+plugin_type: data_connector
 version: 1.0.0
 origin: community
 """)
@@ -257,6 +271,7 @@ origin: community
         plugin_yaml.write_text("""
 id: test.force
 name: Force Plugin
+plugin_type: data_connector
 version: 1.0.0
 origin: community
 """)

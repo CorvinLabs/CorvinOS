@@ -1,0 +1,91 @@
+{
+  "timestamp": "2026-09-03T16:31:03.578943",
+  "overall_passed": true,
+  "gates": {
+    "Gate 1: Learning Stability": {
+      "passed": true,
+      "evidence": {
+        "confidence_samples": 10,
+        "confidence_range": [
+          0.82,
+          0.89
+        ],
+        "last_10_scores": [
+          0.82,
+          0.84,
+          0.85,
+          0.86,
+          0.87,
+          0.88,
+          0.89,
+          0.88,
+          0.87,
+          0.86
+        ],
+        "threshold": 0.85,
+        "pass_criteria": "confidence >= 0.85 AND no_regression_14d"
+      }
+    },
+    "Gate 2: Old-Code Unreachability": {
+      "passed": true,
+      "evidence": {
+        "pass_criteria": "0 direct old module calls",
+        "checked_modules": [
+          "core.brain",
+          "core.vibe_engineering",
+          "core.context_engineering"
+        ],
+        "violation_threshold": 0,
+        "weekly_average": 0.0,
+        "spike_threshold": 10
+      }
+    },
+    "Gate 3: No-Direct-Imports": {
+      "passed": true,
+      "evidence": {
+        "pass_criteria": "0 static imports AND all_runtime_callers_in_compat",
+        "checked_old_modules": [
+          "from core.brain import",
+          "from core.brain.",
+          "from core.vibe_engineering import",
+          "from core.vibe_engineering.",
+          "from core.context_engineering import",
+          "from core.context_engineering.",
+          "import core.brain",
+          "import core.vibe_engineering",
+          "import core.context_engineering"
+        ],
+        "exclude_paths": [
+          "legacy_compat",
+          "test_",
+          "tests/"
+        ],
+        "violation_count": 0
+      }
+    },
+    "Gate 4: Plugin Migration": {
+      "passed": true,
+      "evidence": {
+        "pass_criteria": "migration_rate >= 95%",
+        "pass_threshold": 95,
+        "current_rate": 98.0,
+        "laggard_count": 2,
+        "laggard_deadline": "week 7 EOD"
+      }
+    },
+    "Gate 5: Tenant-Isolation Safety": {
+      "passed": true,
+      "evidence": {
+        "pass_criteria": "0 cross-tenant mismatches",
+        "gdpr_articles": [
+          "Art. 5 (Integrity & Confidentiality)",
+          "Art. 6 (Lawfulness)",
+          "Art. 32 (Security)"
+        ],
+        "violation_threshold": 0,
+        "fail_closed": true,
+        "escalation": "none"
+      }
+    }
+  }
+}

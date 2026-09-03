@@ -33,6 +33,22 @@ class BtwResponse(BaseModel):
     task_id: Optional[str] = None
 
 
+
+# Lazy module-level seam for the Hub class: imported on first use (the hub
+# package imports gateway modules, so a top-level import would be circular),
+# but exposed as a module attribute so it can be patched in tests.
+SubsystemHub = None
+
+
+def _hub_class():
+    global SubsystemHub
+    if SubsystemHub is None:
+        from core.orchestration.hub import SubsystemHub as _Hub
+
+        SubsystemHub = _Hub
+    return SubsystemHub
+
+
 def get_actor_from_request(request_context: Dict[str, Any]) -> str:
     """Extract actor from request context (bearer token, session)."""
     # Placeholder: would integrate with L16 auth system
@@ -111,12 +127,11 @@ async def handle_btw(req: BtwRequest) -> BtwResponse:
     audit_log_btw_action(actor, task_id, instruction_text, "received")
 
     try:
-        # K1-003 Fix: Wire real Hub import (2b-3 implementation, k=1)
-        from core.orchestration.hub import SubsystemHub
-
+        # K1-003 Fix: Wire real Hub (2b-3 implementation, k=1). Resolved through
+        # the module attribute so tests can patch ``btw_routes.SubsystemHub``.
         # For MVP: create a Hub instance per task (production will use tenant's shared Hub)
         # This allows BtwAdvisor to receive guidance_received events immediately
-        hub = SubsystemHub()
+        hub = _hub_class()()
 
         # Publish guidance_received event to Hub
         # BtwAdvisor.on_event() listens for this and queues the instruction
@@ -172,9 +187,7 @@ async def get_btw_status(task_id: str) -> Dict[str, Any]:
     try:
         # K1-003 Fix: Wire real Hub (2b-3 implementation, k=1)
         # Query BtwAdvisor subsystem via Hub to peek at pending guidance
-        from core.orchestration.hub import SubsystemHub
-
-        hub = SubsystemHub()
+        hub = _hub_class()()
         response = await hub.request_from_subsystem(
             "btw_advisor",
             "peek_pending_guidance",
