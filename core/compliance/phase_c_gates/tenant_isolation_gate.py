@@ -21,6 +21,9 @@ class TenantIsolationResult:
 class TenantIsolationGate:
     """Gate 5: Verify zero cross-tenant leakage (GDPR Art. 5, 6, 32)."""
 
+    def __init__(self, audit_jsonl_path: str = "~/.corvin/audit.jsonl"):
+        self.audit_path = audit_jsonl_path.replace("~", "/home/shumway")
+
     def execute(self) -> TenantIsolationResult:
         """
         Run Gate 5: Tenant-Isolation Safety
@@ -66,7 +69,7 @@ class TenantIsolationGate:
             # Check: every event has tenant_id AND it matches the caller context
             # GDPR Art. 5 (Integrity & Confidentiality) + Art. 32 (Security) require zero cross-tenant leakage
 
-            cmd = f"""grep '"event_type".*"deprecated_api_call"' ~/.corvin/audit.jsonl 2>/dev/null | \
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | \
               jq -r 'select(.tenant_id == null) | "NO_TENANT_ID"' 2>/dev/null | head -10"""
 
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
@@ -81,7 +84,7 @@ class TenantIsolationGate:
                 })
 
             # Check for mismatched tenant_id (event.tenant_id != request.tenant_id)
-            cmd = f"""grep '"event_type".*"deprecated_api_call"' ~/.corvin/audit.jsonl 2>/dev/null | \
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | \
               jq -r 'select(.tenant_id != .request_tenant_id) | \
               "MISMATCH \\(.tenant_id) != \\(.request_tenant_id)"' 2>/dev/null | head -10"""
 
@@ -98,7 +101,7 @@ class TenantIsolationGate:
                 })
 
             # Audit tenant_id distribution (should not have unexpected tenants)
-            cmd = f"""grep '"event_type".*"deprecated_api_call"' ~/.corvin/audit.jsonl 2>/dev/null | \
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | \
               jq -r '.tenant_id' 2>/dev/null | sort | uniq"""
 
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
@@ -110,8 +113,9 @@ class TenantIsolationGate:
             return violations
 
         except Exception as e:
-            logger.error(f"Failed to find cross-tenant mismatches (GDPR violation): {e}")
+            logger.error(f"Gate 5 failed: Cannot verify tenant isolation (GDPR violation risk) — {e}")
             # On error: FAIL (fail-closed) — better to block deletion than risk GDPR breach
+            # Return a violation so gate.passed = False
             return [{
                 "type": "audit_trail_error",
                 "severity": "CRITICAL",

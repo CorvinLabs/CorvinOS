@@ -57,6 +57,8 @@ _PII_PATTERNS = {
     "aws_access_key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     "github_token": re.compile(r"\b(ghp_|ghu_|ghs_|ghr_)[A-Za-z0-9_]{36,255}\b"),
     "openai_style_key": re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
+    "jwt": re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    "bearer": re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE),
     "phone_number": re.compile(r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b"),
 }
 
@@ -73,6 +75,12 @@ _PII_KEY_PATTERN = re.compile(
 )
 
 _REDACTED = "[REDACTED_PII]"
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _key_is_sensitive(key: str) -> bool:
+    """Segment-anchored match on snake_case AND camelCase keys (``apiKey``, ``userEmail``)."""
+    return bool(_PII_KEY_PATTERN.search(_CAMEL_BOUNDARY.sub("_", key)))
 
 
 class SkillOrigin(str, Enum):
@@ -287,6 +295,7 @@ class SkillsRegistry:
     """
 
     AUTO_DISABLE_THRESHOLD = 3
+    MAX_IN_FLIGHT_PER_SKILL = 8
 
     def __init__(
         self,
@@ -315,6 +324,11 @@ class SkillsRegistry:
         # Tenant isolation whitelist: the registry's own tenant is always allowed.
         self._allowed_tenants: set = {"_default", tenant_id} if tenant_id else {"_default"}
         self.learning_emit_failures = 0
+        # Abandoned (timed-out) worker threads keep running until the Skill
+        # returns. Without a cap, a hanging Skill called in a loop leaks one
+        # thread per call — so in-flight executions are bounded per skill.
+        self._in_flight: Dict[str, int] = {}
+        self._in_flight_lock = Lock()
 
     # ── registration ────────────────────────────────────────────────────────
 
@@ -379,8 +393,16 @@ class SkillsRegistry:
             source_path = Path(file_path)
             if not source_path.is_absolute():
                 source_path = _REPO_ROOT / source_path
+            source_path = source_path.resolve()
 
-            if not source_path.exists():
+            # A LoM names CorvinOS source. Anything outside the repo root (``../``,
+            # absolute paths) would turn this into a hash oracle over arbitrary
+            # readable files — refuse and fall back to the label hash.
+            if not source_path.is_relative_to(_REPO_ROOT):
+                logger.warning("LoM outside repo root refused: %s", source_path)
+                return hashlib.sha256(lom.encode()).hexdigest()
+
+            if not source_path.is_file():
                 logger.warning(f"LoM source file not found: {source_path}")
                 return hashlib.sha256(lom.encode()).hexdigest()
 
@@ -429,7 +451,7 @@ class SkillsRegistry:
             visited.add(obj_id)
             scrubbed = {}
             for key, value in output.items():
-                if isinstance(key, str) and _PII_KEY_PATTERN.search(key):
+                if isinstance(key, str) and _key_is_sensitive(key):
                     scrubbed[key] = _REDACTED
                 elif isinstance(value, (dict, list)):
                     scrubbed[key] = SkillsRegistry._scrub_pii_from_output(value, visited, depth + 1)
@@ -552,6 +574,20 @@ class SkillsRegistry:
 
         skill = self._skills[skill_id]
 
+        with self._in_flight_lock:
+            if self._in_flight.get(skill_id, 0) >= self.MAX_IN_FLIGHT_PER_SKILL:
+                saturated = True
+            else:
+                saturated = False
+                self._in_flight[skill_id] = self._in_flight.get(skill_id, 0) + 1
+        if saturated:
+            return self._finish_error(
+                skill_id,
+                f"Skill saturated: {self.MAX_IN_FLIGHT_PER_SKILL} executions still in flight "
+                f"(timed-out workers not yet returned): {skill_id}",
+                effective_tenant_id, lom, start_time, track=True,
+            )
+
         # FIX #10: Scrub PII from input before Skill execution (GDPR Art. 32)
         scrubbed_input = self._scrub_pii_from_output(input)
 
@@ -562,6 +598,9 @@ class SkillsRegistry:
                 holder.value = skill.execute(scrubbed_input)
             except BaseException as exc:  # noqa: BLE001 — recorded, re-raised on the caller side
                 holder.exc = exc
+            finally:
+                with self._in_flight_lock:
+                    self._in_flight[skill_id] = max(0, self._in_flight.get(skill_id, 1) - 1)
 
         worker = threading.Thread(
             target=_runner, name=f"skill:{skill_id}", daemon=True,

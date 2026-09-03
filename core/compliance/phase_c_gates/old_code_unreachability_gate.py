@@ -50,7 +50,6 @@ class OldCodeUnreachabilityGate:
                     "pass_criteria": "0 direct old module calls",
                     "checked_modules": self.OLD_MODULES,
                     "violation_threshold": 0,
-                    "weekly_average": 0.0,  # Week 8 would read real data
                     "spike_threshold": 10
                 }
             )

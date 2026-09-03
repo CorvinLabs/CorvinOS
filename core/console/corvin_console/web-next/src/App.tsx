@@ -1,7 +1,8 @@
 import * as React from "react";
-import { panelRoutes } from "@/panels/registry";
+import { panelRoutes, manifestPanelRoutes, PANELS } from "@/panels/registry";
 import PanelHost from "@/panels/PanelHost";
 import { useAiPanels, aiPanelSrc } from "@/adapters/ai-panels";
+import { useConsoleManifest } from "@/adapters/capabilities";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { AppLayout } from "@/components/layout";
@@ -62,6 +63,36 @@ function ScrollToTop() {
     window.scrollTo({ top: 0, behavior: "instant" });
   }, [pathname]);
   return null;
+}
+
+/**
+ * ManifestPanelRoutes — ADR-0561 Phase 2 (manifest-driven routing)
+ *
+ * Renders routes from two sources:
+ * 1. Backend manifest (if available) — panels created, installed, or AI-generated
+ * 2. Fallback registry (always) — core builtin panels for robustness
+ *
+ * Deduplicates routes (manifest takes precedence if a panel_id appears in both).
+ * If manifest fetch fails (timeout/error), falls back to registry-only routes.
+ */
+function ManifestPanelRoutes() {
+  const { data: manifest } = useConsoleManifest();
+
+  // Collect panel IDs already rendered by manifest (to avoid duplicates)
+  const manifestPanelIds = new Set(manifest?.panels?.map((p) => p.id) ?? []);
+
+  // Render manifest panels first (if available), then fallback registry panels
+  const manifestRoutes = manifest?.panels ? manifestPanelRoutes(manifest.panels) : [];
+  const fallbackRoutes = panelRoutes(PANELS).filter(
+    (route) => route && !manifestPanelIds.has(route.key as string)
+  );
+
+  return (
+    <>
+      {manifestRoutes}
+      {fallbackRoutes}
+    </>
+  );
 }
 
 // SetupGate is rendered inside RequireAuth so it has access to the auth
@@ -131,9 +162,10 @@ export default function App() {
             <Route path="personas/:name" element={<PersonaDetailPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
-            {/* ADR-0353 P1: panels render from the registry (all routes mounted;
-                the nav gates visibility, layout.tsx). */}
-            {panelRoutes()}
+            {/* ADR-0561 Phase 2: panels render from backend manifest + fallback registry.
+                Manifest provides dynamic panels (plugin, skill, ai-generated); registry
+                provides fallback core panels if manifest unavailable. */}
+            <ManifestPanelRoutes />
             {/* ADR-0366: AI-generated panels, mounted dynamically. */}
             {(aiPanels ?? []).map((p) => (
               <Route

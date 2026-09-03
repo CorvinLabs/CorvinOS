@@ -34,6 +34,9 @@ class NoDirectImportsGate:
         "import core.context_engineering",
     ]
 
+    def __init__(self, audit_jsonl_path: str = "~/.corvin/audit.jsonl"):
+        self.audit_path = audit_jsonl_path.replace("~", "/home/shumway")
+
     def execute(self) -> NoDirectImportsResult:
         """
         Run Gate 3: No-Direct-Imports
@@ -106,7 +109,7 @@ class NoDirectImportsGate:
         try:
             # Query audit.jsonl for deprecated_api_call events
             # Check caller_file: should be in core/legacy_compat
-            cmd = f"""grep '"event_type".*"deprecated_api_call"' ~/.corvin/audit.jsonl 2>/dev/null | \
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | \
               jq -r 'select(.caller_file | startswith("core/legacy_compat") | not) | \
               "\\(.caller_file) \\(.api_name)"' 2>/dev/null | sort -u"""
 
