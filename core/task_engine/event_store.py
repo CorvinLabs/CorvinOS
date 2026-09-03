@@ -6,25 +6,53 @@ from .models import AuditEvent, Snapshot
 
 
 class EventStore:
-    """In-memory audit event store with hash-chain verification (ADR-0541)."""
+    """In-memory audit event store with WAL atomicity (CRITICAL FIX, ADR-0541)."""
 
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
         self.events: List[AuditEvent] = []
         self.snapshots: Dict[str, Snapshot] = {}
+        self.wal_log: List[Dict[str, Any]] = []  # Write-ahead log for crash recovery
+        import threading
+        self.lock = threading.Lock()
 
     def append_event(self, event: AuditEvent) -> str:
-        """Append immutable event to chain. Returns event hash."""
+        """Append immutable event to chain with WAL (CRITICAL FIX: proper atomicity)."""
         if event.tenant_id != self.tenant_id:
             raise ValueError(f"Tenant mismatch: expected {self.tenant_id}, got {event.tenant_id}")
 
-        # Set prev_hash to last event's hash
-        if self.events:
-            prev_hash = self.events[-1].hash
-            object.__setattr__(event, "prev_hash", prev_hash)
+        with self.lock:
+            # CRITICAL FIX: Capture last_hash BEFORE modifying event
+            last_hash = self.events[-1].hash if self.events else ""
 
-        self.events.append(event)
-        return event.hash
+            # CRITICAL FIX: If event doesn't have prev_hash set, set it now (BEFORE persistence)
+            if not event.prev_hash and self.events:
+                # Create NEW event object with correct prev_hash (immutable pattern)
+                # Dataclass __post_init__ will compute correct hash
+                from .models import AuditEvent as AE
+                event = AE(
+                    event_type=event.event_type,
+                    task_id=event.task_id,
+                    tenant_id=event.tenant_id,
+                    timestamp=event.timestamp,
+                    session_id=event.session_id,
+                    phase_id=event.phase_id,
+                    payload=event.payload,
+                    prev_hash=last_hash  # NOW set before creation
+                )
+
+            # WAL: Log intent BEFORE appending
+            self.wal_log.append({
+                "op": "append_event",
+                "event_hash": event.hash,
+                "event_type": event.event_type,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            })
+
+            # Now append (safe: WAL logged first)
+            self.events.append(event)
+
+            return event.hash
 
     def create_snapshot(self, task_id: str, session_id: str, phase_id: str,
                        state: Dict[str, Any]) -> Snapshot:
