@@ -9,8 +9,12 @@ Transparent routing: old get_session_context() calls → new Skill.
 """
 
 from typing import Optional, Dict, Any
-from core.telemetry.deprecated_api_calls import log_deprecated_call, log_deprecated_error
-from core.skills.os_skills.context_adapter import ContextAdapterSkill
+from core.telemetry.deprecated_api_calls import (
+    log_deprecated_call,
+    log_deprecated_error,
+    skill_call_timeout
+)
+from core.skills.os_skills_phase1 import ContextAdapterSkill
 
 
 def get_session_context(
@@ -43,22 +47,23 @@ def get_session_context(
     Raises:
         Exception: If Skill call fails (fail-closed: never silent fallback)
     """
-    try:
-        # Log deprecated call (telemetry + audit trail)
-        event = log_deprecated_call(
-            api_name="get_session_context",
-            module="core.brain.conversation_recall",
-            tenant_id=tenant_id,
-            task_id=task_id,
-            user_id=user_id,
-        )
+    # Log deprecated call (telemetry + audit trail, CRITICAL-2 FIX)
+    event = log_deprecated_call(
+        api_name="get_session_context",
+        module="core.brain.conversation_recall",
+        tenant_id=tenant_id,
+        task_id=task_id,
+        user_id=user_id,
+    )
 
-        # Call new Skill (Phase B: both old + new code present)
+    try:
+        # Call new Skill with timeout (CRITICAL-5 FIX: fail-closed guarantee)
         skill = ContextAdapterSkill()
-        result = skill.execute(task_id=task_id, tenant_id=tenant_id)
+        with skill_call_timeout(seconds=5):  # Fail-closed: timeout is explicit error
+            result = skill.execute(task_id=task_id, tenant_id=tenant_id)
 
         if result.status != "success":
-            raise RuntimeError(f"Skill failed: {result.error}")
+            raise RuntimeError(f"Skill failed: {result.error_message}")
 
         # Return in old shape (transparent to caller)
         return result.output
@@ -72,7 +77,7 @@ def get_session_context(
             tenant_id=tenant_id,
             task_id=task_id,
         )
-        raise  # Propagate error
+        raise  # Propagate error (fail-closed guarantee)
 
 
 def recall_recent_sessions(
@@ -108,7 +113,7 @@ def recall_recent_sessions(
         )
 
         if result.status != "success":
-            raise RuntimeError(f"Skill failed: {result.error}")
+            raise RuntimeError(f"Skill failed: {result.error_message}")
 
         return result.output
 
