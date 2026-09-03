@@ -1,8 +1,22 @@
 """
-CorvinOS Vibe Engineering Platform v1.0
+⚠️ DEPRECATED — CorvinOS Vibe Engineering Platform v1.0
 
 Autonomous task execution with Memory Palace + Skills + Brain + Context.
 Integrated with CorvinOS native engine (spawning, state, recovery, plugins).
+
+**DEPRECATION NOTICE (ADR-0538):** This module is being phased out in favor of ACP Skills:
+- Routing logic → `os.delegation_router` Skill (ADR-0532 Phase 1)
+- Context management → HybridContextModel + `os.context_adapter` Skill (ADR-0555)
+- State/recovery → SkillAuditEvent + plugin lifecycle (ADR-0314)
+
+**Timeline:**
+- Phase A (weeks 1–2): Audit + mark deprecated (NOW)
+- Phase B (weeks 3–4): Compat layer routing old APIs → Skills transparently
+- Phase C (weeks 5–8): Measured deletion (after telemetry confirms 0 live calls)
+
+**Migration:** See docs/implementation/MIGRATION_GUIDE_TO_SKILLS.md
+
+**For new code:** Use ACP Skills instead. For existing code: compat layer (Phase B) maintains API compatibility transparently.
 
 Phase 1 (MVP): Core subsystems only. Foundation for v1.0 GA.
 """
