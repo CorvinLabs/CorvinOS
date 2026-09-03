@@ -97,7 +97,6 @@ export const PANELS: ConsolePanel[] = [
   {
     id: "vibe-engineering", route: "vibe-engineering",
     nav: { label: "Dashboard", icon: "Layers", group: "vibe" },
-    requiredFlag: "vibe_engineering",
     element: { kind: "react", load: () => import("@/pages/vibe-engineering") },
     contractVersion: "1",
   },
