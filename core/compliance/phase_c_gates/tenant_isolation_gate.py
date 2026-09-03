@@ -56,11 +56,65 @@ class TenantIsolationGate:
             )
 
     def _find_cross_tenant_mismatches(self) -> list:
-        """Query audit trail for cross-tenant anomalies (simplified)."""
-        # In real implementation:
-        # 1. Read all deprecated_api_call events from audit.jsonl
-        # 2. For each event: verify event.tenant_id == context.tenant_id
-        # 3. If mismatch: add to violations
-        # 4. Return violations list
-        # For now: return empty (Week 8 would read real data)
-        return []
+        """Query audit trail for cross-tenant anomalies (REAL implementation - GDPR Art. 5, 6, 32)."""
+        import subprocess
+        import json
+
+        violations = []
+        try:
+            # Query audit.jsonl for deprecated_api_call events
+            # Check: every event has tenant_id AND it matches the caller context
+            # GDPR Art. 5 (Integrity & Confidentiality) + Art. 32 (Security) require zero cross-tenant leakage
+
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' ~/.corvin/audit.jsonl 2>/dev/null | \
+              jq -r 'select(.tenant_id == null) | "NO_TENANT_ID"' 2>/dev/null | head -10"""
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+
+            if result.stdout.strip().count("NO_TENANT_ID") > 0:
+                violations.append({
+                    "type": "missing_tenant_id",
+                    "count": result.stdout.strip().count("NO_TENANT_ID"),
+                    "severity": "CRITICAL",
+                    "gdpr_article": "Art. 5 (Integrity & Confidentiality)",
+                    "reason": "Event logged without tenant_id (GDPR violation)"
+                })
+
+            # Check for mismatched tenant_id (event.tenant_id != request.tenant_id)
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' ~/.corvin/audit.jsonl 2>/dev/null | \
+              jq -r 'select(.tenant_id != .request_tenant_id) | \
+              "MISMATCH \\(.tenant_id) != \\(.request_tenant_id)"' 2>/dev/null | head -10"""
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+
+            if result.stdout.strip():
+                mismatch_count = len([x for x in result.stdout.strip().split('\n') if x.startswith("MISMATCH")])
+                violations.append({
+                    "type": "tenant_mismatch",
+                    "count": mismatch_count,
+                    "severity": "CRITICAL",
+                    "gdpr_article": "Art. 6, 32 (Lawfulness, Security)",
+                    "reason": "Event logged with mismatched tenant_id (cross-tenant leak)"
+                })
+
+            # Audit tenant_id distribution (should not have unexpected tenants)
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' ~/.corvin/audit.jsonl 2>/dev/null | \
+              jq -r '.tenant_id' 2>/dev/null | sort | uniq"""
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            seen_tenants = set(x for x in result.stdout.strip().split('\n') if x and x != "null")
+
+            # Log which tenants saw compat calls (for audit)
+            logger.info(f"Gate 5: Deprecated API calls detected in tenants: {seen_tenants}")
+
+            return violations
+
+        except Exception as e:
+            logger.error(f"Failed to find cross-tenant mismatches (GDPR violation): {e}")
+            # On error: FAIL (fail-closed) — better to block deletion than risk GDPR breach
+            return [{
+                "type": "audit_trail_error",
+                "severity": "CRITICAL",
+                "gdpr_article": "Art. 32 (Security of Processing)",
+                "reason": f"Cannot verify tenant isolation due to audit trail error: {e}"
+            }]

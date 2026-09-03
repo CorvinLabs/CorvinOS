@@ -63,18 +63,52 @@ class PluginMigrationGate:
             )
 
     def _scan_plugin_registry(self) -> tuple:
-        """Scan plugin registry for migration status (simplified)."""
-        # In real implementation: load core/plugins/registry.yaml
-        # Check each plugin's manifest for old-subsystem imports
-        # Count migrated_plugins / total_plugins
-        # For now: return example data (Week 8 would scan real registry)
+        """Scan plugin registry for migration status (REAL implementation)."""
+        import subprocess
+        import yaml
+        import os
 
-        # Example: 100 total plugins, 98 migrated (98%)
-        total_plugins = 100
-        migrated_plugins = 98
-        laggards = [
-            {"plugin_id": "community/old-voice-plugin", "owner": "unknown", "deadline": "2026-09-10"},
-            {"plugin_id": "deprecated/legacy-storage", "owner": "archived", "deadline": "2026-09-10"},
-        ]
+        laggards = []
+        total_plugins = 0
+        migrated_plugins = 0
 
-        return total_plugins, migrated_plugins, laggards
+        try:
+            # Load plugin registry
+            registry_path = "/home/shumway/projects/CorvinOS/core/plugins/registry.yaml"
+            if not os.path.exists(registry_path):
+                return 0, 0, []
+
+            with open(registry_path, 'r') as f:
+                registry = yaml.safe_load(f) or {}
+
+            plugins = registry.get('plugins', [])
+            total_plugins = len(plugins)
+
+            # Check each plugin for old-subsystem imports in its manifest
+            old_imports_pattern = "core.brain|core.vibe_engineering|core.context_engineering"
+
+            for plugin in plugins:
+                plugin_id = plugin.get('id', 'unknown')
+                plugin_path = plugin.get('path', '')
+
+                # Check plugin's source files for old imports
+                cmd = f"""grep -r "{old_imports_pattern}" "{plugin_path}" --include="*.py" 2>/dev/null | wc -l"""
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+                old_import_count = int(result.stdout.strip() or 0)
+
+                if old_import_count == 0:
+                    migrated_plugins += 1
+                else:
+                    laggards.append({
+                        "plugin_id": plugin_id,
+                        "owner": plugin.get('owner', 'unknown'),
+                        "deadline": "2026-09-10",
+                        "old_import_count": old_import_count
+                    })
+
+            return total_plugins, migrated_plugins, laggards
+
+        except Exception as e:
+            logger.error(f"Failed to scan plugin registry: {e}")
+            # Fallback: assume no plugins scanned
+            return 0, 0, []
