@@ -31,19 +31,23 @@ export async function setupMockApis(page: Page) {
     });
   });
 
-  // Mock console manifest (capabilities)
+  // Mock console manifest (capabilities) — ADR-0561 v2.0 schema
   await page.route('**/v1/console/capabilities/manifest', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        version: '1.0',
-        panels: [],
-        nav_groups: [],
-        features: {
+        version: '2.0',
+        timestamp: new Date().toISOString(),
+        contract_version: '1',
+        capabilities: ['vibe-engineering', 'dashboard', 'settings'],
+        flags: {
           vibe_engineering: true,
           console_marketplace_panel: true,
         },
+        panels: [],  // Empty; fallback to registry panels
+        nav_groups: [],
+        hash: 'mock-manifest-hash-123',
       }),
     });
   });
