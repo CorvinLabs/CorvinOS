@@ -13,11 +13,10 @@
  */
 
 import * as React from "react"
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
-import { Loader2, LogOut, Menu, X, ChevronDown } from "lucide-react"
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { Loader2, LogOut, Menu, X } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { RouteErrorBoundary } from "@/components/error-boundary"
 import { ConsoleAssistant } from "@/components/assistant/ConsoleAssistant"
@@ -96,7 +95,8 @@ function LicenseTierFooter() {
 }
 
 // ── Collapse state ──────────────────────────────────────────────────────────
-
+// (Deferred: useNavCollapse will be re-enabled when nav groups have collapse UI — Phase 3+)
+/*
 function useNavCollapse(groupId: string, defaultOpen: boolean) {
   const key = `corvin_nav_open_${groupId}`
   const [open, setOpen] = React.useState<boolean>(() => {
@@ -113,13 +113,14 @@ function useNavCollapse(groupId: string, defaultOpen: boolean) {
       try {
         localStorage.setItem(key, String(next))
       } catch {
-        /* ignore */
+        // ignore
       }
       return next
     })
   }, [key])
   return [open, toggle] as const
 }
+*/
 
 // ── Fallback panels (if manifest fails) ──────────────────────────────────────
 
@@ -343,7 +344,7 @@ export function AppLayout() {
         </div>
       </div>
 
-      {assistantOpen && <ConsoleAssistant onClose={() => setAssistantOpen(false)} />}
+      {assistantOpen && <ConsoleAssistant open={assistantOpen} onClose={() => setAssistantOpen(false)} />}
     </>
   )
 }

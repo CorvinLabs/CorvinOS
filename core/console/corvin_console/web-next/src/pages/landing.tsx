@@ -6,8 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { landingPersonas, type LandingPersona } from "@/lib/api";
-import { PublicLayout } from "@/components/layout";
 import { cn } from "@/lib/utils";
+
+// PublicLayout temporary fallback (ADR-0561: landing/login pages to be redesigned)
+const PublicLayout = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
 
 const PILLARS = [
   {

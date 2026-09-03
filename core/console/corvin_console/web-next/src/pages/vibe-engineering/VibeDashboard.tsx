@@ -6,12 +6,12 @@
  * URL-synced via query param: /app/vibe-engineering?tab=brain-monitor
  */
 
-import React, { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
+import { useVibeData } from "./hooks/useVibeData";
 
 // Lazy-load tab content (components already exist)
 const BrainMonitorContent = lazy(() =>
@@ -51,6 +51,7 @@ const LoadingFallback = () => (
 export function VibeDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get("tab") || "dashboard";
+  const vibeData = useVibeData(5000);
 
   const tabs = [
     { id: "dashboard", label: "Dashboard", icon: "📊" },
@@ -94,19 +95,31 @@ export function VibeDashboard() {
 
         <TabsContent value="brain-monitor">
           <Suspense fallback={<LoadingFallback />}>
-            <BrainMonitorContent />
+            {!vibeData.loading && !vibeData.error ? (
+              <BrainMonitorContent />
+            ) : (
+              <LoadingFallback />
+            )}
           </Suspense>
         </TabsContent>
 
         <TabsContent value="context-intelligence">
           <Suspense fallback={<LoadingFallback />}>
-            <ContextIntelligenceContent />
+            {!vibeData.loading && !vibeData.error ? (
+              <ContextIntelligenceContent data={vibeData} onQualityGateChange={() => {}} />
+            ) : (
+              <LoadingFallback />
+            )}
           </Suspense>
         </TabsContent>
 
         <TabsContent value="learning-hub">
           <Suspense fallback={<LoadingFallback />}>
-            <LearningHubContent />
+            {!vibeData.loading && !vibeData.error ? (
+              <LearningHubContent data={vibeData} />
+            ) : (
+              <LoadingFallback />
+            )}
           </Suspense>
         </TabsContent>
 
