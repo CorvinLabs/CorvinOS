@@ -266,3 +266,29 @@ export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
     return null;
   });
 }
+
+/**
+ * ADR-0561 Phase 2 — the route set the console actually mounts: manifest routes
+ * first, then every registry panel the manifest did NOT produce a route for.
+ *
+ * Dedupe is by ROUTE PATH of the routes actually PRODUCED, never by manifest panel
+ * id. The manifest may list a panel this bundle cannot render yet (`react` kind is
+ * unsupported, a `component` name may be unknown) — manifestPanelRoutes() then
+ * returns null for it, and the registry route MUST take over. Keying the dedupe on
+ * the manifest's ids instead dropped `/app/vibe-engineering` the moment the
+ * manifest loaded (2026-09-03: "The address /app/vibe-engineering doesn't exist").
+ * Pure; unit-tested in tests/unit/merge-panel-routes.test.tsx.
+ */
+export function mergePanelRoutes(
+  manifestPanels: readonly PanelDescriptor[] | undefined,
+  registryPanels: readonly ConsolePanel[] = PANELS,
+) {
+  const manifestRoutes = manifestPanels ? manifestPanelRoutes(manifestPanels) : [];
+  const produced = new Set(
+    manifestRoutes.filter((r) => r != null).map((r) => String(r!.props.path)),
+  );
+  const fallbackRoutes = panelRoutes(registryPanels).filter(
+    (r) => r != null && !produced.has(String(r.props.path)),
+  );
+  return [...manifestRoutes, ...fallbackRoutes];
+}

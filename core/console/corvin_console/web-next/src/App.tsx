@@ -1,5 +1,5 @@
 import * as React from "react";
-import { panelRoutes, manifestPanelRoutes, PANELS } from "@/panels/registry";
+import { mergePanelRoutes } from "@/panels/registry";
 import PanelHost from "@/panels/PanelHost";
 import { useAiPanels, aiPanelSrc } from "@/adapters/ai-panels";
 import { useConsoleManifest } from "@/adapters/capabilities";
@@ -84,17 +84,9 @@ function ScrollToTop() {
  */
 function useManifestPanelRoutes(): React.ReactNode[] {
   const { data: manifest } = useConsoleManifest();
-
-  // Collect panel IDs already rendered by manifest (to avoid duplicates)
-  const manifestPanelIds = new Set(manifest?.panels?.map((p) => p.id) ?? []);
-
-  // Render manifest panels first (if available), then fallback registry panels
-  const manifestRoutes = manifest?.panels ? manifestPanelRoutes(manifest.panels) : [];
-  const fallbackRoutes = panelRoutes(PANELS).filter(
-    (route) => route && !manifestPanelIds.has(route.key as string)
-  );
-
-  return [...manifestRoutes, ...fallbackRoutes];
+  // Manifest routes first, registry routes for everything the manifest did not
+  // actually produce a route for — dedupe by produced path, see mergePanelRoutes().
+  return mergePanelRoutes(manifest?.panels);
 }
 
 // SetupGate is rendered inside RequireAuth so it has access to the auth
