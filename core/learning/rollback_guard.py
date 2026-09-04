@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import threading
 import os
+import re
 
 from .utils import (
     format_iso_timestamp,
@@ -126,6 +127,9 @@ class RollbackGuard:
         # Override metrics for learning
         self.override_metrics: Dict[str, OverrideMetrics] = {}
 
+        # Hold period configuration per Skill (updated via suggest_hold_adjustment)
+        self.skill_hold_config: Dict[str, int] = {}
+
         # Load persisted history
         self._load_persisted_history()
 
@@ -153,6 +157,13 @@ class RollbackGuard:
                                     timestamp=data.get("timestamp", ""),
                                 )
                                 self.override_metrics[approval_id] = metrics
+                        # Reconstruct approval apply times from persisted history
+                        elif data.get("type") == "approval_registered":
+                            approval_id = data.get("approval_id", "")
+                            if approval_id:
+                                apply_timestamp = data.get("apply_timestamp", "")
+                                hold_hours = data.get("hold_hours", 12)
+                                self.approval_apply_times[approval_id] = (apply_timestamp, hold_hours)
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.warning(f"[L5 Rollback] Failed to load history: {e}")
         except Exception as e:
@@ -216,10 +227,27 @@ class RollbackGuard:
             hold_hours = custom_hold_hours if custom_hold_hours is not None else DEFAULT_HOLD_HOURS[criticality]
 
             # Record approval with its hold period (prevents overwrites for multiple approvals)
-            self.approval_apply_times[approval_id] = (format_iso_timestamp(), hold_hours)
+            apply_timestamp = format_iso_timestamp()
+            self.approval_apply_times[approval_id] = (apply_timestamp, hold_hours)
 
             # Track total approval count per skill (for override rate calculation)
             self.approval_count_by_skill[skill_id] = self.approval_count_by_skill.get(skill_id, 0) + 1
+
+            # Persist approval registration to disk (fail-closed: log error but continue)
+            try:
+                self.history_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.history_file, "a") as f:
+                    record = {
+                        "type": "approval_registered",
+                        "approval_id": approval_id,
+                        "skill_id": skill_id,
+                        "apply_timestamp": apply_timestamp,
+                        "hold_hours": hold_hours,
+                        "timestamp": apply_timestamp,
+                    }
+                    f.write(json.dumps(record) + "\n")
+            except Exception as e:
+                logger.error(f"[L5 Rollback] Failed to persist approval registration: {e}")
 
             logger.info(
                 f"[L5 Rollback] Registered {approval_id} for {skill_id} "
@@ -289,8 +317,6 @@ class RollbackGuard:
             ValueError if force=True but reason is empty/invalid
             RuntimeError if audit fails
         """
-        import re
-
         # Validate inputs
         if not operator_id or not re.match(r"^[a-z0-9._\-:]{3,50}$", operator_id):
             raise ValueError(
@@ -349,6 +375,13 @@ class RollbackGuard:
             # Determine if this is a normal or forced revoke
             if force:
                 # Forced revoke — compute override metrics
+                # Guard: verify approval exists before accessing
+                if approval_id not in self.approval_apply_times:
+                    return RollbackDecision(
+                        approval_id=approval_id,
+                        allowed=False,
+                        reason="Approval not found; cannot force-revoke",
+                    )
                 apply_timestamp, hold_hours = self.approval_apply_times[approval_id]
                 apply_time = parse_iso_timestamp(apply_timestamp)
                 now = datetime.utcnow()
