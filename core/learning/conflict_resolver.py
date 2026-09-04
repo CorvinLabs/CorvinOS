@@ -108,13 +108,17 @@ class ConflictDetector:
                 )
 
                 if ConflictDetector._times_overlap(time_a, time_b):
+                    # Compute actual intersection bounds
+                    overlap_start = max(time_a[0], time_b[0])
+                    overlap_end = min(time_a[1], time_b[1])
+
                     conflict = Conflict(
                         conflict_id=str(uuid.uuid4()),
                         skill_a_id=skill_a,
                         skill_b_id=skill_b,
                         metric_name=metric_a,
                         conflict_type=ConflictType.CONCURRENT_PARAMETER,
-                        time_overlap=(time_a[0], time_b[1]),
+                        time_overlap=(overlap_start, overlap_end),
                         reason=f"{skill_a} and {skill_b} both requesting "
                         f"changes to {metric_a} in overlapping time windows",
                         severity="medium",
@@ -212,10 +216,22 @@ class ConflictResolver:
                         continue
                     try:
                         data = json.loads(line)
-                        # Store as record for reference
+                        # Deserialize to Conflict dataclass (not raw dict)
                         if data.get("type") == "conflict":
-                            self.conflicts[data.get("conflict_id", "")] = data
-                    except (json.JSONDecodeError, TypeError) as e:
+                            conflict = Conflict(
+                                conflict_id=data.get("conflict_id", ""),
+                                skill_a_id=data.get("skill_a_id", ""),
+                                skill_b_id=data.get("skill_b_id", ""),
+                                metric_name=data.get("metric_name", ""),
+                                conflict_type=ConflictType(data.get("conflict_type", "concurrent_parameter")),
+                                time_overlap=(data.get("time_overlap_start", ""), data.get("time_overlap_end", "")),
+                                reason=data.get("reason", ""),
+                                severity=data.get("severity", "medium"),
+                                timestamp=data.get("timestamp", ""),
+                                audit_event_id=data.get("audit_event_id", ""),
+                            )
+                            self.conflicts[conflict.conflict_id] = conflict
+                    except (json.JSONDecodeError, TypeError, ValueError) as e:
                         logger.warning(f"[L5 Conflict] Failed to load conflict: {e}")
         except Exception as e:
             logger.error(f"[L5 Conflict] Failed to load persisted conflicts: {e}")
@@ -233,8 +249,12 @@ class ConflictResolver:
                     "skill_b_id": conflict.skill_b_id,
                     "metric_name": conflict.metric_name,
                     "conflict_type": conflict.conflict_type.value,
+                    "time_overlap_start": conflict.time_overlap[0],
+                    "time_overlap_end": conflict.time_overlap[1],
+                    "reason": conflict.reason,
                     "severity": conflict.severity,
                     "timestamp": conflict.timestamp,
+                    "audit_event_id": conflict.audit_event_id,
                 }
                 f.write(json.dumps(record) + "\n")
         except Exception as e:
@@ -259,7 +279,7 @@ class ConflictResolver:
             resolutions: List[ConflictResolution] = []
 
             for conflict in conflicts:
-                # Audit-first: log conflict detection
+                # Audit-first: log conflict detection (fail-closed)
                 if self.audit_backend:
                     try:
                         audit_event = {
@@ -275,8 +295,10 @@ class ConflictResolver:
                         event_id = self.audit_backend.write_event(audit_event)
                         conflict.audit_event_id = str(event_id) if event_id else ""
                     except Exception as e:
-                        logger.error(
-                            f"[L5 Conflict] Failed to audit conflict: {e}; proceeding anyway"
+                        logger.error(f"[L5 Conflict] FATAL: audit_backend.write_event() failed: {e}")
+                        raise RuntimeError(
+                            f"[L5 Conflict] FATAL: audit_backend.write_event() failed: {e}. "
+                            f"Conflict resolution BLOCKED (fail-closed constraint C5)."
                         )
 
                 # Store conflict
