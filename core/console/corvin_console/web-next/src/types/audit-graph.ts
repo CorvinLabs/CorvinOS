@@ -29,17 +29,26 @@ export interface AuditEvent {
   prev_hash: string; // SHA256 of prior event (chain link)
   lom_hash: string; // Line of Moral Responsibility (source code binding)
   tenant_id: string; // GDPR tenant scoping
+  // What the backend ACTUALLY delivers per event (routes/vibe_engineering.py
+  // ::get_audit_chain maps real chain records to {event_type, details,
+  // severity} and only classifies `type`). The typed fields on the subtypes
+  // below are the design-time ideal and are OPTIONAL: none of them is
+  // populated today, and rendering them unguarded crashed the Inspector
+  // ("Cannot read properties of undefined (reading 'toFixed')", 2026-09-04).
+  event_type?: string; // raw chain event_type, e.g. "tier2_layer_injected"
+  details?: Record<string, unknown>;
+  severity?: string;
 }
 
 // Skill Execution Event
 export interface SkillExecutedEvent extends AuditEvent {
   type: 'skill_executed';
-  skill_id: string;
-  skill_version: string;
-  status: SkillExecutionStatus;
-  latency_ms: number;
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
+  skill_id?: string;
+  skill_version?: string;
+  status?: SkillExecutionStatus;
+  latency_ms?: number;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
   error?: {
     type: string;
     message: string;
@@ -49,9 +58,9 @@ export interface SkillExecutedEvent extends AuditEvent {
 // Learning Event
 export interface LearningEventRecord extends AuditEvent {
   type: 'learning_event';
-  skill_id: string;
-  event_type: LearningEventType;
-  signal: unknown; // Type depends on event_type
+  skill_id?: string;
+  event_type?: LearningEventType | string;
+  signal?: unknown; // Type depends on event_type
   confidence_before?: number;
   confidence_after?: number;
   confidence_delta?: number;
@@ -60,29 +69,29 @@ export interface LearningEventRecord extends AuditEvent {
 // Decision Event
 export interface DecisionEvent extends AuditEvent {
   type: 'decision';
-  decision_name: string;
-  skill_id: string;
-  confidence: number;
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
+  decision_name?: string;
+  skill_id?: string;
+  confidence?: number;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
 }
 
 // Context Snapshot Event
 export interface ContextSnapshotEvent extends AuditEvent {
   type: 'context_snapshot';
-  context_id: string;
-  entropy_score: number;
-  tier_1_count: number;
-  tier_2_count: number;
-  tier_3_count: number;
-  merge_status: 'success' | 'conflict' | 'failed';
+  context_id?: string;
+  entropy_score?: number;
+  tier_1_count?: number;
+  tier_2_count?: number;
+  tier_3_count?: number;
+  merge_status?: 'success' | 'conflict' | 'failed';
 }
 
 // Error Event
 export interface ErrorEvent extends AuditEvent {
   type: 'error';
-  error_type: string;
-  error_message: string;
+  error_type?: string;
+  error_message?: string;
   related_skill?: string;
   stack_trace?: string;
 }

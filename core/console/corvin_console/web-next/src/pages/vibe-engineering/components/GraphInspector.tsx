@@ -162,26 +162,33 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
     if (isSkillExecutedEvent(event)) {
       return (
         <div className="space-y-2 text-sm">
-          <div>
-            <span className="font-semibold">Skill:</span> {event.skill_id} v{event.skill_version}
-          </div>
-          <div>
-            <span className="font-semibold">Status:</span>{' '}
-            <span
-              className={`inline-block rounded px-2 py-1 text-xs font-semibold ${
-                event.status === 'success' ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'
-              }`}
-            >
-              {event.status}
-            </span>
-          </div>
-          <div>
-            <span className="font-semibold">Latency:</span> {event.latency_ms}ms
-          </div>
-          {event.output?.confidence !== undefined && (
+          {event.skill_id && (
+            <div>
+              <span className="font-semibold">Skill:</span> {event.skill_id}
+              {event.skill_version && ` v${event.skill_version}`}
+            </div>
+          )}
+          {event.status && (
+            <div>
+              <span className="font-semibold">Status:</span>{' '}
+              <span
+                className={`inline-block rounded px-2 py-1 text-xs font-semibold ${
+                  event.status === 'success' ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'
+                }`}
+              >
+                {event.status}
+              </span>
+            </div>
+          )}
+          {typeof event.latency_ms === 'number' && (
+            <div>
+              <span className="font-semibold">Latency:</span> {event.latency_ms}ms
+            </div>
+          )}
+          {typeof event.output?.confidence === 'number' && (
             <div>
               <span className="font-semibold">Confidence:</span>{' '}
-              {(event.output.confidence as number).toFixed(2)}
+              {event.output.confidence.toFixed(2)}
             </div>
           )}
           {event.error && (
@@ -202,28 +209,32 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
     if (isLearningEvent(event)) {
       return (
         <div className="space-y-2 text-sm">
-          <div>
-            <span className="font-semibold">Skill:</span> {event.skill_id}
-          </div>
-          <div>
-            <span className="font-semibold">Event Type:</span>{' '}
-            <span className="inline-block rounded bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-900">
-              {event.event_type}
-            </span>
-          </div>
-          {event.confidence_before !== undefined && (
+          {event.skill_id && (
+            <div>
+              <span className="font-semibold">Skill:</span> {event.skill_id}
+            </div>
+          )}
+          {event.event_type && (
+            <div>
+              <span className="font-semibold">Event Type:</span>{' '}
+              <span className="inline-block rounded bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-900">
+                {event.event_type}
+              </span>
+            </div>
+          )}
+          {typeof event.confidence_before === 'number' && (
             <div>
               <span className="font-semibold">Confidence Before:</span>{' '}
               {event.confidence_before.toFixed(2)}
             </div>
           )}
-          {event.confidence_after !== undefined && (
+          {typeof event.confidence_after === 'number' && (
             <div>
               <span className="font-semibold">Confidence After:</span>{' '}
               {event.confidence_after.toFixed(2)}
             </div>
           )}
-          {event.confidence_delta !== undefined && (
+          {typeof event.confidence_delta === 'number' && (
             <div>
               <span className="font-semibold">Delta:</span>{' '}
               <span
@@ -234,9 +245,11 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
               </span>
             </div>
           )}
-          <div>
-            <span className="font-semibold">Signal:</span> {JSON.stringify(event.signal)}
-          </div>
+          {event.signal !== undefined && (
+            <div>
+              <span className="font-semibold">Signal:</span> {JSON.stringify(event.signal)}
+            </div>
+          )}
         </div>
       );
     }
@@ -244,21 +257,29 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
     if (isDecisionEvent(event)) {
       return (
         <div className="space-y-2 text-sm">
-          <div>
-            <span className="font-semibold">Decision:</span> {event.decision_name}
-          </div>
-          <div>
-            <span className="font-semibold">Skill:</span> {event.skill_id}
-          </div>
-          <div>
-            <span className="font-semibold">Confidence:</span> {event.confidence.toFixed(2)}
-          </div>
-          <div className="mt-3 space-y-1">
-            <p className="text-xs font-semibold">Input:</p>
-            <code className="block rounded bg-muted p-2 text-xs">
-              {JSON.stringify(event.input, null, 2).substring(0, 200)}...
-            </code>
-          </div>
+          {event.decision_name && (
+            <div>
+              <span className="font-semibold">Decision:</span> {event.decision_name}
+            </div>
+          )}
+          {event.skill_id && (
+            <div>
+              <span className="font-semibold">Skill:</span> {event.skill_id}
+            </div>
+          )}
+          {typeof event.confidence === 'number' && (
+            <div>
+              <span className="font-semibold">Confidence:</span> {event.confidence.toFixed(2)}
+            </div>
+          )}
+          {event.input !== undefined && (
+            <div className="mt-3 space-y-1">
+              <p className="text-xs font-semibold">Input:</p>
+              <code className="block rounded bg-muted p-2 text-xs">
+                {JSON.stringify(event.input, null, 2).substring(0, 200)}...
+              </code>
+            </div>
+          )}
         </div>
       );
     }
@@ -266,20 +287,29 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
     if (isContextSnapshotEvent(event)) {
       return (
         <div className="space-y-2 text-sm">
-          <div>
-            <span className="font-semibold">Context ID:</span> {event.context_id}
-          </div>
-          <div>
-            <span className="font-semibold">Entropy:</span> {event.entropy_score.toFixed(2)}
-          </div>
-          <div>
-            <span className="font-semibold">Tier Distribution:</span>
-          </div>
-          <div className="ml-4 space-y-1">
-            <div>Tier 1: {event.tier_1_count}</div>
-            <div>Tier 2: {event.tier_2_count}</div>
-            <div>Tier 3: {event.tier_3_count}</div>
-          </div>
+          {event.context_id && (
+            <div>
+              <span className="font-semibold">Context ID:</span> {event.context_id}
+            </div>
+          )}
+          {typeof event.entropy_score === 'number' && (
+            <div>
+              <span className="font-semibold">Entropy:</span> {event.entropy_score.toFixed(2)}
+            </div>
+          )}
+          {typeof event.tier_1_count === 'number' && (
+            <>
+              <div>
+                <span className="font-semibold">Tier Distribution:</span>
+              </div>
+              <div className="ml-4 space-y-1">
+                <div>Tier 1: {event.tier_1_count}</div>
+                <div>Tier 2: {event.tier_2_count}</div>
+                <div>Tier 3: {event.tier_3_count}</div>
+              </div>
+            </>
+          )}
+          {event.merge_status && (
           <div>
             <span className="font-semibold">Merge Status:</span>{' '}
             <span
@@ -292,11 +322,44 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
               {event.merge_status}
             </span>
           </div>
+          )}
         </div>
       );
     }
 
     return null;
+  };
+
+  /**
+   * What the chain record actually carries. The backend maps every real audit
+   * event to {event_type, severity, details} and only classifies `type`; the
+   * typed renderers above show their fields when — and only when — present.
+   */
+  const renderChainRecord = () => {
+    if (!event.event_type && !event.details && !event.severity) return null;
+    return (
+      <div className="space-y-2 text-sm" data-testid="chain-record">
+        {event.event_type && (
+          <div>
+            <span className="font-semibold">Chain event:</span>{' '}
+            <code className="font-mono text-xs">{event.event_type}</code>
+          </div>
+        )}
+        {event.severity && (
+          <div>
+            <span className="font-semibold">Severity:</span> {event.severity}
+          </div>
+        )}
+        {event.details && Object.keys(event.details).length > 0 && (
+          <div className="space-y-1">
+            <p className="text-xs font-semibold">Details:</p>
+            <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-xs">
+              {JSON.stringify(event.details, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -350,7 +413,8 @@ export function GraphInspector({ event, graph, onEventSelect }: GraphInspectorPr
         <div className="space-y-2">
           <p className="text-sm font-semibold">Event Details</p>
           <div className="rounded-lg border border-border bg-muted/30 p-4">
-            {renderEventDetails()}
+            {renderChainRecord()}
+              {renderEventDetails()}
           </div>
         </div>
 
