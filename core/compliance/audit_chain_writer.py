@@ -155,67 +155,157 @@ class AuditChainWriter:
         )
         return self.write_event(event)
 
+    def enforce_retention(self, max_age_days: int, *, tenant_id: Optional[str] = None) -> dict:
+        """Apply retention policy to audit chain (delete old events).
+
+        Args:
+            max_age_days: Maximum age of events in days
+            tenant_id: Optional tenant to filter retention to
+
+        Returns:
+            Dict with "deleted" count
+        """
+        from datetime import datetime, timedelta
+
+        with self._lock:
+            if not self.log_path.exists():
+                return {"deleted": 0}
+
+            cutoff_date = datetime.utcnow() - timedelta(days=max_age_days)
+            cutoff_iso = cutoff_date.isoformat()
+            deleted = 0
+            kept_lines = []
+
+            try:
+                # Read all events
+                with open(self.log_path, "r") as f:
+                    lines = f.readlines()
+
+                # Filter old events
+                for line in lines:
+                    if not line.strip():
+                        continue
+
+                    try:
+                        entry = json.loads(line)
+                        event_timestamp = entry.get("timestamp", "")
+                        # Keep events newer than cutoff
+                        if event_timestamp >= cutoff_iso:
+                            kept_lines.append(line)
+                        else:
+                            if tenant_id is None or entry.get("tenant_id") == tenant_id:
+                                deleted += 1
+                            else:
+                                kept_lines.append(line)
+                    except json.JSONDecodeError:
+                        kept_lines.append(line)
+
+                # Write back kept events (rebuild hash chain)
+                if deleted > 0:
+                    # Rebuild chain from scratch
+                    self._last_hash = self.GENESIS_HASH
+                    self._event_count = 0
+
+                    with open(self.log_path, "w") as f:
+                        for line in kept_lines:
+                            entry = json.loads(line)
+                            # Recompute hash with current chain state
+                            event = AuditEvent(
+                                event_id=entry["event_id"],
+                                event_type=entry["event_type"],
+                                tenant_id=entry["tenant_id"],
+                                user_id=entry.get("user_id"),
+                                timestamp=entry["timestamp"],
+                                details=entry.get("details", {}),
+                                severity=entry.get("severity"),
+                            )
+                            event_json = event.to_json()
+                            combined = (self._last_hash + event_json).encode("utf-8")
+                            event_hash = hashlib.sha256(combined).hexdigest()
+
+                            record = {
+                                "event_id": event.event_id,
+                                "event_type": event.event_type,
+                                "tenant_id": event.tenant_id,
+                                "user_id": event.user_id,
+                                "timestamp": event.timestamp,
+                                "details": event.details,
+                                "severity": event.severity,
+                                "hash": event_hash,
+                                "prev_hash": self._last_hash,
+                                "sequence": self._event_count,
+                            }
+                            f.write(json.dumps(record) + "\n")
+                            self._last_hash = event_hash
+                            self._event_count += 1
+
+                return {"deleted": deleted}
+
+            except (json.JSONDecodeError, IOError) as e:
+                raise IOError(f"Failed to enforce retention: {e}")
+
     def verify_chain(self) -> bool:
         """Verify hash chain integrity.
 
         Returns:
             True if chain is valid, False if corrupted
         """
-        if not self.log_path.exists():
-            return True  # Empty chain is valid
+        with self._lock:
+            if not self.log_path.exists():
+                return True  # Empty chain is valid
 
-        try:
-            with open(self.log_path, "r") as f:
-                lines = f.readlines()
+            try:
+                with open(self.log_path, "r") as f:
+                    lines = f.readlines()
 
-            prev_hash = self.GENESIS_HASH
+                prev_hash = self.GENESIS_HASH
 
-            for line_idx, line in enumerate(lines):
-                if not line.strip():
-                    continue
+                for line_idx, line in enumerate(lines):
+                    if not line.strip():
+                        continue
 
-                entry = json.loads(line)
-                stored_hash = entry.get("hash")
-                expected_prev = entry.get("prev_hash")
+                    entry = json.loads(line)
+                    stored_hash = entry.get("hash")
+                    expected_prev = entry.get("prev_hash")
 
-                # Verify previous hash
-                if expected_prev != prev_hash:
-                    print(
-                        f"ERROR: Chain broken at line {line_idx}: "
-                        f"expected prev={prev_hash}, got {expected_prev}"
+                    # Verify previous hash
+                    if expected_prev != prev_hash:
+                        print(
+                            f"ERROR: Chain broken at line {line_idx}: "
+                            f"expected prev={prev_hash}, got {expected_prev}"
+                        )
+                        return False
+
+                    # Reconstruct event and recompute hash
+                    event = AuditEvent(
+                        event_id=entry["event_id"],
+                        event_type=entry["event_type"],
+                        tenant_id=entry["tenant_id"],
+                        user_id=entry.get("user_id"),
+                        timestamp=entry["timestamp"],
+                        details=entry.get("details", {}),
+                        severity=entry.get("severity"),
                     )
-                    return False
+                    event_json = event.to_json()
 
-                # Reconstruct event and recompute hash
-                event = AuditEvent(
-                    event_id=entry["event_id"],
-                    event_type=entry["event_type"],
-                    tenant_id=entry["tenant_id"],
-                    user_id=entry.get("user_id"),
-                    timestamp=entry["timestamp"],
-                    details=entry.get("details", {}),
-                    severity=entry.get("severity"),
-                )
-                event_json = event.to_json()
+                    combined = (prev_hash + event_json).encode("utf-8")
+                    computed_hash = hashlib.sha256(combined).hexdigest()
 
-                combined = (prev_hash + event_json).encode("utf-8")
-                computed_hash = hashlib.sha256(combined).hexdigest()
+                    # Compare
+                    if computed_hash != stored_hash:
+                        print(
+                            f"ERROR: Hash mismatch at line {line_idx}: "
+                            f"expected {stored_hash}, computed {computed_hash}"
+                        )
+                        return False
 
-                # Compare
-                if computed_hash != stored_hash:
-                    print(
-                        f"ERROR: Hash mismatch at line {line_idx}: "
-                        f"expected {stored_hash}, computed {computed_hash}"
-                    )
-                    return False
+                    prev_hash = stored_hash
 
-                prev_hash = stored_hash
+                return True
 
-            return True
-
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"ERROR: Failed to verify chain: {e}")
-            return False
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"ERROR: Failed to verify chain: {e}")
+                return False
 
     def get_last_hash(self) -> str:
         """Get the hash of the most recent event."""
@@ -227,67 +317,69 @@ class AuditChainWriter:
 
     def read_events(self, tenant_id: Optional[str] = None, limit: int = 1000) -> list[AuditEvent]:
         """Read audit events, optionally filtered by tenant."""
-        if not self.log_path.exists():
-            return []
+        with self._lock:
+            if not self.log_path.exists():
+                return []
 
-        events = []
+            events = []
 
-        try:
-            with open(self.log_path, "r") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
+            try:
+                with open(self.log_path, "r") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
 
-                    entry = json.loads(line)
+                        entry = json.loads(line)
 
-                    if tenant_id and entry.get("tenant_id") != tenant_id:
-                        continue
+                        if tenant_id and entry.get("tenant_id") != tenant_id:
+                            continue
 
-                    event = AuditEvent(
-                        event_id=entry["event_id"],
-                        event_type=entry["event_type"],
-                        tenant_id=entry["tenant_id"],
-                        user_id=entry.get("user_id"),
-                        timestamp=entry["timestamp"],
-                        details=entry.get("details", {}),
-                        severity=entry.get("severity"),
-                    )
-                    events.append(event)
+                        event = AuditEvent(
+                            event_id=entry["event_id"],
+                            event_type=entry["event_type"],
+                            tenant_id=entry["tenant_id"],
+                            user_id=entry.get("user_id"),
+                            timestamp=entry["timestamp"],
+                            details=entry.get("details", {}),
+                            severity=entry.get("severity"),
+                        )
+                        events.append(event)
 
-                    if len(events) >= limit:
-                        break
+                        if len(events) >= limit:
+                            break
 
-            return events
+                return events
 
-        except (json.JSONDecodeError, IOError):
-            return []
+            except (json.JSONDecodeError, IOError):
+                return []
 
     def get_stats(self) -> dict[str, Any]:
         """Get audit chain statistics."""
-        events_by_type = {}
-        events_by_tenant = {}
+        with self._lock:
+            events_by_type = {}
+            events_by_tenant = {}
 
-        try:
-            with open(self.log_path, "r") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
+            try:
+                with open(self.log_path, "r") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
 
-                    entry = json.loads(line)
-                    event_type = entry.get("event_type")
-                    tenant_id = entry.get("tenant_id")
+                        entry = json.loads(line)
+                        event_type = entry.get("event_type")
+                        tenant_id = entry.get("tenant_id")
 
-                    events_by_type[event_type] = events_by_type.get(event_type, 0) + 1
-                    events_by_tenant[tenant_id] = events_by_tenant.get(tenant_id, 0) + 1
+                        events_by_type[event_type] = events_by_type.get(event_type, 0) + 1
+                        events_by_tenant[tenant_id] = events_by_tenant.get(tenant_id, 0) + 1
 
-        except (json.JSONDecodeError, IOError):
-            pass
+            except (json.JSONDecodeError, IOError):
+                pass
 
-        return {
-            "total_events": self._event_count,
-            "events_by_type": events_by_type,
-            "events_by_tenant": events_by_tenant,
-            "last_hash": self._last_hash,
-            "log_path": str(self.log_path),
-            "chain_verified": self.verify_chain(),
-        }
+            return {
+                "total_events": self._event_count,
+                "events_by_type": events_by_type,
+                "events_by_tenant": events_by_tenant,
+                "last_hash": self._last_hash,
+                "log_path": str(self.log_path),
+                "chain_verified": self.verify_chain(),
+            }
