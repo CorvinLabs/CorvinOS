@@ -50,6 +50,13 @@ The steps above describe the v1 `useVibeData()` dashboard; the shipped
   `AUDIT_GRAPH_LAYOUT` from `components/AuditChainGraph.tsx`. The name is
   case-sensitive and cytoscape throws at construction on an unknown one
   (`breadthFirstSearch` shipped and left the Graph View empty until 2026-09-04).
+- The Inspector renders what a chain record actually carries: the backend maps
+  every real audit event to `{event_type, severity, details}` and only classifies
+  `type`; the typed fields on the frontend event subtypes (`confidence`,
+  `entropy_score`, `decision_name`, `latency_ms`, `input`, …) are optional and
+  rendered only when present. Reading them unguarded crashed the page on the
+  first node click ("Cannot read properties of undefined (reading 'toFixed')",
+  fixed 2026-09-04; guard: `tests/unit/graph-inspector-backend-shape.test.tsx`).
 - The console manifest (`/v1/console/capabilities/manifest`) is additive: a
   manifest failure falls back to the static panel registry, so the route still
   mounts — which is why the 500 it answered until 2026-09-04 (a builtin panel

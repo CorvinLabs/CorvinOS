@@ -321,7 +321,8 @@ export function getEventLabel(event: AnyAuditEvent): string {
       return `Learning: ${type}`;
     }
     case 'decision': {
-      const name = (event as any).decision_name;
+      // Real chain records carry no decision_name; show the chain event type.
+      const name = (event as any).decision_name ?? event.event_type ?? event.id.slice(0, 8);
       return `Decision: ${name}`;
     }
     case 'context_snapshot': {
