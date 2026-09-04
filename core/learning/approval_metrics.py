@@ -175,7 +175,9 @@ class ApprovalMetricsCollector:
 
         # Decision counts
         auto_approved = sum(1 for e in self.approval_requests if e["auto_approved"])
-        manual_approved = len(self.approvals)  # Non-auto approvals
+        # Count approvals that are NOT in the auto-approved set (issue #7: avoid double-count)
+        auto_approved_ids = {r["approval_id"] for r in self.approval_requests if r["auto_approved"]}
+        manual_approved = sum(1 for a in self.approvals if a["approval_id"] not in auto_approved_ids)
         metrics.auto_approved_count = auto_approved
         metrics.manual_approved_count = manual_approved
         metrics.rejected_count = len(self.rejections)
