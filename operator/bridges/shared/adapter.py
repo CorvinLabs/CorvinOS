@@ -10647,6 +10647,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                             # completion time (approach (a)). Mirrors the record's
                             # want_voice set at register() above.
                             "want_voice": _pv_want_voice,
+                            # BG-NOTIFICATION-FIX: Pass OUTBOX path to worker so it
+                            # can call deliver_ready() immediately after mark_done(),
+                            # guaranteeing second message within seconds (not 60s).
+                            "outbox_dir": str(OUTBOX),
                         }
                         # Supervised-run record (ships dark). Created BEFORE the
                         # worker starts, so a worker that dies during start-up is
