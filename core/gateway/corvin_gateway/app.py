@@ -262,6 +262,34 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.dispatcher = RunDispatcher()
     if not hasattr(app.state, "rate_limiter") or app.state.rate_limiter is None:
         app.state.rate_limiter = _rate_limit.RateLimiter()
+    # L5 k=2 — OperatorApprovalGate for learning feedback control
+    # Initialize approval gate with audit backend for operator-gated skill learning
+    try:
+        from core.skills.feedback_stability import OperatorApprovalGate as _OperatorApprovalGate
+        from corvin_plugins.providers import audit_backend as _approval_audit_backend
+
+        _approval_gate = _OperatorApprovalGate(
+            tenant_id="_default",
+            auto_approval_confidence_threshold=0.8,
+            approval_ttl_hours=12,
+            audit_backend=_approval_audit_backend,
+            corvin_home=os.environ.get("CORVIN_HOME"),
+        )
+        app.state.approval_gate = _approval_gate
+
+        # Wire approval gate into routes (enable /v1/approvals endpoints)
+        from core.gateway.routes import approval_routes as _approval_routes_module
+        _approval_routes_module.set_approval_gate(_approval_gate)
+
+        import logging as _appr_log
+        _appr_log.getLogger("corvin.approval_gate").info(
+            "OperatorApprovalGate initialized for L5 k=2 learning control"
+        )
+    except Exception as e:
+        import logging as _appr_log_err
+        _appr_log_err.getLogger("corvin.approval_gate").warning(
+            "Failed to initialize OperatorApprovalGate (approval endpoints disabled): %s", e
+        )
     # Phase 7.1 — recover any pending runs from the durable queue
     # the previous process accepted but never finished.
     try:
@@ -514,6 +542,18 @@ app = FastAPI(
 # → silently skipped. When present:
 #   * /v1/console/* — REST API
 #   * /console/*    — React SPA (web-next/dist)
+# ── L5 k=2 Approval Routes ──────────────────────────────────────────
+#
+# REST API for operator-gated learning control
+try:
+    from core.gateway.routes.approval_routes import approval_router
+    app.include_router(approval_router)
+except Exception as _appr_routes_err:
+    import logging as _appr_routes_log
+    _appr_routes_log.getLogger(__name__).warning(
+        "Failed to include approval routes: %s", _appr_routes_err
+    )
+
 try:
     import sys as _sys2
     from pathlib import Path as _Path2
