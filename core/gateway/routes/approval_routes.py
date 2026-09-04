@@ -472,6 +472,13 @@ async def revoke_approval(
 
         record = gate.get_approval_status(approval_id)
 
+        # Trigger optimizer callback for rollback if available
+        if hasattr(gate, '_optimizer_with_gate') and gate._optimizer_with_gate:
+            try:
+                gate._optimizer_with_gate.handle_revoke(approval_id)
+            except Exception as e:
+                logger.error(f"[Approval Routes] Optimizer revoke callback failed: {e}")
+
         return ApprovalActionResponse(
             success=True,
             message="Approval revoked",

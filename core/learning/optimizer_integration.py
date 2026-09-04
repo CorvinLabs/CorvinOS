@@ -64,6 +64,7 @@ class OptimizerWithApprovalGate:
         # Callbacks (wired by Skill implementation)
         self.on_approval_callback = None  # (approval_id, config_hash) → apply config
         self.on_rejection_callback = None  # (approval_id) → log rejection, continue
+        self.on_revoke_callback = None  # (approval_id) → rollback config, restore prev
 
     def process_feedback(
         self,
@@ -186,5 +187,10 @@ class OptimizerWithApprovalGate:
         logger.critical(
             f"[Optimizer] Approval revoked: {approval_id}, rolling back to previous config"
         )
-        # Skill should restore prev_config_hash
-        # TODO: add rollback_callback
+
+        # Call Skill-provided callback to rollback config
+        if self.on_revoke_callback:
+            try:
+                self.on_revoke_callback(approval_id)
+            except Exception as e:
+                logger.error(f"[Optimizer] Revoke callback failed: {e}")
