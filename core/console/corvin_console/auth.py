@@ -344,16 +344,32 @@ def create_session(
         lic_proof=_compute_lic_proof(sid),
     )
     _write_record(rec)
+
+    # CRITICAL #1: Cache with tenant isolation
+    from . import session_manager
+    manager = session_manager.get_session_manager()
+    manager.cache_put(rec, tenant_id)
+
     return rec
 
 
-def load_session(sid: str, *, now: float | None = None) -> SessionRecord | None:
+def load_session(sid: str, *, now: float | None = None, tenant_id: str | None = None) -> SessionRecord | None:
     try:
         path = _session_path(sid)
     except SessionError:
         return None
     if not path.exists():
         return None
+
+    # Try cache first (if tenant_id provided)
+    if tenant_id is not None:
+        from . import session_manager
+        manager = session_manager.get_session_manager()
+        cached = manager.cache_get(sid, tenant_id)
+        if cached is not None and cached.is_alive(now if now is not None else time.time()):
+            _log.debug("Session cache hit: sid_fp=%s tenant=%s", cached.sid_fingerprint, tenant_id)
+            return cached
+
     try:
         rec = _read_record(path, sid)
     except SessionStoreMalformed:
@@ -365,6 +381,11 @@ def load_session(sid: str, *, now: float | None = None) -> SessionRecord | None:
             path.unlink()
         except OSError:
             pass
+        # Invalidate cache on session expiry
+        if tenant_id is not None:
+            from . import session_manager
+            manager = session_manager.get_session_manager()
+            manager.cache_invalidate(sid, tenant_id)
         return None
 
     # ADR-0154 M3 (SDLP): if this session carries a license proof, it must still
@@ -429,10 +450,17 @@ def load_session(sid: str, *, now: float | None = None) -> SessionRecord | None:
     if fp in _write_failures:
         del _write_failures[fp]
         load_session._write_failures = _write_failures  # type: ignore[attr-defined]
+
+    # CRITICAL #1: Cache with tenant isolation
+    if tenant_id is not None:
+        from . import session_manager
+        manager = session_manager.get_session_manager()
+        manager.cache_put(bumped, tenant_id)
+
     return bumped
 
 
-def end_session(sid: str) -> bool:
+def end_session(sid: str, tenant_id: str | None = None) -> bool:
     try:
         path = _session_path(sid)
     except SessionError:
@@ -441,6 +469,11 @@ def end_session(sid: str) -> bool:
         return False
     try:
         path.unlink()
+        # Invalidate cache on session end
+        if tenant_id is not None:
+            from . import session_manager
+            manager = session_manager.get_session_manager()
+            manager.cache_invalidate(sid, tenant_id)
         return True
     except OSError:
         return False
