@@ -567,7 +567,51 @@ def create_app() -> FastAPI:
         import logging
         logging.getLogger(__name__).warning(f"Failed to set marketplace index path: {e}")
 
-    _app = FastAPI(title="CorvinOS Console", version="0.1.0")
+    # Session lifecycle management (recovery + cleanup)
+    from contextlib import asynccontextmanager
+    from .session_manager import bootstrap_session_manager, get_session_manager
+
+    @asynccontextmanager
+    async def app_lifespan(app: FastAPI):
+        # Startup: recover sessions from disk
+        try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("🚀 CorvinOS Console starting up...")
+            await bootstrap_session_manager()
+            manager = get_session_manager()
+            stats = manager.stats()
+            logger.info(
+                "✅ App ready. Sessions: total=%d active=%d expired=%d corrupted=%d",
+                stats.total_sessions,
+                stats.active_sessions,
+                stats.expired_sessions,
+                stats.corrupted_sessions,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("Failed to bootstrap session manager: %s", exc)
+            # Don't fail the startup — sessions will work but won't be recovered
+
+        yield
+
+        # Shutdown: cleanup task (optional — can be extended for graceful cleanup)
+        try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("🛑 CorvinOS Console shutting down...")
+            manager = get_session_manager()
+            await manager.cleanup_expired_sessions(max_age_s=86400)
+            logger.info("✅ Session cleanup complete")
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Session cleanup during shutdown failed: %s", exc)
+
+    _app = FastAPI(
+        title="CorvinOS Console",
+        version="0.1.0",
+        lifespan=app_lifespan,
+    )
     _app.include_router(router)  # All API routes (includes /vibe-engineering/*)
     mount_static(_app, url_prefix="/console")  # SPA at /console/
     return _app
