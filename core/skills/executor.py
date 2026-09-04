@@ -20,6 +20,8 @@ Compliance Notes:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import sys
 import time
 import traceback
@@ -29,6 +31,11 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from core.skills.skill_audit import emit_skill_audit
+from core.skills.context_isolation import (
+    IsolatedTaskContext,
+    ContextMutationValidator,
+    ContextMerger,
+)
 
 
 class ErrorClass(str, Enum):
@@ -52,6 +59,9 @@ class ExecutionResult:
         error_class: ErrorClass if status != "success", else None
         error_message: Human-readable error description
         timestamp: ISO8601 execution time
+        context_state_before_hash: SHA256 of context before execution (for isolated execution)
+        context_state_after_hash: SHA256 of context after execution (for isolated execution)
+        mutations: Dict of context mutations made by skill (for isolated execution)
     """
 
     status: str  # "success", "failure", "partial"
@@ -60,6 +70,9 @@ class ExecutionResult:
     error_class: Optional[ErrorClass] = None
     error_message: Optional[str] = None
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    context_state_before_hash: Optional[str] = None
+    context_state_after_hash: Optional[str] = None
+    mutations: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         """Validate result consistency."""
@@ -284,6 +297,136 @@ class SkillExecutor:
             self._record_execution(tenant_id, skill_name, result)
             return result
 
+    async def execute_isolated(
+        self,
+        tenant_id: str,
+        skill_id: str,
+        skill: Callable,
+        context: Dict[str, Any],
+        task_id: str = "unknown",
+    ) -> ExecutionResult:
+        """Execute skill with context isolation (L4: Copy-on-Write).
+
+        Args:
+            tenant_id: Tenant identifier
+            skill_id: Skill identifier (for isolation tracking)
+            skill: Async callable that implements the skill
+            context: Input context (will be isolated)
+            task_id: Task ID (for audit trail)
+
+        Returns:
+            ExecutionResult with status, output, timing, and context deltas
+
+        Note:
+            - Context is isolated before skill execution
+            - Mutations are tracked and validated
+            - Original context is never modified
+            - Isolation is verified before returning
+        """
+        # Get skill name for executor tracking
+        skill_name = getattr(skill, "id", None) or getattr(skill, "name", None) \
+            or skill_id or getattr(skill, "__name__", "skill")
+
+        start_time = time.time()
+
+        try:
+            # Step 1: Create isolated context (Copy-on-Write)
+            try:
+                isolated_ctx = IsolatedTaskContext.create_isolated(
+                    original_context=context,
+                    skill_id=skill_id,
+                    task_id=task_id,
+                    tenant_id=tenant_id,
+                )
+            except ValueError as e:
+                # Tenant safety check failed
+                elapsed_ms = (time.time() - start_time) * 1000
+                result = ExecutionResult(
+                    status="failure",
+                    output=None,
+                    execution_time_ms=elapsed_ms,
+                    error_class=ErrorClass.EXCEPTION,
+                    error_message=f"Context isolation setup failed: {str(e)}",
+                )
+                self._record_execution(tenant_id, skill_name, result)
+                return result
+
+            # Step 2: Execute skill with isolated context
+            timeout_s = self.get_timeout(skill_name) / 1000.0
+
+            try:
+                # Pass isolated context to skill (as context_copy for mutation)
+                skill_output = await asyncio.wait_for(
+                    skill(context=isolated_ctx._context_copy),
+                    timeout=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                elapsed_ms = (time.time() - start_time) * 1000
+                result = ExecutionResult(
+                    status="failure",
+                    output=None,
+                    execution_time_ms=elapsed_ms,
+                    error_class=ErrorClass.TIMEOUT,
+                    error_message=f"Isolated execution exceeded {self.get_timeout(skill_name)}ms timeout",
+                )
+                self._record_execution(tenant_id, skill_name, result)
+                return result
+
+            # Step 3: Verify isolation is intact
+            try:
+                isolated_ctx.assert_isolation_intact()
+            except RuntimeError as e:
+                elapsed_ms = (time.time() - start_time) * 1000
+                result = ExecutionResult(
+                    status="failure",
+                    output=None,
+                    execution_time_ms=elapsed_ms,
+                    error_class=ErrorClass.EXCEPTION,
+                    error_message=f"Isolation violation detected: {str(e)}",
+                )
+                self._record_execution(tenant_id, skill_name, result)
+                return result
+
+            # Step 4: Compute deltas by diffing before/after context
+            deltas = self._compute_context_deltas(
+                original_context=context,
+                modified_context=isolated_ctx._context_copy,
+                skill_id=skill_id,
+            )
+
+            # Step 5: Create augmented result with deltas
+            elapsed_ms = (time.time() - start_time) * 1000
+            result = ExecutionResult(
+                status="success",
+                output=skill_output,
+                execution_time_ms=elapsed_ms,
+            )
+
+            # Attach isolation metadata (for audit chain linking)
+            result.context_state_before_hash = hashlib.sha256(
+                json.dumps(context, sort_keys=True, default=str).encode()
+            ).hexdigest()
+            result.context_state_after_hash = isolated_ctx.get_context_hash()
+            result.mutations = deltas
+
+            self._record_execution(tenant_id, skill_name, result)
+            return result
+
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            error_class = self._classify_exception(e)
+            error_message = self._sanitize_error_message(e)
+
+            result = ExecutionResult(
+                status="failure",
+                output=None,
+                execution_time_ms=elapsed_ms,
+                error_class=error_class,
+                error_message=error_message,
+            )
+            self._record_execution(tenant_id, skill_name, result)
+            return result
+
     def _sanitize_error_message(self, exc: Exception) -> str:
         """Return sanitized error message (GDPR Art. 32, no PII)."""
         import re
@@ -302,6 +445,53 @@ class SkillExecutor:
             exc_msg = exc_msg[:197] + '...'
 
         return f"{exc_type}: {exc_msg}"
+
+    def _compute_context_deltas(
+        self,
+        original_context: Dict[str, Any],
+        modified_context: Dict[str, Any],
+        skill_id: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Compute deltas between original and modified context by diffing.
+
+        Args:
+            original_context: Context state before skill execution
+            modified_context: Context state after skill execution
+            skill_id: Skill ID (for audit)
+
+        Returns:
+            Dict of {path: {old_value, new_value}} for changed paths
+        """
+
+        def dict_diff(orig: Any, modified: Any, path: str = "") -> Dict[str, Dict]:
+            """Recursively diff two dicts, collecting all changes."""
+            changes = {}
+
+            # Check modified keys
+            if isinstance(modified, dict):
+                for key, new_val in modified.items():
+                    new_path = f"{path}.{key}" if path else key
+
+                    if key not in orig:
+                        # New key
+                        changes[new_path] = {"old_value": None, "new_value": new_val}
+                    elif isinstance(new_val, dict) and isinstance(orig.get(key), dict):
+                        # Recurse into nested dict
+                        nested_changes = dict_diff(orig[key], new_val, new_path)
+                        changes.update(nested_changes)
+                    elif orig[key] != new_val:
+                        # Value changed
+                        changes[new_path] = {"old_value": orig[key], "new_value": new_val}
+
+                # Check for deleted keys
+                for key in orig:
+                    new_path = f"{path}.{key}" if path else key
+                    if key not in modified:
+                        changes[new_path] = {"old_value": orig[key], "new_value": None}
+
+            return changes
+
+        return dict_diff(original_context, modified_context)
 
     def _classify_exception(self, exc: Exception) -> ErrorClass:
         """Classify an exception into an ErrorClass.
