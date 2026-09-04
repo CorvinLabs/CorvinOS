@@ -111,33 +111,27 @@ class OptimizerWithApprovalGate:
             f"magnitude={drift_alert.smoothed_delta:.4f}, requesting approval"
         )
 
-        try:
-            record, auto_approved = self.approval_gate.request_approval(
-                drift_alert,
-                confidence=confidence,
-                prev_config_hash=self.current_config_hash or "a" * 64,
-                next_config_hash=new_config_hash,
+        # Don't catch exception - let it propagate (fail-closed, issue #4)
+        record, auto_approved = self.approval_gate.request_approval(
+            drift_alert,
+            confidence=confidence,
+            prev_config_hash=self.current_config_hash or "a" * 64,
+            next_config_hash=new_config_hash,
+        )
+
+        if auto_approved:
+            logger.info(
+                f"[Optimizer] Auto-approved {self.skill_id}.{metric_name} "
+                f"(confidence={confidence:.2f} > 0.8)"
             )
+            return record, True
 
-            if auto_approved:
-                logger.info(
-                    f"[Optimizer] Auto-approved {self.skill_id}.{metric_name} "
-                    f"(confidence={confidence:.2f} > 0.8)"
-                )
-                return record, True
-
-            else:
-                logger.warning(
-                    f"[Optimizer] Approval pending for {self.skill_id}.{metric_name}, "
-                    f"approval_id={record.approval_id}"
-                )
-                return record, False
-
-        except Exception as e:
-            logger.error(
-                f"[Optimizer] Failed to request approval: {e}, applying immediately (fallback)"
+        else:
+            logger.warning(
+                f"[Optimizer] Approval pending for {self.skill_id}.{metric_name}, "
+                f"approval_id={record.approval_id}"
             )
-            return None, True  # Fallback: apply anyway (fail-open, not ideal but safe)
+            return record, False
 
     def handle_approval(self, approval_id: str, new_config_hash: str) -> None:
         """
@@ -150,14 +144,17 @@ class OptimizerWithApprovalGate:
         status = self.approval_gate.get_approval_status(approval_id)
         if status and status.decision == ApprovalDecision.APPROVED:
             logger.info(f"[Optimizer] Approval granted: {approval_id}, applying config")
-            self.current_config_hash = new_config_hash
 
-            # Call Skill-provided callback
+            # Call Skill-provided callback FIRST (issue #3: state desync)
             if self.on_approval_callback:
                 try:
                     self.on_approval_callback(approval_id, new_config_hash)
                 except Exception as e:
                     logger.error(f"[Optimizer] Approval callback failed: {e}")
+                    return  # Don't update hash if callback fails
+
+            # Update hash ONLY after callback succeeds (issue #3)
+            self.current_config_hash = new_config_hash
 
     def handle_rejection(self, approval_id: str) -> None:
         """

@@ -236,13 +236,12 @@ class SkillConfigApplier:
             SHA256 hex string of current config
 
         Raises:
-            NotImplementedError if not overridden
+            ValueError if _config_getter not configured
         """
         if hasattr(self, '_config_getter'):
             config = self._config_getter()
             return self._hash_config(config)
-        # Fallback: return dummy hash (for testing)
-        return "a" * 64
+        raise ValueError("_config_getter not configured for SkillConfigApplier")
 
     def _apply_config(
         self,
@@ -263,32 +262,28 @@ class SkillConfigApplier:
         Returns:
             ConfigApplyResult with success/error
         """
-        if hasattr(self, '_config_applier'):
-            try:
-                new_config = self._config_applier(new_config_hash)
-                from datetime import datetime
-                return ConfigApplyResult(
-                    success=True,
-                    config_hash=new_config_hash,
-                    previous_hash=self._get_current_config_hash(),
-                    timestamp=datetime.utcnow().isoformat() + "Z"
-                )
-            except Exception as e:
-                return ConfigApplyResult(
-                    success=False,
-                    config_hash=new_config_hash,
-                    previous_hash=self._get_current_config_hash(),
-                    error=str(e),
-                )
+        if not hasattr(self, '_config_applier'):
+            raise ValueError("_config_applier not configured for SkillConfigApplier")
 
-        # Fallback: return success (for testing)
-        from datetime import datetime
-        return ConfigApplyResult(
-            success=True,
-            config_hash=new_config_hash,
-            previous_hash="a" * 64,
-            timestamp=datetime.utcnow().isoformat() + "Z"
-        )
+        # Save previous hash BEFORE attempting to apply (issue #8, #10)
+        prev_hash = self._get_current_config_hash()
+
+        try:
+            new_config = self._config_applier(new_config_hash)
+            from datetime import datetime
+            return ConfigApplyResult(
+                success=True,
+                config_hash=new_config_hash,
+                previous_hash=prev_hash,
+                timestamp=datetime.utcnow().isoformat() + "Z"
+            )
+        except Exception as e:
+            return ConfigApplyResult(
+                success=False,
+                config_hash=new_config_hash,
+                previous_hash=prev_hash,
+                error=str(e),
+            )
 
     def _restore_config(
         self,
@@ -309,32 +304,28 @@ class SkillConfigApplier:
         Returns:
             ConfigApplyResult with success/error
         """
-        if hasattr(self, '_config_restorer'):
-            try:
-                restored_config = self._config_restorer(prev_config_hash)
-                from datetime import datetime
-                return ConfigApplyResult(
-                    success=True,
-                    config_hash=prev_config_hash,
-                    previous_hash=self._get_current_config_hash(),
-                    timestamp=datetime.utcnow().isoformat() + "Z"
-                )
-            except Exception as e:
-                return ConfigApplyResult(
-                    success=False,
-                    config_hash=prev_config_hash,
-                    previous_hash=self._get_current_config_hash(),
-                    error=str(e),
-                )
+        if not hasattr(self, '_config_restorer'):
+            raise ValueError("_config_restorer not configured for SkillConfigApplier")
 
-        # Fallback: return success (for testing)
-        from datetime import datetime
-        return ConfigApplyResult(
-            success=True,
-            config_hash=prev_config_hash,
-            previous_hash="a" * 64,
-            timestamp=datetime.utcnow().isoformat() + "Z"
-        )
+        # Save current hash BEFORE attempting to restore (issue #8)
+        current_hash = self._get_current_config_hash()
+
+        try:
+            restored_config = self._config_restorer(prev_config_hash)
+            from datetime import datetime
+            return ConfigApplyResult(
+                success=True,
+                config_hash=prev_config_hash,
+                previous_hash=current_hash,
+                timestamp=datetime.utcnow().isoformat() + "Z"
+            )
+        except Exception as e:
+            return ConfigApplyResult(
+                success=False,
+                config_hash=prev_config_hash,
+                previous_hash=current_hash,
+                error=str(e),
+            )
 
     def _audit_config_apply(
         self,

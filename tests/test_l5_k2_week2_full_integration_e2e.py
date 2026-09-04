@@ -177,8 +177,8 @@ class TestAutoApprovalFlow:
             assert auto_approved is True
             assert record.decision == ApprovalDecision.APPROVED
 
-            # Step 4: Config should be applied immediately (via callback)
-            config_applier._on_approval_callback(record.approval_id, new_config_hash)
+            # Step 4: Config should be applied immediately (via public method, issue #5)
+            optimizer_with_gate.handle_approval(record.approval_id, new_config_hash)
 
             # Step 5: Verify audit trail
             approval_events = mock_audit_backend.get_events("skill_approval_requested")
@@ -266,7 +266,7 @@ class TestPendingApprovalFlow:
             assert approved is True
 
             # Step 5: Config is applied
-            config_applier._on_approval_callback(record.approval_id, new_config_hash)
+            optimizer_with_gate.handle_approval(record.approval_id, new_config_hash)
 
             # Step 6: Verify audit trail
             approval_events = mock_audit_backend.get_events("skill_approval_requested")
@@ -408,7 +408,7 @@ class TestOperatorRevoke:
             assert auto_approved is True
 
             # Apply config
-            config_applier._on_approval_callback(record.approval_id, new_config_hash)
+            optimizer_with_gate.handle_approval(record.approval_id, new_config_hash)
 
             # Step 2: Operator revokes
             revoked = optimizer_with_gate.approval_gate.operator_revoke(
@@ -478,7 +478,7 @@ class TestConfigApplyFailure:
             )
 
             # Try to apply
-            config_applier._on_approval_callback(record.approval_id, new_config_hash)
+            optimizer_with_gate.handle_approval(record.approval_id, new_config_hash)
 
             # Approval should still be APPROVED (not REVOKED)
             status = optimizer_with_gate.approval_gate.get_approval_status(record.approval_id)
@@ -623,7 +623,8 @@ class TestCompleteLoop:
         for cycle in range(5):
             raw_delta = 0.25 + cycle * 0.05  # Large deltas to trigger drift
             metric_name = f"metric_{cycle}"
-            new_config_hash = ("f" * 64) if cycle == 0 else (bytes([65 + cycle]) * 32 + b"\x00" * 32).hex()
+            # Create proper 64-char SHA256 hash format (issue #6)
+            new_config_hash = f"{cycle:064x}"
 
             # Learning feedback
             smoothed, drift_alert = optimizer_with_gate.stability_gate.apply_feedback(
@@ -646,7 +647,7 @@ class TestCompleteLoop:
 
                 # If approved, apply config
                 if auto_approved or record.decision.value == "approved":
-                    config_applier._on_approval_callback(
+                    optimizer_with_gate.handle_approval(
                         record.approval_id,
                         new_config_hash
                     )
@@ -656,7 +657,7 @@ class TestCompleteLoop:
                         approval_id=record.approval_id,
                         operator_id="user:learning_op",
                     )
-                    config_applier._on_approval_callback(
+                    optimizer_with_gate.handle_approval(
                         record.approval_id,
                         new_config_hash
                     )
