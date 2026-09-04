@@ -603,6 +603,7 @@ def create_app() -> FastAPI:
             logger = logging.getLogger(__name__)
             logger.info("🛑 CorvinOS Console shutting down...")
             manager = get_session_manager()
+            await manager.cleanup_orphaned_tmp_files()  # MEDIUM: Clean up tmp files first
             await manager.cleanup_expired_sessions(max_age_s=86400)
             logger.info("✅ Session cleanup complete")
         except Exception as exc:
