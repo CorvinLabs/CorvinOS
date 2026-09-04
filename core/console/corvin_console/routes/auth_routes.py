@@ -65,7 +65,11 @@ def logout(
     corvin_console_sid: Annotated[str | None, Cookie()] = None,
 ) -> Response:
     if corvin_console_sid:
-        session_auth.end_session(corvin_console_sid)
+        session_auth.end_session(corvin_console_sid, tenant_id=rec.tenant_id)
+        # Phase 2 REMEDIATION #3: Wire audit backend
+        from ..session_manager import get_session_manager
+        manager = get_session_manager()
+        manager.audit_session_ended(corvin_console_sid, rec.sid_fingerprint, reason="logout", tenant_id=rec.tenant_id)
         console_audit.session_ended(
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
@@ -103,6 +107,10 @@ def whoami(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="session expired",
         )
+    # Phase 2 REMEDIATION #3: Wire audit backend
+    from ..session_manager import get_session_manager
+    manager = get_session_manager()
+    manager.audit_session_loaded(rec)
     return WhoamiResponse(
         tier=rec.tier,
         tenant_id=rec.tenant_id,
@@ -170,6 +178,10 @@ def local_login(
         token_fingerprint="",
         persistent=False,
     )
+    # Phase 2 REMEDIATION #3: Wire audit backend
+    from ..session_manager import get_session_manager
+    manager = get_session_manager()
+    manager.audit_session_created(rec, via="local-login")
     console_audit.session_started(
         tenant_id=tenant_id,
         token_fingerprint="",

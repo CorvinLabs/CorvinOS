@@ -334,7 +334,8 @@ class SessionManager:
                     tenant_id=rec.tenant_id,
                 )
             except Exception as backend_exc:
-                _log.debug("Failed to fanout session.created to audit backend: %s", backend_exc)
+                # Phase 2 REMEDIATION #3: WARNING level, not DEBUG (silent failure fix)
+                _log.warning("Failed to fanout session.created to audit backend: %s", backend_exc)
         except Exception as exc:
             _log.error("Failed to audit session creation: %s", exc)
 
@@ -362,7 +363,8 @@ class SessionManager:
                     tenant_id=rec.tenant_id,
                 )
             except Exception as backend_exc:
-                _log.debug("Failed to fanout session.loaded to audit backend: %s", backend_exc)
+                # Phase 2 REMEDIATION #3: WARNING level, not DEBUG (silent failure fix)
+                _log.warning("Failed to fanout session.loaded to audit backend: %s", backend_exc)
         except Exception as exc:
             _log.error("Failed to audit session load: %s", exc)
 
@@ -387,7 +389,8 @@ class SessionManager:
                     tenant_id=tenant_id,
                 )
             except Exception as backend_exc:
-                _log.debug("Failed to fanout session.ended to audit backend: %s", backend_exc)
+                # Phase 2 REMEDIATION #3: WARNING level, not DEBUG (silent failure fix)
+                _log.warning("Failed to fanout session.ended to audit backend: %s", backend_exc)
         except Exception as exc:
             _log.error("Failed to audit session end: %s", exc)
 
