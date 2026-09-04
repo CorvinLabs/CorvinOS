@@ -11,6 +11,9 @@ from enum import Enum
 import logging
 import math
 import threading
+from datetime import datetime
+
+from .utils import format_iso_timestamp, compute_mean_std
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +110,6 @@ class QualityGate:
         Returns:
             QualityScore with composite score + recommendation
         """
-        import datetime
-
         if len(recent_deltas) == 0:
             # No data — score is neutral
             return QualityScore(
@@ -121,13 +122,13 @@ class QualityGate:
                     noise_ratio=0.5,
                     convergence_rate=0.5,
                     stability_score=0.5,
-                    timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+                    timestamp=format_iso_timestamp(),
                     confidence=0.0,
                 ),
                 composite_score=0.5,
                 quality_level=QualityLevel.FAIR,
                 recommendation="Insufficient data for quality assessment",
-                timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+                timestamp=format_iso_timestamp(),
             )
 
         # Compute four metrics
@@ -146,7 +147,7 @@ class QualityGate:
             noise_ratio=noise_ratio,
             convergence_rate=convergence_rate,
             stability_score=stability_score,
-            timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+            timestamp=format_iso_timestamp(),
             confidence=ema_confidence,
         )
 
@@ -183,7 +184,7 @@ class QualityGate:
             composite_score=composite,
             quality_level=quality_level,
             recommendation=recommendation,
-            timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+            timestamp=format_iso_timestamp(),
         )
 
         # Audit-first: log the score before storing
@@ -248,17 +249,25 @@ class QualityGate:
             recent_deltas
         )
 
-        # Normalize by confidence: high confidence should correlate with low divergence
-        # If divergence is high despite high confidence, that's overfitting
-        overfitting_risk = min(1.0, divergence / (ema_confidence + 0.1))
+        # Overfitting risk: high divergence despite high confidence = severe risk
+        # Formula: divergence / (1 - confidence + epsilon)
+        # High divergence + high confidence → high risk (fitting noise)
+        # High divergence + low confidence → medium risk (uncertain)
+        # Low divergence + high confidence → low risk (good learning)
+        overfitting_risk = min(1.0, divergence / (1.0 - ema_confidence + 0.01))
 
         return max(0.0, min(1.0, overfitting_risk))
 
     def _compute_noise_ratio(self, recent_deltas: List[float]) -> float:
         """Estimate what fraction of feedback is random noise.
 
-        If many high-delta events appear singly (not confirmed by history),
-        that suggests noise dominates.
+        Uses isolation-based detection: a delta is noise if it appears
+        infrequently (isolated spike). Consistent signals appear multiple times.
+
+        Algorithm:
+        1. Count how many times each magnitude appears
+        2. Count isolated deltas (appear only once and are outliers by zscore)
+        3. Noise ratio = (isolated outliers) / total deltas
 
         Returns:
             [0.0=clean, 1.0=pure noise]
@@ -266,12 +275,31 @@ class QualityGate:
         if len(recent_deltas) == 0:
             return 0.5
 
-        # Heuristic: count single-high-deltas (isolated outliers)
-        # If ≥ 50% of deltas are isolated outliers, noise dominates
-        threshold = max(abs(d) for d in recent_deltas) * 0.66
-        outlier_count = sum(1 for d in recent_deltas if abs(d) > threshold)
+        if len(recent_deltas) == 1:
+            return 0.0  # Single delta cannot be isolated; assume clean
 
-        noise_ratio = min(1.0, outlier_count / max(1, len(recent_deltas)))
+        # Compute mean and std for zscore-based outlier detection
+        mean_delta, std_delta = compute_mean_std(recent_deltas)
+
+        # Count how many times each delta magnitude appears
+        magnitude_counts = {}
+        for d in recent_deltas:
+            mag = round(abs(d), 6)  # Round to avoid floating-point precision issues
+            magnitude_counts[mag] = magnitude_counts.get(mag, 0) + 1
+
+        # Count isolated outliers: appear once AND are >2σ from mean
+        isolated_outliers = 0
+        for d in recent_deltas:
+            mag = round(abs(d), 6)
+            # Isolated if appears only once
+            if magnitude_counts[mag] == 1:
+                # AND is an outlier by zscore (>2σ from mean)
+                if std_delta > 0.001:  # Avoid division by very small std
+                    zscore = abs(d - mean_delta) / (std_delta + 0.001)
+                    if zscore > 2.0:
+                        isolated_outliers += 1
+
+        noise_ratio = min(1.0, isolated_outliers / max(1, len(recent_deltas)))
 
         return max(0.0, min(1.0, noise_ratio))
 
@@ -286,12 +314,8 @@ class QualityGate:
         if len(recent_deltas) < 2:
             return 0.5
 
-        # Compute std of recent deltas
-        mean_delta = sum(recent_deltas) / len(recent_deltas)
-        variance = sum((d - mean_delta) ** 2 for d in recent_deltas) / len(
-            recent_deltas
-        )
-        std = math.sqrt(variance)
+        # Compute mean and std of recent deltas
+        mean_delta, std = compute_mean_std(recent_deltas)
 
         # Compute mean absolute delta
         mean_abs_delta = sum(abs(d) for d in recent_deltas) / len(recent_deltas)
@@ -316,12 +340,8 @@ class QualityGate:
         if len(config_history) < 2:
             return 0.5
 
-        # Compute variance in config values
-        mean_config = sum(config_history) / len(config_history)
-        variance = sum((c - mean_config) ** 2 for c in config_history) / len(
-            config_history
-        )
-        std = math.sqrt(variance)
+        # Compute mean and std in config values
+        mean_config, std = compute_mean_std(config_history)
 
         # Stability = exp(-std), normalized
         # Very small std → stability ≈ 1.0
