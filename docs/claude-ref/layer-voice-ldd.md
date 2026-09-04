@@ -117,7 +117,49 @@ each carry a final `SELBST-PRÜFUNG` / `SELF-CHECK` block, appended in
 `_system_for(...)` AFTER the persona-tone addendum and the audience
 block. The block instructs the LLM to walk the candidate one final time
 and revise on faithfulness defect, completeness gap, listener-angle
-slip, or meta-question drift.
+slip, or meta-question drift. Its completeness item is **type-scoped**
+(ADR-0596, see below): `decision`/empty keep the absolute option+list
+check; `report`/`explainer` check the outcome bracket without inventing.
+
+#### Speech-type classification + option-safe degrade (ADR-0596 / ADR-0597)
+
+Long, structured answers used to be read as a **recited list** because an
+absolute `VOLLSTÄNDIGKEIT` / `COMPLETENESS` rule outweighed the outcome-first
+lead the prompt already asked for. ADR-0596 separates three concerns that the
+single completeness rule conflated:
+
+1. **Option/choice fidelity is unconditional** — the base prompt's
+   `AUSWAHLMÖGLICHKEITEN` / `CHOICES ARE SACRED` rule (now also naming in-prose
+   "entweder … oder …" choices) preserves every option + closing question for
+   *every* answer, independent of the type or the classifier.
+2. **Load-bearing non-choice facts stay too** — the reworded, type-neutral
+   `VOLLSTÄNDIGKEIT` keeps every called-out consequence, breaking change,
+   prerequisite, and deadline regardless of type.
+3. **Only the phrasing of genuinely minor / parallel detail is type-driven.**
+
+`classify_speech_type(text)` (deterministic, no LLM) picks one of
+`report` (finished/status → lead with the reached goal, land on what is now
+possible), `explainer` (analysis → core idea leads, load-bearing points as a
+model), or `decision` (options/pick-one → keep depth, no outcome bracket). The
+chosen type selects a `SPEECH_TYPE_BLOCK` fragment spliced into `_system_for`
+after the base prompt, and scopes the SELF-CHECK completeness item. Because it
+only tunes bundling of minor detail + the outcome bracket, a misclassification
+costs *tone*, never a dropped option or fact. The type is emitted on a
+content-free `[summarize] type=… lang=…` stderr diagnostic.
+
+**Option-safe degrade ladder (ADR-0597).** When both LLM backends are down, the
+no-LLM fallback in `summarize()` routes structurally, using the *same*
+deterministic `has_choice_shape` detector: a real choice → `item_preserving_cap`
+(shorten within options, never drop one, keep the closing question — options beat
+length); an ordinary long list → `bounded_list_cap` (first-K items + "N more
+points" tail, hard-bounded so a 30-item list is never read aloud); prose →
+`_cap_to_budget` (front-fill whole sentences, keep a trailing "?"). Named limit:
+a label-less in-prose choice with no trailing "?" is not structurally visible
+here, so on the no-LLM path only the LLM AUSWAHL rule (absent by definition)
+would protect it. Covered by `test_speech_type_classifier.py`,
+`test_degrade_ladder_endings.py` (incl. a mutation test proving the old
+`_cap_to_budget(naive_truncate(...))` chain dropped a middle option), and the
+`test_summarize_outcome_first_e2e.py` real-subprocess proof.
 
 **Order is load-bearing.** The self-check MUST be the most-recent
 instruction in the system prompt, AFTER persona and audience. The
