@@ -38,8 +38,8 @@ class MockAuditBackend:
 def test_constraint_1_audit_trail():
     """Constraint #1: Linearizable Audit Trail."""
     print("\n[C1] Testing Linearizable Audit Trail...")
-    gate = OperatorApprovalGate(tenant_id="test_tenant")
     audit = MockAuditBackend()
+    gate = OperatorApprovalGate(tenant_id="test_tenant", audit_backend=audit)
 
     drift = DriftAlert(
         skill_id="skill.router",
@@ -54,9 +54,8 @@ def test_constraint_1_audit_trail():
     record, auto = gate.request_approval(
         drift,
         confidence=0.5,
-        prev_config_hash="abc123",
-        next_config_hash="def456",
-        audit_backend=audit,
+        prev_config_hash="a" * 64,
+        next_config_hash="b" * 64,
     )
 
     # C1a: Request emits event
@@ -67,7 +66,7 @@ def test_constraint_1_audit_trail():
     print("  ✓ Approval request emits audit event")
 
     # C1b: Approval decision emits event
-    success = gate.operator_approve(record.approval_id, "operator:alice", audit_backend=audit)
+    success = gate.operator_approve(record.approval_id, "operator:alice")
     assert success, "Approval should succeed"
 
     granted_events = audit.get_events_by_type("skill_approval_granted")
@@ -87,8 +86,8 @@ def test_constraint_1_audit_trail():
     record2, _ = gate.request_approval(
         drift2,
         confidence=0.5,
-        prev_config_hash="abc",
-        next_config_hash="def",
+        prev_config_hash="a" * 64,
+        next_config_hash="b" * 64,
         audit_backend=audit,
     )
 
@@ -96,7 +95,6 @@ def test_constraint_1_audit_trail():
         record2.approval_id,
         "operator:bob",
         reason="Too risky",
-        audit_backend=audit,
     )
 
     denied_events = audit.get_events_by_type("skill_approval_denied")
@@ -110,7 +108,8 @@ def test_constraint_1_audit_trail():
 def test_constraint_2_auto_approval():
     """Constraint #2: Auto-Approval for Low-Risk."""
     print("\n[C2] Testing Auto-Approval for Low-Risk...")
-    gate = OperatorApprovalGate(auto_approval_confidence_threshold=0.8)
+    audit = MockAuditBackend()
+    gate = OperatorApprovalGate(audit_backend=audit, auto_approval_confidence_threshold=0.8)
 
     # C2a: High confidence auto-approves
     drift_high = DriftAlert(
@@ -124,8 +123,8 @@ def test_constraint_2_auto_approval():
     record_high, auto_high = gate.request_approval(
         drift_high,
         confidence=0.85,
-        prev_config_hash="abc",
-        next_config_hash="def",
+        prev_config_hash="a" * 64,
+        next_config_hash="b" * 64,
     )
 
     assert auto_high is True, "High confidence should auto-approve"
@@ -145,8 +144,8 @@ def test_constraint_2_auto_approval():
     record_low, auto_low = gate.request_approval(
         drift_low,
         confidence=0.6,
-        prev_config_hash="abc",
-        next_config_hash="def",
+        prev_config_hash="a" * 64,
+        next_config_hash="b" * 64,
     )
 
     assert auto_low is False, "Low confidence should queue"
@@ -296,8 +295,8 @@ def test_constraint_5_revoke():
     record, auto = gate.request_approval(
         drift,
         confidence=0.9,  # Auto-approved
-        prev_config_hash="abc",
-        next_config_hash="def",
+        prev_config_hash="a" * 64,
+        next_config_hash="b" * 64,
         audit_backend=audit,
     )
 
@@ -339,8 +338,8 @@ def test_constraint_5_revoke():
     record2, _ = gate.request_approval(
         drift2,
         confidence=0.5,  # Pending
-        prev_config_hash="abc",
-        next_config_hash="def",
+        prev_config_hash="a" * 64,
+        next_config_hash="b" * 64,
     )
 
     revoke_pending = gate.operator_revoke(record2.approval_id, "operator:alice")
