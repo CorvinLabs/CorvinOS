@@ -132,17 +132,24 @@ class RollbackGuard:
                         continue
                     try:
                         data = json.loads(line)
+                        # Reconstruct override metrics from persisted history
                         if data.get("type") == "override_metric":
-                            mid = data.get("approval_id", "")
-                            if mid:
-                                # Just load for reference; metrics will be recomputed
-                                pass
+                            approval_id = data.get("approval_id", "")
+                            if approval_id:
+                                metrics = OverrideMetrics(
+                                    skill_id=data.get("skill_id", ""),
+                                    approval_id=approval_id,
+                                    time_into_hold_seconds=data.get("time_into_hold_seconds", 0),
+                                    hold_period_configured_seconds=data.get("hold_period_configured_seconds", 0),
+                                    timestamp=data.get("timestamp", ""),
+                                )
+                                self.override_metrics[approval_id] = metrics
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.warning(f"[L5 Rollback] Failed to load history: {e}")
         except Exception as e:
             logger.error(f"[L5 Rollback] Failed to load persisted history: {e}")
 
-    def _persist_decision(self, decision: RollbackDecision, approved: bool) -> None:
+    def _persist_decision(self, decision: RollbackDecision) -> None:
         """Append decision to disk (immutable log)."""
         try:
             self.history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +159,7 @@ class RollbackGuard:
                     "type": "revoke_decision",
                     "approval_id": decision.approval_id,
                     "allowed": decision.allowed,
+                    "reason": decision.reason,
                     "timestamp": datetime.utcnow().isoformat() + "Z",
                 }
                 f.write(json.dumps(record) + "\n")
@@ -227,10 +235,16 @@ class RollbackGuard:
             # Get hold period for this Skill
             hold_hours = self.skill_hold_config.get(skill_id, 12)
 
-            # Compute elapsed time
-            apply_time = datetime.fromisoformat(
-                self.approval_apply_times[approval_id].replace("Z", "")
-            )
+            # Compute elapsed time (with error handling for malformed timestamps)
+            try:
+                apply_time = datetime.fromisoformat(
+                    self.approval_apply_times[approval_id].replace("Z", "")
+                )
+            except (ValueError, TypeError) as e:
+                logger.warning(f"[L5 Rollback] Malformed timestamp for {approval_id}: {e}; cannot revoke yet")
+                # Graceful degradation: assume infinite remaining time (cannot revoke)
+                return (False, "inf (malformed timestamp)")
+
             now = datetime.utcnow()
             elapsed = now - apply_time
 
@@ -325,7 +339,7 @@ class RollbackGuard:
 
             # Determine if this is a normal or forced revoke
             if force:
-                # Forced revoke — log override metrics
+                # Forced revoke — compute override metrics
                 apply_time = datetime.fromisoformat(
                     self.approval_apply_times[approval_id].replace("Z", "")
                 )
@@ -343,10 +357,7 @@ class RollbackGuard:
                     timestamp=datetime.utcnow().isoformat() + "Z",
                 )
 
-                self.override_metrics[approval_id] = metrics
-                self._persist_override(metrics)
-
-                # Audit-log the force-revoke separately
+                # Audit-first: log the force-revoke BEFORE persistence
                 if self.audit_backend:
                     audit_event_force = {
                         "tenant_id": self.tenant_id,
@@ -359,9 +370,15 @@ class RollbackGuard:
                     try:
                         self.audit_backend.write_event(audit_event_force)
                     except Exception as e:
-                        logger.warning(
-                            f"[L5 Rollback] Failed to audit force-revoke: {e}"
+                        logger.error(f"[L5 Rollback] FATAL: audit failed; force-revoke NOT executed (fail-closed)")
+                        raise RuntimeError(
+                            f"[L5 Rollback] FATAL: audit_backend.write_event() failed: {e}. "
+                            f"Force-revoke NOT executed (fail-closed)."
                         )
+
+                # Persist AFTER audit succeeds
+                self.override_metrics[approval_id] = metrics
+                self._persist_override(metrics)
 
                 logger.warning(
                     f"[L5 Rollback] Force-revoke by {operator_id}: {skill_id}.{approval_id} "
@@ -386,7 +403,7 @@ class RollbackGuard:
                 ),
             )
 
-            self._persist_decision(decision, allowed=True)
+            self._persist_decision(decision)
 
             return decision
 
@@ -394,19 +411,31 @@ class RollbackGuard:
         """Parse time remaining string and return total seconds.
 
         Args:
-            time_str: Format "HH:MM:SS remaining"
+            time_str: Format "HH:MM:SS remaining", or special strings like "Approval not found", "inf"
 
         Returns:
-            Total seconds, or None if parse fails
+            Total seconds, or None if parse fails / special string
         """
+        if not time_str or not isinstance(time_str, str):
+            return None
+
+        # Handle special cases
+        if "inf" in time_str.lower() or "not found" in time_str.lower():
+            return None  # Cannot revoke
+
         try:
             parts = time_str.split(":")[: 3]  # HH:MM:SS
-            hours = int(parts[0]) if len(parts) > 0 else 0
-            minutes = int(parts[1]) if len(parts) > 1 else 0
-            seconds = int(parts[2].split()[0]) if len(parts) > 2 else 0
+            if len(parts) < 3:
+                # Not in HH:MM:SS format
+                return None
+
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2].split()[0])  # Extract digits before " remaining"
 
             return hours * 3600 + minutes * 60 + seconds
-        except (ValueError, IndexError, AttributeError):
+        except (ValueError, IndexError, AttributeError, TypeError):
+            logger.warning(f"[L5 Rollback] Could not parse time_remaining: {time_str!r}")
             return None
 
     def get_override_metrics(self, skill_id: str) -> Dict[str, OverrideMetrics]:

@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from enum import Enum
 import logging
 import math
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +79,11 @@ class QualityGate:
         self.tenant_id = tenant_id
         self.audit_backend = audit_backend
 
-        # State: skill_id -> metric_name -> QualityScore
-        self.scores: Dict[str, Dict[str, QualityScore]] = {}
+        # Thread safety for score mutations
+        self._lock = threading.RLock()
+
+        # State: (tenant_id, skill_id, metric_name) -> QualityScore (tenant-scoped)
+        self.scores: Dict[str, QualityScore] = {}
 
     def compute_quality(
         self,
@@ -199,16 +203,16 @@ class QualityGate:
                 }
                 self.audit_backend.write_event(audit_event)
             except Exception as e:
-                logger.error(f"[L5 Quality] Failed to audit score: {e}")
+                logger.error(f"[L5 Quality] FATAL: audit_backend.write_event() failed: {e}")
                 raise RuntimeError(
                     f"[L5 Quality] FATAL: audit_backend.write_event() failed: {e}. "
                     f"State mutation BLOCKED (fail-closed constraint C5)."
                 )
 
-        # Store score (after successful audit)
-        if skill_id not in self.scores:
-            self.scores[skill_id] = {}
-        self.scores[skill_id][metric_name] = score
+        # Store score (after successful audit), with tenant-scoped key and thread safety
+        with self._lock:
+            score_key = f"{self.tenant_id}:{skill_id}:{metric_name}"
+            self.scores[score_key] = score
 
         logger.info(
             f"[L5 Quality] {skill_id}.{metric_name}: "
@@ -332,10 +336,9 @@ class QualityGate:
         Returns:
             QualityScore if available, None otherwise
         """
-        if skill_id not in self.scores or metric_name not in self.scores[skill_id]:
-            return None
-
-        return self.scores[skill_id][metric_name]
+        with self._lock:
+            score_key = f"{self.tenant_id}:{skill_id}:{metric_name}"
+            return self.scores.get(score_key)
 
     def get_scores_by_skill(self, skill_id: str) -> Dict[str, QualityScore]:
         """Get all quality scores for a Skill.
@@ -343,8 +346,11 @@ class QualityGate:
         Returns:
             Dict[metric_name, QualityScore]
         """
-        if skill_id not in self.scores:
-            return {}
-
-        return dict(self.scores[skill_id])
+        with self._lock:
+            prefix = f"{self.tenant_id}:{skill_id}:"
+            return {
+                k.split(":")[-1]: v
+                for k, v in self.scores.items()
+                if k.startswith(prefix)
+            }
 
