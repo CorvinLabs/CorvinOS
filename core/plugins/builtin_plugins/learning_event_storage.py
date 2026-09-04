@@ -57,13 +57,16 @@ class LearningEventStorage:
 
         elif op_lower == "retrieve_events":
             event_type = kwargs.get("event_type")
+            tenant_id = kwargs.get("tenant_id", "_default")
 
             try:
                 with self._lock:
+                    # Filter by tenant_id first (GDPR Art. 5, 6, 32)
+                    tenant_events = [e for e in self._events if e.get("tenant_id") == tenant_id]
                     if event_type:
-                        filtered = [e for e in self._events if e.get("type") == event_type]
+                        filtered = [e for e in tenant_events if e.get("type") == event_type]
                     else:
-                        filtered = self._events.copy()
+                        filtered = tenant_events
                 return {"success": True, "events": filtered, "count": len(filtered)}
             except Exception as e:
                 return {"success": False, "error": str(e)}
@@ -85,6 +88,30 @@ class LearningEventStorage:
                 return {"success": False, "error": str(e)}
 
         return {"success": False, "error": f"unknown operation: {op}"}
+
+    def get_all_events(self, tenant_id: str) -> list[dict]:
+        """Get all events for a specific tenant (with lock).
+
+        GDPR Art. 5/6/32: Filter by tenant_id, never cross-tenant leakage.
+        """
+        with self._lock:
+            events = []
+            for event in self._events:
+                if event.get("tenant_id") == tenant_id:
+                    events.append(event)
+            return events
+
+    def query_by_type(self, event_type: str, tenant_id: str) -> list[dict]:
+        """Query events by type for a specific tenant (with tenant isolation)."""
+        with self._lock:
+            return [e for e in self._events
+                    if e.get("tenant_id") == tenant_id and e.get("type") == event_type]
+
+    def query_by_skill(self, skill_id: str, tenant_id: str) -> list[dict]:
+        """Query events by skill for a specific tenant (with tenant isolation)."""
+        with self._lock:
+            return [e for e in self._events
+                    if e.get("tenant_id") == tenant_id and e.get("skill_id") == skill_id]
 
     async def health_check(self) -> bool:
         """Check plugin health."""
