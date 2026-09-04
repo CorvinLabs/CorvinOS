@@ -170,6 +170,7 @@ spec:
   # Enable whitelist strategy with all stable features
   features_whitelist:
     - vibe_engineering              # CEL brief on live turns (deterministic)
+    - cel_brief_includes_content    # inject memory/ADR BODIES, not just titles (ADR-0396); correctness 0.00->1.00
     - vibe_engineering_active       # CEL ACTIVE brain (LLM + Toolforge + SkillForge)
     - tree_of_thoughts              # Learning dashboard (Phase 1-7)
     - learning_objectives           # User-defined learning objectives
