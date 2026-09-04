@@ -17,6 +17,7 @@ import { MarketplacePanel } from "./marketplace";
 import { SkillsOverviewPanel } from "@/components/SkillsOverviewPanel";
 import { ApprovalControlPanel } from "./ApprovalControlPanel";
 import L5MetricsMonitor from "./L5MetricsMonitor";
+import L5Tutorial from "./L5Tutorial";
 import { VibeDashboard } from "@/pages/vibe-engineering";
 import {
   DashboardPage, SettingsPage, EnginesPage, BrowserPage,
@@ -52,6 +53,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   SkillsOverviewPanel: SkillsOverviewPanel as unknown as ComponentType,
   ApprovalControlPanel: ApprovalControlPanel as unknown as ComponentType,
   L5MetricsMonitor: L5MetricsMonitor as unknown as ComponentType,
+  L5Tutorial: L5Tutorial as unknown as ComponentType,
   PackagesPage,
   CoworkPage,
   LddPage,
@@ -169,6 +171,9 @@ export const PANELS: ConsolePanel[] = [
   // L5 Phase 5: Metrics Monitor (ADR-0588)
   rc("l5-metrics-monitor", "L5 Metrics", L5MetricsMonitor as unknown as typeof DashboardPage,
      { nav: { label: "L5 Metrics", icon: "BarChart3", group: "learning" }, requiredFlag: "l5_metrics_monitor" }),
+  // L5 Phase 6: Training Tutorial (ADR-0589)
+  rc("l5-tutorial", "L5 Training", L5Tutorial as unknown as typeof DashboardPage,
+     { nav: { label: "L5 Training", icon: "BookOpen", group: "learning" }, requiredFlag: "l5_tutorial" }),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {
