@@ -361,19 +361,26 @@ def load_session(sid: str, *, now: float | None = None, tenant_id: str | None = 
     if not path.exists():
         return None
 
-    # Try cache first (if tenant_id provided)
-    if tenant_id is not None:
+    # Phase 2 REMEDIATION: If tenant_id not provided, read disk first to extract it
+    # This allows cache lookup even when caller doesn't know tenant_id upfront
+    if tenant_id is None:
+        try:
+            rec = _read_record(path, sid)
+            tenant_id = rec.tenant_id  # Extract tenant_id from disk record
+        except SessionStoreMalformed:
+            return None
+    else:
+        # Try cache first (if tenant_id provided)
         from . import session_manager
         manager = session_manager.get_session_manager()
         cached = manager.cache_get(sid, tenant_id)
         if cached is not None and cached.is_alive(now if now is not None else time.time()):
             _log.debug("Session cache hit: sid_fp=%s tenant=%s", cached.sid_fingerprint, tenant_id)
             return cached
-
-    try:
-        rec = _read_record(path, sid)
-    except SessionStoreMalformed:
-        return None
+        try:
+            rec = _read_record(path, sid)
+        except SessionStoreMalformed:
+            return None
 
     ts = now if now is not None else time.time()
     if not rec.is_alive(ts):
