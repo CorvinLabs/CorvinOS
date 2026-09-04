@@ -34,10 +34,15 @@ class MockAuditBackend:
 class TestAuditLinearity:
     """Test audit trail is linearizable (CAS + chain-verified)."""
 
+    def test_approval_requires_audit_backend(self):
+        """OperatorApprovalGate should require audit_backend (fail-closed)."""
+        with pytest.raises(RuntimeError, match="audit_backend is required"):
+            OperatorApprovalGate(tenant_id="test_tenant", audit_backend=None)
+
     def test_approval_request_emits_audit_event(self):
         """Requesting approval should emit audit event."""
-        gate = OperatorApprovalGate(tenant_id="test_tenant")
         audit = MockAuditBackend()
+        gate = OperatorApprovalGate(tenant_id="test_tenant", audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",

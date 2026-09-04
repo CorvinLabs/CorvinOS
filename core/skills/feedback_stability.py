@@ -337,6 +337,31 @@ class OperatorApprovalGate:
         # Last approved config per skill.metric (for fallback on revoke)
         self.last_approved_configs: Dict[str, Dict[str, Dict]] = {}
 
+    def _validate_inputs(self, prev_hash: str, next_hash: str, operator_id: str, confidence: float) -> None:
+        """
+        Validate all inputs before storing (fail-closed).
+
+        Raises:
+            ValueError if any input is invalid
+        """
+        import math
+        import re
+
+        # Validate config hashes (SHA256 hex format)
+        hash_pattern = re.compile(r'^[a-f0-9]{64}$')
+        if not hash_pattern.match(prev_hash):
+            raise ValueError(f"prev_config_hash must be valid SHA256 hex, got: {prev_hash}")
+        if not hash_pattern.match(next_hash):
+            raise ValueError(f"next_config_hash must be valid SHA256 hex, got: {next_hash}")
+
+        # Validate operator_id (alphanumeric + special chars, no newlines/nulls)
+        if operator_id and not re.match(r'^[a-z0-9._\-:]{3,50}$', operator_id):
+            raise ValueError(f"operator_id must match pattern ^[a-z0-9._\\-:]{{3,50}}$, got: {operator_id}")
+
+        # Validate confidence is finite
+        if not (0.0 <= confidence <= 1.0 and math.isfinite(confidence)):
+            raise ValueError(f"confidence must be finite in [0.0, 1.0], got: {confidence}")
+
     def scrub_alert(
         self,
         drift_alert: DriftAlert,
@@ -349,11 +374,24 @@ class OperatorApprovalGate:
 
         Args:
             drift_alert: Original alert with recent_deltas
-            confidence: EMA confidence score
+            confidence: EMA confidence score [0.0-1.0], must be finite
 
         Returns:
             ScrubbedDriftAlert with only magnitude, confidence, reason_code
+
+        Raises:
+            ValueError if confidence is invalid (non-finite, out of bounds)
         """
+        import math
+
+        # Validate confidence before scrubbing
+        if not (0.0 <= confidence <= 1.0 and math.isfinite(confidence)):
+            raise ValueError(f"confidence must be finite in [0.0, 1.0], got: {confidence}")
+
+        # Validate smoothed_delta is finite (prevents NaN in magnitude)
+        if not math.isfinite(drift_alert.smoothed_delta):
+            raise ValueError(f"drift_alert.smoothed_delta must be finite, got: {drift_alert.smoothed_delta}")
+
         # Infer reason_code from drift pattern (no raw data)
         if drift_alert.consecutive_high_deltas >= 2:
             reason = ApprovalReasonCode.CONSISTENT_PATTERN
@@ -377,31 +415,41 @@ class OperatorApprovalGate:
         confidence: float,
         prev_config_hash: str,
         next_config_hash: str,
-        audit_backend=None,  # Optional audit backend for logging
     ) -> Tuple[OperatorApprovalRecord, bool]:
         """
         Request approval for a learning delta (from optimizer).
 
+        AUDIT-FIRST PATTERN: writes audit event BEFORE state mutation.
+        If audit fails, state is NOT mutated (fail-closed).
+
         Implements:
+        - Constraint #1: Linearizable Audit Trail (audit written first, CAS verified)
         - Constraint #2: Auto-Approval for low-risk (confidence > threshold)
-        - Constraint #1: Linearizable Audit Trail (CAS + event logging)
+        - Thread-safe: all state mutations under lock
 
         Args:
             drift_alert: Original drift alert
-            confidence: EMA confidence [0.0-1.0]
-            prev_config_hash: SHA256 of config before delta
-            next_config_hash: SHA256 of config after delta
-            audit_backend: Optional audit system for logging
+            confidence: EMA confidence [0.0-1.0], must be finite
+            prev_config_hash: SHA256 hex of config before delta
+            next_config_hash: SHA256 hex of config after delta
 
         Returns:
             (OperatorApprovalRecord, auto_approved: bool)
             - If auto_approved=True, delta is approved immediately
             - If auto_approved=False, operator action required
+
+        Raises:
+            ValueError if inputs invalid (confidence, hashes, drift_alert)
+            RuntimeError if audit_backend fails
         """
+        # Validate inputs (fail-closed)
+        self._validate_inputs(prev_config_hash, next_config_hash, "", confidence)
+
+        # Scrub alert (also validates confidence/smoothed_delta are finite)
         scrubbed = self.scrub_alert(drift_alert, confidence)
         approval_id = str(uuid.uuid4())
-        now = datetime.utcnow()
-        ttl_expires = (now + self.approval_ttl).isoformat() + "Z"
+        now = datetime.utcnow().replace(tzinfo=None)
+        ttl_expires = (now + self.approval_ttl).replace(tzinfo=None)
 
         # Decide: auto-approve or queue for operator?
         auto_approved = confidence > self.auto_approval_threshold
@@ -416,43 +464,62 @@ class OperatorApprovalGate:
             operator_timestamp=now.isoformat() + "Z",
             prev_config_hash=prev_config_hash,
             next_config_hash=next_config_hash,
-            ttl_expires=ttl_expires,
-            audit_event_id="",  # Will be filled by audit backend
+            ttl_expires=ttl_expires.isoformat() + "Z",
+            audit_event_id="",
         )
 
-        # Store in appropriate location
-        if auto_approved:
-            # Auto-approved: go straight to history
-            self.approval_history.append(record)
-            logger.info(
-                f"[L5 Approval] Auto-approved {drift_alert.skill_id}.{drift_alert.metric_name} "
-                f"(confidence={confidence:.2f} > {self.auto_approval_threshold})"
-            )
-        else:
-            # Queue for operator
-            if drift_alert.skill_id not in self.pending_approvals:
-                self.pending_approvals[drift_alert.skill_id] = {}
-            self.pending_approvals[drift_alert.skill_id][drift_alert.metric_name] = record
-            logger.warning(
-                f"[L5 Approval Queue] {drift_alert.skill_id}.{drift_alert.metric_name} "
-                f"requires operator approval (confidence={confidence:.2f})"
+        # AUDIT-FIRST: Write audit event BEFORE state mutation
+        audit_event = {
+            "tenant_id": self.tenant_id,
+            "event_type": "skill_approval_requested",
+            "approval_id": approval_id,
+            "skill_id": drift_alert.skill_id,
+            "metric_name": drift_alert.metric_name,
+            "confidence": confidence,
+            "auto_approved": auto_approved,
+            "reason_code": scrubbed.reason_code.value,
+        }
+
+        try:
+            event_id = self.audit_backend.write_event(audit_event)
+            # Update record with audit event ID
+            record.audit_event_id = str(event_id) if event_id else ""
+        except Exception as e:
+            # Fail-closed: if audit fails, do NOT mutate state
+            raise RuntimeError(
+                f"[L5 Approval] FATAL: audit_backend.write_event() failed: {e}. "
+                f"State mutation BLOCKED (fail-closed constraint C1)."
             )
 
-        # Log to audit trail if backend provided
-        if audit_backend:
-            try:
-                audit_backend.write_event({
-                    "tenant_id": self.tenant_id,
-                    "event_type": "skill_approval_requested",
-                    "approval_id": approval_id,
-                    "skill_id": drift_alert.skill_id,
-                    "metric_name": drift_alert.metric_name,
-                    "confidence": confidence,
-                    "auto_approved": auto_approved,
-                    "reason_code": scrubbed.reason_code.value,
-                })
-            except Exception as e:
-                logger.error(f"[L5 Audit] Failed to write approval event: {e}")
+        # State mutation AFTER successful audit (under lock to prevent TOCTOU)
+        with self._lock:
+            if auto_approved:
+                # Auto-approved: go straight to history
+                self.approval_history.append(record)
+                logger.info(
+                    f"[L5 Approval] Auto-approved {drift_alert.skill_id}.{drift_alert.metric_name} "
+                    f"(confidence={confidence:.2f} > {self.auto_approval_threshold})"
+                )
+            else:
+                # Check-then-insert (prevent TOCTOU: reject duplicate in flight)
+                skill_id = drift_alert.skill_id
+                metric_name = drift_alert.metric_name
+
+                if skill_id in self.pending_approvals and metric_name in self.pending_approvals[skill_id]:
+                    raise RuntimeError(
+                        f"[L5 Approval] Approval already pending for {skill_id}.{metric_name}. "
+                        f"Duplicate request rejected (TOCTOU protection)."
+                    )
+
+                # Safe to insert
+                if skill_id not in self.pending_approvals:
+                    self.pending_approvals[skill_id] = {}
+                self.pending_approvals[skill_id][metric_name] = record
+
+                logger.warning(
+                    f"[L5 Approval Queue] {skill_id}.{metric_name} "
+                    f"requires operator approval (confidence={confidence:.2f})"
+                )
 
         return record, auto_approved
 
@@ -460,145 +527,182 @@ class OperatorApprovalGate:
         self,
         approval_id: str,
         operator_id: str,
-        audit_backend=None,
     ) -> bool:
         """
-        Operator explicitly approves a pending request.
+        Operator explicitly approves a pending request (AUDIT-FIRST).
 
-        Constraint #1: Linearizable Audit Trail (CAS + event)
+        Constraint #1: Linearizable Audit Trail (audit first, CAS verified)
+        Thread-safe: under lock
 
         Args:
             approval_id: UUID of the pending approval
-            operator_id: Who is approving (e.g., "user:alice")
-            audit_backend: Optional audit backend
+            operator_id: Who is approving (e.g., "user:alice"), must match pattern
 
         Returns:
-            True if approved, False if not found or already expired
+            True if approved, False if not found or expired
+
+        Raises:
+            ValueError if operator_id is invalid
         """
-        # Find in pending
-        record = None
-        for skill_dict in self.pending_approvals.values():
-            for r in skill_dict.values():
-                if r.approval_id == approval_id:
-                    record = r
+        # Validate operator_id
+        self._validate_inputs("a" * 64, "b" * 64, operator_id, 0.5)
+
+        with self._lock:
+            # Find in pending (thread-safe scan under lock)
+            record = None
+            found_at = None
+            for skill_id, metric_dict in self.pending_approvals.items():
+                for metric_name, r in metric_dict.items():
+                    if r.approval_id == approval_id:
+                        record = r
+                        found_at = (skill_id, metric_name)
+                        break
+                if record:
                     break
 
-        if not record:
-            logger.warning(f"[L5 Approval] Approval {approval_id} not found in pending queue")
-            return False
+            if not record:
+                logger.warning(f"[L5 Approval] Approval {approval_id} not found in pending")
+                return False
 
-        # Check TTL (Constraint #4)
-        now = datetime.utcnow().replace(tzinfo=None)  # Keep naive for consistency
-        ttl_dt = datetime.fromisoformat(record.ttl_expires.replace("Z", "")).replace(tzinfo=None)
-        if now > ttl_dt:
-            logger.warning(
-                f"[L5 Approval] Approval {approval_id} expired (TTL: {record.ttl_expires})"
+            # Check TTL (Constraint #4)
+            now = datetime.utcnow().replace(tzinfo=None)
+            ttl_dt = datetime.fromisoformat(record.ttl_expires.replace("Z", "")).replace(tzinfo=None)
+            if now > ttl_dt:
+                # Expired: remove and return False
+                skill_id, metric_name = found_at
+                if skill_id in self.pending_approvals and metric_name in self.pending_approvals[skill_id]:
+                    del self.pending_approvals[skill_id][metric_name]
+                logger.warning(
+                    f"[L5 Approval] Approval {approval_id} expired; removed from queue"
+                )
+                return False
+
+            # Create NEW record with updated fields (immutable pattern)
+            skill_id, metric_name = found_at
+            new_record = OperatorApprovalRecord(
+                approval_id=record.approval_id,
+                scrubbed_alert=record.scrubbed_alert,
+                decision=ApprovalDecision.APPROVED,  # Updated
+                operator_id=operator_id,  # Updated
+                operator_timestamp=now.isoformat() + "Z",  # Updated
+                prev_config_hash=record.prev_config_hash,
+                next_config_hash=record.next_config_hash,
+                ttl_expires=record.ttl_expires,
+                audit_event_id=record.audit_event_id,
             )
-            # Remove from pending
-            skill_id = record.scrubbed_alert.skill_id
-            metric_name = record.scrubbed_alert.metric_name
-            if skill_id in self.pending_approvals and metric_name in self.pending_approvals[skill_id]:
-                del self.pending_approvals[skill_id][metric_name]
-            return False
 
-        # CAS: Update decision atomically
-        record.decision = ApprovalDecision.APPROVED
-        record.operator_id = operator_id
-        record.operator_timestamp = now.isoformat() + "Z"
+            # AUDIT-FIRST: write event before state mutation
+            audit_event = {
+                "tenant_id": self.tenant_id,
+                "event_type": "skill_approval_granted",
+                "approval_id": approval_id,
+                "operator_id": operator_id,
+                "skill_id": skill_id,
+                "metric_name": metric_name,
+            }
 
-        # Move to history
-        skill_id = record.scrubbed_alert.skill_id
-        metric_name = record.scrubbed_alert.metric_name
-        if skill_id in self.pending_approvals and metric_name in self.pending_approvals[skill_id]:
-            del self.pending_approvals[skill_id][metric_name]
-
-        self.approval_history.append(record)
-
-        logger.info(
-            f"[L5 Approval] Operator {operator_id} approved {skill_id}.{metric_name} "
-            f"(approval_id={approval_id})"
-        )
-
-        # Audit trail
-        if audit_backend:
             try:
-                audit_backend.write_event({
-                    "tenant_id": self.tenant_id,
-                    "event_type": "skill_approval_granted",
-                    "approval_id": approval_id,
-                    "operator_id": operator_id,
-                    "skill_id": skill_id,
-                    "metric_name": metric_name,
-                })
+                self.audit_backend.write_event(audit_event)
             except Exception as e:
-                logger.error(f"[L5 Audit] Failed to write approval_granted event: {e}")
+                logger.error(
+                    f"[L5 Audit] Failed to write approval_granted event for {approval_id}: {e}"
+                )
+                # Fail-closed: do NOT update state if audit fails
+                raise RuntimeError(
+                    f"[L5 Approval] FATAL: audit failed; approval NOT granted (fail-closed)."
+                )
 
-        return True
+            # State mutation AFTER successful audit (under lock)
+            del self.pending_approvals[skill_id][metric_name]
+            self.approval_history.append(new_record)
+
+            logger.info(
+                f"[L5 Approval] Operator {operator_id} approved {skill_id}.{metric_name}"
+            )
+
+            return True
 
     def operator_reject(
         self,
         approval_id: str,
         operator_id: str,
         reason: str = "",
-        audit_backend=None,
     ) -> bool:
         """
-        Operator explicitly rejects a pending request.
+        Operator explicitly rejects a pending request (AUDIT-FIRST).
 
         Args:
             approval_id: UUID of the pending approval
-            operator_id: Who is rejecting
-            reason: Optional explanation for rejection
-            audit_backend: Optional audit backend
+            operator_id: Who is rejecting, must match pattern
+            reason: Optional explanation (max 500 chars)
 
         Returns:
-            True if rejected, False if not found or already expired
+            True if rejected, False if not found
         """
-        record = None
-        for skill_dict in self.pending_approvals.values():
-            for r in list(skill_dict.values()):
-                if r.approval_id == approval_id:
-                    record = r
+        # Validate operator_id
+        self._validate_inputs("a" * 64, "b" * 64, operator_id, 0.5)
+
+        if reason and len(reason) > 500:
+            raise ValueError(f"reason too long (max 500 chars): {len(reason)}")
+
+        with self._lock:
+            # Find in pending
+            record = None
+            found_at = None
+            for skill_id, metric_dict in self.pending_approvals.items():
+                for metric_name, r in list(metric_dict.items()):
+                    if r.approval_id == approval_id:
+                        record = r
+                        found_at = (skill_id, metric_name)
+                        break
+                if record:
                     break
 
-        if not record:
-            logger.warning(f"[L5 Approval] Approval {approval_id} not found in pending queue")
-            return False
+            if not record:
+                logger.warning(f"[L5 Approval] Approval {approval_id} not found")
+                return False
 
-        # Update decision
-        record.decision = ApprovalDecision.REJECTED
-        record.operator_id = operator_id
-        record.operator_timestamp = datetime.utcnow().isoformat() + "Z"
+            skill_id, metric_name = found_at
 
-        # Move to history
-        skill_id = record.scrubbed_alert.skill_id
-        metric_name = record.scrubbed_alert.metric_name
-        if skill_id in self.pending_approvals and metric_name in self.pending_approvals[skill_id]:
-            del self.pending_approvals[skill_id][metric_name]
+            # Create NEW record with updated fields
+            new_record = OperatorApprovalRecord(
+                approval_id=record.approval_id,
+                scrubbed_alert=record.scrubbed_alert,
+                decision=ApprovalDecision.REJECTED,  # Updated
+                operator_id=operator_id,  # Updated
+                operator_timestamp=datetime.utcnow().isoformat() + "Z",  # Updated
+                prev_config_hash=record.prev_config_hash,
+                next_config_hash=record.next_config_hash,
+                ttl_expires=record.ttl_expires,
+                audit_event_id=record.audit_event_id,
+            )
 
-        self.approval_history.append(record)
+            # AUDIT-FIRST
+            audit_event = {
+                "tenant_id": self.tenant_id,
+                "event_type": "skill_approval_denied",
+                "approval_id": approval_id,
+                "operator_id": operator_id,
+                "skill_id": skill_id,
+                "metric_name": metric_name,
+                "reason": reason,
+            }
 
-        logger.info(
-            f"[L5 Approval] Operator {operator_id} rejected {skill_id}.{metric_name} "
-            f"(approval_id={approval_id}, reason={reason})"
-        )
-
-        # Audit trail
-        if audit_backend:
             try:
-                audit_backend.write_event({
-                    "tenant_id": self.tenant_id,
-                    "event_type": "skill_approval_denied",
-                    "approval_id": approval_id,
-                    "operator_id": operator_id,
-                    "skill_id": skill_id,
-                    "metric_name": metric_name,
-                    "reason": reason,
-                })
+                self.audit_backend.write_event(audit_event)
             except Exception as e:
-                logger.error(f"[L5 Audit] Failed to write approval_denied event: {e}")
+                logger.error(f"[L5 Audit] write_event failed: {e}")
+                raise RuntimeError(f"[L5 Approval] FATAL: audit failed; state NOT mutated (fail-closed).")
 
-        return True
+            # State mutation AFTER audit
+            del self.pending_approvals[skill_id][metric_name]
+            self.approval_history.append(new_record)
+
+            logger.info(
+                f"[L5 Approval] Operator {operator_id} rejected {skill_id}.{metric_name}"
+            )
+
+            return True
 
     def operator_revoke(
         self,
@@ -654,20 +758,31 @@ class OperatorApprovalGate:
             f"approval (approval_id={approval_id}, reason={reason})"
         )
 
-        # Audit trail
-        if audit_backend:
-            try:
-                audit_backend.write_event({
-                    "tenant_id": self.tenant_id,
-                    "event_type": "skill_approval_revoked",
-                    "approval_id": approval_id,
-                    "operator_id": operator_id,
-                    "skill_id": skill_id,
-                    "metric_name": metric_name,
-                    "reason": reason,
-                })
-            except Exception as e:
-                logger.error(f"[L5 Audit] Failed to write approval_revoked event: {e}")
+        # AUDIT-FIRST: write event before state mutation
+        audit_event = {
+            "tenant_id": self.tenant_id,
+            "event_type": "skill_approval_revoked",
+            "approval_id": approval_id,
+            "operator_id": operator_id,
+            "skill_id": skill_id,
+            "metric_name": metric_name,
+            "reason": reason,
+        }
+
+        try:
+            self.audit_backend.write_event(audit_event)
+        except Exception as e:
+            logger.error(f"[L5 Audit] write_event failed: {e}")
+            raise RuntimeError(f"[L5 Approval] FATAL: audit failed; state NOT mutated (fail-closed).")
+
+        # State mutation AFTER audit: mark as revoked
+        record.decision = ApprovalDecision.REVOKED
+        record.revoke_timestamp = datetime.utcnow().isoformat() + "Z"
+        record.revoke_reason = reason
+
+        logger.warning(
+            f"[L5 Approval] Operator {operator_id} revoked {skill_id}.{metric_name}"
+        )
 
         return True
 
@@ -675,24 +790,30 @@ class OperatorApprovalGate:
         """
         Get all pending approvals (optionally filtered by skill_id).
 
+        Returns a COPY to prevent external mutation of internal state.
+        Thread-safe: uses lock to prevent iterator invalidation.
+
         Args:
             skill_id: Optional filter
 
         Returns:
-            List of pending OperatorApprovalRecord
+            List of pending OperatorApprovalRecord (copy, immutable)
         """
-        result = []
-        if skill_id:
-            if skill_id in self.pending_approvals:
-                result.extend(self.pending_approvals[skill_id].values())
-        else:
-            for skill_dict in self.pending_approvals.values():
-                result.extend(skill_dict.values())
-        return result
+        with self._lock:
+            result = []
+            if skill_id:
+                if skill_id in self.pending_approvals:
+                    result.extend(self.pending_approvals[skill_id].values())
+            else:
+                for skill_dict in self.pending_approvals.values():
+                    result.extend(skill_dict.values())
+            return result  # Returns copy
 
     def get_approval_status(self, approval_id: str) -> Optional[OperatorApprovalRecord]:
         """
         Get status of a specific approval (pending or historical).
+
+        Thread-safe: uses lock to prevent iterator invalidation.
 
         Args:
             approval_id: UUID of approval
@@ -700,15 +821,16 @@ class OperatorApprovalGate:
         Returns:
             OperatorApprovalRecord if found, None otherwise
         """
-        # Check pending
-        for skill_dict in self.pending_approvals.values():
-            for r in skill_dict.values():
+        with self._lock:
+            # Check pending
+            for skill_dict in self.pending_approvals.values():
+                for r in skill_dict.values():
+                    if r.approval_id == approval_id:
+                        return r
+
+            # Check history
+            for r in self.approval_history:
                 if r.approval_id == approval_id:
                     return r
-
-        # Check history
-        for r in self.approval_history:
-            if r.approval_id == approval_id:
-                return r
 
         return None
