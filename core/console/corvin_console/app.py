@@ -590,8 +590,10 @@ def create_app() -> FastAPI:
             )
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).error("Failed to bootstrap session manager: %s", exc)
-            # Don't fail the startup — sessions will work but won't be recovered
+            logger = logging.getLogger(__name__)
+            logger.error("❌ CRITICAL: Failed to bootstrap session manager: %s", exc)
+            logger.error("Cannot start console without session recovery.")
+            raise  # CRITICAL FIX: Fail startup on bootstrap failure (HIGH #9)
 
         yield
 

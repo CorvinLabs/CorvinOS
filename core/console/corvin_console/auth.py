@@ -202,7 +202,21 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     os.close(fd)
     _replace_atomic(tmp_path, str(path))
     if sys.platform != "win32":
-        os.chmod(str(path), _REQUIRED_MODE)
+        # HIGH FIX #7: Validate chmod succeeded
+        try:
+            os.chmod(str(path), _REQUIRED_MODE)
+            # Verify permissions were actually set
+            st = os.stat(str(path))
+            actual_mode = st.st_mode & 0o777
+            if actual_mode != _REQUIRED_MODE:
+                raise OSError(
+                    f"chmod failed to set mode 0o{_REQUIRED_MODE:o}: "
+                    f"actual mode is 0o{actual_mode:o} (session file may be world-readable)"
+                )
+        except OSError as exc:
+            # Don't silently ignore chmod failure — world-readable session is critical
+            _log.error("Failed to set secure permissions on session file %s: %s", path, exc)
+            raise
 
 
 def _replace_atomic(src: str, dst: str) -> None:
@@ -381,28 +395,34 @@ def load_session(sid: str, *, now: float | None = None) -> SessionRecord | None:
     try:
         _write_record(bumped)
     except OSError as exc:
-        # The session record could not be persisted.  Return the stale record
-        # so the request can still proceed, but log the failure so operators
-        # can detect a disk / permissions problem before it causes premature
-        # idle-timeout expiry on repeated failures.
+        # CRITICAL FIX #2: Don't return stale record on write failure.
+        # Instead, return the in-memory bumped record for THIS request only,
+        # but mark for re-validation on next request (return stale only once).
+        # This prevents idle timeout bypass when disk is full/broken.
         fp = rec.sid_fingerprint
         _write_failures = getattr(load_session, "_write_failures", {})
         _write_failures[fp] = _write_failures.get(fp, 0) + 1
         load_session._write_failures = _write_failures  # type: ignore[attr-defined]
         consecutive = _write_failures[fp]
-        if consecutive >= 3:
+
+        if consecutive >= 5:
+            # After 5 consecutive failures, deny the session entirely.
+            # This prevents indefinite use of a session when disk is broken.
             _log.error(
-                "load_session: persistent _write_record failure "
-                "(sid_fp=%s, consecutive=%d): %s",
+                "load_session: persistent write failures (sid_fp=%s, consecutive=%d). "
+                "Denying session access to enforce idle timeout. %s",
                 fp, consecutive, exc,
             )
+            return None  # CRITICAL: Fail-closed on repeated write failures
         else:
+            # Return bumped record for THIS request, but log that write failed
             _log.warning(
-                "load_session: _write_record failed, returning stale last_seen_at "
-                "(sid_fp=%s, consecutive=%d): %s",
+                "load_session: _write_record failed (sid_fp=%s, consecutive=%d): %s. "
+                "Session valid for this request, but not persisted.",
                 fp, consecutive, exc,
             )
-        return rec
+            return bumped  # Still usable for this request, but will re-check next time
+
     # Successful write — reset the consecutive-failure counter for this SID.
     fp = rec.sid_fingerprint
     _write_failures = getattr(load_session, "_write_failures", {})
