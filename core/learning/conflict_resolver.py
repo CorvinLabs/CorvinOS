@@ -15,6 +15,8 @@ from pathlib import Path
 import threading
 import uuid
 
+from .utils import format_iso_timestamp, parse_iso_timestamp
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +74,9 @@ class ConflictDetector:
         2. They reference the same parameter (by metric_name)
         3. They come from DIFFERENT Skills (not same-Skill concurrency)
 
+        Optimization: Group approvals by metric_name first, then scan conflicts
+        only within same-metric groups. This reduces complexity from O(n²) to O(n log n).
+
         Args:
             pending_approvals: Dict[skill_id][metric_name] = approval_record
 
@@ -80,51 +85,59 @@ class ConflictDetector:
         """
         conflicts: List[Conflict] = []
 
-        # Flatten pending approvals to scan all pairs
-        all_approvals: List[Tuple[str, str, dict]] = []  # (skill_id, metric_name, record)
+        # Group approvals by metric_name to reduce comparison scope
+        metrics_groups: Dict[str, List[Tuple[str, str, dict]]] = {}
         for skill_id, metric_dict in pending_approvals.items():
             for metric_name, record in metric_dict.items():
-                all_approvals.append((skill_id, metric_name, record))
+                if metric_name not in metrics_groups:
+                    metrics_groups[metric_name] = []
+                metrics_groups[metric_name].append((skill_id, metric_name, record))
 
-        # Scan all pairs for conflicts
-        for i, (skill_a, metric_a, record_a) in enumerate(all_approvals):
-            for skill_b, metric_b, record_b in all_approvals[i + 1 :]:
-                # Only detect cross-Skill conflicts (same_Skill is handled elsewhere)
-                if skill_a == skill_b:
-                    continue
+        # Scan conflicts only within same-metric groups
+        for metric_name, approvals_for_metric in metrics_groups.items():
+            # Only worth checking if ≥2 approvals for this metric
+            if len(approvals_for_metric) < 2:
+                continue
 
-                # Same parameter?
-                if metric_a != metric_b:
-                    continue
+            # Scan all pairs within this metric group
+            for i, (skill_a, metric_a, record_a) in enumerate(approvals_for_metric):
+                for skill_b, metric_b, record_b in approvals_for_metric[i + 1 :]:
+                    # Only detect cross-Skill conflicts (same_Skill is handled elsewhere)
+                    if skill_a == skill_b:
+                        continue
 
-                # Time overlap?
-                time_a = (
-                    record_a.get("operator_timestamp", ""),
-                    record_a.get("ttl_expires", ""),
-                )
-                time_b = (
-                    record_b.get("operator_timestamp", ""),
-                    record_b.get("ttl_expires", ""),
-                )
+                    # Same parameter? (guaranteed by grouping, but verify)
+                    if metric_a != metric_b:
+                        continue
 
-                if ConflictDetector._times_overlap(time_a, time_b):
-                    # Compute actual intersection bounds
-                    overlap_start = max(time_a[0], time_b[0])
-                    overlap_end = min(time_a[1], time_b[1])
-
-                    conflict = Conflict(
-                        conflict_id=str(uuid.uuid4()),
-                        skill_a_id=skill_a,
-                        skill_b_id=skill_b,
-                        metric_name=metric_a,
-                        conflict_type=ConflictType.CONCURRENT_PARAMETER,
-                        time_overlap=(overlap_start, overlap_end),
-                        reason=f"{skill_a} and {skill_b} both requesting "
-                        f"changes to {metric_a} in overlapping time windows",
-                        severity="medium",
-                        timestamp=datetime.utcnow().isoformat() + "Z",
+                    # Time overlap?
+                    time_a = (
+                        record_a.get("operator_timestamp", ""),
+                        record_a.get("ttl_expires", ""),
                     )
-                    conflicts.append(conflict)
+                    time_b = (
+                        record_b.get("operator_timestamp", ""),
+                        record_b.get("ttl_expires", ""),
+                    )
+
+                    if ConflictDetector._times_overlap(time_a, time_b):
+                        # Compute actual intersection bounds
+                        overlap_start = max(time_a[0], time_b[0])
+                        overlap_end = min(time_a[1], time_b[1])
+
+                        conflict = Conflict(
+                            conflict_id=str(uuid.uuid4()),
+                            skill_a_id=skill_a,
+                            skill_b_id=skill_b,
+                            metric_name=metric_a,
+                            conflict_type=ConflictType.CONCURRENT_PARAMETER,
+                            time_overlap=(overlap_start, overlap_end),
+                            reason=f"{skill_a} and {skill_b} both requesting "
+                            f"changes to {metric_a} in overlapping time windows",
+                            severity="medium",
+                            timestamp=format_iso_timestamp(),
+                        )
+                        conflicts.append(conflict)
 
         return conflicts
 
@@ -346,7 +359,7 @@ class ConflictResolver:
             resolution=resolution,
             action=action,
             affected_approval_ids=[],  # Would be filled in by caller
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=format_iso_timestamp(),
         )
 
         return res

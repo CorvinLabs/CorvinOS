@@ -16,6 +16,13 @@ from pathlib import Path
 import threading
 import os
 
+from .utils import (
+    format_iso_timestamp,
+    parse_iso_timestamp,
+    format_time_remaining,
+    parse_time_remaining_string,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,14 +112,16 @@ class RollbackGuard:
         # Thread safety
         self._lock = threading.RLock()
 
-        # Per-Skill hold period config (in hours)
-        self.skill_hold_config: Dict[str, int] = {}  # skill_id -> hours
-
         # Per-Skill criticality (inferred or explicit)
         self.skill_criticality: Dict[str, Criticality] = {}  # skill_id -> Criticality
 
-        # Approval tracking: approval_id -> approval_timestamp
-        self.approval_apply_times: Dict[str, str] = {}
+        # Approval tracking: approval_id -> (apply_timestamp, hold_hours)
+        # Changed from Dict[str, str] to include hold hours with each approval
+        # This prevents multiple approvals for same skill from overwriting hold periods
+        self.approval_apply_times: Dict[str, Tuple[str, int]] = {}
+
+        # Track total approval count per skill for override rate calculation
+        self.approval_count_by_skill: Dict[str, int] = {}
 
         # Override metrics for learning
         self.override_metrics: Dict[str, OverrideMetrics] = {}
@@ -160,7 +169,7 @@ class RollbackGuard:
                     "approval_id": decision.approval_id,
                     "allowed": decision.allowed,
                     "reason": decision.reason,
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "timestamp": format_iso_timestamp(),
                 }
                 f.write(json.dumps(record) + "\n")
         except Exception as e:
@@ -200,50 +209,48 @@ class RollbackGuard:
             custom_hold_hours: Override default hold period (None = use default)
         """
         with self._lock:
-            # Record approval apply time
-            self.approval_apply_times[approval_id] = datetime.utcnow().isoformat() + "Z"
-
             # Store criticality
             self.skill_criticality[skill_id] = criticality
 
-            # Store hold period (custom or default)
-            if custom_hold_hours is not None:
-                self.skill_hold_config[skill_id] = custom_hold_hours
-            else:
-                self.skill_hold_config[skill_id] = DEFAULT_HOLD_HOURS[criticality]
+            # Determine hold period (custom or default)
+            hold_hours = custom_hold_hours if custom_hold_hours is not None else DEFAULT_HOLD_HOURS[criticality]
+
+            # Record approval with its hold period (prevents overwrites for multiple approvals)
+            self.approval_apply_times[approval_id] = (format_iso_timestamp(), hold_hours)
+
+            # Track total approval count per skill (for override rate calculation)
+            self.approval_count_by_skill[skill_id] = self.approval_count_by_skill.get(skill_id, 0) + 1
 
             logger.info(
                 f"[L5 Rollback] Registered {approval_id} for {skill_id} "
-                f"(hold={self.skill_hold_config[skill_id]}h)"
+                f"(hold={hold_hours}h)"
             )
 
     def can_revoke(
         self, approval_id: str, skill_id: str
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> Tuple[bool, Optional[timedelta]]:
         """Check if an approval can be revoked (normal, non-forced).
 
         Returns:
-            (allowed, reason_or_time_remaining)
+            (allowed, time_remaining)
             - If allowed: (True, None)
-            - If blocked by hold: (False, "HH:MM:SS until allowed")
+            - If blocked by hold: (False, timedelta_until_allowed)
         """
         with self._lock:
             # Check if approval exists
             if approval_id not in self.approval_apply_times:
-                return (False, "Approval not found")
+                return (False, None)  # Approval not found — cannot revoke
 
-            # Get hold period for this Skill
-            hold_hours = self.skill_hold_config.get(skill_id, 12)
+            # Get approval timestamp and hold hours
+            apply_timestamp, hold_hours = self.approval_apply_times[approval_id]
 
             # Compute elapsed time (with error handling for malformed timestamps)
             try:
-                apply_time = datetime.fromisoformat(
-                    self.approval_apply_times[approval_id].replace("Z", "")
-                )
-            except (ValueError, TypeError) as e:
+                apply_time = parse_iso_timestamp(apply_timestamp)
+            except ValueError as e:
                 logger.warning(f"[L5 Rollback] Malformed timestamp for {approval_id}: {e}; cannot revoke yet")
-                # Graceful degradation: assume infinite remaining time (cannot revoke)
-                return (False, "inf (malformed timestamp)")
+                # Graceful degradation: return False with large remaining time
+                return (False, timedelta(days=365))
 
             now = datetime.utcnow()
             elapsed = now - apply_time
@@ -253,11 +260,7 @@ class RollbackGuard:
             if elapsed < hold_period:
                 # Still in hold period
                 remaining = hold_period - elapsed
-                hours, remainder = divmod(remaining.total_seconds(), 3600)
-                minutes, seconds = divmod(remainder, 60)
-
-                reason = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d} remaining"
-                return (False, reason)
+                return (False, remaining)
 
             # Hold period expired — allow normal revoke
             return (True, None)
@@ -306,15 +309,21 @@ class RollbackGuard:
 
         with self._lock:
             # Check hold period
-            can_revoke, time_remaining = self.can_revoke(approval_id, skill_id)
+            is_allowed, time_remaining = self.can_revoke(approval_id, skill_id)
 
-            if not can_revoke and not force:
+            if not is_allowed and not force:
                 # Blocked by hold — advise but don't execute
+                time_remaining_secs = None
+                reason_msg = "Hold period not expired."
+                if time_remaining:
+                    reason_msg += f" Time remaining: {format_time_remaining(time_remaining)}"
+                    time_remaining_secs = int(time_remaining.total_seconds())
+
                 return RollbackDecision(
                     approval_id=approval_id,
                     allowed=False,
-                    reason=f"Hold period not expired. Time remaining: {time_remaining}",
-                    time_remaining_seconds=self._parse_time_remaining(time_remaining),
+                    reason=reason_msg,
+                    time_remaining_seconds=time_remaining_secs,
                 )
 
             # Audit-first: log the revoke request
@@ -340,13 +349,10 @@ class RollbackGuard:
             # Determine if this is a normal or forced revoke
             if force:
                 # Forced revoke — compute override metrics
-                apply_time = datetime.fromisoformat(
-                    self.approval_apply_times[approval_id].replace("Z", "")
-                )
+                apply_timestamp, hold_hours = self.approval_apply_times[approval_id]
+                apply_time = parse_iso_timestamp(apply_timestamp)
                 now = datetime.utcnow()
                 elapsed = (now - apply_time).total_seconds()
-
-                hold_hours = self.skill_hold_config.get(skill_id, 12)
                 hold_seconds = hold_hours * 3600
 
                 metrics = OverrideMetrics(
@@ -354,7 +360,7 @@ class RollbackGuard:
                     approval_id=approval_id,
                     time_into_hold_seconds=int(elapsed),
                     hold_period_configured_seconds=int(hold_seconds),
-                    timestamp=datetime.utcnow().isoformat() + "Z",
+                    timestamp=format_iso_timestamp(),
                 )
 
                 # Audit-first: log the force-revoke BEFORE persistence
@@ -398,45 +404,12 @@ class RollbackGuard:
                 approval_id=approval_id,
                 allowed=True,
                 reason="Revoke allowed" if not force else f"Force-revoked: {reason}",
-                override_timestamp=(
-                    datetime.utcnow().isoformat() + "Z" if force else None
-                ),
+                override_timestamp=format_iso_timestamp() if force else None,
             )
 
             self._persist_decision(decision)
 
             return decision
-
-    def _parse_time_remaining(self, time_str: str) -> Optional[int]:
-        """Parse time remaining string and return total seconds.
-
-        Args:
-            time_str: Format "HH:MM:SS remaining", or special strings like "Approval not found", "inf"
-
-        Returns:
-            Total seconds, or None if parse fails / special string
-        """
-        if not time_str or not isinstance(time_str, str):
-            return None
-
-        # Handle special cases
-        if "inf" in time_str.lower() or "not found" in time_str.lower():
-            return None  # Cannot revoke
-
-        try:
-            parts = time_str.split(":")[: 3]  # HH:MM:SS
-            if len(parts) < 3:
-                # Not in HH:MM:SS format
-                return None
-
-            hours = int(parts[0])
-            minutes = int(parts[1])
-            seconds = int(parts[2].split()[0])  # Extract digits before " remaining"
-
-            return hours * 3600 + minutes * 60 + seconds
-        except (ValueError, IndexError, AttributeError, TypeError):
-            logger.warning(f"[L5 Rollback] Could not parse time_remaining: {time_str!r}")
-            return None
 
     def get_override_metrics(self, skill_id: str) -> Dict[str, OverrideMetrics]:
         """Get all override metrics for a Skill.
@@ -454,18 +427,27 @@ class RollbackGuard:
     def compute_override_rate(self, skill_id: str) -> Tuple[float, int]:
         """Compute override rate for a Skill.
 
+        Override rate = (count of overrides before hold expired) / total_approvals
+
         Returns:
             (override_rate [0.0, 1.0], sample_size)
         """
         metrics_list = self.get_override_metrics(skill_id)
+        total_approvals = self.approval_count_by_skill.get(skill_id, 0)
 
-        # For now, return metrics based on what we have
-        # In production, this would query approval history
-        if not metrics_list:
+        if total_approvals == 0:
             return 0.0, 0
 
-        # Placeholder: return sample size and 0.0 rate (no overrides yet)
-        return 0.0, len(metrics_list)
+        # Count overrides that happened before hold period expired
+        early_overrides = 0
+        for approval_id, metrics in metrics_list.items():
+            # If time_into_hold_seconds < hold_period_configured_seconds,
+            # then the override happened before hold expired
+            if metrics.time_into_hold_seconds < metrics.hold_period_configured_seconds:
+                early_overrides += 1
+
+        override_rate = min(1.0, early_overrides / max(1, total_approvals))
+        return override_rate, total_approvals
 
     def suggest_hold_adjustment(self, skill_id: str) -> Optional[int]:
         """Suggest new hold period based on override metrics.
