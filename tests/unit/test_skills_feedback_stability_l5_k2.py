@@ -59,7 +59,6 @@ class TestAuditLinearity:
             confidence=0.5,
             prev_config_hash="abc123",
             next_config_hash="def456",
-            audit_backend=audit,
         )
 
         # Verify audit event was logged
@@ -71,8 +70,8 @@ class TestAuditLinearity:
 
     def test_approval_decision_emits_audit_event(self):
         """Operator approval should emit audit event."""
-        gate = OperatorApprovalGate()
         audit = MockAuditBackend()
+        gate = OperatorApprovalGate(tenant_id="test_tenant", audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -85,14 +84,13 @@ class TestAuditLinearity:
         record, _ = gate.request_approval(
             drift,
             confidence=0.5,  # Below auto-threshold
-            prev_config_hash="abc",
-            next_config_hash="def",
-            audit_backend=audit,
+            prev_config_hash="abc123",
+            next_config_hash="def456",
         )
 
         # Operator approves
         approval_id = record.approval_id
-        gate.operator_approve(approval_id, "operator:alice", audit_backend=audit)
+        gate.operator_approve(approval_id, "operator:alice")
 
         events = audit.get_events_by_type("skill_approval_granted")
         assert len(events) == 1

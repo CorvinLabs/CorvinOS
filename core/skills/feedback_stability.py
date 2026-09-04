@@ -355,8 +355,9 @@ class OperatorApprovalGate:
             raise ValueError(f"next_config_hash must be valid SHA256 hex, got: {next_hash}")
 
         # Validate operator_id (alphanumeric + special chars, no newlines/nulls)
-        if operator_id and not re.match(r'^[a-z0-9._\-:]{3,50}$', operator_id):
-            raise ValueError(f"operator_id must match pattern ^[a-z0-9._\\-:]{{3,50}}$, got: {operator_id}")
+        # CRITICAL: empty string must fail (prevents untraceable approvals)
+        if not operator_id or not re.match(r'^[a-z0-9._\-:]{3,50}$', operator_id):
+            raise ValueError(f"operator_id must match pattern ^[a-z0-9._\\-:]{{3,50}}$, got: {operator_id!r}")
 
         # Validate confidence is finite
         if not (0.0 <= confidence <= 1.0 and math.isfinite(confidence)):
@@ -709,80 +710,76 @@ class OperatorApprovalGate:
         approval_id: str,
         operator_id: str,
         reason: str = "",
-        audit_backend=None,
     ) -> bool:
         """
-        Operator revokes a previously-approved config change.
+        Operator revokes a previously-approved config change (AUDIT-FIRST, THREAD-SAFE).
 
         Constraint #5: Operator Can Revert
 
-        Implementation: Update the approval record to REVOKED, emit audit event.
-        Skill should fallback to last_approved_configs.
-
         Args:
             approval_id: UUID of the approval to revoke
-            operator_id: Who is revoking
-            reason: Explanation for revocation
-            audit_backend: Optional audit backend
+            operator_id: Who is revoking, must match pattern
+            reason: Explanation for revocation (max 500 chars)
 
         Returns:
             True if revoked, False if not found or not currently approved
         """
-        record = None
-        for r in self.approval_history:
-            if r.approval_id == approval_id:
-                record = r
-                break
+        # Validate operator_id
+        self._validate_inputs("a" * 64, "b" * 64, operator_id, 0.5)
 
-        if not record:
-            logger.warning(f"[L5 Approval] Approval {approval_id} not found in history")
-            return False
+        if reason and len(reason) > 500:
+            raise ValueError(f"reason too long (max 500 chars): {len(reason)}")
 
-        if record.decision != ApprovalDecision.APPROVED:
+        with self._lock:
+            record = None
+            for r in self.approval_history:
+                if r.approval_id == approval_id:
+                    record = r
+                    break
+
+            if not record:
+                logger.warning(f"[L5 Approval] Approval {approval_id} not found")
+                return False
+
+            if record.decision != ApprovalDecision.APPROVED:
+                logger.warning(
+                    f"[L5 Approval] Approval {approval_id} is {record.decision.value}, "
+                    f"cannot revoke non-approved"
+                )
+                return False
+
+            skill_id = record.scrubbed_alert.skill_id
+            metric_name = record.scrubbed_alert.metric_name
+
+            # AUDIT-FIRST: write event before state mutation
+            audit_event = {
+                "tenant_id": self.tenant_id,
+                "event_type": "skill_approval_revoked",
+                "approval_id": approval_id,
+                "operator_id": operator_id,
+                "skill_id": skill_id,
+                "metric_name": metric_name,
+                "reason": reason,
+            }
+
+            try:
+                self.audit_backend.write_event(audit_event)
+            except Exception as e:
+                logger.error(f"[L5 Audit] write_event failed: {e}")
+                raise RuntimeError(f"[L5 Approval] FATAL: audit failed; state NOT mutated (fail-closed).")
+
+            # State mutation AFTER audit: create new record (immutable pattern)
+            # Note: We update the EXISTING record in-place because approval_history is append-only
+            # and record mutations are only visible through get_approval_status() which scans the list.
+            # To maintain true immutability, we would need to rebuild history, but that's expensive.
+            # For now: document the limitation and protect via locks.
+            record.decision = ApprovalDecision.REVOKED
+            record.revoke_timestamp = datetime.utcnow().isoformat() + "Z"
+            record.revoke_reason = reason
+
             logger.warning(
-                f"[L5 Approval] Approval {approval_id} is {record.decision.value}, "
-                f"cannot revoke non-approved decision"
+                f"[L5 Approval] Operator {operator_id} revoked {skill_id}.{metric_name}"
             )
-            return False
-
-        # Revoke
-        record.decision = ApprovalDecision.REVOKED
-        record.revoke_timestamp = datetime.utcnow().isoformat() + "Z"
-        record.revoke_reason = reason
-
-        skill_id = record.scrubbed_alert.skill_id
-        metric_name = record.scrubbed_alert.metric_name
-
-        logger.warning(
-            f"[L5 Approval] Operator {operator_id} revoked {skill_id}.{metric_name} "
-            f"approval (approval_id={approval_id}, reason={reason})"
-        )
-
-        # AUDIT-FIRST: write event before state mutation
-        audit_event = {
-            "tenant_id": self.tenant_id,
-            "event_type": "skill_approval_revoked",
-            "approval_id": approval_id,
-            "operator_id": operator_id,
-            "skill_id": skill_id,
-            "metric_name": metric_name,
-            "reason": reason,
-        }
-
-        try:
-            self.audit_backend.write_event(audit_event)
-        except Exception as e:
-            logger.error(f"[L5 Audit] write_event failed: {e}")
-            raise RuntimeError(f"[L5 Approval] FATAL: audit failed; state NOT mutated (fail-closed).")
-
-        # State mutation AFTER audit: mark as revoked
-        record.decision = ApprovalDecision.REVOKED
-        record.revoke_timestamp = datetime.utcnow().isoformat() + "Z"
-        record.revoke_reason = reason
-
-        logger.warning(
-            f"[L5 Approval] Operator {operator_id} revoked {skill_id}.{metric_name}"
-        )
 
         return True
 
@@ -790,14 +787,17 @@ class OperatorApprovalGate:
         """
         Get all pending approvals (optionally filtered by skill_id).
 
-        Returns a COPY to prevent external mutation of internal state.
-        Thread-safe: uses lock to prevent iterator invalidation.
+        Returns a LIST of records (mutable dataclass references).
+        WARNING: Caller should NOT mutate returned records. Mutation without lock violation.
+        For truly immutable interface, freeze records or return dicts (not implemented).
+
+        Thread-safe: uses lock to prevent iterator invalidation during scan.
 
         Args:
             skill_id: Optional filter
 
         Returns:
-            List of pending OperatorApprovalRecord (copy, immutable)
+            List of pending OperatorApprovalRecord references (WARNING: do not mutate)
         """
         with self._lock:
             result = []
@@ -807,7 +807,7 @@ class OperatorApprovalGate:
             else:
                 for skill_dict in self.pending_approvals.values():
                     result.extend(skill_dict.values())
-            return result  # Returns copy
+            return result  # List of references — locked scan prevents iterator invalidation
 
     def get_approval_status(self, approval_id: str) -> Optional[OperatorApprovalRecord]:
         """
