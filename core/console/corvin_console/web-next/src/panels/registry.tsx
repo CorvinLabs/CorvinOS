@@ -15,6 +15,7 @@ import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
 import { MarketplacePanel } from "./marketplace";
 import { SkillsOverviewPanel } from "@/components/SkillsOverviewPanel";
+import { ApprovalControlPanel } from "./ApprovalControlPanel";
 import { VibeDashboard } from "@/pages/vibe-engineering";
 import {
   DashboardPage, SettingsPage, EnginesPage, BrowserPage,
@@ -48,6 +49,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   ForgePage,
   SkillsPage,
   SkillsOverviewPanel: SkillsOverviewPanel as unknown as ComponentType,
+  ApprovalControlPanel: ApprovalControlPanel as unknown as ComponentType,
   PackagesPage,
   CoworkPage,
   LddPage,
@@ -159,6 +161,9 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Learning Hub", icon: "Lightbulb", group: "vibe" }, requiredFlag: "vibe_engineering" }),
   rc("session-explorer", "Session Explorer", SessionExplorerPage,
      { nav: { label: "Session Explorer", icon: "History", group: "vibe" }, requiredFlag: "vibe_engineering" }),
+  // L5 Phase 3: Approval Control Panel (ADR-0584)
+  rc("approval-control", "L5 Approvals", ApprovalControlPanel as unknown as typeof DashboardPage,
+     { nav: { label: "L5 Approvals", icon: "CheckCircle", group: "learning" }, requiredFlag: "l5_approval_panel" }),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {
