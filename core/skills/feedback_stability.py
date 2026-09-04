@@ -443,8 +443,18 @@ class OperatorApprovalGate:
             ValueError if inputs invalid (confidence, hashes, drift_alert)
             RuntimeError if audit_backend fails
         """
-        # Validate inputs (fail-closed)
-        self._validate_inputs(prev_config_hash, next_config_hash, "", confidence)
+        # Validate inputs (fail-closed) — note: don't validate operator_id here (it's set by system:auto or pending)
+        import re
+        import math
+
+        hash_pattern = re.compile(r'^[a-f0-9]{64}$')
+        if not hash_pattern.match(prev_config_hash):
+            raise ValueError(f"prev_config_hash must be valid SHA256 hex, got: {prev_config_hash}")
+        if not hash_pattern.match(next_config_hash):
+            raise ValueError(f"next_config_hash must be valid SHA256 hex, got: {next_config_hash}")
+
+        if not (0.0 <= confidence <= 1.0 and math.isfinite(confidence)):
+            raise ValueError(f"confidence must be finite in [0.0, 1.0], got: {confidence}")
 
         # Scrub alert (also validates confidence/smoothed_delta are finite)
         scrubbed = self.scrub_alert(drift_alert, confidence)
