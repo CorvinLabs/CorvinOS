@@ -218,7 +218,8 @@ class MetricsCollector:
             self._last_refresh_timestamp = datetime.utcnow()
             logger.debug(f"Metrics cache refreshed for {self.tenant_id}")
         except Exception as e:
-            logger.error(f"Failed to refresh metrics cache: {e}")
+            # BUG FIX #7: Log refresh failures with warning level for operator visibility
+            logger.warning(f"Metrics refresh failed for tenant {self.tenant_id}: {e}. Using stale cache.")
 
     def _compute_approval_latencies(self) -> Dict[str, Optional[float]]:
         """Compute latency percentiles for approval events."""
@@ -437,6 +438,10 @@ class HealthChecker:
             p99_latency = latencies.get("p99")
             is_healthy = p99_latency is None or p99_latency <= self.GATE_LATENCY_SLA_MS
 
+            # BUG FIX #6: Count total pending approvals, not number of skills
+            pending_by_skill = metrics.get("pending_by_skill", {})
+            total_pending = sum(pending_by_skill.values()) if pending_by_skill else 0
+
             status = GateHealthStatus(
                 gate_name=gate_name,
                 is_healthy=is_healthy,
@@ -445,7 +450,7 @@ class HealthChecker:
                 latency_p99_ms=latencies.get("p99"),
                 avg_latency_ms=latencies.get("avg"),
                 error_rate_pct=0.0,
-                pending_count=len(metrics.get("pending_by_skill", {})),
+                pending_count=total_pending,
                 last_check_timestamp=datetime.utcnow().isoformat(),
             )
             gates_status[gate_name] = status

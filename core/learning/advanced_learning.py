@@ -151,17 +151,23 @@ class AdvancedLearningEngine:
             BayesianUpdate with posterior distribution
         """
         with self.lock:
-            # Posteriors via Bayes' theorem (simplified conjugate prior)
-            prior_var = prior_std ** 2
-            obs_var = 0.1 ** 2  # Observation uncertainty (assume 10%)
+            # BUG FIX #1: Guard against division by zero (prior_std <= 0)
+            if prior_std <= 0.001:
+                # Uninformed prior: use observed value as posterior
+                posterior_mean = observed_accuracy
+                posterior_std = 0.1
+                confidence = 0.0
+            else:
+                # Posteriors via Bayes' theorem (simplified conjugate prior)
+                prior_var = prior_std ** 2
+                obs_var = 0.1 ** 2  # Observation uncertainty (assume 10%)
 
-            posterior_mean = (
-                prior_value / prior_var + observed_accuracy / obs_var
-            ) / (1.0 / prior_var + 1.0 / obs_var)
-            posterior_std = math.sqrt(1.0 / (1.0 / prior_var + 1.0 / obs_var))
-
-            # Confidence: how much better is posterior than prior?
-            confidence = min(1.0, 1.0 - (posterior_std / prior_std))
+                posterior_mean = (
+                    prior_value / prior_var + observed_accuracy / obs_var
+                ) / (1.0 / prior_var + 1.0 / obs_var)
+                posterior_std = math.sqrt(1.0 / (1.0 / prior_var + 1.0 / obs_var))
+                # Confidence: how much better is posterior than prior?
+                confidence = min(1.0, 1.0 - (posterior_std / prior_std))
 
             update = BayesianUpdate(
                 skill_id=skill_id,
@@ -341,6 +347,9 @@ class AdvancedLearningEngine:
             )
 
             self.drift_signals.append(signal)
+            # BUG FIX #4: Prune unbounded memory growth (keep only last 100 signals)
+            if len(self.drift_signals) > 100:
+                self.drift_signals = self.drift_signals[-100:]
 
             # Audit
             self._audit_event({
