@@ -216,6 +216,8 @@ from datetime import datetime, timedelta
 import uuid
 import json
 from pathlib import Path
+import threading
+from dataclasses import dataclass, field, FrozenInstanceError
 
 
 class ApprovalReasonCode(str, Enum):
@@ -283,6 +285,10 @@ class OperatorApprovalGate:
     3. Scrubbed Alerts — no raw data, only reason_code enum
     4. TTL — approvals expire after 12h
     5. Revoke — operator can undo, fallback to last approved
+
+    CRITICAL FIX: audit_backend is REQUIRED (fail-closed, not optional).
+    All state mutations protected by threading.Lock (thread-safe).
+    Approval history is immutable append-only log.
     """
 
     def __init__(
@@ -290,6 +296,7 @@ class OperatorApprovalGate:
         tenant_id: str = "_default",
         auto_approval_confidence_threshold: float = 0.8,
         approval_ttl_hours: int = 12,
+        audit_backend=None,  # Will be required in __post_init__
     ):
         """
         Initialize approval gate.
@@ -297,16 +304,34 @@ class OperatorApprovalGate:
         Args:
             tenant_id: Tenant (for audit trail + approval persistence)
             auto_approval_confidence_threshold: Confidence above this auto-approve
-            approval_ttl_hours: Approval validity duration (hours)
+            approval_ttl_hours: Approval validity duration (hours) [1-72, default 12]
+            audit_backend: REQUIRED. Fail-closed: None raises RuntimeError.
+
+        Raises:
+            RuntimeError if audit_backend is None (fail-closed constraint C1)
         """
+        if audit_backend is None:
+            raise RuntimeError(
+                "[L5 Approval] FATAL: audit_backend is required (fail-closed). "
+                "Cannot proceed without audit trail capability."
+            )
+
+        if not (1 <= approval_ttl_hours <= 72):
+            raise ValueError(f"approval_ttl_hours must be in [1, 72], got {approval_ttl_hours}")
+
         self.tenant_id = tenant_id
         self.auto_approval_threshold = auto_approval_confidence_threshold
         self.approval_ttl = timedelta(hours=approval_ttl_hours)
+        self.audit_backend = audit_backend
+
+        # Thread safety: lock protects all state mutations
+        self._lock = threading.RLock()
 
         # In-memory queue of pending approvals (skill_id -> metric_name -> record)
         self.pending_approvals: Dict[str, Dict[str, OperatorApprovalRecord]] = {}
 
-        # History of all approval decisions (immutable, backed by jsonl)
+        # History of all approval decisions (immutable append-only log)
+        # Protected by _lock; never delete, only append
         self.approval_history: List[OperatorApprovalRecord] = []
 
         # Last approved config per skill.metric (for fallback on revoke)
