@@ -201,8 +201,46 @@ class SessionManager:
 
         return recovered
 
+    async def cleanup_orphaned_tmp_files(self) -> None:
+        """MEDIUM: Clean up orphaned .XXX.tmp files from failed writes.
+
+        These are temporary files created by _atomic_write() that failed to rename.
+        They accumulate if disk is full or permissions are wrong.
+        """
+        sessions_dir = session_auth._sessions_dir()
+
+        if not sessions_dir.exists():
+            return
+
+        deleted = 0
+        errors = 0
+
+        try:
+            tmp_files = list(sessions_dir.glob(".*.tmp"))
+        except OSError as exc:
+            _log.warning("Failed to list tmp files for cleanup: %s", exc)
+            return
+
+        for tmp_file in tmp_files:
+            try:
+                # Only delete if older than 1 hour (safety: don't delete in-flight writes)
+                if time.time() - tmp_file.stat().st_mtime > 3600:
+                    tmp_file.unlink()
+                    deleted += 1
+                    _log.debug("Deleted orphaned tmp file: %s", tmp_file.name)
+            except OSError as exc:
+                _log.warning("Failed to delete orphaned tmp file %s: %s", tmp_file.name, exc)
+                errors += 1
+
+        if deleted > 0:
+            _log.info("Cleaned up %d orphaned tmp files (%d errors)", deleted, errors)
+
     async def cleanup_expired_sessions(self, max_age_s: int = 86400) -> None:
-        """Delete expired sessions. Intended for periodic background task."""
+        """Delete expired sessions. Intended for periodic background task.
+
+        HIGH #4: Cleanup logic now app-based (replaces shell-script heuristic).
+        HIGH #6: Validates cleanup operations and alerts on failures.
+        """
         sessions_dir = session_auth._sessions_dir()
 
         if not sessions_dir.exists():
@@ -211,6 +249,7 @@ class SessionManager:
         now = time.time()
         deleted = 0
         errors = 0
+        validation_failures = 0
 
         try:
             session_files = sorted(sessions_dir.glob("*.json"))
@@ -229,9 +268,21 @@ class SessionManager:
 
                 if rec is None:
                     # Session is expired/invalid and was already deleted by load_session
-                    # (or doesn't exist). Just count it.
-                    deleted += 1
-                    _log.debug("Expired session deleted: %s", session_file.name)
+                    # (or doesn't exist). Verify deletion succeeded.
+                    if session_file.exists():
+                        # HIGH #6: Unlink failed silently earlier — try again
+                        try:
+                            session_file.unlink()
+                            _log.debug("Deleted expired session (retry): %s", session_file.name)
+                            deleted += 1
+                        except OSError as retry_exc:
+                            _log.error("Failed to delete expired session (retry failed): %s: %s",
+                                      session_file.name, retry_exc)
+                            validation_failures += 1
+                    else:
+                        # Deletion succeeded
+                        deleted += 1
+                        _log.debug("Expired session deleted: %s", session_file.name)
 
             except session_auth.SessionStoreMalformed as exc:
                 # Corrupted file — delete it
@@ -240,14 +291,21 @@ class SessionManager:
                     deleted += 1
                     _log.warning("Deleted corrupted session %s: %s", session_file.name, exc)
                 except OSError as del_exc:
-                    _log.warning("Failed to delete corrupted session %s: %s", session_file.name, del_exc)
+                    _log.error("Failed to delete corrupted session %s: %s", session_file.name, del_exc)
                     errors += 1
+                    validation_failures += 1
             except OSError as exc:
                 _log.warning("Error checking session file %s: %s", session_file.name, exc)
                 errors += 1
 
         self._stats.last_cleanup_at = now
-        _log.info("Session cleanup complete: deleted=%d errors=%d", deleted, errors)
+        _log.info("Session cleanup complete: deleted=%d errors=%d validation_failures=%d",
+                 deleted, errors, validation_failures)
+
+        # Alert if validation failures detected
+        if validation_failures > 0:
+            _log.error("⚠️  Cleanup validation failures detected: %d. "
+                      "Check disk permissions and available space.", validation_failures)
 
     def audit_session_created(self, rec: session_auth.SessionRecord, via: str = "local-login") -> None:
         """Audit log when a session is created (CRITICAL #3: fanout to audit backend)."""

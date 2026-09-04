@@ -469,6 +469,17 @@ def end_session(sid: str, tenant_id: str | None = None) -> bool:
         return False
     try:
         path.unlink()
+        # MEDIUM: Fsync after unlink for durability (ensures metadata written)
+        if sys.platform != "win32":
+            try:
+                dirfd = os.open(str(path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dirfd)
+                finally:
+                    os.close(dirfd)
+            except OSError as sync_exc:
+                _log.warning("Failed to fsync session directory after unlink: %s", sync_exc)
+                # Non-fatal — log but don't fail the operation
         # Invalidate cache on session end
         if tenant_id is not None:
             from . import session_manager
