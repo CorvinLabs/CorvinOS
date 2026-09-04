@@ -159,22 +159,27 @@ SYSTEM = {
         "schweigt. Metaphern sind Brücken zu Vorhandenem, nicht "
         "Türen zu Neuem. Im Zweifel weglassen statt erfinden.\n"
         "\n"
-        "VOLLSTÄNDIGKEIT (zweite Regel): Niemals einen Hauptpunkt "
-        "streichen, niemals eine Liste mittendrin abbrechen, niemals "
-        "nur ein Vorschau-Snippet liefern. Wenn das Original eine Liste "
-        "ist, taucht JEDES Item im Vorlesetext auf. Wenn es einen Plan "
-        "in Schritten beschreibt, kommen alle Schritte vor. Wenn es "
-        "mehrere Phasen hat, kommen alle Phasen vor.\n"
+        "VOLLSTÄNDIGKEIT (zweite Regel): Behalte JEDEN load-bearing "
+        "Punkt, den das Original ausdrücklich nennt — jede Option, jede "
+        "benannte Konsequenz, jeden Breaking Change, jede Voraussetzung, "
+        "jede Deadline, jede betroffene Sache. Genuin nebensächliches "
+        "oder paralleles Detail darfst du zu einer Idee bündeln, so weit "
+        "der Sprech-Typ-Block es erlaubt, statt es aufzuzählen — niemals "
+        "aber einen benannten Fakt weglassen, niemals eine Liste "
+        "mittendrin abbrechen, niemals nur ein Vorschau-Snippet liefern.\n"
         "\n"
-        "DETAILTIEFE (folgt aus Treue): Die Tiefe pro Punkt ergibt sich "
-        "aus dem Original — nicht aus einem Stilziel. Ist der Punkt im "
-        "Original kompakt, bleibt er kompakt (ein Halbsatz reicht). Ist "
-        "er ausführlich, übernimm den vorhandenen Inhalt. Niemals "
-        "ausschmücken, um eine Soll-Länge zu erreichen.\n"
+        "DETAILTIEFE (folgt aus Treue): Die Tiefe pro load-bearing Punkt "
+        "ergibt sich aus dem Original — nicht aus einem Stilziel. Ist ein "
+        "Punkt im Original kompakt, bleibt er kompakt (ein Halbsatz "
+        "reicht). Ist er ausführlich, übernimm den vorhandenen Inhalt. "
+        "Wie weit du nebensächliches Detail bündelst, sagt der "
+        "Sprech-Typ-Block. Niemals ausschmücken, um eine Soll-Länge zu "
+        "erreichen.\n"
         "\n"
         "AUSWAHLMÖGLICHKEITEN sind heilig: Wenn die Antwort dem Hörer "
         "Optionen anbietet — egal ob als 'a, b, c', 'Variante 1, 2, 3', "
-        "'Option A / B', 'Stufe 1 / 2 / 3', mehrere Vorschläge oder eine "
+        "'Option A / B', 'Stufe 1 / 2 / 3', mehrere Vorschläge, eine "
+        "reine Fließtext-Wahl ('entweder … oder …') oder eine "
         "abschließende Auswahlfrage — muss JEDE Option mit Bezeichner "
         "UND der im Original genannten Kurzbeschreibung im Vorlesetext "
         "auftauchen, sodass der Hörer die Auswahl ohne Bildschirm "
@@ -284,25 +289,28 @@ SYSTEM = {
         "to what is there, not doors to what isn't. When in doubt, "
         "drop rather than invent.\n"
         "\n"
-        "COMPLETENESS (second rule): never drop a main point, never cut "
-        "a list off mid-way, never deliver a preview snippet. If the "
-        "original is a list, EVERY item appears. If it describes a plan "
-        "in steps, all steps appear. If it has multiple phases, every "
-        "phase appears.\n"
+        "COMPLETENESS (second rule): keep EVERY load-bearing point the "
+        "original calls out — every option, every named consequence, "
+        "every breaking change, every prerequisite, every deadline, every "
+        "affected item. Genuinely minor or parallel detail may be bundled "
+        "into an idea, as far as the speech-type block allows, instead of "
+        "enumerated — but never drop a called-out fact, never cut a list "
+        "off mid-way, never deliver a preview snippet.\n"
         "\n"
-        "DETAIL DEPTH (derived from faithfulness): the depth per point "
-        "follows the original, not a style target. If the original is "
-        "compact, stay compact (a clause is enough). If it is detailed, "
-        "carry over the present content. Never embellish to hit a "
-        "target length.\n"
+        "DETAIL DEPTH (derived from faithfulness): the depth per "
+        "load-bearing point follows the original, not a style target. If "
+        "the original is compact, stay compact (a clause is enough). If it "
+        "is detailed, carry over the present content. How far you bundle "
+        "minor detail is set by the speech-type block. Never embellish to "
+        "hit a target length.\n"
         "\n"
         "CHOICES ARE SACRED: when the answer offers the listener options "
         "— whether 'a, b, c', 'option A/B', 'tier 1/2/3', several "
-        "suggestions, or a closing pick-one question — EVERY option must "
-        "appear in the spoken text with its label AND the brief "
-        "description the original gives, so the listener can decide "
-        "without the screen. A closing question like 'which one do you "
-        "want?' is kept verbatim.\n"
+        "suggestions, a plain in-prose choice ('either … or …'), or a "
+        "closing pick-one question — EVERY option must appear in the "
+        "spoken text with its label AND the brief description the original "
+        "gives, so the listener can decide without the screen. A closing "
+        "question like 'which one do you want?' is kept verbatim.\n"
         "\n"
         "SPEAKING STYLE — important, the listener can't read the "
         "original and doesn't want to hear a recited list:\n"
@@ -378,11 +386,12 @@ SYSTEM_WITH_TASK = {
         "   oder Phasen, formuliere zuerst die übergeordnete Idee in "
         "   eigenen Worten und ordne die einzelnen Punkte hinein — "
         "   z.B. 'Es gibt zwei Wege …', 'Die Idee dahinter ist …', "
-        "   'Im Kern macht das …'. Vollständigkeit bleibt absolut: "
-        "   jeder Hauptpunkt, jede Option, jedes Listenelement, jede "
-        "   abschließende Auswahlfrage muss inhaltlich vorkommen — "
-        "   aber als Idee verpackt, nicht als Stichwortliste. "
-        "   Kompakte Originalstellen bleiben kompakt; ausgeschmückt "
+        "   'Im Kern macht das …'. Jeder load-bearing Punkt kommt "
+        "   inhaltlich vor — jede Option, jede benannte Konsequenz, "
+        "   jede Deadline, jede abschließende Auswahlfrage — als Idee "
+        "   verpackt, nicht als Stichwortliste; genuin nebensächliches "
+        "   Detail darfst du bündeln, so weit der Sprech-Typ-Block es "
+        "   sagt. Kompakte Originalstellen bleiben kompakt; ausgeschmückt "
         "   wird nichts. Codeschnipsel und kryptische Pfade nicht "
         "   wörtlich vorlesen, sondern in Worte fassen, sodass der "
         "   Hörer ohne Bildschirm versteht, worum es geht.\n"
@@ -418,15 +427,19 @@ SYSTEM_WITH_TASK = {
         "Brücken zu Vorhandenem, nicht Türen zu Neuem. Im Zweifel "
         "weglassen statt erfinden.\n"
         "\n"
-        "VOLLSTÄNDIGKEIT (zweite Regel): Niemals einen Hauptpunkt "
-        "streichen, niemals eine Liste mittendrin abbrechen. Wenn die "
-        "Antwort eine Liste ist, taucht JEDES Item im Vorlesetext auf. "
-        "Hat sie Schritte oder Phasen, kommen alle vor. Die Tiefe pro "
-        "Punkt folgt dem Original — kompakt bleibt kompakt.\n"
+        "VOLLSTÄNDIGKEIT (zweite Regel): Behalte jeden load-bearing "
+        "Punkt, den das Original benennt — jede Option, jede Konsequenz, "
+        "jeden Breaking Change, jede Voraussetzung, jede Deadline; "
+        "niemals einen benannten Fakt streichen, niemals eine Liste "
+        "mittendrin abbrechen. Genuin nebensächliches oder paralleles "
+        "Detail darfst du zu einer Idee bündeln, so weit der "
+        "Sprech-Typ-Block es erlaubt. Die Tiefe pro load-bearing Punkt "
+        "folgt dem Original — kompakt bleibt kompakt.\n"
         "\n"
         "AUSWAHLMÖGLICHKEITEN sind heilig: Wenn die Antwort dem Hörer "
         "Optionen anbietet — egal ob als 'a, b, c', 'Variante 1, 2, 3', "
-        "'Option A / B', 'Stufe 1 / 2 / 3', mehrere Vorschläge oder eine "
+        "'Option A / B', 'Stufe 1 / 2 / 3', mehrere Vorschläge, eine "
+        "reine Fließtext-Wahl ('entweder … oder …') oder eine "
         "abschließende Auswahlfrage — muss JEDE Option mit Bezeichner "
         "UND der im Original genannten Kurzbeschreibung vorgelesen "
         "werden, sodass der Hörer ohne Bildschirm entscheiden kann. "
@@ -496,10 +509,11 @@ SYSTEM_WITH_TASK = {
         "   steps, or phases, capture the overarching idea in your "
         "   own words first and slot the items into it — e.g. 'There "
         "   are two paths …', 'The idea is …', 'At the core …'. "
-        "   Completeness still holds absolutely: every main point, "
-        "   every option, every list item, every closing pick-one "
-        "   question must appear in substance — but wrapped as an "
-        "   idea, not as a bare keyword list. Compact spots in the "
+        "   Every load-bearing point appears in substance — every "
+        "   option, every named consequence, every deadline, every "
+        "   closing pick-one question — wrapped as an idea, not a bare "
+        "   keyword list; genuinely minor detail you may bundle as far "
+        "   as the speech-type block allows. Compact spots in the "
         "   original stay compact; nothing gets embellished. Don't "
         "   read code snippets or cryptic paths verbatim — paraphrase "
         "   them so the listener understands without a screen.\n"
@@ -534,14 +548,18 @@ SYSTEM_WITH_TASK = {
         "there, not doors to what isn't. When in doubt, drop rather "
         "than invent.\n"
         "\n"
-        "COMPLETENESS (second rule): never drop a main point, never cut "
-        "a list off mid-way. If the answer is a list, EVERY item "
-        "appears. If it has steps or phases, all of them appear. The "
-        "depth per point follows the original — compact stays compact.\n"
+        "COMPLETENESS (second rule): keep every load-bearing point the "
+        "answer calls out — every option, every named consequence, every "
+        "breaking change, every prerequisite, every deadline; never drop "
+        "a called-out fact, never cut a list off mid-way. Genuinely minor "
+        "or parallel detail you may bundle into an idea as far as the "
+        "speech-type block allows. The depth per load-bearing point "
+        "follows the original — compact stays compact.\n"
         "\n"
         "CHOICES ARE SACRED: when the answer offers the listener options "
         "— whether 'a, b, c', 'option A/B', 'tier 1/2/3', several "
-        "suggestions, or a closing pick-one question — EVERY option must "
+        "suggestions, a plain in-prose choice ('either … or …'), or a "
+        "closing pick-one question — EVERY option must "
         "be spoken with its label AND the brief description the original "
         "gives, so the listener can decide without the screen. A closing "
         "question like 'which one do you want?' is kept verbatim.\n"
@@ -601,9 +619,7 @@ SELF_CHECK_BLOCK = {
         "   ohne dass das Original es nennt? Im Zweifel rauslassen, "
         "   nicht behaupten — die Persona-Tone darf die Stimme färben, "
         "   aber nichts erfinden.\n"
-        "2. Vollständigkeit: ist jeder Hauptpunkt, jede Option, jede "
-        "   abschließende Auswahlfrage drin? Wurde keine Liste "
-        "   mittendrin abgebrochen?\n"
+        "2. {completeness_check}\n"
         "3. Hörer-Perspektive: führt der Lead-Satz mit dem Effekt für "
         "   den Hörer, nicht mit einem Code-Schritt-Katalog?\n"
         "4. Meta-Disziplin: ist der Output reine Zusammenfassung — "
@@ -632,8 +648,7 @@ SELF_CHECK_BLOCK = {
         "   vault, forge) the source doesn't mention? When in doubt, "
         "   drop rather than assert — the persona tone may colour the "
         "   voice, but it must invent nothing.\n"
-        "2. Completeness: is every main point, every option, every "
-        "   closing pick-one question present? No list cut off mid-way?\n"
+        "2. {completeness_check}\n"
         "3. Listener angle: does the lead carry the effect for the "
         "   listener, not a catalogue of code steps?\n"
         "4. Meta discipline: is the output pure summary — no 'what "
@@ -646,6 +661,109 @@ SELF_CHECK_BLOCK = {
         "persona instruction. Output only the verified final version, "
         "no meta-comment."
     ),
+}
+
+
+# ADR-0596 — type-scoped completeness item for the SELF-CHECK block. `decision`
+# (and empty) keep the absolute option+list check; report/explainer check the
+# outcome bracket WITHOUT inventing. Option + closing-question survival is in
+# every variant — it is never dropped, whatever the type.
+_SELF_CHECK_COMPLETENESS = {
+    "de": {
+        "decision": (
+            "Vollständigkeit: ist jeder Hauptpunkt, jede Option, jede "
+            "abschließende Auswahlfrage drin? Wurde keine Liste mittendrin "
+            "abgebrochen?"
+        ),
+        "report": (
+            "Ergebnis-Klammer: führt der Text mit dem erreichten Ziel bzw. der "
+            "Kernaussage und schließt mit dem, was jetzt möglich ist — OHNE ein "
+            "Ziel oder einen Effekt zu erfinden, den das Original nicht nennt? "
+            "Ist jede Option und jede Auswahlfrage weiterhin drin, und jede vom "
+            "Original benannte Konsequenz, jeder Breaking Change, jede Deadline?"
+        ),
+        "explainer": (
+            "Modell-Klammer: führt der Text mit der Kernaussage und trägt jeden "
+            "load-bearing Punkt als verbundenes Modell — OHNE etwas zu erfinden, "
+            "das im Original nicht steht? Ist jede Option und jede Auswahlfrage "
+            "weiterhin drin, und jede vom Original benannte Konsequenz?"
+        ),
+    },
+    "en": {
+        "decision": (
+            "Completeness: is every main point, every option, every closing "
+            "pick-one question present? No list cut off mid-way?"
+        ),
+        "report": (
+            "Outcome bracket: does the text lead with the reached goal or core "
+            "point and land on what is now possible — WITHOUT inventing a goal "
+            "or effect the source omits? Is every option and closing question "
+            "still present, plus every called-out consequence, breaking change, "
+            "and deadline the source names?"
+        ),
+        "explainer": (
+            "Model bracket: does the text lead with the core point and carry "
+            "every load-bearing point as a connected model — WITHOUT inventing "
+            "anything the source omits? Is every option and closing question "
+            "still present, plus every called-out consequence the source names?"
+        ),
+    },
+}
+
+
+# ADR-0596 — the per-type prompt block. Injected after the base prompt (which
+# still carries FAITHFULNESS + the unconditional AUSWAHL/CHOICES rule + the
+# type-neutral "keep every load-bearing point" rule). This block ONLY sets how
+# far genuinely minor / parallel detail is bundled and whether an outcome
+# bracket is added. `decision` inherits near-today behaviour. Empty ⇒ no block.
+SPEECH_TYPE_BLOCK = {
+    "de": {
+        "report": (
+            "SPRECH-TYP — STATUSBERICHT / ERLEDIGTE ARBEIT: Führe mit dem "
+            "erreichten Ziel (was ist jetzt fertig oder anders). Nennt das "
+            "Original kein erreichtes Ziel, führe mit dem Kerninhalt — erfinde "
+            "niemals ein Ziel. Fasse GENUIN NEBENSÄCHLICHES Detail zu einer Idee "
+            "zusammen, statt es aufzuzählen; aber jede vom Original benannte "
+            "Konsequenz, jeden Breaking Change, jede Deadline, jede betroffene "
+            "Sache behältst du inhaltlich. Schließe mit dem, was jetzt möglich "
+            "ist; nennt das Original keinen Effekt, lass die Schluss-Klammer weg, "
+            "statt einen zu erfinden."
+        ),
+        "explainer": (
+            "SPRECH-TYP — ERKLÄRUNG / ANALYSE: Führe mit der Kernaussage in "
+            "einem Satz. Trage jeden load-bearing Punkt als verbundenes Modell "
+            "vor und bündle nur genuin nebensächliches Detail. Schließe mit der "
+            "übergeordneten Bedeutung nur, wenn das Original sie ausspricht."
+        ),
+        "decision": (
+            "SPRECH-TYP — ENTSCHEIDUNGSVORLAGE: Der Hörer muss wählen. Behalte "
+            "die Tiefe des Originals bei und füge keine Ergebnis-Klammer hinzu. "
+            "Die Optionstreue folgt der unbedingten AUSWAHL-Regel oben."
+        ),
+    },
+    "en": {
+        "report": (
+            "SPEECH TYPE — STATUS / FINISHED WORK: Lead with the reached goal "
+            "(what is now done or different). If the source states no reached "
+            "goal, lead with the core content — never invent a goal. Bundle "
+            "GENUINELY MINOR detail into an idea instead of enumerating it; but "
+            "keep every called-out consequence, breaking change, deadline, and "
+            "affected item in substance. Close with what is now possible; if the "
+            "source states no effect, drop the closing bracket rather than invent "
+            "one."
+        ),
+        "explainer": (
+            "SPEECH TYPE — EXPLANATION / ANALYSIS: Lead with the core point in "
+            "one sentence. Carry every load-bearing point as a connected model "
+            "and bundle only genuinely minor detail. Close with the high-level "
+            "meaning only if the source states one."
+        ),
+        "decision": (
+            "SPEECH TYPE — DECISION / PICK-ONE: The listener must choose. Keep "
+            "the source's depth and add no outcome bracket. Option fidelity "
+            "follows the unconditional CHOICES rule above."
+        ),
+    },
 }
 
 
@@ -805,6 +923,106 @@ ITEM_RE = re.compile(
     re.DOTALL,
 )
 
+# --- ADR-0596 / ADR-0597: speech-type classification + structural choice
+# detection.
+#
+# Design (ADR-0596): option/choice fidelity is UNCONDITIONAL (enforced by the
+# base prompt's AUSWAHL rule on the LLM path, and by `has_choice_shape` on the
+# no-LLM degrade path — ADR-0597). The speech type is only a STYLE dial that sets
+# how far *genuinely minor* non-choice detail is bundled + whether an outcome
+# bracket is added. A misclassification therefore costs tone, never a dropped
+# option or a dropped called-out fact — which is why a cheap, deterministic,
+# intentionally inclusive classifier is acceptable.
+#
+# `has_choice_shape` is deliberately INCLUSIVE: a false positive is safe (in the
+# classifier it just keeps more depth; in the degrade path it just preserves more
+# items), only a false negative could drop an option — so we bias toward True.
+
+# ≥2 letter-labelled option lines at line-start ("a) …", "b. …", "(c) …").
+# Letters only, NOT bare numbers: "1. / 2. / 3." are far more often ordinary
+# steps in an explainer than a pick-one choice, so numbered lists never trigger a
+# choice on their own (they are still option-safe in the degrade path via the
+# ordinary-list branch). Line-start anchored, so an inline "a. synchron b. async"
+# inside one prose line does NOT match.
+_CHOICE_LABEL_LINE_RE = re.compile(
+    r"(?m)^\s*(?:\*{0,2})\(?[a-eA-E][\)\.]\s+\S",
+)
+# Explicit option keyword + a label ("Option A", "Variante 2", "Tier 1", ...).
+_CHOICE_KEYWORD_RE = re.compile(
+    r"(?i)\b(?:option|variante|tier|stufe|weg|ansatz|approach|alternative)\s+"
+    r"(?:[a-e]\b|\d+\b|[ivx]+\b)",
+)
+# Trailing pick-one question: the last non-empty line ends in '?' and reads as a
+# choice ("Welche Variante willst du?", "which one?", "A oder B?", "either X or
+# Y?").
+_PICK_ONE_CUE_RE = re.compile(
+    r"(?i)(welche|which|wähl|choos|prefer|bevorzug|willst du|möchtest du|"
+    r"want\b|entweder|either|\boder\b|\bor\b)",
+)
+# Report markers, restricted to the TOP of the text (first line / first ~140
+# chars) so a mid-text "is now live" in an explanation does not flip the type.
+_REPORT_TOP_RE = re.compile(
+    r"(?i)^\W{0,3}(?:✅|erledigt|fertig|done|completed|geschafft"
+    r"|(?:habe|ich)\b.*\b(?:gebaut|implementiert|umgesetzt|behoben|gefixt|"
+    r"repariert|hinzugefügt|deployed|geschrieben)"
+    r"|(?:built|implemented|fixed|added|deployed|shipped|released|wired)"
+    r"|läuft jetzt|is now (?:live|green|passing|working|done))",
+)
+
+
+def has_choice_shape(text: str) -> bool:
+    """True iff the text is a real multiple-choice / pick-one shape.
+
+    Shared, deterministic option detector used by BOTH `classify_speech_type`
+    (to pick the `decision` type) and the ADR-0597 degrade ladder (to decide
+    option-safety without an LLM). Intentionally inclusive — see module note.
+
+    Named limitation (ADR-0597): a label-less in-prose choice with no trailing
+    '?' ("either Postgres or stay on SQLite." buried mid-answer) is not
+    structurally visible here; on the LLM path the base-prompt AUSWAHL rule
+    still protects it, but on the no-LLM degrade path it cannot be guaranteed.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if len(_CHOICE_LABEL_LINE_RE.findall(t)) >= 2:
+        return True
+    if _CHOICE_KEYWORD_RE.search(t):
+        return True
+    last_line = next((ln.strip() for ln in reversed(t.splitlines()) if ln.strip()), "")
+    if last_line.endswith("?") and _PICK_ONE_CUE_RE.search(last_line):
+        return True
+    return False
+
+
+def classify_speech_type(text: str) -> str:
+    """Deterministically classify the answer as report / explainer / decision.
+
+    STYLE dial only (ADR-0596): the type sets bundling aggressiveness + whether
+    an outcome bracket is added; it never gates option or called-out-fact
+    fidelity. No LLM, no network, no clock — same input, same type.
+    """
+    t = (text or "").strip()
+    if not t:
+        return "explainer"
+    if has_choice_shape(t):
+        return "decision"
+    head = t[:140]
+    first_line = head.splitlines()[0] if head.splitlines() else head
+    if _REPORT_TOP_RE.search(first_line):
+        return "report"
+    return "explainer"
+
+
+def naive_truncate_is_list(text: str) -> bool:
+    """True iff `naive_truncate` would treat this as a list (≥2 ITEM_RE items).
+
+    Non-breaking sibling (ADR-0597): `naive_truncate` keeps its string return, so
+    its existing direct consumers are untouched; the degrade call site uses this
+    predicate to route ordinary long lists to the bounded cap.
+    """
+    return len(ITEM_RE.findall(text or "")) >= 2
+
 
 def _first_clause(s: str, max_chars: int = 90) -> str:
     s = re.sub(r"\*+", "", s)
@@ -862,7 +1080,7 @@ def _build_input(text: str, task: str, lang: str) -> str:
     return f"[TASK]\n{task.strip()}\n\n[{answer_label}]\n{text}"
 
 
-def _cap_to_budget(text: str, max_chars: int) -> str:
+def _cap_to_budget(text: str, max_chars: int, lang: str = "de") -> str:
     """Hard-bound a degraded (no-LLM) fallback to the spoken budget.
 
     The old degraded path returned the whole answer whitespace-collapsed
@@ -871,33 +1089,200 @@ def _cap_to_budget(text: str, max_chars: int) -> str:
     cannot summarise we must at least never read the full text: keep whole
     sentences up to the budget, always at least the first one, and only
     ever hard-cut mid-sentence if a single sentence already overruns.
+
+    ADR-0597: when the source's LAST sentence is a question (ends in '?'), keep
+    it whole and reserve room for it — this preserves a trailing prose pick-one
+    question ("… Willst du A oder B?") that front-filling would otherwise drop.
+    `lang` selects the elision wording only; the 2-arg call form is preserved for
+    backward compatibility.
     """
     t = re.sub(r"\s+", " ", text or "").strip()
     if len(t) <= max_chars:
         return t
     # Split on sentence enders while keeping the punctuation.
-    sentences = re.findall(r"[^.!?…]+[.!?…]+|\S[^.!?…]*$", t)
+    sentences = [s.strip() for s in re.findall(r"[^.!?…]+[.!?…]+|\S[^.!?…]*$", t)
+                 if s.strip()]
+    # Reserve a trailing question so a pick-one question is never truncated away.
+    reserved = ""
+    if len(sentences) >= 2 and sentences[-1].endswith("?"):
+        last = sentences[-1]
+        if len(last) <= max_chars:
+            reserved = last
+            sentences = sentences[:-1]
+    budget = max_chars - (len(reserved) + 1 if reserved else 0)
     out = ""
     for s in sentences:
-        s = s.strip()
-        if not s:
-            continue
         cand = (out + " " + s).strip() if out else s
-        if len(cand) > max_chars:
+        if len(cand) > budget:
             break
         out = cand
-    if not out:  # first sentence alone overruns → hard cut at a word boundary
+    if not out and not reserved:  # first sentence alone overruns → hard cut
         cut = t[:max_chars].rsplit(" ", 1)[0].strip()
-        out = (cut or t[:max_chars]).rstrip(",;:") + "…"
+        return (cut or t[:max_chars]).rstrip(",;:") + "…"
+    if reserved:
+        out = (out + " " + reserved).strip() if out else reserved
     return out
+
+
+# Start-of-line option label for the line-based degrade splitter.
+_OPTION_LINE_START_RE = re.compile(
+    r"^[ \t]*(?:\*{0,2})(?:\(?[a-zA-Z][\)\.]|\d+[\).]|[-*+])[ \t]+\S",
+)
+
+
+def _clean_line(s: str) -> str:
+    """Normalize a line for spoken output: drop markdown emphasis + a leading
+    BULLET marker (`- `/`* `/`+ `), but KEEP letter/number labels (`a)`, `1.`) so
+    a choice referencing "a oder b?" / "welche Nummer, 1 oder 2?" stays decidable.
+    """
+    s = re.sub(r"[*#>`]+", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"^[-*+]\s+", "", s)  # bullet dash is not spoken; labels are kept
+    return s
+
+
+def _extract_options(body: str) -> tuple[str, list[str], str]:
+    """Line-based option extraction for the degrade path (ADR-0597).
+
+    Returns (intro, options, outro). An option starts at a label line; an
+    *indented* following line is folded into that option as a continuation; a
+    col-0 non-label line AFTER the first option is the outro (a non-cue closing
+    question or shared facts — consequences/deadlines — that must not be lost).
+    Line-based, so numbered markers are never mis-split as sentence enders.
+
+    Heuristic boundary (accepted, non-load-bearing): a wrapped continuation that
+    sits at column 0 instead of indented is attributed to the outro (spoken at
+    the end, not next to its option), and a col-0 sub-point that itself looks
+    like a label is counted as an option. These change ORDERING/attribution, not
+    survival — no option, label, or called-out fact is ever dropped, and every
+    choice stays decidable. Real LLM markdown indents continuations, so it is
+    rare; the degrade path is already the both-backends-down fallback. See
+    `test_degrade_ladder_endings.py::test_col0_continuation_ordering_nuance`.
+    """
+    intro_lines: list[str] = []
+    options: list[list[str]] = []
+    outro_lines: list[str] = []
+    for ln in body.split("\n"):
+        if not ln.strip():
+            continue
+        if _OPTION_LINE_START_RE.match(ln):
+            options.append([_clean_line(ln)])
+        elif options and ln[:1] in (" ", "\t"):
+            options[-1].append(_clean_line(ln))  # indented continuation
+        elif options:
+            outro_lines.append(_clean_line(ln))   # col-0 after options → outro
+        else:
+            intro_lines.append(_clean_line(ln))    # before first option → intro
+    intro = " ".join(intro_lines).strip(" :—-")
+    outro = " ".join(outro_lines).strip(" :—-")
+    opts = [" ".join(o).strip() for o in options]
+    return intro, opts, outro
+
+
+def item_preserving_cap(text: str, max_chars: int, lang: str = "de") -> str:
+    """Degrade-path cap for a REAL choice (ADR-0597): shorten *within* each option
+    toward the budget but never delete an option line or the closing question.
+
+    Operates on the ORIGINAL text (has the list markers). Options beat length:
+    if even the trimmed options exceed the budget, exceed the soft budget rather
+    than drop an option — a listener must hear every choice to decide.
+
+    0-item guard: when `has_choice_shape` fired only on a trailing prose question
+    (no ITEM_RE items), delegate to the prose cap, which keeps the trailing '?'.
+    """
+    body = text or ""
+
+    def _join(main: str, q: str) -> str:
+        return (main + " " + q).strip() if q else main
+
+    # Peel a trailing question at LINE granularity. We are already a known choice
+    # (has_choice_shape), so ANY trailing '?' line is the closing question — it
+    # need not carry a cue word ("Was passt am besten?"). Require ≥2 non-empty
+    # lines so a single paragraph is never wholly treated as the question, and
+    # only when it fits the budget. Line-based (not sentence-based) so numbered
+    # option markers "1." / "2." are never mistaken for sentence enders.
+    closing_q = ""
+    nonempty = [ln for ln in body.splitlines() if ln.strip()]
+    if len(nonempty) >= 2 and nonempty[-1].strip().endswith("?"):
+        q = nonempty[-1].strip()
+        cut = body.rfind(nonempty[-1])
+        if len(q) <= max_chars and cut > 0:
+            body, closing_q = body[:cut], _clean_line(q)
+
+    # (A) Structured options — line-based extraction keeps the label, folds
+    # indented continuation lines into their option, and preserves the outro
+    # (a non-cue closing question OR shared facts after the last option).
+    intro, opts, outro = _extract_options(body)
+    if len(opts) >= 2:
+        reserved = len(intro) + len(outro) + len(closing_q) + 2 * (len(opts) + 4)
+        per_item = max(40, (max_chars - reserved) // max(1, len(opts)))
+        clauses = [_first_clause(o, max_chars=per_item) for o in opts]
+        parts = ([intro.rstrip(":.") + ":"] if intro and len(intro) <= 200 else [])
+        parts += clauses
+        if outro:
+            parts.append(outro)
+        return _join(" ".join(p.rstrip(".") + "." for p in parts if p), closing_q)
+
+    # (B) Keyword-prose choice ("Option A ist … Option B ist …") with no list
+    # markers: keep EVERY sentence that names an option; never drop one.
+    if _CHOICE_KEYWORD_RE.search(body):
+        sentences = [s.strip() for s in re.findall(r"[^.!?…]+[.!?…]+|\S[^.!?…]*$", body)
+                     if s.strip()]
+        option_sents = [s for s in sentences if _CHOICE_KEYWORD_RE.search(s)]
+        lead = next((s for s in sentences if s not in option_sents), "")
+        parts = ([lead] if lead and len(lead) <= 200 else []) + option_sents
+        per = max(40, (max_chars - len(closing_q) - 2 * (len(parts) + 2)) // max(1, len(parts)))
+        parts = [_first_clause(p, max_chars=max(per, 60)) for p in parts]
+        return _join(" ".join(p.rstrip(".") + "." for p in parts if p), closing_q)
+
+    # (C) Only a trailing question / label-less → prose cap, re-attach question.
+    prose = _cap_to_budget(naive_truncate(body, max_chars), max_chars, lang)
+    return _join(prose, closing_q)
+
+
+def bounded_list_cap(text: str, max_chars: int, lang: str = "de") -> str:
+    """Degrade-path cap for an ORDINARY long list (ADR-0597): NOT a choice, so it
+    is hard-bounded — keep as many whole items as fit, then a spoken tail
+    ("und N weitere Punkte" / "and N more points"). This is the case that must
+    never read a 30-item changelog aloud (preserves the "never full verbatim"
+    guarantee); ordinary lists do NOT earn options-beat-length.
+    """
+    items = ITEM_RE.findall(text or "")
+    if len(items) < 2:
+        return _cap_to_budget(text, max_chars, lang)
+    first = ITEM_RE.search(text)
+    intro = re.sub(r"[*#>`]+", "", re.sub(r"\s+", " ", text[:first.start()])).strip(" :—-")
+    parts = []
+    if intro and len(intro) <= 200:
+        parts.append(intro.rstrip(":.") + ":")
+    kept = 0
+    acc_len = sum(len(p) for p in parts)
+    for it in items:
+        clause = _first_clause(it, max_chars=200)
+        if acc_len + len(clause) + 2 > max_chars and kept >= 1:
+            break
+        parts.append(clause)
+        acc_len += len(clause) + 2
+        kept += 1
+    remaining = len(items) - kept
+    if remaining > 0:
+        if lang == "de":
+            tail = (f"und {remaining} weiterer Punkt" if remaining == 1
+                    else f"und {remaining} weitere Punkte")
+        else:
+            tail = (f"and {remaining} more point" if remaining == 1
+                    else f"and {remaining} more points")
+        parts.append(tail)
+    return " ".join(p.rstrip(".") + "." for p in parts if p)
 
 
 def _system_for(lang: str, target_chars: int, has_task: bool,
                 persona: str = "", audience: str = "",
-                output_language: str = "") -> str:
+                output_language: str = "", speech_type: str = "") -> str:
     """Compose the summarizer's system prompt.
 
-    Layer order — base prompt → persona-tone (the *speaker*) → audience
+    Layer order — base prompt → SPEECH-TYPE block (ADR-0596; empty = none) →
+    persona-tone (the *speaker*) → audience
     (the *listener*, layer 12) → SELF-CHECK (the *truthfulness loop*,
     layer 11 inline integration) → OUTPUT LANGUAGE directive (i18n,
     emitted for EVERY locale including `de`/`en` since 2026-07-24, so the
@@ -924,16 +1309,27 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     """
     table = SYSTEM_WITH_TASK if has_task else SYSTEM
     base = table[lang].format(max_chars=target_chars)
+    # ADR-0596 speech-type block — spliced right after the base so the persona/
+    # audience tone still follows. Empty speech_type ⇒ no block (legacy shape).
+    # Governs ONLY minor-detail bundling + the outcome bracket; option and
+    # called-out-fact fidelity live in the base prompt for every type.
+    type_block = SPEECH_TYPE_BLOCK.get(lang, SPEECH_TYPE_BLOCK["en"]).get(speech_type, "")
+    if type_block:
+        base = base + "\n\n" + type_block
     addendum = _persona_addendum(lang, persona)
     if addendum:
         base = base + "\n\n" + addendum
     if audience:
         base = base + "\n\n" + audience.strip()
-    # Self-check is appended unconditionally — always-on by structure.
-    # The op-in CLI judge in dialectic.judge_summary() runs in addition
-    # for personas that need second-model verification; this inline
+    # Self-check is appended unconditionally — always-on by structure. Its
+    # completeness item is type-scoped (ADR-0596): `decision`/empty keep the
+    # absolute option+list wording; report/explainer check the outcome bracket
+    # without inventing. The op-in CLI judge in dialectic.judge_summary() runs in
+    # addition for personas that need second-model verification; this inline
     # check is the always-active first line of defence.
-    base = base + "\n\n" + SELF_CHECK_BLOCK[lang]
+    completeness_check = (_SELF_CHECK_COMPLETENESS[lang].get(speech_type)
+                          or _SELF_CHECK_COMPLETENESS[lang]["decision"])
+    base = base + "\n\n" + SELF_CHECK_BLOCK[lang].format(completeness_check=completeness_check)
     # Output-language pin (i18n), emitted for EVERY code — see the 2026-07-24 note
     # at the end of this comment block for why the original "non-de/en only"
     # optimisation was dropped. We SANDWICH the directive: once at the very front, once at the very
@@ -1003,7 +1399,7 @@ def _claude_authenticated() -> bool:
         return True  # fail-open: don't reroute a possibly-authenticated user
 
 
-def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "") -> str | None:
+def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "", speech_type: str = "") -> str | None:
     """Backend 1: the local `claude` CLI (uses OAuth from Claude Max — no key).
 
     Sets VOICE_HOOK_RECURSION=1 so the CLI's own stop-hook does not re-trigger
@@ -1012,7 +1408,7 @@ def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model
     if not shutil.which("claude") or not _claude_authenticated():
         return None
     has_task = bool(task.strip())
-    system_prompt = _system_for(lang, target_chars, has_task, persona, audience, output_language)
+    system_prompt = _system_for(lang, target_chars, has_task, persona, audience, output_language, speech_type)
     payload = _build_input(text, task, lang) if has_task else text
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
@@ -1098,7 +1494,7 @@ def prewarm_summary_model(timeout_s: float = 120.0) -> bool:
         return False
 
 
-def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "") -> str | None:
+def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "", speech_type: str = "") -> str | None:
     """Backend 2: the local Hermes engine (Ollama). This is the DEFAULT zero-config
     engine, so without it a Hermes-only install had no LLM summarizer at all and
     every long voice reply fell through to naive_truncate — spoken answers cut off
@@ -1119,7 +1515,7 @@ def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, mo
         base_url = "http://localhost:11434"
 
     has_task = bool(task.strip())
-    system_prompt = _system_for(lang, target_chars, has_task, persona, audience, output_language)
+    system_prompt = _system_for(lang, target_chars, has_task, persona, audience, output_language, speech_type)
     user_input = _build_input(text, task, lang) if has_task else text
     hermes_model = _resolve_hermes_model_for_summary()
 
@@ -1789,9 +2185,15 @@ def generate_session_recap(transcript: str, lang: str = "de", max_chars: int = 7
     return (raw or "").strip()
 
 
-def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", persona: str = "", audience: str = "", output_language: str = "") -> str:
+def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", persona: str = "", audience: str = "", output_language: str = "", speech_type: str = "") -> str:
     """Try CLI first (Max-subscription / OAuth), then SDK (API key), then
     structural compression. Each backend may return None to signal fallback.
+
+    `speech_type` (ADR-0596) is one of "report"/"explainer"/"decision" and only
+    tunes the STYLE of the LLM summary (outcome bracket + how far minor detail is
+    bundled); option and called-out-fact fidelity do not depend on it. Empty =
+    classify from `text` here. The structural fallback ignores it and instead uses
+    the deterministic `has_choice_shape` detector (ADR-0597) for option safety.
 
     When `task` is non-empty, the LLM backends produce a two-part read-aloud
     (task paraphrase + answer summary). The structural fallback synthesizes
@@ -1816,6 +2218,12 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     """
     target = adaptive_target(text, max_chars)
 
+    if not speech_type:
+        speech_type = classify_speech_type(text)
+    # New diagnostic line (ADR-0596) — inspectable in a live run, content-free,
+    # not audited (presentation-layer change).
+    print(f"[summarize] type={speech_type} lang={lang}", file=sys.stderr)
+
     candidate: str | None = None
 
     _backend = os.environ.get("VOICE_SUMMARIZE_BACKEND", "auto")
@@ -1835,7 +2243,7 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     # Backend 1: CLI — preferred for users with Claude Max who don't want
     # to manage a separate API key.
     if _backend in ("auto", "cli"):
-        out = _summarize_via_cli(text, task, lang, target, model, persona, audience, output_language)
+        out = _summarize_via_cli(text, task, lang, target, model, persona, audience, output_language, speech_type)
         if out:
             candidate = out
 
@@ -1845,7 +2253,7 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     # CLI so Claude-Max users are unaffected; before structural so the shipped
     # default gets a real summary.
     if candidate is None and _backend in ("auto", "hermes"):
-        out = _summarize_via_hermes(text, task, lang, target, model, persona, audience, output_language)
+        out = _summarize_via_hermes(text, task, lang, target, model, persona, audience, output_language, speech_type)
         if out:
             candidate = out
 
@@ -1877,7 +2285,16 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
         # everything. This is a DEGRADED result — it cannot translate or
         # rephrase — but it is short and bounded, honouring "never read the
         # whole thing" even when no LLM backend is reachable.
-        body = _cap_to_budget(naive_truncate(text, max_chars), max_chars)
+        # ADR-0597 — option-safe three-way degrade. A real choice keeps every
+        # option (options beat length); an ordinary long list is hard-bounded
+        # (never read a 30-item list aloud); prose front-fills but keeps a
+        # trailing pick-one question.
+        if has_choice_shape(text):
+            body = item_preserving_cap(text, max_chars, lang)
+        elif naive_truncate_is_list(text):
+            body = bounded_list_cap(text, max_chars, lang)
+        else:
+            body = _cap_to_budget(naive_truncate(text, max_chars), max_chars, lang)
         candidate = _task_prefix(task, lang) + body if task.strip() else body
 
     # Layer-11 dialectic faithfulness check (independent second-model
