@@ -173,12 +173,15 @@ export function useAuditQuery(
 ): UseQueryResult<AuditQueryResult, Error> & {
   isCached: boolean;
 } {
+  // Default window (last hour, limit 100), fixed once per mount. `filter` is
+  // part of the query key; a default recomputed on every render would give
+  // each render a new key and re-fetch forever (see VibeDashboard).
+  const [defaultFilter] = React.useState<AuditQueryFilter>(() => ({
+    since: new Date(Date.now() - 3600000).toISOString(),
+    limit: 100,
+  }));
   const {
-    filter = {
-      // Default: last hour, limit 100 events
-      since: new Date(Date.now() - 3600000).toISOString(),
-      limit: 100,
-    },
+    filter = defaultFilter,
     enabled = true,
     staleTime = 5000, // Re-fetch after 5s
     gcTime = 30000, // Keep data for 30s

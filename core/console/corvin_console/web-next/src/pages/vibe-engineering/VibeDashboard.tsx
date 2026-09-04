@@ -50,12 +50,17 @@ export function VibeDashboard() {
   const activeTab = searchParams.get('tab') || 'graph';
   const [selectedEvent, setSelectedEvent] = useState<AnyAuditEvent | null>(null);
 
-  // Query audit events (last hour, limit 100)
+  // Query audit events (last hour, limit 100). The window is fixed ONCE per
+  // mount: `filter` is part of the React Query key, and computing `since`
+  // inline gave every render a new key → a new query → a new fetch → a
+  // re-render, forever. On 2026-09-04 that was ~33 requests/s against the live
+  // console, a spinner that never resolved and "Live • 0 events".
+  const [auditFilter] = useState(() => ({
+    since: new Date(Date.now() - 3600000).toISOString(),
+    limit: 100,
+  }));
   const auditQuery = useAuditQuery({
-    filter: {
-      since: new Date(Date.now() - 3600000).toISOString(),
-      limit: 100,
-    },
+    filter: auditFilter,
   });
 
   const handleTabChange = (tabId: string) => {

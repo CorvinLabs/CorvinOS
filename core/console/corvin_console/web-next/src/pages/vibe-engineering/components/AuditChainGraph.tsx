@@ -64,6 +64,26 @@ const NODE_COLORS: Record<AuditEventType, string> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Layout
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cytoscape layout for the hash chain. The built-in BFS layout is registered as
+ * `breadthfirst` (lowercase, no "Search"); until 2026-09-04 this said
+ * `breadthFirstSearch`, and cytoscape() THREW "No such layout ... found" from
+ * inside the mount effect, so the Graph View never rendered a single node.
+ * Exported so tests/unit/audit-chain-graph-layout.test.ts can run it against a
+ * headless cytoscape instance — jsdom cannot, and the mocks hid it.
+ */
+export const AUDIT_GRAPH_LAYOUT = {
+  name: 'breadthfirst',
+  circle: false,
+  spacingFactor: 1.75,
+  avoidOverlap: true,
+  animationDuration: 300,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -109,12 +129,8 @@ export function AuditChainGraph({
       elements: [...filteredData.nodes, ...filteredData.edges],
       style: getCytoscapeStylesheet(),
       layout: {
-        name: 'breadthFirstSearch',
+        ...AUDIT_GRAPH_LAYOUT,
         roots: rootNodeId ? '#' + rootNodeId : undefined,
-        circle: false,
-        spacingFactor: 1.75,
-        avoidOverlap: true,
-        animationDuration: 300,
       } as any,
     });
 

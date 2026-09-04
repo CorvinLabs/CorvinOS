@@ -35,6 +35,26 @@ VibeDashboard
 3. Tab state is stored in URL query param (`?tab=<id>`)
 4. Browser back/forward navigation restores tab state automatically
 
+**Current code — Graph Engineering Edition (ADR-0564), documented 2026-09-04.**
+The steps above describe the v1 `useVibeData()` dashboard; the shipped
+`VibeDashboard.tsx` is the audit-first version:
+
+- The page queries `GET /v1/console/vibe-engineering/audit?since=&limit=100`
+  through `useAuditQuery()` (React Query) and renders the hash chain as a graph.
+- The query filter (`since`, `limit`) is fixed **once per mount** with a
+  `useState` initializer, in both `VibeDashboard` and the hook's default. The
+  filter is part of the query key: computing `since` inline re-keyed the query
+  on every render, which re-fetched forever (~33 requests/s against the live
+  console, spinner never resolved, "Live • 0 events" — fixed 2026-09-04).
+- Graph View draws with cytoscape's built-in `breadthfirst` layout, exported as
+  `AUDIT_GRAPH_LAYOUT` from `components/AuditChainGraph.tsx`. The name is
+  case-sensitive and cytoscape throws at construction on an unknown one
+  (`breadthFirstSearch` shipped and left the Graph View empty until 2026-09-04).
+- The console manifest (`/v1/console/capabilities/manifest`) is additive: a
+  manifest failure falls back to the static panel registry, so the route still
+  mounts — which is why the 500 it answered until 2026-09-04 (a builtin panel
+  dict without `requiredFlag`) went unnoticed from the UI.
+
 ### Design Decisions
 
 | Decision | Why |
@@ -64,6 +84,17 @@ None. VibeDashboard is a route-level component; it doesn't accept props.
 - ⏳ Tab switching and URL state sync (blocked by Radix UI complexity in unit test environment)
 
 **Run:** `npm run test -- tests/unit/vibe-dashboard.test.tsx`
+
+Note (2026-09-04): this file predates the audit-graph rewrite and fails at HEAD
+(no `QueryClientProvider`, five-tab assertions). Current guards:
+
+- `tests/unit/vibe-dashboard-query-stability.test.tsx` — real hook + real React
+  Query over a mocked transport; asserts exactly ONE audit request per mount and
+  "Live • N events" from the payload.
+- `tests/unit/audit-chain-graph-layout.test.ts` — runs `AUDIT_GRAPH_LAYOUT`
+  against headless cytoscape (jsdom has no canvas; the mocks hid the typo).
+- `core/console/tests/test_console_manifest_route.py` — HTTP-level manifest
+  test; every panel source must carry both gate keys.
 
 ### E2E Tests (`tests/e2e/vibe-engineering.spec.ts`)
 - 14 Playwright scenarios covering:
@@ -100,6 +131,17 @@ None. VibeDashboard is a route-level component; it doesn't accept props.
    - **Workaround:** Mock the endpoint (see `tests/fixtures/mock-api.ts`)
 3. **No error fallback UI:** If vibe data fetch fails, components render empty
    - **Workaround:** Add error boundary (Phase 5 enhancement)
+4. **Audit source is the home-dir file, not the live root (open, 2026-09-04):**
+   `routes/vibe_engineering.py::get_audit_chain` reads `Path.home()/.corvin/audit.jsonl`
+   instead of resolving through `CORVIN_HOME` / the tenant chain paths, ignores
+   `since`/`until` (only `limit` applies), and stamps the session's `tenant_id` on
+   events from that global file. On a repo-local install the graph therefore shows
+   the stale home-dir chain. Which chain(s) the graph should visualise is a product
+   decision — not changed here.
+5. **Cold-start flag window after a backend restart (open, 2026-09-04):** the first
+   `os.capabilities` executions after boot hit the 5 s Skill timeout (audit chain
+   shows `status: timeout`), so `/capabilities` answers every flag `False` and the
+   Vibe sidebar group is hidden until the next refetch.
 
 ## Future Enhancements (Phase 5+)
 
