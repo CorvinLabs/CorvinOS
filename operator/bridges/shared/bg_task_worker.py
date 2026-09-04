@@ -323,6 +323,24 @@ def main() -> int:
 
     # A gate refusal comes back as text (ok stays True) — the user still gets it.
     cn.mark_done(task_id, text=(text or "(no output)"), ok=ok)
+
+    # BG-NOTIFICATION-FIX: Immediately deliver the completion to the outbox so the
+    # Discord daemon (and other messengers) send the second message within seconds,
+    # not waiting for bg_monitor's 60s timer. Idempotent — O_EXCL locks prevent
+    # double-delivery even if adapter or bg_monitor also call deliver_ready().
+    # Failure is non-fatal; bg_monitor will retry.
+    _outbox_dir = spec.get("outbox_dir")
+    if _outbox_dir:
+        try:
+            _delivered = cn.deliver_ready(_outbox_dir)
+            if _delivered:
+                print(f"bg_task_worker: delivered {_delivered} completion(s) immediately",
+                      file=sys.stderr)
+        except Exception as _de:  # noqa: BLE001
+            # Non-fatal: bg_monitor will retry after 60s
+            print(f"bg_task_worker: deliver_ready() failed (bg_monitor will retry): {_de}",
+                  file=sys.stderr)
+
     if tp is not None:
         try:
             tp.finish(task_id)
