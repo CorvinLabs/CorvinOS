@@ -9,6 +9,7 @@ Provides reusable helpers for:
 from datetime import datetime, timedelta
 from typing import Tuple
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,6 @@ def compute_mean_std(values: list) -> Tuple[float, float]:
     mean = sum(values) / len(values)
     variance = sum((v - mean) ** 2 for v in values) / len(values)
 
-    import math
     std = math.sqrt(variance)
 
     return mean, std

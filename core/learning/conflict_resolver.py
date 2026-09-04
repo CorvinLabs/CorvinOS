@@ -74,8 +74,9 @@ class ConflictDetector:
         2. They reference the same parameter (by metric_name)
         3. They come from DIFFERENT Skills (not same-Skill concurrency)
 
-        Optimization: Group approvals by metric_name first, then scan conflicts
-        only within same-metric groups. This reduces complexity from O(n²) to O(n log n).
+        Optimization: Group approvals by metric_name first (O(n)), then scan conflicts
+        only within same-metric groups. Actual complexity: O(n + k²) where k = max group size.
+        This is better than O(n²) when k << n.
 
         Args:
             pending_approvals: Dict[skill_id][metric_name] = approval_record
