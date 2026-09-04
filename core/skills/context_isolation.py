@@ -218,12 +218,14 @@ class ContextMutationValidator:
     def validate_deltas(
         deltas: Dict[str, StateDelta],
         postconditions: list,
+        context_after: Dict[str, Any],
     ) -> tuple[bool, str]:
         """Validate mutations against skill's postconditions.
 
         Args:
             deltas: Mutations made by skill
             postconditions: List of Predicate objects (from SkillContract)
+            context_after: Context state after skill execution
 
         Returns:
             (valid, reason)
@@ -232,9 +234,23 @@ class ContextMutationValidator:
             # No postconditions = accept all mutations
             return True, "No postconditions to validate"
 
-        # TODO: Implement predicate evaluation
-        # For now, accept all mutations if postconditions are declared
-        return True, "Postconditions deferred to skill validation layer"
+        # Evaluate each postcondition against the final context
+        for predicate in postconditions:
+            try:
+                # Postconditions have a `condition` callable and a `name`
+                if hasattr(predicate, "evaluate"):
+                    # Predicate.evaluate() method (from SkillContract.Predicate)
+                    if not predicate.evaluate(context_after):
+                        return False, f"Postcondition '{predicate.name}' failed"
+                elif callable(predicate.condition):
+                    # Fallback: call condition directly
+                    if not predicate.condition(context_after):
+                        return False, f"Postcondition '{predicate.name}' failed"
+            except Exception as e:
+                # Predicate evaluation error (treat as failure, fail-closed)
+                return False, f"Postcondition '{predicate.name}' evaluation error: {str(e)}"
+
+        return True, "All postconditions validated"
 
 
 class ContextMerger:
