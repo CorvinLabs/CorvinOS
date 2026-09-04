@@ -217,7 +217,8 @@ import uuid
 import json
 from pathlib import Path
 import threading
-from dataclasses import dataclass, field, FrozenInstanceError
+from dataclasses import dataclass, field, FrozenInstanceError, asdict
+import os
 
 
 class ApprovalReasonCode(str, Enum):
@@ -296,16 +297,18 @@ class OperatorApprovalGate:
         tenant_id: str = "_default",
         auto_approval_confidence_threshold: float = 0.8,
         approval_ttl_hours: int = 12,
-        audit_backend=None,  # Will be required in __post_init__
+        audit_backend=None,
+        corvin_home: str = None,  # Path to ~/.corvin (for persistence)
     ):
         """
-        Initialize approval gate.
+        Initialize approval gate (with persistence recovery).
 
         Args:
-            tenant_id: Tenant (for audit trail + approval persistence)
+            tenant_id: Tenant (for audit trail + persistence)
             auto_approval_confidence_threshold: Confidence above this auto-approve
             approval_ttl_hours: Approval validity duration (hours) [1-72, default 12]
             audit_backend: REQUIRED. Fail-closed: None raises RuntimeError.
+            corvin_home: Path to ~/.corvin (default: env var CORVIN_HOME or ~/.corvin)
 
         Raises:
             RuntimeError if audit_backend is None (fail-closed constraint C1)
@@ -324,6 +327,12 @@ class OperatorApprovalGate:
         self.approval_ttl = timedelta(hours=approval_ttl_hours)
         self.audit_backend = audit_backend
 
+        # Persistence: path to approvals.jsonl (per-tenant, append-only log)
+        if corvin_home is None:
+            corvin_home = os.getenv("CORVIN_HOME", os.path.expanduser("~/.corvin"))
+        self.corvin_home = Path(corvin_home)
+        self.approvals_file = self.corvin_home / "tenants" / tenant_id / "skills" / "approvals.jsonl"
+
         # Thread safety: lock protects all state mutations
         self._lock = threading.RLock()
 
@@ -336,6 +345,97 @@ class OperatorApprovalGate:
 
         # Last approved config per skill.metric (for fallback on revoke)
         self.last_approved_configs: Dict[str, Dict[str, Dict]] = {}
+
+        # Load persisted approvals from disk (recovery after restart)
+        self._load_persisted_approvals()
+
+        # Garbage collection: delete expired approvals (GDPR Art. 17)
+        self._cleanup_expired_approvals()
+
+    def _load_persisted_approvals(self) -> None:
+        """Load approval history from disk (recovery after restart)."""
+        if not self.approvals_file.exists():
+            return  # No persisted approvals yet
+
+        try:
+            with open(self.approvals_file, "r") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        # Reconstruct OperatorApprovalRecord from JSON
+                        # (simplified: just load as-is; in production, add schema versioning)
+                        record = OperatorApprovalRecord(**data)
+                        self.approval_history.append(record)
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(f"[L5 Persistence] Failed to load record: {e}")
+        except Exception as e:
+            logger.error(f"[L5 Persistence] Failed to load persisted approvals: {e}")
+
+    def _persist_approval(self, record: OperatorApprovalRecord) -> None:
+        """Append approval to disk (immutable log)."""
+        try:
+            # Ensure directory exists
+            self.approvals_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Append record as JSON line (JSONL format, append-only)
+            with open(self.approvals_file, "a") as f:
+                json_line = json.dumps(asdict(record), default=str)  # Use default=str for datetime
+                f.write(json_line + "\n")
+        except Exception as e:
+            logger.error(f"[L5 Persistence] Failed to persist approval {record.approval_id}: {e}")
+
+    def _cleanup_expired_approvals(self, days_to_keep: int = 90) -> None:
+        """Delete approvals older than days_to_keep (GDPR Art. 17 compliance)."""
+        if not self.approvals_file.exists():
+            return
+
+        try:
+            now = datetime.utcnow().replace(tzinfo=None)
+            cutoff = now - timedelta(days=days_to_keep)
+
+            # Read all records
+            records = []
+            try:
+                with open(self.approvals_file, "r") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            data = json.loads(line)
+                            records.append(data)
+                        except json.JSONDecodeError:
+                            pass
+            except FileNotFoundError:
+                return
+
+            # Filter out expired records
+            kept_records = []
+            deleted_count = 0
+            for data in records:
+                try:
+                    timestamp_str = data.get("operator_timestamp", "")
+                    if timestamp_str:
+                        ts = datetime.fromisoformat(timestamp_str.replace("Z", "")).replace(tzinfo=None)
+                        if ts >= cutoff:
+                            kept_records.append(data)
+                        else:
+                            deleted_count += 1
+                    else:
+                        kept_records.append(data)
+                except (ValueError, KeyError):
+                    kept_records.append(data)
+
+            # Rewrite file (only kept records)
+            if deleted_count > 0:
+                with open(self.approvals_file, "w") as f:
+                    for data in kept_records:
+                        json_line = json.dumps(data, default=str)
+                        f.write(json_line + "\n")
+                logger.info(f"[L5 Persistence] Garbage collection: deleted {deleted_count} expired approvals")
+        except Exception as e:
+            logger.error(f"[L5 Persistence] Garbage collection failed: {e}")
 
     def _validate_inputs(self, prev_hash: str, next_hash: str, operator_id: str, confidence: float) -> None:
         """
@@ -507,6 +607,7 @@ class OperatorApprovalGate:
             if auto_approved:
                 # Auto-approved: go straight to history
                 self.approval_history.append(record)
+                self._persist_approval(record)  # Persist to disk
                 logger.info(
                     f"[L5 Approval] Auto-approved {drift_alert.skill_id}.{drift_alert.metric_name} "
                     f"(confidence={confidence:.2f} > {self.auto_approval_threshold})"
@@ -527,6 +628,7 @@ class OperatorApprovalGate:
                     self.pending_approvals[skill_id] = {}
                 self.pending_approvals[skill_id][metric_name] = record
 
+                self._persist_approval(record)  # Persist to disk
                 logger.warning(
                     f"[L5 Approval Queue] {skill_id}.{metric_name} "
                     f"requires operator approval (confidence={confidence:.2f})"
