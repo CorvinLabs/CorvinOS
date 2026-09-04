@@ -347,5 +347,111 @@ class TestSessionRecoveryEdgeCases:
         assert stats.corrupted_sessions == 1
 
 
+class TestCacheTenantIsolation:
+    """Test CRITICAL #1: Cache isolation with tenant_id."""
+
+    def test_cache_isolation_no_crosscontamination(self, mock_sessions_dir):
+        """Verify one tenant's session doesn't collide with another's."""
+        manager = SessionManager(enable_cache=True, cache_size=100)
+
+        # Create two sessions with same SID but different tenants (impossible in practice, but test isolation)
+        rec1 = session_auth.SessionRecord(
+            sid="test_sid_12345678901234567890123456789012",
+            sid_fingerprint="fp1",
+            tier="owner",
+            tenant_id="tenant_a",
+            token_fingerprint="",
+            csrf_secret="csrf1",
+            created_at=time.time(),
+            last_seen_at=time.time(),
+            expires_at=time.time() + 3600,
+            persistent=False,
+        )
+
+        rec2 = session_auth.SessionRecord(
+            sid="test_sid_12345678901234567890123456789012",  # Same SID
+            sid_fingerprint="fp2",
+            tier="owner",
+            tenant_id="tenant_b",  # Different tenant
+            token_fingerprint="",
+            csrf_secret="csrf2",
+            created_at=time.time(),
+            last_seen_at=time.time(),
+            expires_at=time.time() + 3600,
+            persistent=False,
+        )
+
+        # Cache both records (different tenants, same SID)
+        manager.cache_put(rec1, "tenant_a")
+        manager.cache_put(rec2, "tenant_b")
+
+        # Verify isolation: getting tenant_a should not return tenant_b's data
+        cached_a = manager.cache_get("test_sid_12345678901234567890123456789012", "tenant_a")
+        assert cached_a is not None
+        assert cached_a.tenant_id == "tenant_a"
+        assert cached_a.csrf_secret == "csrf1"
+
+        # And vice versa
+        cached_b = manager.cache_get("test_sid_12345678901234567890123456789012", "tenant_b")
+        assert cached_b is not None
+        assert cached_b.tenant_id == "tenant_b"
+        assert cached_b.csrf_secret == "csrf2"
+
+        # Wrong tenant should return None (isolation verified)
+        assert manager.cache_get("test_sid_12345678901234567890123456789012", "tenant_c") is None
+
+    def test_cache_coherency_expired_sessions(self, mock_sessions_dir):
+        """Test HIGH #5: Expired sessions are removed from cache."""
+        manager = SessionManager(enable_cache=True, cache_size=100)
+
+        # Create an already-expired session
+        rec = session_auth.SessionRecord(
+            sid="expired_sid_1234567890123456789012345678901",
+            sid_fingerprint="exp_fp",
+            tier="owner",
+            tenant_id="tenant_a",
+            token_fingerprint="",
+            csrf_secret="csrf_exp",
+            created_at=time.time() - 7200,  # 2 hours ago
+            last_seen_at=time.time() - 7200,
+            expires_at=time.time() - 3600,  # Expired 1 hour ago
+            persistent=False,
+        )
+
+        # Cache the expired session
+        manager.cache_put(rec, "tenant_a")
+
+        # Try to get it — should be None (cache coherency check)
+        cached = manager.cache_get("expired_sid_1234567890123456789012345678901", "tenant_a")
+        assert cached is None
+
+    def test_cache_invalidate_removes_tenant_scoped(self, mock_sessions_dir):
+        """Test cache invalidate with tenant isolation."""
+        manager = SessionManager(enable_cache=True, cache_size=100)
+
+        rec = session_auth.SessionRecord(
+            sid="invalidate_sid_1234567890123456789012345",
+            sid_fingerprint="inv_fp",
+            tier="owner",
+            tenant_id="tenant_a",
+            token_fingerprint="",
+            csrf_secret="csrf_inv",
+            created_at=time.time(),
+            last_seen_at=time.time(),
+            expires_at=time.time() + 3600,
+            persistent=False,
+        )
+
+        # Cache it
+        manager.cache_put(rec, "tenant_a")
+        assert manager.cache_get("invalidate_sid_1234567890123456789012345", "tenant_a") is not None
+
+        # Invalidate for tenant_a
+        manager.cache_invalidate("invalidate_sid_1234567890123456789012345", "tenant_a")
+
+        # Should be gone from cache
+        assert manager.cache_get("invalidate_sid_1234567890123456789012345", "tenant_a") is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

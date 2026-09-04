@@ -26,41 +26,43 @@ _log = logging.getLogger(__name__)
 
 # Simple LRU Cache (thread-safe via GIL in CPython)
 class _SessionLRUCache:
-    """In-memory LRU cache for active sessions.
+    """In-memory LRU cache for active sessions with tenant isolation.
 
-    TODO (CRITICAL): Add tenant_id to cache key for isolation.
-    Current implementation caches by sid only. In multi-tenant environments,
-    this could allow one tenant's sid to collide with another's.
-    See session_manager.py cache_get() for details.
+    CRITICAL #1 FIX: Cache key is now (tenant_id, sid) tuple for isolation.
+    This prevents one tenant's session sid from colliding with another tenant's.
     """
 
     def __init__(self, max_size: int = 1000):
         self.max_size = max_size
-        self.cache: OrderedDict[str, session_auth.SessionRecord] = OrderedDict()
+        self.cache: OrderedDict[tuple[str, str], session_auth.SessionRecord] = OrderedDict()
         self.hits = 0
         self.misses = 0
 
-    def get(self, sid: str) -> Optional[session_auth.SessionRecord]:
-        """Get from cache (moves to end if hit)."""
-        if sid in self.cache:
-            self.cache.move_to_end(sid)
+    def get(self, sid: str, tenant_id: str) -> Optional[session_auth.SessionRecord]:
+        """Get from cache (moves to end if hit). CRITICAL #1: tenant-scoped."""
+        key = (tenant_id, sid)
+        if key in self.cache:
+            self.cache.move_to_end(key)
             self.hits += 1
-            return self.cache[sid]
+            return self.cache[key]
         self.misses += 1
         return None
 
-    def put(self, sid: str, rec: session_auth.SessionRecord) -> None:
-        """Put in cache (evict LRU if full)."""
-        if sid in self.cache:
-            self.cache.move_to_end(sid)
-        self.cache[sid] = rec
+    def put(self, sid: str, tenant_id: str, rec: session_auth.SessionRecord) -> None:
+        """Put in cache (evict LRU if full). CRITICAL #1: tenant-scoped."""
+        key = (tenant_id, sid)
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        self.cache[key] = rec
         if len(self.cache) > self.max_size:
-            oldest_sid, _ = self.cache.popitem(last=False)
-            _log.debug("Evicted LRU session from cache: %s", oldest_sid)
+            oldest_key, _ = self.cache.popitem(last=False)
+            _log.debug("Evicted LRU session from cache: tenant=%s sid_prefix=%s",
+                      oldest_key[0], oldest_key[1][:8])
 
-    def invalidate(self, sid: str) -> None:
-        """Remove from cache."""
-        self.cache.pop(sid, None)
+    def invalidate(self, sid: str, tenant_id: str) -> None:
+        """Remove from cache. CRITICAL #1: tenant-scoped."""
+        key = (tenant_id, sid)
+        self.cache.pop(key, None)
 
     def clear(self) -> None:
         """Clear cache."""
@@ -181,6 +183,8 @@ class SessionManager:
                 else:
                     recovered += 1
                     self._stats.active_sessions += 1
+                    # CRITICAL #1: Cache recovered session with tenant isolation
+                    self.cache_put(rec, rec.tenant_id)
                     _log.debug(
                         "Recovered session: sid_fp=%s tenant=%s expires_in=%.0f",
                         rec.sid_fingerprint,
@@ -246,7 +250,7 @@ class SessionManager:
         _log.info("Session cleanup complete: deleted=%d errors=%d", deleted, errors)
 
     def audit_session_created(self, rec: session_auth.SessionRecord, via: str = "local-login") -> None:
-        """Audit log when a session is created."""
+        """Audit log when a session is created (CRITICAL #3: fanout to audit backend)."""
         try:
             _log.info(
                 "AUDIT[session.created] sid_fp=%s tenant=%s tier=%s via=%s persistent=%s",
@@ -256,29 +260,76 @@ class SessionManager:
                 via,
                 rec.persistent,
             )
+            # CRITICAL #3: Emit to audit backend
+            try:
+                from corvin_plugins.providers import audit_backend
+                audit_backend.fanout(
+                    "console_session_created",
+                    {
+                        "sid_fingerprint": rec.sid_fingerprint,
+                        "tier": rec.tier,
+                        "via": via,
+                        "persistent": rec.persistent,
+                        "expires_in_s": rec.expires_at - time.time(),
+                    },
+                    severity="INFO",
+                    tenant_id=rec.tenant_id,
+                )
+            except Exception as backend_exc:
+                _log.debug("Failed to fanout session.created to audit backend: %s", backend_exc)
         except Exception as exc:
             _log.error("Failed to audit session creation: %s", exc)
 
     def audit_session_loaded(self, rec: session_auth.SessionRecord) -> None:
-        """Audit log when a session is loaded/validated."""
+        """Audit log when a session is loaded/validated (CRITICAL #3: fanout to audit backend)."""
         try:
+            idle_age = time.time() - rec.last_seen_at
             _log.debug(
                 "AUDIT[session.loaded] sid_fp=%s tenant=%s idle_age=%.0f",
                 rec.sid_fingerprint,
                 rec.tenant_id,
-                time.time() - rec.last_seen_at,
+                idle_age,
             )
+            # CRITICAL #3: Emit to audit backend
+            try:
+                from corvin_plugins.providers import audit_backend
+                audit_backend.fanout(
+                    "console_session_loaded",
+                    {
+                        "sid_fingerprint": rec.sid_fingerprint,
+                        "idle_age_s": idle_age,
+                        "persistent": rec.persistent,
+                    },
+                    severity="DEBUG",
+                    tenant_id=rec.tenant_id,
+                )
+            except Exception as backend_exc:
+                _log.debug("Failed to fanout session.loaded to audit backend: %s", backend_exc)
         except Exception as exc:
             _log.error("Failed to audit session load: %s", exc)
 
-    def audit_session_ended(self, sid: str, sid_fingerprint: str, reason: str = "logout") -> None:
-        """Audit log when a session is ended."""
+    def audit_session_ended(self, sid: str, sid_fingerprint: str, reason: str = "logout", tenant_id: str = "_default") -> None:
+        """Audit log when a session is ended (CRITICAL #3: fanout to audit backend)."""
         try:
             _log.info(
                 "AUDIT[session.ended] sid_fp=%s reason=%s",
                 sid_fingerprint,
                 reason,
             )
+            # CRITICAL #3: Emit to audit backend
+            try:
+                from corvin_plugins.providers import audit_backend
+                audit_backend.fanout(
+                    "console_session_ended",
+                    {
+                        "sid_fingerprint": sid_fingerprint,
+                        "reason": reason,
+                    },
+                    severity="INFO",
+                    tenant_id=tenant_id,
+                )
+            except Exception as backend_exc:
+                _log.debug("Failed to fanout session.ended to audit backend: %s", backend_exc)
         except Exception as exc:
             _log.error("Failed to audit session end: %s", exc)
 
@@ -286,22 +337,38 @@ class SessionManager:
         """Return current session statistics."""
         return self._stats
 
-    def cache_get(self, sid: str) -> Optional[session_auth.SessionRecord]:
-        """Get session from cache if enabled (TODO: validate tenant isolation)."""
+    def cache_get(self, sid: str, tenant_id: str) -> Optional[session_auth.SessionRecord]:
+        """Get session from cache if enabled. CRITICAL #1: tenant-scoped. HIGH #5: coherency check."""
         if self._cache is None:
             return None
-        # TODO (CRITICAL): Validate tenant_id on cache hit to prevent isolation bypass
-        return self._cache.get(sid)
+        rec = self._cache.get(sid, tenant_id)
+        if rec is None:
+            return None
+        # HIGH #5: Cache coherency — verify record is still alive
+        if not rec.is_alive():
+            _log.debug("Cached session expired: invalidating from cache")
+            self._cache.invalidate(sid, tenant_id)
+            return None
+        # Paranoid tenant isolation check (should never happen with keyed cache)
+        if rec.tenant_id != tenant_id:
+            _log.warning("Cache isolation bypass attempt detected: tenant mismatch")
+            self._cache.invalidate(sid, tenant_id)
+            return None
+        return rec
 
-    def cache_put(self, rec: session_auth.SessionRecord) -> None:
-        """Put session in cache if enabled (TODO: validate tenant isolation)."""
+    def cache_put(self, rec: session_auth.SessionRecord, tenant_id: str) -> None:
+        """Put session in cache if enabled. CRITICAL #1: tenant-scoped."""
         if self._cache is not None:
-            self._cache.put(rec.sid, rec)
+            if rec.tenant_id != tenant_id:
+                _log.error("Cache put tenant mismatch: rec.tenant=%s passed tenant=%s",
+                          rec.tenant_id, tenant_id)
+                return
+            self._cache.put(rec.sid, tenant_id, rec)
 
-    def cache_invalidate(self, sid: str) -> None:
-        """Invalidate session in cache."""
+    def cache_invalidate(self, sid: str, tenant_id: str) -> None:
+        """Invalidate session in cache. CRITICAL #1: tenant-scoped."""
         if self._cache is not None:
-            self._cache.invalidate(sid)
+            self._cache.invalidate(sid, tenant_id)
 
     def cache_stats(self) -> dict:
         """Return cache statistics."""
