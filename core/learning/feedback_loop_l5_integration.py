@@ -154,8 +154,9 @@ class L5FeedbackLoopIntegrator:
         # Track all pipeline runs (for observability)
         self.pipeline_results: Dict[str, L5PipelineResult] = {}
 
-        # Pending approvals (for conflict detection) — tenant-scoped
-        self.pending_approvals: Dict[str, Dict[str, Dict]] = {}
+        # BUG FIX #3: Pending approvals scoped by tenant first, then skill, then metric
+        # Structure: {tenant_id: {skill_id: {metric_name: approval_data}}}
+        self.pending_approvals: Dict[str, Dict[str, Dict[str, Dict]]] = {}
 
         # Current config hash (for traceability)
         self._current_config_hash: str = "0" * 64
@@ -496,9 +497,9 @@ class L5FeedbackLoopIntegrator:
         """
         try:
             # CRITICAL: Tenant isolation + prevent mutation leaks
-            # Deep copy pending approvals to prevent downstream modifications from leaking
+            # BUG FIX #3: Extract only this tenant's approvals
             with self._lock:
-                tenant_approvals = copy.deepcopy(self.pending_approvals)
+                tenant_approvals = copy.deepcopy(self.pending_approvals.get(self.tenant_id, {}))
 
             # Detect conflicts in pending approvals (tenant-scoped)
             resolutions = self.conflict_resolver.detect_and_resolve(
@@ -620,12 +621,16 @@ class L5FeedbackLoopIntegrator:
         self.audit_backend.write_event(event)
 
     def _track_pending_approval(self, result: L5PipelineResult) -> None:
-        """Track pending approval for conflict detection."""
+        """Track pending approval for conflict detection (tenant-scoped)."""
         with self._lock:
-            if result.skill_id not in self.pending_approvals:
-                self.pending_approvals[result.skill_id] = {}
+            # BUG FIX #3: Initialize tenant scope if not present
+            if self.tenant_id not in self.pending_approvals:
+                self.pending_approvals[self.tenant_id] = {}
 
-            self.pending_approvals[result.skill_id][result.metric_name] = {
+            if result.skill_id not in self.pending_approvals[self.tenant_id]:
+                self.pending_approvals[self.tenant_id][result.skill_id] = {}
+
+            self.pending_approvals[self.tenant_id][result.skill_id][result.metric_name] = {
                 "approval_id": result.approval_id,
                 "pipeline_id": result.pipeline_id,
                 "timestamp": format_iso_timestamp(),
@@ -702,6 +707,7 @@ class L5FeedbackLoopIntegrator:
             return self.pipeline_results.get(pipeline_id)
 
     def get_pending_approvals(self) -> Dict[str, Dict[str, Dict]]:
-        """Get all pending approvals."""
+        """Get all pending approvals for this tenant."""
         with self._lock:
-            return dict(self.pending_approvals)
+            # BUG FIX #3: Return only this tenant's approvals
+            return dict(self.pending_approvals.get(self.tenant_id, {}))

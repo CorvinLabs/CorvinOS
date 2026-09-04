@@ -15,7 +15,7 @@ ADR-0588: L5 Deployment Monitoring
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
@@ -265,11 +265,16 @@ async def acknowledge_l5_alert(
         Success status
     """
     try:
-        monitoring = get_monitoring_system()
+        # BUG FIX #9: Validate tenant access before mutation
+        _validate_tenant_access(rec, req.tenant_id)
+
+        monitoring = get_monitoring_system(tenant_id=req.tenant_id)
         success = monitoring.acknowledge_alert(alert_id)
         if not success:
             raise HTTPException(status_code=404, detail="Alert not found")
         return {"status": "acknowledged", "alert_id": alert_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to acknowledge alert: {str(e)}")
 
@@ -291,10 +296,15 @@ async def resolve_l5_alert(
         Success status
     """
     try:
-        monitoring = get_monitoring_system()
+        # BUG FIX #9: Validate tenant access before mutation
+        _validate_tenant_access(rec, req.tenant_id)
+
+        monitoring = get_monitoring_system(tenant_id=req.tenant_id)
         success = monitoring.resolve_alert(alert_id)
         if not success:
             raise HTTPException(status_code=404, detail="Alert not found")
         return {"status": "resolved", "alert_id": alert_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to resolve alert: {str(e)}")

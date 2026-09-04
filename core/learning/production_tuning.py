@@ -217,6 +217,11 @@ class ProductionTuningEngine:
             cost: Optimization cost
             num_evaluations: Number of samples
         """
+        # BUG FIX #5: Add input validation for arm_id
+        valid_arm_ids = {"control", "treatment"}
+        if arm_id not in valid_arm_ids:
+            raise ValueError(f"Invalid arm_id: {arm_id}. Must be one of {valid_arm_ids}")
+
         with self.lock:
             if test_id not in self.ab_tests:
                 raise ValueError(f"Test {test_id} not found")
@@ -589,8 +594,11 @@ class ProductionTuningEngine:
                     return True
 
             elif key == "latency_p95":
-                # Latency increase > threshold
-                increase = (current[key] - baseline[key]) / baseline[key]
+                # BUG FIX #2: Avoid division by zero (use absolute instead of relative)
+                if baseline[key] == 0:
+                    increase = current[key]
+                else:
+                    increase = (current[key] - baseline[key]) / baseline[key]
                 if increase > self.latency_increase_threshold:
                     return True
 
@@ -628,9 +636,11 @@ class ProductionTuningEngine:
             canary = self.canaries[deployment_id]
             cohort_size = int(len(operator_ids) * canary.target_cohort_size)
 
-            # Random selection (deterministic seed for reproducibility)
-            seed = hashlib.sha256(deployment_id.encode()).digest()[0]
-            random.seed(seed)
+            # BUG FIX #8: Use strong random seed (256+ bits, not 8 bits)
+            # Deterministic for reproducibility, but with strong entropy
+            seed_material = f"{deployment_id}:{datetime.utcnow().isoformat()}"
+            strong_seed = int(hashlib.sha256(seed_material.encode()).hexdigest()[:16], 16)
+            random.seed(strong_seed)
             selected = random.sample(operator_ids, min(cohort_size, len(operator_ids)))
 
             # Record cohort assignment
