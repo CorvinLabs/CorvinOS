@@ -304,6 +304,11 @@ def _get_builtin_panels() -> list[dict]:
             "kind": "feature",
             "source": "builtin",
             "nav_group": "vibe",
+            # Ungated on purpose (mirrors src/panels/registry.tsx, where only the
+            # sidebar entry gates on `vibe_engineering`). The key MUST be present:
+            # the gating loop below indexes it strictly, and dropping the line in
+            # 4fdd32a5 turned every manifest request into a 500 (2026-09-04).
+            "requiredFlag": None,
             "requiredCapability": None,
             "element": {"kind": "react-component", "component": "VibeDashboard"},
             "version": "1.0.0",
