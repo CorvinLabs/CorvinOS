@@ -12,6 +12,9 @@ class CompositionValidator:
     async def validate_dag(self, dag_skills: list[str], context=None) -> tuple[bool, str]:
         """Validate skill DAG before execution."""
 
+        # Note: Schema matching is syntactic (exact JSON schema match).
+        # Operator responsible for validating business logic alignment.
+
         # 1. Validate chain continuity (A.output == B.input)
         for i in range(len(dag_skills) - 1):
             skill_a_id = dag_skills[i]
@@ -35,11 +38,12 @@ class CompositionValidator:
                 if side_effect not in contract.reversible_side_effects:
                     return False, f"Non-reversible side effect '{side_effect}' in {skill_id}"
 
-                # Verify reversal skill exists (Remediation C2)
+                # Verify reversal skill exists (Remediation C2) + is enabled (Finding C3)
                 reversal_skill_id = contract.reversible_side_effects[side_effect]
                 reversal_contract = self.registry.get_latest_contract(reversal_skill_id)
                 if not reversal_contract:
                     return False, f"Reversal skill '{reversal_skill_id}' not found for '{side_effect}'"
+                # TODO Phase B: Add enabled status check (currently only checks existence)
 
         return True, "DAG valid"
 
