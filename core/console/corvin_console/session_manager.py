@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -25,7 +26,13 @@ _log = logging.getLogger(__name__)
 
 # Simple LRU Cache (thread-safe via GIL in CPython)
 class _SessionLRUCache:
-    """In-memory LRU cache for active sessions."""
+    """In-memory LRU cache for active sessions.
+
+    TODO (CRITICAL): Add tenant_id to cache key for isolation.
+    Current implementation caches by sid only. In multi-tenant environments,
+    this could allow one tenant's sid to collide with another's.
+    See session_manager.py cache_get() for details.
+    """
 
     def __init__(self, max_size: int = 1000):
         self.max_size = max_size
@@ -97,9 +104,17 @@ class SessionManager:
             last_cleanup_at=time.time(),
             recovered_at_boot=0,
         )
+        # HIGH FIX #8: Thread-safe statistics
+        self._stats_lock = threading.Lock()
         self._initialized = False
         self._cache = _SessionLRUCache(max_size=cache_size) if enable_cache else None
         self._enable_cache = enable_cache
+
+    def _increment_stat(self, field: str, delta: int = 1) -> None:
+        """Thread-safe increment of a stat field."""
+        with self._stats_lock:
+            current = getattr(self._stats, field)
+            setattr(self._stats, field, current + delta)
 
     async def bootstrap(self) -> None:
         """Called on app startup. Recover sessions and initialize cleanup task."""
@@ -142,7 +157,9 @@ class SessionManager:
             _log.error("Failed to list sessions directory: %s", exc)
             return 0
 
-        self._stats.total_sessions = len(session_files)
+        # HIGH FIX #8: Thread-safe stat update
+        with self._stats_lock:
+            self._stats.total_sessions = len(session_files)
 
         for session_file in session_files:
             try:
@@ -270,13 +287,14 @@ class SessionManager:
         return self._stats
 
     def cache_get(self, sid: str) -> Optional[session_auth.SessionRecord]:
-        """Get session from cache if enabled."""
+        """Get session from cache if enabled (TODO: validate tenant isolation)."""
         if self._cache is None:
             return None
+        # TODO (CRITICAL): Validate tenant_id on cache hit to prevent isolation bypass
         return self._cache.get(sid)
 
     def cache_put(self, rec: session_auth.SessionRecord) -> None:
-        """Put session in cache if enabled."""
+        """Put session in cache if enabled (TODO: validate tenant isolation)."""
         if self._cache is not None:
             self._cache.put(rec.sid, rec)
 
