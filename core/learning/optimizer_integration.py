@@ -5,14 +5,17 @@ Wires the optimizer feedback loop to the operator approval gate.
 When learning detects significant drift, requests operator approval before applying config.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 from core.skills.feedback_stability import (
     FeedbackStabilityGate,
     DriftAlert,
     OperatorApprovalRecord,
     ApprovalDecision,
+    OperatorApprovalGate,
 )
 
 logger = logging.getLogger(__name__)

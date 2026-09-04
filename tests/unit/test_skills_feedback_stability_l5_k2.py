@@ -57,8 +57,8 @@ class TestAuditLinearity:
         record, auto = gate.request_approval(
             drift,
             confidence=0.5,
-            prev_config_hash="abc123",
-            next_config_hash="def456",
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         # Verify audit event was logged
@@ -84,8 +84,8 @@ class TestAuditLinearity:
         record, _ = gate.request_approval(
             drift,
             confidence=0.5,  # Below auto-threshold
-            prev_config_hash="abc123",
-            next_config_hash="def456",
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         # Operator approves
@@ -99,8 +99,8 @@ class TestAuditLinearity:
 
     def test_approval_rejection_emits_audit_event(self):
         """Operator rejection should emit audit event."""
-        gate = OperatorApprovalGate()
         audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -113,9 +113,8 @@ class TestAuditLinearity:
         record, _ = gate.request_approval(
             drift,
             confidence=0.5,
-            prev_config_hash="abc",
-            next_config_hash="def",
-            audit_backend=audit,
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         # Operator rejects
@@ -123,7 +122,6 @@ class TestAuditLinearity:
             record.approval_id,
             "operator:bob",
             reason="Threshold change too risky",
-            audit_backend=audit,
         )
 
         events = audit.get_events_by_type("skill_approval_denied")
@@ -141,7 +139,11 @@ class TestAutoApproval:
 
     def test_high_confidence_auto_approves(self):
         """Delta with confidence > 0.8 should auto-approve."""
-        gate = OperatorApprovalGate(auto_approval_confidence_threshold=0.8)
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(
+            auto_approval_confidence_threshold=0.8,
+            audit_backend=audit
+        )
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -154,8 +156,8 @@ class TestAutoApproval:
         record, auto = gate.request_approval(
             drift,
             confidence=0.85,  # > 0.8
-            prev_config_hash="abc",
-            next_config_hash="def",
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         assert auto is True
@@ -164,7 +166,11 @@ class TestAutoApproval:
 
     def test_low_confidence_requires_operator(self):
         """Delta with confidence < 0.8 should queue for operator."""
-        gate = OperatorApprovalGate(auto_approval_confidence_threshold=0.8)
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(
+            auto_approval_confidence_threshold=0.8,
+            audit_backend=audit
+        )
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -177,8 +183,8 @@ class TestAutoApproval:
         record, auto = gate.request_approval(
             drift,
             confidence=0.6,  # < 0.8
-            prev_config_hash="abc",
-            next_config_hash="def",
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         assert auto is False
@@ -187,7 +193,11 @@ class TestAutoApproval:
 
     def test_auto_approval_reduces_queue(self):
         """Multiple high-confidence deltas should not queue."""
-        gate = OperatorApprovalGate(auto_approval_confidence_threshold=0.8)
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(
+            auto_approval_confidence_threshold=0.8,
+            audit_backend=audit
+        )
 
         for i in range(5):
             drift = DriftAlert(
@@ -201,8 +211,8 @@ class TestAutoApproval:
             _, auto = gate.request_approval(
                 drift,
                 confidence=0.9,  # All high-confidence
-                prev_config_hash=f"abc{i}",
-                next_config_hash=f"def{i}",
+                prev_config_hash=f"{i:064x}",
+                next_config_hash=f"{i+10:064x}",
             )
 
             assert auto is True
@@ -220,7 +230,8 @@ class TestScrubbedAlertPayload:
 
     def test_scrub_alert_removes_raw_deltas(self):
         """Scrubbed alert should not contain recent_deltas."""
-        gate = OperatorApprovalGate()
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -241,7 +252,8 @@ class TestScrubbedAlertPayload:
 
     def test_scrub_alert_uses_reason_codes(self):
         """Scrubbed alert should use enum reason codes, not raw data."""
-        gate = OperatorApprovalGate()
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift_consistent = DriftAlert(
             skill_id="skill.router",
@@ -268,7 +280,8 @@ class TestScrubbedAlertPayload:
 
     def test_scrubbed_alert_in_approval_record(self):
         """Approval record should contain scrubbed alert, not original."""
-        gate = OperatorApprovalGate()
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -282,8 +295,8 @@ class TestScrubbedAlertPayload:
         record, _ = gate.request_approval(
             drift,
             confidence=0.9,
-            prev_config_hash="abc",
-            next_config_hash="def",
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         # Record should have scrubbed alert
@@ -301,7 +314,8 @@ class TestApprovalTTL:
 
     def test_approval_has_expiry(self):
         """Approval should have TTL expiry timestamp."""
-        gate = OperatorApprovalGate(approval_ttl_hours=12)
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(approval_ttl_hours=12, audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -314,13 +328,16 @@ class TestApprovalTTL:
         record, _ = gate.request_approval(
             drift,
             confidence=0.5,
-            prev_config_hash="abc",
-            next_config_hash="def",
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         # TTL should be ~12h from now
-        now = datetime.utcnow()
-        expiry = datetime.fromisoformat(record.ttl_expires.replace("Z", "+00:00"))
+        from datetime import datetime as dt_class
+        now = dt_class.utcnow()
+        # Parse ISO 8601 timestamp
+        ttl_str = record.ttl_expires.replace("Z", "")
+        expiry = dt_class.fromisoformat(ttl_str)
         delta = expiry - now
 
         # Should be approximately 12 hours
@@ -328,7 +345,8 @@ class TestApprovalTTL:
 
     def test_expired_approval_rejected(self):
         """Operator cannot approve an expired request."""
-        gate = OperatorApprovalGate(approval_ttl_hours=0)  # Instant expiry
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(approval_ttl_hours=1, audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -341,15 +359,15 @@ class TestApprovalTTL:
         record, _ = gate.request_approval(
             drift,
             confidence=0.5,
-            prev_config_hash="abc",
-            next_config_hash="def",
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
-        # Wait a bit to ensure expiry
-        import time
-        time.sleep(0.1)
+        # Manually set the TTL to past time to simulate expiration
+        import datetime
+        record.ttl_expires = (datetime.datetime.utcnow() - datetime.timedelta(hours=1)).isoformat() + "Z"
 
-        # Try to approve
+        # Try to approve (should fail because TTL expired)
         success = gate.operator_approve(record.approval_id, "operator:alice")
 
         # Should fail (expired)
@@ -365,8 +383,8 @@ class TestOperatorRevoke:
 
     def test_operator_can_revoke_approved(self):
         """Operator can revoke an approved config change."""
-        gate = OperatorApprovalGate()
         audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -379,9 +397,8 @@ class TestOperatorRevoke:
         record, auto = gate.request_approval(
             drift,
             confidence=0.9,  # Auto-approved
-            prev_config_hash="abc",
-            next_config_hash="def",
-            audit_backend=audit,
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         # Verify it's approved
@@ -392,7 +409,6 @@ class TestOperatorRevoke:
             record.approval_id,
             "operator:alice",
             reason="Caused performance regression",
-            audit_backend=audit,
         )
 
         assert success is True
@@ -404,8 +420,8 @@ class TestOperatorRevoke:
 
     def test_revoke_emits_audit_event(self):
         """Revoke should emit audit event."""
-        gate = OperatorApprovalGate()
         audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -418,16 +434,14 @@ class TestOperatorRevoke:
         record, _ = gate.request_approval(
             drift,
             confidence=0.9,
-            prev_config_hash="abc",
-            next_config_hash="def",
-            audit_backend=audit,
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         gate.operator_revoke(
             record.approval_id,
             "operator:alice",
             reason="Regression detected",
-            audit_backend=audit,
         )
 
         events = audit.get_events_by_type("skill_approval_revoked")
@@ -437,7 +451,8 @@ class TestOperatorRevoke:
 
     def test_cannot_revoke_non_approved(self):
         """Cannot revoke a rejected or pending approval."""
-        gate = OperatorApprovalGate()
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -450,8 +465,8 @@ class TestOperatorRevoke:
         record, _ = gate.request_approval(
             drift,
             confidence=0.5,  # Pending
-            prev_config_hash="abc",
-            next_config_hash="def",
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         # Try to revoke pending
@@ -473,8 +488,8 @@ class TestIntegration:
 
     def test_end_to_end_approval_workflow(self):
         """Complete workflow: request → operator approves → audit trail."""
-        gate = OperatorApprovalGate()
         audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -488,9 +503,8 @@ class TestIntegration:
         record, auto = gate.request_approval(
             drift,
             confidence=0.6,
-            prev_config_hash="old_config_hash",
-            next_config_hash="new_config_hash",
-            audit_backend=audit,
+            prev_config_hash="a" * 64,
+            next_config_hash="b" * 64,
         )
 
         assert auto is False
@@ -500,7 +514,6 @@ class TestIntegration:
         success = gate.operator_approve(
             record.approval_id,
             "operator:alice",
-            audit_backend=audit,
         )
 
         assert success is True
@@ -515,7 +528,8 @@ class TestIntegration:
 
     def test_multiple_skills_independent_queues(self):
         """Different skills should have independent approval queues."""
-        gate = OperatorApprovalGate()
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift1 = DriftAlert(
             skill_id="skill.router",
@@ -534,8 +548,8 @@ class TestIntegration:
         )
 
         # Request for both
-        r1, _ = gate.request_approval(drift1, 0.6, "a1", "b1")
-        r2, _ = gate.request_approval(drift2, 0.6, "a2", "b2")
+        r1, _ = gate.request_approval(drift1, 0.6, "a" * 64, "b" * 64)
+        r2, _ = gate.request_approval(drift2, 0.6, "c" * 64, "d" * 64)
 
         # Both should be pending
         pending = gate.get_pending_approvals()
@@ -551,7 +565,8 @@ class TestIntegration:
 
     def test_approval_record_has_config_hashes(self):
         """Approval record should track config hashes for reversibility."""
-        gate = OperatorApprovalGate()
+        audit = MockAuditBackend()
+        gate = OperatorApprovalGate(audit_backend=audit)
 
         drift = DriftAlert(
             skill_id="skill.router",
@@ -561,15 +576,18 @@ class TestIntegration:
             consecutive_high_deltas=1,
         )
 
+        prev_hash = "a" * 64
+        next_hash = "b" * 64
+
         record, _ = gate.request_approval(
             drift,
             confidence=0.5,
-            prev_config_hash="abc123",
-            next_config_hash="def456",
+            prev_config_hash=prev_hash,
+            next_config_hash=next_hash,
         )
 
-        assert record.prev_config_hash == "abc123"
-        assert record.next_config_hash == "def456"
+        assert record.prev_config_hash == prev_hash
+        assert record.next_config_hash == next_hash
 
 
 if __name__ == "__main__":
