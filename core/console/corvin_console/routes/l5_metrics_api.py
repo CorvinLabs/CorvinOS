@@ -19,6 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from threading import RLock
 from .. import auth as session_auth
 from ..deps import require_session
 from core.learning.monitoring_l5 import (
@@ -27,6 +28,21 @@ from core.learning.monitoring_l5 import (
     Alert,
     GateHealthStatus,
 )
+
+
+def _validate_tenant_access(rec, requested_tenant_id: str) -> None:
+    """
+    CRITICAL FIX #4: Validate that authenticated session matches requested tenant.
+    Raises 403 if session tenant doesn't match requested tenant.
+    """
+    if not hasattr(rec, 'tenant_id') or not rec.tenant_id:
+        raise HTTPException(status_code=401, detail="Session not properly authenticated")
+
+    if rec.tenant_id != requested_tenant_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot access tenant {requested_tenant_id} from session {rec.tenant_id}"
+        )
 
 # ============================================================================
 # Request/Response Models
@@ -89,20 +105,28 @@ class TimeseriesDataResponse(BaseModel):
 
 
 # ============================================================================
-# Global Monitoring System Instance
+# Global Monitoring System Instances (Per-Tenant)
 # ============================================================================
 
-_monitoring_system: Optional[L5MonitoringSystem] = None
+# CRITICAL FIX #3: Per-tenant monitoring systems instead of global singleton
+_monitoring_systems: Dict[str, L5MonitoringSystem] = {}
+_monitoring_lock = RLock()
 
 
-def get_monitoring_system(audit_backend=None) -> L5MonitoringSystem:
-    """Get or create the L5 monitoring system."""
-    global _monitoring_system
-    if _monitoring_system is None:
-        # Initialize with audit backend (for real implementation)
-        # For now, use a mock/placeholder
-        _monitoring_system = L5MonitoringSystem(audit_backend, tenant_id="_default")
-    return _monitoring_system
+def get_monitoring_system(tenant_id: str = "_default", audit_backend=None) -> L5MonitoringSystem:
+    """Get or create the L5 monitoring system for a specific tenant."""
+    from threading import RLock
+    global _monitoring_systems, _monitoring_lock
+
+    if not tenant_id:
+        raise ValueError("tenant_id cannot be empty")
+
+    with _monitoring_lock:
+        if tenant_id not in _monitoring_systems:
+            _monitoring_systems[tenant_id] = L5MonitoringSystem(
+                audit_backend, tenant_id=tenant_id
+            )
+        return _monitoring_systems[tenant_id]
 
 
 # ============================================================================
@@ -124,7 +148,10 @@ async def get_l5_health_status(
         L5HealthSnapshotResponse with gate health, metrics, and alerts
     """
     try:
-        monitoring = get_monitoring_system()
+        # CRITICAL FIX #4: Validate tenant access
+        _validate_tenant_access(rec, tenant_id)
+
+        monitoring = get_monitoring_system(tenant_id=tenant_id)
         snapshot = monitoring.get_health_status()
         return L5HealthSnapshotResponse(
             timestamp=snapshot.timestamp,
@@ -174,7 +201,10 @@ async def get_l5_timeseries(
         TimeseriesDataResponse with historical datapoints
     """
     try:
-        monitoring = get_monitoring_system()
+        # CRITICAL FIX #4: Validate tenant access
+        _validate_tenant_access(rec, tenant_id)
+
+        monitoring = get_monitoring_system(tenant_id=tenant_id)
         data = monitoring.get_timeseries_data(start, end)
         return TimeseriesDataResponse(
             start_time=data["start_time"],
@@ -197,7 +227,10 @@ async def get_l5_alerts(
         List of active AlertResponse objects
     """
     try:
-        monitoring = get_monitoring_system()
+        # CRITICAL FIX #4: Validate tenant access
+        _validate_tenant_access(rec, tenant_id)
+
+        monitoring = get_monitoring_system(tenant_id=tenant_id)
         alerts = monitoring.get_active_alerts()
         return [
             AlertResponse(

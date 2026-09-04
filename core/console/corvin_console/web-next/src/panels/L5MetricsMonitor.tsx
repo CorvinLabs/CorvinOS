@@ -88,9 +88,32 @@ interface MetricsService {
 class L5MetricsService implements MetricsService {
   baseURL = "/v1/metrics/l5";
   tenantID = "_default";
+  // HIGH FIX #7: Add timeout constant (5 seconds)
+  private FETCH_TIMEOUT_MS = 5000;
+
+  private async fetchWithTimeout(url: string, options?: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      return res;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timeout (5s)');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 
   async getHealthStatus(): Promise<L5HealthSnapshot> {
-    const res = await fetch(`${this.baseURL}/status?tenant_id=${this.tenantID}`);
+    const res = await this.fetchWithTimeout(
+      `${this.baseURL}/status?tenant_id=${this.tenantID}`
+    );
     if (!res.ok) throw new Error(`Failed to fetch health status: ${res.statusText}`);
     return res.json();
   }
@@ -101,32 +124,40 @@ class L5MetricsService implements MetricsService {
       end: endTime,
       tenant_id: this.tenantID,
     });
-    const res = await fetch(`${this.baseURL}/timeseries?${params}`);
+    const res = await this.fetchWithTimeout(`${this.baseURL}/timeseries?${params}`);
     if (!res.ok) throw new Error(`Failed to fetch timeseries: ${res.statusText}`);
     return res.json();
   }
 
   async getActiveAlerts(): Promise<Alert[]> {
-    const res = await fetch(`${this.baseURL}/alerts?tenant_id=${this.tenantID}`);
+    const res = await this.fetchWithTimeout(
+      `${this.baseURL}/alerts?tenant_id=${this.tenantID}`
+    );
     if (!res.ok) throw new Error(`Failed to fetch alerts: ${res.statusText}`);
     return res.json();
   }
 
   async acknowledgeAlert(alertId: string): Promise<boolean> {
-    const res = await fetch(`${this.baseURL}/alerts/${alertId}/acknowledge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenant_id: this.tenantID }),
-    });
+    const res = await this.fetchWithTimeout(
+      `${this.baseURL}/alerts/${alertId}/acknowledge`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenant_id: this.tenantID }),
+      }
+    );
     return res.ok;
   }
 
   async resolveAlert(alertId: string): Promise<boolean> {
-    const res = await fetch(`${this.baseURL}/alerts/${alertId}/resolve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenant_id: this.tenantID }),
-    });
+    const res = await this.fetchWithTimeout(
+      `${this.baseURL}/alerts/${alertId}/resolve`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenant_id: this.tenantID }),
+      }
+    );
     return res.ok;
   }
 }
@@ -372,31 +403,57 @@ export default function L5MetricsMonitor() {
   // Initial fetch
   useEffect(() => {
     fetchHealthStatus();
-  }, [fetchHealthStatus]);
+  }, []);
 
-  // Auto-refresh every 10 seconds
+  // HIGH FIX #8: Separate useEffect for auto-refresh; don't depend on fetchHealthStatus
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(fetchHealthStatus, 10000);
+    const interval = setInterval(() => {
+      fetchHealthStatus();
+    }, 10000);
     return () => clearInterval(interval);
-  }, [autoRefresh, fetchHealthStatus]);
+  }, [autoRefresh]);
 
-  // Alert handlers
+  // Alert handlers with error rollback
   const handleAcknowledgeAlert = async (alertId: string) => {
-    const success = await service.acknowledgeAlert(alertId);
-    if (success) {
-      setAlerts((prev) =>
-        prev.map((a) =>
-          a.alert_id === alertId ? { ...a, is_acknowledged: true } : a
-        )
-      );
+    // HIGH FIX #9: Save previous state for rollback on error
+    const previousAlerts = alerts;
+
+    // Optimistic update
+    setAlerts((prev) =>
+      prev.map((a) =>
+        a.alert_id === alertId ? { ...a, is_acknowledged: true } : a
+      )
+    );
+
+    try {
+      const success = await service.acknowledgeAlert(alertId);
+      if (!success) {
+        // Rollback on failure
+        setAlerts(previousAlerts);
+      }
+    } catch (err) {
+      // Rollback on error
+      setAlerts(previousAlerts);
     }
   };
 
   const handleResolveAlert = async (alertId: string) => {
-    const success = await service.resolveAlert(alertId);
-    if (success) {
-      setAlerts((prev) => prev.filter((a) => a.alert_id !== alertId));
+    // HIGH FIX #9: Save previous state for rollback on error
+    const previousAlerts = alerts;
+
+    // Optimistic update
+    setAlerts((prev) => prev.filter((a) => a.alert_id !== alertId));
+
+    try {
+      const success = await service.resolveAlert(alertId);
+      if (!success) {
+        // Rollback on failure
+        setAlerts(previousAlerts);
+      }
+    } catch (err) {
+      // Rollback on error
+      setAlerts(previousAlerts);
     }
   };
 

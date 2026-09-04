@@ -27,6 +27,7 @@ Tenant-scoped: All reads filtered by tenant_id.
 
 import logging
 import statistics
+import copy
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -152,6 +153,10 @@ class MetricsCollector:
             window_hours: Time window for metrics (default 24h)
             tenant_id: Tenant scope (default "_default")
         """
+        # CRITICAL FIX #1: Validate tenant_id (GDPR Art. 32)
+        if not tenant_id:
+            raise ValueError("tenant_id cannot be empty (GDPR Art. 32)")
+
         self.audit_backend = audit_backend
         self.window_hours = window_hours
         self.tenant_id = tenant_id
@@ -191,9 +196,23 @@ class MetricsCollector:
     def _refresh_cache(self, cutoff_time: datetime) -> None:
         """Refresh in-memory cache from audit trail."""
         try:
-            # Read approval-related events from audit trail
-            # (This is a mock implementation; real code would query audit_backend)
-            self._approval_events = []
+            # CRITICAL FIX #2: Add tenant filtering + timeout
+            if self.audit_backend:
+                try:
+                    # Query with tenant filter AND timeout (5 seconds)
+                    events = self.audit_backend.query_events(
+                        tenant_id=self.tenant_id,
+                        event_types=['approval_request', 'approval_decision'],
+                        after=cutoff_time,
+                        timeout_seconds=5
+                    ) or []
+                    self._approval_events = events
+                except TimeoutError:
+                    logger.warning(f"Audit backend timeout for tenant {self.tenant_id}; using stale cache")
+                    return
+            else:
+                self._approval_events = []
+
             self._config_apply_events = []
             self._revoke_events = []
             self._last_refresh_timestamp = datetime.utcnow()
@@ -404,7 +423,8 @@ class HealthChecker:
                 elif any("exceed" in a.lower() for a in alerts):
                     snapshot.sla_status = "WARNING"
 
-            self._previous_metrics = metrics
+            # CRITICAL FIX #2: Deep copy metrics, don't store reference
+            self._previous_metrics = copy.deepcopy(metrics)
             return snapshot
 
     def _check_gate_latencies(self, metrics: Dict) -> Dict[str, GateHealthStatus]:

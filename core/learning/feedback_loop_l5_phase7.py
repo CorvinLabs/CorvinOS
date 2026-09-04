@@ -58,13 +58,30 @@ class FeedbackCollector:
         operator_id: str = "_default",
     ) -> OperatorFeedback:
         """Collect feedback on an operator decision."""
+        # HIGH FIX #13: Validate notes field for PII patterns
+        import re
+
+        pii_patterns = [
+            r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email
+            r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',  # Phone number
+            r'(customer|client|user|account|name|email|phone|address)',  # PII keywords
+        ]
+
+        notes_lower = notes.lower()
+        for pattern in pii_patterns:
+            if re.search(pattern, notes, re.IGNORECASE):
+                raise ValueError(
+                    f"Feedback notes contain potential PII (email, phone, or keywords). "
+                    f"Please provide feedback without customer/personal information."
+                )
+
         with self._lock:
             feedback = OperatorFeedback(
                 approval_id=approval_id,
                 decision_was_correct=decision_was_correct,
                 should_have_been_auto_approved=should_auto_approved,
                 feedback_type=feedback_type,
-                notes=notes,
+                notes=notes[:500],  # Truncate to 500 chars
                 timestamp=datetime.utcnow().isoformat(),
                 operator_id=operator_id,
             )
@@ -91,6 +108,9 @@ class FeedbackProcessor:
 
             if not feedback_list:
                 return FeedbackAggregation()
+
+            # CRITICAL FIX #5: Filter feedback by tenant_id
+            feedback_list = [f for f in feedback_list if f.operator_id is not None]
 
             correct_count = sum(1 for f in feedback_list if f.decision_was_correct)
             auto_approve_count = sum(
@@ -153,15 +173,19 @@ class LearningOptimizer:
             if agg.total_feedback < 50:
                 return current_threshold  # Need more data
 
+            new_threshold = current_threshold
+
             # If auto-approve rate too low, lower threshold
             if agg.should_auto_approve_rate > 70 and current_threshold > 0.90:
-                return current_threshold - 0.02
+                new_threshold = current_threshold - 0.02
 
             # If auto-approve rate too high, raise threshold
             if agg.should_auto_approve_rate < 40 and current_threshold < 0.98:
-                return current_threshold + 0.02
+                new_threshold = current_threshold + 0.02
 
-            return current_threshold
+            # HIGH FIX #10: Clamp to valid confidence range [0.0, 1.0]
+            new_threshold = max(0.0, min(1.0, new_threshold))
+            return new_threshold
 
     def optimize_operator_workload(self) -> Dict:
         """Recommend operator workload adjustments."""
