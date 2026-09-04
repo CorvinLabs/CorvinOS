@@ -151,8 +151,8 @@ class PluginRegistry:
 
         for k, v in data.items():
             if any(secret in k.lower() for secret in secret_keys):
-                # Replace secret with presence indicator + hash
-                masked[k] = f"<MASKED:{hashlib.md5(str(v).encode()).hexdigest()[:8]}>"
+                # Replace secret with presence indicator + SHA256 hash (not MD5)
+                masked[k] = f"<MASKED:{hashlib.sha256(str(v).encode()).hexdigest()[:8]}>"
             else:
                 masked[k] = v
 
