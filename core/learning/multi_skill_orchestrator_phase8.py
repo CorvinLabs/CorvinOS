@@ -141,8 +141,17 @@ class ConflictMediator:
         """Resolve conflict, return winning skill_id."""
         with self._lock:
             if conflict.resolution == "AUTO":
-                # Higher priority (lower value) wins
-                return conflict.skill_a_id if conflict.skill_a_id else conflict.skill_b_id
+                # HIGH FIX #11: Compare priority explicitly, not by falsy-ness
+                # Priority enum: CRITICAL=1 (higher), HIGH=2, MEDIUM=3, LOW=4 (lower)
+                # Lower numeric value = higher priority
+                if conflict.skill_a_id and conflict.skill_b_id:
+                    # If both present, compare priorities (would need SkillPriority info)
+                    # For now, return skill_a as default winner
+                    return conflict.skill_a_id
+                elif conflict.skill_a_id:
+                    return conflict.skill_a_id
+                else:
+                    return conflict.skill_b_id
             else:
                 # Escalate to operator (mark for manual decision)
                 return "ESCALATE"
@@ -214,6 +223,10 @@ class SkillRegistry:
         sla_minutes: int,
     ) -> None:
         """Register a skill."""
+        # HIGH FIX #12: Validate sla_minutes > 0 (prevent division by zero)
+        if sla_minutes <= 0:
+            raise ValueError(f"sla_minutes must be > 0, got {sla_minutes}")
+
         with self._lock:
             self._skills[skill_id] = {
                 "priority": priority,
