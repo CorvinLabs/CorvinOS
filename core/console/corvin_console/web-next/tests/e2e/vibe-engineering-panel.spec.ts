@@ -1,6 +1,5 @@
 /**
- * Vibe Engineering group E2E — the five-panel navigation
- * (CONSOLE_REDESIGN_UNIFIED_CONCEPT, replaces the eleven-entry legacy group).
+ * Vibe Engineering group E2E — the group is ONE panel.
  *
  * Runs against the LIVE console (playwright.config baseURL =
  * http://127.0.0.1:8765/console) with the shared session from global-setup, so
@@ -9,22 +8,26 @@
  * weeks because pages/vibe-engineering.tsx shadowed pages/vibe-engineering/ and
  * nothing exercised the mounted route.
  *
- * Group: Dashboard · Brain Monitor · Context Intelligence · Learning Hub ·
- *        Session Explorer.
+ * On 2026-09-05 the four secondary panels (Brain Monitor · Context Intelligence ·
+ * Learning Hub · Session Explorer) were retired — their content is reachable as
+ * tabs of the dashboard, and the duplicate sidebar entries were removed from
+ * NAV_GROUPS, PANELS and the backend capability manifest.
  */
 import { test, expect, type Page } from '@playwright/test';
 
 const RETIRED = [
   'vibe-overview', 'talent', 'learning', 'learning-objectives',
   'multi-instance', 'task-graph', 'brain-status', 'debug-panel',
+  // Retired 2026-09-05 — folded into the dashboard's tabs.
+  'brain-monitor', 'context-intelligence', 'learning-hub', 'session-explorer',
 ];
 
 async function goto(page: Page, route: string) {
   // baseURL already ends in /console, and an ABSOLUTE path would discard that
   // prefix and hit the gateway's own 404 instead of the SPA.
   await page.goto(`/console/app/${route}`);
-  // NOT networkidle: these panels poll (/state every 5s, the vibe adapter every
-  // 15s), so the network never goes idle and every wait would burn the timeout.
+  // NOT networkidle: the dashboard polls the audit query, so the network never
+  // goes idle and every wait would burn the timeout.
   await page.waitForLoadState('domcontentloaded');
 }
 
@@ -36,22 +39,14 @@ async function expectNoCrash(page: Page) {
 }
 
 test.describe('Vibe Engineering group', () => {
-  test('sidebar lists exactly the five current panels', async ({ page }) => {
+  test('sidebar lists exactly the one current panel', async ({ page }) => {
     await goto(page, 'vibe-engineering');
 
     const nav = page.locator('aside, nav').first();
-    for (const [route, label] of [
-      ['vibe-engineering', 'Dashboard'],
-      ['brain-monitor', 'Brain Monitor'],
-      ['context-intelligence', 'Context Intelligence'],
-      ['learning-hub', 'Learning Hub'],
-      ['session-explorer', 'Session Explorer'],
-    ] as const) {
-      await expect(
-        nav.locator(`a[href$="/app/${route}"]`),
-        `sidebar entry for ${label}`,
-      ).toHaveCount(1);
-    }
+    await expect(
+      nav.locator('a[href$="/app/vibe-engineering"]'),
+      'sidebar entry for the Vibe Dashboard',
+    ).toHaveCount(1);
   });
 
   test('no retired panel is still linked from the sidebar', async ({ page }) => {
@@ -64,47 +59,23 @@ test.describe('Vibe Engineering group', () => {
     }
   });
 
-  test('Dashboard route renders the unified 3-column dashboard', async ({ page }) => {
+  test('Dashboard route renders the tabbed dashboard', async ({ page }) => {
     await goto(page, 'vibe-engineering');
-    // The directory index (Dashboard.tsx), not the retired Context Pipeline page.
-    await expect(page.getByTestId('vibe-dashboard')).toBeVisible();
     await expect(
-      page.getByRole('heading', { name: /vibe engineering dashboard/i }),
+      page.getByRole('heading', { name: /^vibe engineering$/i }),
     ).toBeVisible();
+    for (const label of ['Graph View', 'Inspector', 'Timeline', 'Learning']) {
+      await expect(
+        page.getByRole('tab', { name: new RegExp(label, 'i') }),
+        `tab ${label}`,
+      ).toBeVisible();
+    }
     await expectNoCrash(page);
   });
 
-  test('Brain Monitor renders real pipeline telemetry', async ({ page }) => {
-    await goto(page, 'brain-monitor');
-    await expect(page.getByTestId('brain-monitor')).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: /brain monitor/i }),
-    ).toBeVisible();
-    // The configured-pipeline card is rendered from GET /pipeline, always.
-    await expect(page.locator('text=/configured pipeline/i')).toBeVisible();
-    await expectNoCrash(page);
-  });
-
-  test('Session Explorer renders the turn history', async ({ page }) => {
-    await goto(page, 'session-explorer');
-    await expect(page.getByTestId('session-explorer')).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: /session explorer/i }),
-    ).toBeVisible();
-    // Either sessions or the honest empty state — never a crash.
-    await expectNoCrash(page);
-  });
-
-  test('Context Intelligence and Learning Hub still render', async ({ page }) => {
-    // Assert a card these panels always render once /state resolves — an empty
-    // `main` is just the loading spinner, which would pass a truthiness check
-    // and prove nothing.
-    await goto(page, 'context-intelligence');
-    await expect(page.locator('text=Original Context').first()).toBeVisible();
-    await expectNoCrash(page);
-
-    await goto(page, 'learning-hub');
-    await expect(page.locator('text=Talent Score').first()).toBeVisible();
+  test('Learning tab renders the learning dashboard', async ({ page }) => {
+    await goto(page, 'vibe-engineering?tab=learning');
+    await expect(page.locator('text=/learning score/i').first()).toBeVisible();
     await expectNoCrash(page);
   });
 

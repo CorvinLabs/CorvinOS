@@ -15,16 +15,13 @@ import {
   Globe,
   Globe2,
   Hammer,
-  History,
   KeyRound,
   Layers,
   LayoutDashboard,
-  Lightbulb,
   Lock,
   LogOut,
   MessagesSquare,
   Network,
-  GitBranch,
   Package,
   Plug,
   Blocks,
@@ -142,16 +139,15 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Vibe Engineering",
     collapsible: true,
     defaultOpen: true,
-    // CONSOLE_REDESIGN_UNIFIED_CONCEPT: one coherent group of five views.
+    // CONSOLE_REDESIGN_UNIFIED_CONCEPT: the group is the ONE tabbed dashboard.
+    // Brain Monitor / Context Intelligence / Learning Hub / Session Explorer were
+    // retired on 2026-09-05 — their content lives in the dashboard's tabs, and
+    // the separate sidebar entries only duplicated it.
     // A panel needs BOTH registrations — panelRoutes() mounts /app/<route> from
     // PANELS, this list makes it reachable. tests/unit/panel-nav-wiring.test.ts
     // fails if the two drift apart.
     items: [
       { to: "/app/vibe-engineering",     label: "Dashboard",            icon: Boxes,     requiredFlag: "vibe_engineering" },
-      { to: "/app/brain-monitor",        label: "Brain Monitor",        icon: Cpu,       requiredFlag: "vibe_engineering" },
-      { to: "/app/context-intelligence", label: "Context Intelligence", icon: GitBranch, requiredFlag: "vibe_engineering" },
-      { to: "/app/learning-hub",         label: "Learning Hub",         icon: Lightbulb, requiredFlag: "vibe_engineering" },
-      { to: "/app/session-explorer",     label: "Session Explorer",     icon: History,   requiredFlag: "vibe_engineering" },
     ],
   },
   {

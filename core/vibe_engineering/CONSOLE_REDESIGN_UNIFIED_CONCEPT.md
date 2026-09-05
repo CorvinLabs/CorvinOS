@@ -1,7 +1,17 @@
 # Vibe Engineering Console Redesign — Unified UX Concept
 
-**Status: IMPLEMENTED (2026-08-27, ADR-0431).** The five-entry NavGroup below is
-live. Deltas from this document, deliberate:
+**Status: SUPERSEDED IN PART (2026-09-05).** The five-entry NavGroup this
+document describes shipped on 2026-08-27 (ADR-0431) and was cut back to ONE
+entry on 2026-09-05: the Vibe Dashboard was rewritten as the audit-graph panel
+(ADR-0564) with its own tabs — Graph View · Inspector · Timeline · Learning —
+and Brain Monitor, Context Intelligence, Learning Hub and Session Explorer were
+removed as duplicates (routes, `PANELS`, `NAV_GROUPS`, page files and the
+backend capability manifest). The secondary-view sections below describe pages
+that no longer exist; keep them for the UX rationale, not as a map of the
+console. See `docs/components/vibe-dashboard.md`.
+
+Deltas from this document that were deliberate while the five-entry group was
+live:
 
 | This document | Shipped |
 |---|---|
