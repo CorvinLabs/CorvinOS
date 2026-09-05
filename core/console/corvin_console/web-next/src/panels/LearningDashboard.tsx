@@ -11,6 +11,36 @@
 
 import React, { useState, useEffect } from 'react';
 
+// ============================================================================
+// PALETTE (Same as Maturity Metrics)
+// ============================================================================
+const PALETTE = {
+  systems: [
+    { id: 'delegation_router', name: 'Delegation Router', hex: '#FF6B6B' },
+    { id: 'context_adapter', name: 'Context Adapter', hex: '#4ECDC4' },
+    { id: 'workflow_optimizer', name: 'Workflow Optimizer', hex: '#95E1D3' },
+    { id: 'security_orchestrator', name: 'Security Orchestrator', hex: '#F7B801' },
+    { id: 'flow_guard', name: 'Flow Guard', hex: '#6C63FF' },
+  ],
+  sequential: {
+    light: '#F0F0F0',
+    mid: '#888888',
+    dark: '#1A1A1A',
+  },
+  status: {
+    good: '#2ECC71',
+    warning: '#F39C12',
+    serious: '#E74C3C',
+  },
+  surface: {
+    dark: '#0D1117',
+    card: '#161B22',
+    border: '#30363D',
+    text: '#C9D1D9',
+    muted: '#8B949E',
+  },
+};
+
 interface Pattern {
   pattern_id: string;
   task_type: string;
@@ -35,12 +65,27 @@ interface Preference {
   observation_count: number;
 }
 
-export const LearningDashboard: React.FC = () => {
+interface LearningDashboardProps {
+  activeTab?: 'patterns' | 'config' | 'preferences' | 'summary';
+  onTabChange?: (tab: 'patterns' | 'config' | 'preferences' | 'summary') => void;
+  hideTabNavigation?: boolean;
+}
+
+export const LearningDashboard: React.FC<LearningDashboardProps> = ({
+  activeTab: propActiveTab,
+  onTabChange,
+  hideTabNavigation = false
+}) => {
   const [patterns, setPatterns] = useState<Pattern[]>([]);
   const [configVersions, setConfigVersions] = useState<ConfigVersion[]>([]);
   const [preferences, setPreferences] = useState<Record<string, Preference>>({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'patterns' | 'config' | 'preferences' | 'summary'>('summary');
+  const [activeTab, setActiveTab] = useState<'patterns' | 'config' | 'preferences' | 'summary'>(propActiveTab || 'summary');
+
+  const handleTabChange = (tab: 'patterns' | 'config' | 'preferences' | 'summary') => {
+    setActiveTab(tab);
+    if (onTabChange) onTabChange(tab);
+  };
   const [feedbackTask, setFeedbackTask] = useState('');
   const [feedbackQuality, setFeedbackQuality] = useState<'excellent' | 'good' | 'okay' | 'poor' | 'bad'>('good');
 
@@ -135,69 +180,79 @@ export const LearningDashboard: React.FC = () => {
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6">🧠 Learning Dashboard</h1>
+    <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto', backgroundColor: PALETTE.surface.dark, color: PALETTE.surface.text }}>
+      <h1 style={{ fontSize: '28px', fontWeight: 700, marginBottom: '24px', color: PALETTE.surface.text }}>🧠 Learning Dashboard</h1>
 
       {/* Tab Navigation */}
-      <div className="flex gap-4 mb-6 border-b overflow-x-auto">
-        {(['summary', 'patterns', 'config', 'preferences'] as const).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`pb-2 px-4 font-semibold whitespace-nowrap ${
-              activeTab === tab
-                ? 'border-b-2 border-blue-500 text-blue-600'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            {tab === 'summary' && `📝 Summary`}
-            {tab === 'patterns' && `📊 Patterns (${patterns.length})`}
-            {tab === 'config' && `⚙️ Config History (${configVersions.length})`}
-            {tab === 'preferences' && `👤 Preferences (${Object.keys(preferences).length})`}
-          </button>
-        ))}
-      </div>
+      {!hideTabNavigation && (
+        <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', borderBottom: `1px solid ${PALETTE.surface.border}`, overflowX: 'auto' }}>
+          {(['summary', 'patterns', 'config', 'preferences'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => handleTabChange(tab)}
+              style={{
+                paddingBottom: '8px',
+                paddingLeft: '16px',
+                paddingRight: '16px',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                borderBottom: activeTab === tab ? `2px solid #4ECDC4` : 'none',
+                color: activeTab === tab ? '#4ECDC4' : PALETTE.surface.muted,
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                transition: 'color 0.2s',
+              }}
+            >
+              {tab === 'summary' && `📝 Summary`}
+              {tab === 'patterns' && `📊 Patterns (${patterns.length})`}
+              {tab === 'config' && `⚙️ Config History (${configVersions.length})`}
+              {tab === 'preferences' && `👤 Preferences (${Object.keys(preferences).length})`}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* TAB 1: Learning Summary */}
       {activeTab === 'summary' && (
         <div>
-          <h2 className="text-2xl font-bold mb-6">📝 Learning Summary</h2>
+          <h2 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '24px', color: PALETTE.surface.text }}>📝 Learning Summary</h2>
 
           {patterns.length === 0 && configVersions.length === 0 && Object.keys(preferences).length === 0 ? (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 text-center">
-              <p className="text-lg text-gray-700 mb-2">No learning data yet</p>
-              <p className="text-sm text-gray-600">Complete tasks and provide feedback to see what the system learns about your working style.</p>
+            <div style={{ backgroundColor: PALETTE.surface.card, border: `1px solid ${PALETTE.surface.border}`, borderRadius: '8px', padding: '24px', textAlign: 'center' }}>
+              <p style={{ fontSize: '18px', color: PALETTE.surface.text, marginBottom: '8px' }}>No learning data yet</p>
+              <p style={{ fontSize: '14px', color: PALETTE.surface.muted }}>Complete tasks and provide feedback to see what the system learns about your working style.</p>
             </div>
           ) : (
             <div className="space-y-6">
               {/* Overall Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
-                  <div className="text-3xl font-bold text-blue-600">{patterns.length}</div>
-                  <div className="text-sm text-gray-700">Patterns Discovered</div>
-                  <p className="text-xs text-gray-600 mt-2">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+                <div style={{ backgroundColor: PALETTE.surface.card, borderRadius: '8px', padding: '16px', border: `1px solid ${PALETTE.surface.border}` }}>
+                  <div style={{ fontSize: '32px', fontWeight: 700, color: PALETTE.systems[1].hex, marginBottom: '8px' }}>{patterns.length}</div>
+                  <div style={{ fontSize: '14px', color: PALETTE.surface.text, marginBottom: '8px' }}>Patterns Discovered</div>
+                  <p style={{ fontSize: '12px', color: PALETTE.surface.muted, margin: 0 }}>
                     {patterns.length === 0
                       ? 'Need 5+ tasks to discover patterns'
                       : `Based on ${patterns.reduce((sum, p) => sum + p.observation_count, 0)} observations`}
                   </p>
                 </div>
 
-                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200">
-                  <div className="text-3xl font-bold text-green-600">
+                <div style={{ backgroundColor: PALETTE.surface.card, borderRadius: '8px', padding: '16px', border: `1px solid ${PALETTE.surface.border}` }}>
+                  <div style={{ fontSize: '32px', fontWeight: 700, color: PALETTE.status.good, marginBottom: '8px' }}>
                     {configVersions.length > 1 ? `+${((configVersions[configVersions.length - 1]?.improvement_pct || 0) * 100).toFixed(1)}%` : 'N/A'}
                   </div>
-                  <div className="text-sm text-gray-700">Config Improvement</div>
-                  <p className="text-xs text-gray-600 mt-2">
+                  <div style={{ fontSize: '14px', color: PALETTE.surface.text, marginBottom: '8px' }}>Config Improvement</div>
+                  <p style={{ fontSize: '12px', color: PALETTE.surface.muted, margin: 0 }}>
                     {configVersions.length === 0
                       ? 'Will improve after feedback'
                       : `${configVersions.length} config versions tested`}
                   </p>
                 </div>
 
-                <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 border border-purple-200">
-                  <div className="text-3xl font-bold text-purple-600">{Object.keys(preferences).length}</div>
-                  <div className="text-sm text-gray-700">Task Types Learned</div>
-                  <p className="text-xs text-gray-600 mt-2">
+                <div style={{ backgroundColor: PALETTE.surface.card, borderRadius: '8px', padding: '16px', border: `1px solid ${PALETTE.surface.border}` }}>
+                  <div style={{ fontSize: '32px', fontWeight: 700, color: PALETTE.systems[4].hex, marginBottom: '8px' }}>{Object.keys(preferences).length}</div>
+                  <div style={{ fontSize: '14px', color: PALETTE.surface.text, marginBottom: '8px' }}>Task Types Learned</div>
+                  <p style={{ fontSize: '12px', color: PALETTE.surface.muted, margin: 0 }}>
                     {Object.keys(preferences).length === 0
                       ? 'Preferences emerge after 10+ tasks'
                       : Object.keys(preferences).map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(', ')}
@@ -206,23 +261,23 @@ export const LearningDashboard: React.FC = () => {
               </div>
 
               {/* Main Learnings */}
-              <div className="bg-white rounded-lg p-6 border border-gray-200">
-                <h3 className="text-lg font-semibold mb-4">🎯 What We've Learned About You</h3>
+              <div style={{ backgroundColor: PALETTE.surface.card, borderRadius: '8px', padding: '24px', border: `1px solid ${PALETTE.surface.border}` }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '16px', color: PALETTE.surface.text }}>🎯 What We've Learned About You</h3>
 
                 {patterns.length > 0 && (
-                  <div className="mb-6">
-                    <h4 className="font-semibold text-gray-800 mb-3">Your Most Effective Workflows</h4>
-                    <div className="space-y-3">
+                  <div style={{ marginBottom: '24px' }}>
+                    <h4 style={{ fontWeight: 600, color: PALETTE.surface.text, marginBottom: '12px' }}>Your Most Effective Workflows</h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       {patterns.slice(0, 3).map(p => (
-                        <div key={p.pattern_id} className="bg-gray-50 rounded p-4 border-l-4 border-blue-500">
-                          <p className="font-mono text-sm mb-2 text-gray-700">
+                        <div key={p.pattern_id} style={{ backgroundColor: 'rgba(255, 107, 107, 0.1)', borderRadius: '6px', padding: '16px', borderLeft: `4px solid ${PALETTE.systems[0].hex}` }}>
+                          <p style={{ fontFamily: 'monospace', fontSize: '14px', marginBottom: '8px', color: PALETTE.surface.text, margin: 0 }}>
                             {p.skill_sequence.join(' → ')}
                           </p>
-                          <div className="flex justify-between text-xs text-gray-600">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: PALETTE.surface.muted }}>
                             <span>✓ {(p.success_rate * 100).toFixed(0)}% success rate</span>
                             <span>→ {(p.confidence_score * 100).toFixed(0)}% confidence</span>
                           </div>
-                          <p className="text-xs text-gray-500 mt-2">
+                          <p style={{ fontSize: '12px', color: PALETTE.surface.muted, marginTop: '8px', margin: 0 }}>
                             Based on {p.observation_count} {p.observation_count === 1 ? 'task' : 'tasks'}
                           </p>
                         </div>
@@ -232,21 +287,21 @@ export const LearningDashboard: React.FC = () => {
                 )}
 
                 {configVersions.length > 1 && (
-                  <div className="mb-6">
-                    <h4 className="font-semibold text-gray-800 mb-3">Configuration Evolution</h4>
-                    <div className="bg-gray-50 rounded p-4">
-                      <p className="text-sm text-gray-700 mb-3">
+                  <div style={{ marginBottom: '24px' }}>
+                    <h4 style={{ fontWeight: 600, color: PALETTE.surface.text, marginBottom: '12px' }}>Configuration Evolution</h4>
+                    <div style={{ backgroundColor: 'rgba(78, 205, 196, 0.1)', borderRadius: '6px', padding: '16px' }}>
+                      <p style={{ fontSize: '14px', color: PALETTE.surface.text, marginBottom: '12px', margin: 0 }}>
                         The system has optimized your configuration through {configVersions.length} iterations:
                       </p>
-                      <div className="space-y-2">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {configVersions.slice(-3).map((v, idx) => (
-                          <div key={v.version_id} className="text-sm text-gray-600 flex justify-between">
+                          <div key={v.version_id} style={{ fontSize: '14px', color: PALETTE.surface.muted, display: 'flex', justifyContent: 'space-between' }}>
                             <span>{v.version_id}: {v.change_reason}</span>
-                            <span className="text-green-600 font-semibold">+{v.improvement_pct.toFixed(1)}%</span>
+                            <span style={{ color: PALETTE.status.good, fontWeight: 600 }}>+{v.improvement_pct.toFixed(1)}%</span>
                           </div>
                         ))}
                       </div>
-                      <p className="text-xs text-gray-500 mt-3">
+                      <p style={{ fontSize: '12px', color: PALETTE.surface.muted, marginTop: '12px', margin: 0 }}>
                         💡 Tip: You can rollback to any previous version if you prefer it.
                       </p>
                     </div>
@@ -254,24 +309,24 @@ export const LearningDashboard: React.FC = () => {
                 )}
 
                 {Object.keys(preferences).length > 0 && (
-                  <div className="mb-4">
-                    <h4 className="font-semibold text-gray-800 mb-3">Your Work Style</h4>
-                    <div className="space-y-4">
+                  <div style={{ marginBottom: '16px' }}>
+                    <h4 style={{ fontWeight: 600, color: PALETTE.surface.text, marginBottom: '12px' }}>Your Work Style</h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                       {Object.entries(preferences).map(([taskType, prefs]) => (
-                        <div key={taskType} className="bg-gray-50 rounded p-4">
-                          <p className="font-semibold text-gray-800 mb-2">
+                        <div key={taskType} style={{ backgroundColor: 'rgba(102, 99, 255, 0.1)', borderRadius: '6px', padding: '16px' }}>
+                          <p style={{ fontWeight: 600, color: PALETTE.surface.text, marginBottom: '8px', margin: 0 }}>
                             For {taskType.charAt(0).toUpperCase() + taskType.slice(1)} Tasks
                           </p>
-                          <p className="text-sm text-gray-700 mb-3">
+                          <p style={{ fontSize: '14px', color: PALETTE.surface.muted, marginBottom: '12px', margin: 0 }}>
                             You prefer this sequence:
                           </p>
-                          <p className="font-mono text-sm bg-white px-3 py-2 rounded border border-gray-200 mb-2">
+                          <p style={{ fontFamily: 'monospace', fontSize: '14px', backgroundColor: PALETTE.surface.border, padding: '8px 12px', borderRadius: '4px', marginBottom: '8px', color: PALETTE.surface.text, margin: 0 }}>
                             {Object.entries(prefs.preferred_skills)
                               .sort(([, a], [, b]) => b - a)
                               .map(([skill]) => skill)
                               .join(' → ')}
                           </p>
-                          <p className="text-xs text-gray-600">
+                          <p style={{ fontSize: '12px', color: PALETTE.surface.muted, margin: 0 }}>
                             Confidence: {(prefs.confidence_score * 100).toFixed(0)}% (based on {prefs.observation_count} tasks)
                           </p>
                         </div>
