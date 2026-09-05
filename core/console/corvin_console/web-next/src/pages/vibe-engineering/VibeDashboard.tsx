@@ -34,8 +34,8 @@ export function VibeDashboard() {
   return (
     <div data-testid="learning-dashboard-panel">
       {/* Tab Navigation */}
-      <div style={{ borderBottom: '1px solid #e5e7eb', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+      <div className="border-b border-slate-200 dark:border-slate-700 mb-6">
+        <div className="flex gap-2 flex-wrap">
           {[
             { id: 'maturity', label: '📊 Maturity Metrics', icon: '📊' },
             { id: 'summary', label: '📝 Summary', icon: '📝' },
@@ -46,17 +46,11 @@ export function VibeDashboard() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
-              style={{
-                padding: '12px 16px',
-                border: 'none',
-                background: 'none',
-                cursor: 'pointer',
-                borderBottom: activeTab === tab.id ? '2px solid #3b82f6' : '2px solid transparent',
-                color: activeTab === tab.id ? '#3b82f6' : '#6b7280',
-                fontWeight: activeTab === tab.id ? 600 : 500,
-                fontSize: '14px',
-                transition: 'all 0.2s',
-              }}
+              className={`px-4 py-3 font-medium text-sm whitespace-nowrap transition border-b-2 ${
+                activeTab === tab.id
+                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                  : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
             >
               {tab.label}
             </button>
