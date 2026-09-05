@@ -148,7 +148,16 @@ const NAV_GROUPS: NavGroup[] = [
     // PANELS, this list makes it reachable. tests/unit/panel-nav-wiring.test.ts
     // fails if the two drift apart.
     items: [
-      { to: "/app/vibe-engineering",     label: "Learning Dashboard",   icon: TrendingUp, requiredFlag: "vibe_engineering" },
+      { to: "/app/vibe-engineering",     label: "Vibe Dashboard",   icon: TrendingUp, requiredFlag: "vibe_engineering" },
+    ],
+  },
+  {
+    id: "observability",
+    label: "Observability",
+    collapsible: true,
+    defaultOpen: true,
+    items: [
+      { to: "/app/learning-dashboard", label: "Learning Dashboard", icon: BookOpen, requiredFlag: "learning_enabled" },
     ],
   },
   {
