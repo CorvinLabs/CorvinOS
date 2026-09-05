@@ -41,6 +41,7 @@ _CASES = (
     ("user_backend", "user_registry"),
     ("stt_provider", "stt_registry"),
     ("data_connector", "data_connector_registry"),
+    ("context_retriever", "context_retriever_registry"),  # ADR-0599
 )
 
 

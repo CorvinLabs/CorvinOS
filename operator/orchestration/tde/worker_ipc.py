@@ -346,6 +346,58 @@ class SubprocessWorkerIPC:
     # constantly). 100KB leaves headroom for the prompt frame + other args.
     _SNAPSHOT_MAX_CHARS = 100_000
 
+    def _select_snapshot_slice(self, snapshot_json: str, envelope) -> str:
+        """ADR-0599 fail-open TDE seam: let an active ``context_retriever`` pick a
+        semantic slice of ``snapshot_json``, subject to the hard argv ceiling.
+
+        Fail-open by contract:
+
+        * No plugin subsystem (stripped install) → return ``snapshot_json`` unchanged.
+        * Passthrough default (no provider) → ``select`` returns the same list, so
+          this returns ``snapshot_json`` unchanged and the caller's raw truncation
+          runs exactly as today (byte-identical behaviour).
+        * A provider result that is not a list of strings, or whose joined length
+          exceeds ``_SNAPSHOT_MAX_CHARS`` (the E2BIG argv ceiling), is REJECTED —
+          return ``snapshot_json`` unchanged so the raw truncation below applies.
+          This is the load-bearing post-condition: a bad provider can never cause
+          an over-limit argv.
+        * Any exception → return ``snapshot_json`` unchanged.
+
+        The retriever selects from the already-assembled (L34-filtered) snapshot;
+        it sits behind that gate and never re-admits redacted content (ADR-0297).
+        """
+        try:
+            from corvin_plugins.providers import context_retriever
+        except ImportError:
+            return snapshot_json
+        try:
+            step = getattr(envelope, "step", None)
+            query = " ".join(
+                str(getattr(step, attr, "") or "")
+                for attr in ("action", "description")
+            ).strip()
+            candidates = [snapshot_json]
+            selected = context_retriever.get_active().select(
+                query,
+                candidates,
+                budget=self._SNAPSHOT_MAX_CHARS,
+                tenant_id=getattr(envelope, "tenant_id", None),
+            )
+            if selected is candidates:
+                return snapshot_json  # passthrough / no-op
+            if not isinstance(selected, list) or not all(
+                isinstance(s, str) for s in selected
+            ):
+                return snapshot_json
+            slice_text = "\n".join(selected)
+            # HARD post-condition (E2BIG): reject an over-ceiling slice and let the
+            # caller's raw truncation take over instead.
+            if len(slice_text) > self._SNAPSHOT_MAX_CHARS:
+                return snapshot_json
+            return slice_text
+        except Exception:  # noqa: BLE001 — the seam must never break a delegation
+            return snapshot_json
+
     def _build_prompt(self, envelope: DelegationEnvelope) -> str:
         step = envelope.step
         plan_lines = [
@@ -361,6 +413,11 @@ class SubprocessWorkerIPC:
         # must still process real "<"/">" in code/markup it's given.
         snapshot_json = re.sub(r"</?\s*DATA\s*>", "[DATA]", snapshot_json,
                                flags=re.IGNORECASE)
+        # ADR-0599 fail-open seam: an active context_retriever MAY choose a
+        # semantic ≤_SNAPSHOT_MAX_CHARS slice of the snapshot before the raw cut.
+        # Never additive, never larger than the argv ceiling, never raises past
+        # here — a bad provider falls back to the raw truncation below (E2BIG-safe).
+        snapshot_json = self._select_snapshot_slice(snapshot_json, envelope)
         if len(snapshot_json) > self._SNAPSHOT_MAX_CHARS:
             # Truncation is explicit and visible to the worker — same contract
             # as default_local_step_executor's own 20,000-char context cap.

@@ -146,6 +146,26 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         invariant="Must NOT store un-redacted text.",
     ),
     ExtensionSurface(
+        plugin_type="context_retriever",
+        ctx_handle="context_retriever_registry",
+        provider_module="context_retriever",
+        template=None,
+        # TWO consuming surfaces (ADR-0599). The map carries one primary
+        # `consumed_by` per row; the CEL memory stage is named here because it is
+        # the reference seam, and the second surface — the TDE step assembler,
+        # operator/orchestration/tde/worker_ipc.py::_build_prompt — is named in
+        # the invariant below so both call sites are discoverable from this row.
+        consumed_by="operator/context_engineering/stages/memory.py",
+        dead_reason=None,
+        invariant=(
+            "select() only NARROWS/REORDERS candidates, never adds, and MUST NOT "
+            "raise; both seams are fail-open (CEL stages/memory.py and TDE "
+            "worker_ipc.py::_build_prompt). The TDE seam additionally enforces a "
+            "hard post-condition: a returned slice over _SNAPSHOT_MAX_CHARS "
+            "(argv/E2BIG ceiling) is rejected and the raw truncation is used."
+        ),
+    ),
+    ExtensionSurface(
         plugin_type="audit_backend",
         ctx_handle="audit_registry",
         provider_module="audit_backend",
