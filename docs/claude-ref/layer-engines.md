@@ -106,6 +106,62 @@ New console page at `/app/engine-control` with:
 - ECI command panel: lists registered `/e:<cmd>` commands per engine.
 - API: `GET /v1/console/settings/engine/capabilities` (read-only).
 
+`/app/engine-control` now redirects to `/app/engines` (Control tab); the page
+component is rendered embedded, it is no longer a separate route.
+
+### Console — `/app/engines` (ADR-0607 single-harness layout)
+
+`src/pages/engines.tsx` presents three tabs. The **Setup** tab is the ADR-0607
+model — one orchestration harness, swappable model providers:
+
+| Section | Component | Reads | Writes |
+|---|---|---|---|
+| Orchestration Harness | `HarnessSection` | `GET /settings/engine`, `GET /settings/engine/detect` | `PUT /settings/engine` → `default_engine: "claude_code"` |
+| Model Providers | `ModelProvidersSection` | `GET /settings/engine/providers` (ADR-0181 registry), `GET /settings/engine/models?provider=`, `GET /setup/engines` | `PUT /settings/engine` → `engine_models.claude_code.{provider,os_model}`; `PUT /setup/engines/{id}` for credentials |
+| Routing & Fallback | `RoutingSection` | the two above + `GET /settings/engine/health` | — read-only |
+
+**The provider list is never hard-coded.** It is whatever
+`GET /settings/engine/providers` returns. A prior revision shipped a static
+`MODEL_PROVIDERS` array whose Ollama entry used the id `ollama` while the
+registry calls it `ollama_local`, so every model fetch for it answered
+`unknown provider 'ollama'`. Do not re-introduce a static mirror of the registry.
+
+**The harness cannot drive every provider — gate on the registry.** `PUT
+/settings/engine` validates the (engine, provider) pair against
+`GET /settings/engine/registry`'s `supported_providers` and answers
+`400 {"detail":"engine 'claude_code' does not support provider 'openai'"}` for a
+pair that does not exist. Claude Code supports `anthropic` (native) plus
+`ollama_local`, `ollama_cloud` and `openrouter` **via the built-in
+`anthropic_openai_bridge` translating proxy** — and NOT `openai`. So the assign
+button is disabled for any provider absent from that list, and the routing chain
+lists only drivable ones. This is the pre-ADR-0607 per-engine whitelist still in
+force: ADR-0607's "any provider" model is proposed, not implemented in the
+backend. Do not offer a provider the registry does not list — the button 400s.
+
+**`worker_model` is not this section's field.** The assign mutation carries the
+existing `engine_models.claude_code.worker_model` through untouched; the Advanced
+tab's `PerEngineModelConfig` owns it. An earlier revision wrote `worker_model:
+null` and silently destroyed the operator's worker model on the first live save.
+`os_model` IS this section's, and is cleared on a provider switch because a model
+id is provider-scoped — `null` means "adaptive default", never an invalid pair.
+
+**Routing is a readiness view, not an executing policy.** It orders providers
+cost-ascending and strikes through the ones missing a credential or unreachable.
+ADR-0609's `ModelRouter` (`core/models/router.py`) is implemented but constructed
+by nothing in the request path — `tests/unit/test_phase_b.py` is its only
+importer — so the section says so in the UI rather than implying a fallback the
+runtime does not perform. When `ModelRouter` gets wired, replace the notice; do
+not make the chain editable before that, or the console would persist a policy
+nothing honours.
+
+The **Advanced** tab holds the pre-ADR-0607 multi-engine controls
+(`DetectedEnginesSection`, `OsEngineSelector`, `WorkerEngineSelector`,
+`PerEngineModelConfig`). They were moved there, **not deleted**: `PUT
+/settings/engine` still accepts `default_engine` / `default_worker_engine`, the
+adapter still reads them on the next turn, and `/engine <name>` resolves against
+them. Removing the UI would strand live tenant settings with no way to change
+them.
+
 ### Console chat — inline media artifacts
 
 The console chat mirrors the messenger-bridge UX: any file an engine writes into

@@ -74,7 +74,7 @@ import {
   type EngineInfo, type EngineCatalogEntry, type EngineModelConfig,
   type CustomEngineManifest, type CustomEngineRegisterRequest,
   type EngineProbeResult, type CredentialSource,
-  type ProviderSpec, type ProviderModelsResponse,
+  type ProviderSpec, type ProviderModelsResponse, type EngineProviderSupport,
 } from "@/lib/api";
 import { LicenseGate, isEngineAllowed } from "@/components/license-gate";
 import { cn } from "@/lib/utils";
@@ -422,131 +422,655 @@ function DetectedEnginesSection({ csrf }: { csrf: string }) {
   );
 }
 
-// ── Architecture Overview ─────────────────────────────────────────
+// ── Single-Harness + Model Providers (ADR-0607 / 0608 / 0609) ─────
+//
+// ADR-0607 replaces the former multi-engine model: only Claude Code runs the
+// full Skill-execution model (LDD loop, agentic reasoning, meta-skills), so it
+// is THE orchestration harness. Everything else is a *model provider* — an
+// interchangeable backend the harness talks to — not a second orchestrator.
+//
+// The provider ids below are NOT a hard-coded list: they come from the live
+// ADR-0181 registry at GET /settings/engine/providers. An earlier revision of
+// this page shipped a static MODEL_PROVIDERS array whose Ollama entry used the
+// id "ollama" while the registry calls it "ollama_local" — so every model fetch
+// for it answered `unknown provider 'ollama'`. Never re-introduce a static
+// mirror of the registry.
 
-const MODEL_PROVIDERS: Array<{
-  id: string;
-  label: string;
-  type: "harness" | "provider";
-  locality: "local" | "cloud";
-  cost: string;
-  features: string;
-  badge?: string;
-}> = [
-  {
-    id: "claude_code",
-    label: "Claude Code",
-    type: "harness",
-    locality: "cloud",
-    cost: "Per token",
-    features: "LDD Loop · Agentic · Meta-Skills · Full Capabilities",
-    badge: "Harness"
-  },
-  {
-    id: "openai",
-    label: "OpenAI",
-    type: "provider",
-    locality: "cloud",
-    cost: "Per token",
-    features: "gpt-4, gpt-3.5-turbo · Powerful"
-  },
-  {
-    id: "openrouter",
-    label: "OpenRouter",
-    type: "provider",
-    locality: "cloud",
-    cost: "Per token (optimized)",
-    features: "Claude, GPT, Llama · Balanced Cost"
-  },
-  {
-    id: "ollama",
-    label: "Ollama",
-    type: "provider",
-    locality: "local",
-    cost: "Free (after download)",
-    features: "Mistral, Llama · 100% Local · No Egress"
-  },
+const HARNESS_ID = "claude_code";
+
+const HARNESS_CAPABILITIES = [
+  "LDD loop (k=1–5)",
+  "Agentic reasoning",
+  "Meta-Skills",
+  "Skill execution via RPC (ADR-0598)",
 ];
 
-function ArchitectureOverview() {
+/** Cost-ascending preference order used to render the fallback chain. Providers
+ *  the registry reports but that are not listed here are appended in registry
+ *  order, so a newly added provider still shows up. */
+const PROVIDER_COST_ORDER = ["ollama_local", "openrouter", "openai", "anthropic", "ollama_cloud"];
+
+/** A provider is usable when its credential is present. Local providers need no
+ *  credential — reachability is what decides, which the caller passes in. */
+function providerReady(
+  spec: ProviderSpec,
+  keyByEnv: Record<string, EngineInfo>,
+  ollamaReachable: boolean,
+): { ready: boolean; reason: string } {
+  if (spec.kind === "local") {
+    return ollamaReachable
+      ? { ready: true, reason: "reachable" }
+      : { ready: false, reason: "not reachable" };
+  }
+  if (!spec.credential_env) return { ready: true, reason: "no credential required" };
+  const info = keyByEnv[spec.credential_env];
+  return info?.configured
+    ? { ready: true, reason: "key configured" }
+    : { ready: false, reason: `${spec.credential_env} missing` };
+}
+
+// ── Harness — the single orchestrator ─────────────────────────────
+
+function HarnessSection({ csrf }: { csrf: string }) {
+  const qc = useQueryClient();
+
+  const settingQ = useQuery({
+    queryKey: ["os-engine-setting"],
+    queryFn: ({ signal }) => getOsEngineSetting(signal),
+  });
+  const detectQ = useQuery({
+    queryKey: ["engine-detect"],
+    queryFn: ({ signal }) => detectEngines(signal),
+    staleTime: 3 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const [saved, setSaved] = React.useState(false);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      setOsEngineSetting({
+        default_engine: HARNESS_ID,
+        hermes_model: settingQ.data?.hermes_model ?? null,
+        default_worker_engine: settingQ.data?.default_worker_engine ?? null,
+        default_worker_model: settingQ.data?.default_worker_model ?? null,
+      }, csrf),
+    onSuccess: () => {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+      qc.invalidateQueries({ queryKey: ["os-engine-setting"] });
+    },
+  });
+
+  // `default_engine: null` means "system default", which resolves to the harness
+  // — so a null is already correct and must not be reported as a mismatch.
+  const current = settingQ.data?.default_engine ?? null;
+  const isHarness = current === null || current === HARNESS_ID;
+
+  const probe = detectQ.data?.results?.find((r) => r.engine_id === HARNESS_ID);
+
   return (
-    <Card className="border-2 border-accent/20">
+    <Card className="border-2 border-accent/30">
+      <CardContent className="pt-5 pb-4 space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-sm flex items-center gap-2">
+              <Zap className="h-4 w-4 text-accent" />
+              Orchestration Harness
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Claude Code orchestrates every turn. Models are swappable below —
+              the harness is not.
+            </p>
+          </div>
+          {saved && (
+            <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-xs gap-1">
+              <Check className="h-3 w-3" /> Saved
+            </Badge>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-accent/40 bg-accent/5 p-3 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="rounded-md bg-accent/15 text-accent p-2">
+              <Zap className="h-4 w-4" />
+            </div>
+            <span className="font-medium text-sm">Claude Code</span>
+            <Badge className="text-[9px] px-1.5 py-0 h-4 bg-accent/15 text-accent border-accent/40">
+              Harness
+            </Badge>
+            {settingQ.isLoading ? null : isHarness ? (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-400/40">
+                Active
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-amber-600 border-amber-400/40">
+                Overridden
+              </Badge>
+            )}
+            {probe && (
+              <span className="text-[10px] text-muted-foreground ml-auto">
+                {probe.installed ? "detected on this system" : "not detected"}
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {HARNESS_CAPABILITIES.map((c) => (
+              <span
+                key={c}
+                className="text-[10px] rounded bg-background/70 border border-border px-1.5 py-0.5 text-muted-foreground"
+              >
+                {c}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {!settingQ.isLoading && !isHarness && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+            <p className="text-xs text-amber-700 dark:text-amber-500 flex items-start gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>
+                The tenant OS engine is set to <code className="font-mono">{current}</code>,
+                not the harness. Skill execution (LDD, meta-skills) is only complete
+                under Claude Code.
+              </span>
+            </p>
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => mutation.mutate()}
+              disabled={mutation.isPending}
+            >
+              {mutation.isPending ? "Saving…" : "Restore Claude Code as harness"}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Model Providers — provider-centric, live registry ─────────────
+
+function ModelProvidersSection({ csrf }: { csrf: string }) {
+  const qc = useQueryClient();
+
+  const providersQ = useQuery({
+    queryKey: ["engine-providers"],
+    queryFn: ({ signal }) => getEngineProviders(signal),
+    staleTime: 60_000,
+  });
+  const keysQ = useQuery({
+    queryKey: ["engines"],
+    queryFn: ({ signal }) => listEngines(signal),
+  });
+  const settingQ = useQuery({
+    queryKey: ["os-engine-setting"],
+    queryFn: ({ signal }) => getOsEngineSetting(signal),
+  });
+  const healthQ = useQuery({
+    queryKey: ["os-engine-health"],
+    queryFn: ({ signal }) => getOsEngineHealth(signal),
+    refetchInterval: 15_000,
+  });
+  // The harness cannot drive every provider: PUT /settings/engine rejects an
+  // unsupported pair with 400 "engine 'claude_code' does not support provider
+  // 'openai'". The registry is the authority on which pairs exist, so the
+  // assign button is gated on it rather than on the provider list alone.
+  const registryQ = useQuery({
+    queryKey: ["engine-model-registry"],
+    queryFn: ({ signal }) => getEngineModelRegistry(signal),
+    staleTime: 60_000,
+  });
+
+  const [liveModels, setLiveModels] = React.useState<Record<string, ProviderModelsResponse>>({});
+  const [fetching, setFetching] = React.useState<string | null>(null);
+  const [modelDraft, setModelDraft] = React.useState<Record<string, string>>({});
+  const [keyDraft, setKeyDraft] = React.useState<Record<string, string>>({});
+  const [savedProvider, setSavedProvider] = React.useState<string | null>(null);
+  const [warnings, setWarnings] = React.useState<string[]>([]);
+
+  // Memoised: an inline `?? {}` produces a fresh object each render, which would
+  // re-fire every useMemo/useEffect keyed on it (react-hooks/exhaustive-deps).
+  const providers = React.useMemo(() => providersQ.data ?? {}, [providersQ.data]);
+  const ollamaReachable = healthQ.data?.ollama_reachable ?? settingQ.data?.ollama_reachable ?? false;
+
+  // Join the credential registry (env-var NAMES only, never secrets) onto the
+  // provider specs. EngineInfo.key IS the env var name, which is exactly what
+  // ProviderSpec.credential_env holds.
+  const keyByEnv = React.useMemo(() => {
+    const out: Record<string, EngineInfo> = {};
+    for (const e of keysQ.data?.engines ?? []) if (e.key) out[e.key] = e;
+    return out;
+  }, [keysQ.data]);
+
+  const harnessCfg: EngineModelConfig =
+    settingQ.data?.engine_models?.[HARNESS_ID] ?? { os_model: null, worker_model: null, provider: null };
+  const activeProvider = harnessCfg.provider ?? null;
+
+  const harnessSupport = React.useMemo(() => {
+    const out: Record<string, EngineProviderSupport> = {};
+    for (const sp of registryQ.data?.[HARNESS_ID]?.supported_providers ?? []) out[sp.provider] = sp;
+    return out;
+  }, [registryQ.data]);
+
+  const fetchModelsFor = async (provider: string) => {
+    setFetching(provider);
+    try {
+      const res = await getProviderModels(provider);
+      setLiveModels((prev) => ({ ...prev, [provider]: res }));
+    } finally {
+      setFetching(null);
+    }
+  };
+
+  // A model id is provider-scoped, so switching provider clears `os_model` — the
+  // field this section owns. `worker_model` is NOT ours: the Advanced tab's
+  // PerEngineModelConfig owns it, and nulling it here silently destroyed the
+  // operator's worker model on the first live write. Always carry it through.
+  const assign = useMutation({
+    mutationFn: (args: { provider: string | null; osModel: string | null }) =>
+      setOsEngineSetting({
+        default_engine: settingQ.data?.default_engine ?? null,
+        hermes_model: settingQ.data?.hermes_model ?? null,
+        default_worker_engine: settingQ.data?.default_worker_engine ?? null,
+        default_worker_model: settingQ.data?.default_worker_model ?? null,
+        engine_models: {
+          ...(settingQ.data?.engine_models ?? {}),
+          [HARNESS_ID]: {
+            os_model: args.osModel,
+            worker_model: settingQ.data?.engine_models?.[HARNESS_ID]?.worker_model ?? null,
+            provider: args.provider,
+          },
+        },
+      }, csrf),
+    onSuccess: (data, args) => {
+      setSavedProvider(args.provider ?? "__native__");
+      setWarnings(data?.compliance_warnings ?? []);
+      setTimeout(() => setSavedProvider(null), 2500);
+      qc.invalidateQueries({ queryKey: ["os-engine-setting"] });
+    },
+  });
+
+  const saveKey = useMutation({
+    mutationFn: (args: { engineId: string; value: string }) =>
+      updateEngineKey(args.engineId, args.value, csrf),
+    onSuccess: (_d, args) => {
+      setKeyDraft((prev) => ({ ...prev, [args.engineId]: "" }));
+      qc.invalidateQueries({ queryKey: ["engines"] });
+    },
+  });
+
+  const ordered = React.useMemo(() => {
+    const ids = Object.keys(providers);
+    const ranked = PROVIDER_COST_ORDER.filter((id) => ids.includes(id));
+    return [...ranked, ...ids.filter((id) => !ranked.includes(id))];
+  }, [providers]);
+
+  const isLoading =
+    providersQ.isLoading || keysQ.isLoading || settingQ.isLoading || registryQ.isLoading;
+
+  return (
+    <Card>
       <CardContent className="pt-5 pb-4 space-y-4">
         <div>
           <h2 className="font-semibold text-sm flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-accent" />
-            Single-Harness + Multi-Model Architecture
+            <Cloud className="h-4 w-4" />
+            Model Providers
           </h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Claude Code orchestration harness (LDD, Agentic) + pluggable model providers (cost-optimized fallback chain).
+            Interchangeable model backends for the harness. Pick one to serve
+            Claude Code&apos;s OS turn, or leave it on the native provider.
           </p>
         </div>
 
-        <div className="space-y-2">
-          {MODEL_PROVIDERS.map((p) => (
+        {isLoading && <Skeleton className="h-40 w-full" />}
+
+        {!isLoading && ordered.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            The provider registry returned nothing — check{" "}
+            <code className="font-mono">/settings/engine/providers</code>.
+          </p>
+        )}
+
+        {warnings.length > 0 && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-1">
+            {warnings.map((w) => (
+              <p key={w} className="text-[11px] text-amber-700 dark:text-amber-500 flex items-start gap-2">
+                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                {w}
+              </p>
+            ))}
+          </div>
+        )}
+
+        {!isLoading && ordered.length > 0 && (
+          <div className="space-y-3">
+            {/* Native — the harness's own provider, i.e. no override at all. */}
             <div
-              key={p.id}
               className={cn(
-                "rounded-lg border p-3 flex items-start gap-3 transition-all",
-                p.type === "harness"
-                  ? "border-accent/40 bg-accent/5"
-                  : p.locality === "local"
-                  ? "border-emerald-500/30 bg-emerald-500/5"
-                  : "border-blue-500/30 bg-blue-500/5"
+                "rounded-lg border p-3 flex items-center gap-3",
+                activeProvider === null ? "border-accent/40 bg-accent/5" : "bg-muted/10",
               )}
             >
-              <div className={cn(
-                "rounded-md p-2 mt-0.5",
-                p.type === "harness"
-                  ? "bg-accent/15 text-accent"
-                  : p.locality === "local"
-                  ? "bg-emerald-500/15 text-emerald-600"
-                  : "bg-blue-500/15 text-blue-600"
-              )}>
-                {p.type === "harness" ? (
-                  <Zap className="h-4 w-4" />
-                ) : p.locality === "local" ? (
-                  <Cpu className="h-4 w-4" />
-                ) : (
-                  <Cloud className="h-4 w-4" />
-                )}
+              <div className="rounded-md bg-muted p-2 text-muted-foreground">
+                <Sparkles className="h-4 w-4" />
               </div>
-
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="font-medium text-sm">{p.label}</span>
-                  {p.badge && (
-                    <Badge className="text-[9px] px-1.5 py-0 h-4 bg-accent/15 text-accent border-accent/40">
-                      {p.badge}
-                    </Badge>
-                  )}
-                  {p.locality === "local" && (
-                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-400/40">
-                      Local
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm">Native (Anthropic via Claude Code)</span>
+                  {activeProvider === null && (
+                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-accent border-accent/40">
+                      In use
                     </Badge>
                   )}
                 </div>
-                <p className="text-[11px] text-muted-foreground mb-1">{p.features}</p>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono text-muted-foreground/70">{p.cost}</span>
-                  {p.type === "harness" && (
-                    <Check className="h-3 w-3 text-accent shrink-0" />
-                  )}
-                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  The harness&apos;s own subscription auth — no separate API key.
+                  Switching provider clears the OS-model override (a model id
+                  belongs to one provider); set it again below or in Advanced.
+                </p>
               </div>
+              {activeProvider !== null && (
+                <Button
+                  size="sm" variant="outline" className="h-8 text-[11px] shrink-0"
+                  onClick={() => assign.mutate({ provider: null, osModel: null })}
+                  disabled={assign.isPending}
+                >
+                  Use native
+                </Button>
+              )}
             </div>
-          ))}
+
+            {ordered.map((id) => {
+              const spec = providers[id];
+              const { ready, reason } = providerReady(spec, keyByEnv, ollamaReachable);
+              const live = liveModels[id];
+              const isActive = activeProvider === id;
+              const cred = spec.credential_env ? keyByEnv[spec.credential_env] : undefined;
+              const draft = modelDraft[id] ?? (isActive ? harnessCfg.os_model ?? "" : "");
+              const support = harnessSupport[id];
+              const drivable = Boolean(support);
+
+              return (
+                <div
+                  key={id}
+                  className={cn(
+                    "rounded-lg border p-3 space-y-2",
+                    isActive
+                      ? "border-accent/40 bg-accent/5"
+                      : !drivable
+                      ? "bg-muted/10 opacity-60"
+                      : spec.kind === "local"
+                      ? "border-emerald-500/30 bg-emerald-500/5"
+                      : "bg-muted/10",
+                  )}
+                >
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div
+                      className={cn(
+                        "rounded-md p-2",
+                        spec.kind === "local"
+                          ? "bg-emerald-500/15 text-emerald-600"
+                          : "bg-blue-500/15 text-blue-600",
+                      )}
+                    >
+                      {spec.kind === "local" ? <Cpu className="h-4 w-4" /> : <Cloud className="h-4 w-4" />}
+                    </div>
+                    <span className="font-medium text-sm">{spec.label}</span>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-[9px] px-1.5 py-0 h-4",
+                        spec.kind === "local"
+                          ? "text-emerald-600 border-emerald-400/40"
+                          : "text-blue-600 border-blue-400/40",
+                      )}
+                    >
+                      {spec.kind === "local" ? "Local" : "Cloud"}
+                    </Badge>
+                    {isActive && (
+                      <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-accent border-accent/40">
+                        In use
+                      </Badge>
+                    )}
+                    {drivable && !support.native && (
+                      <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-muted-foreground">
+                        via proxy
+                      </Badge>
+                    )}
+                    {!drivable && (
+                      <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-muted-foreground">
+                        not for this harness
+                      </Badge>
+                    )}
+                    <span
+                      className={cn(
+                        "text-[10px] ml-auto flex items-center gap-1",
+                        ready ? "text-emerald-600" : "text-muted-foreground",
+                      )}
+                    >
+                      {ready ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+                      {reason}
+                    </span>
+                  </div>
+
+                  {/* Credential entry — only for cloud providers that need one and
+                      have no key yet. The value is written to the vault, never rendered back. */}
+                  {!ready && spec.kind === "cloud" && cred && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Input
+                        type="password"
+                        value={keyDraft[cred.id] ?? ""}
+                        onChange={(e) => setKeyDraft((p) => ({ ...p, [cred.id]: e.target.value }))}
+                        placeholder={spec.credential_env}
+                        className="h-8 text-xs font-mono flex-1 min-w-[200px]"
+                      />
+                      <Button
+                        size="sm" className="h-8 text-[11px]"
+                        onClick={() => saveKey.mutate({ engineId: cred.id, value: keyDraft[cred.id] ?? "" })}
+                        disabled={!(keyDraft[cred.id] ?? "").trim() || saveKey.isPending}
+                      >
+                        <Key className="h-3 w-3 mr-1" />
+                        Save key
+                      </Button>
+                      {cred.url && (
+                        <a
+                          href={cred.url} target="_blank" rel="noreferrer"
+                          className="text-[10px] underline underline-offset-2 text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                        >
+                          Get a key <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {spec.model_source !== "static" && (
+                      <Button
+                        type="button" size="sm" variant="outline" className="h-8 text-[11px]"
+                        onClick={() => void fetchModelsFor(id)}
+                        disabled={fetching === id}
+                      >
+                        {fetching === id ? "Fetching…" : "Fetch models"}
+                      </Button>
+                    )}
+                    {live && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {live.reachable ? `${live.count} models` : (live.error ?? "unreachable")}
+                      </span>
+                    )}
+                    {live?.note && (
+                      <span className="text-[10px] text-muted-foreground">{live.note}</span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="space-y-1 flex-1 min-w-[200px]">
+                      <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                        OS model
+                      </Label>
+                      {(live?.models?.length ?? 0) > 0 ? (
+                        <select
+                          value={draft}
+                          onChange={(e) => setModelDraft((p) => ({ ...p, [id]: e.target.value }))}
+                          className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                        >
+                          <option value="">(provider default)</option>
+                          {live!.models.map((m) => (
+                            <option key={m.id} value={m.id}>{m.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={draft}
+                          onChange={(e) => setModelDraft((p) => ({ ...p, [id]: e.target.value }))}
+                          placeholder="model id — blank for the provider default"
+                          className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                        />
+                      )}
+                    </div>
+                    <Button
+                      size="sm" className="h-8 text-[11px] shrink-0"
+                      variant={isActive ? "outline" : "default"}
+                      onClick={() => assign.mutate({ provider: id, osModel: draft.trim() || null })}
+                      disabled={assign.isPending || !drivable}
+                      title={drivable ? undefined : `Claude Code cannot drive ${spec.label}`}
+                    >
+                      {savedProvider === id ? (
+                        <><Check className="h-3 w-3 mr-1" /> Saved</>
+                      ) : isActive ? "Update model" : "Use for harness"}
+                    </Button>
+                  </div>
+
+                  {drivable && support.note && (
+                    <p className="text-[10px] text-muted-foreground">{support.note}</p>
+                  )}
+
+                  {!drivable && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Claude Code has no path to this provider. It is reachable from
+                      other engines — see the Advanced tab.
+                    </p>
+                  )}
+
+                  {spec.kind === "cloud" && (
+                    <p className="text-[10px] text-amber-600">
+                      Cloud provider — turns egress data; L34/L35 apply.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Routing — derived from what is actually reachable right now ───
+
+function RoutingSection() {
+  const providersQ = useQuery({
+    queryKey: ["engine-providers"],
+    queryFn: ({ signal }) => getEngineProviders(signal),
+    staleTime: 60_000,
+  });
+  const keysQ = useQuery({
+    queryKey: ["engines"],
+    queryFn: ({ signal }) => listEngines(signal),
+  });
+  const healthQ = useQuery({
+    queryKey: ["os-engine-health"],
+    queryFn: ({ signal }) => getOsEngineHealth(signal),
+    refetchInterval: 15_000,
+  });
+  const registryQ = useQuery({
+    queryKey: ["engine-model-registry"],
+    queryFn: ({ signal }) => getEngineModelRegistry(signal),
+    staleTime: 60_000,
+  });
+
+  const providers = providersQ.data ?? {};
+  const ollamaReachable = healthQ.data?.ollama_reachable ?? false;
+  // Only providers the harness can actually drive belong in its fallback order —
+  // listing one it cannot reach (openai) would describe a hop that cannot happen.
+  const drivable = new Set(
+    (registryQ.data?.[HARNESS_ID]?.supported_providers ?? []).map((sp) => sp.provider),
+  );
+
+  const keyByEnv = React.useMemo(() => {
+    const out: Record<string, EngineInfo> = {};
+    for (const e of keysQ.data?.engines ?? []) if (e.key) out[e.key] = e;
+    return out;
+  }, [keysQ.data]);
+
+  const chain = PROVIDER_COST_ORDER
+    .filter((id) => providers[id] && drivable.has(id))
+    .map((id) => ({ id, spec: providers[id], ...providerReady(providers[id], keyByEnv, ollamaReachable) }));
+
+  const readyCount = chain.filter((c) => c.ready).length;
+
+  return (
+    <Card>
+      <CardContent className="pt-5 pb-4 space-y-3">
+        <div>
+          <h2 className="font-semibold text-sm flex items-center gap-2">
+            <ArrowRight className="h-4 w-4" />
+            Routing &amp; Fallback
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Cost-ascending order the harness would fall through, limited to the
+            providers Claude Code can drive and derived from what is reachable
+            right now. Cheapest first.
+          </p>
         </div>
 
-        {/* Fallback chain diagram */}
-        <div className="flex items-center justify-center gap-2 pt-2 text-[10px] text-muted-foreground">
-          <span className="font-mono px-2 py-1 rounded bg-muted">Ollama</span>
-          <ArrowRight className="h-3 w-3" />
-          <span className="font-mono px-2 py-1 rounded bg-muted">OpenRouter</span>
-          <ArrowRight className="h-3 w-3" />
-          <span className="font-mono px-2 py-1 rounded bg-muted">OpenAI</span>
-          <span className="ml-1 font-semibold">automatic fallback</span>
-        </div>
+        {providersQ.isLoading || registryQ.isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {chain.map((c, i) => (
+              <React.Fragment key={c.id}>
+                {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />}
+                <span
+                  className={cn(
+                    "font-mono text-[10px] px-2 py-1 rounded border",
+                    c.ready
+                      ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                      : "border-border bg-muted text-muted-foreground line-through",
+                  )}
+                  title={c.reason}
+                >
+                  {c.spec.label}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        )}
+
+        <p className="text-[11px] text-muted-foreground">
+          {readyCount} of {chain.length} providers usable. Struck-through entries
+          are missing a credential or are unreachable.
+        </p>
+
+        {/* Honesty gate: ADR-0609's ModelRouter exists (core/models/router.py) but
+            nothing in the request path constructs it — it is imported only by
+            tests/unit/test_phase_b.py. Presenting this chain as an executing
+            policy would be a claim the runtime does not honour. */}
+        <p className="text-[11px] text-amber-700 dark:text-amber-500 flex items-start gap-2">
+          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>
+            Read-only. The harness uses the provider selected above; automatic
+            fallback (ADR-0609 <code className="font-mono">ModelRouter</code>) is
+            implemented but not yet wired into the request path, so this order is
+            a readiness view, not an active policy.
+          </span>
+        </p>
       </CardContent>
     </Card>
   );
@@ -2032,7 +2556,7 @@ export function EnginesPage() {
         <div>
           <h1 className="font-serif text-3xl font-light tracking-tight">Engines</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Choose which AI powers your assistant and configure its credentials.
+            Single-Harness (Claude Code) + swappable model providers.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -2058,27 +2582,26 @@ export function EnginesPage() {
         <TabsList>
           <TabsTrigger value="setup">Setup</TabsTrigger>
           <TabsTrigger value="control">Control</TabsTrigger>
-          <TabsTrigger value="reference">Reference</TabsTrigger>
+          <TabsTrigger value="advanced">Advanced</TabsTrigger>
         </TabsList>
 
-        {/* ── Setup: detected engines, defaults, models & keys (mirrors onboarding) ── */}
+        {/* ── Setup: the ADR-0607 model — one harness, swappable providers ── */}
         <TabsContent value="setup" className="mt-4 space-y-6">
-          {/* Detected Engines — primary section (ADR-0125) */}
-          <DetectedEnginesSection csrf={session!.csrf_token} />
+          {/* Harness — Claude Code, the single orchestrator */}
+          <HarnessSection csrf={session!.csrf_token} />
 
-          {/* OS Engine selector — catalog-driven, tenant-level default */}
-          <OsEngineSelector csrf={session!.csrf_token} />
+          {/* Model Providers — live ADR-0181 registry, provider-centric */}
+          <ModelProvidersSection csrf={session!.csrf_token} />
 
-          {/* Worker Engine selector */}
-          <WorkerEngineSelector csrf={session!.csrf_token} />
-
-          {/* Per-engine model configuration */}
-          <PerEngineModelConfig csrf={session!.csrf_token} />
+          {/* Routing — readiness view derived from the two above */}
+          <RoutingSection />
 
           {/* Divider */}
           <div className="flex items-center gap-3">
             <div className="flex-1 border-t border-border" />
-            <span className="text-xs text-muted-foreground">Cloud engine credentials</span>
+            <span className="text-xs text-muted-foreground">
+              All credentials — including engines that are not model providers
+            </span>
             <div className="flex-1 border-t border-border" />
           </div>
 
@@ -2115,9 +2638,31 @@ export function EnginesPage() {
           <EngineControlPage embedded />
         </TabsContent>
 
-        {/* ── Reference: engine architecture (de-emphasised) ── */}
-        <TabsContent value="reference" className="mt-4">
-          <ArchitectureOverview />
+        {/* ── Advanced: the pre-ADR-0607 multi-engine controls.
+            These are NOT dead: PUT /settings/engine still accepts and the adapter
+            still reads default_engine / default_worker_engine on the next turn,
+            and /engine <name> resolves against them. Deleting the UI would strand
+            live tenant settings with no way to change them, so they move here
+            rather than out. ── */}
+        <TabsContent value="advanced" className="mt-4 space-y-6">
+          <div className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+            <AlertTriangle className="inline h-3.5 w-3.5 mr-1 text-amber-600" />
+            Pre-ADR-0607 multi-engine controls. Under the single-harness model the
+            OS engine should stay on Claude Code — change these only to run a
+            non-harness engine deliberately.
+          </div>
+
+          {/* Detected Engines (ADR-0125) */}
+          <DetectedEnginesSection csrf={session!.csrf_token} />
+
+          {/* OS Engine selector — catalog-driven, tenant-level default */}
+          <OsEngineSelector csrf={session!.csrf_token} />
+
+          {/* Worker Engine selector */}
+          <WorkerEngineSelector csrf={session!.csrf_token} />
+
+          {/* Per-engine model configuration (ADR-0119/0181) */}
+          <PerEngineModelConfig csrf={session!.csrf_token} />
         </TabsContent>
       </Tabs>
     </div>
