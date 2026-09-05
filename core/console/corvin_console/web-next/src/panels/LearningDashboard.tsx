@@ -11,6 +11,22 @@
 
 import React, { useState, useEffect } from 'react';
 
+// Maturity Metrics Theme Palette
+const PALETTE = {
+  surface: {
+    dark: '#0D1117',
+    card: '#161B22',
+    border: '#30363D',
+    text: '#C9D1D9',
+    muted: '#8B949E',
+  },
+  status: {
+    good: '#2ECC71',
+    warning: '#F39C12',
+    serious: '#E74C3C',
+  },
+};
+
 interface Pattern {
   pattern_id: string;
   task_type: string;
@@ -181,10 +197,10 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
             <div className="space-y-6">
               {/* Overall Stats */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
-                  <div className="text-3xl font-bold text-blue-600">{patterns.length}</div>
-                  <div className="text-sm text-gray-700">Patterns Discovered</div>
-                  <p className="text-xs text-gray-600 mt-2">
+                <div style={{ backgroundColor: PALETTE.surface.card, borderRadius: "8px", padding: "16px", border: "1px solid " + PALETTE.surface.border }}>
+                  <div style={{ fontSize: "28px", fontWeight: 700, color: "#3b82f6" }}>{patterns.length}</div>
+                  <div style={{ fontSize: "14px", color: PALETTE.surface.text }}>Patterns Discovered</div>
+                  <p style={{ fontSize: "12px", color: PALETTE.surface.muted, marginTop: "8px" }}>
                     {patterns.length === 0
                       ? 'Need 5+ tasks to discover patterns'
                       : `Based on ${patterns.reduce((sum, p) => sum + p.observation_count, 0)} observations`}
@@ -195,8 +211,8 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                   <div className="text-3xl font-bold text-green-600">
                     {configVersions.length > 1 ? `+${((configVersions[configVersions.length - 1]?.improvement_pct || 0) * 100).toFixed(1)}%` : 'N/A'}
                   </div>
-                  <div className="text-sm text-gray-700">Config Improvement</div>
-                  <p className="text-xs text-gray-600 mt-2">
+                  <div style={{ fontSize: "14px", color: PALETTE.surface.text }}>Config Improvement</div>
+                  <p style={{ fontSize: "12px", color: PALETTE.surface.muted, marginTop: "8px" }}>
                     {configVersions.length === 0
                       ? 'Will improve after feedback'
                       : `${configVersions.length} config versions tested`}
@@ -205,8 +221,8 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
 
                 <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 border border-purple-200">
                   <div className="text-3xl font-bold text-purple-600">{Object.keys(preferences).length}</div>
-                  <div className="text-sm text-gray-700">Task Types Learned</div>
-                  <p className="text-xs text-gray-600 mt-2">
+                  <div style={{ fontSize: "14px", color: PALETTE.surface.text }}>Task Types Learned</div>
+                  <p style={{ fontSize: "12px", color: PALETTE.surface.muted, marginTop: "8px" }}>
                     {Object.keys(preferences).length === 0
                       ? 'Preferences emerge after 10+ tasks'
                       : Object.keys(preferences).map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(', ')}
