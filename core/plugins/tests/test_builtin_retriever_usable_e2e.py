@@ -30,9 +30,11 @@ def _clean_registry():
 
 
 def test_builtin_retriever_is_discovered():
-    """The plugin dir is found by the builtin discovery scan."""
-    names = [d.name for d in bootstrap._builtin_plugin_dirs(bootstrap._BUILTIN_ROOT)]
-    assert "semantic-context-retriever" in names
+    """The plugin is found by discovery — its source lives in the Corvin-Marketplace
+    repo, not in CorvinOS (operator rule), so it is discovered under the marketplace
+    root, not _BUILTIN_ROOT."""
+    names = [d.name for d in bootstrap._builtin_plugin_dirs(bootstrap._marketplace_root())]
+    assert "semantic_context_retriever" in names
 
 
 def test_bootstrap_activates_the_retriever():

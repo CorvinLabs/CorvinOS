@@ -438,6 +438,34 @@ feature flag or plugin disable.
 
 ---
 
+## Plugins Live Fully in the Marketplace, Not in CorvinOS (load-bearing)
+
+**Operator rule (2026-09-05): the complete source of EVERY plugin lives in the
+Corvin-Marketplace repo (`/home/shumway/projects/Corvin-Marketplace/`) — ALWAYS — never in
+CorvinOS.** The goal is to keep the CorvinOS codebase small: CorvinOS loads/references plugins
+from the marketplace, it does not own a copy of their implementation.
+
+**What "fully in the marketplace" means:** a plugin ships its real
+`plugins/buildin/<category>/<name>/` tree — `src/` (the implementation), `tests/`, `README.md`,
+`setup.py`, and `plugin.json` (with `source_url` pointing at the marketplace `src/`, not
+CorvinOS). A `plugin.json` alone is incomplete.
+
+**How to apply:**
+- When building or adding a plugin, put its full source in Corvin-Marketplace, not in
+  `CorvinOS/core/plugins/buildin/...`. Do not duplicate the source into CorvinOS.
+- CorvinOS's load path resolves plugins from the marketplace (install/discovery), not from an
+  in-wheel `core/plugins/buildin/<category>/<name>/` source copy.
+- Migrating an existing in-CorvinOS builtin means: move its source to the marketplace, change the
+  load path from builtin-in-wheel discovery to marketplace resolution, then DELETE the CorvinOS
+  copy — and verify the plugin still loads + activates end-to-end before declaring done.
+
+**Must NOT do:** keep a plugin's real `src/` under `CorvinOS/core/plugins/buildin/` when it also
+lives in the marketplace (that duplicates it and grows CorvinOS) · ship a marketplace entry that
+is `plugin.json`-only with no `src/` · point a plugin's `source_url` at CorvinOS instead of the
+marketplace.
+
+---
+
 ## Testing + Docs Sync (load-bearing)
 
 **Before committing** changes to `adapter.py`, `daemon.js`, or `shared/js/`:

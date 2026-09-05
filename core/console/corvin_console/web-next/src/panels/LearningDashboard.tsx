@@ -142,20 +142,20 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto bg-[#161B22] dark:bg-slate-800 rounded-lg">
-      {!hideTabNavigation && <h1 className="text-3xl font-bold mb-6 text-slate-900 dark:text-white">🧠 Learning Dashboard</h1>}
+    <div className="p-6 max-w-6xl mx-auto">
+      {!hideTabNavigation && <h1 className="text-3xl font-bold mb-6">🧠 Learning Dashboard</h1>}
 
       {/* Tab Navigation */}
       {!hideTabNavigation && (
-      <div className="flex gap-4 mb-6 border-b border-[#30363D] dark:border-slate-700 overflow-x-auto">
+      <div className="flex gap-4 mb-6 border-b overflow-x-auto">
         {(['summary', 'patterns', 'config', 'preferences'] as const).map(tab => (
           <button
             key={tab}
             onClick={() => handleTabChange(tab)}
-            className={`pb-2 px-4 font-semibold whitespace-nowrap transition ${
+            className={`pb-2 px-4 font-semibold whitespace-nowrap ${
               activeTab === tab
-                ? 'border-b-2 border-blue-500 text-blue-600 dark:text-blue-400'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                ? 'border-b-2 border-blue-500 text-blue-600'
+                : 'text-gray-600 hover:text-gray-900'
             }`}
           >
             {tab === 'summary' && `📝 Summary`}
@@ -173,7 +173,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
           <h2 className="text-2xl font-bold mb-6">📝 Learning Summary</h2>
 
           {patterns.length === 0 && configVersions.length === 0 && Object.keys(preferences).length === 0 ? (
-            <div className="bg-[#0D1117] border border-blue-200 rounded-lg p-6 text-center">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 text-center">
               <p className="text-lg text-gray-700 mb-2">No learning data yet</p>
               <p className="text-sm text-gray-600">Complete tasks and provide feedback to see what the system learns about your working style.</p>
             </div>
@@ -215,7 +215,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
               </div>
 
               {/* Main Learnings */}
-              <div className="bg-[#161B22] rounded-lg p-6 border border-gray-200">
+              <div className="bg-white rounded-lg p-6 border border-gray-200">
                 <h3 className="text-lg font-semibold mb-4">🎯 What We've Learned About You</h3>
 
                 {patterns.length > 0 && (
@@ -223,7 +223,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                     <h4 className="font-semibold text-gray-800 mb-3">Your Most Effective Workflows</h4>
                     <div className="space-y-3">
                       {patterns.slice(0, 3).map(p => (
-                        <div key={p.pattern_id} className="bg-[#161B22] rounded p-4 border-l-4 border-blue-500">
+                        <div key={p.pattern_id} className="bg-gray-50 rounded p-4 border-l-4 border-blue-500">
                           <p className="font-mono text-sm mb-2 text-gray-700">
                             {p.skill_sequence.join(' → ')}
                           </p>
@@ -243,7 +243,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                 {configVersions.length > 1 && (
                   <div className="mb-6">
                     <h4 className="font-semibold text-gray-800 mb-3">Configuration Evolution</h4>
-                    <div className="bg-[#161B22] rounded p-4">
+                    <div className="bg-gray-50 rounded p-4">
                       <p className="text-sm text-gray-700 mb-3">
                         The system has optimized your configuration through {configVersions.length} iterations:
                       </p>
@@ -267,14 +267,14 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                     <h4 className="font-semibold text-gray-800 mb-3">Your Work Style</h4>
                     <div className="space-y-4">
                       {Object.entries(preferences).map(([taskType, prefs]) => (
-                        <div key={taskType} className="bg-[#161B22] rounded p-4">
+                        <div key={taskType} className="bg-gray-50 rounded p-4">
                           <p className="font-semibold text-gray-800 mb-2">
                             For {taskType.charAt(0).toUpperCase() + taskType.slice(1)} Tasks
                           </p>
                           <p className="text-sm text-gray-700 mb-3">
                             You prefer this sequence:
                           </p>
-                          <p className="font-mono text-sm bg-[#161B22] px-3 py-2 rounded border border-gray-200 mb-2">
+                          <p className="font-mono text-sm bg-white px-3 py-2 rounded border border-gray-200 mb-2">
                             {Object.entries(prefs.preferred_skills)
                               .sort(([, a], [, b]) => b - a)
                               .map(([skill]) => skill)
@@ -334,7 +334,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
           ) : (
             <div className="grid gap-4">
               {patterns.map(p => (
-                <div key={p.pattern_id} className="border rounded-lg p-4 bg-[#161B22]">
+                <div key={p.pattern_id} className="border rounded-lg p-4 bg-gray-50">
                   <div className="flex justify-between items-start mb-3">
                     <div>
                       <h3 className="font-semibold text-lg">{p.task_type.toUpperCase()}</h3>
@@ -347,7 +347,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                   </div>
 
                   <div className="mb-3">
-                    <p className="text-sm font-mono bg-[#161B22] px-3 py-2 rounded border">
+                    <p className="text-sm font-mono bg-white px-3 py-2 rounded border">
                       {p.skill_sequence.join(' → ')}
                     </p>
                   </div>
@@ -409,7 +409,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
           ) : (
             <div className="space-y-3">
               {configVersions.map((v, idx) => (
-                <div key={v.version_id} className="border rounded-lg p-4 bg-[#161B22]">
+                <div key={v.version_id} className="border rounded-lg p-4 bg-gray-50">
                   <div className="flex justify-between items-center">
                     <div>
                       <h3 className="font-semibold">{v.version_id}</h3>
@@ -462,7 +462,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                       {Object.entries(prefs.preferred_skills)
                         .sort(([, a], [, b]) => b - a)
                         .map(([skill, score]) => (
-                          <div key={skill} className="bg-[#161B22] px-3 py-1 rounded text-sm border">
+                          <div key={skill} className="bg-white px-3 py-1 rounded text-sm border">
                             {skill} <span className="text-gray-500">({(score * 100).toFixed(0)}%)</span>
                           </div>
                         ))}
