@@ -61,15 +61,26 @@ export const LearningDashboard: React.FC = () => {
 
       if (patternsRes.ok) {
         const data = await patternsRes.json();
-        setPatterns(data.data || data || []);
+        const patterns = data.data || data;
+        if (Array.isArray(patterns)) {
+          setPatterns(patterns);
+        } else if (patterns && typeof patterns === 'object' && !patterns.detail) {
+          setPatterns(Array.isArray(patterns) ? patterns : []);
+        }
       }
       if (versionsRes.ok) {
         const data = await versionsRes.json();
-        setConfigVersions(data.data || data || []);
+        const versions = data.data || data;
+        if (Array.isArray(versions)) {
+          setConfigVersions(versions);
+        }
       }
       if (prefsRes.ok) {
         const data = await prefsRes.json();
-        setPreferences(data.data || data || {});
+        const prefs = data.data || data;
+        if (prefs && typeof prefs === 'object' && !prefs.detail) {
+          setPreferences(prefs);
+        }
       }
     } catch (error) {
       console.error('Failed to fetch learning data:', error);
