@@ -35,12 +35,27 @@ interface Preference {
   observation_count: number;
 }
 
-export const LearningDashboard: React.FC = () => {
+interface LearningDashboardProps {
+  activeTab?: 'patterns' | 'config' | 'preferences' | 'summary';
+  onTabChange?: (tab: 'patterns' | 'config' | 'preferences' | 'summary') => void;
+  hideTabNavigation?: boolean;
+}
+
+export const LearningDashboard: React.FC<LearningDashboardProps> = ({
+  activeTab: propActiveTab,
+  onTabChange,
+  hideTabNavigation = false
+}) => {
   const [patterns, setPatterns] = useState<Pattern[]>([]);
   const [configVersions, setConfigVersions] = useState<ConfigVersion[]>([]);
   const [preferences, setPreferences] = useState<Record<string, Preference>>({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'patterns' | 'config' | 'preferences' | 'summary'>('summary');
+  const [activeTab, setActiveTab] = useState<'patterns' | 'config' | 'preferences' | 'summary'>(propActiveTab || 'summary');
+
+  const handleTabChange = (tab: 'patterns' | 'config' | 'preferences' | 'summary') => {
+    setActiveTab(tab);
+    if (onTabChange) onTabChange(tab);
+  };
   const [feedbackTask, setFeedbackTask] = useState('');
   const [feedbackQuality, setFeedbackQuality] = useState<'excellent' | 'good' | 'okay' | 'poor' | 'bad'>('good');
 
@@ -128,14 +143,15 @@ export const LearningDashboard: React.FC = () => {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6">🧠 Learning Dashboard</h1>
+      {!hideTabNavigation && <h1 className="text-3xl font-bold mb-6">🧠 Learning Dashboard</h1>}
 
       {/* Tab Navigation */}
+      {!hideTabNavigation && (
       <div className="flex gap-4 mb-6 border-b overflow-x-auto">
         {(['summary', 'patterns', 'config', 'preferences'] as const).map(tab => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => handleTabChange(tab)}
             className={`pb-2 px-4 font-semibold whitespace-nowrap ${
               activeTab === tab
                 ? 'border-b-2 border-blue-500 text-blue-600'
@@ -149,6 +165,7 @@ export const LearningDashboard: React.FC = () => {
           </button>
         ))}
       </div>
+      )}
 
       {/* TAB 1: Learning Summary */}
       {activeTab === 'summary' && (

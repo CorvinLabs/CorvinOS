@@ -17,9 +17,9 @@
  * without asking.
  */
 
-import { Suspense } from 'react';
+import { Suspense, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import LearningDashboard from './components/LearningDashboard';
+import MaturityDashboard from './components/LearningDashboard';
 import MethodDiscoveryDashboard from '@/panels/LearningDashboard';
 
 const LoadingFallback = () => (
@@ -29,20 +29,56 @@ const LoadingFallback = () => (
 );
 
 export function VibeDashboard() {
-  // LearningDashboard renders its own <h1> and page chrome; wrapping it in a
-  // second header would show the title twice.
+  const [activeTab, setActiveTab] = useState<'maturity' | 'summary' | 'patterns' | 'config' | 'preferences'>('maturity');
+
   return (
     <div data-testid="learning-dashboard-panel">
-      <Suspense fallback={<LoadingFallback />}>
-        <LearningDashboard />
-      </Suspense>
-
-      {/* Method Discovery 4-Tab Dashboard (ADR-0548 Phase 1) */}
-      <div style={{ marginTop: '48px', borderTop: '1px solid #e5e7eb', paddingTop: '32px' }}>
-        <Suspense fallback={<LoadingFallback />}>
-          <MethodDiscoveryDashboard />
-        </Suspense>
+      {/* Tab Navigation */}
+      <div style={{ borderBottom: '1px solid #e5e7eb', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {[
+            { id: 'maturity', label: '📊 Maturity Metrics', icon: '📊' },
+            { id: 'summary', label: '📝 Summary', icon: '📝' },
+            { id: 'patterns', label: '📊 Patterns', icon: '📊' },
+            { id: 'config', label: '⚙️ Config', icon: '⚙️' },
+            { id: 'preferences', label: '👤 Preferences', icon: '👤' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              style={{
+                padding: '12px 16px',
+                border: 'none',
+                background: 'none',
+                cursor: 'pointer',
+                borderBottom: activeTab === tab.id ? '2px solid #3b82f6' : '2px solid transparent',
+                color: activeTab === tab.id ? '#3b82f6' : '#6b7280',
+                fontWeight: activeTab === tab.id ? 600 : 500,
+                fontSize: '14px',
+                transition: 'all 0.2s',
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {/* Tab Content */}
+      {activeTab === 'maturity' && (
+        <Suspense fallback={<LoadingFallback />}>
+          <MaturityDashboard />
+        </Suspense>
+      )}
+
+      {activeTab !== 'maturity' && (
+        <Suspense fallback={<LoadingFallback />}>
+          <MethodDiscoveryDashboard
+            activeTab={activeTab as 'summary' | 'patterns' | 'config' | 'preferences'}
+            hideTabNavigation={true}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
