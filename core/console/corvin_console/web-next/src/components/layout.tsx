@@ -5,6 +5,7 @@ import {
   AudioLines,
   BookOpen,
   Boxes,
+  TrendingUp,
   Building2,
   ChevronDown,
   Cloud,
@@ -147,7 +148,7 @@ const NAV_GROUPS: NavGroup[] = [
     // PANELS, this list makes it reachable. tests/unit/panel-nav-wiring.test.ts
     // fails if the two drift apart.
     items: [
-      { to: "/app/vibe-engineering",     label: "Dashboard",            icon: Boxes,     requiredFlag: "vibe_engineering" },
+      { to: "/app/vibe-engineering",     label: "Learning Dashboard",   icon: TrendingUp, requiredFlag: "vibe_engineering" },
     ],
   },
   {
@@ -424,6 +425,7 @@ export function mergeManifestNav(groups: NavGroup[], manifest: ConsoleManifest |
 const MANIFEST_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   MessagesSquare, LayoutDashboard, Layers: Boxes, Cpu, BookOpen, Blocks, Settings,
   Zap: Sparkles, Shield: ShieldCheck, ShieldCheck, Sparkles, Plug, Package, Globe, Network, Workflow,
+  TrendingUp,
 };
 
 export function AppLayout() {

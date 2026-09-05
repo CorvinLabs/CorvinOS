@@ -298,9 +298,12 @@ def _get_builtin_panels() -> list[dict]:
         # Vibe Engineering group (ADR-0561 Phase 4-5)
         {
             "id": "vibe-engineering",
-            "title": "Dashboard",
+            # Named after what it shows since 2026-09-05: the route id stays
+            # `vibe-engineering` (sidebar, registry, bookmarks all address it),
+            # only the visible title changed.
+            "title": "Learning Dashboard",
             "route": "vibe-engineering",
-            "icon": "Layers",
+            "icon": "TrendingUp",
             "kind": "feature",
             "source": "builtin",
             "nav_group": "vibe",
