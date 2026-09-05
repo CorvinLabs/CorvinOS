@@ -20,6 +20,7 @@
 import { Suspense } from 'react';
 import { Loader2 } from 'lucide-react';
 import LearningDashboard from './components/LearningDashboard';
+import MethodDiscoveryDashboard from '@/panels/LearningDashboard';
 
 const LoadingFallback = () => (
   <div className="flex justify-center py-12">
@@ -35,6 +36,13 @@ export function VibeDashboard() {
       <Suspense fallback={<LoadingFallback />}>
         <LearningDashboard />
       </Suspense>
+
+      {/* Method Discovery 4-Tab Dashboard (ADR-0548 Phase 1) */}
+      <div style={{ marginTop: '48px', borderTop: '1px solid #e5e7eb', paddingTop: '32px' }}>
+        <Suspense fallback={<LoadingFallback />}>
+          <MethodDiscoveryDashboard />
+        </Suspense>
+      </div>
     </div>
   );
 }
