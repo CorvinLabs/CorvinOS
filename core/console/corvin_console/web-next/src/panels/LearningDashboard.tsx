@@ -59,9 +59,18 @@ export const LearningDashboard: React.FC = () => {
         fetch('/v1/console/learning/preferences'),
       ]);
 
-      if (patternsRes.ok) setPatterns(await patternsRes.json());
-      if (versionsRes.ok) setConfigVersions(await versionsRes.json());
-      if (prefsRes.ok) setPreferences(await prefsRes.json());
+      if (patternsRes.ok) {
+        const data = await patternsRes.json();
+        setPatterns(data.data || data || []);
+      }
+      if (versionsRes.ok) {
+        const data = await versionsRes.json();
+        setConfigVersions(data.data || data || []);
+      }
+      if (prefsRes.ok) {
+        const data = await prefsRes.json();
+        setPreferences(data.data || data || {});
+      }
     } catch (error) {
       console.error('Failed to fetch learning data:', error);
     } finally {
