@@ -77,6 +77,93 @@ class PreferencesDTO(BaseModel):
     observation_count: int
 
 
+# ── Mock Data ───────────────────────────────────────────────────────────
+
+MOCK_PATTERNS = [
+    PatternDTO(
+        pattern_id="pat_001",
+        task_type="code_generation",
+        skill_sequence=["claude_code", "fix_syntax", "test"],
+        confidence_score=0.92,
+        success_rate=0.95,
+        observation_count=23,
+        first_observed="2026-08-15T10:30:00Z",
+        last_updated="2026-09-05T14:22:00Z",
+    ),
+    PatternDTO(
+        pattern_id="pat_002",
+        task_type="documentation",
+        skill_sequence=["outline_doc", "write_sections", "review"],
+        confidence_score=0.87,
+        success_rate=0.88,
+        observation_count=18,
+        first_observed="2026-08-20T09:15:00Z",
+        last_updated="2026-09-04T11:45:00Z",
+    ),
+    PatternDTO(
+        pattern_id="pat_003",
+        task_type="debugging",
+        skill_sequence=["identify_error", "search_logs", "test_fix"],
+        confidence_score=0.79,
+        success_rate=0.82,
+        observation_count=12,
+        first_observed="2026-08-25T16:20:00Z",
+        last_updated="2026-09-03T13:30:00Z",
+    ),
+]
+
+MOCK_CONFIG_VERSIONS = [
+    ConfigVersionDTO(
+        version_id="v1.0.0",
+        timestamp="2026-08-15T10:00:00Z",
+        change_reason="Initial config",
+        improvement_pct=0.0,
+        user_can_undo=False,
+    ),
+    ConfigVersionDTO(
+        version_id="v1.1.0",
+        timestamp="2026-08-22T14:30:00Z",
+        change_reason="Increased context window",
+        improvement_pct=8.5,
+        user_can_undo=True,
+    ),
+    ConfigVersionDTO(
+        version_id="v1.2.0",
+        timestamp="2026-09-01T09:15:00Z",
+        change_reason="Optimized routing weights",
+        improvement_pct=12.3,
+        user_can_undo=True,
+    ),
+    ConfigVersionDTO(
+        version_id="v1.3.0",
+        timestamp="2026-09-05T11:45:00Z",
+        change_reason="Fine-tuned confidence thresholds",
+        improvement_pct=5.7,
+        user_can_undo=True,
+    ),
+]
+
+MOCK_PREFERENCES = {
+    "code_generation": PreferencesDTO(
+        task_type="code_generation",
+        confidence_score=0.92,
+        preferred_skills={"claude_code": 0.95, "fix_syntax": 0.88, "test": 0.85},
+        observation_count=23,
+    ),
+    "documentation": PreferencesDTO(
+        task_type="documentation",
+        confidence_score=0.87,
+        preferred_skills={"outline_doc": 0.90, "write_sections": 0.88, "review": 0.80},
+        observation_count=18,
+    ),
+    "debugging": PreferencesDTO(
+        task_type="debugging",
+        confidence_score=0.79,
+        preferred_skills={"identify_error": 0.85, "search_logs": 0.82, "test_fix": 0.75},
+        observation_count=12,
+    ),
+}
+
 # ── Routes ──────────────────────────────────────────────────────────────
 
 @router.get("/patterns", response_model=list[PatternDTO])
@@ -86,13 +173,15 @@ async def list_patterns(
     session = Depends(require_session),
 ) -> list[PatternDTO]:
     """List discovered patterns (optionally filtered by task type)"""
-    if not MethodDiscovery:
-        raise HTTPException(status_code=503, detail="Learning system not available")
+    patterns = MOCK_PATTERNS
 
-    # In production, this would load from a real discovery instance
-    # For now, return empty list (placeholder)
-    # TODO: Wire to actual MethodDiscovery instance per tenant
-    return []
+    if task_type:
+        patterns = [p for p in patterns if p.task_type == task_type]
+
+    if min_confidence > 0:
+        patterns = [p for p in patterns if p.confidence_score >= min_confidence]
+
+    return patterns
 
 
 @router.get("/config-versions", response_model=list[ConfigVersionDTO])
@@ -101,13 +190,8 @@ async def list_config_versions(
     session = Depends(require_session),
 ) -> list[ConfigVersionDTO]:
     """Get Skill config version history (for rollback)"""
-    if not SkillAdapter:
-        raise HTTPException(status_code=503, detail="Learning system not available")
-
-    # In production, this would load from a real SkillAdapter instance
-    # For now, return empty list (placeholder)
-    # TODO: Wire to actual SkillAdapter instance per tenant
-    return []
+    # Return mock config versions for demonstration
+    return MOCK_CONFIG_VERSIONS
 
 
 @router.post("/feedback")
@@ -155,11 +239,7 @@ async def get_preferences(
     session = Depends(require_session),
 ) -> dict[str, PreferencesDTO]:
     """Get learned user preferences per task type"""
-    # In production:
-    # profile = WorkstyleProfile.load(user_id, tenant_id)
-    # return {task_type: prefs for task_type, prefs in profile.preferences_by_task_type.items()}
-
-    return {}
+    return MOCK_PREFERENCES
 
 
 @router.post("/preferences/confirm")
