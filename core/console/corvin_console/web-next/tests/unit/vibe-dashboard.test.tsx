@@ -1,103 +1,63 @@
 /**
- * Unit tests for VibeDashboard — the ONE Vibe Engineering panel.
+ * Unit tests for the Vibe Engineering panel — the Learning Dashboard.
  *
- * The group used to be five sidebar entries (Dashboard · Brain Monitor ·
- * Context Intelligence · Learning Hub · Session Explorer). On 2026-09-05 the
- * four secondary panels were retired: everything lives in this panel's tabs,
- * so the sidebar no longer duplicates them.
+ * The panel's shape has changed twice, so these tests pin the current one:
+ *   - it was five sidebar entries (Dashboard · Brain Monitor · Context
+ *     Intelligence · Learning Hub · Session Explorer) until 2026-09-05,
+ *   - then one tabbed panel (Graph View · Inspector · Timeline · Learning),
+ *   - and now the Learning view alone, with no tab bar at all.
  *
- * Covers: tab list, URL query-param sync, and that the Learning tab (ADR-0321)
- * stays registered — it was added to the dashboard and must not be dropped
- * again by a later edit.
+ * The route id stays `vibe-engineering`; only the visible name is "Learning
+ * Dashboard".
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { VibeDashboard } from '@/pages/vibe-engineering/VibeDashboard';
 
-// The graph canvas (Cytoscape) and the learning charts (recharts) both need a
-// real layout engine; stub them so the test asserts the dashboard's own shell.
-vi.mock('@/pages/vibe-engineering/components/AuditChainGraph', () => ({
-  AuditChainGraph: () => <div data-testid="audit-chain-graph">Graph</div>,
-}));
-
-vi.mock('@/pages/vibe-engineering/components/GraphInspector', () => ({
-  GraphInspector: () => <div data-testid="graph-inspector">Inspector</div>,
-}));
-
+// recharts needs a real layout box; the panel's own wiring is what's under test.
 vi.mock('@/pages/vibe-engineering/components/LearningDashboard', () => ({
-  default: () => <div data-testid="learning-dashboard">Learning Dashboard</div>,
+  default: () => (
+    <div data-testid="learning-dashboard">
+      <h1>Learning Dashboard</h1>
+    </div>
+  ),
 }));
 
-vi.mock('@/pages/vibe-engineering/hooks/useAuditQuery', () => ({
-  useAuditQuery: () => ({
-    data: {
-      graph: { nodes: [], edges: [], metadata: { nodeCount: 0, edgeCount: 0 } },
-      events: [],
-      snapshotFreshness_ms: 0,
-    },
-    isLoading: false,
-    isCached: false,
-    error: null,
-    refetch: vi.fn(),
-  }),
-}));
-
-describe('VibeDashboard Component', () => {
-  const renderComponent = () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    return render(
-      <QueryClientProvider client={client}>
-        <BrowserRouter>
-          <VibeDashboard />
-        </BrowserRouter>
-      </QueryClientProvider>,
+describe('Vibe Engineering panel', () => {
+  const renderComponent = () =>
+    render(
+      <BrowserRouter>
+        <VibeDashboard />
+      </BrowserRouter>,
     );
-  };
 
-  beforeEach(() => {
-    window.history.pushState({}, '', '/app/vibe-engineering');
-  });
-
-  it('should render the main heading', () => {
+  it('renders the learning dashboard', async () => {
     renderComponent();
-    expect(screen.getByText('Vibe Engineering')).toBeInTheDocument();
+    expect(await screen.findByTestId('learning-dashboard')).toBeInTheDocument();
   });
 
-  it('should render all four tabs', () => {
+  it('is named Learning Dashboard', async () => {
     renderComponent();
-    for (const label of [/Graph View/i, /Inspector/i, /Timeline/i, /Learning/i]) {
-      expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
-    }
+    expect(
+      await screen.findByRole('heading', { name: /learning dashboard/i }),
+    ).toBeInTheDocument();
   });
 
-  it('should render the tab list as a 4-column grid', () => {
+  it('has no tab bar — the audit tabs were removed', () => {
     const { container } = renderComponent();
-    const tabsList = container.querySelector('[role="tablist"]');
-    expect(tabsList).toBeInTheDocument();
-    expect(tabsList).toHaveClass('grid');
-    expect(tabsList).toHaveClass('grid-cols-4');
+    expect(container.querySelector('[role="tablist"]')).toBeNull();
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
   });
 
-  // Radix activates a trigger on mousedown, not on a synthetic click.
-  it('should sync the selected tab into the URL and render it', async () => {
+  it('renders no retired view', () => {
     renderComponent();
-    fireEvent.mouseDown(screen.getByRole('tab', { name: /Learning/i }));
-    await waitFor(() => {
-      expect(window.location.search).toContain('tab=learning');
-      expect(screen.getByTestId('learning-dashboard')).toBeInTheDocument();
-    });
-  });
-
-  it('should open the tab named by ?tab= on mount', async () => {
-    window.history.pushState({}, '', '/app/vibe-engineering?tab=learning');
-    renderComponent();
-    await waitFor(() => {
-      expect(screen.getByTestId('learning-dashboard')).toBeInTheDocument();
-    });
+    for (const gone of [
+      /graph view/i, /inspector/i, /timeline/i,
+      /brain monitor/i, /context intelligence/i, /learning hub/i, /session explorer/i,
+    ]) {
+      expect(screen.queryByText(gone)).toBeNull();
+    }
   });
 });

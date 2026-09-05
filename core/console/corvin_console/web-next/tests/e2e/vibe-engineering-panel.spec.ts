@@ -9,9 +9,11 @@
  * nothing exercised the mounted route.
  *
  * On 2026-09-05 the four secondary panels (Brain Monitor · Context Intelligence ·
- * Learning Hub · Session Explorer) were retired — their content is reachable as
- * tabs of the dashboard, and the duplicate sidebar entries were removed from
- * NAV_GROUPS, PANELS and the backend capability manifest.
+ * Learning Hub · Session Explorer) were retired from NAV_GROUPS, PANELS and the
+ * backend capability manifest, and the panel itself was cut down to the
+ * Learning view — the Graph View / Inspector / Timeline tabs over the audit
+ * chain went with them. The route id stays `vibe-engineering`; the visible name
+ * is "Learning Dashboard".
  */
 import { test, expect, type Page } from '@playwright/test';
 
@@ -26,9 +28,16 @@ async function goto(page: Page, route: string) {
   // baseURL already ends in /console, and an ABSOLUTE path would discard that
   // prefix and hit the gateway's own 404 instead of the SPA.
   await page.goto(`/console/app/${route}`);
-  // NOT networkidle: the dashboard polls the audit query, so the network never
-  // goes idle and every wait would burn the timeout.
+  // NOT networkidle: the shell polls, so the network never goes idle and every
+  // wait would burn the timeout.
   await page.waitForLoadState('domcontentloaded');
+  // The shell renders "Loading session…" until whoami resolves. On a console
+  // that just booted that can take longer than an assertion's 5s timeout, which
+  // made every panel assertion flaky. Wait for the auth gate to clear first.
+  await page
+    .locator('text=Loading session…')
+    .waitFor({ state: 'detached', timeout: 30000 })
+    .catch(() => {});
 }
 
 /** A React render crash leaves the route error boundary, not the panel. */
@@ -39,14 +48,13 @@ async function expectNoCrash(page: Page) {
 }
 
 test.describe('Vibe Engineering group', () => {
-  test('sidebar lists exactly the one current panel', async ({ page }) => {
+  test('sidebar lists exactly the one current panel, named Learning Dashboard', async ({ page }) => {
     await goto(page, 'vibe-engineering');
 
     const nav = page.locator('aside, nav').first();
-    await expect(
-      nav.locator('a[href$="/app/vibe-engineering"]'),
-      'sidebar entry for the Vibe Dashboard',
-    ).toHaveCount(1);
+    const entry = nav.locator('a[href$="/app/vibe-engineering"]');
+    await expect(entry, 'sidebar entry for the Learning Dashboard').toHaveCount(1);
+    await expect(entry).toContainText(/learning dashboard/i);
   });
 
   test('no retired panel is still linked from the sidebar', async ({ page }) => {
@@ -59,23 +67,24 @@ test.describe('Vibe Engineering group', () => {
     }
   });
 
-  test('Dashboard route renders the tabbed dashboard', async ({ page }) => {
+  test('the route renders the Learning Dashboard', async ({ page }) => {
     await goto(page, 'vibe-engineering');
     await expect(
-      page.getByRole('heading', { name: /^vibe engineering$/i }),
+      page.getByRole('heading', { name: /^learning dashboard$/i }),
     ).toBeVisible();
-    for (const label of ['Graph View', 'Inspector', 'Timeline', 'Learning']) {
-      await expect(
-        page.getByRole('tab', { name: new RegExp(label, 'i') }),
-        `tab ${label}`,
-      ).toBeVisible();
-    }
+    await expect(page.locator('text=/learning score/i').first()).toBeVisible();
     await expectNoCrash(page);
   });
 
-  test('Learning tab renders the learning dashboard', async ({ page }) => {
-    await goto(page, 'vibe-engineering?tab=learning');
-    await expect(page.locator('text=/learning score/i').first()).toBeVisible();
+  test('the retired audit tabs are gone', async ({ page }) => {
+    await goto(page, 'vibe-engineering');
+    await expect(page.locator('[role="tablist"]')).toHaveCount(0);
+    for (const gone of ['Graph View', 'Inspector', 'Timeline']) {
+      await expect(
+        page.getByRole('tab', { name: new RegExp(gone, 'i') }),
+        `retired tab ${gone}`,
+      ).toHaveCount(0);
+    }
     await expectNoCrash(page);
   });
 
