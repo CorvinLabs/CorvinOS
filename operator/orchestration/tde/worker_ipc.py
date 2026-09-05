@@ -411,6 +411,15 @@ class SubprocessWorkerIPC:
             if any(s not in snapshot_json for s in selected):
                 return snapshot_json
             slice_text = "\n".join(selected)
+            # Re-defang AFTER the join: two individually marker-free substrings can
+            # reconstruct a "</\nDATA>" marker across the "\n" separator, which the
+            # worker's \s*-tolerant defang regex reads as a frame boundary. The
+            # per-element substring check cannot see this cross-join case, so
+            # neutralise any marker in the joined text too (targeted, preserves data
+            # fidelity) — this makes the "cannot re-introduce a </DATA> marker"
+            # guarantee hold across the join, not only per element.
+            slice_text = re.sub(r"</?\s*DATA\s*>", "[DATA]", slice_text,
+                                flags=re.IGNORECASE)
             # HARD post-condition (E2BIG): reject an over-ceiling slice and let the
             # caller's raw truncation take over instead.
             if len(slice_text) > self._SNAPSHOT_MAX_CHARS:
