@@ -16,6 +16,7 @@ import PanelHost from "./PanelHost";
 import { MarketplacePanel } from "./marketplace";
 import { SkillsOverviewPanel } from "@/components/SkillsOverviewPanel";
 import { VibeDashboard } from "@/pages/vibe-engineering";
+import { LearningDashboard } from "./LearningDashboard";
 import {
   DashboardPage, SettingsPage, EnginesPage, BrowserPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
@@ -38,6 +39,7 @@ import { SkillInspector } from "@/components/SkillInspector";
  */
 const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   DashboardPage,
+  LearningDashboard: LearningDashboard as unknown as ComponentType,
   SettingsPage,
   EnginesPage,
   BrowserPage,
@@ -90,7 +92,8 @@ export const PANELS: ConsolePanel[] = [
   // pages/vibe-engineering.tsx (the retired Context Pipeline page), shadowed the
   // directory — file beats directory in module resolution — so this import
   // silently loaded the old page and the Dashboard was unreachable.
-  rc("vibe-engineering", "Learning Dashboard", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Learning Dashboard", icon: "TrendingUp", group: "vibe" } }),
+  rc("vibe-engineering", "Vibe Dashboard", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Vibe Dashboard", icon: "TrendingUp", group: "vibe" } }),
+  rc("learning-dashboard", "Learning Dashboard", LearningDashboard as unknown as typeof DashboardPage, { nav: { label: "Learning Dashboard", icon: "Brain", group: "observability" } }),
   rc("dashboard", "Dashboard", DashboardPage),
   rc("settings", "Settings", SettingsPage),
   rc("engines", "AI Engines", EnginesPage),
