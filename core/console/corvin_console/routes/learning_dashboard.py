@@ -27,8 +27,19 @@ import logging
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
-from core.learning.dashboard import LearningDashboard, DashboardMetrics, SkillPerformance
-from core.learning.event_store import EventStore
+try:
+    # Try direct import first (when PYTHONPATH includes project root)
+    from core.learning.dashboard import LearningDashboard, DashboardMetrics, SkillPerformance
+    from core.learning.event_store import EventStore
+except ImportError:
+    # Fallback: use relative import from parent structure
+    import sys
+    from pathlib import Path
+    project_root = Path(__file__).resolve().parents[3]  # Navigate up to project root
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from core.learning.dashboard import LearningDashboard, DashboardMetrics, SkillPerformance
+    from core.learning.event_store import EventStore
 
 from .. import auth as session_auth
 from ..deps import require_session
