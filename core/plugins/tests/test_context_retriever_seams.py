@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -330,6 +331,25 @@ class TestTDESeam(unittest.TestCase):
         sj = json.dumps(snap, default=str, indent=2)
         self.assertEqual(self.ipc._select_snapshot_slice(sj, env), sj)
         self.assertIn("keep-this-body", self.ipc._build_prompt(env))
+
+    def test_cross_join_marker_reconstruction_is_defanged(self):
+        # Two individually marker-free substrings of the snapshot that reconstruct a
+        # "</DATA>" frame marker ACROSS the "\n" join separator must be defanged in
+        # the joined result — the per-element substring check cannot catch this.
+        snap = {"prev": "aa</ up DATA> bb"}
+        env = _make_envelope(snap)
+        sj = json.dumps(snap, default=str, indent=2)
+
+        class SplitMarker:
+            def select(self, query, candidates, *, budget=None, tenant_id=None):
+                return ["</", "DATA>"]  # both substrings of sj; join → "</\nDATA>"
+
+        cr.set_active(SplitMarker())
+        out = self.ipc._select_snapshot_slice(sj, env)
+        self.assertIsNone(
+            re.search(r"</?\s*DATA\s*>", out, re.IGNORECASE),
+            "cross-join reconstructed frame marker must be defanged",
+        )
 
     def test_raising_provider_falls_back_to_raw(self):
         class Boom:
