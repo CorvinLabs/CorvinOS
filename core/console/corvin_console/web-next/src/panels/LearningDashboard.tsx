@@ -224,7 +224,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
               <p style={{ fontSize: '14px', color: PALETTE.surface.muted }}>Complete tasks and provide feedback to see what the system learns about your working style.</p>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
               {/* Overall Stats */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px', marginBottom: '24px' }}>
                 <div style={{ backgroundColor: PALETTE.surface.card, borderRadius: '8px', padding: '16px', border: `1px solid ${PALETTE.surface.border}` }}>

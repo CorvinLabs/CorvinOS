@@ -1,0 +1,56 @@
+{
+  "dashboard": {
+    "title": "Plugin Orchestration \u2014 Production Learning Loop",
+    "tags": [
+      "plugin-orchestration",
+      "learning",
+      "production"
+    ],
+    "refresh": "30s",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "title": "Orchestration Success Rate (24h)",
+        "targets": [
+          {
+            "expr": "avg(orchestration_plugin_success_rate)",
+            "legendFormat": "{{ plugin_id }}"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "title": "Learning Confidence Convergence",
+        "targets": [
+          {
+            "expr": "orchestration_plugin_confidence",
+            "legendFormat": "{{ skill_id }}"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "title": "Plugin Invocation Counts",
+        "targets": [
+          {
+            "expr": "sum(orchestration_invocations) by (plugin_id)",
+            "legendFormat": "{{ plugin_id }}"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "title": "Selection Method Distribution",
+        "targets": [
+          {
+            "expr": "sum(orchestration_selection_method_total) by (method)"
+          }
+        ],
+        "type": "pie_chart"
+      }
+    ]
+  }
+}
