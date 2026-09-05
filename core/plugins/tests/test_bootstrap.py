@@ -638,9 +638,15 @@ class TestDegradationIsAudited(unittest.TestCase):
         path = self.home / "tenants" / "_default" / "plugins" / "registry.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("- not\n- a\n- mapping\n")
-        config = {"spec": {"plugins": {"installed": [
-            {"id": "x.bad", "class_path": "garbage-without-a-colon"},
-        ]}}}
+        config = {"spec": {"plugins": {
+            # This test exercises failure-degradation of the global/declared/runtime
+            # paths; the builtin path is a HEALTHY path (it ships real plugins in the
+            # wheel, e.g. semantic-context-retriever), so opt it out to keep "every
+            # path fails" true for the paths under test.
+            "load_builtin": False,
+            "installed": [
+                {"id": "x.bad", "class_path": "garbage-without-a-colon"},
+            ]}}}
         loaded = bootstrap.bootstrap_all(
             tenant_id="_default", corvin_home=self.home,
             lifecycle_enabled=True, tenant_config=config,
