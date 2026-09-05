@@ -685,6 +685,21 @@ def _bundled_bridge_declarations(
 _BUILTIN_ROOT: Path = Path(__file__).resolve().parents[1] / "buildin"
 
 
+def _marketplace_root() -> Path:
+    """Root of plugins whose SOURCE lives in the Corvin-Marketplace repo, not in
+    CorvinOS (operator rule — keep the CorvinOS codebase small; plugin source is owned
+    by the marketplace, CorvinOS only loads it). Resolved from ``CORVIN_MARKETPLACE_ROOT``
+    if set, else a sibling ``../Corvin-Marketplace/plugins/buildin`` checkout next to the
+    CorvinOS repo. A missing path scans to ``[]`` (behaviour-neutral)."""
+    import os
+    env = os.environ.get("CORVIN_MARKETPLACE_ROOT")
+    if env:
+        return Path(env)
+    # bootstrap.py is core/plugins/corvin_plugins/ → parents[3] is the CorvinOS repo root;
+    # its sibling is the Corvin-Marketplace checkout.
+    return Path(__file__).resolve().parents[3].parent / "Corvin-Marketplace" / "plugins" / "buildin"
+
+
 def _builtin_plugin_dirs(root: Path) -> list[Path]:
     """Every directory under ``root`` that holds a ``plugin.yaml`` (recursive).
 
@@ -790,6 +805,13 @@ def bootstrap_builtin(
     """
     scan_root = root if root is not None else _BUILTIN_ROOT
     plugin_dirs = _builtin_plugin_dirs(scan_root)
+    if root is None:
+        # Also discover plugins whose SOURCE lives in the Corvin-Marketplace repo, not in
+        # CorvinOS (operator rule). Same load contract (plugin.yaml + provider.py); deduped
+        # by directory. An explicit test ``root`` scans only that root (isolation).
+        for _d in _builtin_plugin_dirs(_marketplace_root()):
+            if _d not in plugin_dirs:
+                plugin_dirs.append(_d)
     if not plugin_dirs:
         return []
 
