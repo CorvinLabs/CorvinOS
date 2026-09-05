@@ -1,21 +1,25 @@
 /**
- * Engines — AI engine configuration hub.
+ * Models & Providers — AI model backend configuration.
  * Route: /app/engines
  *
- * Architecture: Corvin is engine-agnostic. Five engines are available
- * across two roles:
+ * Architecture: Single-Harness (Claude Code) + Multi-Model Providers (ADR-0607/0608/0609)
  *
- *   OS engines (run the Corvin turn directly):
- *     Claude Code · OpenCode · Hermes
+ *   Orchestration Harness (Claude Code only):
+ *     - LDD Loop (k=1-5 iterative development)
+ *     - Agentic reasoning, Meta-Skills
+ *     - Executes all Skills via RPC API (ADR-0598)
  *
- *   Worker engines (delegation targets via mcp__corvin_delegate__*):
- *     All OS engines + Codex CLI + GitHub Copilot
+ *   Model Providers (pluggable, automatic fallback):
+ *     OpenAI (powerful, cloud) → OpenRouter (balanced, proxy) → Ollama (free, local)
+ *
+ *   UI-Layers (stateless frontends):
+ *     Discord Bot, GitHub CLI, Local CLI, Cloud API (ADR-0608)
  *
  * This page lets operators configure:
- *   1. OS Engine     — which engine IS Corvin (tenant-level default)
- *   2. Worker Engine — which engine Corvin delegates sub-tasks to
- *   3. API keys      — cloud engine credentials
- *   4. Custom Engines — register third-party OpenAI-compat/Anthropic/Ollama endpoints
+ *   1. Harness       — Claude Code (only option, full capabilities)
+ *   2. Model Providers — OpenAI, Ollama, OpenRouter API keys + model selection
+ *   3. Model Routing — cost optimization, automatic fallback chain
+ *   4. Custom Models — register third-party OpenAI-compat/Ollama endpoints
  */
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -420,83 +424,128 @@ function DetectedEnginesSection({ csrf }: { csrf: string }) {
 
 // ── Architecture Overview ─────────────────────────────────────────
 
-const ENGINE_ROLES: Array<{
+const MODEL_PROVIDERS: Array<{
   id: string;
   label: string;
-  role: "os+worker" | "worker";
-  locality: "local" | "cloud" | "github";
+  type: "harness" | "provider";
+  locality: "local" | "cloud";
   cost: string;
-  note?: string;
+  features: string;
+  badge?: string;
 }> = [
-  { id: "claude_code", label: "Claude Code",     role: "os+worker", locality: "cloud",  cost: "Per token" },
-  { id: "opencode",    label: "OpenCode",         role: "os+worker", locality: "cloud",  cost: "Per token / free (Ollama)" },
-  { id: "hermes",      label: "Hermes",           role: "os+worker", locality: "local",  cost: "Zero (after model download)", note: "CONFIDENTIAL-capable" },
-  { id: "codex_cli",   label: "Codex CLI",        role: "worker",    locality: "cloud",  cost: "Per token" },
-  { id: "copilot",     label: "GitHub Copilot",   role: "worker",    locality: "github", cost: "Zero (Copilot Business/Enterprise)", note: "Copilot Business/Enterprise plan required" },
+  {
+    id: "claude_code",
+    label: "Claude Code",
+    type: "harness",
+    locality: "cloud",
+    cost: "Per token",
+    features: "LDD Loop · Agentic · Meta-Skills · Full Capabilities",
+    badge: "Harness"
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    type: "provider",
+    locality: "cloud",
+    cost: "Per token",
+    features: "gpt-4, gpt-3.5-turbo · Powerful"
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    type: "provider",
+    locality: "cloud",
+    cost: "Per token (optimized)",
+    features: "Claude, GPT, Llama · Balanced Cost"
+  },
+  {
+    id: "ollama",
+    label: "Ollama",
+    type: "provider",
+    locality: "local",
+    cost: "Free (after download)",
+    features: "Mistral, Llama · 100% Local · No Egress"
+  },
 ];
 
 function ArchitectureOverview() {
   return (
-    <Card>
-      <CardContent className="pt-5 pb-4">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h2 className="font-semibold text-sm">Engine Architecture</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Corvin is engine-agnostic — any of the five engines can run sub-tasks.
-              OS engines also host the main conversation.
-            </p>
-          </div>
+    <Card className="border-2 border-accent/20">
+      <CardContent className="pt-5 pb-4 space-y-4">
+        <div>
+          <h2 className="font-semibold text-sm flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-accent" />
+            Single-Harness + Multi-Model Architecture
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Claude Code orchestration harness (LDD, Agentic) + pluggable model providers (cost-optimized fallback chain).
+          </p>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b text-muted-foreground">
-                <th className="text-left py-2 pr-4 font-medium">Engine</th>
-                <th className="text-left py-2 pr-4 font-medium">Role</th>
-                <th className="text-left py-2 pr-4 font-medium">Locality</th>
-                <th className="text-left py-2 font-medium">Cost model</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ENGINE_ROLES.map((e) => (
-                <tr key={e.id} className="border-b last:border-0 hover:bg-muted/20">
-                  <td className="py-2 pr-4">
-                    <div className="flex items-center gap-1.5">
-                      <EngineIcon
-                        engineId={e.id}
-                        className={cn("h-3.5 w-3.5", e.locality === "local" ? "text-emerald-500" : "text-muted-foreground")}
-                      />
-                      <span className="font-medium">{e.label}</span>
-                      {e.note && (
-                        <span className="text-[9px] bg-muted text-muted-foreground rounded px-1">{e.note}</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="py-2 pr-4">
-                    {e.role === "os+worker" ? (
-                      <span className="flex items-center gap-1 text-foreground">
-                        OS <ArrowRight className="h-3 w-3 text-muted-foreground" /> Worker
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">Worker only</span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-4">
-                    {e.locality === "local" ? (
-                      <span className="text-emerald-600 font-medium">On-premise</span>
-                    ) : e.locality === "github" ? (
-                      <span className="text-blue-600">GitHub cloud</span>
-                    ) : (
-                      <span className="text-muted-foreground">Cloud</span>
-                    )}
-                  </td>
-                  <td className="py-2 text-muted-foreground">{e.cost}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="space-y-2">
+          {MODEL_PROVIDERS.map((p) => (
+            <div
+              key={p.id}
+              className={cn(
+                "rounded-lg border p-3 flex items-start gap-3 transition-all",
+                p.type === "harness"
+                  ? "border-accent/40 bg-accent/5"
+                  : p.locality === "local"
+                  ? "border-emerald-500/30 bg-emerald-500/5"
+                  : "border-blue-500/30 bg-blue-500/5"
+              )}
+            >
+              <div className={cn(
+                "rounded-md p-2 mt-0.5",
+                p.type === "harness"
+                  ? "bg-accent/15 text-accent"
+                  : p.locality === "local"
+                  ? "bg-emerald-500/15 text-emerald-600"
+                  : "bg-blue-500/15 text-blue-600"
+              )}>
+                {p.type === "harness" ? (
+                  <Zap className="h-4 w-4" />
+                ) : p.locality === "local" ? (
+                  <Cpu className="h-4 w-4" />
+                ) : (
+                  <Cloud className="h-4 w-4" />
+                )}
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="font-medium text-sm">{p.label}</span>
+                  {p.badge && (
+                    <Badge className="text-[9px] px-1.5 py-0 h-4 bg-accent/15 text-accent border-accent/40">
+                      {p.badge}
+                    </Badge>
+                  )}
+                  {p.locality === "local" && (
+                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-400/40">
+                      Local
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground mb-1">{p.features}</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono text-muted-foreground/70">{p.cost}</span>
+                  {p.type === "harness" && (
+                    <Check className="h-3 w-3 text-accent shrink-0" />
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Fallback chain diagram */}
+        <div className="flex items-center justify-center gap-2 pt-2 text-[10px] text-muted-foreground">
+          <span className="font-mono px-2 py-1 rounded bg-muted">Ollama</span>
+          <ArrowRight className="h-3 w-3" />
+          <span className="font-mono px-2 py-1 rounded bg-muted">OpenRouter</span>
+          <ArrowRight className="h-3 w-3" />
+          <span className="font-mono px-2 py-1 rounded bg-muted">OpenAI</span>
+          <span className="ml-1 font-semibold">automatic fallback</span>
         </div>
       </CardContent>
     </Card>
@@ -532,15 +581,15 @@ function OsEngineSelector({ csrf }: { csrf: string }) {
     refetchOnWindowFocus: false,
   });
 
-  const [selected, setSelected] = React.useState<string | null>(null);
+  const [selected, setSelected] = React.useState<string | null>("claude_code");
   const [modelOverride, setModelOverride] = React.useState<string>("");
   const [saved, setSaved] = React.useState(false);
 
   // Sync local state from server
   React.useEffect(() => {
     if (settingQ.data && selected === null) {
-      setSelected(settingQ.data.default_engine ?? "claude_code");
-      setModelOverride(settingQ.data.hermes_model ?? "");
+      setSelected("claude_code"); // Single-harness: Claude Code always
+      setModelOverride("");
     }
   }, [settingQ.data, selected]);
 
