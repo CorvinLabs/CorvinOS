@@ -377,6 +377,11 @@ class SubprocessWorkerIPC:
                 for attr in ("action", "description")
             ).strip()
             candidates = [snapshot_json]
+            # NOTE: DelegationEnvelope carries no tenant_id, so this is always None
+            # here — TDE retrieval is tenant-BLIND. Harmless for the shipped BM25
+            # provider (stateless, ignores tenant_id; the snapshot is already
+            # tenant-scoped upstream), but a future tenant-aware retriever needs the
+            # tenant threaded onto the envelope before it can serve this surface.
             selected = context_retriever.get_active().select(
                 query,
                 candidates,
@@ -388,6 +393,22 @@ class SubprocessWorkerIPC:
             if not isinstance(selected, list) or not all(
                 isinstance(s, str) for s in selected
             ):
+                return snapshot_json
+            # Empty-result floor: an empty selection is a NO-OP, not "blank the
+            # context". Returning "" would hand the worker an empty <DATA> block,
+            # which is NOT fail-open to today's behaviour — keep the raw snapshot.
+            if not selected:
+                return snapshot_json
+            # Narrows-only post-condition (ADR-0297): every returned string MUST be a
+            # substring of the already-defanged input snapshot. A genuine slice IS a
+            # substring; a paraphrasing / re-chunking / hostile provider that returns
+            # text not present in the snapshot is REJECTED (raw truncation applies).
+            # This is what makes "never re-admits redacted content" ENFORCED rather
+            # than merely asserted, and — because the input was already defanged at
+            # the call site — it also guarantees the substituted slice cannot
+            # re-introduce a "</DATA>" frame marker. Parity with the CEL seam's
+            # `s is c` identity check (stages/memory.py).
+            if any(s not in snapshot_json for s in selected):
                 return snapshot_json
             slice_text = "\n".join(selected)
             # HARD post-condition (E2BIG): reject an over-ceiling slice and let the

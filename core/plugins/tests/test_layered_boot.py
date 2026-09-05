@@ -286,6 +286,7 @@ class TestBootstrapAllWiring(_BootTestCase):
     def test_returned_ids_are_globals_first_and_deduplicated(self):
         with mock.patch.object(boot, "bootstrap_global", return_value=["g"]), \
              mock.patch.object(boot, "bootstrap_declared", return_value=["d", "g"]), \
+             mock.patch.object(boot, "bootstrap_builtin", return_value=[]), \
              mock.patch.object(boot, "bootstrap_tenant", return_value=["r", "d"]):
             result = boot.bootstrap_all(
                 tenant_id="t", corvin_home=Path("/tmp"), tenant_config={}

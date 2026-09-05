@@ -53,6 +53,10 @@ def _apply_context_retriever(brief, ctx):
         # candidate (identity-checked; MemoryMatch is unhashable). Fail-open.
         if not isinstance(selected, list) or len(selected) > len(candidates):
             return brief
+        if not selected:
+            # Empty selection is a NO-OP, not "wipe all memory matches" — a floor:
+            # keep the raw candidates rather than handing the brief an empty context.
+            return brief
         if not all(any(s is c for c in candidates) for s in selected):
             return brief
         mc.matches = selected
