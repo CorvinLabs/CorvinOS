@@ -1,0 +1,22 @@
+groups:
+- interval: 30s
+  name: plugin_orchestration_alerts
+  rules:
+  - alert: PluginErrorRateHigh
+    annotations:
+      description: 'Success rate: {{ $value | humanizePercentage }}'
+      summary: High error rate for plugin {{ $labels.plugin_id }}
+    expr: orchestration_plugin_success_rate < 0.95
+    for: 5m
+  - alert: LearningConfidenceLow
+    annotations:
+      description: 'Confidence: {{ $value | humanizePercentage }}'
+      summary: Low learning confidence for {{ $labels.skill_id }}
+    expr: orchestration_plugin_confidence < 0.5
+    for: 10m
+  - alert: SLOComplianceBreached
+    annotations:
+      description: 'Compliance: {{ $value | humanizePercentage }}'
+      summary: 'SLO breached: {{ $labels.capability_id }}'
+    expr: orchestration_slo_compliance < 0.99
+    for: 3m

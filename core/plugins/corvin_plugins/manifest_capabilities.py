@@ -20,6 +20,22 @@ class CapabilityType(str, Enum):
     ROUTER_POLICY = "router_policy"
     USER_BACKEND = "user_backend"
     AUDIT_BACKEND = "audit_backend"
+    # New capability types for marketplace plugins (Segment A)
+    SESSION_STORE = "session_store"
+    EVENT_STORE = "event_store"
+    DATA_VALIDATOR = "data_validator"
+    DATA_CLASSIFIER = "data_classifier"
+    ERROR_HANDLER = "error_handler"
+    DATA_ANONYMIZER = "data_anonymizer"
+    ARTIFACT_PROCESSOR = "artifact_processor"
+    CONTEXT_ANALYZER = "context_analyzer"
+    METRICS_AGGREGATOR = "metrics_aggregator"
+    WHEEL_INSPECTOR = "wheel_inspector"
+    LEARNING_TRACKER = "learning_tracker"
+    USER_PROFILER = "user_profiler"
+    AUTONOMY_TRACKER = "autonomy_tracker"
+    DIAGNOSTICS_RENDERER = "diagnostics_renderer"
+    HEALTH_MONITOR = "health_monitor"
 
 
 class FailureMode(str, Enum):

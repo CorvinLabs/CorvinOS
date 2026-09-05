@@ -1,0 +1,231 @@
+{
+  "monitoring": {
+    "enabled": true,
+    "namespace": "plugin_orchestration",
+    "environment": "production",
+    "timestamp": "2026-09-05T23:58:34.666074"
+  },
+  "metrics": [
+    {
+      "name": "orchestration.selection_latency_ms",
+      "type": "histogram",
+      "help": "Plugin selection latency in milliseconds",
+      "buckets": [
+        10,
+        25,
+        50,
+        100,
+        250,
+        500,
+        1000
+      ],
+      "tags": [
+        "skill_id",
+        "selection_method"
+      ]
+    },
+    {
+      "name": "orchestration.plugin_success_rate",
+      "type": "gauge",
+      "help": "Per-plugin success rate (0.0-1.0)",
+      "tags": [
+        "plugin_id",
+        "capability_id"
+      ]
+    },
+    {
+      "name": "orchestration.plugin_confidence",
+      "type": "gauge",
+      "help": "Learning model confidence (0.0-1.0)",
+      "tags": [
+        "skill_id",
+        "tenant_id"
+      ]
+    },
+    {
+      "name": "orchestration.slo_compliance",
+      "type": "gauge",
+      "help": "Per-plugin SLO compliance rate",
+      "tags": [
+        "plugin_id",
+        "capability_id",
+        "slo_name"
+      ]
+    },
+    {
+      "name": "orchestration.feedback_received",
+      "type": "counter",
+      "help": "Number of feedback signals received",
+      "tags": [
+        "skill_id",
+        "feedback_type",
+        "tenant_id"
+      ]
+    },
+    {
+      "name": "orchestration.model_convergence",
+      "type": "gauge",
+      "help": "Learning model convergence rate (improvement per epoch)",
+      "tags": [
+        "skill_id",
+        "tenant_id"
+      ]
+    }
+  ],
+  "dashboards": [
+    {
+      "name": "Plugin Orchestration Overview",
+      "uid": "plugin-orchestration-overview",
+      "panels": [
+        {
+          "title": "Selection Method Distribution",
+          "type": "pie_chart",
+          "targets": [
+            "orchestration_selection_method_deterministic",
+            "orchestration_selection_method_llm_guided",
+            "orchestration_selection_method_learned"
+          ]
+        },
+        {
+          "title": "Plugin Success Rates (Real-Time)",
+          "type": "graph",
+          "targets": [
+            "orchestration_plugin_success_rate"
+          ],
+          "yaxis": {
+            "format": "percentunit",
+            "min": 0,
+            "max": 1
+          }
+        },
+        {
+          "title": "Learning Confidence by Skill",
+          "type": "graph",
+          "targets": [
+            "orchestration_plugin_confidence"
+          ],
+          "yaxis": {
+            "format": "percentunit",
+            "min": 0,
+            "max": 1
+          }
+        },
+        {
+          "title": "SLO Compliance Heatmap",
+          "type": "heatmap",
+          "targets": [
+            "orchestration_slo_compliance"
+          ]
+        },
+        {
+          "title": "Selection Latency Distribution",
+          "type": "histogram",
+          "targets": [
+            "orchestration_selection_latency_ms"
+          ],
+          "xaxis": {
+            "format": "short",
+            "label": "Latency (ms)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Learning Loop Health",
+      "uid": "learning-loop-health",
+      "panels": [
+        {
+          "title": "Feedback Signals Received",
+          "type": "stat",
+          "targets": [
+            "orchestration_feedback_received"
+          ]
+        },
+        {
+          "title": "Model Convergence Rate",
+          "type": "graph",
+          "targets": [
+            "orchestration_model_convergence"
+          ],
+          "yaxis": {
+            "format": "percentunit"
+          }
+        },
+        {
+          "title": "Top Recommended Plugins (by Score)",
+          "type": "table",
+          "targets": [
+            "orchestration_top_recommendations"
+          ]
+        },
+        {
+          "title": "Outlier Feedback Alerts",
+          "type": "alert_list",
+          "query": "orchestration_feedback_outlier"
+        }
+      ]
+    }
+  ],
+  "alerts": [
+    {
+      "name": "HighPluginErrorRate",
+      "condition": "orchestration_plugin_success_rate < 0.95",
+      "duration": "5m",
+      "severity": "high",
+      "annotations": {
+        "summary": "Plugin {{ $labels.plugin_id }} success rate below 95%",
+        "description": "Plugin {{ $labels.plugin_id }} has success rate {{ $value }}. Investigate failures."
+      }
+    },
+    {
+      "name": "LowLearningConfidence",
+      "condition": "orchestration_plugin_confidence < 0.5 AND invocations > 100",
+      "duration": "10m",
+      "severity": "medium",
+      "annotations": {
+        "summary": "Skill {{ $labels.skill_id }} learning confidence low",
+        "description": "Model confidence {{ $value }} after {{ invocations }} invocations. Learning loop may be unstable."
+      }
+    },
+    {
+      "name": "SLOComplianceBreached",
+      "condition": "orchestration_slo_compliance < 0.99",
+      "duration": "3m",
+      "severity": "high",
+      "annotations": {
+        "summary": "SLO breached for {{ $labels.capability_id }}",
+        "description": "Compliance: {{ $value }}. Threshold: 0.99"
+      }
+    },
+    {
+      "name": "SelectionLatencyHigh",
+      "condition": "orchestration_selection_latency_ms > 100",
+      "duration": "2m",
+      "severity": "medium",
+      "annotations": {
+        "summary": "Selection latency high: {{ $value }}ms",
+        "description": "Latency spike detected for {{ $labels.skill_id }}"
+      }
+    }
+  ],
+  "slo_targets": [
+    {
+      "name": "Plugin Orchestration Availability",
+      "objective": 0.999,
+      "window": "30d",
+      "error_budget_pct": 0.1
+    },
+    {
+      "name": "Plugin Success Rate",
+      "objective": 0.98,
+      "window": "7d",
+      "error_budget_pct": 0.2
+    },
+    {
+      "name": "Learning Convergence Time",
+      "objective_target_invocations": 100,
+      "objective_confidence": 0.7,
+      "window": "14d"
+    }
+  ]
+}
