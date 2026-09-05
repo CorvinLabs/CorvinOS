@@ -35,7 +35,7 @@ except ImportError:
     ContextualRouter = None
 
 
-router = APIRouter(prefix="/v1/console/learning", tags=["learning"])
+router = APIRouter(prefix="/learning", tags=["learning"])
 
 
 # ── Request/Response Models ──────────────────────────────────────────────
