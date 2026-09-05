@@ -372,6 +372,10 @@ def test_the_unconsumed_set_is_recorded_not_incidental():
         "notification_backend",
         "recall_backend",
         "audit_backend",
+        # ADR-0599: the CEL memory stage (consumed_by) and the TDE step assembler
+        # both call get_active("context_retriever"). Moved into the consumed set
+        # the same commit the two fail-open seams were wired.
+        "context_retriever",
         # Moved out of the dead set 2026-07-27 (Stage 4). NOT by passing the
         # handle in the gateway, which is what the plan asked for and could
         # never have worked — by loading compute_engine plugins in the COMPUTE

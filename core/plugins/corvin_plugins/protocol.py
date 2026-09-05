@@ -37,6 +37,8 @@ class PluginContext:
     # and had no registry to hand itself to.
     stt_registry: Any | None = None            # providers.stt_provider._registry
     data_connector_registry: Any | None = None  # providers.data_connector._registry
+    # ADR-0599 CEL/TDE context-selection registry
+    context_retriever_registry: Any | None = None  # providers.context_retriever._registry
     extra: dict = field(default_factory=dict)
 
 
@@ -182,6 +184,46 @@ class RouterBackend(Protocol):
 
 
 @runtime_checkable
+class ContextRetriever(Protocol):
+    """Choose which context is put in front of the model (ADR-0599).
+
+    A ``context_retriever`` is a swappable strategy for *selecting* context at the
+    two surfaces that do it badly today — lexical substring for the CEL memory
+    stage, and blind truncation for a TDE delegated step. It is handed a list of
+    already-produced ``candidates`` and returns a **subset in some order**.
+
+    **The retriever only ever NARROWS or REORDERS. It never ADDS.** The returned
+    list must be drawn from ``candidates`` — a caller is free to reject and
+    fall back to its current behaviour if the result grows the set, exceeds a
+    hard byte ceiling, or the provider raises. This is a fail-open seam: with no
+    provider installed (the bundled :class:`PassthroughContextRetriever`) or on
+    any error, core behaves exactly as it does today.
+
+    It sits BEHIND whatever PII/consent gate the surface already applies
+    (ADR-0297): it selects from candidates that are already gated, and must not
+    be used to widen or re-admit anything a gate removed.
+
+    ``select`` MUST NOT raise; a raising provider is treated as "no selection".
+    """
+
+    def select(
+        self,
+        query: str,
+        candidates: list,
+        *,
+        budget: int | None = None,
+        tenant_id: str | None = None,
+    ) -> list:
+        """Return a reordered/narrowed subset of ``candidates`` (never additive).
+
+        ``budget`` is an optional soft hint (e.g. a max item count or char
+        budget); a provider may ignore it. ``tenant_id`` is passed for
+        tenant-scoped ranking and audit, never to cross tenant boundaries.
+        """
+        ...
+
+
+@runtime_checkable
 class AuditBackend(Protocol):
     """Receive a COPY of an audit event for fan-out to an external sink (ADR-0233).
 
@@ -321,4 +363,6 @@ KNOWN_PLUGIN_TYPES: frozenset[str] = frozenset({
     "user_backend",          # L18-21 — UserBackend
     # ADR-0356 (P2.5 — the Console as a bundled/builtin web UI surface)
     "web_surface",           # UI  — WebSurface (Console is the first instance)
+    # ADR-0599 (CEL/TDE context-selection seam)
+    "context_retriever",     # CEL/TDE — ContextRetriever (ADR-0599)
 })
