@@ -15,9 +15,6 @@ import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
 import { MarketplacePanel } from "./marketplace";
 import { SkillsOverviewPanel } from "@/components/SkillsOverviewPanel";
-import { ApprovalControlPanel } from "./ApprovalControlPanel";
-import L5MetricsMonitor from "./L5MetricsMonitor";
-import L5Tutorial from "./L5Tutorial";
 import { VibeDashboard } from "@/pages/vibe-engineering";
 import {
   DashboardPage, SettingsPage, EnginesPage, BrowserPage,
@@ -27,7 +24,6 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage, AgentsPage,
   ExtensionsPage, McpPluginsPage, PluginsPage, PluginCenterPage, ActivityFeedPage,
   GitHubPage, SyncMonitorPage, WebhooksPage, AuditPage, ReleasesPage,
-  BrainMonitorPage, ContextIntelligencePage, LearningHubPage, SessionExplorerPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -51,9 +47,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   ForgePage,
   SkillsPage,
   SkillsOverviewPanel: SkillsOverviewPanel as unknown as ComponentType,
-  ApprovalControlPanel: ApprovalControlPanel as unknown as ComponentType,
-  L5MetricsMonitor: L5MetricsMonitor as unknown as ComponentType,
-  L5Tutorial: L5Tutorial as unknown as ComponentType,
   PackagesPage,
   CoworkPage,
   LddPage,
@@ -83,10 +76,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   WebhooksPage,
   AuditPage,
   ReleasesPage,
-  BrainMonitorPage,
-  ContextIntelligencePage,
-  LearningHubPage,
-  SessionExplorerPage,
 };
 
 const rc = (route: string, label: string, component: ComponentType,
@@ -153,27 +142,10 @@ export const PANELS: ConsolePanel[] = [
      { nav: { label: "Audit", icon: "Shield" } }),
   rc("releases", "Releases", ReleasesPage,
      { nav: { label: "Releases", icon: "Package" } }),
-  // Vibe Engineering secondary views (CONSOLE_REDESIGN_UNIFIED_CONCEPT):
-  // Dashboard (above) · Brain Monitor · Context Intelligence · Learning Hub ·
-  // Session Explorer. Brain Status and Debug Panel were folded into these two
-  // and the Dashboard respectively; they are no longer standalone panels.
-  rc("brain-monitor", "Brain Monitor", BrainMonitorPage,
-     { nav: { label: "Brain Monitor", icon: "Cpu", group: "vibe" }, requiredFlag: "vibe_engineering" }),
-  rc("context-intelligence", "Context Intelligence", ContextIntelligencePage,
-     { nav: { label: "Context Intelligence", icon: "GitBranch", group: "vibe" }, requiredFlag: "vibe_engineering" }),
-  rc("learning-hub", "Learning Hub", LearningHubPage,
-     { nav: { label: "Learning Hub", icon: "Lightbulb", group: "vibe" }, requiredFlag: "vibe_engineering" }),
-  rc("session-explorer", "Session Explorer", SessionExplorerPage,
-     { nav: { label: "Session Explorer", icon: "History", group: "vibe" }, requiredFlag: "vibe_engineering" }),
-  // L5 Phase 3: Approval Control Panel (ADR-0584)
-  rc("approval-control", "L5 Approvals", ApprovalControlPanel as unknown as typeof DashboardPage,
-     { nav: { label: "L5 Approvals", icon: "CheckCircle", group: "learning" }, requiredFlag: "l5_approval_panel" }),
-  // L5 Phase 5: Metrics Monitor (ADR-0588)
-  rc("l5-metrics-monitor", "L5 Metrics", L5MetricsMonitor as unknown as typeof DashboardPage,
-     { nav: { label: "L5 Metrics", icon: "BarChart3", group: "learning" }, requiredFlag: "l5_metrics_monitor" }),
-  // L5 Phase 6: Training Tutorial (ADR-0589)
-  rc("l5-tutorial", "L5 Training", L5Tutorial as unknown as typeof DashboardPage,
-     { nav: { label: "L5 Training", icon: "BookOpen", group: "learning" }, requiredFlag: "l5_tutorial" }),
+  // Vibe Engineering is ONE panel: the tabbed dashboard registered above.
+  // Brain Monitor · Context Intelligence · Learning Hub · Session Explorer were
+  // retired on 2026-09-05 (their content is reachable as dashboard tabs);
+  // Brain Status and Debug Panel had already been folded in before that.
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {

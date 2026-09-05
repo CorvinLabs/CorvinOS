@@ -315,21 +315,6 @@ def _get_builtin_panels() -> list[dict]:
             "audit_events": ["console_panel_opened"],
             "tenant_scoped": True,
         },
-        {
-            "id": "brain-monitor",
-            "title": "Brain Monitor",
-            "route": "brain-monitor",
-            "icon": "Cpu",
-            "kind": "feature",
-            "source": "builtin",
-            "nav_group": "vibe",
-            "requiredFlag": "vibe_engineering",
-            "requiredCapability": None,
-            "element": {"kind": "react-component", "component": "BrainMonitorPage"},
-            "version": "1.0.0",
-            "audit_events": ["console_panel_opened"],
-            "tenant_scoped": True,
-        },
         # More builtin panels...
         {
             "id": "skills",
@@ -439,7 +424,6 @@ def _get_nav_groups(panels: list[dict], flags: dict[str, bool]) -> list[dict]:
             "defaultOpen": True,
             "items": [
                 {"panel_id": "vibe-engineering"},
-                {"panel_id": "brain-monitor"},
             ],
         },
         {

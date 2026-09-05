@@ -23,6 +23,7 @@ import { useAuditQuery } from './hooks/useAuditQuery';
 import { AuditChainGraph } from './components/AuditChainGraph';
 import { GraphInspector } from './components/GraphInspector';
 import { AnyAuditEvent } from '@/types/audit-graph';
+import LearningDashboard from './components/LearningDashboard';
 
 const LoadingFallback = () => (
   <div className="flex justify-center py-12">
@@ -111,10 +112,11 @@ export function VibeDashboard() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="graph">📊 Graph View</TabsTrigger>
           <TabsTrigger value="inspector">🔍 Inspector</TabsTrigger>
           <TabsTrigger value="timeline">📋 Timeline</TabsTrigger>
+          <TabsTrigger value="learning">📈 Learning</TabsTrigger>
         </TabsList>
 
         {/* Graph View Tab */}
@@ -230,6 +232,13 @@ export function VibeDashboard() {
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        {/* Learning Dashboard Tab (ADR-0321) */}
+        <TabsContent value="learning" className="space-y-4">
+          <Suspense fallback={<LoadingFallback />}>
+            <LearningDashboard />
+          </Suspense>
         </TabsContent>
       </Tabs>
 

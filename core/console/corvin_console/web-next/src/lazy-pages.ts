@@ -188,14 +188,6 @@ export const VibeEngineeringPage = React.lazy(() =>
   import("@/pages/vibe-engineering").then((m) => ({ default: m.default }))
 );
 
-export const BrainMonitorPage = React.lazy(() =>
-  import("@/pages/brain-monitor").then((m) => ({ default: m.default }))
-);
-
-export const SessionExplorerPage = React.lazy(() =>
-  import("@/pages/session-explorer").then((m) => ({ default: m.default }))
-);
-
 
 
 
@@ -221,12 +213,4 @@ export const ReleasesPage = React.lazy(() =>
 );
 
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
-
-export const ContextIntelligencePage = React.lazy(() =>
-  import("@/pages/context-intelligence").then((m) => ({ default: m.default }))
-);
-
-export const LearningHubPage = React.lazy(() =>
-  import("@/pages/learning-hub").then((m) => ({ default: m.default }))
-);
 

@@ -2,8 +2,10 @@
 
 **Status:** SUPERSEDED (2026-08-27) — see ADR-0431. The shipped shape is NOT the
 hybrid plan below: the operator chose full replacement. The Vibe Engineering nav
-group is now exactly five entries (Dashboard · Brain Monitor · Context Intelligence ·
-Learning Hub · Session Explorer) per
+group is now exactly ONE entry — the tabbed Vibe Dashboard. It was five for a
+while (Dashboard · Brain Monitor · Context Intelligence · Learning Hub · Session
+Explorer); the four secondary panels were retired on 2026-09-05 because they
+duplicated the dashboard's own tabs. See `docs/components/vibe-dashboard.md` and
 `core/vibe_engineering/CONSOLE_REDESIGN_UNIFIED_CONCEPT.md`, and the eleven panels
 this document analyses were REMOVED — routes, `PANELS` entries, `NAV_GROUPS` entries
 and page files. Keep the analysis below for its per-panel audit; ignore its

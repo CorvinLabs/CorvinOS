@@ -95,8 +95,14 @@ def test_manifest_lists_vibe_engineering_ungated(tmp_path):
         body = tc.get("/v1/console/capabilities/manifest").json()
         ids = {p["id"] for p in body["panels"]}
         assert "vibe-engineering" in ids
-        # A flag-gated sibling is correctly hidden in the all-flags-off sandbox.
-        assert "brain-monitor" not in ids
+        # The Vibe group is ONE panel since 2026-09-05: Brain Monitor, Context
+        # Intelligence, Learning Hub and Session Explorer were retired into the
+        # dashboard's tabs and must never come back as manifest panels — the
+        # manifest is additive to NAV_GROUPS, so a stray entry here would put
+        # the duplicate sidebar links back on its own.
+        for retired in ("brain-monitor", "context-intelligence",
+                        "learning-hub", "session-explorer"):
+            assert retired not in ids
 
 
 def test_every_panel_source_carries_both_gate_keys(tmp_path):
