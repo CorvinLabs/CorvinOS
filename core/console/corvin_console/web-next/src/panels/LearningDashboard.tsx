@@ -142,12 +142,12 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto bg-white dark:bg-slate-800 rounded-lg">
+    <div className="p-6 max-w-6xl mx-auto bg-[#161B22] dark:bg-slate-800 rounded-lg">
       {!hideTabNavigation && <h1 className="text-3xl font-bold mb-6 text-slate-900 dark:text-white">🧠 Learning Dashboard</h1>}
 
       {/* Tab Navigation */}
       {!hideTabNavigation && (
-      <div className="flex gap-4 mb-6 border-b border-slate-200 dark:border-slate-700 overflow-x-auto">
+      <div className="flex gap-4 mb-6 border-b border-[#30363D] dark:border-slate-700 overflow-x-auto">
         {(['summary', 'patterns', 'config', 'preferences'] as const).map(tab => (
           <button
             key={tab}
@@ -173,40 +173,40 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
           <h2 className="text-2xl font-bold mb-6">📝 Learning Summary</h2>
 
           {patterns.length === 0 && configVersions.length === 0 && Object.keys(preferences).length === 0 ? (
-            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-6 text-center">
-              <p className="text-lg text-slate-700 dark:text-slate-300 mb-2">No learning data yet</p>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Complete tasks and provide feedback to see what the system learns about your working style.</p>
+            <div className="bg-[#0D1117] border border-blue-200 rounded-lg p-6 text-center">
+              <p className="text-lg text-gray-700 mb-2">No learning data yet</p>
+              <p className="text-sm text-gray-600">Complete tasks and provide feedback to see what the system learns about your working style.</p>
             </div>
           ) : (
             <div className="space-y-6">
               {/* Overall Stats */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
-                  <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">{patterns.length}</div>
-                  <div className="text-sm text-slate-700 dark:text-slate-300">Patterns Discovered</div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">
+                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
+                  <div className="text-3xl font-bold text-blue-600">{patterns.length}</div>
+                  <div className="text-sm text-gray-700">Patterns Discovered</div>
+                  <p className="text-xs text-gray-600 mt-2">
                     {patterns.length === 0
                       ? 'Need 5+ tasks to discover patterns'
                       : `Based on ${patterns.reduce((sum, p) => sum + p.observation_count, 0)} observations`}
                   </p>
                 </div>
 
-                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200 dark:border-green-800">
-                  <div className="text-3xl font-bold text-green-600 dark:text-green-400">
+                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200">
+                  <div className="text-3xl font-bold text-green-600">
                     {configVersions.length > 1 ? `+${((configVersions[configVersions.length - 1]?.improvement_pct || 0) * 100).toFixed(1)}%` : 'N/A'}
                   </div>
-                  <div className="text-sm text-slate-700 dark:text-slate-300">Config Improvement</div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">
+                  <div className="text-sm text-gray-700">Config Improvement</div>
+                  <p className="text-xs text-gray-600 mt-2">
                     {configVersions.length === 0
                       ? 'Will improve after feedback'
                       : `${configVersions.length} config versions tested`}
                   </p>
                 </div>
 
-                <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 border border-purple-200 dark:border-purple-800">
-                  <div className="text-3xl font-bold text-purple-600 dark:text-purple-400">{Object.keys(preferences).length}</div>
-                  <div className="text-sm text-slate-700 dark:text-slate-300">Task Types Learned</div>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">
+                <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 border border-purple-200">
+                  <div className="text-3xl font-bold text-purple-600">{Object.keys(preferences).length}</div>
+                  <div className="text-sm text-gray-700">Task Types Learned</div>
+                  <p className="text-xs text-gray-600 mt-2">
                     {Object.keys(preferences).length === 0
                       ? 'Preferences emerge after 10+ tasks'
                       : Object.keys(preferences).map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(', ')}
@@ -215,23 +215,23 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
               </div>
 
               {/* Main Learnings */}
-              <div className="bg-white dark:bg-slate-800 rounded-lg p-6 border border-slate-200 dark:border-slate-700">
+              <div className="bg-[#161B22] rounded-lg p-6 border border-gray-200">
                 <h3 className="text-lg font-semibold mb-4">🎯 What We've Learned About You</h3>
 
                 {patterns.length > 0 && (
                   <div className="mb-6">
-                    <h4 className="font-semibold text-slate-800 dark:text-slate-200 mb-3">Your Most Effective Workflows</h4>
+                    <h4 className="font-semibold text-gray-800 mb-3">Your Most Effective Workflows</h4>
                     <div className="space-y-3">
                       {patterns.slice(0, 3).map(p => (
-                        <div key={p.pattern_id} className="bg-slate-50 dark:bg-slate-900/30 rounded p-4 border-l-4 border-blue-500">
-                          <p className="font-mono text-sm mb-2 text-slate-700 dark:text-slate-300">
+                        <div key={p.pattern_id} className="bg-[#161B22] rounded p-4 border-l-4 border-blue-500">
+                          <p className="font-mono text-sm mb-2 text-gray-700">
                             {p.skill_sequence.join(' → ')}
                           </p>
-                          <div className="flex justify-between text-xs text-slate-600 dark:text-slate-400">
+                          <div className="flex justify-between text-xs text-gray-600">
                             <span>✓ {(p.success_rate * 100).toFixed(0)}% success rate</span>
                             <span>→ {(p.confidence_score * 100).toFixed(0)}% confidence</span>
                           </div>
-                          <p className="text-xs text-slate-500 dark:text-slate-500 mt-2">
+                          <p className="text-xs text-gray-500 mt-2">
                             Based on {p.observation_count} {p.observation_count === 1 ? 'task' : 'tasks'}
                           </p>
                         </div>
@@ -242,20 +242,20 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
 
                 {configVersions.length > 1 && (
                   <div className="mb-6">
-                    <h4 className="font-semibold text-slate-800 dark:text-slate-200 mb-3">Configuration Evolution</h4>
-                    <div className="bg-slate-50 dark:bg-slate-900/30 rounded p-4">
-                      <p className="text-sm text-slate-700 dark:text-slate-300 mb-3">
+                    <h4 className="font-semibold text-gray-800 mb-3">Configuration Evolution</h4>
+                    <div className="bg-[#161B22] rounded p-4">
+                      <p className="text-sm text-gray-700 mb-3">
                         The system has optimized your configuration through {configVersions.length} iterations:
                       </p>
                       <div className="space-y-2">
                         {configVersions.slice(-3).map((v, idx) => (
-                          <div key={v.version_id} className="text-sm text-slate-600 dark:text-slate-400 flex justify-between">
+                          <div key={v.version_id} className="text-sm text-gray-600 flex justify-between">
                             <span>{v.version_id}: {v.change_reason}</span>
-                            <span className="text-green-600 dark:text-green-400 font-semibold">+{v.improvement_pct.toFixed(1)}%</span>
+                            <span className="text-green-600 font-semibold">+{v.improvement_pct.toFixed(1)}%</span>
                           </div>
                         ))}
                       </div>
-                      <p className="text-xs text-slate-500 dark:text-slate-500 mt-3">
+                      <p className="text-xs text-gray-500 mt-3">
                         💡 Tip: You can rollback to any previous version if you prefer it.
                       </p>
                     </div>
@@ -264,23 +264,23 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
 
                 {Object.keys(preferences).length > 0 && (
                   <div className="mb-4">
-                    <h4 className="font-semibold text-slate-800 dark:text-slate-200 mb-3">Your Work Style</h4>
+                    <h4 className="font-semibold text-gray-800 mb-3">Your Work Style</h4>
                     <div className="space-y-4">
                       {Object.entries(preferences).map(([taskType, prefs]) => (
-                        <div key={taskType} className="bg-slate-50 dark:bg-slate-900/30 rounded p-4">
-                          <p className="font-semibold text-slate-800 dark:text-slate-200 mb-2">
+                        <div key={taskType} className="bg-[#161B22] rounded p-4">
+                          <p className="font-semibold text-gray-800 mb-2">
                             For {taskType.charAt(0).toUpperCase() + taskType.slice(1)} Tasks
                           </p>
-                          <p className="text-sm text-slate-700 dark:text-slate-300 mb-3">
+                          <p className="text-sm text-gray-700 mb-3">
                             You prefer this sequence:
                           </p>
-                          <p className="font-mono text-sm bg-white dark:bg-slate-800 px-3 py-2 rounded border border-slate-200 dark:border-slate-700 mb-2">
+                          <p className="font-mono text-sm bg-[#161B22] px-3 py-2 rounded border border-gray-200 mb-2">
                             {Object.entries(prefs.preferred_skills)
                               .sort(([, a], [, b]) => b - a)
                               .map(([skill]) => skill)
                               .join(' → ')}
                           </p>
-                          <p className="text-xs text-slate-600 dark:text-slate-400">
+                          <p className="text-xs text-gray-600">
                             Confidence: {(prefs.confidence_score * 100).toFixed(0)}% (based on {prefs.observation_count} tasks)
                           </p>
                         </div>
@@ -293,7 +293,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
               {/* Next Steps */}
               <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-lg p-6 border border-amber-200">
                 <h3 className="text-lg font-semibold mb-3">💡 Next Steps</h3>
-                <ul className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
+                <ul className="space-y-2 text-sm text-gray-700">
                   {patterns.length === 0 && (
                     <li className="flex items-start gap-2">
                       <span className="text-amber-600 font-bold">1.</span>
@@ -314,7 +314,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                   )}
                   {patterns.length > 0 && (
                     <li className="flex items-start gap-2">
-                      <span className="text-blue-600 dark:text-blue-400 font-bold">→</span>
+                      <span className="text-blue-600 font-bold">→</span>
                       <span>The system will automatically recommend your preferred workflows for new tasks</span>
                     </li>
                   )}
@@ -330,35 +330,35 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
         <div>
           <h2 className="text-2xl font-bold mb-4">Discovered Patterns</h2>
           {patterns.length === 0 ? (
-            <p className="text-slate-600 dark:text-slate-400">No patterns discovered yet. Complete more tasks to learn patterns.</p>
+            <p className="text-gray-600">No patterns discovered yet. Complete more tasks to learn patterns.</p>
           ) : (
             <div className="grid gap-4">
               {patterns.map(p => (
-                <div key={p.pattern_id} className="border rounded-lg p-4 bg-slate-50 dark:bg-slate-900/30">
+                <div key={p.pattern_id} className="border rounded-lg p-4 bg-[#161B22]">
                   <div className="flex justify-between items-start mb-3">
                     <div>
                       <h3 className="font-semibold text-lg">{p.task_type.toUpperCase()}</h3>
-                      <p className="text-sm text-slate-600 dark:text-slate-400">{p.pattern_id}</p>
+                      <p className="text-sm text-gray-600">{p.pattern_id}</p>
                     </div>
                     <div className="text-right">
-                      <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{(p.confidence_score * 100).toFixed(0)}%</div>
-                      <div className="text-xs text-slate-600 dark:text-slate-400">confidence</div>
+                      <div className="text-2xl font-bold text-blue-600">{(p.confidence_score * 100).toFixed(0)}%</div>
+                      <div className="text-xs text-gray-600">confidence</div>
                     </div>
                   </div>
 
                   <div className="mb-3">
-                    <p className="text-sm font-mono bg-white dark:bg-slate-800 px-3 py-2 rounded border">
+                    <p className="text-sm font-mono bg-[#161B22] px-3 py-2 rounded border">
                       {p.skill_sequence.join(' → ')}
                     </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
-                      <span className="text-slate-600 dark:text-slate-400">Success Rate:</span>
+                      <span className="text-gray-600">Success Rate:</span>
                       <div className="font-semibold">{(p.success_rate * 100).toFixed(0)}%</div>
                     </div>
                     <div>
-                      <span className="text-slate-600 dark:text-slate-400">Observations:</span>
+                      <span className="text-gray-600">Observations:</span>
                       <div className="font-semibold">{p.observation_count}</div>
                     </div>
                   </div>
@@ -405,21 +405,21 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
         <div>
           <h2 className="text-2xl font-bold mb-4">Skill Config History (os.delegation_router)</h2>
           {configVersions.length === 0 ? (
-            <p className="text-slate-600 dark:text-slate-400">No config changes yet. Submit feedback to trigger learning.</p>
+            <p className="text-gray-600">No config changes yet. Submit feedback to trigger learning.</p>
           ) : (
             <div className="space-y-3">
               {configVersions.map((v, idx) => (
-                <div key={v.version_id} className="border rounded-lg p-4 bg-slate-50 dark:bg-slate-900/30">
+                <div key={v.version_id} className="border rounded-lg p-4 bg-[#161B22]">
                   <div className="flex justify-between items-center">
                     <div>
                       <h3 className="font-semibold">{v.version_id}</h3>
-                      <p className="text-sm text-slate-600 dark:text-slate-400">{v.change_reason}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-500">{new Date(v.timestamp).toLocaleString()}</p>
+                      <p className="text-sm text-gray-600">{v.change_reason}</p>
+                      <p className="text-xs text-gray-500">{new Date(v.timestamp).toLocaleString()}</p>
                     </div>
                     <div className="text-right flex items-center gap-4">
                       <div>
-                        <div className="text-lg font-bold text-green-600 dark:text-green-400">+{v.improvement_pct.toFixed(1)}%</div>
-                        <div className="text-xs text-slate-600 dark:text-slate-400">improvement</div>
+                        <div className="text-lg font-bold text-green-600">+{v.improvement_pct.toFixed(1)}%</div>
+                        <div className="text-xs text-gray-600">improvement</div>
                       </div>
                       {v.user_can_undo && idx > 0 && (
                         <button
@@ -443,7 +443,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
         <div>
           <h2 className="text-2xl font-bold mb-4">Learned Preferences</h2>
           {Object.keys(preferences).length === 0 ? (
-            <p className="text-slate-600 dark:text-slate-400">No preferences learned yet. Complete tasks and provide feedback.</p>
+            <p className="text-gray-600">No preferences learned yet. Complete tasks and provide feedback.</p>
           ) : (
             <div className="grid gap-4">
               {Object.entries(preferences).map(([taskType, prefs]) => (
@@ -451,8 +451,8 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                   <div className="flex justify-between items-start mb-3">
                     <h3 className="text-lg font-semibold">{taskType.toUpperCase()} Tasks</h3>
                     <div className="text-right">
-                      <div className="text-xl font-bold text-purple-600 dark:text-purple-400">{(prefs.confidence_score * 100).toFixed(0)}%</div>
-                      <div className="text-xs text-slate-600 dark:text-slate-400">confidence (N={prefs.observation_count})</div>
+                      <div className="text-xl font-bold text-purple-600">{(prefs.confidence_score * 100).toFixed(0)}%</div>
+                      <div className="text-xs text-gray-600">confidence (N={prefs.observation_count})</div>
                     </div>
                   </div>
 
@@ -462,8 +462,8 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                       {Object.entries(prefs.preferred_skills)
                         .sort(([, a], [, b]) => b - a)
                         .map(([skill, score]) => (
-                          <div key={skill} className="bg-white dark:bg-slate-800 px-3 py-1 rounded text-sm border">
-                            {skill} <span className="text-slate-500 dark:text-slate-500">({(score * 100).toFixed(0)}%)</span>
+                          <div key={skill} className="bg-[#161B22] px-3 py-1 rounded text-sm border">
+                            {skill} <span className="text-gray-500">({(score * 100).toFixed(0)}%)</span>
                           </div>
                         ))}
                     </div>
@@ -476,7 +476,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
       )}
 
       {/* Footer */}
-      <div className="mt-8 pt-6 border-t text-xs text-slate-500 dark:text-slate-500">
+      <div className="mt-8 pt-6 border-t text-xs text-gray-500">
         <p>Last updated: {new Date().toLocaleTimeString()}</p>
         <p>🔄 Learning Dashboard auto-refreshes every 30 seconds</p>
       </div>
