@@ -1,0 +1,95 @@
+{
+  "experiment": "savings-vs-hallucination",
+  "suite": "answerable-v1 + traps-v1",
+  "model": "claude-haiku-4-5-20251001",
+  "reps": 2,
+  "n_tasks": 14,
+  "n_answerable": 8,
+  "n_traps": 6,
+  "total_calls": 84,
+  "wall_s": 584.2,
+  "guardrail_margin": 0.05,
+  "arms": {
+    "none": {
+      "cost_usd": {
+        "mean": 0.0265,
+        "ci95": [
+          0.0185,
+          0.0346
+        ]
+      },
+      "input_tokens_total_mean": 29260.0,
+      "output_tokens_mean": 400.2143,
+      "cache_creation_mean": 11330.8929,
+      "cache_read_mean": 17919.1071,
+      "correct_rate_answerable": 0.125,
+      "abstain_rate_answerable": 0.9375,
+      "halluc_rate_answerable": 0.0625,
+      "abstain_rate_trap": 0.9167,
+      "halluc_rate_trap": 0.0833,
+      "halluc_rate_overall": {
+        "mean": 0.0714,
+        "ci95": [
+          0.0,
+          0.1786
+        ]
+      },
+      "halluc_lift_vs_none": 0.0,
+      "guardrail": "PASS"
+    },
+    "pruned": {
+      "cost_usd": {
+        "mean": 0.0263,
+        "ci95": [
+          0.0188,
+          0.0338
+        ]
+      },
+      "input_tokens_total_mean": 29289.5714,
+      "output_tokens_mean": 454.4643,
+      "cache_creation_mean": 11092.2857,
+      "cache_read_mean": 18187.2857,
+      "correct_rate_answerable": 0.125,
+      "abstain_rate_answerable": 0.9375,
+      "halluc_rate_answerable": 0.0,
+      "abstain_rate_trap": 1.0,
+      "halluc_rate_trap": 0.0,
+      "halluc_rate_overall": {
+        "mean": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "halluc_lift_vs_none": -0.0714,
+      "guardrail": "PASS"
+    },
+    "full": {
+      "cost_usd": {
+        "mean": 0.0255,
+        "ci95": [
+          0.0179,
+          0.0331
+        ]
+      },
+      "input_tokens_total_mean": 29297.9286,
+      "output_tokens_mean": 292.75,
+      "cache_creation_mean": 11096.4643,
+      "cache_read_mean": 18191.4643,
+      "correct_rate_answerable": 1.0,
+      "abstain_rate_answerable": 0.0,
+      "halluc_rate_answerable": 0.0,
+      "abstain_rate_trap": 0.8333,
+      "halluc_rate_trap": 0.1667,
+      "halluc_rate_overall": {
+        "mean": 0.0714,
+        "ci95": [
+          0.0,
+          0.1786
+        ]
+      },
+      "halluc_lift_vs_none": 0.0,
+      "guardrail": "PASS"
+    }
+  }
+}

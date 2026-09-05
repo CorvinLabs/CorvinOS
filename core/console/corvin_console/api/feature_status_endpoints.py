@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..deps import require_session, require_csrf
 from ..feature_flags import REGISTRY
-from core.telemetry import get_flag_metrics
+
+# Optional: telemetry integration (may not be available in all environments)
+try:
+    from core.telemetry import get_flag_metrics
+except ImportError:
+    get_flag_metrics = None  # type: ignore
 
 router = APIRouter(prefix="/api/feature-status", tags=["feature-status"])
 

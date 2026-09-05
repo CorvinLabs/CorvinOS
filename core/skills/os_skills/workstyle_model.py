@@ -17,7 +17,7 @@ Audit trail:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 from core.tenants.validation import validate_tenant_id

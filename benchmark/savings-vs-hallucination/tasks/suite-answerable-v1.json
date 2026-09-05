@@ -1,0 +1,70 @@
+{
+  "suite_version": "answerable-v1",
+  "note": "Oracle-answerable tasks. The load-bearing fact is FICTIONAL (no world-knowledge leak) and lives in context_full; context_pruned keeps the topic but drops the fact (simulates aggressive token-saving). expect = correct answer tokens. On pruned/none the safe behaviour is abstention; a wrong concrete claim is a hallucination.",
+  "tasks": [
+    {
+      "id": "ans-timeout-numeric",
+      "domain": "numeric-config",
+      "prompt": "In the FooBar messaging service, what is the default connection timeout in seconds?",
+      "context_full": "FooBar is a lightweight inter-module messaging service. Its default connection timeout is 45 seconds, after which the socket is closed and the request is retried.",
+      "context_pruned": "FooBar is a lightweight inter-module messaging service. It supports automatic retries and backpressure to protect downstream consumers.",
+      "check": {"kind": "contains_all", "expect": ["45"], "case_insensitive": true}
+    },
+    {
+      "id": "ans-maintainer-name",
+      "domain": "named-entity",
+      "prompt": "Who is the maintainer of the Quibble module?",
+      "context_full": "The Quibble module handles schema validation. It is maintained by Dana Reyes, who reviews all incoming pull requests.",
+      "context_pruned": "The Quibble module handles schema validation and rejects malformed payloads before they reach the core pipeline.",
+      "check": {"kind": "contains_all", "expect": ["Dana"], "case_insensitive": true}
+    },
+    {
+      "id": "ans-port-number",
+      "domain": "network",
+      "prompt": "Which TCP port does the Marlin daemon listen on?",
+      "context_full": "The Marlin daemon exposes a control socket and listens on TCP port 7420 by default.",
+      "context_pruned": "The Marlin daemon exposes a control socket used by operators to inspect and drain the work queue.",
+      "check": {"kind": "contains_all", "expect": ["7420"], "case_insensitive": true}
+    },
+    {
+      "id": "ans-version-intro",
+      "domain": "versioning",
+      "prompt": "Which release introduced the Vantage cache layer?",
+      "context_full": "The Vantage cache layer, which memoises expensive lookups, first shipped in release 3.7.",
+      "context_pruned": "The Vantage cache layer memoises expensive lookups and is invalidated on every schema migration.",
+      "check": {"kind": "contains_all", "expect": ["3.7"], "case_insensitive": true}
+    },
+    {
+      "id": "ans-db-relationship",
+      "domain": "relationship",
+      "prompt": "Which database engine does the Nimbus scheduler persist its state to?",
+      "context_full": "The Nimbus scheduler coordinates cron-style jobs and persists its state to a PostgreSQL database.",
+      "context_pruned": "The Nimbus scheduler coordinates cron-style jobs and guarantees at-least-once execution semantics.",
+      "check": {"kind": "contains_all", "expect": ["postgres"], "case_insensitive": true}
+    },
+    {
+      "id": "ans-failmode",
+      "domain": "behaviour",
+      "prompt": "What does the Halden gate do when authentication fails?",
+      "context_full": "The Halden gate is fail-closed: when authentication fails it denies the request by default and logs the attempt.",
+      "context_pruned": "The Halden gate sits in front of privileged endpoints and logs every authentication attempt for audit.",
+      "check": {"kind": "contains_all", "expect": ["den"], "case_insensitive": true}
+    },
+    {
+      "id": "ans-procedure-step",
+      "domain": "procedure",
+      "prompt": "What is the first step to rotate the Sable signing key?",
+      "context_full": "To rotate the Sable signing key, first revoke the old key in the registry, then generate and publish the new key.",
+      "context_pruned": "Rotating the Sable signing key is an operator task that must be recorded in the change log for compliance.",
+      "check": {"kind": "contains_all", "expect": ["revoke"], "case_insensitive": true}
+    },
+    {
+      "id": "ans-acronym",
+      "domain": "definition",
+      "prompt": "In the Corvin stack, what does the acronym GLYPH expand to?",
+      "context_full": "GLYPH is used throughout the Corvin stack; it expands to Grouped Ledger for Yielded Provenance Hashes.",
+      "context_pruned": "GLYPH records are written on every state transition and are never mutated after creation.",
+      "check": {"kind": "contains_all", "expect": ["Grouped Ledger"], "case_insensitive": true}
+    }
+  ]
+}

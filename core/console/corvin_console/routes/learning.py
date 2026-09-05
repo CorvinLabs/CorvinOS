@@ -17,10 +17,17 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core.learning import LearningIntegration
-from core.learning.event_store import EventStore
-from core.learning.operator_feedback import OperatorFeedbackHandler
 from ..deps import require_session
+
+# Optional: core.learning integration (may not be available in all environments)
+try:
+    from core.learning import LearningIntegration
+    from core.learning.event_store import EventStore
+    from core.learning.operator_feedback import OperatorFeedbackHandler
+except ImportError:
+    LearningIntegration = None  # type: ignore
+    EventStore = None  # type: ignore
+    OperatorFeedbackHandler = None  # type: ignore
 
 
 def _tenant_home(tenant_id: str) -> Path:
@@ -428,3 +435,119 @@ async def get_skill_feedback(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve skill feedback: {str(e)}")
+
+
+# ── Method Discovery (ADR-0548, Phase 1) ────────────────────────────────────
+
+
+class MethodPatternJSON(BaseModel):
+    """One discovered workstyle pattern, as the dashboard consumes it."""
+
+    pattern_id: str
+    pattern_name: str
+    task_type: str
+    skill_sequence: list[str]
+    success_rate: float
+    observation_count: int
+    confidence_score: float
+    first_observed: str
+    last_observed: str
+    observation_ids: list[str]
+    user_confirmed: bool
+    discovered: bool  # confidence >= threshold, or user-confirmed
+    confidence_derivation: dict
+    confidence_explanation: str
+
+
+class MethodPatternsResponse(BaseModel):
+    """Response of ``GET /v1/console/learning/patterns``."""
+
+    tenant_id: str
+    threshold: float
+    observation_count: int
+    chain_verified: bool
+    chain_error: Optional[str] = None
+    patterns: list[MethodPatternJSON]
+
+
+async def _method_patterns_response(tenant_id: str) -> dict:
+    """Build the patterns response for one tenant.
+
+    Split out from the route so the E2E test can drive the REAL handler rather
+    than a reimplementation of it (a test that rebuilds the response itself
+    proves only that the test can do arithmetic).
+
+    Patterns are always re-derived from the audit trail, never read from the
+    ``patterns.json`` snapshot: the dashboard must not be able to show a
+    pattern the audit chain does not support.
+    """
+    from core.skills.os_skills.confidence_scorer import ConfidenceScorer
+    from core.skills.os_skills.method_discovery import MethodDiscovery
+
+    discovery = MethodDiscovery(tenant_id)
+    scored = await discovery.current_patterns()
+    verification = await discovery.sink.verify_chain()
+
+    patterns = []
+    for pattern, breakdown in scored:
+        payload = pattern.to_payload()
+        patterns.append(
+            {
+                **payload,
+                "discovered": ConfidenceScorer.is_discoverable(
+                    pattern.confidence_score, user_confirmed=pattern.user_confirmed
+                ),
+                "confidence_derivation": breakdown.to_payload(),
+                "confidence_explanation": breakdown.explain(),
+            }
+        )
+
+    return {
+        "tenant_id": tenant_id,
+        "threshold": discovery.threshold,
+        "observation_count": verification.count,
+        "chain_verified": verification.ok,
+        "chain_error": verification.error,
+        "patterns": patterns,
+    }
+
+
+@router.get("/learning/patterns", response_model=MethodPatternsResponse)
+async def get_method_patterns(session = Depends(require_session)):
+    """Discovered workstyle patterns for the caller's tenant (ADR-0548).
+
+    Tenant comes from the authenticated ``SessionRecord``, never from an env
+    var — cross-tenant pattern leakage is the CRITICAL risk on this feature's
+    own risk matrix.
+
+    ``chain_verified`` is reported rather than enforced: a broken chain must be
+    VISIBLE to the operator, and 500-ing here would hide the one signal that
+    says the trail was tampered with. The individual patterns are still derived
+    only from records that were on the chain.
+    """
+    try:
+        return MethodPatternsResponse(**await _method_patterns_response(session.tenant_id))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve method patterns: {e}")
+
+
+@router.post("/learning/patterns/{pattern_id}/confirm", response_model=dict)
+async def confirm_method_pattern(pattern_id: str, session = Depends(require_session)):
+    """Record an explicit user confirmation of a pattern (CONCEPT-0029 C4).
+
+    Confirmation is only ever taken from an active user action like this one —
+    never inferred from behaviour, which is Attack 2 in the concept.
+    """
+    from core.skills.os_skills.method_discovery import MethodDiscovery
+
+    try:
+        discovery = MethodDiscovery(session.tenant_id)
+        discovery.confirm_pattern(pattern_id)
+        newly = await discovery.discover()
+        return {
+            "pattern_id": pattern_id,
+            "confirmed": True,
+            "newly_discovered": [p.pattern_id for p, _ in newly],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to confirm pattern: {e}")

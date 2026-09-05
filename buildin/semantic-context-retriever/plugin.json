@@ -1,0 +1,16 @@
+{
+  "id": "semantic-context-retriever",
+  "name": "Semantic Context Retriever",
+  "version": "0.1.0",
+  "category": "Memory",
+  "description": "BM25 context-selection provider (ADR-0599 context_retriever). Narrows/reorders already-gated CEL memory and TDE step candidates — never adds. Torch-free, local, no network egress.",
+  "author": "CorvinOS Core",
+  "email": "unknown@corvin.org",
+  "tier": "buildin",
+  "origin": "builtin",
+  "boot_layer": "installed",
+  "license": "Apache-2.0",
+  "rating": 5.0,
+  "installs": 0,
+  "dependencies": []
+}

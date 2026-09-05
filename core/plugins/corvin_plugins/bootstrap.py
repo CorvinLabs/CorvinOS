@@ -25,6 +25,7 @@ from .manifest import BootLayer, PluginError, PluginRecord
 from .protocol import PluginContext
 from .providers import (
     audit_backend,
+    context_retriever,
     data_connector,
     notification_backend,
     recall_backend,
@@ -90,6 +91,7 @@ def build_context(
         user_registry=user_backend._registry,
         stt_registry=stt_provider._registry,
         data_connector_registry=data_connector._registry,
+        context_retriever_registry=context_retriever._registry,
     )
 
 
@@ -673,6 +675,233 @@ def _bundled_bridge_declarations(
         return []
 
 
+#: Root of the bundled builtin plugins shipped IN THE WHEEL, one nested tree per
+#: category: ``core/plugins/buildin/<category>/<name>/plugin.yaml`` (+ provider.py).
+#:
+#: This is the CODE root, distinct from the repo-root ``/buildin`` the legacy
+#: marketplace directory-scanner reads (which holds plugin.json INDEX metadata,
+#: no provider code). ``bootstrap.py`` lives at ``core/plugins/corvin_plugins/``,
+#: so ``parents[1]`` is ``core/plugins/``.
+_BUILTIN_ROOT: Path = Path(__file__).resolve().parents[1] / "buildin"
+
+
+def _builtin_plugin_dirs(root: Path) -> list[Path]:
+    """Every directory under ``root`` that holds a ``plugin.yaml`` (recursive).
+
+    The marketplace's own directory scan (``core/plugins/marketplace.py``) looks
+    only at the DIRECT children of a ``buildin/`` for ``plugin.json``; a builtin
+    organised as ``buildin/<category>/<name>/plugin.yaml`` is therefore invisible
+    to it. This walk finds the load manifest wherever it is nested, which is the
+    layout the ADR-0598 plugin actually ships in.
+    """
+    if not root.is_dir():
+        return []
+    return sorted({p.parent for p in root.rglob("plugin.yaml")})
+
+
+def _load_builtin_class(plugin_dir: Path, plugin_id: str) -> type | None:
+    """Import a builtin plugin's provider module BY FILE PATH; return its class.
+
+    A builtin dir name is hyphenated (``semantic-context-retriever``) and its
+    code lives in ``provider.py``, so neither ``importlib.import_module`` (needs a
+    dotted, identifier-legal path) nor the tenant-registry loader (looks for
+    ``plugin.py``) can reach it. Loading by file location is the one mechanism
+    that can. Returns the class whose ``plugin_id`` matches the manifest, else the
+    first class exposing the ``plugin_id``/``on_load`` lifecycle shape, else None.
+    """
+    import importlib.util
+    import inspect
+    import sys
+
+    for fname in ("provider.py", "plugin.py"):
+        cand = plugin_dir / fname
+        if not cand.is_file():
+            continue
+        mod_name = f"corvin_builtin_{plugin_id.replace('-', '_')}"
+        spec = importlib.util.spec_from_file_location(mod_name, cand)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        # Register under a stable name so dataclasses/pickling inside the module
+        # resolve, mirroring _load_tenant_plugin. Overwriting a prior load is
+        # fine: builtin discovery is idempotent per boot.
+        sys.modules[mod_name] = module
+        spec.loader.exec_module(module)
+
+        exact: type | None = None
+        fallback: type | None = None
+        for _name, obj in inspect.getmembers(module, inspect.isclass):
+            if obj.__module__ != mod_name:
+                continue  # only classes DEFINED here, not imported ones
+            if not (hasattr(obj, "plugin_id") and hasattr(obj, "on_load")):
+                continue
+            if getattr(obj, "plugin_id", None) == plugin_id:
+                exact = obj
+                break
+            if fallback is None:
+                fallback = obj
+        return exact or fallback
+    return None
+
+
+def bootstrap_builtin(
+    *,
+    tenant_id: str,
+    corvin_home: Path,
+    tenant_config: dict | None = None,
+    root: Path | None = None,
+    **registries: Any,
+) -> list[str]:
+    """Discover + load the bundled builtin plugins shipped under ``buildin/``.
+
+    The gap this closes: a builtin plugin under
+    ``core/plugins/buildin/<category>/<name>/`` with a ``plugin.yaml`` + hyphenated
+    directory + ``provider.py`` matched NONE of the three prior load paths —
+    ``bootstrap_global`` (code-registered only), ``bootstrap_declared`` (needs a
+    dotted ``class_path`` an importlib call can resolve — a hyphenated dir cannot
+    be one), and the runtime registry (loads ``plugin.py`` from a per-tenant
+    install dir). So the ADR-0598 retriever shipped in the wheel, registered as an
+    ADR-0599 ``context_retriever`` provider, and yet nothing ever called its
+    ``on_load`` → ``set_active``: the CEL/TDE seams stayed on the passthrough.
+
+    This is that path. It is ADDITIVE and behaviour-neutral where there are no
+    builtin manifests (``_builtin_plugin_dirs`` returns ``[]`` → ``[]``). Each
+    discovered plugin is:
+
+    * VALIDATED through the ADR-0247 manifest gate — a manifest that fails the
+      gate is skipped and audited, never loaded (the gate is not bypassed);
+    * loaded with ``origin="builtin"`` — a FACT here, not a claim: these dirs ship
+      in the wheel, so the ADR-0250 provider-slot gate's ``origin_builtin``
+      exemption applies (a ``context_retriever`` is a process-wide provider slot;
+      an ``origin=None`` declarative load of it is refused on a multi-tenant
+      install, which is why the builtin path must assert its real provenance);
+    * registered on ``boot_layer=installed`` through the SAME ``_register_instance``
+      the other paths use, so ``register()`` runs ``on_load(ctx)`` under the
+      loading context — which is what lets ``set_active`` record slot ownership.
+
+    Precedence: an id already declared in ``tenant.corvin.yaml`` or already
+    registered wins (``_register_instance`` treats an already-registered id as
+    loaded), so an operator's explicit config is never shadowed by discovery.
+
+    Opt-out: ``spec.plugins.builtin_disabled: [<id>, ...]`` skips named builtins,
+    and ``spec.plugins.load_builtin: false`` skips discovery entirely. Both honour
+    the Phase 2b "builtin always active locally" default — absent config loads
+    everything discovered.
+    """
+    scan_root = root if root is not None else _BUILTIN_ROOT
+    plugin_dirs = _builtin_plugin_dirs(scan_root)
+    if not plugin_dirs:
+        return []
+
+    config = tenant_config if tenant_config is not None else load_tenant_spec(
+        tenant_id, corvin_home
+    )
+    plugins_cfg = (config.get("spec") or {}).get("plugins") or {}
+    if plugins_cfg.get("load_builtin") is False:
+        log.debug("spec.plugins.load_builtin is false — skipping builtin discovery")
+        return []
+    disabled = {
+        str(x) for x in (plugins_cfg.get("builtin_disabled") or []) if x
+    }
+    declared_ids = {
+        e.get("id")
+        for e in (plugins_cfg.get("installed") or [])
+        if isinstance(e, dict)
+    }
+
+    from .validation import validate_manifest_file
+
+    loaded: list[str] = []
+    for plugin_dir in plugin_dirs:
+        manifest_path = plugin_dir / "plugin.yaml"
+        try:
+            manifest = load_from_manifest_safe(manifest_path)
+        except Exception as exc:  # noqa: BLE001 — a bad manifest skips one plugin
+            log.error(
+                "builtin manifest unreadable at %s (%s) — skipping",
+                plugin_dir, type(exc).__name__,
+            )
+            continue
+        plugin_id = str(manifest.get("plugin_id") or "").strip()
+        if not plugin_id:
+            log.error("builtin at %s has no plugin_id — skipping", plugin_dir)
+            continue
+        if plugin_id in disabled:
+            log.info("builtin %r opted out via builtin_disabled — skipping", plugin_id)
+            continue
+        if plugin_id in declared_ids:
+            log.debug(
+                "builtin %r also declared in spec.plugins.installed — the "
+                "declaration wins; discovery skips it", plugin_id,
+            )
+            continue
+
+        # ADR-0247 gate — a manifest that does not validate is NOT loaded.
+        report = validate_manifest_file(manifest_path)
+        if not report.ok:
+            log.error(
+                "builtin %r manifest failed the ADR-0247 gate (%d error(s)) — skipping",
+                plugin_id, len(report.errors),
+            )
+            _audit_degradation(tenant_id, "plugin.load_failed", {
+                "plugin_id": plugin_id, "tenant_id": tenant_id,
+                "reason": "manifest_invalid",
+            })
+            continue
+
+        cls = _load_builtin_class(plugin_dir, plugin_id)
+        if cls is None:
+            log.error(
+                "builtin %r: no loadable provider class in %s — skipping",
+                plugin_id, plugin_dir,
+            )
+            _audit_degradation(tenant_id, "plugin.load_failed", {
+                "plugin_id": plugin_id, "tenant_id": tenant_id,
+                "reason": "no_provider_class",
+            })
+            continue
+        try:
+            instance = cls()
+        except Exception as exc:  # noqa: BLE001 — one bad builtin must not stop boot
+            log.error(
+                "builtin %r failed to instantiate (%s) — skipping",
+                plugin_id, type(exc).__name__,
+            )
+            _audit_degradation(tenant_id, "plugin.load_failed", {
+                "plugin_id": plugin_id, "tenant_id": tenant_id,
+                "reason": "instantiate_failed", "error_type": type(exc).__name__,
+            })
+            continue
+
+        if _register_instance(
+            instance,
+            plugin_id=plugin_id,
+            tenant_id=tenant_id,
+            corvin_home=corvin_home,
+            boot_layer=BootLayer.INSTALLED,
+            # These dirs ship in the wheel, so builtin is a fact, not a claim —
+            # the one place the ADR-0250 slot gate's origin exemption is honest.
+            origin="builtin",
+            **registries,
+        ):
+            loaded.append(plugin_id)
+
+    if loaded:
+        log.info(
+            "loaded %d builtin plugin(s) for tenant %r: %s",
+            len(loaded), tenant_id, loaded,
+        )
+    return loaded
+
+
+def load_from_manifest_safe(manifest_path: Path) -> dict:
+    """Read a plugin.yaml manifest into a dict, tolerating an absent PyYAML."""
+    from .loader import load_from_manifest
+
+    data = load_from_manifest(manifest_path)
+    return data if isinstance(data, dict) else {}
+
+
 def bootstrap_tenant(
     *,
     tenant_id: str,
@@ -1167,7 +1396,11 @@ def bootstrap_all(
     1. **Global** — bundled ``compliance`` then ``core`` plugins.  A compliance
        failure here aborts the boot; a core failure degrades.
     2. **Declarative** — ``spec.plugins.installed`` from ``tenant.corvin.yaml``.
-    3. **Runtime registry** — Console-installed plugins, gated on the
+    3. **Builtin** — the plugins shipped under ``core/plugins/buildin/`` and
+       discovered by :func:`bootstrap_builtin`. Loaded with ``origin=builtin`` and
+       default-on locally (opt-out via ``spec.plugins.builtin_disabled`` /
+       ``load_builtin: false``). An id already declared in step 2 wins.
+    4. **Runtime registry** — Console-installed plugins, gated on the
        ``plugin_runtime_lifecycle`` flag.
 
     Precedence inside the tenant scope: the **declarative** config wins over the
@@ -1190,6 +1423,12 @@ def bootstrap_all(
         tenant_config=tenant_config,
         **registries,
     )
+    builtin = bootstrap_builtin(
+        tenant_id=tenant_id,
+        corvin_home=corvin_home,
+        tenant_config=tenant_config,
+        **registries,
+    )
     runtime = bootstrap_tenant(
         tenant_id=tenant_id,
         corvin_home=corvin_home,
@@ -1202,10 +1441,11 @@ def bootstrap_all(
             "plugin(s) %s are both declared and in the registry — the declaration won",
             overlap,
         )
-    # Preserve order: globals, then declarations, then registry-only ids.
+    # Preserve order: globals, then declarations, then builtins, then
+    # registry-only ids.
     seen = set(global_ids)
     ordered = list(global_ids)
-    for pid in declared + runtime:
+    for pid in declared + builtin + runtime:
         if pid not in seen:
             seen.add(pid)
             ordered.append(pid)
@@ -1665,6 +1905,7 @@ __all__ = [
     "assert_compliance",
     "boot_platform",
     "bootstrap_all",
+    "bootstrap_builtin",
     "bootstrap_declared",
     "bootstrap_global",
     "bootstrap_tenant",

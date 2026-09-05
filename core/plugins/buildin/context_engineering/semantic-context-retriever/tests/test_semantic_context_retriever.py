@@ -175,3 +175,90 @@ def test_e2e_seam_uses_active_provider_then_passthrough():
     assert brief3.memory_context.matches[0] is no_overlap  # back to no-op
 
     context_retriever.clear()
+
+
+# ── 5. E2E through the REAL boot discovery path (bootstrap_builtin) ───────────
+def test_bootstrap_builtin_discovers_and_activates(tmp_path):
+    """The plugin loads through the production discovery+load path and set_active.
+
+    This does NOT instantiate the class directly. It drives
+    ``bootstrap.bootstrap_builtin`` — the mechanism ``bootstrap_all`` runs at every
+    boot — pointed at the real ``core/plugins/buildin`` root. That path discovers
+    the nested ``plugin.yaml``, validates it through the ADR-0247 gate, imports
+    ``provider.py`` by file path, instantiates the class and registers it with
+    ``origin=builtin`` — which runs ``on_load`` → ``set_active``. The assertion is
+    that the module-level ``context_retriever`` slot is now this plugin, i.e. the
+    CEL/TDE seams are no longer on the passthrough.
+    """
+    from corvin_plugins import bootstrap
+    from corvin_plugins.providers import context_retriever
+    from corvin_plugins.registry import get_registry, unregister
+
+    context_retriever.clear()
+    # Guard: if a prior boot in this process already loaded it, start clean.
+    if "semantic-context-retriever" in get_registry().discover():
+        unregister("semantic-context-retriever")
+
+    try:
+        loaded = bootstrap.bootstrap_builtin(
+            tenant_id="_default",
+            corvin_home=tmp_path,  # irrelevant for origin=builtin (slot gate exempt)
+            tenant_config={},
+        )
+        assert "semantic-context-retriever" in loaded, (
+            f"builtin discovery did not load the plugin; loaded={loaded}"
+        )
+        active = context_retriever.get_active()
+        # NOT isinstance: bootstrap_builtin imports provider.py by FILE PATH under
+        # its own module name, so the class object differs from this test file's
+        # separate top-of-file load — two loads, two class identities. In
+        # production only bootstrap_builtin loads it, so there is one identity.
+        # Assert by the plugin's stable identity + class name instead, and prove
+        # the seam is really active by exercising the ranking below.
+        assert getattr(active, "plugin_id", None) == "semantic-context-retriever"
+        assert type(active).__name__ == "SemanticContextRetriever"
+        # Functional proof: the active provider actually ranks (not passthrough).
+        no_overlap = _memory_match("Cooking recipes", "how to bake sourdough bread")
+        overlap = _memory_match(
+            "Database migration guide", "steps to migrate the database schema"
+        )
+        ranked = active.select("database migration", [no_overlap, overlap])
+        assert ranked[0] is overlap
+        # And it must be attributed as a builtin on the installed boot layer.
+        assert get_registry().boot_layer_of("semantic-context-retriever").value == (
+            "installed"
+        )
+    finally:
+        if "semantic-context-retriever" in get_registry().discover():
+            unregister("semantic-context-retriever")
+        context_retriever.clear()
+
+
+def test_bootstrap_builtin_respects_opt_out(tmp_path):
+    """``spec.plugins.builtin_disabled`` skips a named builtin (no set_active)."""
+    from corvin_plugins import bootstrap
+    from corvin_plugins.providers import context_retriever
+    from corvin_plugins.registry import get_registry, unregister
+
+    context_retriever.clear()
+    if "semantic-context-retriever" in get_registry().discover():
+        unregister("semantic-context-retriever")
+
+    try:
+        loaded = bootstrap.bootstrap_builtin(
+            tenant_id="_default",
+            corvin_home=tmp_path,
+            tenant_config={
+                "spec": {
+                    "plugins": {"builtin_disabled": ["semantic-context-retriever"]}
+                }
+            },
+        )
+        assert "semantic-context-retriever" not in loaded
+        assert not isinstance(
+            context_retriever.get_active(), SemanticContextRetriever
+        )
+    finally:
+        if "semantic-context-retriever" in get_registry().discover():
+            unregister("semantic-context-retriever")
+        context_retriever.clear()

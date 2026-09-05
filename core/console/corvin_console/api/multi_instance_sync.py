@@ -12,7 +12,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..deps import require_session, require_csrf
-from core.telemetry import compute_digest
+
+# Optional: telemetry integration
+try:
+    from core.telemetry import compute_digest
+except ImportError:
+    compute_digest = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 

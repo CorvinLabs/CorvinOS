@@ -19,6 +19,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
 } from 'recharts';
+import MethodDiscoveryPanel from '@/panels/MethodDiscoveryPanel';
 
 // ============================================================================
 // TYPES & DATA
@@ -569,6 +570,14 @@ const LearningDashboard: React.FC = () => {
           System Details
         </h2>
         <SystemDetailCards systems={metrics.systems} />
+      </div>
+
+      {/* Method Discovery (ADR-0548) — real API data, not part of the mock
+          metrics above. Mounted here rather than as its own sidebar panel:
+          Vibe Engineering was deliberately collapsed to one panel on
+          2026-09-05 and a new nav entry would re-open that. */}
+      <div style={{ marginBottom: '32px' }}>
+        <MethodDiscoveryPanel />
       </div>
 
       {/* Footer */}
