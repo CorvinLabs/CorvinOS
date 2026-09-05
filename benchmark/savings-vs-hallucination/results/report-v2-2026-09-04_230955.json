@@ -1,0 +1,77 @@
+{
+  "arms": {
+    "none": {
+      "input_tokens_mean": 29398.5,
+      "marginal_context_tokens": 0.0,
+      "cost_cold_usd_mean": 0.0504,
+      "cost_warm_usd_mean": null,
+      "correct_rate_answerable": 0.0,
+      "abstain_rate_answerable": 1.0,
+      "halluc_rate_answerable": 0.0,
+      "abstain_rate_trap": 1.0,
+      "halluc_rate_trap": {
+        "mean": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "trap_halluc_lift_vs_none": 0.0,
+      "guardrail": "PASS"
+    },
+    "pruned": {
+      "input_tokens_mean": 29568.5,
+      "marginal_context_tokens": 170.0,
+      "cost_cold_usd_mean": 0.0488,
+      "cost_warm_usd_mean": null,
+      "correct_rate_answerable": 0.0,
+      "abstain_rate_answerable": 1.0,
+      "halluc_rate_answerable": 0.0,
+      "abstain_rate_trap": 1.0,
+      "halluc_rate_trap": {
+        "mean": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "trap_halluc_lift_vs_none": 0.0,
+      "guardrail": "PASS"
+    },
+    "full": {
+      "input_tokens_mean": 30987.25,
+      "marginal_context_tokens": 1588.8,
+      "cost_cold_usd_mean": 0.0501,
+      "cost_warm_usd_mean": null,
+      "correct_rate_answerable": 1.0,
+      "abstain_rate_answerable": 0.0,
+      "halluc_rate_answerable": 0.0,
+      "abstain_rate_trap": 1.0,
+      "halluc_rate_trap": {
+        "mean": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "trap_halluc_lift_vs_none": 0.0,
+      "guardrail": "PASS"
+    }
+  },
+  "guardrail_margin": 0.05,
+  "P7_full_vs_pruned_trap": {
+    "diff": 0,
+    "p": 1.0,
+    "n_a": 2,
+    "n_b": 2
+  },
+  "meta": {
+    "model": "claude-haiku-4-5-20251001",
+    "reps": 1,
+    "n_tasks": 4,
+    "n_ans": 2,
+    "n_trap": 2,
+    "total_calls": 12,
+    "wall_s": 97.9
+  }
+}

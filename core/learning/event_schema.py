@@ -30,6 +30,13 @@ class LearningEventType(str, Enum):
     METRIC_AGGREGATED = "metric.aggregated"
     TOKEN_METRICS = "token.metrics"  # Phase 1: Token measurement
 
+    # Method Discovery (ADR-0548, Phase 3.5). Deliberately only TWO types:
+    # CONCEPT-0029 Constraint 5 (audit sparseness) — task start/end, skill
+    # calls and latencies stay in telemetry and must never enter the chain,
+    # or the signal an auditor needs drowns in noise.
+    METHOD_OBSERVATION = "method.observation"
+    METHOD_DISCOVERED = "method.discovered"
+
 
 @dataclass(frozen=True)
 class LearningEvent:

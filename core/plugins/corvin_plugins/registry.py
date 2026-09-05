@@ -103,6 +103,7 @@ def _scrub_plugin_details(details: object) -> dict:
 _PROVIDER_MODULE_NAMES: tuple[str, ...] = (
     "audit_backend", "user_backend", "stt_provider", "data_connector",
     "recall_backend", "router_backend", "summary_provider", "notification_backend",
+    "context_retriever",  # ADR-0599
 )
 
 

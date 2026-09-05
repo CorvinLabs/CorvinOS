@@ -181,7 +181,7 @@ class SkillAdapter:
         return False, "no_action"
 
     def _persist(self) -> None:
-        """Save current config to disk."""
+        """Save current config to disk (fail-closed: exception on write failure)."""
         import json
         config_file = self.work_dir / f"{self.skill_id.replace('.', '_')}_config.json"
         data = {
@@ -196,7 +196,10 @@ class SkillAdapter:
                 for v in self.state.config_versions
             ],
         }
-        config_file.write_text(json.dumps(data, indent=2))
+        try:
+            config_file.write_text(json.dumps(data, indent=2))
+        except (IOError, OSError) as e:
+            raise RuntimeError(f"Failed to persist SkillAdapter config: {e}") from e
 
     def rollback(self, to_version: str) -> SkillConfig:
         """Rollback to a prior version (user override, GDPR Art. 21)."""

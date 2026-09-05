@@ -835,9 +835,11 @@ class PluginLifecycle:
 
 
 #: Every plugin_type that owns a provider slot, mapped to its module name.
-#: All EIGHT of them — an earlier version listed four, so unloading a
-#: recall/router/summary/notification plugin left the registry pointing at the
-#: torn-down object and the next call went into a closed handle.
+#: An earlier version listed four, so unloading a recall/router/summary/
+#: notification plugin left the registry pointing at the torn-down object and the
+#: next call went into a closed handle. Keep this in step with ``providers/`` —
+#: a new provider module (ADR-0599 added ``context_retriever``) must be mapped
+#: here too, or its plugins leak their slot on unload.
 _PROVIDER_MODULES: Dict[str, str] = {
     "audit_backend": "audit_backend",
     "user_backend": "user_backend",
@@ -847,6 +849,7 @@ _PROVIDER_MODULES: Dict[str, str] = {
     "router_backend": "router_backend",
     "summary_provider": "summary_provider",
     "notification_backend": "notification_backend",
+    "context_retriever": "context_retriever",  # ADR-0599
 }
 
 

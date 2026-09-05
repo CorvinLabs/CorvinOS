@@ -44,12 +44,14 @@ log = logging.getLogger(__name__)
 
 #: Plugin types that occupy a process-wide provider slot (ADR-0033 + ADR-0233).
 #:
-#: Deliberately NOT derived from ``KNOWN_PLUGIN_TYPES``: three of those eleven —
+#: Deliberately NOT derived from ``KNOWN_PLUGIN_TYPES``: three of those types —
 #: ``compute_engine``, ``worker_engine``, ``bridge_channel`` — register into their
 #: own subsystems' registries rather than into ``providers/``, and those registries
-#: are keyed differently.  Listing the eight explicitly means adding a ninth
+#: are keyed differently.  Listing the provider types explicitly means adding a new
 #: provider module forces a deliberate edit here; deriving would have silently
 #: included the three that do not belong and silently excluded a new one that does.
+#: ``test_provider_types_match_the_provider_modules`` pins this set to the
+#: ``providers/`` directory, so a new ``providers/<type>.py`` must be added here.
 PROVIDER_PLUGIN_TYPES: frozenset[str] = frozenset(
     {
         "audit_backend",
@@ -60,6 +62,7 @@ PROVIDER_PLUGIN_TYPES: frozenset[str] = frozenset(
         "notification_backend",
         "stt_provider",
         "data_connector",
+        "context_retriever",  # ADR-0599 CEL/TDE context-selection slot
     }
 )
 

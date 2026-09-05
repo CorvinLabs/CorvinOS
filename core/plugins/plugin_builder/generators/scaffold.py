@@ -193,6 +193,7 @@ _CTX_HANDLE_GUESS: dict[str, str] = {
     "recall_backend": "recall_registry",
     "audit_backend": "audit_registry",
     "user_backend": "user_registry",
+    "context_retriever": "context_retriever_registry",
     "compute_engine": "compute_registry",
     "worker_engine": "engine_factory",
     "bridge_channel": "channel_registry",

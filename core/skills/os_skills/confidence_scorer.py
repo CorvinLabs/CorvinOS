@@ -43,7 +43,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import cycle
 __all__ = [
     "ConfidenceBreakdown",
     "ConfidenceScorer",
-    "MethodConfidenceScorer",
     "DISCOVERY_THRESHOLD",
     "AUTONOMOUS_THRESHOLD",
     "MAX_CONFIDENCE",

@@ -104,6 +104,7 @@ from .routes import (
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     l5_metrics_api as l5_metrics_route,
+    vibe as vibe_route,
     admin as admin_route,
     data_sources as data_sources_route,
     chain_dual_track as chain_dual_track_route,
@@ -179,6 +180,7 @@ router.include_router(skills_monitoring_route.router, tags=["console-skills-moni
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(l5_metrics_route.router, tags=["console-l5-metrics"])
+router.include_router(vibe_route.router, tags=["console-vibe"])
 router.include_router(memory.router, tags=["console-memory"])
 # Phase D — realtime SSE streams
 router.include_router(streams.router, tags=["console-streams"])
