@@ -42,6 +42,22 @@ from corvin_plugins.providers.context_retriever import (  # noqa: E402
     ContextRetrieverRegistry,
     PassthroughContextRetriever,
 )
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_context_retriever_registry():
+    """Reset the module-global ``context_retriever`` registry around every test.
+
+    The seam tests share ``cr._registry`` (module-global, ADR-0599). A test that
+    leaves a provider active via ``cr.set_active`` otherwise contaminates the next
+    one: ``TestTDESeam`` expects the passthrough default and passed in isolation
+    but failed in a full run. Clearing before AND after makes this module's tests
+    order-independent — a production-ready requirement, not optional hygiene.
+    """
+    cr.clear()
+    yield
+    cr.clear()
 
 
 def _load_cel_memory():
@@ -206,6 +222,24 @@ def _make_envelope(snapshot: dict):
 
 class TestTDESeam(unittest.TestCase):
     def setUp(self):
+        # Repo-wide module-name collision: two initial_analysis.py exist —
+        # operator/initial_analysis.py and operator/orchestration/initial_analysis.py
+        # (the latter defines make_task_analysis_prompt/GlobalPlan/Step). In a FULL
+        # test run an earlier module can cache the former as
+        # sys.modules["initial_analysis"], so worker_ipc -> analysis_runner's
+        # `from initial_analysis import make_task_analysis_prompt` raises ImportError
+        # and every TDE seam test fails though each passes in isolation. Normalise the
+        # import state: put operator/orchestration first and evict the stale
+        # initial_analysis / tde modules so they re-import from the correct path.
+        import sys as _sys
+        _orch = str(_REPO / "operator" / "orchestration")
+        if _orch in _sys.path:
+            _sys.path.remove(_orch)
+        _sys.path.insert(0, _orch)
+        for _m in [m for m in list(_sys.modules)
+                   if m == "initial_analysis" or m == "tde" or m.startswith("tde.")]:
+            del _sys.modules[_m]
+
         from tde.worker_ipc import SubprocessWorkerIPC  # noqa: PLC0415
 
         # Build without __init__ so we don't need helper_model on the path;
