@@ -1,24 +1,48 @@
-# CorvinOS v2.0 — Agentic Operating System
+# CorvinOS 1.0.0 — Agentic Operating System
 
 [![CI/CD](https://img.shields.io/badge/ci%2Fcd-passing-brightgreen)](https://github.com/CorvinLabs/CorvinOS)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v1.0%20Production-blue)](CHANGELOG.md)
-[![Compliance](https://img.shields.io/badge/compliance-GDPR%20%2B%20EU%20AI%20Act-green)](docs/compliance/10_COMPLIANCE_BASELINE.md)
+[![Status](https://img.shields.io/badge/status-v1.0.0%20Production-blue)](CHANGELOG.md)
+[![Compliance](https://img.shields.io/badge/compliance-GDPR%20%2B%20EU%20AI%20Act%20Compliant-green)](docs/compliance/10_COMPLIANCE_BASELINE.md)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
 ---
 
 ## What is CorvinOS?
 
-**CorvinOS is not your typical operating system.** It's an agentic OS where:
+**CorvinOS 1.0.0 is a self-learning, auditable operating system for AI agents.** It's built on three load-bearing principles:
 
-- **Every decision** is made by a **versioned, learnable Skill** — not hardcoded logic or buried feature flags
-- **Every execution** is fully audited with cryptographic proof (hash-chained, GDPR-compliant)
-- **Every system behavior** is self-optimizing via a 9D learning vector that converges automatically
-- **The operator** remains in complete control — governing through tuning, not coding
+1. **Versioned Skills** — Every decision by a versioned, auditable Skill (not hardcoded logic or feature flags)
+2. **GDPR + EU AI Act Structural Compliance** — Compliance gates are fail-closed, load-bearing code (not features you can disable)
+3. **Self-Learning 9D System** — Converges automatically via feedback loops (operator tunes, system optimizes)
 
-Think of it as **"Kubernetes for AI decisions"** — versioned, composable, observable, compliant.
+**The Promise:** Operators get **governance** (they control behavior), **intelligence** (system learns automatically), and **proof** (every decision is auditable).
+
+Think of it as **"Kubernetes for AI decisions"** — versioned, composable, observable, and inherently compliant.
 
 ![CorvinOS Ecosystem](docs/diagrams/DIAGRAM_10_ECOSYSTEM.svg)
+
+---
+
+## 🏛️ Compliance Built-In (GDPR + EU AI Act 2026)
+
+**CorvinOS 1.0.0 doesn't add compliance on top — it IS compliance.**
+
+### **Load-Bearing Compliance Mechanisms** (Structural, Not Features)
+
+| Regulation | Requirement | CorvinOS Implementation | Status |
+|---|---|---|---|
+| **EU AI Act Art. 50** | Disclose AI use to user | Bot disclosure card (one-time, locked) | ✅ Mandatory |
+| **EU AI Act Art. 5** | Transparent, acceptable-use enforcement | House-rules gate (fail-closed, no disable flag) | ✅ Mandatory |
+| **EU AI Act Art. 50** | User can opt out anytime | `/leave` command (instant, no retention) | ✅ Mandatory |
+| **GDPR Art. 6** | Process data only with consent | Consent gate (deny-by-default, TTL-capped) | ✅ Mandatory |
+| **GDPR Art. 30, 32** | Immutable audit trail of all actions | Hash-chained audit log (RFC 3161 timestamping) | ✅ Mandatory |
+| **GDPR Art. 5** | Collect minimum data only | Metadata-only audit (never store prompts/content) | ✅ Mandatory |
+| **GDPR Art. 17** | User can delete all data | Cascading erasure (all systems, proof logged) | ✅ Mandatory |
+
+**Key Principle:** These are NOT feature flags you flip. They are **hardcoded, fail-closed gates that run BEFORE any business logic.**
+
+![Compliance Architecture](docs/diagrams/DIAGRAM_11_COMPLIANCE_EU_AI_ACT.svg)
 
 ---
 

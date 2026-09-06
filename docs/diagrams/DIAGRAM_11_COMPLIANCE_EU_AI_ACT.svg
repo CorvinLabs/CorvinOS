@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1400 1100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #0f0f0f; }
+      .title { font-size: 28px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .section { font-size: 18px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+      .subsection { font-size: 14px; font-weight: bold; fill: #00ff88; font-family: monospace; }
+      .requirement { fill: #1a1a2e; stroke: #ff006e; stroke-width: 2; }
+      .implementation { fill: #16213e; stroke: #00d4ff; stroke-width: 2; }
+      .label { font-size: 13px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 11px; fill: #888; font-family: monospace; }
+      .code { font-size: 10px; fill: #00ff88; font-family: monospace; }
+      .check { font-size: 12px; fill: #00ff88; }
+      .arrow { stroke: #00d4ff; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead); }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1400" height="1100"/>
+
+  <text x="700" y="40" class="title" text-anchor="middle">CorvinOS 1.0.0: Compliance Foundation</text>
+  <text x="700" y="62" class="desc" text-anchor="middle">GDPR + EU AI Act 2026 structural constraints (load-bearing, non-negotiable)</text>
+
+  <!-- SECTION 1: EU AI ACT REQUIREMENTS -->
+  <text x="50" y="110" class="section">🏛️ EU AI ACT 2026</text>
+
+  <!-- Requirement 1 -->
+  <rect class="requirement" x="50" y="130" width="310" height="140"/>
+  <text x="205" y="155" class="subsection" text-anchor="middle">Art. 50: Disclose AI Use</text>
+  <text x="205" y="173" class="label" text-anchor="middle">Requirement:</text>
+  <text x="205" y="188" class="desc" text-anchor="middle">Tell user that AI is being used</text>
+  <text x="205" y="202" class="desc" text-anchor="middle">One-time disclosure per user</text>
+  <text x="205" y="216" class="desc" text-anchor="middle">No way to skip/bypass</text>
+  <text x="205" y="238" class="check">✓ LOCKED IN CODE</text>
+
+  <!-- Implementation 1 -->
+  <rect class="implementation" x="50" y="275" width="310" height="85"/>
+  <text x="205" y="295" class="subsection" text-anchor="middle">Implementation:</text>
+  <text x="205" y="313" class="code" text-anchor="middle">core/compliance/bot_disclosure.py</text>
+  <text x="205" y="327" class="desc" text-anchor="middle">Before any LLM call: show disclosure card</text>
+  <text x="205" y="341" class="desc" text-anchor="middle">Locked (cannot be disabled)</text>
+
+  <!-- Requirement 2 -->
+  <rect class="requirement" x="380" y="130" width="310" height="140"/>
+  <text x="535" y="155" class="subsection" text-anchor="middle">Art. 5: System Transparency</text>
+  <text x="535" y="173" class="label" text-anchor="middle">Requirement:</text>
+  <text x="535" y="188" class="desc" text-anchor="middle">Log every decision made by AI</text>
+  <text x="535" y="202" class="desc" text-anchor="middle">Operator can audit trail</text>
+  <text x="535" y="216" class="desc" text-anchor="middle">No blind spots</text>
+  <text x="535" y="238" class="check">✓ LOCKED IN CODE</text>
+
+  <!-- Implementation 2 -->
+  <rect class="implementation" x="380" y="275" width="310" height="85"/>
+  <text x="535" y="295" class="subsection" text-anchor="middle">Implementation:</text>
+  <text x="535" y="313" class="code" text-anchor="middle">core/compliance/audit_backend.py</text>
+  <text x="535" y="327" class="desc" text-anchor="middle">Hash-chained audit log (immutable)</text>
+  <text x="535" y="341" class="desc" text-anchor="middle">Cryptographic proof of compliance</text>
+
+  <!-- Requirement 3 -->
+  <rect class="requirement" x="710" y="130" width="310" height="140"/>
+  <text x="865" y="155" class="subsection" text-anchor="middle">Art. 5: Acceptable Use</text>
+  <text x="865" y="173" class="label" text-anchor="middle">Requirement:</text>
+  <text x="865" y="188" class="desc" text-anchor="middle">Reject high-risk / unethical requests</text>
+  <text x="865" y="202" class="desc" text-anchor="middle">Deny-by-default policy</text>
+  <text x="865" y="216" class="desc" text-anchor="middle">Non-negotiable</text>
+  <text x="865" y="238" class="check">✓ LOCKED IN CODE</text>
+
+  <!-- Implementation 3 -->
+  <rect class="implementation" x="710" y="275" width="310" height="85"/>
+  <text x="865" y="295" class="subsection" text-anchor="middle">Implementation:</text>
+  <text x="865" y="313" class="code" text-anchor="middle">core/compliance/house_rules.py (L44)</text>
+  <text x="865" y="327" class="desc" text-anchor="middle">Fail-closed gate (no bypass flag)</text>
+  <text x="865" y="341" class="desc" text-anchor="middle">Blocks requests before routing</text>
+
+  <!-- Requirement 4 -->
+  <rect class="requirement" x="1040" y="130" width="310" height="140"/>
+  <text x="1195" y="155" class="subsection" text-anchor="middle">Art. 50: User Choice</text>
+  <text x="1195" y="173" class="label" text-anchor="middle">Requirement:</text>
+  <text x="1195" y="188" class="desc" text-anchor="middle">User can opt out anytime</text>
+  <text x="1195" y="202" class="desc" text-anchor="middle">/leave command (immediate)</text>
+  <text x="1195" y="216" class="desc" text-anchor="middle">No fallback "guest" account</text>
+  <text x="1195" y="238" class="check">✓ LOCKED IN CODE</text>
+
+  <!-- Implementation 4 -->
+  <rect class="implementation" x="1040" y="275" width="310" height="85"/>
+  <text x="1195" y="295" class="subsection" text-anchor="middle">Implementation:</text>
+  <text x="1195" y="313" class="code" text-anchor="middle">core/console/commands/leave.py</text>
+  <text x="1195" y="327" class="desc" text-anchor="middle">Instant opt-out (no retention)</text>
+  <text x="1195" y="341" class="desc" text-anchor="middle">Audit event logged</text>
+
+  <!-- SECTION 2: GDPR REQUIREMENTS -->
+  <text x="50" y="410" class="section">🔒 GDPR 2016</text>
+
+  <!-- GDPR 1 -->
+  <rect class="requirement" x="50" y="430" width="300" height="135"/>
+  <text x="200" y="453" class="subsection" text-anchor="middle">Art. 6: Legal Basis</text>
+  <text x="200" y="471" class="label" text-anchor="middle">Requirement:</text>
+  <text x="200" y="485" class="desc" text-anchor="middle">Process data only with consent</text>
+  <text x="200" y="499" class="desc" text-anchor="middle">Deny-by-default (no auto-admit)</text>
+  <text x="200" y="513" class="desc" text-anchor="middle">TTL-capped tokens</text>
+  <text x="200" y="532" class="check">✓ LOCKED IN CODE</text>
+
+  <!-- GDPR 1 impl -->
+  <rect class="implementation" x="50" y="570" width="300" height="70"/>
+  <text x="200" y="587" class="code" text-anchor="middle">core/compliance/consent_gate.py (L16)</text>
+  <text x="200" y="601" class="desc" text-anchor="middle">Consent required before any LLM call</text>
+  <text x="200" y="615" class="desc" text-anchor="middle">Default: DENY (operator must approve)</text>
+
+  <!-- GDPR 2 -->
+  <rect class="requirement" x="380" y="430" width="300" height="135"/>
+  <text x="530" y="453" class="subsection" text-anchor="middle">Art. 30, 32: Audit Trail</text>
+  <text x="530" y="471" class="label" text-anchor="middle">Requirement:</text>
+  <text x="530" y="485" class="desc" text-anchor="middle">Process records (every action logged)</text>
+  <text x="530" y="499" class="desc" text-anchor="middle">Immutable audit trail</text>
+  <text x="530" y="513" class="desc" text-anchor="middle">Hash-chain integrity</text>
+  <text x="530" y="532" class="check">✓ LOCKED IN CODE</text>
+
+  <!-- GDPR 2 impl -->
+  <rect class="implementation" x="380" y="570" width="300" height="70"/>
+  <text x="530" y="587" class="code" text-anchor="middle">core/compliance/audit_backend.py (L37)</text>
+  <text x="530" y="601" class="desc" text-anchor="middle">Daily audit chain verification (RFC 3161)</text>
+  <text x="530" y="615" class="desc" text-anchor="middle">Cryptographic proof (timestamps + signatures)</text>
+
+  <!-- GDPR 3 -->
+  <rect class="requirement" x="710" y="430" width="300" height="135"/>
+  <text x="860" y="453" class="subsection" text-anchor="middle">Art. 5: Data Minimization</text>
+  <text x="860" y="471" class="label" text-anchor="middle">Requirement:</text>
+  <text x="860" y="485" class="desc" text-anchor="middle">Collect minimum data only</text>
+  <text x="860" y="499" class="desc" text-anchor="middle">No unnecessary storage</text>
+  <text x="860" y="513" class="desc" text-anchor="middle">No prompt/transcript records</text>
+  <text x="860" y="532" class="check">✓ LOCKED IN CODE</text>
+
+  <!-- GDPR 3 impl -->
+  <rect class="implementation" x="710" y="570" width="300" height="70"/>
+  <text x="860" y="587" class="code" text-anchor="middle">core/compliance/data_minimization.py</text>
+  <text x="860" y="601" class="desc" text-anchor="middle">Audit logs metadata only (never content)</text>
+  <text x="860" y="615" class="desc" text-anchor="middle">Fail-closed scrubbing (_assert_safe)</text>
+
+  <!-- GDPR 4 -->
+  <rect class="requirement" x="1040" y="430" width="310" height="135"/>
+  <text x="1195" y="453" class="subsection" text-anchor="middle">Art. 17: Right to Erasure</text>
+  <text x="1195" y="471" class="label" text-anchor="middle">Requirement:</text>
+  <text x="1195" y="485" class="desc" text-anchor="middle">User can delete all data</text>
+  <text x="1195" y="499" class="desc" text-anchor="middle">Cascading purge (all systems)</text>
+  <text x="1195" y="513" class="desc" text-anchor="middle">Proof of deletion</text>
+  <text x="1195" y="532" class="check">✓ LOCKED IN CODE</text>
+
+  <!-- GDPR 4 impl -->
+  <rect class="implementation" x="1040" y="570" width="310" height="70"/>
+  <text x="1195" y="587" class="code" text-anchor="middle">core/compliance/erasure_orchestrator.py (L36)</text>
+  <text x="1195" y="601" class="desc" text-anchor="middle">Audit-first deletion (log before purge)</text>
+  <text x="1195" y="615" class="desc" text-anchor="middle">Immutable proof of erasure</text>
+
+  <!-- SECTION 3: CORE MECHANISMS -->
+  <text x="50" y="700" class="section">🔐 Load-Bearing Compliance Mechanisms</text>
+
+  <!-- Mechanism 1 -->
+  <rect class="requirement" x="50" y="730" width="280" height="150"/>
+  <text x="190" y="755" class="subsection" text-anchor="middle">① Audit Chain</text>
+  <text x="190" y="773" class="label" text-anchor="middle">What:</text>
+  <text x="190" y="787" class="desc" text-anchor="middle">Immutable hash-chained log</text>
+  <text x="190" y="801" class="desc" text-anchor="middle">of every decision + feedback</text>
+  <text x="190" y="815" class="desc" text-anchor="middle">Tenant-scoped isolation</text>
+  <text x="190" y="829" class="desc" text-anchor="middle">RFC 3161 timestamping</text>
+  <text x="190" y="861" class="check">✓ Core to compliance</text>
+
+  <!-- Mechanism 2 -->
+  <rect class="requirement" x="360" y="730" width="280" height="150"/>
+  <text x="500" y="755" class="subsection" text-anchor="middle">② Consent Gate</text>
+  <text x="500" y="773" class="label" text-anchor="middle">What:</text>
+  <text x="500" y="787" class="desc" text-anchor="middle">Deny-by-default policy</text>
+  <text x="500" y="801" class="desc" text-anchor="middle">Operator must approve</text>
+  <text x="500" y="815" class="desc" text-anchor="middle">TTL-capped (30-day renewal)</text>
+  <text x="500" y="829" class="desc" text-anchor="middle">No auto-grant backdoors</text>
+  <text x="500" y="861" class="check">✓ Core to GDPR</text>
+
+  <!-- Mechanism 3 -->
+  <rect class="requirement" x="670" y="730" width="280" height="150"/>
+  <text x="810" y="755" class="subsection" text-anchor="middle">③ House-Rules Gate</text>
+  <text x="810" y="773" class="label" text-anchor="middle">What:</text>
+  <text x="810" y="787" class="desc" text-anchor="middle">Acceptable-use enforcement</text>
+  <text x="810" y="801" class="desc" text-anchor="middle">Fail-closed (deny unethical)</text>
+  <text x="810" y="815" class="desc" text-anchor="middle">NO disable flag (locked)</text>
+  <text x="810" y="829" class="desc" text-anchor="middle">Applies to all requests</text>
+  <text x="810" y="861" class="check">✓ Core to EU AI Act</text>
+
+  <!-- Mechanism 4 -->
+  <rect class="requirement" x="980" y="730" width="350" height="150"/>
+  <text x="1155" y="755" class="subsection" text-anchor="middle">④ Plugin Audit</text>
+  <text x="1155" y="773" class="label" text-anchor="middle">What:</text>
+  <text x="1155" y="787" class="desc" text-anchor="middle">Every plugin action audited</text>
+  <text x="1155" y="801" class="desc" text-anchor="middle">Compliance meta-skills locked</text>
+  <text x="1155" y="815" class="desc" text-anchor="middle">(can't be disabled by plugins)</text>
+  <text x="1155" y="829" class="desc" text-anchor="middle">Boot-layer enforcement</text>
+  <text x="1155" y="861" class="check">✓ Extends compliance scope</text>
+
+  <!-- BOTTOM: Key Insight -->
+  <rect class="implementation" x="50" y="920" width="1300" height="150"/>
+  <text x="700" y="950" class="section" text-anchor="middle">✅ Core Principle: Compliance is Structural, Not Behavioral</text>
+  <text x="700" y="972" class="label" text-anchor="middle">CorvinOS compliance is NOT:</text>
+  <text x="700" y="987" class="desc" text-anchor="middle">❌ Feature flags you can flip ("enable compliance mode")</text>
+  <text x="700" y="1001" class="desc" text-anchor="middle">❌ Environment variables you can disable</text>
+  <text x="700" y="1015" class="desc" text-anchor="middle">❌ Pluggable logic that can be overridden</text>
+  <text x="700" y="1029" class="desc" text-anchor="middle">✓ Hardcoded, fail-closed gates that run BEFORE any business logic</text>
+  <text x="700" y="1043" class="desc" text-anchor="middle">✓ Audit-first: every event logged BEFORE state changes</text>
+</svg>
