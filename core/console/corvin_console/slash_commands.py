@@ -16,7 +16,7 @@ Routing (``handle`` return value):
 
 Functional (real action / real data): /help, /whoami, /role, /quota, /engine
 (show). Informational pointers (the action lives in a dedicated tab or is
-tenant-wide, not per-web-chat): /engine <name>, /persona, /dialectic-*, /skills,
+tenant-wide, not per-web-chat): /engine <name>, /dialectic-*, /skills,
 /memory. Honest "not in the console" for bridge-only runtime commands
 (/go, /propose, /btw, /share, /forget). Client-side actions (/stop, /new, /clear,
 /reset) are performed by the frontend; if one still reaches the server we return
@@ -86,7 +86,7 @@ _HELP = (
     "- `/whoami`, `/role` — your identity, tier and role\n"
     "- `/quota` — your daily chat-turn limit\n"
     "- `/engine [name]` — show the configured engine (change it in the Engines tab)\n"
-    "- `/persona`, `/skills`, `/memory` — open the matching tab to manage these\n"
+    "- `/skills`, `/memory` — open the matching tab to manage these\n"
     "- `/dialectic-on`, `/dialectic-off` — toggle in the Engines/Settings tab\n"
     "- `/create workflow|task|tool|skill`, `/erase`, `/audit` — CCC entity actions\n"
     "- `/delegate <task>` — force ACS delegation for this turn\n"
@@ -286,11 +286,6 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
             return (base + " The console engine is set **tenant-wide** in the "
                     "**Engines** tab, not per chat — change it there.")
         return base + " Change it in the **Engines** tab."
-
-    if cmd == "/persona":
-        return ("Personas are managed in the **Personas** tab (create, edit, "
-                "assign an engine, enable/disable). Per-web-chat persona pinning "
-                "is not available in this console session.")
 
     if cmd in ("/dialectic-on", "/dialectic-off"):
         return ("Dialectic reasoning is toggled in the **Engines / Settings** "

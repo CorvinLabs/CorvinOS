@@ -94,7 +94,6 @@ async def _route_ats_task(
         task_id = tm.create_task(
             chat_key=f"ccc:{tenant_id}",
             instruction=slots.get("name", "CCC task"),
-            persona="assistant",
             turn_number=0,
             tenant_id=tenant_id,  # ADR-0314 outcome sink: the task's own tenant
         )

@@ -63,7 +63,7 @@ class _SPAStaticFiles(StaticFiles):
 from . import __version__
 from .api import feature_status_endpoints, multi_instance_sync
 from .routes import (
-    auth_routes, dashboard, sessions, audit_tail, runs, personas,
+    auth_routes, dashboard, sessions, audit_tail, runs,
     tasks as tasks_route,
     tools, skills, memory, streams, promote,
     workspaces, members, compute, settings as settings_route,
@@ -167,7 +167,6 @@ router.include_router(remote_trigger_log_route.router, tags=["console-a2a"])
 router.include_router(a2a_pair_route.router, tags=["console-a2a-pair"])
 router.include_router(runs.router, tags=["console-runs"])
 router.include_router(tasks_route.router, tags=["console-tasks"])
-router.include_router(personas.router, tags=["console-personas"])
 # Phase C — drilldowns
 # ADR-0124 M5a/M5b: manual-skill and manual-tool routers MUST be registered
 # before the generic skills/tools routers so that /skills/manual and
@@ -186,7 +185,7 @@ router.include_router(vibe_route.router, tags=["console-vibe"])
 router.include_router(memory.router, tags=["console-memory"])
 # Phase D — realtime SSE streams
 router.include_router(streams.router, tags=["console-streams"])
-# Phase E — mutations (promote endpoints; memory + persona writes
+# Phase E — mutations (promote endpoints; memory writes
 # live inside their own routers above, gated by require_csrf +
 # verify_reauth).
 router.include_router(promote.router, tags=["console-promote"])
