@@ -100,7 +100,8 @@ class LearningLoopLiveE2E(unittest.TestCase):
                 and e["skill_id"] == "os.delegation_router"
                 and (e.get("signal") or {}).get("output", {}).get("shadow") is True
             ]
-            self.assertGreaterEqual(len(shadow), 1, [e["event_type"] for e in events])
+            # exactly ONE shadow record per turn (route-selection OR engine site, never both)
+            self.assertEqual(len(shadow), 1, [e["event_type"] for e in events])
             self.assertIn(shadow[0]["signal"]["output"]["bundled_engine"], ("native", "acs", "tde"))
             self.assertTrue(all(e["audit_ref"] for e in shadow))
 
@@ -108,6 +109,7 @@ class LearningLoopLiveE2E(unittest.TestCase):
             self.assertGreaterEqual(len(outcomes), 1)
             self.assertEqual(outcomes[0]["tenant_id"], tenant_id)
             self.assertEqual(outcomes[0]["signal"]["status"], "completed")
+            self.assertEqual(outcomes[0]["signal"]["engine"], "claude")  # from the task.started stamp
             task_id = outcomes[0]["signal"]["task_id"]
             self.assertTrue(task_id)
             self.assertNotIn("PONG", json.dumps(outcomes))  # content-free

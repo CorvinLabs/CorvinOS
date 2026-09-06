@@ -10,6 +10,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { api } from '@/lib/api/client';
+import { useAuth } from '@/lib/auth';
 
 // ============================================================================
 // PALETTE (Same as Maturity Metrics)
@@ -76,6 +78,8 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
   onTabChange,
   hideTabNavigation = false
 }) => {
+  const { session } = useAuth();
+  const csrf = session?.csrf_token ?? '';
   const [patterns, setPatterns] = useState<Pattern[]>([]);
   const [configVersions, setConfigVersions] = useState<ConfigVersion[]>([]);
   const [preferences, setPreferences] = useState<Record<string, Preference>>({});
@@ -133,24 +137,24 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
     }
   };
 
+  // Feedback + rollback are MUTATIONS: the backend requires the session's CSRF
+  // token (require_csrf) and the tenant is the authenticated session's. The
+  // shared api() client attaches the token; a bare fetch() without it is a 403.
   const submitFeedback = async () => {
     if (!feedbackTask) return;
 
     try {
-      const res = await fetch('/v1/console/learning/feedback', {
+      await api('/learning/feedback', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        csrf,
+        body: {
           task_id: feedbackTask,
           outcome_quality: feedbackQuality,
           would_repeat: feedbackQuality === 'excellent' || feedbackQuality === 'good',
-        }),
+        },
       });
-
-      if (res.ok) {
-        setFeedbackTask('');
-        setTimeout(fetchData, 1000); // Refresh after feedback
-      }
+      setFeedbackTask('');
+      setTimeout(fetchData, 1000); // Refresh after feedback
     } catch (error) {
       console.error('Failed to submit feedback:', error);
     }
@@ -160,15 +164,12 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
     if (!window.confirm(`Rollback to ${version}?`)) return;
 
     try {
-      const res = await fetch('/v1/console/learning/config/rollback', {
+      // to_version is a query parameter (routes/method_discovery_api.py)
+      await api(`/learning/config/rollback?to_version=${encodeURIComponent(version)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to_version: version }),
+        csrf,
       });
-
-      if (res.ok) {
-        setTimeout(fetchData, 1000);
-      }
+      setTimeout(fetchData, 1000);
     } catch (error) {
       console.error('Rollback failed:', error);
     }

@@ -108,6 +108,12 @@ async def toggle_feature(
 
     # Clear cache so next read is fresh
     feature_flags._spec_cache.clear()
+    try:  # the manifest's 5 s flag cache must not outlive an operator decision
+        from . import capabilities as _capabilities  # noqa: PLC0415
+
+        _capabilities.invalidate_flags_cache(session.tenant_id)
+    except Exception:  # noqa: BLE001 — cache miss at worst
+        pass
 
     console_audit.action_performed(
         tenant_id=session.tenant_id,

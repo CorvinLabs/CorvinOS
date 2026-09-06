@@ -100,6 +100,12 @@ class SkillMetadata:
     origin: SkillOrigin
     owner: str
     tags: List[str] = field(default_factory=list)
+    #: Whether executions feed the ADR-0314 learning store. Every execution is
+    #: still AUDITED (compliance is not optional); ``learn=False`` is for
+    #: deterministic flag/manifest lookups (``os.capabilities`` ran 346× in ten
+    #: minutes of console polling, doubling the chain and filling the learning
+    #: store with events no optimizer can use — adversarial review F31).
+    learn: bool = True
 
 
 def _utc_now_iso() -> str:
@@ -723,6 +729,9 @@ class SkillsRegistry:
         """Emit learning event for Skill execution (ADR-0314, FIX #7: scrubbed output)."""
         if not self.learning_backend:
             return  # Learning backend not configured (optional)
+        skill = self.get(result.skill_id)
+        if skill is not None and not getattr(skill.metadata, "learn", True):
+            return  # audited above; deliberately NOT a learning signal
 
         try:
             scrubbed_output = (

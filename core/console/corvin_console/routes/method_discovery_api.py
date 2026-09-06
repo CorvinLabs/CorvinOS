@@ -93,7 +93,8 @@ class ConfigVersionDTO(BaseModel):
 
 class UserFeedbackRequest(BaseModel):
     """User submits feedback on a task"""
-    task_id: str = Field(min_length=1, max_length=128)
+    # a task id (uuid / opaque token) — never free text: it lands in audit target_id
+    task_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     outcome_quality: str  # excellent, good, okay, poor, bad
     would_repeat: Optional[bool] = None
     reason: Optional[str] = Field(default=None, max_length=2000)
