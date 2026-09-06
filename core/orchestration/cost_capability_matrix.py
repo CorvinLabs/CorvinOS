@@ -39,6 +39,7 @@ class CostCapabilityMatrix:
 
     def _initialize_matrix(self) -> None:
         """Initialize with realistic cost/capability data."""
+        # Claude Code only (v2.0) — Hermes and Local removed
         # Claude (best quality, slowest, most expensive)
         self._add_capability(EngineType.CLAUDE, "code_gen", 3000, 2500, 0.98)
         self._add_capability(EngineType.CLAUDE, "analysis", 3000, 2200, 0.99)
@@ -50,18 +51,6 @@ class CostCapabilityMatrix:
         self._add_capability(EngineType.HAIKU, "analysis", 80, 1000, 0.88)
         self._add_capability(EngineType.HAIKU, "chat", 80, 600, 0.92)
         self._add_capability(EngineType.HAIKU, "research", 80, 1500, 0.85)
-
-        # Hermes (balanced)
-        self._add_capability(EngineType.HERMES, "code_gen", 100, 1800, 0.94)
-        self._add_capability(EngineType.HERMES, "analysis", 100, 1600, 0.95)
-        self._add_capability(EngineType.HERMES, "chat", 100, 1000, 0.93)
-        self._add_capability(EngineType.HERMES, "research", 100, 2000, 0.94)
-
-        # Local (free, slow, acceptable quality)
-        self._add_capability(EngineType.LOCAL, "code_gen", 0, 3000, 0.80)
-        self._add_capability(EngineType.LOCAL, "analysis", 0, 3200, 0.78)
-        self._add_capability(EngineType.LOCAL, "chat", 0, 2500, 0.82)
-        self._add_capability(EngineType.LOCAL, "research", 0, 3500, 0.75)
 
     def _add_capability(
         self,
