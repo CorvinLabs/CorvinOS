@@ -43,11 +43,10 @@ class FallbackCascade:
 
     def __init__(self, registry: EngineRegistry):
         self.registry = registry
+        # NOTE: Hermes and Local removed in v2.0 (Claude Code only).
+        # Legacy cascade chain simplified to Claude only.
         self.cascade_chain: List[CascadeLevel] = [
-            CascadeLevel(EngineType.HAIKU, timeout_ms=5000, max_retries=1),
-            CascadeLevel(EngineType.HERMES, timeout_ms=10000, max_retries=1),
             CascadeLevel(EngineType.CLAUDE, timeout_ms=20000, max_retries=1),
-            CascadeLevel(EngineType.LOCAL, timeout_ms=60000, max_retries=0),
         ]
         self.cascade_stats = {
             "attempts": 0,

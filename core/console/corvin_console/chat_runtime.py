@@ -1396,22 +1396,17 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
     so instead of a raw "claude binary not found" we name the configured
     engine and point the operator at the Engines page.
     """
-    # 1. hermes selected → the Layer-22 WorkerEngine path drives it (no claude
-    #    binary, no API key). Drivable iff the engine module imported. A missing
-    #    module is an installation defect, not a "switch to Claude Code" nudge.
-    if engine_id == "hermes":
-        if _HermesEngine is None:
-            return (
-                "Die Engine **Hermes** ist ausgewählt, aber die WorkerEngine-"
-                "Schicht konnte nicht geladen werden. Prüfe die Installation "
-                "(operator/bridges/shared/agents) und die Engine-Einrichtung "
-                "unter Einstellungen → Engines.\n\n"
-                "The **Hermes** engine is selected, but the WorkerEngine layer "
-                "could not be loaded. Check the installation "
-                "(operator/bridges/shared/agents) and the engine setup on the "
-                "Settings → Engines page."
-            )
-        return None  # Hermes is drivable — handled by the Hermes branch below.
+    # 1. Hermes and Local removed in v2.0 (Claude Code only).
+    #    Graceful fallback: old configs with hermes/local silently use claude_code.
+    if engine_id in ("hermes", "local"):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"Engine '{engine_id}' removed in v2.0 (Claude Code only); "
+            f"falling back to claude_code"
+        )
+        engine_id = "claude_code"
+        # Continue with Claude Code path below
 
     # 2. Genuinely-unsupported OS engine selected in Setup (opencode / codex /
     #    copilot) → the console cannot drive it yet. Name it honestly and point
