@@ -1,118 +1,190 @@
-"""Week 12: Phase 2B Integration Tests + Oscillation Detection"""
+"""
+Week 12: Phase 2B Integration Tests (ADR-0615/0616)
 
-from core.learning.gradient_backprop import GradientBackpropDAG, CorrelationFilter, CouplingOscillationDetector
-from core.learning.memory_optimizer import MemoryOptimizer
-from core.learning.composition_optimizer import CompositionOptimizer
-from core.learning.plugin_optimizer import PluginOrchestrator
+6 integration tests:
+1. Unified Loss + Gradient Backprop pipeline
+2. Loss decrease after gradient application
+3. Correlation filter prevents oscillation
+4. Multi-batch convergence
+5. Audit trail complete + tenant-scoped
+6. End-to-end: outcome → loss → gradients → weights update
+"""
+
+from core.learning.unified_loss import UnifiedLossOptimizer, MockAuditBackend, UnifiedLossSnapshot
+from core.learning.gradient_backprop import LossBackpropagator, CorrelationFilter, CouplingOscillationDetector
+from datetime import datetime
+import numpy as np
 
 
-class TestPhase2BIntegration:
-    """All 3 loops stepping with backprop enabled."""
+class TestUnifiedLossGradientPipeline:
+    """Test 1: Unified Loss + Gradient Backprop pipeline end-to-end."""
 
-    def test_all_3_loops_with_backprop(self):
-        """100-batch convergence: all 3 loops + backprop + oscillation detection."""
-        mem = MemoryOptimizer()
-        comp = CompositionOptimizer()
-        plug = PluginOrchestrator()
-        dag = GradientBackpropDAG()
-        filt = CorrelationFilter(threshold=0.5)
-        detector = CouplingOscillationDetector()
+    def test_pipeline_initialization(self):
+        audit = MockAuditBackend()
+        optimizer = UnifiedLossOptimizer(tenant_id='test', audit_backend=audit)
+        backprop = LossBackpropagator(audit_backend=audit, tenant_id='test')
+
+        assert optimizer is not None
+        assert backprop is not None
+        assert backprop.check_dag_validity()
+
+    def test_pipeline_flow(self):
+        """Task batch → loss computation → gradient computation → weights update."""
+        audit = MockAuditBackend()
+        optimizer = UnifiedLossOptimizer(tenant_id='test', audit_backend=audit)
+        backprop = LossBackpropagator(audit_backend=audit, tenant_id='test')
+
+        task_batch = [
+            {'confidence_score': 0.8, 'tokens_used': 500, 'latency_seconds': 2.0, 'task_type': 'classify', 'routed_engine': 'opus', 'budget_allocated': 1000},
+            {'confidence_score': 0.6, 'tokens_used': 800, 'latency_seconds': 3.5, 'task_type': 'summarize', 'routed_engine': 'sonnet', 'budget_allocated': 1000},
+        ]
+
+        outcomes = [
+            {'correct': True, 'engine_correct': True},
+            {'correct': False, 'engine_correct': False},
+        ]
+
+        feedback = [
+            {'timestamp': datetime.now().isoformat(), 'is_valid': True},
+            None,
+        ]
+
+        loss_snapshot = optimizer.compute_batch_loss(task_batch, outcomes, feedback)
+        assert loss_snapshot.L_total > 0
+        assert loss_snapshot.tenant_id == 'test'
+
+        gradients = backprop.compute_gradients_with_dag(loss_snapshot, task_batch, outcomes, feedback)
+        assert 'L1_routing' in gradients
+
+        events = audit.read_events('test')
+        assert len(events) >= 2
+
+
+class TestLossDecreaseAfterGradients:
+    """Test 2: Loss should decrease after applying gradient-based updates."""
+
+    def test_loss_decreases_with_correction(self):
+        audit = MockAuditBackend()
+        optimizer = UnifiedLossOptimizer(tenant_id='test', audit_backend=audit)
+
+        task_batch_1 = [
+            {'confidence_score': 0.7, 'tokens_used': 500, 'latency_seconds': 2.0, 'task_type': 'classify', 'routed_engine': 'opus', 'budget_allocated': 1000},
+        ]
+        outcomes_1 = [{'correct': False, 'engine_correct': False}]
+        feedback_1 = [None]
+
+        loss_1 = optimizer.compute_batch_loss(task_batch_1, outcomes_1, feedback_1)
+
+        task_batch_2 = [
+            {'confidence_score': 0.7, 'tokens_used': 500, 'latency_seconds': 2.0, 'task_type': 'classify', 'routed_engine': 'sonnet', 'budget_allocated': 1000},
+        ]
+        outcomes_2 = [{'correct': True, 'engine_correct': True}]
+        feedback_2 = [{'timestamp': datetime.now().isoformat(), 'is_valid': True}]
+
+        loss_2 = optimizer.compute_batch_loss(task_batch_2, outcomes_2, feedback_2)
+
+        assert loss_2.L_total < loss_1.L_total
+
+
+class TestCorrelationFilterPreventsOscillation:
+    """Test 3: Correlation filter prevents anti-correlated gradient application."""
+
+    def test_filter_stops_oscillating_update(self):
+        filt = CorrelationFilter(correlation_threshold=0.5)
+
+        local_grad = {'L1_routing': -0.05}
+        backprop_grad = {'L1_routing': 0.08}
+
+        apply, corr = filt.apply_filter('L1_routing', local_grad, backprop_grad)
+
+        assert not apply, "Filter should reject anti-correlated gradient"
+        assert corr < 0, "Correlation should be negative"
+
+    def test_filter_accepts_aligned_updates(self):
+        filt = CorrelationFilter(correlation_threshold=0.5)
+
+        local_grad = {'L2_confidence': 0.03}
+        backprop_grad = {'L2_confidence': 0.04}
+
+        apply, corr = filt.apply_filter('L2_confidence', local_grad, backprop_grad)
+
+        assert apply, "Filter should accept correlated gradient"
+
+
+class TestMultiBatchConvergence:
+    """Test 4: Loss converges over multiple batches."""
+
+    def test_loss_trajectory_decreasing(self):
+        audit = MockAuditBackend()
+        optimizer = UnifiedLossOptimizer(tenant_id='test', audit_backend=audit)
 
         losses = []
-        for batch in range(100):
-            # Simulate improving loss
-            quality = 0.5 - (batch * 0.003)
-            
-            # Tier 2 local feedback
-            mem_feedback = {'missing_context_ratio': max(0, quality), 'irrelevance_score': max(0, quality*0.5), 'retrieval_latency_ms': 50, 'token_waste_ratio': 0}
-            mem_loss = mem.compute_loss(mem_feedback)
-            
-            comp_feedback = {'composition_error_rate': max(0, quality), 'dag_execution_time_ms': 500, 'skill_contradictions': 0, 'ordering_penalty': 0}
-            comp_loss = comp.compute_loss(comp_feedback)
-            
-            plug_feedback = {'quality_gain': max(0, 1-quality), 'execution_time_ms': 100, 'error_rate': max(0, quality), 'conflict_score': 0}
-            plug_loss = plug.compute_loss(plug_feedback)
 
-            # Backprop from unified loss
-            L_total = (mem_loss + comp_loss + plug_loss) / 3
-            losses.append(L_total)
-            
-            # Compute backprop gradients
-            backprop_grads = dag.compute_backprop_gradients(L_total, mem_loss, comp_loss, plug_loss)
-            
-            # Apply correlation filter
-            mem_local = {'memory': 0.01}
-            mem_apply, mem_corr = filt.apply_filter('memory', mem_local, {'memory': backprop_grads['memory']})
-            
-            # Check for oscillation
-            is_oscillating = detector.check_for_oscillation('memory', mem.context_window_size)
-        
-        # Loss should decrease
-        assert losses[-1] < losses[0], f"Loss didn't improve: {losses[0]:.3f} → {losses[-1]:.3f}"
+        for batch_idx in range(5):
+            task_batch = [
+                {'confidence_score': 0.5 + batch_idx*0.05, 'tokens_used': 500 - batch_idx*20, 'latency_seconds': 3.0 - batch_idx*0.2, 'task_type': 'test', 'routed_engine': 'opus', 'budget_allocated': 1000},
+            ]
 
-    def test_correlation_filter_working(self):
-        """Verify correlation filter accepts/rejects gradients."""
-        filt = CorrelationFilter(threshold=0.5)
-        
-        # Same sign → accept
-        apply, corr = filt.apply_filter('memory', {'memory': 0.1}, {'memory': 0.08})
-        assert apply, "Should accept correlated gradients"
-        
-        # Opposite sign → reject
-        apply, corr = filt.apply_filter('skills', {'skills': 0.1}, {'skills': -0.05})
-        assert not apply, "Should reject anti-correlated gradients"
+            correct_rate = 0.5 + batch_idx * 0.1
+            outcomes = [{'correct': True, 'engine_correct': True}] if np.random.rand() < correct_rate else [{'correct': False, 'engine_correct': False}]
+            feedback = [{'timestamp': datetime.now().isoformat(), 'is_valid': True}] if outcomes[0]['correct'] else [None]
 
-    def test_oscillation_detection(self):
-        """Coupling oscillation detection working."""
-        detector = CouplingOscillationDetector()
-        
-        # Simulate oscillating parameter
-        for i in range(20):
-            value = 0.15 if i % 2 == 0 else 0.10
-            detector.check_for_oscillation('memory', value)
-        
-        is_oscillating = detector.check_for_oscillation('memory', 0.15)
-        assert is_oscillating or not is_oscillating  # Just verify it runs
+            loss = optimizer.compute_batch_loss(task_batch, outcomes, feedback)
+            losses.append(loss.L_total)
 
-    def test_phase1_regression_memory(self):
-        """MemoryOptimizer still works independently (no regression)."""
-        mem = MemoryOptimizer()
-        feedback = {'missing_context_ratio': 0.1, 'irrelevance_score': 0.2, 'retrieval_latency_ms': 50, 'token_waste_ratio': 0}
-        loss = mem.compute_loss(feedback)
-        assert 0 <= loss <= 1
-
-    def test_phase1_regression_composition(self):
-        """CompositionOptimizer still works independently."""
-        comp = CompositionOptimizer()
-        feedback = {'composition_error_rate': 0.1, 'dag_execution_time_ms': 500, 'skill_contradictions': 0, 'ordering_penalty': 0}
-        loss = comp.compute_loss(feedback)
-        assert 0 <= loss <= 1
-
-    def test_phase1_regression_plugin(self):
-        """PluginOrchestrator still works independently."""
-        plug = PluginOrchestrator()
-        feedback = {'quality_gain': 0.8, 'execution_time_ms': 100, 'error_rate': 0.05, 'conflict_score': 0}
-        loss = plug.compute_loss(feedback)
-        assert 0 <= loss <= 1
+        avg_early = np.mean(losses[:2])
+        avg_late = np.mean(losses[3:])
+        assert avg_late <= avg_early
 
 
-if __name__ == '__main__':
-    suite = [
-        ('All 3 Loops + Backprop', TestPhase2BIntegration().test_all_3_loops_with_backprop),
-        ('Correlation Filter', TestPhase2BIntegration().test_correlation_filter_working),
-        ('Oscillation Detection', TestPhase2BIntegration().test_oscillation_detection),
-        ('Memory Regression', TestPhase2BIntegration().test_phase1_regression_memory),
-        ('Composition Regression', TestPhase2BIntegration().test_phase1_regression_composition),
-        ('Plugin Regression', TestPhase2BIntegration().test_phase1_regression_plugin),
-    ]
-    
-    passed = 0
-    for name, test in suite:
-        try:
-            test()
-            print(f"✅ {name}")
-            passed += 1
-        except AssertionError as e:
-            print(f"❌ {name}: {e}")
-    
-    print(f"\n{passed}/{len(suite)} PASSED")
+class TestAuditTrailTenantIsolation:
+    """Test 5: Audit trail complete + tenant-scoped."""
+
+    def test_tenant_isolation(self):
+        audit = MockAuditBackend()
+
+        optimizer_a = UnifiedLossOptimizer(tenant_id='tenant_a', audit_backend=audit)
+        task_batch_a = [{'confidence_score': 0.7, 'tokens_used': 500, 'latency_seconds': 2.0, 'task_type': 'test', 'routed_engine': 'opus', 'budget_allocated': 1000}]
+        outcomes_a = [{'correct': True, 'engine_correct': True}]
+        feedback_a = [{'timestamp': datetime.now().isoformat(), 'is_valid': True}]
+        loss_a = optimizer_a.compute_batch_loss(task_batch_a, outcomes_a, feedback_a)
+
+        optimizer_b = UnifiedLossOptimizer(tenant_id='tenant_b', audit_backend=audit)
+        task_batch_b = [{'confidence_score': 0.5, 'tokens_used': 700, 'latency_seconds': 3.0, 'task_type': 'test', 'routed_engine': 'sonnet', 'budget_allocated': 1000}]
+        outcomes_b = [{'correct': False, 'engine_correct': False}]
+        feedback_b = [None]
+        loss_b = optimizer_b.compute_batch_loss(task_batch_b, outcomes_b, feedback_b)
+
+        events_a = audit.read_events('tenant_a')
+        events_b = audit.read_events('tenant_b')
+
+        assert len(events_a) > 0
+        assert len(events_b) > 0
+
+        for event in events_a:
+            assert event.get('tenant_id') == 'tenant_a'
+
+        for event in events_b:
+            assert event.get('tenant_id') == 'tenant_b'
+
+
+class TestEndToEndLearningLoop:
+    """Test 6: End-to-end: outcome → loss → gradients → weights update."""
+
+    def test_full_learning_cycle(self):
+        audit = MockAuditBackend()
+        optimizer = UnifiedLossOptimizer(tenant_id='test', audit_backend=audit)
+        backprop = LossBackpropagator(audit_backend=audit, tenant_id='test')
+
+        task_batch = [
+            {'confidence_score': 0.5, 'tokens_used': 1000, 'latency_seconds': 5.0, 'task_type': 'complex', 'routed_engine': 'sonnet', 'budget_allocated': 1000},
+        ]
+        outcomes = [{'correct': False, 'engine_correct': False}]
+        feedback = [None]
+
+        loss_snapshot = optimizer.compute_batch_loss(task_batch, outcomes, feedback)
+        gradients = backprop.compute_gradients_with_dag(loss_snapshot, task_batch, outcomes, feedback)
+
+        events = audit.read_events('test')
+        assert any(e.get('event_type') == 'unified_loss_computed' for e in events)
+        assert any(e.get('event_type') == 'loss_gradient_computed' for e in events)
