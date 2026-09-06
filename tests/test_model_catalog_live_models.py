@@ -124,7 +124,7 @@ class TestRegistryMerge:
         assert reg["claude_code"].live_models is not None
         assert reg["claude_code"].live_models.provider == "anthropic"
         assert reg["claude_code"].live_models.prefix == ""
-        assert reg["hermes"].live_models is None
+        assert "hermes" not in reg  # Hermes removed in v2.0 (Claude Code only)
 
     def test_no_catalog_leaves_the_curated_list_untouched(self) -> None:
         reg = engine_models.load_registry(force_reload=True)
