@@ -1,0 +1,162 @@
+# Production Alerts — Live (Weeks 5–8 Rollout)
+
+alerts:
+  - name: "ERROR_RATE_CRITICAL"
+    condition: "error_rate > 1.0%"
+    severity: "CRITICAL"
+    escalation: "Page oncall (5 min sustained)"
+    action: "Evaluate rollback"
+    enabled: true
+    active_stages: [1, 2, 3, 4]
+
+  - name: "ERROR_RATE_WARNING"
+    condition: "error_rate > 0.1%"
+    severity: "HIGH"
+    escalation: "Alert ops team (10 min sustained)"
+    action: "Investigate routing/Skills"
+    enabled: true
+    active_stages: [1, 2, 3, 4]
+
+  - name: "P99_LATENCY_REGRESSION"
+    condition: "p99_latency > 400ms (18% regression)"
+    severity: "HIGH"
+    escalation: "Alert ops team"
+    action: "Profile context_filter, investigate Skills"
+    enabled: true
+    active_stages: [1, 2, 3, 4]
+
+  - name: "INTENT_ACCURACY_LOW"
+    condition: "intent_classifier_accuracy < 75%"
+    severity: "MEDIUM"
+    escalation: "Alert data team"
+    action: "Increase confidence_threshold (fallback to full context)"
+    enabled: true
+    active_stages: [1, 2, 3]
+
+  - name: "LEARNING_DIVERGENCE"
+    condition: "learning_convergence > 1500 iterations"
+    severity: "HIGH"
+    escalation: "Page on-call data scientist"
+    action: "Freeze user profiles, reduce learning_rate"
+    enabled: true
+    active_stages: [2, 3, 4]
+
+  - name: "DELETION_TIMEOUT"
+    condition: "deletion_orchestrator timeout > 10s"
+    severity: "MEDIUM"
+    escalation: "Alert GDPR compliance team"
+    action: "Increase timeout, investigate large deletes"
+    enabled: true
+    active_stages: [3, 4]
+
+  - name: "AUDIT_CHAIN_BROKEN"
+    condition: "audit_chain_height == prev_height for 5 min"
+    severity: "CRITICAL"
+    escalation: "Immediate escalation (page CTO)"
+    action: "Halt new requests, audit investigation"
+    enabled: true
+    active_stages: [1, 2, 3, 4]
+
+  - name: "TENANT_ISOLATION_VIOLATION"
+    condition: "cross_tenant_data_access detected"
+    severity: "CRITICAL"
+    escalation: "Immediate escalation (page security team)"
+    action: "Isolate affected tenant, audit"
+    enabled: true
+    active_stages: [1, 2, 3, 4]
+
+  - name: "PII_LEAKAGE_DETECTED"
+    condition: "pii_pattern matched in filtered_context"
+    severity: "CRITICAL"
+    escalation: "Immediate escalation (page legal + security)"
+    action: "Halt routing, rollback context_filter"
+    enabled: true
+    active_stages: [1, 2, 3, 4]
+
+dashboards:
+  live_health:
+    refresh: "30 seconds"
+    panels:
+      - name: "Error Rate"
+        metric: "error_rate"
+        unit: "%"
+        threshold: "0.1%"
+        color_good: "green"
+        color_warn: "yellow"
+        color_bad: "red"
+
+      - name: "P99 Latency"
+        metric: "p99_latency"
+        unit: "ms"
+        threshold: "375ms"
+        baseline: "340ms"
+
+      - name: "Intent Accuracy"
+        metric: "intent_classifier_accuracy"
+        unit: "%"
+        threshold: "80%"
+
+      - name: "Learning Convergence"
+        metric: "learning_convergence_iterations"
+        unit: "iter"
+        threshold: "1000"
+
+      - name: "Audit Chain Height"
+        metric: "audit_chain_events"
+        unit: "count"
+        status: "should increase monotonically"
+
+      - name: "Active Traffic %"
+        metric: "traffic_split_new_skills"
+        unit: "%"
+        stages: [5, 25, 50, 100]
+
+on_call:
+  - week: 5
+    primary: "ops_engineer_1"
+    secondary: "ops_engineer_2"
+    escalation: "ops_lead"
+
+  - week: 6
+    primary: "ops_engineer_2"
+    secondary: "ops_engineer_3"
+    escalation: "ops_lead"
+
+  - week: 7
+    primary: "ops_engineer_3"
+    secondary: "ops_engineer_1"
+    escalation: "ops_lead + data_scientist"
+
+  - week: 8
+    primary: "ops_engineer_1"
+    secondary: "ops_engineer_2"
+    escalation: "ops_lead + cto"
+
+daily_review:
+  time: "10:00 UTC"
+  participants: ["ops_lead", "engineering_lead", "compliance_lead"]
+  checklist:
+    - All SLOs met? (error_rate, P99, accuracy)
+    - Learning convergence on track? (<1000 iter avg)
+    - Deletion completeness 100%?
+    - Audit chain verified?
+    - Rollback decision: proceed or halt?
+
+emergency_procedures:
+  "CRITICAL alert fired":
+    1. "Page on-call immediately"
+    2. "Assess severity (real issue vs false positive)"
+    3. "If real: initiate rollback (traffic → 0% new Skills)"
+    4. "If false: acknowledge + document"
+
+  "Audit chain broken":
+    1. "Immediate escalation (page CTO)"
+    2. "Halt all new requests"
+    3. "Investigation + forensics"
+    4. "No resume until verified"
+
+  "PII leakage detected":
+    1. "Immediate escalation (page legal + security)"
+    2. "Isolate affected users"
+    3. "Begin GDPR incident response"
+    4. "Rollback context_filter"
