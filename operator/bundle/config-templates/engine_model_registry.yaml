@@ -164,39 +164,6 @@ engines:
       - id: "ollama/qwen3:8b"
         label: "Qwen3 8B (local Ollama)"
 
-  hermes:
-    label: "Hermes (Ollama)"
-    supports_os_turn: true
-    supports_worker_turn: true
-    supports_task_type_steering: false
-    supported_providers:
-      - provider: "ollama_local"
-        native: true
-        note: ""
-      - provider: "ollama_cloud"
-        native: true
-        note: ""
-    os_models:
-      - id: "hermes-balanced"
-        label: "hermes-balanced (default)"
-        default: true
-      - id: "hermes-fast"
-        label: "hermes-fast — small model, quick"
-      - id: "hermes-capable"
-        label: "hermes-capable — larger context"
-      - id: "hermes-large"
-        label: "hermes-large — maximum local"
-    worker_models:
-      - id: "hermes-balanced"
-        label: "hermes-balanced (default)"
-        default: true
-      - id: "hermes-fast"
-        label: "hermes-fast"
-      - id: "hermes-capable"
-        label: "hermes-capable"
-      - id: "hermes-large"
-        label: "hermes-large"
-
   codex_cli:
     label: "Codex CLI"
     supports_os_turn: false

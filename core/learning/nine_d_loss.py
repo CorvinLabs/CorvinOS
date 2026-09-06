@@ -280,8 +280,16 @@ class NineD_LossOptimizer:
         self.skills_loop.emit_event(
             self.collector, feedback=feedback.get("skills", {}), execution_time_ms=0
         )
+
+        # For plugins, wrap feedback in per-plugin structure
+        plugins_feedback = feedback.get("plugins", {})
+        plugin_feedback_per_plugin = {
+            "plugin_a": plugins_feedback,
+            "plugin_b": plugins_feedback,
+            "plugin_c": plugins_feedback,
+        }
         self.plugins_loop.emit_event(
-            self.collector, feedback=feedback.get("plugins", {}), task_type="generic"
+            self.collector, feedback=plugin_feedback_per_plugin, task_type="generic"
         )
 
         return L_total

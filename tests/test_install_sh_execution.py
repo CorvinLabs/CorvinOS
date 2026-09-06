@@ -194,7 +194,7 @@ def test_happy_path_reaches_ready_banner_with_no_hermes(_stubbed_env) -> None:
     fakebin, editable_dir, env = _stubbed_env
     _write_stub(fakebin / "corvinos-serve", "exit 0")
 
-    result = _run(["--editable", str(editable_dir), "--no-hermes"], env=env)
+    result = _run(["--editable", str(editable_dir)], env=env)
 
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
     assert "CorvinOS is ready!" in result.stdout
@@ -210,7 +210,7 @@ def test_editable_install_carries_the_browser_extra(_stubbed_env) -> None:
     fakebin, editable_dir, env = _stubbed_env
     _write_stub(fakebin / "corvinos-serve", "exit 0")
 
-    result = _run(["--editable", str(editable_dir), "--no-hermes"], env=env)
+    result = _run(["--editable", str(editable_dir)], env=env)
 
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
     uv_log = Path(env["HOME"]) / "uv-args.log"
@@ -225,7 +225,7 @@ def test_missing_corvinos_serve_on_path_dies_with_clear_message(_stubbed_env) ->
     # loop with nothing actually installed.
     fakebin, editable_dir, env = _stubbed_env
 
-    result = _run(["--editable", str(editable_dir), "--no-hermes"], env=env)
+    result = _run(["--editable", str(editable_dir)], env=env)
 
     assert result.returncode == 1
     assert "corvinos-serve" in result.stderr
