@@ -127,6 +127,62 @@ def recent_outcomes(tenant_id: str, limit: int = 10, *, store: Optional[Any] = N
     return successes, total
 
 
+def integrate_feedback_outcome(
+    *,
+    tenant_id: Optional[str],
+    task_id: str,
+    feedback_signal: dict[str, Any],
+    emitter: Optional[Any] = None,
+) -> bool:
+    """Record feedback-based outcome tuning signal.
+
+    Called from the feedback loop when user provides feedback on a task outcome.
+    Emits a special OUTCOME variant that combines original task result with
+    user feedback to refine the confidence/loss calculation.
+
+    Args:
+        tenant_id: Task's tenant
+        task_id: Task identifier
+        feedback_signal: User feedback dict with keys like:
+            - outcome_feedback: "yes"|"no"|"unknown"
+            - quality_rating: 1–5
+            - preference_feedback: "llm"|"deterministic"|"either"
+            - confidence: 0–1 user confidence in feedback
+        emitter: Explicit EventEmitter (tests); default is booted registry's
+
+    Returns:
+        True when the event was queued
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        logger.debug("feedback outcome dropped: no tenant_id (task %s)", task_id)
+        return False
+
+    em = emitter if emitter is not None else learning_emitter()
+    if em is None:
+        logger.debug("feedback outcome dropped: no emitter (task %s)", task_id)
+        return False
+
+    try:
+        from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+
+        signal: dict[str, Any] = {
+            "task_id": task_id,
+            "feedback_signal": feedback_signal,
+            "source": "feedback_loop",
+        }
+        event = LearningEvent.create(
+            event_type=EventType.OUTCOME,
+            skill_id=OUTCOME_SKILL_ID,
+            tenant_id=tenant_id,
+            signal=signal,
+            lom="core/learning/outcome_sink.py:integrate_feedback_outcome",
+        )
+        return bool(em.emit(event))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feedback outcome not recorded (%s): %s", task_id, type(exc).__name__)
+        return False
+
+
 _learning_emitter = learning_emitter  # compat alias
 
 __all__ = ["emit_task_outcome", "recent_outcomes", "learning_emitter", "OUTCOME_SKILL_ID"]
