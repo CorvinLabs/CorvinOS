@@ -1,0 +1,414 @@
+# Infinite Session Engine — Canary Rollout Configuration (ADR-0540–0545)
+#
+# This configuration defines the canary rollout strategy for the Infinite Session Engine.
+# It implements a 5% → 25% → 50% → 100% phased deployment with health gates at each stage.
+#
+# Load-bearing invariants:
+# - Each stage requires 2h minimum health before promotion
+# - SLO breaches (availability, latency, audit integrity) trigger immediate rollback
+# - All deployment decisions are audit-logged + cryptographically signed
+# - Session switches remain invisible to users (audit-logged)
+# - Rollback is atomic: all in-flight tasks preserved
+
+---
+version: "1.1.0"
+metadata:
+  adr_references:
+    - ADR-0540  # Task Engine — Graph-DAG Executor
+    - ADR-0541  # Session Bridging — EventStore Protocol
+    - ADR-0542  # Phase Gate Validator
+    - ADR-0543  # Learning Feedback Loop Optimizer
+    - ADR-0544  # Worktree Session Manager
+    - ADR-0545  # Task Dashboard — Vibe Integration
+  compliance:
+    - GDPR Art. 5, 6, 30, 32 (Audit trail, tenant isolation, retention)
+    - EU AI Act Art. 5, 50 (Transparency, disclosure)
+    - NIST SP 800-53 (Security controls)
+
+# ─ DEPLOYMENT STRATEGY ─────────────────────────────────────────────────────
+
+deployment_strategy:
+  model: "canary_phased"
+  total_stages: 4
+  rollback_trigger: "any_slo_breach"
+  total_duration_est_days: 10  # 2h per stage × 4 stages + stabilization
+  operator_review_gates:
+    - after_stage_1  # After 5% canary reaches health gate
+    - after_stage_2  # After 25% canary reaches health gate
+    - after_stage_3  # After 50% canary reaches health gate
+    - final_approval # Before full 100% production
+
+# ─ CANARY STAGES ───────────────────────────────────────────────────────────
+
+stages:
+  stage_1:
+    name: "CANARY_5"
+    traffic_percent: 5
+    duration_hours: 2
+    health_gate_minimum_seconds: 7200  # 2 hours
+    monitoring_interval_seconds: 30
+    description: "Canary deployment to 5% of users (early detection)"
+
+    slo_targets:
+      availability_percent: 99.9
+      latency_p99_ms: 100
+      error_rate_percent: 0.1
+      audit_events_logged_percent: 100.0
+
+    rollback_triggers:
+      availability_below_percent: 99.0
+      latency_p99_above_ms: 200
+      error_rate_above_percent: 1.0
+      audit_events_below_percent: 99.0
+
+    monitoring:
+      metrics:
+        - "infinite_session_tasks_active"
+        - "infinite_session_session_switches"
+        - "infinite_session_snapshot_writes"
+        - "infinite_session_rollback_operations"
+        - "infinite_session_drift_alerts"
+        - "audit_chain_verification_status"
+
+      dashboards:
+        - "Infinite Session — 5% Canary"
+        - "Audit Chain Health"
+        - "Session Boundary Metrics"
+
+  stage_2:
+    name: "CANARY_25"
+    traffic_percent: 25
+    duration_hours: 2
+    health_gate_minimum_seconds: 7200
+    monitoring_interval_seconds: 30
+    description: "Ramp to 25% of users (verify sustained health)"
+
+    slo_targets:
+      availability_percent: 99.9
+      latency_p99_ms: 100
+      error_rate_percent: 0.1
+      audit_events_logged_percent: 100.0
+
+    rollback_triggers:
+      availability_below_percent: 99.0
+      latency_p99_above_ms: 200
+      error_rate_above_percent: 1.0
+      audit_events_below_percent: 99.0
+
+    monitoring:
+      metrics:
+        - "infinite_session_tasks_active"
+        - "infinite_session_session_switches"
+        - "infinite_session_snapshot_writes"
+        - "infinite_session_rollback_operations"
+        - "infinite_session_drift_alerts"
+        - "audit_chain_verification_status"
+
+  stage_3:
+    name: "CANARY_50"
+    traffic_percent: 50
+    duration_hours: 2
+    health_gate_minimum_seconds: 7200
+    monitoring_interval_seconds: 30
+    description: "Ramp to 50% of users (majority traffic)"
+
+    slo_targets:
+      availability_percent: 99.9
+      latency_p99_ms: 100
+      error_rate_percent: 0.1
+      audit_events_logged_percent: 100.0
+
+    rollback_triggers:
+      availability_below_percent: 99.0
+      latency_p99_above_ms: 200
+      error_rate_above_percent: 1.0
+      audit_events_below_percent: 99.0
+
+    monitoring:
+      metrics:
+        - "infinite_session_tasks_active"
+        - "infinite_session_session_switches"
+        - "infinite_session_snapshot_writes"
+        - "infinite_session_rollback_operations"
+        - "infinite_session_drift_alerts"
+        - "audit_chain_verification_status"
+
+  stage_4:
+    name: "FULL_100"
+    traffic_percent: 100
+    duration_hours: 0  # Permanent once reached
+    health_gate_minimum_seconds: 0
+    monitoring_interval_seconds: 30
+    description: "Full production (100% of users)"
+
+    slo_targets:
+      availability_percent: 99.9
+      latency_p99_ms: 100
+      error_rate_percent: 0.1
+      audit_events_logged_percent: 100.0
+
+    rollback_triggers:
+      availability_below_percent: 99.0
+      latency_p99_above_ms: 200
+      error_rate_above_percent: 1.0
+      audit_events_below_percent: 99.0
+
+    monitoring:
+      metrics:
+        - "infinite_session_tasks_active"
+        - "infinite_session_session_switches"
+        - "infinite_session_snapshot_writes"
+        - "infinite_session_rollback_operations"
+        - "infinite_session_drift_alerts"
+        - "audit_chain_verification_status"
+
+# ─ HEALTH GATE CRITERIA ────────────────────────────────────────────────────
+
+health_gate_criteria:
+  metrics_window_minutes: 5
+  required_data_points_percent: 95.0
+  failure_modes:
+    latency_spike:
+      detection: "p99_latency > threshold_ms for 2 consecutive intervals"
+      action: "ALERT and ROLLBACK"
+      threshold_ms: 200
+
+    error_spike:
+      detection: "error_rate > threshold_percent for 2 consecutive intervals"
+      action: "ALERT and ROLLBACK"
+      threshold_percent: 1.0
+
+    audit_integrity_loss:
+      detection: "audit_events_logged < threshold_percent"
+      action: "HALT and ROLLBACK"
+      threshold_percent: 99.0
+
+    availability_degradation:
+      detection: "availability < threshold_percent"
+      action: "ALERT and ROLLBACK"
+      threshold_percent: 99.0
+
+    session_boundary_errors:
+      detection: "session_switch failures increase > 0.1%"
+      action: "ALERT and INVESTIGATE"
+      action_after_minutes: 5
+
+    snapshot_write_failures:
+      detection: "snapshot_write_error_rate > 0.01%"
+      action: "ALERT and INVESTIGATE"
+      action_after_minutes: 5
+
+# ─ ALERTING CONFIGURATION ──────────────────────────────────────────────────
+
+alerting:
+  channels:
+    slack:
+      enabled: true
+      webhook: "${CANARY_SLACK_WEBHOOK}"
+      include_metrics: true
+      escalation_after_minutes: 15
+
+    email:
+      enabled: true
+      recipients:
+        - "corvin-oncall@corvin-labs.com"
+        - "platform-team@corvin-labs.com"
+      escalation_after_minutes: 30
+
+    pagerduty:
+      enabled: true
+      integration_key: "${PAGERDUTY_INTEGRATION_KEY}"
+      severity: "critical"
+
+  alert_templates:
+    availability_breach:
+      title: "Infinite Session — Availability SLO Breach"
+      body: |
+        Canary stage {stage} has dropped below availability SLO.
+        Current: {current}%
+        Target: {target}%
+        Recommendation: ROLLBACK
+
+    latency_spike:
+      title: "Infinite Session — Latency Spike Detected"
+      body: |
+        P99 latency in {stage} has exceeded threshold.
+        Current: {current}ms
+        Threshold: {threshold}ms
+        Recommendation: INVESTIGATE or ROLLBACK
+
+    audit_integrity_loss:
+      title: "Infinite Session — CRITICAL: Audit Integrity Loss"
+      body: |
+        Audit chain integrity has degraded below threshold.
+        Current: {current}%
+        Threshold: {threshold}%
+        Action: HALT and ROLLBACK immediately
+        Severity: CRITICAL
+
+# ─ ROLLBACK CONFIGURATION ──────────────────────────────────────────────────
+
+rollback:
+  automatic: true
+  trigger_criteria:
+    - "any SLO breach lasting > 2 minutes"
+    - "audit_integrity_loss"
+    - "manual operator request"
+
+  procedure:
+    step_1_halt_traffic:
+      action: "Stop new infinite-session task creation"
+      grace_period_seconds: 30
+
+    step_2_preserve_state:
+      action: "Snapshot all active tasks to EventStore"
+      verify: "100% of in-flight tasks have checkpoints"
+
+    step_3_revert_config:
+      action: "Revert tenant config to previous stage"
+      atomic: true
+
+    step_4_resume_previous:
+      action: "Route new tasks to previous stage's engine"
+      gradual: false  # Immediate cutover for safety
+
+    step_5_audit_log:
+      action: "Log rollback decision to audit chain"
+      include: ["reason", "stage", "timestamp", "affected_task_count"]
+
+  verification:
+    check_routing:
+      action: "Verify all new tasks route to previous stage"
+      timeout_seconds: 10
+
+    check_task_recovery:
+      action: "Verify paused tasks can resume from latest snapshot"
+      sample_size: 10
+
+    check_audit_continuity:
+      action: "Verify audit chain has rollback event + hash link"
+      timeout_seconds: 30
+
+# ─ AUDIT & COMPLIANCE ──────────────────────────────────────────────────────
+
+audit:
+  events_to_capture:
+    - deployment_started
+    - deployment_stage_promoted
+    - health_gate_passed
+    - health_gate_failed
+    - slo_breach_detected
+    - rollback_initiated
+    - rollback_completed
+    - deployment_complete
+
+  retention_policy:
+    period_days: 90
+    encryption: "AES-256-GCM"
+    signing: "RSA-2048"
+    hash_chain: "SHA256"
+
+  compliance_checks:
+    gdpr_art_5_transparency: "User understands invisible session switches (audit log access)"
+    gdpr_art_6_lawfulness: "Deployment documented + approved in change log"
+    gdpr_art_30_processing: "Data processing flow documented"
+    gdpr_art_32_security: "Audit chain integrity verified per RFC 3161"
+    eu_ai_act_transparency: "Deployment tracked + decision reasons logged"
+
+# ─ MONITORING DASHBOARDS ──────────────────────────────────────────────────
+
+monitoring_dashboards:
+  infinite_session_canary_5:
+    title: "Infinite Session — 5% Canary Deployment"
+    panels:
+      - {metric: "availability_percent", display: "gauge", min: 98, max: 100}
+      - {metric: "latency_p99_ms", display: "timeseries", threshold: 100}
+      - {metric: "error_rate_percent", display: "stat", threshold: 0.1}
+      - {metric: "audit_events_logged_percent", display: "gauge", min: 99, max: 100}
+      - {metric: "active_tasks_count", display: "stat"}
+      - {metric: "session_switches_per_minute", display: "timeseries"}
+      - {metric: "rollback_operations", display: "stat"}
+
+  infinite_session_canary_25:
+    title: "Infinite Session — 25% Canary Deployment"
+    panels:
+      - {metric: "availability_percent", display: "gauge", min: 98, max: 100}
+      - {metric: "latency_p99_ms", display: "timeseries", threshold: 100}
+      - {metric: "error_rate_percent", display: "stat", threshold: 0.1}
+      - {metric: "audit_events_logged_percent", display: "gauge", min: 99, max: 100}
+
+  infinite_session_production:
+    title: "Infinite Session — Production (100%)"
+    panels:
+      - {metric: "availability_percent", display: "gauge", min: 98, max: 100}
+      - {metric: "latency_p99_ms", display: "timeseries", threshold: 100}
+      - {metric: "error_rate_percent", display: "stat", threshold: 0.1}
+      - {metric: "audit_events_logged_percent", display: "gauge", min: 99, max: 100}
+      - {metric: "active_tasks_count", display: "stat"}
+      - {metric: "completed_tasks_total", display: "stat"}
+
+# ─ SAFETY GUARANTEES ──────────────────────────────────────────────────────
+
+safety_guarantees:
+  state_freshness:
+    description: "EventStore append-only, timestamp-based TTL, immutable snapshots"
+    verified_by: "test_infinite_session_phase_a.py::TestEventStore"
+
+  audit_continuity:
+    description: "Every session boundary emits hash-chained audit event"
+    verified_by: "test_infinite_session_phase_b.py::TestSessionBridging"
+
+  rollback_atomicity:
+    description: "Logical-task rollback spans all sessions (snapshot-based replay)"
+    verified_by: "test_infinite_session_phase_c.py::TestRollbackManager"
+
+  invisible_not_silent:
+    description: "Session switches don't prompt user, but are audit-logged"
+    verified_by: "test_infinite_session_phase_d.py::TestDashboardAPI"
+
+  optimizer_trust:
+    description: "Learning config-tuning is never silent (emits audit event)"
+    verified_by: "test_infinite_session_phase_e.py::TestLearningOptimizer"
+
+# ─ POST-DEPLOYMENT CHECKLIST ──────────────────────────────────────────────
+
+post_deployment_checklist:
+  - name: "Verify all 4 phases tested"
+    command: "pytest tests/skills/test_infinite_session_phase_*.py -v"
+
+  - name: "Check audit chain integrity"
+    command: "python3 scripts/verify_audit_chain.py --tenant=_default --since=<deploy_time>"
+
+  - name: "Validate session bridging"
+    command: "grep 'task_session_bridged' ~/.corvin/audit.jsonl | wc -l"
+    expected: ">0"
+
+  - name: "Review deployment metrics"
+    command: "tail -10 ~/.corvin/infinite-session-deploy/metrics.jsonl"
+
+  - name: "Check for rollback events"
+    command: "grep 'deployment.*rollback' ~/.corvin/infinite-session-deploy/deploy.log"
+    expected: "none (unless emergency)"
+
+# ─ ROLLBACK DECISION TREE ──────────────────────────────────────────────────
+
+rollback_decision_tree:
+  "Is availability > 99.9%?":
+    "yes": "Continue to next check"
+    "no": "ROLLBACK immediately"
+
+  "Is latency p99 < 100ms?":
+    "yes": "Continue to next check"
+    "no": "ROLLBACK immediately"
+
+  "Are 100% of audit events logged?":
+    "yes": "Continue to next check"
+    "no": "HALT and ROLLBACK (critical)"
+
+  "Have we been healthy for 2 hours?":
+    "yes": "PROMOTE to next stage"
+    "no": "Wait and re-check in 15 minutes"
+
+  "Have we reached 100% traffic?":
+    "yes": "MARK deployment complete"
+    "no": "PROMOTE to next stage"

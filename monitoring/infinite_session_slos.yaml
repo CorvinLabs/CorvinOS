@@ -1,0 +1,537 @@
+# Infinite Session Engine — Service Level Objectives (SLOs)
+# ADR-0540–0545: Production SLO Definitions + Alerting Rules
+#
+# Load-bearing constraints:
+# - Availability SLO: 99.9% (3-9s downtime/month)
+# - Latency SLO: p99 < 100ms (critical for user experience)
+# - Audit SLO: 100% event logging (compliance mandatory)
+# - Session continuity: 100% of snapshots persisted (zero silent data loss)
+
+---
+version: "1.1.0"
+metadata:
+  subsystem: "infinite_session"
+  adr_references:
+    - ADR-0540  # Task Engine — Graph-DAG Executor
+    - ADR-0542  # Phase Gate Validator
+    - ADR-0543  # Learning Feedback Loop Optimizer
+  compliance:
+    - GDPR Art. 5, 6, 30, 32
+    - EU AI Act Art. 5, 50
+    - NIST SP 800-53
+
+# ─ SERVICE LEVEL INDICATORS (SLIs) ─────────────────────────────────────────
+
+slis:
+  availability:
+    name: "System Availability"
+    description: "Percentage of time infinite-session API endpoints respond successfully"
+    measurement_window_minutes: 5
+    data_source: "prometheus"
+    query: |
+      (1 - (increase(infinite_session_errors_total[5m]) /
+             increase(infinite_session_requests_total[5m]))) * 100
+    unit: "percent"
+
+  latency_p99:
+    name: "Request Latency (P99)"
+    description: "99th percentile latency for infinite-session operations"
+    measurement_window_minutes: 5
+    data_source: "prometheus"
+    query: |
+      histogram_quantile(0.99,
+        increase(infinite_session_request_duration_ms_bucket[5m]))
+    unit: "milliseconds"
+
+  latency_p95:
+    name: "Request Latency (P95)"
+    description: "95th percentile latency for infinite-session operations"
+    measurement_window_minutes: 5
+    data_source: "prometheus"
+    query: |
+      histogram_quantile(0.95,
+        increase(infinite_session_request_duration_ms_bucket[5m]))
+    unit: "milliseconds"
+
+  error_rate:
+    name: "Error Rate"
+    description: "Percentage of requests resulting in errors"
+    measurement_window_minutes: 5
+    data_source: "prometheus"
+    query: |
+      (increase(infinite_session_errors_total[5m]) /
+       increase(infinite_session_requests_total[5m])) * 100
+    unit: "percent"
+
+  audit_integrity:
+    name: "Audit Event Logging Rate"
+    description: "Percentage of operations that emit an audit event"
+    measurement_window_minutes: 5
+    data_source: "prometheus"
+    query: |
+      (increase(audit_events_logged_total{subsystem="infinite_session"}[5m]) /
+       increase(infinite_session_operations_total[5m])) * 100
+    unit: "percent"
+
+  session_continuity:
+    name: "Session Snapshot Persistence Rate"
+    description: "Percentage of session snapshots successfully persisted to EventStore"
+    measurement_window_minutes: 5
+    data_source: "prometheus"
+    query: |
+      (increase(infinite_session_snapshots_persisted_total[5m]) /
+       increase(infinite_session_snapshots_attempted_total[5m])) * 100
+    unit: "percent"
+
+  task_completion_rate:
+    name: "Long-Running Task Completion Rate"
+    description: "Percentage of long-running tasks that complete without intervention"
+    measurement_window_hours: 1
+    data_source: "prometheus"
+    query: |
+      (increase(infinite_session_tasks_completed_total[1h]) /
+       increase(infinite_session_tasks_started_total[1h])) * 100
+    unit: "percent"
+
+  drift_detection_accuracy:
+    name: "Drift Detection Accuracy"
+    description: "Percentage of detected drift alerts that are actionable (not false positives)"
+    measurement_window_hours: 1
+    data_source: "prometheus"
+    query: |
+      (increase(infinite_session_drift_alerts_resolved_total[1h]) /
+       increase(infinite_session_drift_alerts_total[1h])) * 100
+    unit: "percent"
+
+# ─ SERVICE LEVEL OBJECTIVES (SLOs) ─────────────────────────────────────────
+
+slos:
+  availability_99_9:
+    name: "Availability SLO"
+    target: 99.9
+    window: "30d"
+    sli: "availability"
+    error_budget_percent: 0.1
+    error_budget_minutes_per_month: 43.2
+
+    breach_actions:
+      - "Page on-call engineer"
+      - "Initiate incident response"
+      - "Document root cause"
+      - "Reduce error budget for future deployments"
+
+  latency_p99_100ms:
+    name: "Latency SLO (P99)"
+    target: 100
+    unit: "milliseconds"
+    window: "30d"
+    sli: "latency_p99"
+
+    success_criteria:
+      - "95% of observations <= 100ms"
+
+    breach_actions:
+      - "Alert: Latency degradation"
+      - "Investigate: Resource contention, deployment issues"
+      - "Possible action: Trigger canary rollback"
+
+  latency_p95_50ms:
+    name: "Latency SLO (P95)"
+    target: 50
+    unit: "milliseconds"
+    window: "30d"
+    sli: "latency_p95"
+
+    success_criteria:
+      - "95% of observations <= 50ms"
+
+  error_rate_0_1:
+    name: "Error Rate SLO"
+    target: 0.1
+    unit: "percent"
+    window: "30d"
+    sli: "error_rate"
+
+    success_criteria:
+      - "Error rate < 0.1%"
+
+    breach_actions:
+      - "Alert: Error rate spike"
+      - "Investigate: Code bugs, resource exhaustion"
+      - "Possible action: Trigger canary rollback"
+
+  audit_integrity_100:
+    name: "Audit Event Logging SLO (CRITICAL)"
+    target: 100.0
+    unit: "percent"
+    window: "30d"
+    sli: "audit_integrity"
+
+    success_criteria:
+      - "100% of operations emit audit events"
+      - "No silent data loss or decisions"
+
+    breach_actions:
+      - "CRITICAL ALERT: Halt all deployments"
+      - "Investigate: Audit chain corruption"
+      - "Mandatory rollback to known-good state"
+      - "GDPR/compliance incident declaration"
+
+  session_continuity_100:
+    name: "Session Snapshot Persistence SLO (CRITICAL)"
+    target: 100.0
+    unit: "percent"
+    window: "30d"
+    sli: "session_continuity"
+
+    success_criteria:
+      - "100% of snapshots persisted to EventStore"
+      - "Zero data loss across session boundaries"
+
+    breach_actions:
+      - "CRITICAL ALERT: Data integrity risk"
+      - "Halt all new infinite-session task creation"
+      - "Mandatory rollback"
+      - "Incident declaration"
+
+  task_completion_99:
+    name: "Long-Running Task Completion SLO"
+    target: 99.0
+    unit: "percent"
+    window: "30d"
+    sli: "task_completion_rate"
+
+    success_criteria:
+      - "99% of long-running tasks complete without user intervention"
+
+    breach_actions:
+      - "Alert: Task completion degradation"
+      - "Investigate: Session boundary failures, optimizer drift"
+
+  drift_detection_accuracy_95:
+    name: "Drift Detection Accuracy SLO"
+    target: 95.0
+    unit: "percent"
+    window: "30d"
+    sli: "drift_detection_accuracy"
+
+    success_criteria:
+      - "< 5% false positive rate on drift alerts"
+
+    breach_actions:
+      - "Alert: Drift detection tuning needed"
+      - "Investigate: EMA smoother parameters"
+      - "Possible action: Retune detection thresholds"
+
+# ─ ALERT RULES ──────────────────────────────────────────────────────────────
+
+alert_rules:
+  availability_breach:
+    name: "Infinite Session Availability Breach"
+    condition: "availability < 99.0"
+    duration: "5m"
+    severity: "critical"
+    actions:
+      - "slack_alert"
+      - "pagerduty_incident"
+      - "email_oncall"
+
+  latency_p99_spike:
+    name: "Infinite Session Latency Spike (P99)"
+    condition: "latency_p99 > 200"
+    duration: "5m"
+    severity: "warning"
+    actions:
+      - "slack_alert"
+      - "investigate_trigger"
+
+  latency_p99_critical:
+    name: "Infinite Session Latency Critical (P99)"
+    condition: "latency_p99 > 500"
+    duration: "2m"
+    severity: "critical"
+    actions:
+      - "slack_alert"
+      - "pagerduty_incident"
+      - "trigger_canary_rollback"
+
+  error_rate_spike:
+    name: "Infinite Session Error Rate Spike"
+    condition: "error_rate > 0.5"
+    duration: "5m"
+    severity: "warning"
+    actions:
+      - "slack_alert"
+      - "investigate_trigger"
+
+  error_rate_critical:
+    name: "Infinite Session Error Rate Critical"
+    condition: "error_rate > 1.0"
+    duration: "2m"
+    severity: "critical"
+    actions:
+      - "slack_alert"
+      - "pagerduty_incident"
+      - "trigger_canary_rollback"
+
+  audit_integrity_loss:
+    name: "CRITICAL: Audit Integrity Loss"
+    condition: "audit_integrity < 100.0"
+    duration: "1m"
+    severity: "critical"
+    actions:
+      - "slack_alert_critical"
+      - "pagerduty_incident_sev1"
+      - "email_security_team"
+      - "email_compliance_officer"
+      - "halt_deployments"
+      - "trigger_mandatory_rollback"
+
+  session_continuity_loss:
+    name: "CRITICAL: Session Snapshot Persistence Failure"
+    condition: "session_continuity < 100.0"
+    duration: "1m"
+    severity: "critical"
+    actions:
+      - "slack_alert_critical"
+      - "pagerduty_incident_sev1"
+      - "email_data_team"
+      - "halt_infinite_session_tasks"
+      - "trigger_mandatory_rollback"
+
+  task_completion_degradation:
+    name: "Infinite Session Task Completion Degradation"
+    condition: "task_completion_rate < 95.0"
+    duration: "10m"
+    severity: "warning"
+    actions:
+      - "slack_alert"
+      - "investigate_trigger"
+
+  drift_detection_high_false_positive:
+    name: "Infinite Session Drift Detection False Positives"
+    condition: "drift_detection_accuracy < 90.0"
+    duration: "30m"
+    severity: "warning"
+    actions:
+      - "slack_alert"
+      - "investigate_trigger"
+
+  session_switch_errors:
+    name: "Infinite Session Boundary Errors"
+    condition: "increase(infinite_session_session_switch_errors_total[5m]) > 0.01% of traffic"
+    duration: "5m"
+    severity: "warning"
+    actions:
+      - "slack_alert"
+      - "investigate_trigger"
+
+  snapshot_write_failures:
+    name: "Infinite Session Snapshot Write Failures"
+    condition: "increase(infinite_session_snapshot_write_errors_total[5m]) > 0.01% of attempts"
+    duration: "5m"
+    severity: "warning"
+    actions:
+      - "slack_alert"
+      - "investigate_trigger"
+
+# ─ ALERTING CHANNELS ────────────────────────────────────────────────────────
+
+alerting:
+  slack_alert:
+    enabled: true
+    webhook: "${MONITORING_SLACK_WEBHOOK}"
+    mentions: "@platform-team"
+    include_runbook_link: true
+
+  slack_alert_critical:
+    enabled: true
+    webhook: "${MONITORING_SLACK_CRITICAL_WEBHOOK}"
+    mentions: "@platform-team @compliance-officer"
+    include_runbook_link: true
+    pin_message: true
+
+  pagerduty_incident:
+    enabled: true
+    service_key: "${PAGERDUTY_SERVICE_KEY}"
+    severity: "error"
+
+  pagerduty_incident_sev1:
+    enabled: true
+    service_key: "${PAGERDUTY_SERVICE_KEY_CRITICAL}"
+    severity: "critical"
+
+  email_oncall:
+    enabled: true
+    recipients: ["oncall@corvin-labs.com"]
+
+  email_data_team:
+    enabled: true
+    recipients: ["data-team@corvin-labs.com"]
+
+  email_security_team:
+    enabled: true
+    recipients: ["security@corvin-labs.com"]
+
+  email_compliance_officer:
+    enabled: true
+    recipients: ["compliance@corvin-labs.com"]
+
+# ─ SLO TRACKING DASHBOARDS ──────────────────────────────────────────────────
+
+dashboards:
+  infinite_session_slo_overview:
+    title: "Infinite Session Engine — SLO Overview"
+    refresh_interval: "30s"
+    panels:
+      - name: "Availability (30d)"
+        metric: "availability"
+        target: 99.9
+        display: "gauge"
+
+      - name: "Latency P99 (30d)"
+        metric: "latency_p99"
+        target: 100
+        display: "timeseries"
+
+      - name: "Error Rate (30d)"
+        metric: "error_rate"
+        target: 0.1
+        display: "stat"
+
+      - name: "Audit Integrity (30d)"
+        metric: "audit_integrity"
+        target: 100.0
+        display: "gauge"
+
+      - name: "Session Continuity (30d)"
+        metric: "session_continuity"
+        target: 100.0
+        display: "gauge"
+
+      - name: "Task Completion (30d)"
+        metric: "task_completion_rate"
+        target: 99.0
+        display: "stat"
+
+  infinite_session_error_budget:
+    title: "Infinite Session Engine — Error Budget"
+    refresh_interval: "5m"
+    panels:
+      - name: "Availability Error Budget Remaining (%)"
+        metric: "error_budget_available"
+        calculation: "100 * (1 - (errors_this_month / (error_rate_threshold * requests_this_month)))"
+        warning_threshold: 30  # Alert if < 30% budget remaining
+        critical_threshold: 10  # Critical if < 10% budget remaining
+
+      - name: "Error Budget Burn Rate"
+        metric: "error_budget_burn_rate"
+        calculation: "error_budget_consumed / days_elapsed"
+        display: "timeseries"
+
+# ─ RUNBOOKS ─────────────────────────────────────────────────────────────────
+
+runbooks:
+  availability_breach:
+    url: "docs/runbooks/infinite_session_availability_breach.md"
+    steps:
+      - "Check dashboard: Is latency spiked?"
+      - "Check dashboard: Is error rate elevated?"
+      - "Check audit log: Any recent deployment changes?"
+      - "Check recent commits: Any code changes to infinite_session?"
+      - "If recent deployment: Consider rollback"
+      - "If code issue: Prepare hotfix or rollback"
+
+  latency_spike:
+    url: "docs/runbooks/infinite_session_latency_spike.md"
+    steps:
+      - "Check active task count: Are we overloaded?"
+      - "Check session switch frequency: Too many boundary crossings?"
+      - "Check snapshot write latency: Is EventStore slow?"
+      - "Check database performance: Any slow queries?"
+      - "If persistent: Consider load shedding or rollback"
+
+  audit_integrity_loss:
+    url: "docs/runbooks/infinite_session_audit_integrity_loss.md"
+    critical: true
+    steps:
+      - "IMMEDIATE: Page security team + compliance"
+      - "IMMEDIATE: Halt all new infinite-session task creation"
+      - "IMMEDIATE: Initiate incident response"
+      - "Check audit chain: Is hash verification failing?"
+      - "Check disk space: Is audit storage full?"
+      - "Check permissions: Is audit writer able to write?"
+      - "MANDATORY: Rollback to known-good state"
+      - "Declare GDPR incident if necessary"
+
+  session_continuity_loss:
+    url: "docs/runbooks/infinite_session_session_continuity_loss.md"
+    critical: true
+    steps:
+      - "IMMEDIATE: Page data team + compliance"
+      - "IMMEDIATE: Halt all new infinite-session task creation"
+      - "Check EventStore: Is it reachable?"
+      - "Check disk space: Is EventStore storage full?"
+      - "Check permissions: Is snapshot writer able to write?"
+      - "MANDATORY: Rollback to known-good state"
+      - "Recovery: Restore snapshots from backup"
+      - "Post-incident: Review data loss impact"
+
+# ─ SLO REPORTING ────────────────────────────────────────────────────────────
+
+reporting:
+  weekly_summary:
+    enabled: true
+    frequency: "every monday 09:00 UTC"
+    recipients:
+      - "platform-team@corvin-labs.com"
+      - "engineering-leadership@corvin-labs.com"
+    content:
+      - "SLO attainment summary (all SLOs)"
+      - "Incidents and major alerts (count + root causes)"
+      - "Error budget remaining"
+      - "Recommendations for next week"
+
+  monthly_review:
+    enabled: true
+    frequency: "first wednesday of month, 10:00 UTC"
+    recipients:
+      - "platform-team@corvin-labs.com"
+      - "engineering-leadership@corvin-labs.com"
+      - "compliance-officer@corvin-labs.com"
+    content:
+      - "Full SLO attainment report (all 30 days)"
+      - "Incident analysis + lessons learned"
+      - "Trend analysis (improving/degrading?)"
+      - "Planned improvements for next month"
+
+  quarterly_review:
+    enabled: true
+    frequency: "last friday of quarter, 14:00 UTC"
+    recipients:
+      - "engineering-leadership@corvin-labs.com"
+      - "compliance-officer@corvin-labs.com"
+      - "executive-team@corvin-labs.com"
+    content:
+      - "Executive summary (did we meet SLOs?)"
+      - "Key incidents + impact"
+      - "Trend analysis (quarter over quarter)"
+      - "Strategic recommendations"
+
+# ─ COMPLIANCE NOTES ──────────────────────────────────────────────────────────
+
+compliance:
+  gdpr_art_32:
+    description: "Security measures for SLO monitoring"
+    controls:
+      - "All SLO data encrypted at rest (AES-256)"
+      - "All alert channels use TLS"
+      - "SLO data retention: 90 days"
+      - "Access control: Platform team only"
+
+  eu_ai_act:
+    description: "Transparent SLO reporting"
+    controls:
+      - "SLO targets published in user-facing docs"
+      - "Incidents logged with reasons"
+      - "Monthly transparency report generated"
