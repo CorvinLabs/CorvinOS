@@ -1,4 +1,4 @@
-"""Infinite Session Engine (ADR-0540–0541).
+"""Infinite Session Engine (ADR-0540–0542).
 
 Phase A: Foundation
 - snapshot_schema: Immutable snapshot dataclass (Snapshot, SnapshotMetadata)
@@ -9,6 +9,11 @@ Phase B: Session Bridging + Crypto Signatures (ADR-0541)
 - crypto_binding: HMAC-SHA256 cryptographic binding (CryptoBinding)
 - session_bridger: Session-to-session bridging (SessionBridger, SessionBridgeEvent)
 - audit_verification: Audit chain verification (AuditVerifier, VerificationResult)
+
+Phase C: Rollback Atomicity + Drift Detection (ADR-0542)
+- rollback_manager: WAL-based rollback with atomic commits (RollbackManager, TransactionLog)
+- ema_smoother: Exponential Moving Average filter (EMASmoother, EMASample, DriftLevel)
+- drift_detector: Drift-detection gates and revert button (DriftDetector, DriftAlert)
 """
 
 from core.infinite_session.snapshot_schema import (
@@ -39,6 +44,21 @@ from core.infinite_session.audit_verification import (
     VerificationResult,
     VerificationStatus,
 )
+from core.infinite_session.rollback_manager import (
+    RollbackManager,
+    TransactionLog,
+    TransactionStatus,
+)
+from core.infinite_session.ema_smoother import (
+    EMASmoother,
+    EMASample,
+    DriftLevel,
+)
+from core.infinite_session.drift_detector import (
+    DriftDetector,
+    DriftAlert,
+    DriftGateType,
+)
 
 __all__ = [
     # Phase A
@@ -61,4 +81,14 @@ __all__ = [
     "AuditVerifier",
     "VerificationResult",
     "VerificationStatus",
+    # Phase C
+    "RollbackManager",
+    "TransactionLog",
+    "TransactionStatus",
+    "EMASmoother",
+    "EMASample",
+    "DriftLevel",
+    "DriftDetector",
+    "DriftAlert",
+    "DriftGateType",
 ]
