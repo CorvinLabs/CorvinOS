@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 # Add operator package to path
-_op_root = Path(__file__).parent.parent / "operator"
+_op_root = Path(__file__).parent.parent / "operator" / "orchestration"  # `tde` is a top-level package there (no operator/orchestration/__init__.py)
 if str(_op_root) not in sys.path:
     sys.path.insert(0, str(_op_root))
 
@@ -66,7 +66,7 @@ def test_loss_entry_with_token_fields():
     # This imports the actual class once implemented
     import time
 
-    from orchestration.tde.loss_profile_tracker import LossEntry
+    from tde.loss_profile_tracker import LossEntry
 
     entry = LossEntry(
         timestamp=time.time(),
@@ -84,7 +84,7 @@ def test_loss_entry_with_token_fields():
 
 def test_record_delegation_result_accepts_token_params():
     """Test that record_delegation_result() accepts token parameters."""
-    from orchestration.tde.loss_profile_tracker import get_session_tracker
+    from tde.loss_profile_tracker import get_session_tracker
 
     tracker = get_session_tracker(session_key="test_session")
 
@@ -102,7 +102,7 @@ def test_record_delegation_result_accepts_token_params():
 
 def test_estimate_cost_ratio_returns_none_with_no_data():
     """Test that estimate_cost_ratio() returns None when no data exists."""
-    from orchestration.tde.loss_profile_tracker import get_session_tracker
+    from tde.loss_profile_tracker import get_session_tracker
 
     tracker = get_session_tracker(session_key="test_empty")
     ratio = tracker.estimate_cost_ratio(task_type="refactor", model_id="opus")
@@ -112,7 +112,7 @@ def test_estimate_cost_ratio_returns_none_with_no_data():
 
 def test_estimate_cost_ratio_with_single_measurement():
     """Test cost ratio with one measurement (MIN_SAMPLES may apply)."""
-    from orchestration.tde.loss_profile_tracker import get_session_tracker
+    from tde.loss_profile_tracker import get_session_tracker
 
     tracker = get_session_tracker(session_key="test_single")
     tracker.record_delegation_result(
@@ -132,7 +132,7 @@ def test_estimate_cost_ratio_with_single_measurement():
 
 def test_estimate_cost_ratio_averaging():
     """Test that multiple measurements are averaged."""
-    from orchestration.tde.loss_profile_tracker import get_session_tracker
+    from tde.loss_profile_tracker import get_session_tracker
 
     tracker = get_session_tracker(session_key="test_average")
 
@@ -179,7 +179,7 @@ def test_cost_ratio_persistence_across_reloads(monkeypatch, tmp_path):
     home into every test that ran after it in the same process. monkeypatch now
     owns that.
     """
-    from orchestration.tde.loss_profile_tracker import get_session_tracker
+    from tde.loss_profile_tracker import get_session_tracker
 
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
 

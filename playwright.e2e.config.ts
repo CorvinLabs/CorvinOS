@@ -18,7 +18,8 @@ export default defineConfig({
   workers: 2,
   retries: 0,
   timeout: 60_000,
-  reporter: [['line'], ['json', { outputFile: 'test-results/root-e2e.json' }]],
+  outputDir: 'playwright-results/root-e2e',
+  reporter: [['line'], ['json', { outputFile: 'playwright-results/root-e2e.json' }]],
   use: {
     baseURL: process.env.BASE_URL || 'http://127.0.0.1:8765',
     trace: 'retain-on-failure',

@@ -37,7 +37,7 @@ class TestQueueCorruptionE2E:
                 action="test",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             chain.record(entry)
 
@@ -145,7 +145,7 @@ class TestQueueCorruptionE2E:
             action="test",
             resource="test_res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
 
         chain_uncorrupted = AuditChain(temp_queue)
@@ -346,7 +346,7 @@ class TestQueueCorruptionE2E:
                 action="test",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             chain.record(entry)
 

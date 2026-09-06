@@ -119,14 +119,14 @@ def test_contract_validation_required_fields():
         SimpleModuleContract(
             module_name="",
             version="1.0.0",
-            public_methods=["method1"],
+            public_methods=["method1"], private_methods=[],
         )
 
     with pytest.raises(ValueError, match="version"):
         SimpleModuleContract(
             module_name="test",
             version="",
-            public_methods=["method1"],
+            public_methods=["method1"], private_methods=[],
         )
 
 
@@ -135,7 +135,7 @@ def test_contract_has_public_method():
     contract = SimpleModuleContract(
         module_name="test",
         version="1.0.0",
-        public_methods=["method1"],
+        public_methods=["method1"], private_methods=[],
     )
     assert contract.has_public_method("method1")
     assert not contract.has_public_method("method2")
@@ -158,7 +158,7 @@ def test_contract_dependency_satisfaction():
     contract = SimpleModuleContract(
         module_name="test",
         version="1.0.0",
-        public_methods=[],
+        public_methods=[], private_methods=[],
         dependencies=["dep1", "dep2"],
     )
     assert contract.is_dependency_satisfied("dep1")
@@ -176,7 +176,7 @@ def test_register_contract(registry):
     contract = SimpleModuleContract(
         module_name="test",
         version="1.0.0",
-        public_methods=["method1"],
+        public_methods=["method1"], private_methods=[],
     )
     registry.register_contract(contract)
     assert "test" in registry._contracts
@@ -187,7 +187,7 @@ def test_register_contract_duplicate(registry):
     contract = SimpleModuleContract(
         module_name="test",
         version="1.0.0",
-        public_methods=["method1"],
+        public_methods=["method1"], private_methods=[],
     )
     registry.register_contract(contract)
     with pytest.raises(ValueError, match="already registered"):
@@ -199,7 +199,7 @@ def test_register_implementation(registry):
     contract = SimpleModuleContract(
         module_name="test",
         version="1.0.0",
-        public_methods=["method1"],
+        public_methods=["method1"], private_methods=[],
     )
     registry.register_contract(contract)
     impl = MockModule()
@@ -219,7 +219,7 @@ def test_validate_implementation_success(registry):
     contract = SimpleModuleContract(
         module_name="test",
         version="1.0.0",
-        public_methods=["public_method", "unmarked_method"],
+        public_methods=["public_method", "unmarked_method"], private_methods=[],
     )
     registry.register_contract(contract)
     impl = MockModule()
@@ -232,7 +232,7 @@ def test_validate_implementation_missing_method(registry):
     contract = SimpleModuleContract(
         module_name="test",
         version="1.0.0",
-        public_methods=["nonexistent"],
+        public_methods=["nonexistent"], private_methods=[],
     )
     registry.register_contract(contract)
     impl = MockModule()
@@ -247,12 +247,12 @@ def test_validate_all_implementations(registry):
     contract1 = SimpleModuleContract(
         module_name="module1",
         version="1.0.0",
-        public_methods=["public_method"],
+        public_methods=["public_method"], private_methods=[],
     )
     contract2 = SimpleModuleContract(
         module_name="module2",
         version="1.0.0",
-        public_methods=["get_data"],
+        public_methods=["get_data"], private_methods=[],
     )
     registry.register_contract(contract1)
     registry.register_contract(contract2)
@@ -303,7 +303,7 @@ def test_check_method_call_allowed(registry):
     contract = SimpleModuleContract(
         module_name="service",
         version="1.0.0",
-        public_methods=["get_data"],
+        public_methods=["get_data"], private_methods=[],
     )
     registry.register_contract(contract)
     detector = ViolationDetector(registry)

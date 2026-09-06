@@ -274,7 +274,7 @@ def test_persist_learning_event():
     """Test persisting a single learning event."""
     tmpdir, memory_root = create_temp_memory_structure()
     try:
-        coordinator = MemoryCoordinator(str(memory_root))
+        coordinator = MemoryCoordinator(str(memory_root), tenant_id="tenant_a")
 
         event = {
             "event_type": "strategy_success",
@@ -308,7 +308,7 @@ def test_persist_multiple_learning_events():
     """Test persisting multiple events sequentially."""
     tmpdir, memory_root = create_temp_memory_structure()
     try:
-        coordinator = MemoryCoordinator(str(memory_root))
+        coordinator = MemoryCoordinator(str(memory_root), tenant_id="tenant_a")
 
         for i in range(5):
             coordinator.persist_learning_event("task_001", "tenant_a", "event_type", {
@@ -333,7 +333,7 @@ def test_persist_learning_events_batch():
     """Test persisting events in batch."""
     tmpdir, memory_root = create_temp_memory_structure()
     try:
-        coordinator = MemoryCoordinator(str(memory_root))
+        coordinator = MemoryCoordinator(str(memory_root), tenant_id="tenant_a")
 
         events = [
             {"event_type": "event1", "payload": {"id": 1}},
@@ -358,7 +358,7 @@ def test_persist_batch_empty_list():
     """Test persisting empty batch does nothing."""
     tmpdir, memory_root = create_temp_memory_structure()
     try:
-        coordinator = MemoryCoordinator(str(memory_root))
+        coordinator = MemoryCoordinator(str(memory_root), tenant_id="tenant_a")
         coordinator.persist_learning_events_batch("task_001", "tenant_a", [])
 
         # File should not be created
@@ -379,7 +379,7 @@ def test_persist_event_creates_directories():
             import shutil
             shutil.rmtree(learning_dir)
 
-        coordinator = MemoryCoordinator(str(memory_root))
+        coordinator = MemoryCoordinator(str(memory_root), tenant_id="tenant_a")
         coordinator.persist_learning_event("task_001", "tenant_a", "event_type", {})
 
         # Directory should now exist
@@ -394,7 +394,7 @@ def test_read_learning_events():
     """Test reading persisted learning events."""
     tmpdir, memory_root = create_temp_memory_structure()
     try:
-        coordinator = MemoryCoordinator(str(memory_root))
+        coordinator = MemoryCoordinator(str(memory_root), tenant_id="tenant_a")
 
         # Persist some events
         coordinator.persist_learning_event("task_001", "tenant_a", "type1", {"x": 1})
@@ -438,7 +438,7 @@ def test_get_learning_event_stats():
     """Test getting statistics about learning events."""
     tmpdir, memory_root = create_temp_memory_structure()
     try:
-        coordinator = MemoryCoordinator(str(memory_root))
+        coordinator = MemoryCoordinator(str(memory_root), tenant_id="tenant_a")
 
         coordinator.persist_learning_event("task_001", "tenant_a", "type1", {})
         coordinator.persist_learning_event("task_001", "tenant_a", "type2", {})
@@ -474,7 +474,7 @@ def test_persist_and_read_roundtrip():
     """Test roundtrip: persist events, then read them back."""
     tmpdir, memory_root = create_temp_memory_structure()
     try:
-        coordinator = MemoryCoordinator(str(memory_root))
+        coordinator = MemoryCoordinator(str(memory_root), tenant_id="tenant_a")
 
         original_events = [
             {"event_type": "event1", "payload": {"id": 1, "data": "test1"}},

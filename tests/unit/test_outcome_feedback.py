@@ -198,7 +198,7 @@ class TestOutcomeFeedbackStore:
         assert outcome_id == outcome.outcome_id
 
         # Verify retrieval
-        retrieved = store.get_outcome(outcome_id)
+        retrieved = store.get_outcome(outcome_id, tenant_id="_default")
         assert retrieved is not None
         assert retrieved.outcome == OutcomeType.SUCCESS
         assert retrieved.rating == 5
@@ -217,7 +217,7 @@ class TestOutcomeFeedbackStore:
             )
             store.record_outcome(outcome)
 
-        outcomes = store.get_outcomes_by_decision(decision_id)
+        outcomes = store.get_outcomes_by_decision(decision_id, tenant_id="_default")
         assert len(outcomes) == 3
 
     def test_get_outcomes_by_type(self, store):
@@ -398,7 +398,7 @@ class TestOutcomeFeedbackLoop:
         await loop.stop()
 
         # Verify outcome was persisted
-        retrieved = store.get_outcome(outcome.outcome_id)
+        retrieved = store.get_outcome(outcome.outcome_id, tenant_id="_default")
         assert retrieved is not None
 
     @pytest.mark.asyncio

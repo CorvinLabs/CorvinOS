@@ -164,6 +164,8 @@ class RollbackGuard:
                                 apply_timestamp = data.get("apply_timestamp", "")
                                 hold_hours = data.get("hold_hours", 12)
                                 self.approval_apply_times[approval_id] = (apply_timestamp, hold_hours)
+                                # Latest effective hold per skill (the attribute existed but was never written)
+                                self.skill_hold_config[skill_id] = hold_hours
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.warning(f"[L5 Rollback] Failed to load history: {e}")
         except Exception as e:

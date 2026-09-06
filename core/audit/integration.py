@@ -130,6 +130,9 @@ class AuditChainWithCorruptionDetection:
                 resource=event_dict["resource"],
                 result=event_dict["result"],
                 timestamp=event_dict["timestamp"],
+                # AuditEntry requires tenant_id since ADR-0007; this site never
+                # passed it, so every corruption event failed to record.
+                tenant_id=str(event_dict.get("tenant_id") or "_default"),
                 details=event_dict["details"],
             )
             # Record to chain directly (bypass wrapper to avoid recursion)
