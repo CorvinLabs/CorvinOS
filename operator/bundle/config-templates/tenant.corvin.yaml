@@ -58,20 +58,12 @@ spec:
 
   # ── Primary OS engine (ADR-0159 M1) ─────────────────────────────────────────
   # Controls which engine handles the OS turn (the main conversation).
-  # Auto-detect ladder (applied when this field is absent):
-  #   1. CORVIN_OS_ENGINE env var
-  #   2. claude CLI on PATH  → claude_code
-  #   3. fallback            → hermes  (local Ollama, fully offline)
-  #
-  # Set explicitly to override auto-detect:
-  #   default_engine: hermes       # local Ollama (platform-independent, offline)
+  # Claude Code only in v2.0 — fully supported by default.
+  # Set explicitly (optional, always claude_code):
   #   default_engine: claude_code  # Anthropic Claude (requires API key + claude CLI)
-  #   default_engine: opencode     # OpenCode (any provider, requires config)
   #
-  # hermes_model: only used when default_engine is "hermes" or hermes is
-  # selected by auto-detect.  Defaults to the model set in Ollama at runtime.
-  # default_engine: hermes
-  # hermes_model: qwen3:8b
+  # Note: Hermes (local Ollama) and LocalEngine removed in v2.0.
+  # Old configs with hermes auto-correct to claude_code on boot.
 
   # ── Sandbox tier (ADR-0159 M2) ───────────────────────────────────────────────
   # Controls Forge tool isolation.  Auto-detected at boot (bwrap → docker → none).
@@ -222,12 +214,8 @@ spec:
 
   # ── ACS default worker model (ADR-0112 / ADR-0119) ───────────────────────────
   # When delegation_enabled=true the orchestrator spawns worker agents.
-  # On a Hermes/local install the worker model should also be local so
-  # no Anthropic API key is required.  Set hermes to use Ollama workers
-  # or leave unset to inherit the OS-engine model automatically.
-  #
-  # acs:
-  #   default_worker_model: hermes   # ← set this if default_engine is hermes
+  # Workers inherit the OS-engine model (Claude Code) automatically.
+  # No configuration needed in v2.0.
 
   # ── Plugin list (ADR-0030 + ADR-0033) ────────────────────────────────────────
   plugins:
