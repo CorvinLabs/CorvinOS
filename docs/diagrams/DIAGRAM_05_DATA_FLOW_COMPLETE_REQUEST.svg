@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #0f0f0f; }
+      .title { font-size: 24px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .step-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2; }
+      .audit-box { fill: #16213e; stroke: #ff006e; stroke-width: 1.5; }
+      .gate-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
+      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 12px; fill: #888; font-family: monospace; }
+      .code { font-size: 11px; fill: #00ff88; font-family: monospace; }
+      .arrow { stroke: #00d4ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-audit { stroke: #ff006e; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead-audit); }
+      .number { font-size: 18px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
+    </marker>
+    <marker id="arrowhead-audit" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ff006e" />
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1400" height="1000"/>
+
+  <!-- Title -->
+  <text x="700" y="35" class="title" text-anchor="middle">Complete Request Data Flow: 9-Step Pipeline</text>
+  <text x="700" y="55" class="desc" text-anchor="middle">Every step creates audit events (hash-chained). Audit trail is the proof.</text>
+
+  <!-- STEP 1: User Input -->
+  <g id="step1">
+    <rect class="step-box" x="50" y="80" width="260" height="100"/>
+    <text x="180" y="100" class="number" text-anchor="middle">① INPUT</text>
+    <text x="180" y="120" class="label" text-anchor="middle">User/Discord Voice</text>
+    <text x="180" y="135" class="desc" text-anchor="middle">• Audio stream from Discord</text>
+    <text x="180" y="148" class="desc" text-anchor="middle">• Metadata: user_id, channel, timestamp</text>
+    <text x="180" y="161" class="desc" text-anchor="middle">• No recording of audio (privacy)</text>
+
+    <rect class="audit-box" x="60" y="185" width="240" height="35"/>
+    <text x="180" y="200" class="code" text-anchor="middle">Audit: voice_input_received</text>
+    <text x="180" y="213" class="desc" text-anchor="middle">(metadata only, hash-chained)</text>
+  </g>
+
+  <!-- Arrow -->
+  <path class="arrow" d="M 310 130 L 340 130"/>
+
+  <!-- STEP 2: Bridge (Audio → Text) -->
+  <g id="step2">
+    <rect class="step-box" x="340" y="80" width="260" height="100"/>
+    <text x="470" y="100" class="number" text-anchor="middle">② BRIDGE</text>
+    <text x="470" y="120" class="label" text-anchor="middle">Speech-to-Text (OpenAI)</text>
+    <text x="470" y="135" class="desc" text-anchor="middle">• Transcribe: audio → text</text>
+    <text x="470" y="148" class="desc" text-anchor="middle">• Extract: intent, entities, entities</text>
+    <text x="470" y="161" class="desc" text-anchor="middle">• Validate: content not PII-heavy</text>
+
+    <rect class="audit-box" x="350" y="185" width="240" height="35"/>
+    <text x="470" y="200" class="code" text-anchor="middle">Audit: speech_transcribed</text>
+    <text x="470" y="213" class="desc" text-anchor="middle">(text output logged, hash-chained)</text>
+  </g>
+
+  <!-- Arrow -->
+  <path class="arrow" d="M 600 130 L 630 130"/>
+
+  <!-- STEP 3: L5 Routing (Skill) -->
+  <g id="step3">
+    <rect class="step-box" x="630" y="80" width="260" height="100"/>
+    <text x="760" y="100" class="number" text-anchor="middle">③ L5 ROUTING</text>
+    <text x="760" y="120" class="label" text-anchor="middle">os.delegation_router (Skill)</text>
+    <text x="760" y="135" class="desc" text-anchor="middle">• Load tenant config</text>
+    <text x="760" y="148" class="desc" text-anchor="middle">• Classify: task_type (Q&A, coding, ...)</text>
+    <text x="760" y="161" class="desc" text-anchor="middle">• Route: opus (cost-optimized)</text>
+
+    <rect class="audit-box" x="640" y="185" width="240" height="35"/>
+    <text x="760" y="200" class="code" text-anchor="middle">Audit: skill_executed (router)</text>
+    <text x="760" y="213" class="desc" text-anchor="middle">(decision: opus, confidence: 0.94)</text>
+  </g>
+
+  <!-- Arrow -->
+  <path class="arrow" d="M 890 130 L 920 130"/>
+
+  <!-- STEP 4: L10 Context -->
+  <g id="step4">
+    <rect class="step-box" x="920" y="80" width="260" height="100"/>
+    <text x="1050" y="100" class="number" text-anchor="middle">④ L10 CONTEXT</text>
+    <text x="1050" y="120" class="label" text-anchor="middle">os.context_adapter (Skill)</text>
+    <text x="1050" y="135" class="desc" text-anchor="middle">• Original: full session history</text>
+    <text x="1050" y="148" class="desc" text-anchor="middle">• Preserve: task_id, prior decisions</text>
+    <text x="1050" y="161" class="desc" text-anchor="middle">• Inject: router output, user model</text>
+
+    <rect class="audit-box" x="930" y="185" width="240" height="35"/>
+    <text x="1050" y="200" class="code" text-anchor="middle">Audit: context_adapted</text>
+    <text x="1050" y="213" class="desc" text-anchor="middle">(preserved: 4 fields, injected: 3)</text>
+  </g>
+
+  <!-- STEP 5: L16 Compliance Gates (vertical alignment) -->
+  <text x="50" y="260" class="label">L16 SECURITY GATES:</text>
+
+  <!-- 5A: Consent -->
+  <g id="step5a">
+    <rect class="gate-box" x="50" y="280" width="250" height="90"/>
+    <text x="175" y="300" class="number" text-anchor="middle">⑤A CONSENT</text>
+    <text x="175" y="318" class="desc" text-anchor="middle">• Check: user_id in consent db</text>
+    <text x="175" y="331" class="desc" text-anchor="middle">• Verify: voice_enabled=true</text>
+    <text x="175" y="344" class="desc" text-anchor="middle">• TTL: valid for 30 days</text>
+    <text x="175" y="357" class="code" text-anchor="middle">✓ PASS</text>
+
+    <rect class="audit-box" x="60" y="375" width="230" height="20"/>
+    <text x="175" y="387" class="code" text-anchor="middle">Audit: consent_checked (PASS)</text>
+  </g>
+
+  <!-- 5B: House-Rules -->
+  <g id="step5b">
+    <rect class="gate-box" x="320" y="280" width="250" height="90"/>
+    <text x="445" y="300" class="number" text-anchor="middle">⑤B HOUSE-RULES</text>
+    <text x="445" y="318" class="desc" text-anchor="middle">• Check: task not in deny-list</text>
+    <text x="445" y="331" class="desc" text-anchor="middle">• Verify: no jailbreak signals</text>
+    <text x="445" y="344" class="desc" text-anchor="middle">• Fail-closed: default=DENY</text>
+    <text x="445" y="357" class="code" text-anchor="middle">✓ PASS</text>
+
+    <rect class="audit-box" x="330" y="375" width="230" height="20"/>
+    <text x="445" y="387" class="code" text-anchor="middle">Audit: house_rule_checked (PASS)</text>
+  </g>
+
+  <!-- 5C: Audit Readiness -->
+  <g id="step5c">
+    <rect class="gate-box" x="590" y="280" width="250" height="90"/>
+    <text x="715" y="300" class="number" text-anchor="middle">⑤C AUDIT-CHAIN</text>
+    <text x="715" y="318" class="desc" text-anchor="middle">• Verify: audit backend reachable</text>
+    <text x="715" y="331" class="desc" text-anchor="middle">• Check: hash-chain integrity</text>
+    <text x="715" y="344" class="desc" text-anchor="middle">• Prepare: audit event buffer</text>
+    <text x="715" y="357" class="code" text-anchor="middle">✓ READY</text>
+
+    <rect class="audit-box" x="600" y="375" width="230" height="20"/>
+    <text x="715" y="387" class="code" text-anchor="middle">Audit: audit_chain_ready</text>
+  </g>
+
+  <!-- 5D: Data Flow Guard -->
+  <g id="step5d">
+    <rect class="gate-box" x="860" y="280" width="250" height="90"/>
+    <text x="985" y="300" class="number" text-anchor="middle">⑤D DATA-FLOW</text>
+    <text x="985" y="318" class="desc" text-anchor="middle">• Classify: input data (public/private)</text>
+    <text x="985" y="331" class="desc" text-anchor="middle">• Validate: flow to opus allowed</text>
+    <text x="985" y="344" class="desc" text-anchor="middle">• PII scan: fail-closed if detected</text>
+    <text x="985" y="357" class="code" text-anchor="middle">✓ CLEAR</text>
+
+    <rect class="audit-box" x="870" y="375" width="230" height="20"/>
+    <text x="985" y="387" class="code" text-anchor="middle">Audit: data_flow_allowed</text>
+  </g>
+
+  <!-- All gates flow down to step 6 -->
+  <path class="arrow" d="M 175 400 L 175 430"/>
+  <path class="arrow" d="M 445 400 L 445 430"/>
+  <path class="arrow" d="M 715 400 L 715 430"/>
+  <path class="arrow" d="M 985 400 L 985 430"/>
+  <!-- Convergence line -->
+  <path class="arrow" d="M 175 440 L 1050 440" stroke-dasharray="5,5"/>
+
+  <!-- STEP 6: L22 Workflow (Skill Execution) -->
+  <g id="step6">
+    <rect class="step-box" x="450" y="450" width="500" height="100"/>
+    <text x="700" y="470" class="number" text-anchor="middle">⑥ L22 WORKFLOW</text>
+    <text x="700" y="488" class="label" text-anchor="middle">os.workflow_optimizer + Skill Execution</text>
+    <text x="700" y="505" class="desc" text-anchor="middle">• Load Skill manifest (routing decision from step ③)</text>
+    <text x="700" y="518" class="desc" text-anchor="middle">• Verify required_checks: audit✓ consent✓ house-rules✓ data-flow✓</text>
+    <text x="700" y="531" class="desc" text-anchor="middle">• Execute: Skill.execute(context, agent="opus", task=text)</text>
+
+    <rect class="audit-box" x="460" y="555" width="480" height="20"/>
+    <text x="700" y="567" class="code" text-anchor="middle">Audit: skill_executed (agent:opus, latency:42ms, confidence:0.94)</text>
+  </g>
+
+  <!-- Arrow -->
+  <path class="arrow" d="M 700 570 L 700 600"/>
+
+  <!-- STEP 7: Response Generation -->
+  <g id="step7">
+    <rect class="step-box" x="450" y="610" width="500" height="90"/>
+    <text x="700" y="630" class="number" text-anchor="middle">⑦ RESPONSE</text>
+    <text x="700" y="648" class="label" text-anchor="middle">LLM Output → Discord</text>
+    <text x="700" y="663" class="desc" text-anchor="middle">• Receive: response from opus engine</text>
+    <text x="700" y="676" class="desc" text-anchor="middle">• Format: Discord message + metadata</text>
+    <text x="700" y="689" class="desc" text-anchor="middle">• Send: respond_to_message(channel_id, text)</text>
+
+    <rect class="audit-box" x="460" y="705" width="480" height="20"/>
+    <text x="700" y="717" class="code" text-anchor="middle">Audit: response_sent (to:user_id, length:347 chars)</text>
+  </g>
+
+  <!-- Arrow -->
+  <path class="arrow" d="M 700 730 L 700 760"/>
+
+  <!-- STEP 8: Feedback Loop (async) -->
+  <g id="step8">
+    <rect class="step-box" x="450" y="770" width="500" height="100"/>
+    <text x="700" y="790" class="number" text-anchor="middle">⑧ FEEDBACK (Async)</text>
+    <text x="700" y="808" class="label" text-anchor="middle">User or Auto-Metrics</text>
+    <text x="700" y="825" class="desc" text-anchor="middle">• User: "👍 Was that helpful?" → feedback_received (signal:true)</text>
+    <text x="700" y="838" class="desc" text-anchor="middle">• Auto: Measure latency (42ms), check SLA (target: 50ms) → pass</text>
+    <text x="700" y="851" class="desc" text-anchor="middle">• Async: non-blocking fire-and-forget (no response delay)</text>
+
+    <rect class="audit-box" x="460" y="875" width="480" height="20"/>
+    <text x="700" y="887" class="code" text-anchor="middle">Audit: skill_feedback (signal:true, source:user, latency:42ms)</text>
+  </g>
+
+  <!-- Arrow -->
+  <path class="arrow" d="M 700 900 L 700 930"/>
+
+  <!-- STEP 9: Optimizer Step + Audit Verification -->
+  <g id="step9">
+    <rect class="step-box" x="450" y="940" width="500" height="100"/>
+    <text x="700" y="960" class="number" text-anchor="middle">⑨ OPTIMIZER + AUDIT VERIFY</text>
+    <text x="700" y="978" class="label" text-anchor="middle">Learning Loop + Chain Integrity</text>
+    <text x="700" y="995" class="desc" text-anchor="middle">• Optimizer: Update router weights (w_opus += 0.02 if correct)</text>
+    <text x="700" y="1008" class="desc" text-anchor="middle">• Convergence: Check variance (0.94 → 0.95, good trend)</text>
+    <text x="700" y="1021" class="desc" text-anchor="middle">• Audit: Hash-chain verified (9 events, all chained, 0 gaps)</text>
+  </g>
+
+  <!-- Legend -->
+  <text x="50" y="1080" class="desc">INVARIANT: Every step (①–⑨) creates immutable audit event (hash-chained, tenant_id=_default)</text>
+  <text x="50" y="1095" class="desc">Operator proof: corvin audit show-task &lt;task_id&gt; returns full 9-step chain with hashes verified</text>
+</svg>

@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1000 1200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #0f0f0f; }
+      .title { font-size: 22px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .layer { fill: #1a1a2e; stroke: #00ff88; stroke-width: 1.5; }
+      .layer-critical { fill: #16213e; stroke: #ff006e; stroke-width: 2; }
+      .label { font-size: 12px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 10px; fill: #888; font-family: monospace; }
+      .divider { stroke: #444; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1000" height="1200"/>
+
+  <text x="500" y="30" class="title" text-anchor="middle">Layer Stack: All 36+ Security/Compliance Layers</text>
+  <text x="500" y="48" class="desc" text-anchor="middle">Each layer adds one invariant. Skills implement layer contracts.</text>
+
+  <!-- INPUT LAYERS (L1-L5) -->
+  <text x="50" y="75" class="title" fill="#ffd700">INPUT &amp; ROUTING</text>
+
+  <rect class="layer" x="50" y="90" width="900" height="35"/>
+  <text x="60" y="105" class="label">L1: Telemetry &amp; Observability</text>
+  <text x="500" y="105" class="desc">Anonymous pings, error traces (GDPR Art. 6(1)(f) legitimate interest)</text>
+
+  <rect class="layer" x="50" y="130" width="900" height="35"/>
+  <text x="60" y="145" class="label">L2: User Session &amp; Authentication</text>
+  <text x="500" y="145" class="desc">Console local-login (credential-less), OIDC future</text>
+
+  <rect class="layer" x="50" y="170" width="900" height="35"/>
+  <text x="60" y="185" class="label">L3: Tenant Namespace &amp; Multi-Tenancy</text>
+  <text x="500" y="185" class="desc">Tenant-scoped storage, audit isolation (ADR-0007)</text>
+
+  <rect class="layer" x="50" y="210" width="900" height="35"/>
+  <text x="60" y="225" class="label">L4: Cowork Hub (Plugin Registry)</text>
+  <text x="500" y="225" class="desc">Multi-persona plugin management, boot layers, lifecycle</text>
+
+  <rect class="layer" x="50" y="250" width="900" height="35"/>
+  <text x="60" y="265" class="label" fill="#ffd700">L5: Auto-Routing (Skills-Driven)</text>
+  <text x="500" y="265" class="desc">os.delegation_router: task classification → engine selection (NEW v2.0)</text>
+
+  <!-- CONTEXT &amp; PROCESSING (L6-L15) -->
+  <text x="50" y="310" class="title" fill="#ffd700">CONTEXT &amp; PROCESSING</text>
+
+  <rect class="layer" x="50" y="325" width="900" height="35"/>
+  <text x="60" y="340" class="label">L6: Forge (Runtime Tool Generation)</text>
+  <text x="500" y="340" class="desc">MCP server, tool discovery, binding to agent</text>
+
+  <rect class="layer" x="50" y="365" width="900" height="35"/>
+  <text x="60" y="380" class="label">L7: SkillForge (Runtime Skill Generation)</text>
+  <text x="500" y="380" class="desc">Skill manifests, versioning, auto-grading</text>
+
+  <rect class="layer" x="50" y="405" width="900" height="35"/>
+  <text x="60" y="420" class="label">L8–L9: Reserved</text>
+  <text x="500" y="420" class="desc">(Numbered for future expansion)</text>
+
+  <rect class="layer" x="50" y="445" width="900" height="35"/>
+  <text x="60" y="460" class="label" fill="#ffd700">L10: Path-Gate &amp; Context Engineering</text>
+  <text x="500" y="460" class="desc">Hybrid model (preserve→adapt→merge), fs-write protection (fail-closed) (NEW v2.0)</text>
+
+  <!-- SECURITY &amp; COMPLIANCE (L16-L25) -->
+  <text x="50" y="505" class="title" fill="#ff006e">SECURITY &amp; COMPLIANCE (CRITICAL)</text>
+
+  <rect class="layer-critical" x="50" y="520" width="900" height="35"/>
+  <text x="60" y="535" class="label">L16: Security Hardening</text>
+  <text x="500" y="535" class="desc">Consent (deny-by-default), audit framing, TOCTOU prevention (GDPR Art. 6, 7)</text>
+
+  <rect class="layer" x="50" y="560" width="900" height="35"/>
+  <text x="60" y="575" class="label">L17: Engine Selection</text>
+  <text x="500" y="575" class="desc">Deprecated (replaced by L5 Skills)</text>
+
+  <rect class="layer" x="50" y="600" width="900" height="35"/>
+  <text x="60" y="615" class="label">L18–L21: User Management &amp; Roles</text>
+  <text x="500" y="615" class="desc">Disclosure, quota, proposal system, user lifecycle</text>
+
+  <rect class="layer-critical" x="50" y="640" width="900" height="35"/>
+  <text x="60" y="655" class="label" fill="#ffd700">L22: WorkerEngine Protocol (Skills Orchestration)</text>
+  <text x="500" y="655" class="desc">ClaudeCodeEngine, HermesEngine abstraction (NEW v2.0: os.workflow_optimizer Skill)</text>
+
+  <rect class="layer" x="50" y="680" width="900" height="35"/>
+  <text x="60" y="695" class="label">L23: Speech-to-Text (STT)</text>
+  <text x="500" y="695" class="desc">Metadata-only audit, no text recording (GDPR Art. 5)</text>
+
+  <rect class="layer" x="50" y="720" width="900" height="35"/>
+  <text x="60" y="735" class="label">L24: Large-Data Snapshot</text>
+  <text x="500" y="735" class="desc">Handle >100KB payloads, compress, chunk</text>
+
+  <rect class="layer" x="50" y="760" width="900" height="35"/>
+  <text x="60" y="775" class="label">L25: Compute Worker Protocol</text>
+  <text x="500" y="775" class="desc">Async task delegation to worker pool</text>
+
+  <!-- AUDIT &amp; DATA FLOW (L28-L38) -->
+  <text x="50" y="820" class="title" fill="#ffd700">AUDIT, DATA FLOW &amp; NETWORK</text>
+
+  <rect class="layer" x="50" y="835" width="900" height="35"/>
+  <text x="60" y="850" class="label">L28: Conversation Recall</text>
+  <text x="500" y="850" class="desc">Session history, artifact memory, context survival</text>
+
+  <rect class="layer" x="50" y="875" width="900" height="35"/>
+  <text x="60" y="890" class="label">L29–L30: Delegation &amp; Engine-Agnostic Forge</text>
+  <text x="500" y="890" class="desc">A2A protocol, multi-engine compatibility</text>
+
+  <rect class="layer" x="50" y="915" width="900" height="35"/>
+  <text x="60" y="930" class="label">L32–L33: Anonymization &amp; Artifact Memory</text>
+  <text x="500" y="930" class="desc">PII scrubbing, artifact storage + versioning</text>
+
+  <rect class="layer-critical" x="50" y="955" width="900" height="35"/>
+  <text x="60" y="970" class="label" fill="#ffd700">L34: Data Classification &amp; Flow Guard</text>
+  <text x="500" y="970" class="desc">4-stage × engine matrix, fail-closed flow validation (GDPR Art. 32)</text>
+
+  <rect class="layer-critical" x="50" y="995" width="900" height="35"/>
+  <text x="60" y="1010" class="label">L35: Network Egress Lockdown</text>
+  <text x="500" y="1010" class="desc">Allowed/forbidden hosts, EU_PRODUCTION presets (GDPR Art. 32)</text>
+
+  <rect class="layer" x="50" y="1035" width="900" height="35"/>
+  <text x="60" y="1050" class="label">L36: GDPR Art. 17 Erasure Orchestrator</text>
+  <text x="500" y="1050" class="desc">User data deletion, cascading purge across plugins</text>
+
+  <rect class="layer-critical" x="50" y="1075" width="900" height="35"/>
+  <text x="60" y="1090" class="label">L37: Audit-at-Rest Encryption &amp; Retention</text>
+  <text x="500" y="1090" class="desc">GPG rotation, RFC 3161 TSA, age/rotation retention (GDPR Art. 30, 32)</text>
+
+  <rect class="layer" x="50" y="1115" width="900" height="35"/>
+  <text x="60" y="1130" class="label">L38: RemoteTrigger &amp; A2A Task Protocol</text>
+  <text x="500" y="1130" class="desc">v6 protocol, instance attestation, envelope encryption</text>
+
+  <!-- FINAL LAYERS (L44, LIP, CLS) -->
+  <text x="50" y="1175" class="title" fill="#ff006e">FINAL ENFORCEMENT (CRITICAL)</text>
+
+  <rect class="layer-critical" x="50" y="1190" width="900" height="35"/>
+  <text x="60" y="1205" class="label">L44: House-Rules Gate (Fail-Closed)</text>
+  <text x="500" y="1205" class="desc">Acceptable-use enforcement, no disable flag (EU AI Act Art. 5, 50)</text>
+
+  <!-- Footer -->
+  <text x="50" y="1250" class="desc">KEY: 🔴 = CRITICAL (never disable) | 🟠 = Security (audit-first) | 🟢 = Feature | Skills implement L-layer contracts.</text>
+</svg>

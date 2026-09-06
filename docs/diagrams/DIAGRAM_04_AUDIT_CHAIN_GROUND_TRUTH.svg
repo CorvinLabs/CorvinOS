@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1400 950" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #0f0f0f; }
+      .title { font-size: 26px; font-weight: bold; fill: #ff6b9d; font-family: monospace; }
+      .subtitle { font-size: 18px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 12px; fill: #888; font-family: monospace; }
+      .chain-box { fill: #1a1a2e; stroke: #ff6b9d; stroke-width: 2; }
+      .event-box { fill: #16213e; stroke: #00ff88; stroke-width: 1.5; }
+      .proof-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
+      .arrow-chain { stroke: #ff6b9d; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-chain); }
+      .arrow-proof { stroke: #ffd700; stroke-width: 2; fill: none; marker-end: url(#arrowhead-proof); }
+      .code { font-size: 11px; fill: #00ff88; font-family: monospace; letter-spacing: -1px; }
+      .hash { font-size: 10px; fill: #666; font-family: monospace; word-break: break-all; }
+      .check { font-size: 14px; fill: #00ff88; font-family: monospace; }
+    </style>
+    <marker id="arrowhead-chain" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ff6b9d" />
+    </marker>
+    <marker id="arrowhead-proof" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ffd700" />
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1400" height="950"/>
+
+  <!-- Title -->
+  <text x="700" y="40" class="title" text-anchor="middle">Audit Chain as Ground Truth</text>
+  <text x="700" y="65" class="desc" text-anchor="middle">Immutable hash-chained proof system: GDPR Art. 30, 32 compliance via cryptographic evidence</text>
+
+  <!-- SECTION 1: Core Principle -->
+  <text x="50" y="110" class="subtitle">CORE PRINCIPLE: Every action → immutable event with cryptographic proof</text>
+
+  <rect class="chain-box" x="60" y="130" width="1310" height="60"/>
+  <text x="715" y="150" class="label" text-anchor="middle">Input: Task/Decision/Feedback/State-Change</text>
+  <text x="715" y="168" class="desc" text-anchor="middle">→ Audit Backend writes IMMUTABLE event to audit.jsonl (hash-chained) → Operator queries "show me the evidence"</text>
+
+  <!-- SECTION 2: Hash Chain Mechanics -->
+  <text x="50" y="230" class="subtitle">HASH CHAIN MECHANICS (Blockchain-style proof):</text>
+
+  <!-- Event 1 -->
+  <g id="event1">
+    <rect class="event-box" x="60" y="255" width="280" height="140"/>
+    <text x="200" y="273" class="code" text-anchor="middle">Event N</text>
+    <text x="200" y="290" class="desc" text-anchor="middle">{</text>
+    <text x="200" y="304" class="code" text-anchor="middle">tenant_id: "_default"</text>
+    <text x="200" y="318" class="code" text-anchor="middle">timestamp: "2026-09-06T12:34:56Z"</text>
+    <text x="200" y="332" class="code" text-anchor="middle">event_type: "skill_executed"</text>
+    <text x="200" y="346" class="code" text-anchor="middle">skill_id: "os.router"</text>
+    <text x="200" y="360" class="code" text-anchor="middle">output: "route_to_opus"</text>
+    <text x="200" y="374" class="code" text-anchor="middle">hash: "sha256(...abc123)"</text>
+    <text x="200" y="388" class="code" text-anchor="middle">prev_hash: "sha256(...xyz789)"</text>
+  </g>
+
+  <!-- Arrow to next -->
+  <path class="arrow-chain" d="M 340 325 L 370 325"/>
+
+  <!-- Event 2 -->
+  <g id="event2">
+    <rect class="event-box" x="370" y="255" width="280" height="140"/>
+    <text x="510" y="273" class="code" text-anchor="middle">Event N+1</text>
+    <text x="510" y="290" class="desc" text-anchor="middle">{</text>
+    <text x="510" y="304" class="code" text-anchor="middle">tenant_id: "_default"</text>
+    <text x="510" y="318" class="code" text-anchor="middle">timestamp: "2026-09-06T12:34:57Z"</text>
+    <text x="510" y="332" class="code" text-anchor="middle">event_type: "context_adapted"</text>
+    <text x="510" y="346" class="code" text-anchor="middle">context_id: "ctx_456"</text>
+    <text x="510" y="360" class="code" text-anchor="middle">preserved: ["task_id", ...]</text>
+    <text x="510" y="374" class="code" text-anchor="middle">hash: "sha256(...def456)"</text>
+    <text x="510" y="388" class="code" text-anchor="middle">prev_hash: "sha256(...abc123)" ← CHAINED</text>
+  </g>
+
+  <!-- Arrow to next -->
+  <path class="arrow-chain" d="M 650 325 L 680 325"/>
+
+  <!-- Event 3 -->
+  <g id="event3">
+    <rect class="event-box" x="680" y="255" width="280" height="140"/>
+    <text x="820" y="273" class="code" text-anchor="middle">Event N+2</text>
+    <text x="820" y="290" class="desc" text-anchor="middle">{</text>
+    <text x="820" y="304" class="code" text-anchor="middle">tenant_id: "_default"</text>
+    <text x="820" y="318" class="code" text-anchor="middle">timestamp: "2026-09-06T12:34:58Z"</text>
+    <text x="820" y="332" class="code" text-anchor="middle">event_type: "skill_feedback"</text>
+    <text x="820" y="346" class="code" text-anchor="middle">feedback: "outcome_correct"</text>
+    <text x="820" y="360" class="code" text-anchor="middle">signal: true</text>
+    <text x="820" y="374" class="code" text-anchor="middle">hash: "sha256(...ghi789)"</text>
+    <text x="820" y="388" class="code" text-anchor="middle">prev_hash: "sha256(...def456)" ← CHAINED</text>
+  </g>
+
+  <!-- Arrow to next -->
+  <path class="arrow-chain" d="M 960 325 L 990 325"/>
+
+  <!-- Event 4 (continues...) -->
+  <g id="event4">
+    <rect class="event-box" x="990" y="255" width="280" height="140"/>
+    <text x="1130" y="273" class="code" text-anchor="middle">Event N+3 ...</text>
+    <text x="1130" y="290" class="desc" text-anchor="middle">{</text>
+    <text x="1130" y="304" class="code" text-anchor="middle">tenant_id: "_default"</text>
+    <text x="1130" y="318" class="code" text-anchor="middle">timestamp: "2026-09-06T12:34:59Z"</text>
+    <text x="1130" y="332" class="code" text-anchor="middle">event_type: "optimizer_step"</text>
+    <text x="1130" y="346" class="code" text-anchor="middle">delta_w: [...+0.03, -0.01]</text>
+    <text x="1130" y="360" class="code" text-anchor="middle">convergence: 0.94</text>
+    <text x="1130" y="374" class="code" text-anchor="middle">hash: "sha256(...jkl012)"</text>
+    <text x="1130" y="388" class="code" text-anchor="middle">prev_hash: "sha256(...ghi789)" ← CHAINED</text>
+  </g>
+
+  <!-- Chain integrity line -->
+  <text x="700" y="420" class="desc" text-anchor="middle">INVARIANT: Every event's prev_hash == prior event's hash. Tampering any event breaks the chain.</text>
+
+  <!-- SECTION 3: What Gets Audited -->
+  <text x="50" y="455" class="subtitle">EVERYTHING IS AUDITED (6 subsystems):</text>
+
+  <g id="audit-types">
+    <rect class="event-box" x="60" y="475" width="200" height="80"/>
+    <text x="160" y="493" class="label" text-anchor="middle">Plugins</text>
+    <text x="160" y="508" class="desc" text-anchor="middle">plugin_loaded</text>
+    <text x="160" y="522" class="desc" text-anchor="middle">plugin_executed</text>
+    <text x="160" y="536" class="desc" text-anchor="middle">plugin_disabled</text>
+
+    <rect class="event-box" x="280" y="475" width="200" height="80"/>
+    <text x="380" y="493" class="label" text-anchor="middle">Skills (L5/L10/L22)</text>
+    <text x="380" y="508" class="desc" text-anchor="middle">skill_executed</text>
+    <text x="380" y="522" class="desc" text-anchor="middle">skill_config_updated</text>
+    <text x="380" y="536" class="desc" text-anchor="middle">skill_feedback</text>
+
+    <rect class="event-box" x="500" y="475" width="200" height="80"/>
+    <text x="600" y="493" class="label" text-anchor="middle">Security (L16)</text>
+    <text x="600" y="508" class="desc" text-anchor="middle">consent_granted</text>
+    <text x="600" y="522" class="desc" text-anchor="middle">consent_checked</text>
+    <text x="600" y="536" class="desc" text-anchor="middle">house_rule_denied</text>
+
+    <rect class="event-box" x="720" y="475" width="200" height="80"/>
+    <text x="820" y="493" class="label" text-anchor="middle">A2A (L38)</text>
+    <text x="820" y="508" class="desc" text-anchor="middle">a2a_task_received</text>
+    <text x="820" y="522" class="desc" text-anchor="middle">a2a_task_executed</text>
+    <text x="820" y="536" class="desc" text-anchor="middle">a2a_result_sent</text>
+
+    <rect class="event-box" x="940" y="475" width="200" height="80"/>
+    <text x="1040" y="493" class="label" text-anchor="middle">Learning (ADR-0314)</text>
+    <text x="1040" y="508" class="desc" text-anchor="middle">learning_feedback</text>
+    <text x="1040" y="522" class="desc" text-anchor="middle">optimizer_config_updated</text>
+    <text x="1040" y="536" class="desc" text-anchor="middle">optimizer_divergence</text>
+
+    <rect class="event-box" x="1160" y="475" width="200" height="80"/>
+    <text x="1260" y="493" class="label" text-anchor="middle">Audit Itself (L37)</text>
+    <text x="1260" y="508" class="desc" text-anchor="middle">audit_chain_verified</text>
+    <text x="1260" y="522" class="desc" text-anchor="middle">audit_snapshot</text>
+    <text x="1260" y="536" class="desc" text-anchor="middle">key_rotated (RFC 3161)</text>
+  </g>
+
+  <!-- SECTION 4: Tenant Isolation -->
+  <text x="50" y="590" class="subtitle">TENANT ISOLATION (GDPR Art. 5, 6, 32 compliance):</text>
+
+  <rect class="chain-box" x="60" y="610" width="1310" height="100"/>
+  <text x="715" y="630" class="label" text-anchor="middle">GOLDEN RULE: Every event carries tenant_id. NO cross-tenant queries without explicit tenant filter.</text>
+  <text x="715" y="650" class="code" text-anchor="middle">Audit read: SELECT * FROM audit.jsonl WHERE tenant_id = "_default" AND event_type = "skill_executed"</text>
+  <text x="715" y="668" class="code" text-anchor="middle">Fail-closed: NULL tenant_id → REJECTED (no event created, log alert)</text>
+  <text x="715" y="686" class="desc" text-anchor="middle">Verified on every read, write, and deletion (none allowed; append-only). Audit export includes tenant_id per event.</text>
+
+  <!-- SECTION 5: Operator Proof Workflow -->
+  <text x="50" y="745" class="subtitle">OPERATOR PROOF WORKFLOW ("Show me the evidence"):</text>
+
+  <g id="proof-workflow">
+    <!-- Query 1 -->
+    <rect class="proof-box" x="60" y="770" width="310" height="100"/>
+    <text x="215" y="790" class="label" text-anchor="middle">① Get Full Proof for Task</text>
+    <text x="215" y="808" class="code" text-anchor="middle">corvin audit show-task</text>
+    <text x="215" y="823" class="code" text-anchor="middle">&lt;task_id&gt;</text>
+    <text x="215" y="838" class="desc" text-anchor="middle">Output: All events for this task</text>
+    <text x="215" y="853" class="desc" text-anchor="middle">(hash chain verified as output)</text>
+
+    <!-- Arrow -->
+    <path class="arrow-proof" d="M 370 820 L 400 820"/>
+
+    <!-- Query 2 -->
+    <rect class="proof-box" x="400" y="770" width="310" height="100"/>
+    <text x="555" y="790" class="label" text-anchor="middle">② Verify Chain Integrity</text>
+    <text x="555" y="808" class="code" text-anchor="middle">corvin audit verify-chain</text>
+    <text x="555" y="823" class="code" text-anchor="middle">--tenant=_default</text>
+    <text x="555" y="838" class="desc" text-anchor="middle">Output: ✅ Chain height 142857,</text>
+    <text x="555" y="853" class="desc" text-anchor="middle">all hashes verified, 0 gaps</text>
+
+    <!-- Arrow -->
+    <path class="arrow-proof" d="M 710 820 L 740 820"/>
+
+    <!-- Query 3 -->
+    <rect class="proof-box" x="740" y="770" width="310" height="100"/>
+    <text x="895" y="790" class="label" text-anchor="middle">③ Extract Compliance Report</text>
+    <text x="895" y="808" class="code" text-anchor="middle">corvin audit export --format=pdf</text>
+    <text x="895" y="823" class="code" text-anchor="middle">--since=2026-09-01</text>
+    <text x="895" y="838" class="desc" text-anchor="middle">Output: Auditor-ready PDF</text>
+    <text x="895" y="853" class="desc" text-anchor="middle">(signatures + timestamps)</text>
+
+    <!-- Arrow -->
+    <path class="arrow-proof" d="M 1050 820 L 1080 820"/>
+
+    <!-- Query 4 -->
+    <rect class="proof-box" x="1080" y="770" width="290" height="100"/>
+    <text x="1225" y="790" class="label" text-anchor="middle">④ Trace Skill Decision</text>
+    <text x="1225" y="808" class="code" text-anchor="middle">corvin audit trace skill</text>
+    <text x="1225" y="823" class="code" text-anchor="middle">os.router --task=&lt;id&gt;</text>
+    <text x="1225" y="838" class="desc" text-anchor="middle">Output: Every event in decision</text>
+    <text x="1225" y="853" class="desc" text-anchor="middle">chain (config → exec → feedback)</text>
+  </g>
+
+  <!-- SECTION 6: Guarantees -->
+  <text x="50" y="895" class="subtitle">LOAD-BEARING GUARANTEES (Immutable contract):</text>
+
+  <rect class="chain-box" x="60" y="915" width="1310" height="30"/>
+  <text x="715" y="933" class="check" text-anchor="middle">✓ Append-only | ✓ Hash-chained | ✓ Tenant-scoped | ✓ Operator-queryable | ✓ RFC 3161 timestamped | ✓ GDPR Art. 30/32 compliant</text>
+</svg>

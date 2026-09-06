@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1400 950" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #0f0f0f; }
+      .title { font-size: 24px; font-weight: bold; fill: #ff006e; font-family: monospace; }
+      .step { fill: #1a1a2e; stroke: #ff006e; stroke-width: 2; }
+      .damping { fill: #16213e; stroke: #00ff88; stroke-width: 2; }
+      .label { font-size: 13px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 11px; fill: #888; font-family: monospace; }
+      .code { font-size: 12px; fill: #00ff88; font-family: monospace; }
+      .arrow { stroke: #ff006e; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-damping { stroke: #00ff88; stroke-width: 2; fill: none; marker-end: url(#arrowhead-damping); }
+      .graph { stroke: #ffd700; stroke-width: 1.5; fill: none; }
+      .gridline { stroke: #333; stroke-width: 0.5; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ff006e" />
+    </marker>
+    <marker id="arrowhead-damping" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#00ff88" />
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1400" height="950"/>
+
+  <text x="700" y="35" class="title" text-anchor="middle">Meta Loop + Tiered Damping: How It Works</text>
+  <text x="700" y="55" class="desc" text-anchor="middle">Why α=1% prevents oscillation while still learning</text>
+
+  <!-- SECTION 1: The Problem (Without Damping) -->
+  <text x="50" y="95" class="label">PROBLEM: Without Damping (α=100%, naive meta learning)</text>
+
+  <g id="problem">
+    <!-- Graph showing oscillation -->
+    <rect class="step" x="50" y="115" width="600" height="220"/>
+    <text x="350" y="135" class="label" text-anchor="middle">Oscillation Scenario (α=100%)</text>
+
+    <!-- Axes -->
+    <line class="gridline" x1="80" y1="320" x2="600" y2="320"/>
+    <line class="gridline" x1="80" y1="120" x2="80" y2="320"/>
+
+    <!-- Y-axis label -->
+    <text x="50" y="220" class="desc" text-anchor="middle">L_total</text>
+
+    <!-- Oscillating curve -->
+    <polyline class="graph" points="100,250 120,200 140,280 160,150 180,320 200,100 220,300"/>
+
+    <!-- Annotations -->
+    <text x="120" y="180" class="desc" fill="#ff006e">Step 1: w=0.5,0.3,0.2</text>
+    <text x="140" y="290" class="desc" fill="#ff006e">Step 2: meta swings→0.3,0.5,0.2</text>
+    <text x="180" y="140" class="desc" fill="#ff006e">Step 3: meta swings→0.5,0.3,0.2</text>
+    <text x="220" y="310" class="desc" fill="#ff006e">OSCILLATION!</text>
+
+    <!-- Result -->
+    <text x="350" y="355" class="desc" text-anchor="middle">❌ Loop never converges (weights flip every step)</text>
+  </g>
+
+  <!-- SECTION 2: The Solution (With Damping) -->
+  <text x="750" y="95" class="label">SOLUTION: With Damping (α=1%, slow learning)</text>
+
+  <g id="solution">
+    <!-- Graph showing convergence -->
+    <rect class="step" x="750" y="115" width="600" height="220"/>
+    <text x="1050" y="135" class="label" text-anchor="middle">Convergence with Damping (α=1%)</text>
+
+    <!-- Axes -->
+    <line class="gridline" x1="780" y1="320" x2="1300" y2="320"/>
+    <line class="gridline" x1="780" y1="120" x2="780" y2="320"/>
+
+    <!-- Y-axis label -->
+    <text x="750" y="220" class="desc" text-anchor="middle">L_total</text>
+
+    <!-- Smooth convergence curve -->
+    <polyline class="graph" points="800,280 820,270 840,260 860,250 880,245 900,242 920,240 940,240 960,240 980,240"/>
+
+    <!-- Annotations -->
+    <text x="820" y="295" class="desc" fill="#00ff88">Iteration 1: w=0.5,0.3,0.2</text>
+    <text x="860" y="265" class="desc" fill="#00ff88">Iter 100: gradual descent</text>
+    <text x="920" y="225" class="desc" fill="#00ff88">Iter 10K: CONVERGED ✓</text>
+
+    <!-- Result -->
+    <text x="1050" y="355" class="desc" text-anchor="middle">✅ Smooth convergence (no oscillation)</text>
+  </g>
+
+  <!-- SECTION 3: Damping Mechanism -->
+  <text x="50" y="385" class="label">DAMPING MECHANISM: Tiered Update Rates</text>
+
+  <g id="damping-tiers">
+    <!-- Tier 1 -->
+    <rect class="damping" x="50" y="405" width="280" height="140"/>
+    <text x="190" y="425" class="label" text-anchor="middle">TIER 1: Core (α₁=10%)</text>
+    <text x="190" y="443" class="code" text-anchor="middle">w_new = 0.9·w_old + 0.1·w'</text>
+    <text x="190" y="459" class="desc" text-anchor="middle">Update: 10% per step</text>
+    <text x="190" y="473" class="desc" text-anchor="middle">Convergence: ~2K samples</text>
+    <text x="190" y="487" class="desc" text-anchor="middle">Proven stable (ADR-0616)</text>
+    <text x="190" y="501" class="desc" text-anchor="middle">Status: ✓ LIVE</text>
+
+    <!-- Tier 2 -->
+    <rect class="damping" x="360" y="405" width="280" height="140"/>
+    <text x="500" y="425" class="label" text-anchor="middle">TIER 2: Infrastructure (α₂=5%)</text>
+    <text x="500" y="443" class="code" text-anchor="middle">w_new = 0.95·w_old + 0.05·w'</text>
+    <text x="500" y="459" class="desc" text-anchor="middle">Update: 5% per step</text>
+    <text x="500" y="473" class="desc" text-anchor="middle">Convergence: ~5K samples</text>
+    <text x="500" y="487" class="desc" text-anchor="middle">Slower (fewer signals)</text>
+    <text x="500" y="501" class="desc" text-anchor="middle">Status: 🆕 NEW (Phase 1)</text>
+
+    <!-- Tier 3 -->
+    <rect class="damping" x="670" y="405" width="280" height="140"/>
+    <text x="810" y="425" class="label" text-anchor="middle">TIER 3: Meta (α₃=1%)</text>
+    <text x="810" y="443" class="code" text-anchor="middle">w_new = 0.99·w_old + 0.01·w'</text>
+    <text x="810" y="459" class="desc" text-anchor="middle">Update: 1% per step</text>
+    <text x="810" y="473" class="desc" text-anchor="middle">Convergence: ~10K samples</text>
+    <text x="810" y="487" class="desc" text-anchor="middle">Slowest (highest-order)</text>
+    <text x="810" y="501" class="desc" text-anchor="middle">Status: 🆕 NEW (Phase 2)</text>
+
+    <!-- Penalty -->
+    <rect class="damping" x="980" y="405" width="370" height="140"/>
+    <text x="1165" y="425" class="label" text-anchor="middle">STABILITY PENALTY (λ=0.1)</text>
+    <text x="1165" y="443" class="code" text-anchor="middle">L_total -= λ·L_meta_stability</text>
+    <text x="1165" y="459" class="desc" text-anchor="middle">Penalizes large weight swings</text>
+    <text x="1165" y="473" class="desc" text-anchor="middle">Additional feedback: "Don't flip weights"</text>
+    <text x="1165" y="487" class="desc" text-anchor="middle">Works TOGETHER with damping</text>
+    <text x="1165" y="501" class="desc" text-anchor="middle">Result: Stable + predictable</text>
+  </g>
+
+  <!-- SECTION 4: Why This Works -->
+  <text x="50" y="585" class="label">WHY TIERED DAMPING WORKS:</text>
+
+  <g id="why-works">
+    <rect class="step" x="50" y="605" width="1300" height="200"/>
+
+    <text x="70" y="630" class="label">① Fast Core (α₁=10%): Proven to converge</text>
+    <text x="90" y="648" class="desc">• 6D core loops already converge in 2K samples (ADR-0616)</text>
+    <text x="90" y="662" class="desc">• No oscillation risk (per-loop feedback is immediate)</text>
+    <text x="90" y="676" class="desc">• Leave unchanged → stability guaranteed</text>
+
+    <text x="70" y="700" class="label">② Medium Infrastructure (α₂=5%): Different feedback rate</text>
+    <text x="90" y="718" class="desc">• L_memory gets per-request feedback (fast)</text>
+    <text x="90" y="732" class="desc">• L_plugins gets hourly metrics (slower signal)</text>
+    <text x="90" y="746" class="desc">• L_security gets daily audit data (slowest signal)</text>
+    <text x="90" y="760" class="desc">• 5% damping matches their varied feedback rates</text>
+
+    <text x="70" y="784" class="label">③ Slow Meta (α₃=1%): Prevent feedback cascade</text>
+    <text x="90" y="802" class="desc">• Meta observes Tier 1+2 convergence → tries to optimize w₁..w₆</text>
+    <text x="90" y="816" class="desc">• 1% update rate = ultra-conservative (takes 100 steps for 63% of max change)</text>
+    <text x="90" y="830" class="desc">• If meta's tweak makes L_total worse, next update is small and reversible</text>
+  </g>
+
+  <!-- SECTION 5: Operator Control -->
+  <text x="50" y="835" class="label">OPERATOR CONTROL (Hybrid Tuning):</text>
+
+  <g id="operator">
+    <rect class="step" x="50" y="855" width="1300" height="90"/>
+
+    <text x="70" y="875" class="code">w_hybrid = (1 - operator_weight)·w_meta + operator_weight·w_target</text>
+    <text x="70" y="893" class="desc">Default: operator_weight = 30%, meta_weight = 70%</text>
+    <text x="70" y="907" class="desc">Example: Operator wants routing=40%, but meta suggests=35% → w_hybrid = (0.7×0.35) + (0.3×0.40) = 0.365 (compromise)</text>
+    <text x="70" y="921" class="desc">Advantage: Operator intent is respected, but meta can still optimize around it. If meta is wrong, operator resets.</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="700" y="950" class="desc" text-anchor="middle">Result: Stable learning (no oscillation) + Operator control + Continuous optimization = Self-tuning system</text>
+</svg>

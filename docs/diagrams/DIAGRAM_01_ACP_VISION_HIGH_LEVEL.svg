@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark background -->
+  <defs>
+    <style>
+      .bg { fill: #0f0f0f; }
+      .box { fill: #1a1a2e; stroke: #00d4ff; stroke-width: 2; }
+      .box-accent { fill: #16213e; stroke: #00d4ff; stroke-width: 2; }
+      .title { font-size: 24px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .subtitle { font-size: 18px; font-weight: bold; fill: #eaeaea; font-family: monospace; }
+      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 12px; fill: #888; font-family: monospace; }
+      .arrow { stroke: #00d4ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-learn { stroke: #ff006e; stroke-width: 2; fill: none; marker-end: url(#arrowhead-learn); stroke-dasharray: 5,5; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
+    </marker>
+    <marker id="arrowhead-learn" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ff006e" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" width="1200" height="800"/>
+
+  <!-- Title -->
+  <text x="600" y="40" class="title" text-anchor="middle">CorvinOS v2.0: ACP Vision (Agentic Control Plane)</text>
+  <text x="600" y="65" class="desc" text-anchor="middle">Skills 2.0 as unified operating system control plane</text>
+
+  <!-- LAYER 1: User/External Interfaces (Input) -->
+  <g id="layer1">
+    <text x="50" y="110" class="subtitle">┌─ INPUT LAYER ─────────────────────────────────────────────────────────┐</text>
+    <rect class="box" x="60" y="120" width="200" height="60"/>
+    <text x="160" y="145" class="label" text-anchor="middle">CLI</text>
+    <text x="160" y="160" class="desc" text-anchor="middle">Corvin Commands</text>
+
+    <rect class="box" x="280" y="120" width="200" height="60"/>
+    <text x="380" y="145" class="label" text-anchor="middle">Web Console</text>
+    <text x="380" y="160" class="desc" text-anchor="middle">React + Real-time</text>
+
+    <rect class="box" x="500" y="120" width="200" height="60"/>
+    <text x="600" y="145" class="label" text-anchor="middle">Voice/Discord</text>
+    <text x="600" y="160" class="desc" text-anchor="middle">Bridge: Audio→Text</text>
+
+    <rect class="box" x="720" y="120" width="200" height="60"/>
+    <text x="820" y="145" class="label" text-anchor="middle">A2A (App-to-App)</text>
+    <text x="820" y="160" class="desc" text-anchor="middle">Task Envelope Protocol</text>
+
+    <rect class="box" x="940" y="120" width="200" height="60"/>
+    <text x="1040" y="145" class="label" text-anchor="middle">MCP Tools</text>
+    <text x="1040" y="160" class="desc" text-anchor="middle">Claude API Integration</text>
+  </g>
+
+  <!-- Arrows down to L5 -->
+  <path class="arrow" d="M 160 180 L 160 220"/>
+  <path class="arrow" d="M 380 180 L 380 220"/>
+  <path class="arrow" d="M 600 180 L 600 220"/>
+  <path class="arrow" d="M 820 180 L 820 220"/>
+  <path class="arrow" d="M 1040 180 L 1040 220"/>
+
+  <!-- LAYER 2: L5 Routing (Skills 2.0 - Skill 1) -->
+  <g id="layer2">
+    <text x="50" y="220" class="subtitle">┌─ L5: ROUTING (Skills-Driven) ──────────────────────────────────────────┐</text>
+    <rect class="box-accent" x="60" y="230" width="1080" height="80"/>
+
+    <rect class="box" x="80" y="245" width="300" height="50"/>
+    <text x="230" y="265" class="label" text-anchor="middle">os.delegation_router</text>
+    <text x="230" y="280" class="desc" text-anchor="middle">Route → Claude/Opus/Hermes</text>
+
+    <rect class="box" x="420" y="245" width="300" height="50"/>
+    <text x="570" y="265" class="label" text-anchor="middle">os.context_adapter</text>
+    <text x="570" y="280" class="desc" text-anchor="middle">User/Task Pattern Learning</text>
+
+    <rect class="box" x="760" y="245" width="340" height="50"/>
+    <text x="930" y="265" class="label" text-anchor="middle">Learning Loop (ADR-0314)</text>
+    <text x="930" y="280" class="desc" text-anchor="middle">Feedback → Config Tuning</text>
+  </g>
+
+  <!-- Arrows down to L10 -->
+  <path class="arrow" d="M 600 310 L 600 350"/>
+  <path class="arrow-learn" d="M 930 310 L 930 350"/>
+
+  <!-- LAYER 3: L10 Context (Hybrid Model) -->
+  <g id="layer3">
+    <text x="50" y="350" class="subtitle">┌─ L10: CONTEXT ENGINEERING ────────────────────────────────────────────┐</text>
+    <rect class="box-accent" x="60" y="360" width="1080" height="80"/>
+
+    <rect class="box" x="80" y="375" width="240" height="50"/>
+    <text x="200" y="395" class="label" text-anchor="middle">Original Context</text>
+    <text x="200" y="410" class="desc" text-anchor="middle">Immutable Base</text>
+
+    <rect class="box" x="350" y="375" width="240" height="50"/>
+    <text x="470" y="395" class="label" text-anchor="middle">Preserved Layers</text>
+    <text x="470" y="410" class="desc" text-anchor="middle">Truncation-Immune</text>
+
+    <rect class="box" x="620" y="375" width="240" height="50"/>
+    <text x="740" y="395" class="label" text-anchor="middle">Injected Signals</text>
+    <text x="740" y="410" class="desc" text-anchor="middle">Skills + Feedback</text>
+
+    <rect class="box" x="890" y="375" width="240" height="50"/>
+    <text x="1010" y="395" class="label" text-anchor="middle">Merged Output</text>
+    <text x="1010" y="410" class="desc" text-anchor="middle">LLM Prompt Ready</text>
+  </g>
+
+  <!-- Arrows down to L16/L22 -->
+  <path class="arrow" d="M 600 440 L 600 480"/>
+
+  <!-- LAYER 4: L16 Security + L22 Workflow -->
+  <g id="layer4">
+    <text x="50" y="480" class="subtitle">┌─ L16/L22: SECURITY + WORKFLOW ────────────────────────────────────────┐</text>
+
+    <rect class="box-accent" x="60" y="490" width="500" height="80"/>
+    <text x="310" y="510" class="label" text-anchor="middle">L16: Compliance Gates</text>
+    <rect class="box" x="80" y="520" width="200" height="30"/>
+    <text x="180" y="538" class="desc" text-anchor="middle">Consent | House-Rules</text>
+    <rect class="box" x="300" y="520" width="200" height="30"/>
+    <text x="400" y="538" class="desc" text-anchor="middle">Audit Chain (Immutable)</text>
+
+    <rect class="box-accent" x="600" y="490" width="540" height="80"/>
+    <text x="870" y="510" class="label" text-anchor="middle">L22: Workflow (Skills Orchestration)</text>
+    <rect class="box" x="620" y="520" width="200" height="30"/>
+    <text x="720" y="538" class="desc" text-anchor="middle">Skill DAG Composer</text>
+    <rect class="box" x="850" y="520" width="270" height="30"/>
+    <text x="985" y="538" class="desc" text-anchor="middle">Topological Sort + Validation</text>
+  </g>
+
+  <!-- Arrows to plugins/data -->
+  <path class="arrow" d="M 300 570 L 300 610"/>
+  <path class="arrow" d="M 870 570 L 870 610"/>
+
+  <!-- LAYER 5: Plugins + Learning -->
+  <g id="layer5">
+    <text x="50" y="610" class="subtitle">┌─ PLUGINS + LEARNING INFRASTRUCTURE ────────────────────────────────────┐</text>
+
+    <rect class="box-accent" x="60" y="620" width="500" height="70"/>
+    <text x="310" y="640" class="label" text-anchor="middle">Plugin System</text>
+    <rect class="box" x="80" y="650" width="180" height="25"/>
+    <text x="170" y="662" class="desc" text-anchor="middle">Boot Layers: Compliance|Core|Bundled</text>
+    <rect class="box" x="280" y="650" width="260" height="25"/>
+    <text x="410" y="662" class="desc" text-anchor="middle">Marketplace: Installed|Community</text>
+
+    <rect class="box-accent" x="600" y="620" width="540" height="70"/>
+    <text x="870" y="640" class="label" text-anchor="middle">Learning Infrastructure (6D Loss)</text>
+    <rect class="box" x="620" y="650" width="160" height="25"/>
+    <text x="700" y="662" class="desc" text-anchor="middle">Feedback Events</text>
+    <rect class="box" x="810" y="650" width="160" height="25"/>
+    <text x="890" y="662" class="desc" text-anchor="middle">Config Optimizer</text>
+    <rect class="box" x="1000" y="650" width="130" height="25"/>
+    <text x="1065" y="662" class="desc" text-anchor="middle">Confidence Score</text>
+  </g>
+
+  <!-- Feedback loop (dashed red) -->
+  <path class="arrow-learn" d="M 870 620 Q 870 550 930 500"/>
+  <text x="880" y="560" class="desc" fill="#ff006e">Feedback Loop</text>
+
+  <!-- Arrows to Audit -->
+  <path class="arrow" d="M 600 690 L 600 730"/>
+
+  <!-- LAYER 6: Audit Chain (Ground Truth) -->
+  <g id="layer6">
+    <text x="50" y="730" class="subtitle">┌─ AUDIT CHAIN (Ground Truth) ──────────────────────────────────────────┐</text>
+    <rect class="box-accent" x="60" y="740" width="1080" height="50"/>
+    <rect class="box" x="80" y="745" width="250" height="40"/>
+    <text x="205" y="765" class="label" text-anchor="middle">Immutable Hash-Chain</text>
+    <text x="205" y="778" class="desc" text-anchor="middle">sha256(event + prev_hash)</text>
+
+    <rect class="box" x="360" y="745" width="250" height="40"/>
+    <text x="485" y="765" class="label" text-anchor="middle">Tenant-Scoped Isolation</text>
+    <text x="485" y="778" class="desc" text-anchor="middle">GDPR Art. 5, 6, 32</text>
+
+    <rect class="box" x="640" y="745" width="250" height="40"/>
+    <text x="765" y="765" class="label" text-anchor="middle">Daily Verification</text>
+    <text x="765" y="778" class="desc" text-anchor="middle">RFC 3161 TSA Timestamping</text>
+
+    <rect class="box" x="920" y="745" width="200" height="40"/>
+    <text x="1020" y="765" class="label" text-anchor="middle">Operator Proof System</text>
+    <text x="1020" y="778" class="desc" text-anchor="middle">Show-me-evidence</text>
+  </g>
+
+  <!-- Legend -->
+  <text x="50" y="820" class="desc">Blue: Data Flow | Red Dashed: Learning Feedback Loop | All events hash-chained to audit trail</text>
+</svg>

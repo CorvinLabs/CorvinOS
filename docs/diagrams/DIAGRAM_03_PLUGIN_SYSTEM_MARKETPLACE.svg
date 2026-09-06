@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1400 850" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #0f0f0f; }
+      .title { font-size: 26px; font-weight: bold; fill: #00ff88; font-family: monospace; }
+      .subtitle { font-size: 18px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 12px; fill: #888; font-family: monospace; }
+      .plugin-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2; }
+      .market-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
+      .boot-box { fill: #1a1a2e; stroke: #ff006e; stroke-width: 2; }
+      .arrow { stroke: #00d4ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-market { stroke: #ffd700; stroke-width: 2; fill: none; marker-end: url(#arrowhead-market); }
+      .number { font-size: 16px; font-weight: bold; fill: #00ff88; font-family: monospace; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
+    </marker>
+    <marker id="arrowhead-market" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ffd700" />
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1400" height="850"/>
+
+  <!-- Title -->
+  <text x="700" y="40" class="title" text-anchor="middle">Plugin System &amp; Marketplace Architecture</text>
+  <text x="700" y="65" class="desc" text-anchor="middle">Boot Layers + Marketplace Integration + Registry Model (ADR-0243, ADR-0511)</text>
+
+  <!-- SECTION 1: Boot Layer Stack -->
+  <text x="50" y="110" class="subtitle">BOOT LAYER STACK (Load Order + Disableability):</text>
+
+  <g id="boot-layers">
+    <!-- Layer 1: Compliance (Meta-Skill, always-on) -->
+    <rect class="boot-box" x="60" y="130" width="200" height="90"/>
+    <text x="160" y="150" class="number" text-anchor="middle">TIER 0:</text>
+    <text x="160" y="168" class="label" text-anchor="middle">Compliance Meta-Skills</text>
+    <text x="160" y="185" class="desc" text-anchor="middle">Audit, Consent, Tripwire,</text>
+    <text x="160" y="198" class="desc" text-anchor="middle">House-Rules (LOCKED)</text>
+    <text x="160" y="211" class="desc" text-anchor="middle">✓ Always-On, Non-Override</text>
+
+    <!-- Layer 2: Core -->
+    <rect class="boot-box" x="290" y="130" width="200" height="90"/>
+    <text x="390" y="150" class="number" text-anchor="middle">TIER 1:</text>
+    <text x="390" y="168" class="label" text-anchor="middle">Core Plugins</text>
+    <text x="390" y="185" class="desc" text-anchor="middle">Routing, Context,</text>
+    <text x="390" y="198" class="desc" text-anchor="middle">Learning, Workflow</text>
+    <text x="390" y="211" class="desc" text-anchor="middle">⊕ Versioned, Replaceable</text>
+
+    <!-- Layer 3: Bundled -->
+    <rect class="boot-box" x="520" y="130" width="200" height="90"/>
+    <text x="620" y="150" class="number" text-anchor="middle">TIER 2:</text>
+    <text x="620" y="168" class="label" text-anchor="middle">Bundled Plugins</text>
+    <text x="620" y="185" class="desc" text-anchor="middle">Memory, Cache, Telemetry,</text>
+    <text x="620" y="198" class="desc" text-anchor="middle">Integration, Data Processing</text>
+    <text x="620" y="211" class="desc" text-anchor="middle">⊕ Disableable (local test)</text>
+
+    <!-- Layer 4: Installed -->
+    <rect class="market-box" x="750" y="130" width="200" height="90"/>
+    <text x="850" y="150" class="number" text-anchor="middle">TIER 3:</text>
+    <text x="850" y="168" class="label" text-anchor="middle">Installed Plugins</text>
+    <text x="850" y="185" class="desc" text-anchor="middle">From Marketplace,</text>
+    <text x="850" y="198" class="desc" text-anchor="middle">Downloaded, Vetted</text>
+    <text x="850" y="211" class="desc" text-anchor="middle">⊕ Enable/Disable per tenant</text>
+
+    <!-- Layer 5: Community -->
+    <rect class="market-box" x="980" y="130" width="200" height="90"/>
+    <text x="1080" y="150" class="number" text-anchor="middle">TIER 4:</text>
+    <text x="1080" y="168" class="label" text-anchor="middle">Community Plugins</text>
+    <text x="1080" y="185" class="desc" text-anchor="middle">From Marketplace,</text>
+    <text x="1080" y="198" class="desc" text-anchor="middle">Community-Contributed</text>
+    <text x="1080" y="211" class="desc" text-anchor="middle">⊕ Sandbox (limited scope)</text>
+
+    <!-- Layer 6: Custom -->
+    <rect class="plugin-box" x="1210" y="130" width="170" height="90"/>
+    <text x="1295" y="150" class="number" text-anchor="middle">TIER 5:</text>
+    <text x="1295" y="168" class="label" text-anchor="middle">Custom (Future)</text>
+    <text x="1295" y="185" class="desc" text-anchor="middle">Operator-Built,</text>
+    <text x="1295" y="198" class="desc" text-anchor="middle">Namespace-Gated</text>
+    <text x="1295" y="211" class="desc" text-anchor="middle">⊕ Fail-Closed Sandbox</text>
+  </g>
+
+  <!-- SECTION 2: Plugin Lifecycle (left column) -->
+  <text x="50" y="280" class="subtitle">PLUGIN LIFECYCLE (Install → Load → Execute → Audit):</text>
+
+  <g id="lifecycle">
+    <!-- Step 1: Discover -->
+    <rect class="plugin-box" x="60" y="305" width="220" height="110"/>
+    <text x="170" y="323" class="label" text-anchor="middle">① DISCOVER</text>
+    <text x="170" y="342" class="desc" text-anchor="middle">Marketplace Index</text>
+    <text x="170" y="356" class="desc" text-anchor="middle">(HTTP GET /plugins)</text>
+    <text x="170" y="370" class="desc" text-anchor="middle">Returns: plugin.json + metadata</text>
+    <text x="170" y="384" class="desc" text-anchor="middle">(name, version, boot_layer,</text>
+    <text x="170" y="398" class="desc" text-anchor="middle">dependencies, checksums)</text>
+
+    <!-- Arrow -->
+    <path class="arrow" d="M 280 360 L 300 360"/>
+
+    <!-- Step 2: Download -->
+    <rect class="plugin-box" x="300" y="305" width="220" height="110"/>
+    <text x="410" y="323" class="label" text-anchor="middle">② DOWNLOAD</text>
+    <text x="410" y="342" class="desc" text-anchor="middle">Marketplace (tar.gz)</text>
+    <text x="410" y="356" class="desc" text-anchor="middle">Verify checksums</text>
+    <text x="410" y="370" class="desc" text-anchor="middle">Extract to:</text>
+    <text x="410" y="384" class="desc" text-anchor="middle">~/.corvin/plugins/&lt;id&gt;/</text>
+    <text x="410" y="398" class="desc" text-anchor="middle">Audit: plugin_installed event</text>
+
+    <!-- Arrow -->
+    <path class="arrow" d="M 520 360 L 540 360"/>
+
+    <!-- Step 3: Boot -->
+    <rect class="boot-box" x="540" y="305" width="220" height="110"/>
+    <text x="650" y="323" class="label" text-anchor="middle">③ BOOT</text>
+    <text x="650" y="342" class="desc" text-anchor="middle">Topological sort by</text>
+    <text x="650" y="356" class="desc" text-anchor="middle">dependencies (DAG validate)</text>
+    <text x="650" y="370" class="desc" text-anchor="middle">Denied boot layers:</text>
+    <text x="650" y="384" class="desc" text-anchor="middle">Compliance (always), Core</text>
+    <text x="650" y="398" class="desc" text-anchor="middle">Audit: plugin_loaded event</text>
+
+    <!-- Arrow -->
+    <path class="arrow" d="M 760 360 L 780 360"/>
+
+    <!-- Step 4: Execute -->
+    <rect class="plugin-box" x="780" y="305" width="220" height="110"/>
+    <text x="890" y="323" class="label" text-anchor="middle">④ EXECUTE</text>
+    <text x="890" y="342" class="desc" text-anchor="middle">In-process or subprocess</text>
+    <text x="890" y="356" class="desc" text-anchor="middle">(depends on trust boundary)</text>
+    <text x="890" y="370" class="desc" text-anchor="middle">Plugin.execute() called</text>
+    <text x="890" y="384" class="desc" text-anchor="middle">Input/output → audit trail</text>
+    <text x="890" y="398" class="desc" text-anchor="middle">Audit: plugin_executed event</text>
+
+    <!-- Arrow -->
+    <path class="arrow" d="M 1000 360 L 1020 360"/>
+
+    <!-- Step 5: Audit -->
+    <rect class="boot-box" x="1020" y="305" width="310" height="110"/>
+    <text x="1175" y="323" class="label" text-anchor="middle">⑤ AUDIT + VERIFY</text>
+    <text x="1175" y="342" class="desc" text-anchor="middle">Entry in audit.jsonl (hash-chained)</text>
+    <text x="1175" y="356" class="desc" text-anchor="middle">Tenant isolation: tenant_id filter</text>
+    <text x="1175" y="370" class="desc" text-anchor="middle">Attribution: plugin_id + version</text>
+    <text x="1175" y="384" class="desc" text-anchor="middle">Payload hash: detect tampering</text>
+    <text x="1175" y="398" class="desc" text-anchor="middle">Audit: plugin_audited event</text>
+  </g>
+
+  <!-- SECTION 3: Marketplace Integration (right column) -->
+  <text x="60" y="460" class="subtitle">MARKETPLACE INTEGRATION (Central Repository):</text>
+
+  <g id="marketplace">
+    <!-- Marketplace structure -->
+    <rect class="market-box" x="60" y="480" width="1310" height="150"/>
+
+    <rect class="plugin-box" x="80" y="495" width="220" height="120"/>
+    <text x="190" y="515" class="label" text-anchor="middle">Marketplace Index</text>
+    <text x="190" y="532" class="desc" text-anchor="middle">File: plugins/index.json</text>
+    <text x="190" y="546" class="desc" text-anchor="middle">Schema: [plugin][] with</text>
+    <text x="190" y="560" class="desc" text-anchor="middle">- id (unique)</text>
+    <text x="190" y="574" class="desc" text-anchor="middle">- version (semver)</text>
+    <text x="190" y="588" class="desc" text-anchor="middle">- boot_layer</text>
+
+    <rect class="plugin-box" x="330" y="495" width="220" height="120"/>
+    <text x="440" y="515" class="label" text-anchor="middle">Plugin Source (tar.gz)</text>
+    <text x="440" y="532" class="desc" text-anchor="middle">Location: plugins/buildin/</text>
+    <text x="440" y="546" class="desc" text-anchor="middle">&lt;category&gt;/&lt;name&gt;/</text>
+    <text x="440" y="560" class="desc" text-anchor="middle">Contains: src/, tests/,</text>
+    <text x="440" y="574" class="desc" text-anchor="middle">README.md, plugin.json</text>
+    <text x="440" y="588" class="desc" text-anchor="middle">(source_url → marketplace)</text>
+
+    <rect class="plugin-box" x="580" y="495" width="220" height="120"/>
+    <text x="690" y="515" class="label" text-anchor="middle">Vetted Registry</text>
+    <text x="690" y="532" class="desc" text-anchor="middle">Category-org (memory,</text>
+    <text x="690" y="546" class="desc" text-anchor="middle">security, integration,</text>
+    <text x="690" y="560" class="desc" text-anchor="middle">observability)</text>
+    <text x="690" y="574" class="desc" text-anchor="middle">Per-category maintainers</text>
+    <text x="690" y="588" class="desc" text-anchor="middle">Review gate (security + tests)</text>
+
+    <rect class="plugin-box" x="830" y="495" width="220" height="120"/>
+    <text x="940" y="515" class="label" text-anchor="middle">Checksum Integrity</text>
+    <text x="940" y="532" class="desc" text-anchor="middle">SHA256: plugin.tar.gz</text>
+    <text x="940" y="546" class="desc" text-anchor="middle">Recorded in index.json</text>
+    <text x="940" y="560" class="desc" text-anchor="middle">Verified at download</text>
+    <text x="940" y="574" class="desc" text-anchor="middle">(fail-closed on mismatch)</text>
+    <text x="940" y="588" class="desc" text-anchor="middle">Audit: checksum_verified</text>
+
+    <rect class="plugin-box" x="1080" y="495" width="280" height="120"/>
+    <text x="1220" y="515" class="label" text-anchor="middle">Remote Discovery Protocol</text>
+    <text x="1220" y="532" class="desc" text-anchor="middle">POST /v1/console/marketplace/sync</text>
+    <text x="1220" y="546" class="desc" text-anchor="middle">Returns: Full index + new versions</text>
+    <text x="1220" y="560" class="desc" text-anchor="middle">Caching: Local TTL 1h</text>
+    <text x="1220" y="574" class="desc" text-anchor="middle">Offline fallback: ~/.corvin/</text>
+    <text x="1220" y="588" class="desc" text-anchor="middle">plugins/cache/</text>
+  </g>
+
+  <!-- SECTION 4: Trust Boundaries -->
+  <text x="60" y="680" class="subtitle">TRUST BOUNDARIES &amp; ISOLATION:</text>
+
+  <g id="trust">
+    <!-- In-Process Plugins (Compliance, Core) -->
+    <rect class="boot-box" x="60" y="705" width="300" height="120"/>
+    <text x="210" y="725" class="label" text-anchor="middle">IN-PROCESS</text>
+    <text x="210" y="742" class="desc" text-anchor="middle">(Compliance, Core)</text>
+    <text x="210" y="756" class="desc" text-anchor="middle">• No sandbox (trusted code)</text>
+    <text x="210" y="770" class="desc" text-anchor="middle">• Direct memory access</text>
+    <text x="210" y="784" class="desc" text-anchor="middle">• Synchronous (fast)</text>
+    <text x="210" y="798" class="desc" text-anchor="middle">• Audit: Every call logged</text>
+    <text x="210" y="812" class="desc" text-anchor="middle">• Fail-Closed: Error → halt</text>
+
+    <!-- Subprocess Plugins (Community) -->
+    <rect class="market-box" x="400" y="705" width="300" height="120"/>
+    <text x="550" y="725" class="label" text-anchor="middle">SUBPROCESS</text>
+    <text x="550" y="742" class="desc" text-anchor="middle">(Community, Custom)</text>
+    <text x="550" y="756" class="desc" text-anchor="middle">• Process-level isolation</text>
+    <text x="550" y="770" class="desc" text-anchor="middle">• IPC via JSON-RPC</text>
+    <text x="550" y="784" class="desc" text-anchor="middle">• Timeout: 30s max</text>
+    <text x="550" y="798" class="desc" text-anchor="middle">• Audit: In/out payloads</text>
+    <text x="550" y="812" class="desc" text-anchor="middle">• Kill on timeout/error</text>
+
+    <!-- Namespace Gating -->
+    <rect class="plugin-box" x="740" y="705" width="320" height="120"/>
+    <text x="900" y="725" class="label" text-anchor="middle">NAMESPACE GATING</text>
+    <text x="900" y="742" class="desc" text-anchor="middle">(Prefix-based identity)</text>
+    <text x="900" y="756" class="desc" text-anchor="middle">• Core plugins: os.*</text>
+    <text x="900" y="770" class="desc" text-anchor="middle">• Buildin: buildin.*</text>
+    <text x="900" y="784" class="desc" text-anchor="middle">• Community: &lt;vendor&gt;.*</text>
+    <text x="900" y="798" class="desc" text-anchor="middle">• Scope: Operator-managed</text>
+    <text x="900" y="812" class="desc" text-anchor="middle">• Reject: prefix mismatch</text>
+
+    <!-- Manifest Validation -->
+    <rect class="boot-box" x="1100" y="705" width="270" height="120"/>
+    <text x="1235" y="725" class="label" text-anchor="middle">MANIFEST VALIDATION</text>
+    <text x="1235" y="742" class="desc" text-anchor="middle">(Static + Runtime Checks)</text>
+    <text x="1235" y="756" class="desc" text-anchor="middle">• Schema: plugin.json</text>
+    <text x="1235" y="770" class="desc" text-anchor="middle">• Signatures: GPG (TBD)</text>
+    <text x="1235" y="784" class="desc" text-anchor="middle">• Deny: missing required_checks</text>
+    <text x="1235" y="798" class="desc" text-anchor="middle">• Audit: manifest_loaded event</text>
+    <text x="1235" y="812" class="desc" text-anchor="middle">• Halt on invalid</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="60" y="850" class="desc">ADR-0243 (Plugin Boot Layers), ADR-0511 (Marketplace), ADR-0233 (Audit), ADR-0241 (Trust Boundaries)</text>
+</svg>
