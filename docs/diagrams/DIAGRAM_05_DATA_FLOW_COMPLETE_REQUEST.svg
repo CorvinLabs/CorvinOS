@@ -1,31 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" width="1400" height="900" font-family="Segoe UI, Arial, sans-serif">
   <defs>
-    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#3d2550"/><stop offset="100%" style="stop-color:#1a1a6e"/></linearGradient>
-    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#2d3e7e"/><stop offset="100%" style="stop-color:#e74c3c"/></linearGradient>
-    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#f39c12"/><stop offset="100%" style="stop-color:#e74c3c"/></linearGradient>
-    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#27ae60"/><stop offset="100%" style="stop-color:#f39c12"/></linearGradient>
-    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#3498db"/><stop offset="100%" style="stop-color:#27ae60"/></linearGradient>
+    
+    
+    
+    
+    
   </defs>
   <rect width="1400" height="900" fill="#0f0f1e"/>
   <text x="700" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">Complete Request Flow</text>
   <line x1="100" y1="70" x2="1300" y2="70" stroke="#333" stroke-width="1"/>
 
-  <rect x="100" y="120" width="1200" height="70" rx="8" fill="url(#g1)"/>
+  <rect x="100" y="120" width="1200" height="70" rx="8" fill="#2d3e6e"/>
   <text x="700" y="155" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">1. Input (CLI/Web/Voice/A2A)</text>
 
-  <rect x="100" y="220" width="1200" height="70" rx="8" fill="url(#g2)"/>
+  <rect x="100" y="220" width="1200" height="70" rx="8" fill="#2d3e6e"/>
   <text x="700" y="255" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">2. L5 Routing + L10 Context (Skills)</text>
 
-  <rect x="100" y="320" width="1200" height="70" rx="8" fill="url(#g3)"/>
+  <rect x="100" y="320" width="1200" height="70" rx="8" fill="#2d3e6e"/>
   <text x="700" y="355" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">3. L22 Workflow (DAG Orchestration)</text>
 
-  <rect x="100" y="420" width="1200" height="70" rx="8" fill="url(#g4)"/>
+  <rect x="100" y="420" width="1200" height="70" rx="8" fill="#2d3e6e"/>
   <text x="700" y="455" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">4. LLM Execution + Learning Event Emission</text>
 
-  <rect x="100" y="520" width="1200" height="70" rx="8" fill="url(#g5)"/>
+  <rect x="100" y="520" width="1200" height="70" rx="8" fill="#2d3e6e"/>
   <text x="700" y="555" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">5. Response + Audit Trail + Metrics</text>
 
-  <rect x="100" y="640" width="1200" height="120" rx="8" fill="url(#g2)"/>
+  <rect x="100" y="640" width="1200" height="120" rx="8" fill="#2d3e6e"/>
   <text x="700" y="680" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">✓ All events logged, hash-chained, auditable</text>
   <text x="700" y="705" text-anchor="middle" fill="#ddd" font-size="11">Every step emits audit event • Tenant-scoped • GDPR compliant</text>
   <text x="700" y="730" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Operator can prove complete execution chain</text>
