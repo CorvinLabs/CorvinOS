@@ -1,0 +1,146 @@
+# Monitoring SLOs for Phase 1–4 Production Deployment
+# Tracks 6 metrics across 2 dashboards + 4 alerts
+
+dashboards:
+  - name: "Phase 1–4 Health"
+    panels:
+      - metric: "error_rate"
+        type: "gauge"
+        unit: "%"
+        thresholds:
+          ok: "< 0.1"
+          warning: "0.1–0.5"
+          critical: "> 0.5"
+        target: "< 0.1%"
+
+      - metric: "p99_latency"
+        type: "line"
+        unit: "ms"
+        thresholds:
+          ok: "< 375"
+          warning: "375–400"
+          critical: "> 400"
+        target: "340 ± 10%"
+
+      - metric: "context_filter_accuracy"
+        type: "gauge"
+        unit: "%"
+        thresholds:
+          ok: "> 80"
+          warning: "60–80"
+          critical: "< 60"
+        target: ">= 80%"
+
+      - metric: "learning_convergence"
+        type: "histogram"
+        unit: "iterations"
+        thresholds:
+          ok: "< 1000"
+          warning: "1000–1500"
+          critical: "> 1500"
+        target: "< 1000 samples"
+
+  - name: "Audit & Compliance"
+    panels:
+      - metric: "audit_chain_height"
+        type: "counter"
+        unit: "events"
+        target: "Monotonically increasing"
+
+      - metric: "deletion_completeness"
+        type: "gauge"
+        unit: "%"
+        thresholds:
+          ok: "100"
+          critical: "< 100"
+        target: "100% (all data deleted)"
+
+      - metric: "tenant_isolation_violations"
+        type: "counter"
+        unit: "count"
+        target: "0 (zero tolerance)"
+
+      - metric: "pii_leakage_detections"
+        type: "counter"
+        unit: "count"
+        target: "0 (zero tolerance)"
+
+alerts:
+  - name: "ERROR_RATE_HIGH"
+    condition: "error_rate > 0.001"
+    severity: "CRITICAL"
+    action: "Page oncall, evaluate rollback"
+    duration: "5 min sustained"
+
+  - name: "P99_LATENCY_REGRESSION"
+    condition: "p99_latency > 400"
+    severity: "HIGH"
+    action: "Alert ops, investigate Skills"
+    duration: "10 min sustained"
+
+  - name: "LEARNING_DIVERGENCE"
+    condition: "learning_convergence > 1500"
+    severity: "HIGH"
+    action: "Alert data team, freeze profiles"
+    duration: "immediate"
+
+  - name: "AUDIT_CHAIN_BROKEN"
+    condition: "audit_chain_height == previous_height for 5 min"
+    severity: "CRITICAL"
+    action: "Immediate escalation, audit investigation"
+    duration: "immediate"
+
+slos:
+  - name: "Availability"
+    metric: "error_rate"
+    target: "99.9% uptime (error_rate < 0.1%)"
+    window: "30 days"
+
+  - name: "Latency"
+    metric: "p99_latency"
+    target: "340ms ± 10% (306–374ms)"
+    window: "30 days"
+
+  - name: "Learning Quality"
+    metric: "context_filter_accuracy"
+    target: ">= 80% F1 score"
+    window: "7 days"
+
+  - name: "GDPR Compliance"
+    metric: "deletion_completeness"
+    target: "100% (all deletion requests complete)"
+    window: "30 days"
+
+escalation:
+  - level: 1
+    on: "Single threshold breach"
+    action: "Log alert, watch for 10 min"
+
+  - level: 2
+    on: "Threshold breached for 30 min"
+    action: "Notify ops lead"
+
+  - level: 3
+    on: "Multiple SLOs breached OR CRITICAL alert"
+    action: "Page oncall engineer"
+
+  - level: 4
+    on: "Service down OR data integrity issue"
+    action: "Page engineering lead + manager + initiate incident response"
+
+rollback_triggers:
+  - metric: "error_rate"
+    condition: "> 1%"
+    action: "Automatic rollback to old personas (traffic 100→0)"
+
+  - metric: "p99_latency"
+    condition: "> 500ms (47% regression)"
+    action: "Manual review + potential rollback"
+
+  - metric: "audit_chain_broken"
+    condition: "true"
+    action: "Immediate rollback + incident"
+
+  - metric: "tenant_isolation_violation"
+    condition: "true"
+    action: "Immediate rollback + security incident"
