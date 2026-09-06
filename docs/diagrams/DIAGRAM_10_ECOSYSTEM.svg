@@ -1,128 +1,80 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 1100" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 950" width="1200" height="950" font-family="Segoe UI, Arial, sans-serif">
   <defs>
-    <style>
-      .bg { fill: #0a0e27; }
-      .title { font-size: 44px; font-weight: bold; fill: #00d4ff; font-family: 'Segoe UI', monospace; letter-spacing: 1px; }
-      .layer-title { font-size: 26px; font-weight: bold; fill: #ffd700; font-family: monospace; }
-      .box { fill: #1a2847; stroke: #00ff88; stroke-width: 2.5; rx: 8; }
-      .core-box { fill: #0d1929; stroke: #00d4ff; stroke-width: 3; rx: 8; }
-      .big-label { font-size: 20px; font-weight: bold; fill: #00ff88; font-family: monospace; }
-      .medium-label { font-size: 16px; fill: #a8dadc; font-family: monospace; }
-      .divider { stroke: #333; stroke-width: 1; }
-    </style>
-  </defs>
-
-  <rect class="bg" width="1400" height="1100"/>
-
-  <!-- GRADIENT ACCENT -->
-  <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.1" />
-      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    <linearGradient id="g0" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a1a3e"/>
+      <stop offset="100%" style="stop-color:#2d1b3e"/>
+    </linearGradient>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3d2550"/>
+      <stop offset="100%" style="stop-color:#1a1a5e"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2d3e6e"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f39c12"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#27ae60"/>
+      <stop offset="100%" style="stop-color:#f39c12"/>
+    </linearGradient>
+    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3498db"/>
+      <stop offset="100%" style="stop-color:#27ae60"/>
     </linearGradient>
   </defs>
-  <rect x="0" y="0" width="1400" height="1100" fill="url(#grad)"/>
 
-  <!-- TITLE -->
-  <text x="700" y="60" class="title" text-anchor="middle">CorvinOS Architecture</text>
-  <line class="divider" x1="200" y1="80" x2="1200" y2="80"/>
+  <!-- Background -->
+  <rect width="1200" height="950" rx="0" fill="#0f0f1e"/>
 
-  <!-- INPUT INTERFACES -->
-  <text x="700" y="130" class="layer-title" text-anchor="middle">📥 Input Channels</text>
+  <!-- Title -->
+  <text x="600" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">CorvinOS Architecture</text>
+  <text x="600" y="75" text-anchor="middle" fill="#999" font-size="12">Self-learning • Auditable • Multi-engine</text>
+  <line x1="100" y1="90" x2="1100" y2="90" stroke="#333" stroke-width="1"/>
 
-  <g>
-    <rect class="box" x="120" y="160" width="240" height="90" rx="6"/>
-    <text x="240" y="195" class="big-label" text-anchor="middle">🖥️ CLI</text>
-    <text x="240" y="220" class="medium-label" text-anchor="middle">Commands</text>
-  </g>
+  <!-- INPUT LAYER -->
+  <rect x="60" y="120" width="1080" height="65" rx="8" fill="url(#g0)"/>
+  <text x="80" y="142" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">INPUTS</text>
+  <text x="80" y="160" fill="#fff" font-size="15" font-weight="bold">Multiple Channels</text>
+  <text x="1080" y="150" text-anchor="end" fill="#fff" font-size="11" opacity="0.8">CLI • Web • Voice • A2A</text>
 
-  <g>
-    <rect class="box" x="410" y="160" width="240" height="90" rx="6"/>
-    <text x="530" y="195" class="big-label" text-anchor="middle">🌐 Web</text>
-    <text x="530" y="220" class="medium-label" text-anchor="middle">Dashboard</text>
-  </g>
-
-  <g>
-    <rect class="box" x="700" y="160" width="240" height="90" rx="6"/>
-    <text x="820" y="195" class="big-label" text-anchor="middle">🎤 Voice</text>
-    <text x="820" y="220" class="medium-label" text-anchor="middle">Discord</text>
-  </g>
-
-  <g>
-    <rect class="box" x="990" y="160" width="240" height="90" rx="6"/>
-    <text x="1110" y="195" class="big-label" text-anchor="middle">🔗 A2A</text>
-    <text x="1110" y="220" class="medium-label" text-anchor="middle">App-to-App</text>
-  </g>
-
-  <!-- FLOW ARROWS -->
-  <path d="M 240 250 L 240 310" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
-  <path d="M 530 250 L 530 310" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
-  <path d="M 820 250 L 820 310" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
-  <path d="M 1110 250 L 1110 310" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
-
-  <!-- ACP SKILLS LAYER -->
-  <text x="700" y="350" class="layer-title" text-anchor="middle">🧠 Agentic Control Plane (ACP)</text>
-
-  <g>
-    <rect class="core-box" x="100" y="380" width="320" height="110" rx="8"/>
-    <text x="260" y="415" class="big-label" text-anchor="middle">L5: Routing</text>
-    <text x="260" y="445" class="medium-label" text-anchor="middle">Pick best engine</text>
-  </g>
-
-  <g>
-    <rect class="core-box" x="540" y="380" width="320" height="110" rx="8"/>
-    <text x="700" y="415" class="big-label" text-anchor="middle">L10: Context</text>
-    <text x="700" y="445" class="medium-label" text-anchor="middle">Preserve facts</text>
-  </g>
-
-  <g>
-    <rect class="core-box" x="980" y="380" width="320" height="110" rx="8"/>
-    <text x="1140" y="415" class="big-label" text-anchor="middle">L22: Workflow</text>
-    <text x="1140" y="445" class="medium-label" text-anchor="middle">Execute DAG</text>
-  </g>
-
-  <!-- FLOW ARROWS -->
-  <path d="M 260 490 L 260 550" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
-  <path d="M 700 490 L 700 550" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
-  <path d="M 1140 490 L 1140 550" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+  <!-- ACP LAYER -->
+  <rect x="60" y="210" width="1080" height="130" rx="8" fill="url(#g1)"/>
+  <text x="80" y="232" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">L5-L22</text>
+  <text x="80" y="250" fill="#fff" font-size="15" font-weight="bold">Agentic Control Plane (Skills 2.0)</text>
+  <text x="80" y="270" fill="#ddd" font-size="11">Every decision made by versioned, learnable Skills</text>
+  <text x="1080" y="240" text-anchor="end" fill="#fff" font-size="11" opacity="0.8">L5: Routing | L10: Context | L22: Workflow</text>
+  <text x="1080" y="260" text-anchor="end" fill="#fff" font-size="11" opacity="0.8">Smart engine selection • Token optimization • DAG execution</text>
 
   <!-- LEARNING LAYER -->
-  <text x="700" y="600" class="layer-title" text-anchor="middle">📊 Learning Loop</text>
+  <rect x="60" y="365" width="1080" height="90" rx="8" fill="url(#g2)"/>
+  <text x="80" y="387" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">LEARNING</text>
+  <text x="80" y="405" fill="#fff" font-size="15" font-weight="bold">9D Self-Optimization Loop</text>
+  <text x="80" y="425" fill="#ddd" font-size="11">6 Core + 3 Infrastructure + 1 Meta Loop • Converges <10K samples</text>
 
-  <rect class="box" x="150" y="630" width="1100" height="90" rx="8"/>
-  <text x="700" y="665" class="big-label" text-anchor="middle">9D Loss Vector: Automatic Self-Optimization</text>
-  <text x="700" y="690" class="medium-label" text-anchor="middle">6 Core + 3 Infrastructure + 1 Meta Loop</text>
-
-  <!-- FLOW ARROWS -->
-  <path d="M 700 720 L 700 770" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+  <!-- INFRASTRUCTURE LAYER -->
+  <rect x="60" y="480" width="1080" height="90" rx="8" fill="url(#g3)"/>
+  <text x="80" y="502" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">INFRASTRUCTURE</text>
+  <text x="80" y="520" fill="#fff" font-size="15" font-weight="bold">Plugins • Marketplace • 5 Trust Tiers</text>
+  <text x="80" y="540" fill="#ddd" font-size="11">Extensible, auditable, sandboxed execution</text>
 
   <!-- COMPLIANCE LAYER -->
-  <text x="700" y="820" class="layer-title" text-anchor="middle">🔐 Compliance & Audit</text>
+  <rect x="60" y="595" width="1080" height="90" rx="8" fill="url(#g4)"/>
+  <text x="80" y="617" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">COMPLIANCE</text>
+  <text x="80" y="635" fill="#fff" font-size="15" font-weight="bold">Consent • House-Rules • Audit Trail</text>
+  <text x="80" y="655" fill="#ddd" font-size="11">GDPR + EU AI Act • Fail-closed • Hash-chained proof</text>
 
-  <g>
-    <rect class="box" x="120" y="850" width="280" height="100" rx="6"/>
-    <text x="260" y="885" class="big-label" text-anchor="middle">Audit Trail</text>
-    <text x="260" y="910" class="medium-label" text-anchor="middle">Hash-chained</text>
-  </g>
+  <!-- AUDIT LAYER -->
+  <rect x="60" y="710" width="1080" height="90" rx="8" fill="url(#g5)"/>
+  <text x="80" y="732" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">AUDIT</text>
+  <text x="80" y="750" fill="#fff" font-size="15" font-weight="bold">Immutable Audit Trail</text>
+  <text x="80" y="770" fill="#ddd" font-size="11">Every decision logged • Cryptographic proof • RFC 3161 timestamping</text>
 
-  <g>
-    <rect class="box" x="520" y="850" width="280" height="100" rx="6"/>
-    <text x="660" y="885" class="big-label" text-anchor="middle">Consent Gate</text>
-    <text x="660" y="910" class="medium-label" text-anchor="middle">Deny-by-default</text>
-  </g>
-
-  <g>
-    <rect class="box" x="920" y="850" width="280" height="100" rx="6"/>
-    <text x="1060" y="885" class="big-label" text-anchor="middle">Plugins</text>
-    <text x="1060" y="910" class="medium-label" text-anchor="middle">5 trust tiers</text>
-  </g>
-
-  <!-- ARROW MARKER -->
-  <defs>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
-    </marker>
-  </defs>
+  <!-- OUTPUTS -->
+  <rect x="60" y="825" width="1080" height="65" rx="8" fill="url(#g0)"/>
+  <text x="80" y="847" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">OUTPUTS</text>
+  <text x="80" y="865" fill="#fff" font-size="15" font-weight="bold">Response • Audit • Learning • Metrics</text>
 
 </svg>

@@ -115,20 +115,106 @@ class TestAdversarialMetaLoop:
     def test_attack_10_manual_override_respected(self):
         """Manual operator override doesn't get overwritten by Meta."""
         meta = MetaOptimizer()
-        
+
         # Operator manually sets α
         meta.α_core = 0.2  # override
         α_set = meta.α_core
-        
+
         # Meta tuning happens
         feedback = {'loss_delta_core': -0.01, 'loss_delta_infra': -0.01}
         loss = meta.compute_loss(feedback)
         grad = meta.compute_gradients(loss, 0.4)
         meta.apply_gradients(grad, learning_rate=0.001)
-        
+
         # α changed (tuning happened), but operator override was starting point
         # This test verifies no "forced reset" behavior
         assert meta.α_core >= 0.001 and meta.α_core <= 0.3
+
+
+class TestAdversarialRecovery:
+    """Verify Meta Loop recovery from edge cases."""
+
+    def test_recovery_from_zero_loss(self):
+        """If all losses are zero, Meta should gracefully handle."""
+        meta = MetaOptimizer()
+        for _ in range(20):
+            loss = meta.compute_loss({'loss_delta_core': 0.0, 'loss_delta_infra': 0.0})
+            assert loss >= 0.0
+
+    def test_recovery_from_repeated_same_loss(self):
+        """Constant loss (no change) should not cause divergence."""
+        meta = MetaOptimizer()
+        for i in range(50):
+            loss = meta.compute_loss({'loss_delta_core': -0.001, 'loss_delta_infra': -0.001})
+            if i > 0:
+                grad = meta.compute_gradients(loss, 0.001)
+                meta.apply_gradients(grad)
+        # Should remain stable
+        assert 0.001 <= meta.α_core <= 0.3
+
+    def test_rollback_after_bad_update(self):
+        """Save checkpoint, update badly, rollback works."""
+        watchdog = DivergenceWatchdog()
+        meta = MetaOptimizer()
+
+        # Good state
+        good_state = meta.get_state()
+        ckpt_id = watchdog.save_checkpoint(good_state)
+
+        # Make changes
+        meta.α_core = 0.25
+        meta.damping_infra = 0.88
+
+        # Restore
+        restored = watchdog.restore_checkpoint(ckpt_id)
+        meta.set_state(restored)
+
+        assert meta.α_core == good_state['α_core']
+
+    def test_watchdog_oscillation_detection(self):
+        """Watchdog detects oscillating loss patterns."""
+        watchdog = DivergenceWatchdog()
+        oscillating_losses = [0.1, 0.5, 0.2, 0.6, 0.15, 0.55]
+        is_oscillating = watchdog.detect_oscillation(oscillating_losses, window_size=6)
+        assert is_oscillating is True
+
+    def test_watchdog_convergence_no_oscillation(self):
+        """Watchdog correctly identifies non-oscillating loss."""
+        watchdog = DivergenceWatchdog()
+        smooth_losses = [0.5, 0.45, 0.40, 0.35, 0.30, 0.28, 0.26]
+        is_oscillating = watchdog.detect_oscillation(smooth_losses, window_size=7)
+        assert is_oscillating is False
+
+    def test_watchdog_health_check_comprehensive(self):
+        """Health check returns all required fields."""
+        watchdog = DivergenceWatchdog()
+        state = {
+            'α_core': 0.1,
+            'α_infra': 0.01,
+            'damping_core': 0.9,
+            'damping_infra': 0.95,
+            'loss': 0.5,
+        }
+        health = watchdog.health_check(state)
+        assert 'valid_bounds' in health
+        assert 'no_nan_inf' in health
+        assert 'loss_reasonable' in health
+        assert 'overall_healthy' in health
+        assert health['overall_healthy'] is True
+
+    def test_watchdog_health_check_detects_invalid_state(self):
+        """Health check detects out-of-bounds state."""
+        watchdog = DivergenceWatchdog()
+        bad_state = {
+            'α_core': 0.5,  # exceeds max of 0.3
+            'α_infra': 0.01,
+            'damping_core': 0.9,
+            'damping_infra': 0.95,
+            'loss': 0.5,
+        }
+        health = watchdog.health_check(bad_state)
+        assert health['valid_bounds'] is False
+        assert health['overall_healthy'] is False
 
 
 if __name__ == '__main__':
