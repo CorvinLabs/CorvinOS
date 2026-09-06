@@ -73,16 +73,54 @@ class ValidationReport:
 
 # ── Individual checks ────────────────────────────────────────────────────────
 
+#: Keys a plugin.yaml MANIFEST legitimately carries that are NOT persisted
+#: registry-record fields. A manifest is a superset of a registry record: it
+#: documents the plugin (``description``), declares its ADR-0599 capability
+#: surface (``capabilities`` / ``capabilities_version`` / ``capabilities_note``)
+#: and its ADR-0610/0611/0612 orchestration shape (``infrastructure_plugin`` /
+#: ``orchestration_support``). ``PluginRecord.from_dict`` fails closed on unknown
+#: keys — correct for ``registry.yaml`` round-tripping, where an unknown key
+#: means "written by a newer version". But applying that verbatim to a manifest
+#: FILE rejected every real marketplace manifest (all 30 builtins), which is why
+#: ``bootstrap_builtin`` loaded zero of them and the console install gate could
+#: not admit any builtin. Stripping only this explicit allowlist before the
+#: record projection keeps the typo-catching (any OTHER unknown key still errors)
+#: while accepting the legitimate manifest sections.
+_MANIFEST_ONLY_KEYS: frozenset[str] = frozenset({
+    "description",
+    "capabilities",
+    "capabilities_version",
+    "capabilities_note",
+    "infrastructure_plugin",
+    "orchestration_support",
+})
+
+
+def strip_manifest_only_keys(data: dict) -> dict:
+    """Return a copy of ``data`` without the manifest-only sections.
+
+    Used to project a plugin.yaml manifest down to the registry-record fields
+    ``PluginRecord.from_dict`` understands, without weakening its unknown-field
+    guard for the registry round-trip.
+    """
+    return {k: v for k, v in data.items() if k not in _MANIFEST_ONLY_KEYS}
+
+
 def validate_record_dict(data: dict) -> ValidationReport:
     """Validate a ``plugin.yaml``-shaped mapping via the real PluginRecord.
 
     Delegates wholesale to ``PluginRecord.from_dict`` → ``__post_init__``, which
     is where the locality/egress contradiction, the
     privileged-boot-layer-vs-origin refusal, and the ``replaces`` rules live.
+
+    Manifest-only sections (``capabilities`` &c., see ``_MANIFEST_ONLY_KEYS``)
+    are stripped first: a manifest is a superset of a registry record, and
+    ``from_dict``'s fail-closed unknown-key guard is meant for the registry
+    round-trip, not for the richer authored manifest.
     """
     report = ValidationReport()
     try:
-        record = PluginRecord.from_dict(data)
+        record = PluginRecord.from_dict(strip_manifest_only_keys(data))
     except PluginError as exc:
         report.add(ERROR, "record.invalid", str(exc))
         return report
