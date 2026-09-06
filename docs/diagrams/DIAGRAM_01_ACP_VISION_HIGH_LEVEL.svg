@@ -1,154 +1,69 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
-  <!-- Dark background -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800" font-family="Segoe UI, Arial, sans-serif">
+
   <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
-      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    <linearGradient id="g0" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a1a3e"/>
+      <stop offset="100%" style="stop-color:#2d1b4e"/>
     </linearGradient>
-    <style>
-      .bg { fill: #0a0e27; }
-      .box { fill: #1a1a2e; stroke: #00d4ff; stroke-width: 2.5; }
-      .box-accent { fill: #16213e; stroke: #00d4ff; stroke-width: 2.5; }
-      .title { font-size: 24px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .subtitle { font-size: 22px; font-weight: bold; fill: #eaeaea; font-family: monospace; }
-      .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 15px; fill: #888; font-family: monospace; }
-      .arrow { stroke: #00d4ff; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
-      .arrow-learn { stroke: #ff006e; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-learn); stroke-dasharray: 5,5; }
-    </style>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
-    </marker>
-    <marker id="arrowhead-learn" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#ff006e" />
-    </marker>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3d2550"/>
+      <stop offset="100%" style="stop-color:#1a1a6e"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2d3e7e"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f39c12"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#27ae60"/>
+      <stop offset="100%" style="stop-color:#f39c12"/>
+    </linearGradient>
+    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3498db"/>
+      <stop offset="100%" style="stop-color:#27ae60"/>
+    </linearGradient>
+    <linearGradient id="g6" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#9b59b6"/>
+      <stop offset="100%" style="stop-color:#3498db"/>
+    </linearGradient>
   </defs>
 
-  <!-- Background -->
-  <rect class="bg" width="1200" height="800"/>
-  <rect x="0" y="0" width="1200" height="800" fill="url(#grad)"/>
+  <rect width="1200" height="800" fill="#0f0f1e"/>
+  <text x="600" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">ACP Vision: Skills 2.0</text>
+  <line x1="100" y1="70" x2="1100" y2="70" stroke="#333" stroke-width="1"/>
 
-  <!-- Title -->
-  <text x="600" y="40" class="title" text-anchor="middle">CorvinOS v2.0: ACP Vision (Agentic Control Plane)</text>
+  <rect x="80" y="110" width="1040" height="80" rx="8" fill="url(#g1)"/>
+  <text x="100" y="130" fill="#fff" font-size="11" font-weight="bold" opacity="0.7">L5: ROUTING</text>
+  <text x="100" y="150" fill="#fff" font-size="16" font-weight="bold">Smart Engine Selection</text>
+  <text x="100" y="170" fill="#ddd" font-size="11">Claude • Opus • Hermes • Learn best per task</text>
 
-  <!-- LAYER 1: User/External Interfaces (Input) -->
-  <g id="layer1">
-    <rect class="box" x="60" y="120" width="200" height="60"/ rx="6">
-    <text x="160" y="145" class="label" text-anchor="middle">CLI</text>
+  <path d="M 600 190 L 600 220" stroke="#3498db" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
 
-    <rect class="box" x="280" y="120" width="200" height="60"/ rx="6">
-    <text x="380" y="145" class="label" text-anchor="middle">Web Console</text>
+  <rect x="80" y="220" width="1040" height="80" rx="8" fill="url(#g2)"/>
+  <text x="100" y="240" fill="#fff" font-size="11" font-weight="bold" opacity="0.7">L10: CONTEXT</text>
+  <text x="100" y="260" fill="#fff" font-size="16" font-weight="bold">Hybrid Context Model</text>
+  <text x="100" y="280" fill="#ddd" font-size="11">Preserve → Adapt → Merge • Saves 30% tokens</text>
 
-    <rect class="box" x="500" y="120" width="200" height="60"/ rx="6">
-    <text x="600" y="145" class="label" text-anchor="middle">Voice/Discord</text>
+  <path d="M 600 300 L 600 330" stroke="#3498db" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
 
-    <rect class="box" x="720" y="120" width="200" height="60"/ rx="6">
-    <text x="820" y="145" class="label" text-anchor="middle">A2A (App-to-App)</text>
+  <rect x="80" y="330" width="1040" height="80" rx="8" fill="url(#g3)"/>
+  <text x="100" y="350" fill="#fff" font-size="11" font-weight="bold" opacity="0.7">L22: WORKFLOW</text>
+  <text x="100" y="370" fill="#fff" font-size="16" font-weight="bold">Orchestrate Skills</text>
+  <text x="100" y="390" fill="#ddd" font-size="11">DAG-validated execution • Optimal ordering</text>
 
-    <rect class="box" x="940" y="120" width="200" height="60"/ rx="6">
-    <text x="1040" y="145" class="label" text-anchor="middle">MCP Tools</text>
-  </g>
+  <path d="M 600 410 L 600 440" stroke="#3498db" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
 
-  <!-- Arrows down to L5 -->
-  <path class="arrow" d="M 160 180 L 160 220"/>
-  <path class="arrow" d="M 380 180 L 380 220"/>
-  <path class="arrow" d="M 600 180 L 600 220"/>
-  <path class="arrow" d="M 820 180 L 820 220"/>
-  <path class="arrow" d="M 1040 180 L 1040 220"/>
+  <rect x="80" y="440" width="1040" height="80" rx="8" fill="url(#g4)"/>
+  <text x="100" y="460" fill="#fff" font-size="11" font-weight="bold" opacity="0.7">LEARNING LOOP</text>
+  <text x="100" y="480" fill="#fff" font-size="16" font-weight="bold">9D Self-Optimization</text>
+  <text x="100" y="500" fill="#ddd" font-size="11">Converges <10K samples • Operator always in control</text>
 
-  <!-- LAYER 2: L5 Routing (Skills 2.0 - Skill 1) -->
-  <g id="layer2">
-    <rect class="box-accent" x="60" y="230" width="1080" height="80"/>
-
-    <rect class="box" x="80" y="245" width="300" height="50"/ rx="6">
-    <text x="230" y="265" class="label" text-anchor="middle">os.delegation_router</text>
-
-    <rect class="box" x="420" y="245" width="300" height="50"/ rx="6">
-    <text x="570" y="265" class="label" text-anchor="middle">os.context_adapter</text>
-
-    <rect class="box" x="760" y="245" width="340" height="50"/ rx="6">
-    <text x="930" y="265" class="label" text-anchor="middle">Learning Loop (ADR-0314)</text>
-  </g>
-
-  <!-- Arrows down to L10 -->
-  <path class="arrow" d="M 600 310 L 600 350"/>
-  <path class="arrow-learn" d="M 930 310 L 930 350"/>
-
-  <!-- LAYER 3: L10 Context (Hybrid Model) -->
-  <g id="layer3">
-    <rect class="box-accent" x="60" y="360" width="1080" height="80"/>
-
-    <rect class="box" x="80" y="375" width="240" height="50"/ rx="6">
-    <text x="200" y="395" class="label" text-anchor="middle">Original Context</text>
-
-    <rect class="box" x="350" y="375" width="240" height="50"/ rx="6">
-    <text x="470" y="395" class="label" text-anchor="middle">Preserved Layers</text>
-
-    <rect class="box" x="620" y="375" width="240" height="50"/ rx="6">
-    <text x="740" y="395" class="label" text-anchor="middle">Injected Signals</text>
-
-    <rect class="box" x="890" y="375" width="240" height="50"/ rx="6">
-    <text x="1010" y="395" class="label" text-anchor="middle">Merged Output</text>
-  </g>
-
-  <!-- Arrows down to L16/L22 -->
-  <path class="arrow" d="M 600 440 L 600 480"/>
-
-  <!-- LAYER 4: L16 Security + L22 Workflow -->
-  <g id="layer4">
-
-    <rect class="box-accent" x="60" y="490" width="500" height="80"/>
-    <text x="310" y="510" class="label" text-anchor="middle">L16: Compliance Gates</text>
-    <rect class="box" x="80" y="520" width="200" height="30"/ rx="6">
-    <rect class="box" x="300" y="520" width="200" height="30"/ rx="6">
-
-    <rect class="box-accent" x="600" y="490" width="540" height="80"/>
-    <text x="870" y="510" class="label" text-anchor="middle">L22: Workflow (Skills Orchestration)</text>
-    <rect class="box" x="620" y="520" width="200" height="30"/ rx="6">
-    <rect class="box" x="850" y="520" width="270" height="30"/ rx="6">
-  </g>
-
-  <!-- Arrows to plugins/data -->
-  <path class="arrow" d="M 300 570 L 300 610"/>
-  <path class="arrow" d="M 870 570 L 870 610"/>
-
-  <!-- LAYER 5: Plugins + Learning -->
-  <g id="layer5">
-
-    <rect class="box-accent" x="60" y="620" width="500" height="70"/>
-    <text x="310" y="640" class="label" text-anchor="middle">Plugin System</text>
-    <rect class="box" x="80" y="650" width="180" height="25"/ rx="6">
-    <rect class="box" x="280" y="650" width="260" height="25"/ rx="6">
-
-    <rect class="box-accent" x="600" y="620" width="540" height="70"/>
-    <text x="870" y="640" class="label" text-anchor="middle">Learning Infrastructure (6D Loss)</text>
-    <rect class="box" x="620" y="650" width="160" height="25"/ rx="6">
-    <rect class="box" x="810" y="650" width="160" height="25"/ rx="6">
-    <rect class="box" x="1000" y="650" width="130" height="25"/ rx="6">
-  </g>
-
-  <!-- Feedback loop (dashed red) -->
-  <path class="arrow-learn" d="M 870 620 Q 870 550 930 500"/>
-
-  <!-- Arrows to Audit -->
-  <path class="arrow" d="M 600 690 L 600 730"/>
-
-  <!-- LAYER 6: Audit Chain (Ground Truth) -->
-  <g id="layer6">
-    <rect class="box-accent" x="60" y="740" width="1080" height="50"/>
-    <rect class="box" x="80" y="745" width="250" height="40"/ rx="6">
-    <text x="205" y="765" class="label" text-anchor="middle">Immutable Hash-Chain</text>
-
-    <rect class="box" x="360" y="745" width="250" height="40"/ rx="6">
-    <text x="485" y="765" class="label" text-anchor="middle">Tenant-Scoped Isolation</text>
-
-    <rect class="box" x="640" y="745" width="250" height="40"/ rx="6">
-    <text x="765" y="765" class="label" text-anchor="middle">Daily Verification</text>
-
-    <rect class="box" x="920" y="745" width="200" height="40"/ rx="6">
-    <text x="1020" y="765" class="label" text-anchor="middle">Operator Proof System</text>
-  </g>
-
-  <!-- Legend -->
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="5" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3498db"/>
+    </marker>
+  </defs>
 </svg>

@@ -1,115 +1,34 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1000 1200" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800" font-family="Segoe UI, Arial, sans-serif">
   <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
-      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
-    </linearGradient>
-    <style>
-      .bg { fill: #0a0e27; }
-      .title { font-size: 22px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .layer { fill: #1a1a2e; stroke: #00ff88; stroke-width: 1.5; }
-      .layer-critical { fill: #16213e; stroke: #ff006e; stroke-width: 2.5; }
-      .label { font-size: 15px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 13px; fill: #888; font-family: monospace; }
-      .divider { stroke: #444; stroke-width: 1; }
-    </style>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#3d2550"/><stop offset="100%" style="stop-color:#1a1a6e"/></linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#2d3e7e"/><stop offset="100%" style="stop-color:#e74c3c"/></linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#f39c12"/><stop offset="100%" style="stop-color:#e74c3c"/></linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#27ae60"/><stop offset="100%" style="stop-color:#f39c12"/></linearGradient>
+    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#3498db"/><stop offset="100%" style="stop-color:#27ae60"/></linearGradient>
   </defs>
+  <rect width="1200" height="800" fill="#0f0f1e"/>
+  <text x="600" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">Layer Stack Overview</text>
+  <line x1="100" y1="70" x2="1100" y2="70" stroke="#333" stroke-width="1"/>
 
-  <rect class="bg" width="1000" height="1200"/>
-  <rect x="0" y="0" width="1000" height="1200" fill="url(#grad)"/>
+  <rect x="100" y="120" width="1000" height="65" rx="8" fill="url(#g1)"/>
+  <text x="600" y="155" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L44: House-Rules (Acceptable Use Gate) 🏛️</text>
 
-  <text x="500" y="30" class="title" text-anchor="middle">Layer Stack: All 36+ Security/Compliance Layers</text>
+  <rect x="100" y="200" width="1000" height="65" rx="8" fill="url(#g2)"/>
+  <text x="600" y="235" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L34: Data Flow Guard (Input Classification)</text>
 
-  <!-- INPUT LAYERS (L1-L5) -->
-  <text x="50" y="75" class="title" fill="#ffd700">INPUT &amp; ROUTING</text>
+  <rect x="100" y="280" width="1000" height="65" rx="8" fill="url(#g3)"/>
+  <text x="600" y="315" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L22: Workflow + L16: Security + L10: Context</text>
 
-  <rect class="layer" x="50" y="90" width="900" height="35"/>
-  <text x="60" y="105" class="label">L1: Telemetry &amp; Observability</text>
+  <rect x="100" y="360" width="1000" height="65" rx="8" fill="url(#g4)"/>
+  <text x="600" y="395" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L5: Routing (Skills-driven) + Plugins</text>
 
-  <rect class="layer" x="50" y="130" width="900" height="35"/>
-  <text x="60" y="145" class="label">L2: User Session &amp; Authentication</text>
+  <rect x="100" y="440" width="1000" height="65" rx="8" fill="url(#g5)"/>
+  <text x="600" y="475" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L3: Audit Trail (Hash-chained)</text>
 
-  <rect class="layer" x="50" y="170" width="900" height="35"/>
-  <text x="60" y="185" class="label">L3: Tenant Namespace &amp; Multi-Tenancy</text>
-
-  <rect class="layer" x="50" y="210" width="900" height="35"/>
-  <text x="60" y="225" class="label">L4: Cowork Hub (Plugin Registry)</text>
-
-  <rect class="layer" x="50" y="250" width="900" height="35"/>
-  <text x="60" y="265" class="label" fill="#ffd700">L5: Auto-Routing (Skills-Driven)</text>
-
-  <!-- CONTEXT &amp; PROCESSING (L6-L15) -->
-  <text x="50" y="310" class="title" fill="#ffd700">CONTEXT &amp; PROCESSING</text>
-
-  <rect class="layer" x="50" y="325" width="900" height="35"/>
-  <text x="60" y="340" class="label">L6: Forge (Runtime Tool Generation)</text>
-
-  <rect class="layer" x="50" y="365" width="900" height="35"/>
-  <text x="60" y="380" class="label">L7: SkillForge (Runtime Skill Generation)</text>
-
-  <rect class="layer" x="50" y="405" width="900" height="35"/>
-  <text x="60" y="420" class="label">L8–L9: Reserved</text>
-
-  <rect class="layer" x="50" y="445" width="900" height="35"/>
-  <text x="60" y="460" class="label" fill="#ffd700">L10: Path-Gate &amp; Context Engineering</text>
-
-  <!-- SECURITY &amp; COMPLIANCE (L16-L25) -->
-  <text x="50" y="505" class="title" fill="#ff006e">SECURITY &amp; COMPLIANCE (CRITICAL)</text>
-
-  <rect class="layer-critical" x="50" y="520" width="900" height="35"/>
-  <text x="60" y="535" class="label">L16: Security Hardening</text>
-
-  <rect class="layer" x="50" y="560" width="900" height="35"/>
-  <text x="60" y="575" class="label">L17: Engine Selection</text>
-
-  <rect class="layer" x="50" y="600" width="900" height="35"/>
-  <text x="60" y="615" class="label">L18–L21: User Management &amp; Roles</text>
-
-  <rect class="layer-critical" x="50" y="640" width="900" height="35"/>
-  <text x="60" y="655" class="label" fill="#ffd700">L22: WorkerEngine Protocol (Skills Orchestration)</text>
-
-  <rect class="layer" x="50" y="680" width="900" height="35"/>
-  <text x="60" y="695" class="label">L23: Speech-to-Text (STT)</text>
-
-  <rect class="layer" x="50" y="720" width="900" height="35"/>
-  <text x="60" y="735" class="label">L24: Large-Data Snapshot</text>
-
-  <rect class="layer" x="50" y="760" width="900" height="35"/>
-  <text x="60" y="775" class="label">L25: Compute Worker Protocol</text>
-
-  <!-- AUDIT &amp; DATA FLOW (L28-L38) -->
-  <text x="50" y="820" class="title" fill="#ffd700">AUDIT, DATA FLOW &amp; NETWORK</text>
-
-  <rect class="layer" x="50" y="835" width="900" height="35"/>
-  <text x="60" y="850" class="label">L28: Conversation Recall</text>
-
-  <rect class="layer" x="50" y="875" width="900" height="35"/>
-  <text x="60" y="890" class="label">L29–L30: Delegation &amp; Engine-Agnostic Forge</text>
-
-  <rect class="layer" x="50" y="915" width="900" height="35"/>
-  <text x="60" y="930" class="label">L32–L33: Anonymization &amp; Artifact Memory</text>
-
-  <rect class="layer-critical" x="50" y="955" width="900" height="35"/>
-  <text x="60" y="970" class="label" fill="#ffd700">L34: Data Classification &amp; Flow Guard</text>
-
-  <rect class="layer-critical" x="50" y="995" width="900" height="35"/>
-  <text x="60" y="1010" class="label">L35: Network Egress Lockdown</text>
-
-  <rect class="layer" x="50" y="1035" width="900" height="35"/>
-  <text x="60" y="1050" class="label">L36: GDPR Art. 17 Erasure Orchestrator</text>
-
-  <rect class="layer-critical" x="50" y="1075" width="900" height="35"/>
-  <text x="60" y="1090" class="label">L37: Audit-at-Rest Encryption &amp; Retention</text>
-
-  <rect class="layer" x="50" y="1115" width="900" height="35"/>
-  <text x="60" y="1130" class="label">L38: RemoteTrigger &amp; A2A Task Protocol</text>
-
-  <!-- FINAL LAYERS (L44, LIP, CLS) -->
-  <text x="50" y="1175" class="title" fill="#ff006e">FINAL ENFORCEMENT (CRITICAL)</text>
-
-  <rect class="layer-critical" x="50" y="1190" width="900" height="35"/>
-  <text x="60" y="1205" class="label">L44: House-Rules Gate (Fail-Closed)</text>
-
-  <!-- Footer -->
+  <rect x="100" y="550" width="1000" height="180" rx="8" fill="url(#g2)"/>
+  <text x="600" y="590" text-anchor="middle" fill="#fff" font-size="13" font-weight="bold">36+ Layers in CorvinOS</text>
+  <text x="600" y="615" text-anchor="middle" fill="#ddd" font-size="11">Input → L5/L10/L22 → Learning → Audit</text>
+  <text x="600" y="635" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Every layer versioned, auditable, GDPR compliant</text>
+  <text x="600" y="655" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Compliance (L16, L34, L44) = fail-closed, non-negotiable</text>
+  <text x="600" y="675" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Full docs at: docs/claude-ref/layer-summary.md</text>
 </svg>

@@ -1,142 +1,67 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 850" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800" font-family="Segoe UI, Arial, sans-serif">
+
   <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
-      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    <linearGradient id="g0" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a1a3e"/>
+      <stop offset="100%" style="stop-color:#2d1b4e"/>
     </linearGradient>
-    <style>
-      .bg { fill: #0a0e27; }
-      .title { font-size: 26px; font-weight: bold; fill: #00ff88; font-family: monospace; }
-      .subtitle { font-size: 22px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 15px; fill: #888; font-family: monospace; }
-      .plugin-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2.5; }
-      .market-box { fill: #16213e; stroke: #ffd700; stroke-width: 2.5; }
-      .boot-box { fill: #1a1a2e; stroke: #ff006e; stroke-width: 2.5; }
-      .arrow { stroke: #00d4ff; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
-      .arrow-market { stroke: #ffd700; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-market); }
-      .number { font-size: 20px; font-weight: bold; fill: #00ff88; font-family: monospace; }
-    </style>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
-    </marker>
-    <marker id="arrowhead-market" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#ffd700" />
-    </marker>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3d2550"/>
+      <stop offset="100%" style="stop-color:#1a1a6e"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2d3e7e"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f39c12"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#27ae60"/>
+      <stop offset="100%" style="stop-color:#f39c12"/>
+    </linearGradient>
+    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3498db"/>
+      <stop offset="100%" style="stop-color:#27ae60"/>
+    </linearGradient>
+    <linearGradient id="g6" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#9b59b6"/>
+      <stop offset="100%" style="stop-color:#3498db"/>
+    </linearGradient>
   </defs>
 
-  <rect class="bg" width="1400" height="850"/>
-  <rect x="0" y="0" width="1400" height="850" fill="url(#grad)"/>
+  <rect width="1200" height="800" fill="#0f0f1e"/>
+  <text x="600" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">Plugin System: 5 Trust Tiers</text>
+  <line x1="100" y1="70" x2="1100" y2="70" stroke="#333" stroke-width="1"/>
 
-  <!-- Title -->
-  <text x="700" y="40" class="title" text-anchor="middle">Plugin System &amp; Marketplace Architecture</text>
+  <rect x="60" y="120" width="200" height="90" rx="8" fill="url(#g1)"/>
+  <text x="160" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Compliance</text>
+  <text x="160" y="165" text-anchor="middle" fill="#ddd" font-size="10">Locked • Mandatory</text>
+  <text x="160" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">🔒</text>
 
-  <!-- SECTION 1: Boot Layer Stack -->
+  <rect x="280" y="120" width="200" height="90" rx="8" fill="url(#g2)"/>
+  <text x="380" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Core</text>
+  <text x="380" y="165" text-anchor="middle" fill="#ddd" font-size="10">No bypass • Audited</text>
+  <text x="380" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">🛡️</text>
 
-  <g id="boot-layers">
-    <!-- Layer 1: Compliance (Meta-Skill, always-on) -->
-    <rect class="boot-box" x="60" y="130" width="200" height="90"/>
-    <text x="160" y="168" class="label" text-anchor="middle">Compliance Meta-Skills</text>
+  <rect x="500" y="120" width="200" height="90" rx="8" fill="url(#g3)"/>
+  <text x="600" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Bundled</text>
+  <text x="600" y="165" text-anchor="middle" fill="#ddd" font-size="10">In-process • Vetted</text>
+  <text x="600" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">✓</text>
 
-    <!-- Layer 2: Core -->
-    <rect class="boot-box" x="290" y="130" width="200" height="90"/>
-    <text x="390" y="168" class="label" text-anchor="middle">Core Plugins</text>
+  <rect x="720" y="120" width="200" height="90" rx="8" fill="url(#g4)"/>
+  <text x="820" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Installed</text>
+  <text x="820" y="165" text-anchor="middle" fill="#ddd" font-size="10">Marketplace • Signed</text>
+  <text x="820" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">📦</text>
 
-    <!-- Layer 3: Bundled -->
-    <rect class="boot-box" x="520" y="130" width="200" height="90"/>
-    <text x="620" y="168" class="label" text-anchor="middle">Bundled Plugins</text>
+  <rect x="940" y="120" width="200" height="90" rx="8" fill="url(#g5)"/>
+  <text x="1040" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Community</text>
+  <text x="1040" y="165" text-anchor="middle" fill="#ddd" font-size="10">Sandboxed • Isolated</text>
+  <text x="1040" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">🌐</text>
 
-    <!-- Layer 4: Installed -->
-    <rect class="market-box" x="750" y="130" width="200" height="90"/>
-    <text x="850" y="168" class="label" text-anchor="middle">Installed Plugins</text>
-
-    <!-- Layer 5: Community -->
-    <rect class="market-box" x="980" y="130" width="200" height="90"/>
-    <text x="1080" y="168" class="label" text-anchor="middle">Community Plugins</text>
-
-    <!-- Layer 6: Custom -->
-    <rect class="plugin-box" x="1210" y="130" width="170" height="90"/>
-    <text x="1295" y="168" class="label" text-anchor="middle">Custom (Future)</text>
-  </g>
-
-  <!-- SECTION 2: Plugin Lifecycle (left column) -->
-
-  <g id="lifecycle">
-    <!-- Step 1: Discover -->
-    <rect class="plugin-box" x="60" y="305" width="220" height="110"/>
-    <text x="170" y="323" class="label" text-anchor="middle">① DISCOVER</text>
-
-    <!-- Arrow -->
-    <path class="arrow" d="M 280 360 L 300 360"/>
-
-    <!-- Step 2: Download -->
-    <rect class="plugin-box" x="300" y="305" width="220" height="110"/>
-    <text x="410" y="323" class="label" text-anchor="middle">② DOWNLOAD</text>
-
-    <!-- Arrow -->
-    <path class="arrow" d="M 520 360 L 540 360"/>
-
-    <!-- Step 3: Boot -->
-    <rect class="boot-box" x="540" y="305" width="220" height="110"/>
-    <text x="650" y="323" class="label" text-anchor="middle">③ BOOT</text>
-
-    <!-- Arrow -->
-    <path class="arrow" d="M 760 360 L 780 360"/>
-
-    <!-- Step 4: Execute -->
-    <rect class="plugin-box" x="780" y="305" width="220" height="110"/>
-    <text x="890" y="323" class="label" text-anchor="middle">④ EXECUTE</text>
-
-    <!-- Arrow -->
-    <path class="arrow" d="M 1000 360 L 1020 360"/>
-
-    <!-- Step 5: Audit -->
-    <rect class="boot-box" x="1020" y="305" width="310" height="110"/>
-    <text x="1175" y="323" class="label" text-anchor="middle">⑤ AUDIT + VERIFY</text>
-  </g>
-
-  <!-- SECTION 3: Marketplace Integration (right column) -->
-
-  <g id="marketplace">
-    <!-- Marketplace structure -->
-    <rect class="market-box" x="60" y="480" width="1310" height="150"/>
-
-    <rect class="plugin-box" x="80" y="495" width="220" height="120"/>
-    <text x="190" y="515" class="label" text-anchor="middle">Marketplace Index</text>
-
-    <rect class="plugin-box" x="330" y="495" width="220" height="120"/>
-    <text x="440" y="515" class="label" text-anchor="middle">Plugin Source (tar.gz)</text>
-
-    <rect class="plugin-box" x="580" y="495" width="220" height="120"/>
-    <text x="690" y="515" class="label" text-anchor="middle">Vetted Registry</text>
-
-    <rect class="plugin-box" x="830" y="495" width="220" height="120"/>
-    <text x="940" y="515" class="label" text-anchor="middle">Checksum Integrity</text>
-
-    <rect class="plugin-box" x="1080" y="495" width="280" height="120"/>
-    <text x="1220" y="515" class="label" text-anchor="middle">Remote Discovery Protocol</text>
-  </g>
-
-  <!-- SECTION 4: Trust Boundaries -->
-
-  <g id="trust">
-    <!-- In-Process Plugins (Compliance, Core) -->
-    <rect class="boot-box" x="60" y="705" width="300" height="120"/>
-    <text x="210" y="725" class="label" text-anchor="middle">IN-PROCESS</text>
-
-    <!-- Subprocess Plugins (Community) -->
-    <rect class="market-box" x="400" y="705" width="300" height="120"/>
-    <text x="550" y="725" class="label" text-anchor="middle">SUBPROCESS</text>
-
-    <!-- Namespace Gating -->
-    <rect class="plugin-box" x="740" y="705" width="320" height="120"/>
-    <text x="900" y="725" class="label" text-anchor="middle">NAMESPACE GATING</text>
-
-    <!-- Manifest Validation -->
-    <rect class="boot-box" x="1100" y="705" width="270" height="120"/>
-    <text x="1235" y="725" class="label" text-anchor="middle">MANIFEST VALIDATION</text>
-  </g>
-
-  <!-- Footer -->
+  <rect x="60" y="280" width="1080" height="120" rx="8" fill="url(#g6)"/>
+  <text x="600" y="320" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Plugin Lifecycle</text>
+  <text x="600" y="345" text-anchor="middle" fill="#ddd" font-size="11">Load → Register → Execute → Audit → Disable</text>
+  <text x="600" y="365" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Zero-downtime upgrades • All actions logged • Versioned configs</text>
 </svg>

@@ -1,121 +1,40 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 950" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 850" width="1200" height="850" font-family="Segoe UI, Arial, sans-serif">
   <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
-      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
-    </linearGradient>
-    <style>
-      .bg { fill: #0a0e27; }
-      .title { font-size: 24px; font-weight: bold; fill: #ff006e; font-family: monospace; }
-      .step { fill: #1a1a2e; stroke: #ff006e; stroke-width: 2.5; }
-      .damping { fill: #16213e; stroke: #00ff88; stroke-width: 2.5; }
-      .label { font-size: 16px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 14px; fill: #888; font-family: monospace; }
-      .code { font-size: 15px; fill: #00ff88; font-family: monospace; }
-      .arrow { stroke: #ff006e; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
-      .arrow-damping { stroke: #00ff88; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-damping); }
-      .graph { stroke: #ffd700; stroke-width: 1.5; fill: none; }
-      .gridline { stroke: #333; stroke-width: 0.5; }
-    </style>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#ff006e" />
-    </marker>
-    <marker id="arrowhead-damping" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#00ff88" />
-    </marker>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#3d2550"/><stop offset="100%" style="stop-color:#1a1a6e"/></linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#2d3e7e"/><stop offset="100%" style="stop-color:#e74c3c"/></linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#f39c12"/><stop offset="100%" style="stop-color:#e74c3c"/></linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#27ae60"/><stop offset="100%" style="stop-color:#f39c12"/></linearGradient>
   </defs>
+  <rect width="1200" height="850" fill="#0f0f1e"/>
+  <text x="600" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">Meta Loop + Damping Protocol</text>
+  <line x1="100" y1="70" x2="1100" y2="70" stroke="#333" stroke-width="1"/>
 
-  <rect class="bg" width="1400" height="950"/>
-  <rect x="0" y="0" width="1400" height="950" fill="url(#grad)"/>
+  <text x="100" y="120" fill="#ffd700" font-size="14" font-weight="bold">❌ Problem: Without Damping</text>
+  <rect x="100" y="140" width="400" height="120" rx="8" fill="url(#g2)"/>
+  <text x="300" y="170" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">All loops update at 10%</text>
+  <text x="300" y="190" text-anchor="middle" fill="#ddd" font-size="11">Coupling causes oscillation</text>
+  <text x="300" y="210" text-anchor="middle" fill="#ddd" font-size="11">System diverges or deadlocks</text>
+  <text x="300" y="235" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">⚡ UNSTABLE</text>
 
-  <text x="700" y="35" class="title" text-anchor="middle">Meta Loop + Tiered Damping: How It Works</text>
+  <text x="700" y="120" fill="#ffd700" font-size="14" font-weight="bold">✓ Solution: Tiered Damping</text>
+  <rect x="700" y="140" width="400" height="120" rx="8" fill="url(#g3)"/>
+  <text x="900" y="170" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Tier 1: 10%, Tier 2: 5%, Tier 3: 1%</text>
+  <text x="900" y="190" text-anchor="middle" fill="#ddd" font-size="11">Prevents coupling oscillation</text>
+  <text x="900" y="210" text-anchor="middle" fill="#ddd" font-size="11">Converges smoothly in <10K samples</text>
+  <text x="900" y="235" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">✓ STABLE</text>
 
-  <!-- SECTION 1: The Problem (Without Damping) -->
-  <text x="50" y="95" class="label">PROBLEM: Without Damping (α=100%, naive meta learning)</text>
+  <rect x="100" y="320" width="1000" height="100" rx="8" fill="url(#g1)"/>
+  <text x="600" y="360" text-anchor="middle" fill="#fff" font-size="13" font-weight="bold">TIER 1 (α=10%): Core Loops</text>
+  <text x="600" y="380" text-anchor="middle" fill="#ddd" font-size="11">Routing, Context, Execution, Confidence, Compliance, Learning</text>
+  <text x="600" y="400" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Fast convergence for frequent feedback</text>
 
-  <g id="problem">
-    <!-- Graph showing oscillation -->
-    <rect class="step" x="50" y="115" width="600" height="220"/>
-    <text x="350" y="135" class="label" text-anchor="middle">Oscillation Scenario (α=100%)</text>
+  <rect x="100" y="450" width="1000" height="100" rx="8" fill="url(#g2)"/>
+  <text x="600" y="490" text-anchor="middle" fill="#fff" font-size="13" font-weight="bold">TIER 2 (α=5%): Infrastructure Loops</text>
+  <text x="600" y="510" text-anchor="middle" fill="#ddd" font-size="11">Memory, Plugins, Security</text>
+  <text x="600" y="530" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Hourly metrics • Slower adaptation</text>
 
-    <!-- Axes -->
-    <line class="gridline" x1="80" y1="320" x2="600" y2="320"/>
-    <line class="gridline" x1="80" y1="120" x2="80" y2="320"/>
-
-    <!-- Y-axis label -->
-
-    <!-- Oscillating curve -->
-    <polyline class="graph" points="100,250 120,200 140,280 160,150 180,320 200,100 220,300"/>
-
-    <!-- Annotations -->
-
-    <!-- Result -->
-  </g>
-
-  <!-- SECTION 2: The Solution (With Damping) -->
-  <text x="750" y="95" class="label">SOLUTION: With Damping (α=1%, slow learning)</text>
-
-  <g id="solution">
-    <!-- Graph showing convergence -->
-    <rect class="step" x="750" y="115" width="600" height="220"/>
-    <text x="1050" y="135" class="label" text-anchor="middle">Convergence with Damping (α=1%)</text>
-
-    <!-- Axes -->
-    <line class="gridline" x1="780" y1="320" x2="1300" y2="320"/>
-    <line class="gridline" x1="780" y1="120" x2="780" y2="320"/>
-
-    <!-- Y-axis label -->
-
-    <!-- Smooth convergence curve -->
-    <polyline class="graph" points="800,280 820,270 840,260 860,250 880,245 900,242 920,240 940,240 960,240 980,240"/>
-
-    <!-- Annotations -->
-
-    <!-- Result -->
-  </g>
-
-  <!-- SECTION 3: Damping Mechanism -->
-  <text x="50" y="385" class="label">DAMPING MECHANISM: Tiered Update Rates</text>
-
-  <g id="damping-tiers">
-    <!-- Tier 1 -->
-    <rect class="damping" x="50" y="405" width="280" height="140"/>
-    <text x="190" y="425" class="label" text-anchor="middle">TIER 1: Core (α₁=10%)</text>
-
-    <!-- Tier 2 -->
-    <rect class="damping" x="360" y="405" width="280" height="140"/>
-    <text x="500" y="425" class="label" text-anchor="middle">TIER 2: Infrastructure (α₂=5%)</text>
-
-    <!-- Tier 3 -->
-    <rect class="damping" x="670" y="405" width="280" height="140"/>
-    <text x="810" y="425" class="label" text-anchor="middle">TIER 3: Meta (α₃=1%)</text>
-
-    <!-- Penalty -->
-    <rect class="damping" x="980" y="405" width="370" height="140"/>
-    <text x="1165" y="425" class="label" text-anchor="middle">STABILITY PENALTY (λ=0.1)</text>
-  </g>
-
-  <!-- SECTION 4: Why This Works -->
-  <text x="50" y="585" class="label">WHY TIERED DAMPING WORKS:</text>
-
-  <g id="why-works">
-    <rect class="step" x="50" y="605" width="1300" height="200"/>
-
-    <text x="70" y="630" class="label">① Fast Core (α₁=10%): Proven to converge</text>
-
-    <text x="70" y="700" class="label">② Medium Infrastructure (α₂=5%): Different feedback rate</text>
-
-    <text x="70" y="784" class="label">③ Slow Meta (α₃=1%): Prevent feedback cascade</text>
-  </g>
-
-  <!-- SECTION 5: Operator Control -->
-  <text x="50" y="835" class="label">OPERATOR CONTROL (Hybrid Tuning):</text>
-
-  <g id="operator">
-    <rect class="step" x="50" y="855" width="1300" height="90"/>
-
-  </g>
-
-  <!-- Footer -->
+  <rect x="100" y="580" width="1000" height="100" rx="8" fill="url(#g4)"/>
+  <text x="600" y="620" text-anchor="middle" fill="#fff" font-size="13" font-weight="bold">TIER 3 (α=1%): Meta Loop</text>
+  <text x="600" y="640" text-anchor="middle" fill="#ddd" font-size="11">Learns optimal weights for all 9 dimensions</text>
+  <text x="600" y="660" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Very slow • Highest-level tuning</text>
 </svg>
