@@ -1,16 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
+      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    </linearGradient>
     <style>
-      .bg { fill: #0f0f0f; }
+      .bg { fill: #0a0e27; }
       .title { font-size: 24px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .step-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2; }
+      .step-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2.5; }
       .audit-box { fill: #16213e; stroke: #ff006e; stroke-width: 1.5; }
-      .gate-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
+      .gate-box { fill: #16213e; stroke: #ffd700; stroke-width: 2.5; }
       .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
       .desc { font-size: 15px; fill: #888; font-family: monospace; }
       .code { font-size: 14px; fill: #00ff88; font-family: monospace; }
-      .arrow { stroke: #00d4ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow { stroke: #00d4ff; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
       .arrow-audit { stroke: #ff006e; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead-audit); }
       .number { font-size: 22px; font-weight: bold; fill: #ffd700; font-family: monospace; }
     </style>
@@ -23,6 +27,7 @@
   </defs>
 
   <rect class="bg" width="1400" height="1000"/>
+  <rect x="0" y="0" width="1400" height="1000" fill="url(#grad)"/>
 
   <!-- Title -->
   <text x="700" y="35" class="title" text-anchor="middle">Complete Request Data Flow: 9-Step Pipeline</text>
