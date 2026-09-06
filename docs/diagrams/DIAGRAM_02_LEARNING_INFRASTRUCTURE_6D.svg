@@ -1,150 +1,66 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 700" width="1400" height="700" font-family="Segoe UI, Arial, sans-serif">
+
   <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
-      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    <linearGradient id="g0" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a1a3e"/>
+      <stop offset="100%" style="stop-color:#2d1b4e"/>
     </linearGradient>
-    <style>
-      .bg { fill: #0a0e27; }
-      .title { font-size: 26px; font-weight: bold; fill: #ff006e; font-family: monospace; }
-      .subtitle { font-size: 22px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 15px; fill: #888; font-family: monospace; }
-      .loop-box { fill: #16213e; stroke: #ff006e; stroke-width: 2.5; }
-      .metric-box { fill: #1a1a2e; stroke: #00d4ff; stroke-width: 1.5; }
-      .arrow-dark { stroke: #666; stroke-width: 1.5; fill: none; }
-      .arrow-bold { stroke: #ff006e; stroke-width: 2.5.5; fill: none; marker-end: url(#arrowhead-bold); }
-      .number { font-size: 20px; font-weight: bold; fill: #ff006e; font-family: monospace; }
-    </style>
-    <marker id="arrowhead-bold" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#ff006e" />
-    </marker>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3d2550"/>
+      <stop offset="100%" style="stop-color:#1a1a6e"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2d3e7e"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f39c12"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#27ae60"/>
+      <stop offset="100%" style="stop-color:#f39c12"/>
+    </linearGradient>
+    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3498db"/>
+      <stop offset="100%" style="stop-color:#27ae60"/>
+    </linearGradient>
+    <linearGradient id="g6" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#9b59b6"/>
+      <stop offset="100%" style="stop-color:#3498db"/>
+    </linearGradient>
   </defs>
 
-  <rect class="bg" width="1400" height="900"/>
-  <rect x="0" y="0" width="1400" height="900" fill="url(#grad)"/>
+  <rect width="1400" height="700" fill="#0f0f1e"/>
+  <text x="700" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">6D Learning Loops</text>
+  <line x1="100" y1="70" x2="1300" y2="70" stroke="#333" stroke-width="1"/>
 
-  <!-- Title -->
-  <text x="700" y="40" class="title" text-anchor="middle">Learning Infrastructure: 6D Loss Vector (ADR-0614/0615/0616)</text>
+  <rect x="80" y="110" width="250" height="100" rx="8" fill="url(#g1)"/>
+  <text x="205" y="135" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Routing Loop</text>
+  <text x="205" y="155" text-anchor="middle" fill="#ddd" font-size="11">Pick best engine?</text>
+  <text x="205" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <!-- SECTION 1: The Six Dimensions (top row) -->
+  <rect x="360" y="110" width="250" height="100" rx="8" fill="url(#g2)"/>
+  <text x="485" y="135" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Context Loop</text>
+  <text x="485" y="155" text-anchor="middle" fill="#ddd" font-size="11">Save important facts?</text>
+  <text x="485" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <g id="dim1">
-    <rect class="loop-box" x="60" y="130" width="180" height="80"/>
-    <text x="150" y="165" class="label" text-anchor="middle">Correct Agent Selected?</text>
-  </g>
+  <rect x="640" y="110" width="250" height="100" rx="8" fill="url(#g3)"/>
+  <text x="765" y="135" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Execution Loop</text>
+  <text x="765" y="155" text-anchor="middle" fill="#ddd" font-size="11">Fast enough?</text>
+  <text x="765" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <g id="dim2">
-    <rect class="loop-box" x="270" y="130" width="180" height="80"/>
-    <text x="360" y="165" class="label" text-anchor="middle">Context Quality?</text>
-  </g>
+  <rect x="920" y="110" width="250" height="100" rx="8" fill="url(#g4)"/>
+  <text x="1045" y="135" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Confidence Loop</text>
+  <text x="1045" y="155" text-anchor="middle" fill="#ddd" font-size="11">Am I right?</text>
+  <text x="1045" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <g id="dim3">
-    <rect class="loop-box" x="480" y="130" width="180" height="80"/>
-    <text x="570" y="165" class="label" text-anchor="middle">Latency OK? SLA?</text>
-  </g>
+  <rect x="1200" y="110" width="120" height="100" rx="8" fill="url(#g5)"/>
+  <text x="1260" y="135" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold">Compliance</text>
+  <text x="1260" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <g id="dim4">
-    <rect class="loop-box" x="690" y="130" width="180" height="80"/>
-    <text x="780" y="165" class="label" text-anchor="middle">P(correct | input)?</text>
-  </g>
-
-  <g id="dim5">
-    <rect class="loop-box" x="900" y="130" width="180" height="80"/>
-    <text x="990" y="165" class="label" text-anchor="middle">PII Leakage? Consent?</text>
-  </g>
-
-  <g id="dim6">
-    <rect class="loop-box" x="1110" y="130" width="180" height="80"/>
-    <text x="1200" y="165" class="label" text-anchor="middle">Config Convergence?</text>
-  </g>
-
-  <!-- SECTION 2: Unified Loss Function -->
-  <rect class="metric-box" x="60" y="265" width="1310" height="80"/>
-  <text x="715" y="285" class="label" text-anchor="middle">L_total = w₁·L_route + w₂·L_context + w₃·L_exec + w₄·L_conf + w₅·L_comply + w₆·L_learn</text>
-
-  <!-- SECTION 3: Causal Coupling -->
-
-  <g id="coupling">
-    <!-- Routing fails → Context degrades -->
-    <path class="arrow-bold" d="M 150 240 L 250 260"/>
-
-    <!-- Context bad → Execution fails -->
-    <path class="arrow-bold" d="M 360 240 L 460 260"/>
-
-    <!-- Execution slow → User feedback negative -->
-    <path class="arrow-bold" d="M 570 240 L 670 260"/>
-
-    <!-- Low confidence → Learning fails -->
-    <path class="arrow-bold" d="M 780 240 L 880 260"/>
-
-    <!-- Compliance error → Audit fail -->
-    <path class="arrow-bold" d="M 990 240 L 1090 260"/>
-
-    <!-- Learning diverge → cycle repeats -->
-    <path class="arrow-bold" d="M 1200 240 Q 1250 180 1250 130" stroke-dasharray="5,5"/>
-  </g>
-
-  <!-- SECTION 4: Six Independent Loops (detailed) -->
-
-  <!-- Row 1: Loops 1-3 -->
-  <g id="loops-top">
-    <!-- Loop 1: Routing -->
-    <rect class="loop-box" x="60" y="410" width="280" height="120"/>
-    <text x="200" y="430" class="label" text-anchor="middle">LOOP 1: Routing Feedback</text>
-
-    <!-- Loop 2: Context -->
-    <rect class="loop-box" x="370" y="410" width="280" height="120"/>
-    <text x="510" y="430" class="label" text-anchor="middle">LOOP 2: Context Quality</text>
-
-    <!-- Loop 3: Execution -->
-    <rect class="loop-box" x="680" y="410" width="280" height="120"/>
-    <text x="820" y="430" class="label" text-anchor="middle">LOOP 3: Execution Performance</text>
-
-    <!-- Loop 4: Confidence -->
-    <rect class="loop-box" x="990" y="410" width="280" height="120"/>
-    <text x="1130" y="430" class="label" text-anchor="middle">LOOP 4: Confidence Scoring</text>
-  </g>
-
-  <!-- Row 2: Loops 5-6 -->
-  <g id="loops-bottom">
-    <!-- Loop 5: Compliance -->
-    <rect class="loop-box" x="60" y="560" width="280" height="120"/>
-    <text x="200" y="580" class="label" text-anchor="middle">LOOP 5: Compliance Scanning</text>
-
-    <!-- Loop 6: Learning Optimizer -->
-    <rect class="loop-box" x="370" y="560" width="280" height="120"/>
-    <text x="510" y="580" class="label" text-anchor="middle">LOOP 6: Learning Optimizer</text>
-
-    <!-- Backprop Protocol -->
-    <rect class="metric-box" x="680" y="560" width="590" height="120"/>
-    <text x="975" y="580" class="label" text-anchor="middle">BACKPROPAGATION PROTOCOL (Loop Coupling)</text>
-  </g>
-
-  <!-- SECTION 5: Console Dashboard Integration -->
-  <rect class="metric-box" x="60" y="750" width="1310" height="120"/>
-
-  <rect class="loop-box" x="80" y="765" width="150" height="90"/>
-  <text x="155" y="780" class="label" text-anchor="middle">Loss Trends</text>
-
-  <rect class="loop-box" x="260" y="765" width="150" height="90"/>
-  <text x="335" y="780" class="label" text-anchor="middle">Weight Vector</text>
-
-  <rect class="loop-box" x="440" y="765" width="150" height="90"/>
-  <text x="515" y="780" class="label" text-anchor="middle">Pareto Frontier</text>
-
-  <rect class="loop-box" x="620" y="765" width="150" height="90"/>
-  <text x="695" y="780" class="label" text-anchor="middle">Convergence</text>
-
-  <rect class="loop-box" x="800" y="765" width="150" height="90"/>
-  <text x="875" y="780" class="label" text-anchor="middle">Loop Health</text>
-
-  <rect class="loop-box" x="980" y="765" width="150" height="90"/>
-  <text x="1055" y="780" class="label" text-anchor="middle">Audit Trail</text>
-
-  <rect class="loop-box" x="1160" y="765" width="200" height="90"/>
-  <text x="1260" y="780" class="label" text-anchor="middle">Export / Report</text>
-
-  <!-- Footer -->
+  <rect x="200" y="280" width="1000" height="120" rx="8" fill="url(#g6)"/>
+  <text x="700" y="315" text-anchor="middle" fill="#fff" font-size="16" font-weight="bold">Meta Loop: Learns Optimal Weights</text>
+  <text x="700" y="340" text-anchor="middle" fill="#ddd" font-size="12">α=1% • Converges all dimensions together</text>
+  <text x="700" y="360" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">Damping prevents oscillation • Scales to N loops</text>
 </svg>

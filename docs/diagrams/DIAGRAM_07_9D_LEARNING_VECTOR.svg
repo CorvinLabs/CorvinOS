@@ -1,98 +1,53 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" width="1400" height="900" font-family="Segoe UI, Arial, sans-serif">
+
   <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
-      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    <linearGradient id="g0" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a1a3e"/>
+      <stop offset="100%" style="stop-color:#2d1b4e"/>
     </linearGradient>
-    <style>
-      .bg { fill: #0a0e27; }
-      .title { font-size: 26px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .tier1-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2.5; }
-      .tier2-box { fill: #16213e; stroke: #ffd700; stroke-width: 2.5; }
-      .tier3-box { fill: #16213e; stroke: #ff006e; stroke-width: 2.5.5; }
-      .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 15px; fill: #888; font-family: monospace; }
-      .number { font-size: 22px; font-weight: bold; fill: #00ff88; font-family: monospace; }
-      .arrow { stroke: #00d4ff; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
-      .arrow-feedback { stroke: #ff006e; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-feedback); stroke-dasharray: 5,5; }
-    </style>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
-    </marker>
-    <marker id="arrowhead-feedback" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#ff006e" />
-    </marker>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3d2550"/>
+      <stop offset="100%" style="stop-color:#1a1a6e"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2d3e7e"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f39c12"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#27ae60"/>
+      <stop offset="100%" style="stop-color:#f39c12"/>
+    </linearGradient>
+    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3498db"/>
+      <stop offset="100%" style="stop-color:#27ae60"/>
+    </linearGradient>
+    <linearGradient id="g6" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#9b59b6"/>
+      <stop offset="100%" style="stop-color:#3498db"/>
+    </linearGradient>
   </defs>
 
-  <rect class="bg" width="1400" height="900"/>
-  <rect x="0" y="0" width="1400" height="900" fill="url(#grad)"/>
+  <rect width="1400" height="900" fill="#0f0f1e"/>
+  <text x="700" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">9D Learning Vector</text>
+  <line x1="100" y1="70" x2="1300" y2="70" stroke="#333" stroke-width="1"/>
 
-  <text x="700" y="35" class="title" text-anchor="middle">9D Learning Vector: Tiered Architecture</text>
+  <text x="100" y="130" fill="#ffd700" font-size="16" font-weight="bold">TIER 1: Core Loops (α=10%)</text>
+  <rect x="100" y="150" width="1200" height="80" rx="8" fill="url(#g1)"/>
+  <text x="700" y="180" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Routing • Context • Execution • Confidence • Compliance • Learning</text>
+  <text x="700" y="205" text-anchor="middle" fill="#ddd" font-size="11">6 independent feedback loops</text>
 
-  <!-- TIER 1: Core Loops (6D, proven) -->
-  <text x="50" y="100" class="label" fill="#00ff88">TIER 1: Core Loops (6D, Proven)</text>
+  <text x="100" y="290" fill="#ffd700" font-size="16" font-weight="bold">TIER 2: Infrastructure Loops (α=5%)</text>
+  <rect x="100" y="310" width="1200" height="80" rx="8" fill="url(#g2)"/>
+  <text x="700" y="340" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Memory • Plugins • Security</text>
+  <text x="700" y="365" text-anchor="middle" fill="#ddd" font-size="11">Learn optimal configuration from hourly metrics</text>
 
-  <g id="tier1">
-    <!-- L1-L6 boxes -->
-    <rect class="tier1-box" x="50" y="120" width="150" height="80"/>
-
-    <rect class="tier1-box" x="220" y="120" width="150" height="80"/>
-
-    <rect class="tier1-box" x="390" y="120" width="150" height="80"/>
-
-    <rect class="tier1-box" x="560" y="120" width="150" height="80"/>
-
-    <rect class="tier1-box" x="730" y="120" width="150" height="80"/>
-
-    <rect class="tier1-box" x="900" y="120" width="150" height="80"/>
-
-    <!-- Arrows down to unified loss -->
-    <path class="arrow" d="M 125 200 L 400 250"/>
-    <path class="arrow" d="M 295 200 L 400 250"/>
-    <path class="arrow" d="M 465 200 L 400 250"/>
-    <path class="arrow" d="M 635 200 L 400 250"/>
-    <path class="arrow" d="M 805 200 L 400 250"/>
-    <path class="arrow" d="M 975 200 L 400 250"/>
-  </g>
-
-  <!-- TIER 2: Infrastructure Loops (3 new, learnable) -->
-  <text x="50" y="300" class="label" fill="#ffd700">TIER 2: Infrastructure Loops (3 NEW, α=5%)</text>
-
-  <g id="tier2">
-    <rect class="tier2-box" x="50" y="320" width="220" height="100"/>
-
-    <rect class="tier2-box" x="300" y="320" width="220" height="100"/>
-
-    <rect class="tier2-box" x="550" y="320" width="220" height="100"/>
-  </g>
-
-  <!-- Arrows down to unified loss -->
-  <path class="arrow" d="M 160 420 L 400 450"/>
-  <path class="arrow" d="M 410 420 L 400 450"/>
-  <path class="arrow" d="M 660 420 L 400 450"/>
-
-  <!-- TIER 3: Meta Loop (self-tuning weights) -->
-  <text x="50" y="500" class="label" fill="#ff006e">TIER 3: Meta Loop (Hyperparameter Tuning, α=1%)</text>
-
-  <g id="tier3">
-    <rect class="tier3-box" x="200" y="520" width="600" height="120"/>
-
-    <!-- Feedback back to Tier 1 -->
-    <path class="arrow-feedback" d="M 500 520 Q 500 400 400 450"/>
-
-    <!-- Operator control -->
-    <text x="850" y="560" class="label" fill="#00d4ff">Operator Control:</text>
-  </g>
-
-  <!-- Unified Loss Function -->
-  <text x="50" y="680" class="label" fill="#00ff88">UNIFIED LOSS FUNCTION (9D):</text>
-
-  <rect class="tier1-box" x="50" y="700" width="1300" height="130"/>
-
-  <text x="700" y="720" class="label" text-anchor="middle">L_total = w₁·L₁ + w₂·L₂ + ... + w₆·L₆ + w₇·L₇ + w₈·L₈ + w₉·L₉ - λ·L_meta_stability</text>
-
-
-
-  <!-- Legend -->
+  <text x="100" y="450" fill="#ffd700" font-size="16" font-weight="bold">TIER 3: Meta Loop (α=1%)</text>
+  <rect x="100" y="470" width="1200" height="100" rx="8" fill="url(#g3)"/>
+  <text x="700" y="510" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Learns Optimal Weight Vector</text>
+  <text x="700" y="535" text-anchor="middle" fill="#ddd" font-size="12">Discovers best balance between all 9 dimensions</text>
+  <text x="700" y="555" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">Converges <10K samples • No oscillation • Operator tunable</text>
 </svg>
