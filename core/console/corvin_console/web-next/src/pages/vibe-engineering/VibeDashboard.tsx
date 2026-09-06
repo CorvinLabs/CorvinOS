@@ -22,6 +22,17 @@ import { Loader2 } from 'lucide-react';
 import MaturityDashboard from './components/LearningDashboard';
 import MethodDiscoveryDashboard from '@/panels/LearningDashboard';
 
+// Same PALETTE as LearningDashboard & Maturity Metrics
+const PALETTE = {
+  surface: {
+    dark: '#0D1117',
+    card: '#161B22',
+    border: '#30363D',
+    text: '#C9D1D9',
+    muted: '#8B949E',
+  },
+};
+
 const LoadingFallback = () => (
   <div className="flex justify-center py-12">
     <Loader2 className="h-6 w-6 animate-spin" />
@@ -32,10 +43,21 @@ export function VibeDashboard() {
   const [activeTab, setActiveTab] = useState<'maturity' | 'summary' | 'patterns' | 'config' | 'preferences'>('maturity');
 
   return (
-    <div data-testid="learning-dashboard-panel">
+    <>
+      <style>{`
+        [data-testid="learning-dashboard-panel"] {
+          background-color: #0D1117 !important;
+        }
+        /* Override any parent containers */
+        [data-testid="learning-dashboard-panel"] {
+          --tw-bg-opacity: 1;
+          background-color: rgb(13, 17, 23 / var(--tw-bg-opacity)) !important;
+        }
+      `}</style>
+    <div data-testid="learning-dashboard-panel" style={{ backgroundColor: PALETTE.surface.dark, minHeight: '100vh', color: PALETTE.surface.text }} className="!bg-[#0D1117] dark:!bg-[#0D1117]">
       {/* Tab Navigation */}
-      <div className="border-b border-slate-200 dark:border-slate-700 mb-6">
-        <div className="flex gap-2 flex-wrap">
+      <div style={{ borderBottom: `1px solid ${PALETTE.surface.border}`, marginBottom: '24px', backgroundColor: PALETTE.surface.dark }}>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {[
             { id: 'maturity', label: '📊 Maturity Metrics', icon: '📊' },
             { id: 'summary', label: '📝 Summary', icon: '📝' },
@@ -46,11 +68,18 @@ export function VibeDashboard() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
-              className={`px-4 py-3 font-medium text-sm whitespace-nowrap transition border-b-2 ${
-                activeTab === tab.id
-                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                  : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
+              style={{
+                padding: '12px 16px',
+                fontWeight: 500,
+                fontSize: '14px',
+                whiteSpace: 'nowrap',
+                transition: 'all 0.2s',
+                borderBottom: activeTab === tab.id ? `2px solid #4ECDC4` : 'none',
+                color: activeTab === tab.id ? '#4ECDC4' : PALETTE.surface.muted,
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+              }}
             >
               {tab.label}
             </button>
@@ -74,6 +103,7 @@ export function VibeDashboard() {
         </Suspense>
       )}
     </div>
+    </>
   );
 }
 
