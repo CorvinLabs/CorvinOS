@@ -18,7 +18,6 @@
   <rect class="bg" width="1400" height="1000"/>
 
   <text x="700" y="50" class="title" text-anchor="middle">Compliance Built-In</text>
-  <text x="700" y="75" class="subtitle" text-anchor="middle">GDPR + EU AI Act (structural, not features)</text>
 
   <!-- EU AI ACT SECTION -->
   <text x="50" y="130" class="section">🏛️ EU AI ACT</text>
@@ -27,41 +26,33 @@
   <rect class="box" x="50" y="160" width="300" height="110"/>
   <text x="200" y="185" class="req-title" text-anchor="middle">Disclose AI Use</text>
   <text x="200" y="208" class="label" text-anchor="middle">(Art. 50)</text>
-  <text x="200" y="230" class="small" text-anchor="middle">Tell user • One-time • Locked</text>
 
   <rect class="impl" x="50" y="280" width="300" height="70"/>
   <text x="200" y="305" class="impl-title" text-anchor="middle">bot_disclosure.py</text>
-  <text x="200" y="325" class="small" text-anchor="middle">Before any LLM call</text>
 
   <!-- Requirement 2 -->
   <rect class="box" x="380" y="160" width="300" height="110"/>
   <text x="530" y="185" class="req-title" text-anchor="middle">Transparent Logging</text>
   <text x="530" y="208" class="label" text-anchor="middle">(Art. 5)</text>
-  <text x="530" y="230" class="small" text-anchor="middle">Every decision • Immutable • Auditable</text>
 
   <rect class="impl" x="380" y="280" width="300" height="70"/>
   <text x="530" y="305" class="impl-title" text-anchor="middle">audit_backend.py</text>
-  <text x="530" y="325" class="small" text-anchor="middle">Hash-chained proof</text>
 
   <!-- Requirement 3 -->
   <rect class="box" x="710" y="160" width="300" height="110"/>
   <text x="860" y="185" class="req-title" text-anchor="middle">Acceptable Use</text>
   <text x="860" y="208" class="label" text-anchor="middle">(Art. 5)</text>
-  <text x="860" y="230" class="small" text-anchor="middle">Block unethical • Fail-closed • No bypass</text>
 
   <rect class="impl" x="710" y="280" width="300" height="70"/>
   <text x="860" y="305" class="impl-title" text-anchor="middle">house_rules.py</text>
-  <text x="860" y="325" class="small" text-anchor="middle">Enforces before routing</text>
 
   <!-- Requirement 4 -->
   <rect class="box" x="1040" y="160" width="310" height="110"/>
   <text x="1195" y="185" class="req-title" text-anchor="middle">User Opt-Out</text>
   <text x="1195" y="208" class="label" text-anchor="middle">(Art. 50)</text>
-  <text x="1195" y="230" class="small" text-anchor="middle">Instant • No retention • Immediate</text>
 
   <rect class="impl" x="1040" y="280" width="310" height="70"/>
   <text x="1195" y="305" class="impl-title" text-anchor="middle">/leave command</text>
-  <text x="1195" y="325" class="small" text-anchor="middle">Audit logged</text>
 
   <!-- GDPR SECTION -->
   <text x="50" y="420" class="section">🔒 GDPR 2016</text>
@@ -70,46 +61,37 @@
   <rect class="box" x="50" y="450" width="300" height="110"/>
   <text x="200" y="475" class="req-title" text-anchor="middle">Legal Basis</text>
   <text x="200" y="498" class="label" text-anchor="middle">(Art. 6)</text>
-  <text x="200" y="520" class="small" text-anchor="middle">Consent required • Deny-by-default</text>
 
   <rect class="impl" x="50" y="570" width="300" height="70"/>
   <text x="200" y="595" class="impl-title" text-anchor="middle">consent_gate.py</text>
-  <text x="200" y="615" class="small" text-anchor="middle">No auto-grant</text>
 
   <!-- GDPR 2 -->
   <rect class="box" x="380" y="450" width="300" height="110"/>
   <text x="530" y="475" class="req-title" text-anchor="middle">Audit Trail</text>
   <text x="530" y="498" class="label" text-anchor="middle">(Art. 30, 32)</text>
-  <text x="530" y="520" class="small" text-anchor="middle">Immutable • Hash-chained • Verified</text>
 
   <rect class="impl" x="380" y="570" width="300" height="70"/>
   <text x="530" y="595" class="impl-title" text-anchor="middle">RFC 3161 Timestamping</text>
-  <text x="530" y="615" class="small" text-anchor="middle">Cryptographic proof</text>
 
   <!-- GDPR 3 -->
   <rect class="box" x="710" y="450" width="300" height="110"/>
   <text x="860" y="475" class="req-title" text-anchor="middle">Data Minimization</text>
   <text x="860" y="498" class="label" text-anchor="middle">(Art. 5)</text>
-  <text x="860" y="520" class="small" text-anchor="middle">Metadata only • No prompts • No content</text>
 
   <rect class="impl" x="710" y="570" width="300" height="70"/>
   <text x="860" y="595" class="impl-title" text-anchor="middle">_assert_safe()</text>
-  <text x="860" y="615" class="small" text-anchor="middle">Fail-closed scrubbing</text>
 
   <!-- GDPR 4 -->
   <rect class="box" x="1040" y="450" width="310" height="110"/>
   <text x="1195" y="475" class="req-title" text-anchor="middle">Right to Erasure</text>
   <text x="1195" y="498" class="label" text-anchor="middle">(Art. 17)</text>
-  <text x="1195" y="520" class="small" text-anchor="middle">Delete all • Cascading • Proof logged</text>
 
   <rect class="impl" x="1040" y="570" width="310" height="70"/>
   <text x="1195" y="595" class="impl-title" text-anchor="middle">erasure_orchestrator.py</text>
-  <text x="1195" y="615" class="small" text-anchor="middle">Audit-first deletion</text>
 
   <!-- KEY INSIGHT -->
   <rect class="impl" x="50" y="720" width="1300" height="100"/>
   <text x="700" y="760" class="section" text-anchor="middle">✅ Compliance = Hardcoded Fail-Closed Gates</text>
   <text x="700" y="785" class="label" text-anchor="middle">NOT feature flags • NOT environment variables • NOT pluggable</text>
-  <text x="700" y="805" class="small" text-anchor="middle">Every gate runs BEFORE business logic. Audit-first. No bypass.</text>
 
 </svg>
