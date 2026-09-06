@@ -7,9 +7,9 @@
       .box { fill: #1a1a2e; stroke: #00d4ff; stroke-width: 2; }
       .box-accent { fill: #16213e; stroke: #00d4ff; stroke-width: 2; }
       .title { font-size: 24px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .subtitle { font-size: 18px; font-weight: bold; fill: #eaeaea; font-family: monospace; }
-      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 12px; fill: #888; font-family: monospace; }
+      .subtitle { font-size: 22px; font-weight: bold; fill: #eaeaea; font-family: monospace; }
+      .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 15px; fill: #888; font-family: monospace; }
       .arrow { stroke: #00d4ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
       .arrow-learn { stroke: #ff006e; stroke-width: 2; fill: none; marker-end: url(#arrowhead-learn); stroke-dasharray: 5,5; }
     </style>

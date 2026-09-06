@@ -6,8 +6,8 @@
       .title { font-size: 22px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
       .layer { fill: #1a1a2e; stroke: #00ff88; stroke-width: 1.5; }
       .layer-critical { fill: #16213e; stroke: #ff006e; stroke-width: 2; }
-      .label { font-size: 12px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 10px; fill: #888; font-family: monospace; }
+      .label { font-size: 15px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 13px; fill: #888; font-family: monospace; }
       .divider { stroke: #444; stroke-width: 1; }
     </style>
   </defs>

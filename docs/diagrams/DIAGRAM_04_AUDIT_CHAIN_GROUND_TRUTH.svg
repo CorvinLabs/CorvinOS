@@ -4,17 +4,17 @@
     <style>
       .bg { fill: #0f0f0f; }
       .title { font-size: 26px; font-weight: bold; fill: #ff6b9d; font-family: monospace; }
-      .subtitle { font-size: 18px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 12px; fill: #888; font-family: monospace; }
+      .subtitle { font-size: 22px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 15px; fill: #888; font-family: monospace; }
       .chain-box { fill: #1a1a2e; stroke: #ff6b9d; stroke-width: 2; }
       .event-box { fill: #16213e; stroke: #00ff88; stroke-width: 1.5; }
       .proof-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
       .arrow-chain { stroke: #ff6b9d; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-chain); }
       .arrow-proof { stroke: #ffd700; stroke-width: 2; fill: none; marker-end: url(#arrowhead-proof); }
-      .code { font-size: 11px; fill: #00ff88; font-family: monospace; letter-spacing: -1px; }
-      .hash { font-size: 10px; fill: #666; font-family: monospace; word-break: break-all; }
-      .check { font-size: 14px; fill: #00ff88; font-family: monospace; }
+      .code { font-size: 14px; fill: #00ff88; font-family: monospace; letter-spacing: -1px; }
+      .hash { font-size: 13px; fill: #666; font-family: monospace; word-break: break-all; }
+      .check { font-size: 17px; fill: #00ff88; font-family: monospace; }
     </style>
     <marker id="arrowhead-chain" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
       <polygon points="0 0, 10 3, 0 6" fill="#ff6b9d" />

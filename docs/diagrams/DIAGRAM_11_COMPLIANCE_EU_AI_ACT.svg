@@ -3,15 +3,15 @@
   <defs>
     <style>
       .bg { fill: #0f0f0f; }
-      .title { font-size: 28px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .section { font-size: 18px; font-weight: bold; fill: #ffd700; font-family: monospace; }
-      .subsection { font-size: 14px; font-weight: bold; fill: #00ff88; font-family: monospace; }
+      .title { font-size: 36px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .section { font-size: 22px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+      .subsection { font-size: 16px; font-weight: bold; fill: #00ff88; font-family: monospace; }
       .requirement { fill: #1a1a2e; stroke: #ff006e; stroke-width: 2; }
       .implementation { fill: #16213e; stroke: #00d4ff; stroke-width: 2; }
-      .label { font-size: 13px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 11px; fill: #888; font-family: monospace; }
-      .code { font-size: 10px; fill: #00ff88; font-family: monospace; }
-      .check { font-size: 12px; fill: #00ff88; }
+      .label { font-size: 15px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 14px; fill: #888; font-family: monospace; }
+      .code { font-size: 13px; fill: #00ff88; font-family: monospace; }
+      .check { font-size: 15px; fill: #00ff88; }
       .arrow { stroke: #00d4ff; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead); }
     </style>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">

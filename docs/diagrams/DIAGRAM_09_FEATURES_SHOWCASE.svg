@@ -3,15 +3,15 @@
   <defs>
     <style>
       .bg { fill: #0f0f0f; }
-      .title { font-size: 32px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .title { font-size: 40px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
       .feature-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2; border-radius: 8px; }
-      .feature-title { font-size: 18px; font-weight: bold; fill: #00ff88; font-family: monospace; }
-      .feature-desc { font-size: 13px; fill: #a8dadc; font-family: monospace; }
-      .benefit { font-size: 12px; fill: #888; font-family: monospace; }
+      .feature-title { font-size: 22px; font-weight: bold; fill: #00ff88; font-family: monospace; }
+      .feature-desc { font-size: 16px; fill: #a8dadc; font-family: monospace; }
+      .benefit { font-size: 15px; fill: #888; font-family: monospace; }
       .icon { font-size: 40px; }
       .stat-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
-      .stat-number { font-size: 28px; font-weight: bold; fill: #ffd700; font-family: monospace; }
-      .stat-label { font-size: 12px; fill: #a8dadc; font-family: monospace; }
+      .stat-number { font-size: 36px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+      .stat-label { font-size: 15px; fill: #a8dadc; font-family: monospace; }
     </style>
   </defs>
 

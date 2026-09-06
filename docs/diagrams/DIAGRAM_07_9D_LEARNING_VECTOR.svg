@@ -7,9 +7,9 @@
       .tier1-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2; }
       .tier2-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
       .tier3-box { fill: #16213e; stroke: #ff006e; stroke-width: 2.5; }
-      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 12px; fill: #888; font-family: monospace; }
-      .number { font-size: 18px; font-weight: bold; fill: #00ff88; font-family: monospace; }
+      .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 15px; fill: #888; font-family: monospace; }
+      .number { font-size: 22px; font-weight: bold; fill: #00ff88; font-family: monospace; }
       .arrow { stroke: #00d4ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
       .arrow-feedback { stroke: #ff006e; stroke-width: 2; fill: none; marker-end: url(#arrowhead-feedback); stroke-dasharray: 5,5; }
     </style>
