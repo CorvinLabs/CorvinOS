@@ -22,6 +22,9 @@ makes that later change non-breaking.
 """
 from __future__ import annotations
 
+import threading
+import time
+
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -129,7 +132,40 @@ GATED_FLAGS: tuple[str, ...] = (
 )
 
 
+#: Short per-tenant cache of the gated-flag manifest. The SPA re-fetches the
+#: manifest continuously (build-freshness poll, panel gating); executing
+#: ``os.capabilities`` for every request produced hundreds of audited skill
+#: executions per ten minutes (F31). Five seconds is well under any operator
+#: expectation, and the features toggle route invalidates explicitly, so a
+#: toggle is still reflected on the very next request.
+_FLAGS_TTL_S = 5.0
+_flags_cache: dict[str, tuple[float, dict[str, bool]]] = {}
+_flags_lock = threading.Lock()
+
+
+def invalidate_flags_cache(tenant_id: str | None = None) -> None:
+    """Drop the cached manifest flags (one tenant, or all)."""
+    with _flags_lock:
+        if tenant_id is None:
+            _flags_cache.clear()
+        else:
+            _flags_cache.pop(tenant_id, None)
+
+
 def _read_flags(tenant_id: str) -> dict[str, bool]:
+    """Read the gated flags for a tenant via os.capabilities Skill (cached ≤5 s)."""
+    now = time.monotonic()
+    with _flags_lock:
+        hit = _flags_cache.get(tenant_id)
+        if hit is not None and now - hit[0] < _FLAGS_TTL_S:
+            return dict(hit[1])
+    flags = _read_flags_uncached(tenant_id)
+    with _flags_lock:
+        _flags_cache[tenant_id] = (now, dict(flags))
+    return flags
+
+
+def _read_flags_uncached(tenant_id: str) -> dict[str, bool]:
     """Read the gated flags for a tenant via os.capabilities Skill.
 
     Phase 1 k=2-5 refactoring: Uses Skill instead of feature_flags module.

@@ -73,6 +73,17 @@ Only `os.delegation_router` is tunable (`TUNABLE_SKILLS`); any other `skill_id` 
 | `learning.skill_executed` / `learning.outcome` / `learning.feedback` / `learning.config_updated` / `learning.preference` | core (content-free: event_id, event_type, skill_id, skill_version, lom) | `EventStore.write_event` (audit-first) |
 | `action_performed` — `learning.feedback_received:*`, `skill_config_updated:hypothesis_accepted`, `skill_config_updated:rollback`, `learning.config_rollback`, `learning.preference_confirmed` | console tenant chain | `method_discovery_api.py` |
 
+## What is learned from — and what is only audited
+
+`SkillMetadata.learn` (default `True`) says whether a Skill's executions feed the
+learning store. Every execution is audited regardless (`skill.executed`).
+`os.capabilities`, `os.headless_mode` and `os.plugin_health_monitoring` declare
+`learn=False`: they are deterministic flag/manifest lookups the SPA triggers
+continuously (346 executions in ten minutes of polling were observed) and no
+optimizer consumes them. The manifest route additionally caches the resolved
+flags per tenant for 5 s (`routes/capabilities.py::_read_flags`), invalidated
+by `POST /features/toggle`, so an operator decision is never stale.
+
 ## Invariants (must NOT be weakened)
 
 * The bundled routing answer is never altered by the shadow path. Promoting the

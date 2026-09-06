@@ -360,13 +360,20 @@ class TaskManager:
         except Exception:  # noqa: BLE001 — stripped install without core.learning
             return
         try:
+            # The engine that ran the task is stamped on its ``task.started``
+            # event ("claude", "hermes", "acs-delegation", "tiered_delegation");
+            # an explicit value on the closing event or in the input wins.
+            started_engine = None
+            for ev in task.output_events or []:
+                if ev.get("event") == "task.started" and ev.get("engine"):
+                    started_engine = str(ev["engine"])
             emit_task_outcome(
                 tenant_id=task.input.get("tenant_id"),
                 task_id=task.task_id,
                 status="completed" if event["event"] == "task.completed" else "failed",
                 exit_code=task.exit_code,
                 duration_ms=task.duration_ms,
-                engine=event.get("engine") or task.input.get("engine"),
+                engine=event.get("engine") or task.input.get("engine") or started_engine,
                 task_type=task.input.get("task_type"),
             )
         except Exception:  # noqa: BLE001 — never break the task lifecycle on learning

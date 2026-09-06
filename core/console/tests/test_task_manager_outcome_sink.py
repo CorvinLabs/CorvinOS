@@ -43,6 +43,15 @@ def test_completed_task_reports_outcome_with_its_own_tenant(tmp_path: Path, monk
     assert isinstance(c["duration_ms"], int)
 
 
+def test_engine_comes_from_the_started_event(tmp_path: Path, monkeypatch):
+    calls = _capture(monkeypatch)
+    tm = TaskManager(tmp_path / "tasks")
+    task_id = tm.create_task(chat_key="web:s1", instruction="hi", check_quota=False, tenant_id="_default")
+    tm.record_event(task_id, {"event": "task.started", "engine": "claude", "turn": 1, "pid": 4242})
+    tm.record_event(task_id, {"event": "task.completed", "exit_code": 0})
+    assert calls[0]["engine"] == "claude"
+
+
 def test_failed_task_reports_failure(tmp_path: Path, monkeypatch):
     calls = _capture(monkeypatch)
     tm = TaskManager(tmp_path / "tasks")

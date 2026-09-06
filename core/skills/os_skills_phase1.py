@@ -430,6 +430,7 @@ class PluginHealthMonitoringSkill(Skill):
             origin=SkillOrigin.BUILTIN,
             owner="corvin-os-team",
             tags=["plugins", "health", "monitoring"],
+            learn=False,  # flag/manifest lookup: audited, not a learning signal (F31)
         )
         super().__init__(metadata)
 
@@ -479,6 +480,7 @@ class HeadlessModeSkill(Skill):
             origin=SkillOrigin.BUILTIN,
             owner="corvin-os-team",
             tags=["console", "deployment", "api"],
+            learn=False,  # flag/manifest lookup: audited, not a learning signal (F31)
         )
         super().__init__(metadata)
 
@@ -576,6 +578,7 @@ class CapabilitiesSkill(Skill):
             origin=SkillOrigin.BUILTIN,
             owner="corvin-os-team",
             tags=["capabilities", "manifest", "api"],
+            learn=False,  # flag/manifest lookup: audited, not a learning signal (F31)
         )
         super().__init__(metadata)
 
