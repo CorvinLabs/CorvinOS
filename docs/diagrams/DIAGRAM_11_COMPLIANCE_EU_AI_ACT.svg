@@ -2,96 +2,105 @@
 <svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      .bg { fill: #0f0f0f; }
-      .title { font-size: 40px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .subtitle { font-size: 16px; fill: #888; font-family: monospace; }
-      .section { font-size: 24px; font-weight: bold; fill: #ffd700; font-family: monospace; }
-      .box { fill: #1a1a2e; stroke: #ff006e; stroke-width: 3; }
-      .impl { fill: #16213e; stroke: #00d4ff; stroke-width: 3; }
+      .bg { fill: #0a0e27; }
+      .title { font-size: 44px; font-weight: bold; fill: #00d4ff; font-family: monospace; letter-spacing: 1px; }
+      .section { font-size: 26px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+      .req-box { fill: #2a1a2e; stroke: #ff006e; stroke-width: 2.5; rx: 6; }
+      .impl-box { fill: #1a2847; stroke: #00d4ff; stroke-width: 2.5; rx: 6; }
       .req-title { font-size: 18px; font-weight: bold; fill: #ff006e; font-family: monospace; }
-      .impl-title { font-size: 18px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .label { font-size: 15px; fill: #a8dadc; font-family: monospace; }
-      .small { font-size: 14px; fill: #888; font-family: monospace; }
+      .impl-title { font-size: 16px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
+      .divider { stroke: #333; stroke-width: 1; }
     </style>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff006e;stop-opacity:0.08" />
+      <stop offset="100%" style="stop-color:#00d4ff;stop-opacity:0" />
+    </linearGradient>
   </defs>
 
   <rect class="bg" width="1400" height="1000"/>
+  <rect x="0" y="0" width="1400" height="1000" fill="url(#grad)"/>
 
-  <text x="700" y="50" class="title" text-anchor="middle">Compliance Built-In</text>
+  <!-- TITLE -->
+  <text x="700" y="60" class="title" text-anchor="middle">Compliance Built-In</text>
+  <line class="divider" x1="200" y1="80" x2="1200" y2="80"/>
+  <text x="700" y="105" style="font-size: 16px; fill: #888; font-family: monospace; text-anchor: middle;">GDPR + EU AI Act 2026 (Structural Constraints)</text>
 
   <!-- EU AI ACT SECTION -->
-  <text x="50" y="130" class="section">🏛️ EU AI ACT</text>
+  <text x="50" y="155" class="section">🏛️ EU AI ACT</text>
 
-  <!-- Requirement 1 -->
-  <rect class="box" x="50" y="160" width="300" height="110"/>
-  <text x="200" y="185" class="req-title" text-anchor="middle">Disclose AI Use</text>
-  <text x="200" y="208" class="label" text-anchor="middle">(Art. 50)</text>
+  <!-- Box 1 -->
+  <rect class="req-box" x="50" y="180" width="290" height="95" rx="6"/>
+  <text x="195" y="208" class="req-title" text-anchor="middle">Disclose AI</text>
+  <text x="195" y="228" class="label" text-anchor="middle">(Art. 50)</text>
 
-  <rect class="impl" x="50" y="280" width="300" height="70"/>
-  <text x="200" y="305" class="impl-title" text-anchor="middle">bot_disclosure.py</text>
+  <rect class="impl-box" x="50" y="285" width="290" height="65" rx="6"/>
+  <text x="195" y="316" class="impl-title" text-anchor="middle">bot_disclosure.py</text>
 
-  <!-- Requirement 2 -->
-  <rect class="box" x="380" y="160" width="300" height="110"/>
-  <text x="530" y="185" class="req-title" text-anchor="middle">Transparent Logging</text>
-  <text x="530" y="208" class="label" text-anchor="middle">(Art. 5)</text>
+  <!-- Box 2 -->
+  <rect class="req-box" x="370" y="180" width="290" height="95" rx="6"/>
+  <text x="515" y="208" class="req-title" text-anchor="middle">Transparent Logging</text>
+  <text x="515" y="228" class="label" text-anchor="middle">(Art. 5)</text>
 
-  <rect class="impl" x="380" y="280" width="300" height="70"/>
-  <text x="530" y="305" class="impl-title" text-anchor="middle">audit_backend.py</text>
+  <rect class="impl-box" x="370" y="285" width="290" height="65" rx="6"/>
+  <text x="515" y="316" class="impl-title" text-anchor="middle">audit_backend.py</text>
 
-  <!-- Requirement 3 -->
-  <rect class="box" x="710" y="160" width="300" height="110"/>
-  <text x="860" y="185" class="req-title" text-anchor="middle">Acceptable Use</text>
-  <text x="860" y="208" class="label" text-anchor="middle">(Art. 5)</text>
+  <!-- Box 3 -->
+  <rect class="req-box" x="690" y="180" width="290" height="95" rx="6"/>
+  <text x="835" y="208" class="req-title" text-anchor="middle">Acceptable Use</text>
+  <text x="835" y="228" class="label" text-anchor="middle">(Art. 5)</text>
 
-  <rect class="impl" x="710" y="280" width="300" height="70"/>
-  <text x="860" y="305" class="impl-title" text-anchor="middle">house_rules.py</text>
+  <rect class="impl-box" x="690" y="285" width="290" height="65" rx="6"/>
+  <text x="835" y="316" class="impl-title" text-anchor="middle">house_rules.py</text>
 
-  <!-- Requirement 4 -->
-  <rect class="box" x="1040" y="160" width="310" height="110"/>
-  <text x="1195" y="185" class="req-title" text-anchor="middle">User Opt-Out</text>
-  <text x="1195" y="208" class="label" text-anchor="middle">(Art. 50)</text>
+  <!-- Box 4 -->
+  <rect class="req-box" x="1010" y="180" width="290" height="95" rx="6"/>
+  <text x="1155" y="208" class="req-title" text-anchor="middle">User Opt-Out</text>
+  <text x="1155" y="228" class="label" text-anchor="middle">(Art. 50)</text>
 
-  <rect class="impl" x="1040" y="280" width="310" height="70"/>
-  <text x="1195" y="305" class="impl-title" text-anchor="middle">/leave command</text>
+  <rect class="impl-box" x="1010" y="285" width="290" height="65" rx="6"/>
+  <text x="1155" y="316" class="impl-title" text-anchor="middle">/leave command</text>
 
   <!-- GDPR SECTION -->
-  <text x="50" y="420" class="section">🔒 GDPR 2016</text>
+  <text x="50" y="415" class="section">🔒 GDPR 2016</text>
 
-  <!-- GDPR 1 -->
-  <rect class="box" x="50" y="450" width="300" height="110"/>
-  <text x="200" y="475" class="req-title" text-anchor="middle">Legal Basis</text>
-  <text x="200" y="498" class="label" text-anchor="middle">(Art. 6)</text>
+  <!-- GDPR Box 1 -->
+  <rect class="req-box" x="50" y="440" width="290" height="95" rx="6"/>
+  <text x="195" y="468" class="req-title" text-anchor="middle">Legal Basis</text>
+  <text x="195" y="488" class="label" text-anchor="middle">(Art. 6)</text>
 
-  <rect class="impl" x="50" y="570" width="300" height="70"/>
-  <text x="200" y="595" class="impl-title" text-anchor="middle">consent_gate.py</text>
+  <rect class="impl-box" x="50" y="545" width="290" height="65" rx="6"/>
+  <text x="195" y="576" class="impl-title" text-anchor="middle">consent_gate.py</text>
 
-  <!-- GDPR 2 -->
-  <rect class="box" x="380" y="450" width="300" height="110"/>
-  <text x="530" y="475" class="req-title" text-anchor="middle">Audit Trail</text>
-  <text x="530" y="498" class="label" text-anchor="middle">(Art. 30, 32)</text>
+  <!-- GDPR Box 2 -->
+  <rect class="req-box" x="370" y="440" width="290" height="95" rx="6"/>
+  <text x="515" y="468" class="req-title" text-anchor="middle">Audit Trail</text>
+  <text x="515" y="488" class="label" text-anchor="middle">(Art. 30, 32)</text>
 
-  <rect class="impl" x="380" y="570" width="300" height="70"/>
-  <text x="530" y="595" class="impl-title" text-anchor="middle">RFC 3161 Timestamping</text>
+  <rect class="impl-box" x="370" y="545" width="290" height="65" rx="6"/>
+  <text x="515" y="576" class="impl-title" text-anchor="middle">RFC 3161 TSA</text>
 
-  <!-- GDPR 3 -->
-  <rect class="box" x="710" y="450" width="300" height="110"/>
-  <text x="860" y="475" class="req-title" text-anchor="middle">Data Minimization</text>
-  <text x="860" y="498" class="label" text-anchor="middle">(Art. 5)</text>
+  <!-- GDPR Box 3 -->
+  <rect class="req-box" x="690" y="440" width="290" height="95" rx="6"/>
+  <text x="835" y="468" class="req-title" text-anchor="middle">Data Minimization</text>
+  <text x="835" y="488" class="label" text-anchor="middle">(Art. 5)</text>
 
-  <rect class="impl" x="710" y="570" width="300" height="70"/>
-  <text x="860" y="595" class="impl-title" text-anchor="middle">_assert_safe()</text>
+  <rect class="impl-box" x="690" y="545" width="290" height="65" rx="6"/>
+  <text x="835" y="576" class="impl-title" text-anchor="middle">_assert_safe()</text>
 
-  <!-- GDPR 4 -->
-  <rect class="box" x="1040" y="450" width="310" height="110"/>
-  <text x="1195" y="475" class="req-title" text-anchor="middle">Right to Erasure</text>
-  <text x="1195" y="498" class="label" text-anchor="middle">(Art. 17)</text>
+  <!-- GDPR Box 4 -->
+  <rect class="req-box" x="1010" y="440" width="290" height="95" rx="6"/>
+  <text x="1155" y="468" class="req-title" text-anchor="middle">Right to Erasure</text>
+  <text x="1155" y="488" class="label" text-anchor="middle">(Art. 17)</text>
 
-  <rect class="impl" x="1040" y="570" width="310" height="70"/>
-  <text x="1195" y="595" class="impl-title" text-anchor="middle">erasure_orchestrator.py</text>
+  <rect class="impl-box" x="1010" y="545" width="290" height="65" rx="6"/>
+  <text x="1155" y="576" class="impl-title" text-anchor="middle">erasure_orchestrator.py</text>
 
   <!-- KEY INSIGHT -->
-  <rect class="impl" x="50" y="720" width="1300" height="100"/>
-  <text x="700" y="760" class="section" text-anchor="middle">✅ Compliance = Hardcoded Fail-Closed Gates</text>
-  <text x="700" y="785" class="label" text-anchor="middle">NOT feature flags • NOT environment variables • NOT pluggable</text>
+  <line class="divider" x1="200" y1="680" x2="1200" y2="680"/>
+
+  <rect class="impl-box" x="80" y="710" width="1240" height="120" rx="8"/>
+  <text x="700" y="750" class="section" text-anchor="middle">✅ Compliance = Hardcoded Fail-Closed Gates</text>
+  <text x="700" y="785" class="label" text-anchor="middle">NOT feature flags • NOT environment variables • NOT pluggable • Runs BEFORE business logic</text>
 
 </svg>
