@@ -319,6 +319,42 @@ class LiveCollectorIntegration:
             "reverted_to": float(old_value)
         })
 
+    def on_meta_tuning(
+        self,
+        step_count: int,
+        alpha_core: float,
+        alpha_infra: float,
+        damping_core: float,
+        damping_infra: float,
+        convergence_threshold: float,
+        variance_threshold: float,
+        is_converged: bool
+    ):
+        """
+        Called when MetaOptimizer (Tier 3) updates hyperparameters.
+
+        Args:
+            step_count: total steps since optimizer initialization
+            alpha_core: learning rate for core loops
+            alpha_infra: learning rate for infrastructure loops
+            damping_core: momentum for core loops
+            damping_infra: momentum for infrastructure loops
+            convergence_threshold: gradient magnitude threshold for convergence
+            variance_threshold: loss variance threshold for convergence
+            is_converged: whether the meta loop has converged
+        """
+
+        self._emit_event("learning_meta_tuning", {
+            "step_count": step_count,
+            "alpha_core": float(alpha_core),
+            "alpha_infra": float(alpha_infra),
+            "damping_core": float(damping_core),
+            "damping_infra": float(damping_infra),
+            "convergence_threshold": float(convergence_threshold),
+            "variance_threshold": float(variance_threshold),
+            "is_converged": bool(is_converged)
+        })
+
     def get_event_summary(self, hours: int = 1) -> Dict[str, Any]:
         """Get summary of events in the last N hours."""
 

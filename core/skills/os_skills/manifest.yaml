@@ -1,0 +1,76 @@
+# Skill Manifest — OS Skills Registry (ADR-0537 Phase 1)
+# Defines Skills and their metadata for boot-time registration
+
+version: "1.0"
+skills:
+  - id: os.capabilities
+    name: "Capabilities Checker"
+    version: "1.0.0"
+    description: "Replaces CapabilityRegistry. Checks if role has capability_id. Immutable input, fail-closed design, audit-first."
+    tier: compliance  # Unskippable (cannot be disabled)
+    status: active
+    entry_point: "core.skills.os_skills.capabilities_skill:CapabilitiesSkill"
+
+    # What this Skill requires (compliance boundaries)
+    required_capabilities: []  # N/A: this Skill IS the capability gate
+
+    # Audit events this Skill emits
+    audit_events:
+      - event_type: capability_checked
+        schema:
+          role: string
+          capability_id: string
+          result: boolean
+
+    # What this Skill provides
+    provides:
+      - capability_check
+
+    # Dependencies
+    depends_on: []  # audit_backend is implicit (booted before Skills load)
+
+    # Configuration
+    config:
+      manifest_immutable_in_phase_1: true  # Manifests cannot be reloaded until Phase 2
+
+    # Security & compliance tags
+    tags:
+      - security
+      - compliance
+      - gdpr-art-32  # Audit trail integrity (GDPR Art. 32)
+      - eu-ai-act   # EU AI Act
+
+  - id: os.identity_resolver
+    name: "Identity Resolver"
+    version: "1.0.0"
+    description: "Replaces TransportResolver. Extracts (role, persona) from Flask headers or CLI args. Pair validation prevents privilege escalation."
+    tier: standard
+    status: active
+    entry_point: "core.skills.os_skills.identity_resolver_skill:IdentityResolverSkill"
+
+    required_capabilities: []
+
+    audit_events: []  # This Skill doesn't emit audit events (transport parsing is input-side)
+
+    provides:
+      - identity_resolution
+
+    depends_on: []
+
+    config:
+      supported_transports:
+        - flask_http
+        - cli
+      manifest_immutable_in_phase_1: true
+
+    tags:
+      - routing
+      - identity
+      - security
+      - gdpr-art-32  # Tenant isolation (GDPR Art. 32)
+
+# Phase 1 Notes
+# - Both Skills tier=compliance/standard (NOT compliance tier, can be versioned)
+# - audit_backend init happens BEFORE Skills boot (boot tripwire validates)
+# - Manifests loaded once at boot; reload deferred to Phase 2
+# - No Skills can override compliance mechanisms (audit chain, consent, house-rules)
