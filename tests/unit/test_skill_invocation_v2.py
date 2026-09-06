@@ -26,11 +26,12 @@ class TestPhaseA:
                 }
         class MockModel:
             pass
-        return SkillInvocationService(MockAudit(), MockManifests(), MockModel())
+        return SkillInvocationService(MockAudit(), MockManifests())  # v2 takes (audit, manifests)
 
     def test_request_immutable(self):
         """Request is frozen."""
         req = SkillInvocationRequest(
+            engine="claude_code",
             tenant_id="_default",
             skill_id="os.test",
             skill_version="1.0",
@@ -43,6 +44,7 @@ class TestPhaseA:
         """tenant_id required (fail-closed)."""
         with pytest.raises(ValueError, match="tenant_id required"):
             SkillInvocationRequest(
+                engine="claude_code",
                 tenant_id="",
                 skill_id="os.test",
                 skill_version="1.0",
@@ -82,6 +84,7 @@ class TestPhaseA:
     async def test_e2e_full_flow(self, service):
         """E2E: Full Skill invocation (all phases)."""
         request = SkillInvocationRequest(
+            engine="claude_code",
             tenant_id="_default",
             skill_id="os.delegation_router",
             skill_version="1.0",
@@ -100,6 +103,7 @@ class TestPhaseA:
     async def test_e2e_missing_required_input(self, service):
         """E2E: Invalid input rejected (fail-closed)."""
         request = SkillInvocationRequest(
+            engine="claude_code",
             tenant_id="_default",
             skill_id="os.delegation_router",
             skill_version="1.0",
@@ -115,6 +119,7 @@ class TestPhaseA:
     async def test_tenant_isolation(self, service):
         """Tenant isolation: different tenants don't leak."""
         req_a = SkillInvocationRequest(
+            engine="claude_code",
             tenant_id="tenant_a",
             skill_id="os.test",
             skill_version="1.0",
@@ -131,6 +136,7 @@ class TestPhaseA:
     async def test_audit_event_emitted(self, service):
         """Audit event is recorded."""
         request = SkillInvocationRequest(
+            engine="claude_code",
             tenant_id="_default",
             skill_id="os.test",
             skill_version="1.0",
@@ -161,7 +167,7 @@ class TestAdversarial:
                 }
         class MockModel:
             pass
-        return SkillInvocationService(MockAudit(), MockManifests(), MockModel())
+        return SkillInvocationService(MockAudit(), MockManifests())  # v2 takes (audit, manifests)
 
     @pytest.mark.asyncio
     async def test_pii_injection_rejected(self, service):
@@ -169,6 +175,7 @@ class TestAdversarial:
         # Real test: verify audit doesn't contain original input
         # For now: just validate request accepts it
         request = SkillInvocationRequest(
+            engine="claude_code",
             tenant_id="_default",
             skill_id="os.test",
             skill_version="1.0",
@@ -182,6 +189,7 @@ class TestAdversarial:
     async def test_timeout_doesnt_hang(self, service):
         """Timeout doesn't leave task hanging."""
         request = SkillInvocationRequest(
+            engine="claude_code",
             tenant_id="_default",
             skill_id="os.test",
             skill_version="1.0",
@@ -197,6 +205,7 @@ class TestAdversarial:
     def test_immutability_enforced(self):
         """Frozen dataclasses prevent mutation."""
         req = SkillInvocationRequest(
+            engine="claude_code",
             tenant_id="test",
             skill_id="test",
             skill_version="1.0",

@@ -51,7 +51,7 @@ def temp_tenant_export(tmp_path, monkeypatch):
 class TestGitHubExporter:
     def test_export_creates_tarball(self, temp_tenant_export):
         """Exporter creates tarball."""
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         result = exporter.export_shared_skills(dry_run=True)
 
         assert result.success is True
@@ -61,7 +61,7 @@ class TestGitHubExporter:
 
     def test_export_tarball_contains_skills(self, temp_tenant_export):
         """Tarball contains all skills."""
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         result = exporter.export_shared_skills(dry_run=True)
 
         assert result.tarball_path.exists()
@@ -75,7 +75,7 @@ class TestGitHubExporter:
 
     def test_export_generates_manifest(self, temp_tenant_export):
         """Exporter generates manifest.json."""
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         result = exporter.export_shared_skills(dry_run=True)
 
         assert result.manifest_path is not None
@@ -91,7 +91,7 @@ class TestGitHubExporter:
 
     def test_export_single_skill(self, temp_tenant_export):
         """Exporter can export single skill."""
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         result = exporter.export_single_skill("skill-0", dry_run=True)
 
         assert result.success is True
@@ -99,7 +99,7 @@ class TestGitHubExporter:
 
     def test_export_calculates_hash(self, temp_tenant_export):
         """Exporter calculates tarball hash."""
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         result = exporter.export_shared_skills(dry_run=True)
 
         assert result.manifest_hash is not None
@@ -111,7 +111,7 @@ class TestGitHubImporter:
         """Importer extracts and imports skills."""
         # Export first
         monkeypatch.setenv("HOME", str(tmp_path))
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         export_result = exporter.export_shared_skills(dry_run=True)
 
         # Now import into new tenant
@@ -131,7 +131,7 @@ class TestGitHubImporter:
 
     def test_import_detects_conflicts(self, temp_tenant_export):
         """Importer detects conflicting skills."""
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         export_result = exporter.export_shared_skills(dry_run=True)
 
         # Create local skill that conflicts
@@ -155,7 +155,7 @@ class TestGitHubImporter:
 
     def test_import_operator_wins_resolution(self, temp_tenant_export):
         """Import resolves conflicts with operator_wins."""
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         export_result = exporter.export_shared_skills(dry_run=True)
 
         importer = GitHubImporter()
@@ -169,7 +169,7 @@ class TestGitHubImporter:
 
     def test_import_github_wins_resolution(self, temp_tenant_export):
         """Import resolves conflicts with github_wins."""
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         export_result = exporter.export_shared_skills(dry_run=True)
 
         importer = GitHubImporter()
@@ -193,7 +193,7 @@ class TestCliSync:
 
         result = cli_runner.invoke(configure_sync, [
             "--tenant", "_default",
-            "--repo", "github:test/repo",
+            "--repo", "https://github.com/test/repo",
             "--enable-sync"
         ])
 
@@ -207,7 +207,7 @@ class TestCliSync:
         # Configure first
         cli_runner.invoke(configure_sync, [
             "--tenant", "_default",
-            "--repo", "github:test/repo"
+            "--repo", "https://github.com/test/repo"
         ])
 
         # Then check status
@@ -220,7 +220,7 @@ class TestCliSync:
         """CLI push with --dry-run."""
         result = cli_runner.invoke(sync_push, [
             "--tenant", "_default",
-            "--repo", "github:test/repo",
+            "--repo", "https://github.com/test/repo",
             "--dry-run"
         ])
 
@@ -234,7 +234,7 @@ class TestPhase2Robustness:
         """Exporter handles missing _shared/ gracefully."""
         monkeypatch.setenv("HOME", str(tmp_path))
 
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         result = exporter.export_shared_skills(dry_run=True)
 
         assert result.success is False
@@ -263,7 +263,7 @@ class TestPhase2Robustness:
         with open(skill_dir / "meta.json", "w") as f:
             f.write("{ invalid json }")
 
-        exporter = GitHubExporter("github:test/repo")
+        exporter = GitHubExporter("https://github.com/test/repo")
         result = exporter.export_shared_skills(dry_run=True)
 
         # Should still work but with bad-skill maybe excluded or error reported

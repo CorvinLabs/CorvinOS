@@ -55,21 +55,24 @@ class TestValidateTenantId:
         assert validate_tenant_id("tenant_123") == "tenant_123"
         assert validate_tenant_id("t1") == "t1"
 
-    def test_invalid_tenant_id_with_hyphen(self):
-        """Invalid: hyphens not allowed."""
+    def test_tenant_id_with_hyphen_matches_canonical_rule(self):
+        """Hyphens are allowed after the first character (same rule as forge.tenants);
+        a LEADING hyphen is not."""
+        assert validate_tenant_id("my-tenant") == "my-tenant"
+        assert validate_tenant_id("acme-corp-2024") == "acme-corp-2024"
         with pytest.raises(ValueError, match="invalid characters"):
-            validate_tenant_id("my-tenant")
-        with pytest.raises(ValueError, match="invalid characters"):
-            validate_tenant_id("acme-corp-2024")
+            validate_tenant_id("-acme")
 
     def test_valid_tenant_id_underscore(self):
         """Valid: with underscores."""
         assert validate_tenant_id("my_tenant") == "my_tenant"
 
     def test_valid_tenant_id_max_length(self):
-        """Valid: maximum length (64 chars)."""
-        max_id = "a" * 64
+        """Valid: maximum length (63 chars, forge.tenants rule); 64 is rejected."""
+        max_id = "a" * 63
         assert validate_tenant_id(max_id) == max_id
+        with pytest.raises(ValueError):
+            validate_tenant_id("a" * 64)
 
     def test_invalid_tenant_id_empty(self):
         """Invalid: empty string."""
@@ -164,10 +167,11 @@ class TestValidateTenantId:
         """Regex rejects uppercase."""
         assert not re.match(TENANT_ID_REGEX, "MyTenant")
 
-    def test_tenant_id_regex_rejects_hyphens(self):
-        """Regex rejects hyphens."""
-        assert not re.match(TENANT_ID_REGEX, "my-tenant")
-        assert not re.match(TENANT_ID_REGEX, "acme-corp-2024")
+    def test_tenant_id_regex_accepts_inner_hyphens_only(self):
+        """Regex accepts inner hyphens, rejects a leading one (forge.tenants parity)."""
+        assert re.match(TENANT_ID_REGEX, "my-tenant")
+        assert re.match(TENANT_ID_REGEX, "acme-corp-2024")
+        assert not re.match(TENANT_ID_REGEX, "-acme")
 
     def test_reserved_tenant_names_constant(self):
         """RESERVED_TENANT_NAMES includes all expected names."""
@@ -332,7 +336,8 @@ class TestTenantHome:
         path = tenant_home("t1")
         assert "tenants" in str(path)
         assert "t1" in str(path)
-        assert ".corvin" in str(path)
+        from core.paths.tenant import corvin_home
+        assert str(path).startswith(str(corvin_home()))  # CORVIN_HOME-aware, never a bare ~/.corvin
 
     def test_tenant_home_isolation_different_tenants(self):
         """Different tenants produce different paths."""

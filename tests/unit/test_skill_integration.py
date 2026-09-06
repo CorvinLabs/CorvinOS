@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 import asyncio
 
 from core.learning.skill_integration import SkillLearningHooks
+from core.learning.event_store import EventStore as _LearningEventStore
 from core.learning.event_emitter import EventEmitter
 from core.learning.outcome_feedback import OutcomeType
 
@@ -17,7 +18,7 @@ async def test_skill_selection_hook():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
 
@@ -49,7 +50,7 @@ async def test_skill_executed_hook():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
 
@@ -80,7 +81,7 @@ async def test_skill_outcome_hook():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
 
@@ -112,7 +113,7 @@ async def test_preference_changed_hook():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
 
@@ -141,7 +142,7 @@ async def test_full_lifecycle():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
 

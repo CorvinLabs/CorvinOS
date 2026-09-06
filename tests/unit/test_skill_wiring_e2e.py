@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.learning.skill_integration import SkillLearningHooks
+from core.learning.event_store import EventStore as _LearningEventStore
 from core.learning.skill_selector_integration import SkillSelectorWithLearning
 from core.learning.skill_executor_integration import SkillExecutorWithLearning
 from core.learning.skill_feedback_integration import SkillFeedbackWithLearning
@@ -18,7 +19,7 @@ async def test_full_skill_lifecycle():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
 
@@ -108,7 +109,7 @@ async def test_selector_with_confidence():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
         selector = SkillSelectorWithLearning(hooks)
@@ -137,7 +138,7 @@ async def test_executor_latency_measurement():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
         executor = SkillExecutorWithLearning(hooks)
@@ -173,7 +174,7 @@ async def test_feedback_outcome_mapping():
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
 
-        emitter = EventEmitter(tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(tenant_home))
         await emitter.start()
         hooks = SkillLearningHooks("_default", emitter)
         feedback = SkillFeedbackWithLearning(hooks)

@@ -37,8 +37,9 @@ except ImportError:
 def tmp_registry(tmp_path):
     """Create a temporary panel registry for testing."""
     registry_path = tmp_path / "panel_registry.json"
-    with patch("core.plugins.plugin_panel_registry.PluginPanelRegistry.path", registry_path):
-        yield PluginPanelRegistry(str(registry_path))
+    # `path` is an INSTANCE attribute set from registry_path; patching it on the
+    # class raised AttributeError and redirected nothing — pass the path instead.
+    yield PluginPanelRegistry(str(registry_path))
 
 
 @pytest.fixture

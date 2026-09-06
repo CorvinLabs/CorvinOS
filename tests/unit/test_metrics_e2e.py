@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.learning.metrics import MetricsCollector, MetricType
+from core.learning.event_store import EventStore as _LearningEventStore
 from core.learning.event_emitter import EventEmitter
 
 
@@ -24,7 +25,7 @@ class TestMetricsE2E:
     async def test_record_and_emit_metric(self, temp_tenant_home):
         """Record a metric and emit as event."""
         collector = MetricsCollector("_default")
-        emitter = EventEmitter(temp_tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(temp_tenant_home))
 
         await emitter.start()
 
@@ -58,7 +59,7 @@ class TestMetricsE2E:
     async def test_multiple_metric_types(self, temp_tenant_home):
         """Emit different metric types."""
         collector = MetricsCollector("_default")
-        emitter = EventEmitter(temp_tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(temp_tenant_home))
 
         await emitter.start()
 
@@ -95,7 +96,7 @@ class TestMetricsE2E:
     async def test_filter_by_skill_and_session(self, temp_tenant_home):
         """Filter metrics by skill and session."""
         collector = MetricsCollector("_default")
-        emitter = EventEmitter(temp_tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(temp_tenant_home))
 
         await emitter.start()
 
@@ -139,7 +140,7 @@ class TestMetricsE2E:
     async def test_metrics_with_tags(self, temp_tenant_home):
         """Metrics can include metadata tags."""
         collector = MetricsCollector("_default")
-        emitter = EventEmitter(temp_tenant_home, "_default")
+        emitter = EventEmitter(_LearningEventStore(temp_tenant_home))
 
         await emitter.start()
 

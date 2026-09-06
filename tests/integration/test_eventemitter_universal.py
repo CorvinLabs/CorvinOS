@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from core.learning.confidence_scorer import ConfidenceScorer
+from core.learning.event_store import EventStore as _LearningEventStore
 from core.learning.operator_feedback import OperatorFeedbackHandler
 from core.learning.skill_attribution import SkillAttributionEngine, AttributionModel
 from core.learning.user_profile import UserProfileManager, UserProfile, DecisionStyle
@@ -40,7 +41,7 @@ class TestEventEmitterUniversalWiring:
     @pytest.fixture
     def event_emitter(self, tenant_home: Path) -> EventEmitter:
         """Create EventEmitter instance."""
-        return EventEmitter(tenant_home, tenant_id="_default", max_queue_size=1000)
+        return EventEmitter(_LearningEventStore(tenant_home), queue_size=1000)
 
     @pytest.fixture
     def event_store(self, tenant_home: Path) -> EventStore:
@@ -362,9 +363,7 @@ class TestEventEmitterUniversalWiring:
     async def test_fire_and_forget_on_queue_full(self, tenant_home: Path):
         """Verify fire-and-forget behavior when queue is full."""
         # Small queue to force dropping
-        emitter = EventEmitter(
-            tenant_home, tenant_id="_default", max_queue_size=5
-        )
+        emitter = EventEmitter(_LearningEventStore(tenant_home), queue_size=5)
 
         await emitter.start()
 

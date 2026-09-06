@@ -47,11 +47,8 @@ def panel_registry(test_dir, tmp_path):
     """Create panel registry for testing."""
     registry_path = tmp_path / "panel_registry.json"
 
-    with patch(
-        "core.plugins.plugin_panel_registry.PluginPanelRegistry.path",
-        registry_path
-    ):
-        yield PluginPanelRegistry(str(registry_path))
+    # `path` is an INSTANCE attribute set from registry_path (class patch raised)
+    yield PluginPanelRegistry(str(registry_path))
 
 
 class TestFullPluginInstallWithPanelFlow:
