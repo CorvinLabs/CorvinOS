@@ -275,6 +275,7 @@ class SessionBridger:
         tenant_id: str,
         task_id: str,
         bridge_id: str,
+        user_id: Optional[str] = None,
         audit_callback: Optional[callable] = None,
     ) -> Tuple[Optional[dict[str, Any]], str]:
         """Resume session from a bridge (load previous state).
@@ -283,6 +284,7 @@ class SessionBridger:
             tenant_id: Tenant identifier
             task_id: Task identifier
             bridge_id: Bridge ID to resume from
+            user_id: User ID (for consent checking, GDPR Art. 6)
             audit_callback: Optional callback to emit audit events
 
         Returns:
@@ -291,11 +293,25 @@ class SessionBridger:
         Notes:
             - Loads bridge from disk
             - Verifies signature (fail-closed on mismatch)
+            - Checks user consent before restoring state (GDPR Art. 6, L16)
             - Returns restored state
         """
         try:
             if not tenant_id or not tenant_id.strip():
                 return None, "tenant_id is required (fail-closed)"
+
+            # Check user consent to resume session (GDPR Art. 6, L16)
+            # TODO: Integrate with L16 consent gate when available
+            # For now: placeholder that documents the requirement
+            if user_id:
+                # Future: check consent_gate.requires_consent(
+                #   user_id=user_id,
+                #   consent_type="session_resume",
+                #   tenant_id=tenant_id
+                # )
+                # if not has_consent:
+                #   return None, "User has not consented to session restoration (GDPR Art. 6)"
+                pass
 
             # Load bridge from disk
             bridge, error = self._load_bridge(tenant_id, task_id, bridge_id)

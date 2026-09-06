@@ -12,11 +12,104 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 from uuid import uuid4
+
+
+def _detect_pii_risk(value: Any) -> bool:
+    """Detect if a value contains potential PII (email, SSN, phone, etc.).
+
+    Args:
+        value: Value to check
+
+    Returns:
+        True if PII-like patterns detected, False otherwise
+    """
+    if not isinstance(value, str):
+        return False
+
+    # Check for common PII patterns
+    pii_patterns = [
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email
+        r'\b\d{3}-\d{2}-\d{4}\b',  # SSN
+        r'\b\d{10}\b',  # Phone (10 digits)
+        r'\b\d{3}[-\s]?\d{3}[-\s]?\d{4}\b',  # Phone (various formats)
+        r'\b4[0-9]{12}(?:[0-9]{3})?\b',  # Credit card (Visa)
+        r'\b5[1-5][0-9]{14}\b',  # Credit card (Mastercard)
+    ]
+
+    for pattern in pii_patterns:
+        if re.search(pattern, value):
+            return True
+    return False
+
+
+def scrub_pii_from_text(text: str) -> str:
+    """Scrub PII patterns from text (for logging).
+
+    Args:
+        text: Text to scrub
+
+    Returns:
+        Text with PII patterns replaced by placeholders
+    """
+    if not isinstance(text, str):
+        return str(text)
+
+    scrubbed = text
+    # Replace emails
+    scrubbed = re.sub(
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+        '<EMAIL>',
+        scrubbed
+    )
+    # Replace SSNs
+    scrubbed = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '<SSN>', scrubbed)
+    # Replace phone numbers
+    scrubbed = re.sub(r'\b\d{10}\b', '<PHONE>', scrubbed)
+    scrubbed = re.sub(r'\b\d{3}[-\s]?\d{3}[-\s]?\d{4}\b', '<PHONE>', scrubbed)
+    # Replace credit cards
+    scrubbed = re.sub(r'\b4[0-9]{12}(?:[0-9]{3})?\b', '<CREDITCARD>', scrubbed)
+    scrubbed = re.sub(r'\b5[1-5][0-9]{14}\b', '<CREDITCARD>', scrubbed)
+
+    return scrubbed
+
+
+def _check_dict_for_pii(state_dict: dict[str, Any], max_depth: int = 10) -> bool:
+    """Recursively check if a dictionary contains PII.
+
+    Args:
+        state_dict: Dictionary to check
+        max_depth: Maximum recursion depth to prevent DoS
+
+    Returns:
+        True if PII detected, False otherwise
+    """
+    if max_depth <= 0:
+        return False
+
+    for key, value in state_dict.items():
+        # Check value itself
+        if _detect_pii_risk(value):
+            return True
+        # Recursively check nested dicts
+        if isinstance(value, dict):
+            if _check_dict_for_pii(value, max_depth - 1):
+                return True
+        # Check list items
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                if _detect_pii_risk(item):
+                    return True
+                if isinstance(item, dict):
+                    if _check_dict_for_pii(item, max_depth - 1):
+                        return True
+
+    return False
 
 
 class SnapshotType(str, Enum):
@@ -36,6 +129,7 @@ class Snapshot:
     - Hash-verified (content_hash computed from state_dict)
     - Timestamped (audit trail)
     - Audit-first (validation before storage)
+    - Size-bounded (max 50MB to prevent DoS)
     """
 
     snapshot_id: str  # UUID4
@@ -53,14 +147,21 @@ class Snapshot:
     base_commit: Optional[str] = None  # Git commit hash at snapshot time
     worktree_path: Optional[str] = None  # Worktree location (for recovery)
 
+    # Size limit constants
+    MAX_SNAPSHOT_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
+
     def __post_init__(self):
         """Validate snapshot on creation (frozen dataclass, fail-closed)."""
         if not self.tenant_id or not self.tenant_id.strip():
             raise ValueError("tenant_id is required and must not be empty (GDPR Art. 32)")
         if not self.task_id or not self.task_id.strip():
             raise ValueError("task_id is required")
+        if '..' in self.task_id or self.task_id.startswith('/'):
+            raise ValueError("task_id contains invalid path sequence (fail-closed)")
         if not self.phase_id or not self.phase_id.strip():
             raise ValueError("phase_id is required")
+        if '..' in self.phase_id or self.phase_id.startswith('/'):
+            raise ValueError("phase_id contains invalid path sequence (fail-closed)")
         if not self.snapshot_id or not self.snapshot_id.strip():
             raise ValueError("snapshot_id is required")
 
@@ -101,8 +202,8 @@ class Snapshot:
 
         Args:
             tenant_id: Tenant identifier (fail-closed if empty)
-            task_id: Task identifier
-            phase_id: Phase identifier
+            task_id: Task identifier (must not contain path traversal)
+            phase_id: Phase identifier (must not contain path traversal)
             state_dict: State dictionary to snapshot
             snapshot_type: Type of snapshot
             prev_snapshot_hash: Hash of previous snapshot (for chain)
@@ -113,10 +214,30 @@ class Snapshot:
             Frozen Snapshot instance
 
         Raises:
-            ValueError: If tenant_id is empty (fail-closed)
+            ValueError: If tenant_id is empty, or identifiers contain path traversal (fail-closed)
         """
         if not tenant_id or not tenant_id.strip():
             raise ValueError("tenant_id is required and must not be empty (fail-closed)")
+        if '..' in task_id or task_id.startswith('/'):
+            raise ValueError("task_id contains invalid path sequence (fail-closed)")
+        if '..' in phase_id or phase_id.startswith('/'):
+            raise ValueError("phase_id contains invalid path sequence (fail-closed)")
+
+        # Check for PII in state_dict (GDPR Art. 5 - data minimization)
+        if _check_dict_for_pii(state_dict):
+            raise ValueError(
+                "state_dict contains potential PII (email, SSN, phone, credit card). "
+                "Scrub sensitive data before snapshotting (GDPR Art. 5, fail-closed)"
+            )
+
+        # Check snapshot size (prevent DoS from oversized snapshots)
+        serialized = json.dumps(state_dict, sort_keys=True, separators=(',', ':'))
+        size_bytes = len(serialized.encode())
+        if size_bytes > cls.MAX_SNAPSHOT_SIZE_BYTES:
+            raise ValueError(
+                f"Snapshot size {size_bytes} bytes exceeds maximum {cls.MAX_SNAPSHOT_SIZE_BYTES} "
+                f"(50MB limit, fail-closed)"
+            )
 
         content_hash = cls.compute_hash(state_dict)
 
