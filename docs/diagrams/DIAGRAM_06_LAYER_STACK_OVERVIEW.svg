@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 1000 1200" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
+      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    </linearGradient>
     <style>
-      .bg { fill: #0f0f0f; }
+      .bg { fill: #0a0e27; }
       .title { font-size: 22px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
       .layer { fill: #1a1a2e; stroke: #00ff88; stroke-width: 1.5; }
-      .layer-critical { fill: #16213e; stroke: #ff006e; stroke-width: 2; }
+      .layer-critical { fill: #16213e; stroke: #ff006e; stroke-width: 2.5; }
       .label { font-size: 15px; fill: #a8dadc; font-family: monospace; }
       .desc { font-size: 13px; fill: #888; font-family: monospace; }
       .divider { stroke: #444; stroke-width: 1; }
@@ -13,6 +17,7 @@
   </defs>
 
   <rect class="bg" width="1000" height="1200"/>
+  <rect x="0" y="0" width="1000" height="1200" fill="url(#grad)"/>
 
   <text x="500" y="30" class="title" text-anchor="middle">Layer Stack: All 36+ Security/Compliance Layers</text>
 

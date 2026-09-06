@@ -2,16 +2,20 @@
 <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
   <!-- Dark background -->
   <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
+      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    </linearGradient>
     <style>
-      .bg { fill: #0f0f0f; }
-      .box { fill: #1a1a2e; stroke: #00d4ff; stroke-width: 2; }
-      .box-accent { fill: #16213e; stroke: #00d4ff; stroke-width: 2; }
+      .bg { fill: #0a0e27; }
+      .box { fill: #1a1a2e; stroke: #00d4ff; stroke-width: 2.5; }
+      .box-accent { fill: #16213e; stroke: #00d4ff; stroke-width: 2.5; }
       .title { font-size: 24px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
       .subtitle { font-size: 22px; font-weight: bold; fill: #eaeaea; font-family: monospace; }
       .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
       .desc { font-size: 15px; fill: #888; font-family: monospace; }
-      .arrow { stroke: #00d4ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
-      .arrow-learn { stroke: #ff006e; stroke-width: 2; fill: none; marker-end: url(#arrowhead-learn); stroke-dasharray: 5,5; }
+      .arrow { stroke: #00d4ff; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
+      .arrow-learn { stroke: #ff006e; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-learn); stroke-dasharray: 5,5; }
     </style>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
       <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
@@ -23,25 +27,26 @@
 
   <!-- Background -->
   <rect class="bg" width="1200" height="800"/>
+  <rect x="0" y="0" width="1200" height="800" fill="url(#grad)"/>
 
   <!-- Title -->
   <text x="600" y="40" class="title" text-anchor="middle">CorvinOS v2.0: ACP Vision (Agentic Control Plane)</text>
 
   <!-- LAYER 1: User/External Interfaces (Input) -->
   <g id="layer1">
-    <rect class="box" x="60" y="120" width="200" height="60"/>
+    <rect class="box" x="60" y="120" width="200" height="60"/ rx="6">
     <text x="160" y="145" class="label" text-anchor="middle">CLI</text>
 
-    <rect class="box" x="280" y="120" width="200" height="60"/>
+    <rect class="box" x="280" y="120" width="200" height="60"/ rx="6">
     <text x="380" y="145" class="label" text-anchor="middle">Web Console</text>
 
-    <rect class="box" x="500" y="120" width="200" height="60"/>
+    <rect class="box" x="500" y="120" width="200" height="60"/ rx="6">
     <text x="600" y="145" class="label" text-anchor="middle">Voice/Discord</text>
 
-    <rect class="box" x="720" y="120" width="200" height="60"/>
+    <rect class="box" x="720" y="120" width="200" height="60"/ rx="6">
     <text x="820" y="145" class="label" text-anchor="middle">A2A (App-to-App)</text>
 
-    <rect class="box" x="940" y="120" width="200" height="60"/>
+    <rect class="box" x="940" y="120" width="200" height="60"/ rx="6">
     <text x="1040" y="145" class="label" text-anchor="middle">MCP Tools</text>
   </g>
 
@@ -56,13 +61,13 @@
   <g id="layer2">
     <rect class="box-accent" x="60" y="230" width="1080" height="80"/>
 
-    <rect class="box" x="80" y="245" width="300" height="50"/>
+    <rect class="box" x="80" y="245" width="300" height="50"/ rx="6">
     <text x="230" y="265" class="label" text-anchor="middle">os.delegation_router</text>
 
-    <rect class="box" x="420" y="245" width="300" height="50"/>
+    <rect class="box" x="420" y="245" width="300" height="50"/ rx="6">
     <text x="570" y="265" class="label" text-anchor="middle">os.context_adapter</text>
 
-    <rect class="box" x="760" y="245" width="340" height="50"/>
+    <rect class="box" x="760" y="245" width="340" height="50"/ rx="6">
     <text x="930" y="265" class="label" text-anchor="middle">Learning Loop (ADR-0314)</text>
   </g>
 
@@ -74,16 +79,16 @@
   <g id="layer3">
     <rect class="box-accent" x="60" y="360" width="1080" height="80"/>
 
-    <rect class="box" x="80" y="375" width="240" height="50"/>
+    <rect class="box" x="80" y="375" width="240" height="50"/ rx="6">
     <text x="200" y="395" class="label" text-anchor="middle">Original Context</text>
 
-    <rect class="box" x="350" y="375" width="240" height="50"/>
+    <rect class="box" x="350" y="375" width="240" height="50"/ rx="6">
     <text x="470" y="395" class="label" text-anchor="middle">Preserved Layers</text>
 
-    <rect class="box" x="620" y="375" width="240" height="50"/>
+    <rect class="box" x="620" y="375" width="240" height="50"/ rx="6">
     <text x="740" y="395" class="label" text-anchor="middle">Injected Signals</text>
 
-    <rect class="box" x="890" y="375" width="240" height="50"/>
+    <rect class="box" x="890" y="375" width="240" height="50"/ rx="6">
     <text x="1010" y="395" class="label" text-anchor="middle">Merged Output</text>
   </g>
 
@@ -95,13 +100,13 @@
 
     <rect class="box-accent" x="60" y="490" width="500" height="80"/>
     <text x="310" y="510" class="label" text-anchor="middle">L16: Compliance Gates</text>
-    <rect class="box" x="80" y="520" width="200" height="30"/>
-    <rect class="box" x="300" y="520" width="200" height="30"/>
+    <rect class="box" x="80" y="520" width="200" height="30"/ rx="6">
+    <rect class="box" x="300" y="520" width="200" height="30"/ rx="6">
 
     <rect class="box-accent" x="600" y="490" width="540" height="80"/>
     <text x="870" y="510" class="label" text-anchor="middle">L22: Workflow (Skills Orchestration)</text>
-    <rect class="box" x="620" y="520" width="200" height="30"/>
-    <rect class="box" x="850" y="520" width="270" height="30"/>
+    <rect class="box" x="620" y="520" width="200" height="30"/ rx="6">
+    <rect class="box" x="850" y="520" width="270" height="30"/ rx="6">
   </g>
 
   <!-- Arrows to plugins/data -->
@@ -113,14 +118,14 @@
 
     <rect class="box-accent" x="60" y="620" width="500" height="70"/>
     <text x="310" y="640" class="label" text-anchor="middle">Plugin System</text>
-    <rect class="box" x="80" y="650" width="180" height="25"/>
-    <rect class="box" x="280" y="650" width="260" height="25"/>
+    <rect class="box" x="80" y="650" width="180" height="25"/ rx="6">
+    <rect class="box" x="280" y="650" width="260" height="25"/ rx="6">
 
     <rect class="box-accent" x="600" y="620" width="540" height="70"/>
     <text x="870" y="640" class="label" text-anchor="middle">Learning Infrastructure (6D Loss)</text>
-    <rect class="box" x="620" y="650" width="160" height="25"/>
-    <rect class="box" x="810" y="650" width="160" height="25"/>
-    <rect class="box" x="1000" y="650" width="130" height="25"/>
+    <rect class="box" x="620" y="650" width="160" height="25"/ rx="6">
+    <rect class="box" x="810" y="650" width="160" height="25"/ rx="6">
+    <rect class="box" x="1000" y="650" width="130" height="25"/ rx="6">
   </g>
 
   <!-- Feedback loop (dashed red) -->
@@ -132,16 +137,16 @@
   <!-- LAYER 6: Audit Chain (Ground Truth) -->
   <g id="layer6">
     <rect class="box-accent" x="60" y="740" width="1080" height="50"/>
-    <rect class="box" x="80" y="745" width="250" height="40"/>
+    <rect class="box" x="80" y="745" width="250" height="40"/ rx="6">
     <text x="205" y="765" class="label" text-anchor="middle">Immutable Hash-Chain</text>
 
-    <rect class="box" x="360" y="745" width="250" height="40"/>
+    <rect class="box" x="360" y="745" width="250" height="40"/ rx="6">
     <text x="485" y="765" class="label" text-anchor="middle">Tenant-Scoped Isolation</text>
 
-    <rect class="box" x="640" y="745" width="250" height="40"/>
+    <rect class="box" x="640" y="745" width="250" height="40"/ rx="6">
     <text x="765" y="765" class="label" text-anchor="middle">Daily Verification</text>
 
-    <rect class="box" x="920" y="745" width="200" height="40"/>
+    <rect class="box" x="920" y="745" width="200" height="40"/ rx="6">
     <text x="1020" y="765" class="label" text-anchor="middle">Operator Proof System</text>
   </g>
 

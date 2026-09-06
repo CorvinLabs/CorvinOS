@@ -1,17 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 1400 950" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.08" />
+      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    </linearGradient>
     <style>
-      .bg { fill: #0f0f0f; }
+      .bg { fill: #0a0e27; }
       .title { font-size: 26px; font-weight: bold; fill: #ff6b9d; font-family: monospace; }
       .subtitle { font-size: 22px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
       .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
       .desc { font-size: 15px; fill: #888; font-family: monospace; }
-      .chain-box { fill: #1a1a2e; stroke: #ff6b9d; stroke-width: 2; }
+      .chain-box { fill: #1a1a2e; stroke: #ff6b9d; stroke-width: 2.5; }
       .event-box { fill: #16213e; stroke: #00ff88; stroke-width: 1.5; }
-      .proof-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
-      .arrow-chain { stroke: #ff6b9d; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-chain); }
-      .arrow-proof { stroke: #ffd700; stroke-width: 2; fill: none; marker-end: url(#arrowhead-proof); }
+      .proof-box { fill: #16213e; stroke: #ffd700; stroke-width: 2.5; }
+      .arrow-chain { stroke: #ff6b9d; stroke-width: 2.5.5; fill: none; marker-end: url(#arrowhead-chain); }
+      .arrow-proof { stroke: #ffd700; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-proof); }
       .code { font-size: 14px; fill: #00ff88; font-family: monospace; letter-spacing: -1px; }
       .hash { font-size: 13px; fill: #666; font-family: monospace; word-break: break-all; }
       .check { font-size: 17px; fill: #00ff88; font-family: monospace; }
@@ -25,6 +29,7 @@
   </defs>
 
   <rect class="bg" width="1400" height="950"/>
+  <rect x="0" y="0" width="1400" height="950" fill="url(#grad)"/>
 
   <!-- Title -->
   <text x="700" y="40" class="title" text-anchor="middle">Audit Chain as Ground Truth</text>
