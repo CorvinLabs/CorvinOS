@@ -158,7 +158,7 @@ class CostCapabilityMatrix:
     def get_matrix_as_dict(self) -> Dict[str, Dict[str, Dict]]:
         """Export matrix as nested dict for inspection."""
         result = {}
-        for engine in [EngineType.CLAUDE, EngineType.HAIKU, EngineType.HERMES, EngineType.LOCAL]:
+        for engine in [EngineType.CLAUDE, EngineType.HAIKU]:
             engine_key = engine.value
             result[engine_key] = {}
             for task_type in ["code_gen", "analysis", "chat", "research"]:
