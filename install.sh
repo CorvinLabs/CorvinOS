@@ -21,14 +21,6 @@
 #             updates. The floor rejects a downgraded/stale index while keeping
 #             the receipt upgradeable. Kept in sync with pyproject.toml by
 #             tests/test_wheel_content_guard.py.
-#   * Ollama — NOT pinned, documented deliberately: https://ollama.com/install.sh
-#             is an unversioned script that itself downloads the current
-#             release; there is no versioned installer asset to hash, and
-#             replacing it with a raw binary download would drop the GPU-driver
-#             and service setup it performs. It runs only when `ollama` is
-#             absent, with --no-hermes / CORVIN_SKIP_HERMES=1 as the opt-out,
-#             and its full output goes to the install log (see _await) so an
-#             elevation prompt or failure is never swallowed.
 set -eu
 
 PKG="${CORVIN_PKG:-corvinos}"
@@ -37,15 +29,14 @@ CORVIN_MIN_VERSION="1.0.0"
 UV_PIN_VERSION="0.12.9"
 UV_INSTALLER_URL="https://github.com/astral-sh/uv/releases/download/${UV_PIN_VERSION}/uv-installer.sh"
 UV_INSTALLER_SHA256="222e006c0fe4a0d793031833e469b21df72311f4e3526ffecca0e19e6dfabc32"
-# Full output of the silent (_await) steps. Printed on any ⚠ so a hidden sudo
-# prompt / download failure inside e.g. the Ollama installer is diagnosable.
+# Full output of the silent (_await) steps. Printed on any ⚠ so a hidden
+# failure is diagnosable.
 INSTALL_LOG="${CORVIN_INSTALL_LOG:-${TMPDIR:-/tmp}/corvinos-install.log}"
 # --lan: open TCP 8765 in ufw for LAN A2A pairing. Off by default — the console
 # binds 127.0.0.1 unless a2a_lan_bind is enabled, so a firewall hole on every
 # install pre-exposed the port before any consent step (F10).
 OPEN_LAN=0
 EDITABLE=""
-SKIP_HERMES="${CORVIN_SKIP_HERMES:-0}"
 # ADR-0184: Stufe 1 (start-at-login) already runs by default on an
 # interactive terminal via corvin-install below; --autostart forces that
 # same step even when piped (curl | sh has no TTY, see step 3). --always-on
@@ -67,7 +58,7 @@ die() { printf '%s %s\n' "$(_red 'Error:')" "$*" >&2; exit 1; }
 # second while it runs so the user always sees "still working …", then ✓ / ⚠.
 # `set -e`-safe: the `if wait` swallows a non-zero exit; the caller decides what
 # a failure means. Use ONLY for silent steps — a command with its own progress
-# (ollama pull, uv sync) should run plainly so its native bar shows through.
+# (uv sync) should run plainly so its native bar shows through.
 # stdout+stderr are APPENDED to $INSTALL_LOG (never discarded): a sudo prompt
 # raised by a child installer, or its real error, used to vanish into
 # /dev/null and the user only ever saw a bare ⚠.
@@ -96,8 +87,6 @@ while [ $# -gt 0 ]; do
         -e|--editable)
             [ $# -lt 2 ] && die "--editable requires a path argument"
             EDITABLE="$2"; shift 2 ;;
-        --no-hermes)
-            SKIP_HERMES=1; shift ;;
         --autostart)
             FORCE_AUTOSTART=1; shift ;;
         --always-on)
@@ -109,7 +98,7 @@ while [ $# -gt 0 ]; do
             OPEN_LAN=1; shift ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>] [--no-hermes] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}]" ;;
+Usage: $0 [--editable|-e <path>] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}]" ;;
     esac
 done
 if [ -n "$EDITABLE" ]; then
@@ -227,100 +216,6 @@ uv tool update-shell >/dev/null 2>&1 || true   # persist ~/.local/bin on PATH
 
 command -v corvinos-serve >/dev/null 2>&1 \
     || die "install succeeded but 'corvinos-serve' is not on PATH — open a new terminal and retry"
-
-# ── 2b. Hermes (local offline engine): Ollama + model, working out of the box ──
-# So CorvinOS runs fully offline with `--engine hermes` from the first start.
-# Opt out with --no-hermes or CORVIN_SKIP_HERMES=1 (e.g. cloud-only / CI).
-if [ "$SKIP_HERMES" != "1" ]; then
-    echo ""
-    echo "  Setting up Hermes (local offline engine) ..."
-    OS="$(uname -s 2>/dev/null || echo unknown)"
-    # pick a model by available RAM (small box → lighter model)
-    ram_mb=8000
-    if [ -r /proc/meminfo ]; then
-        ram_mb=$(awk '/MemTotal/{printf "%d",$2/1024}' /proc/meminfo 2>/dev/null || echo 8000)
-    elif command -v sysctl >/dev/null 2>&1; then
-        ram_mb=$(sysctl -n hw.memsize 2>/dev/null | awk '{printf "%d",$1/1024/1024}' || echo 8000)
-    fi
-    # Guard against an empty / non-numeric probe result (e.g. sysctl failed and
-    # awk emitted nothing): `[ "" -lt 6000 ]` would print a shell error. Default
-    # to a conservative 8000 so we fall through to the standard model, and the
-    # running engine still auto-selects whatever tag actually gets installed.
-    case "$ram_mb" in ''|*[!0-9]*) ram_mb=8000 ;; esac
-    # Three-tier ladder so the pulled model actually RUNS alongside the OS +
-    # console. qwen3:8b (~5.2 GB weights) OOMs/swaps on a 6–8 GB box, so it is
-    # reserved for ≥12 GB; 6–12 GB gets qwen3:4b (~2.6 GB); < 6 GB gets the
-    # 1.7b. The running Hermes engine auto-selects whatever tag is actually
-    # present (_pick_installed_qwen3), so a later manual pull upgrades it.
-    if [ "$ram_mb" -lt 6000 ]; then HMODEL="qwen3:1.7b"
-    elif [ "$ram_mb" -lt 12000 ]; then HMODEL="qwen3:4b"
-    else HMODEL="qwen3:8b"; fi
-    echo "  RAM ~${ram_mb} MB → model $HMODEL"
-
-    # ensure Ollama is installed
-    if ! command -v ollama >/dev/null 2>&1 && [ ! -x /usr/local/bin/ollama ]; then
-        case "$OS" in
-            # `curl -fsSL ... | sh` is a SILENT download (-s suppresses curl's own
-            # meter) of the Ollama binary + runtime (~100+ MB) — with no heartbeat
-            # this looked exactly like a hung installer on a slower connection.
-            Linux)  _await "Downloading Ollama (~100 MB, one-time)" \
-                        sh -c 'curl -fsSL https://ollama.com/install.sh | sh' \
-                        || printf '  %s Ollama install failed — install manually: https://ollama.com/download\n' "$(_yellow '⚠')" ;;
-            Darwin) echo "  Installing Ollama ..."
-                    if command -v brew >/dev/null 2>&1; then brew install ollama
-                    else printf '  %s Install Ollama from https://ollama.com/download\n' "$(_yellow '⚠')"; fi ;;
-            *)      printf '  %s Install Ollama from https://ollama.com/download\n' "$(_yellow '⚠')" ;;
-        esac
-    fi
-    export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin"
-
-    # ensure the Ollama server is reachable (start it detached if needed)
-    if ! curl -s -m 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
-        printf '  %s Starting Ollama service ' "$(_dim '⏳')"
-        command -v ollama >/dev/null 2>&1 && nohup ollama serve >/dev/null 2>&1 &
-        _ollama_ok=0; i=0; while [ "$i" -lt 30 ]; do
-            sleep 1; printf '.'
-            if curl -s -m 2 http://localhost:11434/api/tags >/dev/null 2>&1; then _ollama_ok=1; break; fi
-            i=$((i + 1))
-        done
-        if [ "$_ollama_ok" = 1 ]; then printf ' %s\n' "$(_green 'ready')"
-        else printf ' %s\n' "$(_yellow 'not ready yet')"; fi
-    fi
-
-    # pull the model so Hermes is immediately usable offline
-    if command -v ollama >/dev/null 2>&1 && curl -s -m 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
-        if curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "$HMODEL"; then
-            printf '  %s Hermes model %s already present\n' "$(_green '✓')" "$HMODEL"
-        else
-            echo "  Pulling $HMODEL (one-time, a few GB) ..."
-            if ollama pull "$HMODEL"; then
-                printf '  %s Hermes ready — %s installed\n' "$(_green '✓')" "$HMODEL"
-            else
-                printf '  %s model pull failed — finish later with: ollama pull %s\n' "$(_yellow '⚠')" "$HMODEL"
-            fi
-        fi
-    else
-        printf '  %s Ollama not reachable — Hermes self-heals on first run (or see https://ollama.com/download)\n' "$(_yellow '⚠')"
-    fi
-
-    # ── Pre-warm the L44 safety classifier ───────────────────────────────────
-    # The acceptable-use gate classifies EVERY message using the SAME model the
-    # Hermes engine runs ($HMODEL). On a fresh box that model's first load was a
-    # ~22 s COLD start (and it may still be finishing its download), so the first
-    # message fell back to the deterministic Tier-0 floor instead of a real
-    # semantic check. Pre-warm it now (one throwaway generation, keep_alive 30m so
-    # it stays resident) → the very first real safety-check is instant and warm.
-    # (We deliberately do NOT pin a tiny model here: qwen3:1.7b is fast but fails
-    # the classifier JSON schema ~always, so it would be worse than the warm chat
-    # model; the gate's Tier-0 floor still covers any low-quality verdict.)
-    if command -v ollama >/dev/null 2>&1 \
-       && curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "$HMODEL"; then
-        _await "Warming up the safety classifier ($HMODEL)" \
-            curl -s -m 180 http://localhost:11434/api/generate \
-                -d "{\"model\":\"$HMODEL\",\"prompt\":\"ok\",\"stream\":false,\"keep_alive\":\"30m\"}" \
-            || true
-    fi
-fi
 
 # ── 3. setup wizard (voice provisioning + Stufe-1 login autostart) ────────────
 # A fresh install must be voice-ready (Whisper STT + Piper TTS models) with zero
@@ -493,6 +388,6 @@ cat <<EOF
    $(_bold 'corvin-uninstall')    Remove CorvinOS
    $(_bold 'corvin-a2a')          Agent-to-agent pairing and messaging
 
- $(_dim 'Hermes (offline engine) was installed automatically.')  $(_dim 'Skip next time with --no-hermes.')
+ $(_dim 'Installation is fast (~30 MB).')
 
 EOF
