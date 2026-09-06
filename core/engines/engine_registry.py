@@ -112,12 +112,3 @@ class EngineRegistry:
             return "unknown"
         return engine.get_capability().quality_tier
 
-    def get_default_fallback_chain(self) -> List[EngineType]:
-        """Get default fallback order."""
-        # Haiku (cheap) → Hermes (balanced) → Claude (best) → Local (free fallback)
-        return [
-            EngineType.HAIKU,
-            EngineType.HERMES,
-            EngineType.CLAUDE,
-            EngineType.LOCAL,
-        ]
