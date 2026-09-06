@@ -1,49 +1,79 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 1400 950" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      .bg { fill: #0f0f0f; }
-      .title { font-size: 40px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .subtitle { font-size: 16px; fill: #888; font-family: monospace; }
-      .feature-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 3; }
-      .feature-title { font-size: 22px; font-weight: bold; fill: #00ff88; font-family: monospace; }
-      .feature-desc { font-size: 16px; fill: #a8dadc; font-family: monospace; }
-      .icon { font-size: 50px; }
-      .benefit { font-size: 14px; fill: #888; font-family: monospace; }
+      .bg { fill: #0a0e27; }
+      .title { font-size: 44px; font-weight: bold; fill: #00d4ff; font-family: monospace; letter-spacing: 1px; }
+      .feature-box { fill: #1a2847; stroke: #00ff88; stroke-width: 2.5; rx: 8; }
+      .feature-title { font-size: 24px; font-weight: bold; fill: #00ff88; font-family: monospace; }
+      .icon { font-size: 56px; }
+      .divider { stroke: #333; stroke-width: 1; }
     </style>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.1" />
+      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    </linearGradient>
   </defs>
 
-  <rect class="bg" width="1400" height="900"/>
+  <rect class="bg" width="1400" height="950"/>
+  <rect x="0" y="0" width="1400" height="950" fill="url(#grad)"/>
 
-  <text x="700" y="50" class="title" text-anchor="middle">CorvinOS: Core Features</text>
+  <text x="700" y="60" class="title" text-anchor="middle">CorvinOS: Core Features</text>
+  <line class="divider" x1="200" y1="80" x2="1200" y2="80"/>
 
   <!-- ROW 1 -->
-  <rect class="feature-box" x="50" y="120" width="300" height="180"/>
-  <text x="200" y="190" class="feature-title" text-anchor="middle">Skills 2.0</text>
+  <g>
+    <rect class="feature-box" x="40" y="120" width="310" height="200" rx="8"/>
+    <text x="195" y="170" class="icon" text-anchor="middle">🎯</text>
+    <text x="195" y="220" class="feature-title" text-anchor="middle">Skills 2.0</text>
+  </g>
 
-  <rect class="feature-box" x="400" y="120" width="300" height="180"/>
-  <text x="550" y="190" class="feature-title" text-anchor="middle">Self-Learning</text>
+  <g>
+    <rect class="feature-box" x="380" y="120" width="310" height="200" rx="8"/>
+    <text x="535" y="170" class="icon" text-anchor="middle">🧠</text>
+    <text x="535" y="220" class="feature-title" text-anchor="middle">Self-Learning</text>
+  </g>
 
-  <rect class="feature-box" x="750" y="120" width="300" height="180"/>
-  <text x="900" y="190" class="feature-title" text-anchor="middle">Complete Audit</text>
+  <g>
+    <rect class="feature-box" x="720" y="120" width="310" height="200" rx="8"/>
+    <text x="875" y="170" class="icon" text-anchor="middle">🔐</text>
+    <text x="875" y="220" class="feature-title" text-anchor="middle">Complete Audit</text>
+  </g>
 
-  <rect class="feature-box" x="1100" y="120" width="250" height="180"/>
-  <text x="1225" y="190" class="feature-title" text-anchor="middle">Multi-Engine</text>
+  <g>
+    <rect class="feature-box" x="1050" y="120" width="310" height="200" rx="8"/>
+    <text x="1205" y="170" class="icon" text-anchor="middle">⚙️</text>
+    <text x="1205" y="220" class="feature-title" text-anchor="middle">Multi-Engine</text>
+  </g>
 
   <!-- ROW 2 -->
-  <rect class="feature-box" x="50" y="370" width="300" height="170"/>
-  <text x="200" y="433" class="feature-title" text-anchor="middle">Hybrid Context</text>
+  <g>
+    <rect class="feature-box" x="40" y="390" width="310" height="200" rx="8"/>
+    <text x="195" y="440" class="icon" text-anchor="middle">🧩</text>
+    <text x="195" y="490" class="feature-title" text-anchor="middle">Hybrid Context</text>
+  </g>
 
-  <rect class="feature-box" x="400" y="370" width="300" height="170"/>
-  <text x="550" y="433" class="feature-title" text-anchor="middle">Plugins</text>
+  <g>
+    <rect class="feature-box" x="380" y="390" width="310" height="200" rx="8"/>
+    <text x="535" y="440" class="icon" text-anchor="middle">🔌</text>
+    <text x="535" y="490" class="feature-title" text-anchor="middle">Plugins</text>
+  </g>
 
-  <rect class="feature-box" x="750" y="370" width="300" height="170"/>
-  <text x="900" y="433" class="feature-title" text-anchor="middle">Live Dashboard</text>
+  <g>
+    <rect class="feature-box" x="720" y="390" width="310" height="200" rx="8"/>
+    <text x="875" y="440" class="icon" text-anchor="middle">📊</text>
+    <text x="875" y="490" class="feature-title" text-anchor="middle">Live Dashboard</text>
+  </g>
 
-  <rect class="feature-box" x="1100" y="370" width="250" height="170"/>
-  <text x="1225" y="433" class="feature-title" text-anchor="middle">Compliance</text>
+  <g>
+    <rect class="feature-box" x="1050" y="390" width="310" height="200" rx="8"/>
+    <text x="1205" y="440" class="icon" text-anchor="middle">⚖️</text>
+    <text x="1205" y="490" class="feature-title" text-anchor="middle">Compliance</text>
+  </g>
 
-  <!-- KEY INSIGHT -->
-  <text x="700" y="620" class="feature-title" text-anchor="middle">No hardcoded behavior • No buried feature flags</text>
+  <!-- BOTTOM MESSAGE -->
+  <line class="divider" x1="200" y1="650" x2="1200" y2="650"/>
+  <text x="700" y="720" class="feature-title" text-anchor="middle">No hardcoded behavior • No buried feature flags</text>
+  <text x="700" y="760" style="font-size: 18px; fill: #a8dadc; font-family: monospace; text-anchor: middle;">Every decision is versioned, learnable, and provable</text>
 
 </svg>

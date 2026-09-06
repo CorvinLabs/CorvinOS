@@ -1,86 +1,128 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 1400 1100" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      .bg { fill: #0f0f0f; }
-      .title { font-size: 40px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .subtitle { font-size: 16px; fill: #888; font-family: monospace; }
-      .layer-title { font-size: 24px; font-weight: bold; fill: #ffd700; font-family: monospace; }
-      .box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 3; }
-      .core-box { fill: #16213e; stroke: #00d4ff; stroke-width: 3; }
+      .bg { fill: #0a0e27; }
+      .title { font-size: 44px; font-weight: bold; fill: #00d4ff; font-family: 'Segoe UI', monospace; letter-spacing: 1px; }
+      .layer-title { font-size: 26px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+      .box { fill: #1a2847; stroke: #00ff88; stroke-width: 2.5; rx: 8; }
+      .core-box { fill: #0d1929; stroke: #00d4ff; stroke-width: 3; rx: 8; }
       .big-label { font-size: 20px; font-weight: bold; fill: #00ff88; font-family: monospace; }
-      .medium-label { font-size: 18px; fill: #a8dadc; font-family: monospace; }
-      .small-text { font-size: 14px; fill: #888; font-family: monospace; }
-      .arrow { stroke: #00d4ff; stroke-width: 3; fill: none; marker-end: url(#arrowhead); }
+      .medium-label { font-size: 16px; fill: #a8dadc; font-family: monospace; }
+      .divider { stroke: #333; stroke-width: 1; }
     </style>
+  </defs>
+
+  <rect class="bg" width="1400" height="1100"/>
+
+  <!-- GRADIENT ACCENT -->
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:0.1" />
+      <stop offset="100%" style="stop-color:#ff006e;stop-opacity:0" />
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1400" height="1100" fill="url(#grad)"/>
+
+  <!-- TITLE -->
+  <text x="700" y="60" class="title" text-anchor="middle">CorvinOS Architecture</text>
+  <line class="divider" x1="200" y1="80" x2="1200" y2="80"/>
+
+  <!-- INPUT INTERFACES -->
+  <text x="700" y="130" class="layer-title" text-anchor="middle">📥 Input Channels</text>
+
+  <g>
+    <rect class="box" x="120" y="160" width="240" height="90" rx="6"/>
+    <text x="240" y="195" class="big-label" text-anchor="middle">🖥️ CLI</text>
+    <text x="240" y="220" class="medium-label" text-anchor="middle">Commands</text>
+  </g>
+
+  <g>
+    <rect class="box" x="410" y="160" width="240" height="90" rx="6"/>
+    <text x="530" y="195" class="big-label" text-anchor="middle">🌐 Web</text>
+    <text x="530" y="220" class="medium-label" text-anchor="middle">Dashboard</text>
+  </g>
+
+  <g>
+    <rect class="box" x="700" y="160" width="240" height="90" rx="6"/>
+    <text x="820" y="195" class="big-label" text-anchor="middle">🎤 Voice</text>
+    <text x="820" y="220" class="medium-label" text-anchor="middle">Discord</text>
+  </g>
+
+  <g>
+    <rect class="box" x="990" y="160" width="240" height="90" rx="6"/>
+    <text x="1110" y="195" class="big-label" text-anchor="middle">🔗 A2A</text>
+    <text x="1110" y="220" class="medium-label" text-anchor="middle">App-to-App</text>
+  </g>
+
+  <!-- FLOW ARROWS -->
+  <path d="M 240 250 L 240 310" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+  <path d="M 530 250 L 530 310" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+  <path d="M 820 250 L 820 310" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+  <path d="M 1110 250 L 1110 310" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+
+  <!-- ACP SKILLS LAYER -->
+  <text x="700" y="350" class="layer-title" text-anchor="middle">🧠 Agentic Control Plane (ACP)</text>
+
+  <g>
+    <rect class="core-box" x="100" y="380" width="320" height="110" rx="8"/>
+    <text x="260" y="415" class="big-label" text-anchor="middle">L5: Routing</text>
+    <text x="260" y="445" class="medium-label" text-anchor="middle">Pick best engine</text>
+  </g>
+
+  <g>
+    <rect class="core-box" x="540" y="380" width="320" height="110" rx="8"/>
+    <text x="700" y="415" class="big-label" text-anchor="middle">L10: Context</text>
+    <text x="700" y="445" class="medium-label" text-anchor="middle">Preserve facts</text>
+  </g>
+
+  <g>
+    <rect class="core-box" x="980" y="380" width="320" height="110" rx="8"/>
+    <text x="1140" y="415" class="big-label" text-anchor="middle">L22: Workflow</text>
+    <text x="1140" y="445" class="medium-label" text-anchor="middle">Execute DAG</text>
+  </g>
+
+  <!-- FLOW ARROWS -->
+  <path d="M 260 490 L 260 550" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+  <path d="M 700 490 L 700 550" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+  <path d="M 1140 490 L 1140 550" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+
+  <!-- LEARNING LAYER -->
+  <text x="700" y="600" class="layer-title" text-anchor="middle">📊 Learning Loop</text>
+
+  <rect class="box" x="150" y="630" width="1100" height="90" rx="8"/>
+  <text x="700" y="665" class="big-label" text-anchor="middle">9D Loss Vector: Automatic Self-Optimization</text>
+  <text x="700" y="690" class="medium-label" text-anchor="middle">6 Core + 3 Infrastructure + 1 Meta Loop</text>
+
+  <!-- FLOW ARROWS -->
+  <path d="M 700 720 L 700 770" stroke="#00d4ff" stroke-width="2.5" fill="none" marker-end="url(#arrowhead)"/>
+
+  <!-- COMPLIANCE LAYER -->
+  <text x="700" y="820" class="layer-title" text-anchor="middle">🔐 Compliance & Audit</text>
+
+  <g>
+    <rect class="box" x="120" y="850" width="280" height="100" rx="6"/>
+    <text x="260" y="885" class="big-label" text-anchor="middle">Audit Trail</text>
+    <text x="260" y="910" class="medium-label" text-anchor="middle">Hash-chained</text>
+  </g>
+
+  <g>
+    <rect class="box" x="520" y="850" width="280" height="100" rx="6"/>
+    <text x="660" y="885" class="big-label" text-anchor="middle">Consent Gate</text>
+    <text x="660" y="910" class="medium-label" text-anchor="middle">Deny-by-default</text>
+  </g>
+
+  <g>
+    <rect class="box" x="920" y="850" width="280" height="100" rx="6"/>
+    <text x="1060" y="885" class="big-label" text-anchor="middle">Plugins</text>
+    <text x="1060" y="910" class="medium-label" text-anchor="middle">5 trust tiers</text>
+  </g>
+
+  <!-- ARROW MARKER -->
+  <defs>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
       <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
     </marker>
   </defs>
-
-  <rect class="bg" width="1400" height="1000"/>
-
-  <text x="700" y="50" class="title" text-anchor="middle">CorvinOS Architecture</text>
-
-  <!-- INPUT LAYER -->
-  <rect class="box" x="200" y="150" width="200" height="80"/>
-  <text x="300" y="175" class="big-label" text-anchor="middle">CLI</text>
-
-  <rect class="box" x="450" y="150" width="200" height="80"/>
-  <text x="550" y="175" class="big-label" text-anchor="middle">Web</text>
-
-  <rect class="box" x="700" y="150" width="200" height="80"/>
-  <text x="800" y="175" class="big-label" text-anchor="middle">Voice</text>
-
-  <rect class="box" x="950" y="150" width="200" height="80"/>
-  <text x="1050" y="175" class="big-label" text-anchor="middle">A2A</text>
-
-  <!-- ARROWS DOWN -->
-  <path class="arrow" d="M 300 230 L 300 280"/>
-  <path class="arrow" d="M 550 230 L 550 280"/>
-  <path class="arrow" d="M 800 230 L 800 280"/>
-  <path class="arrow" d="M 1050 230 L 1050 280"/>
-
-  <!-- CORE LAYER: ACP SKILLS -->
-
-  <rect class="core-box" x="150" y="340" width="280" height="100"/>
-  <text x="290" y="370" class="big-label" text-anchor="middle">L5: Routing</text>
-  <text x="290" y="395" class="medium-label" text-anchor="middle">Pick best engine</text>
-
-  <rect class="core-box" x="560" y="340" width="280" height="100"/>
-  <text x="700" y="370" class="big-label" text-anchor="middle">L10: Context</text>
-  <text x="700" y="395" class="medium-label" text-anchor="middle">Preserve important facts</text>
-
-  <rect class="core-box" x="970" y="340" width="280" height="100"/>
-  <text x="1110" y="370" class="big-label" text-anchor="middle">L22: Workflow</text>
-  <text x="1110" y="395" class="medium-label" text-anchor="middle">Orchestrate Skills</text>
-
-  <!-- ARROWS DOWN -->
-  <path class="arrow" d="M 290 440 L 290 500"/>
-  <path class="arrow" d="M 700 440 L 700 500"/>
-  <path class="arrow" d="M 1110 440 L 1110 500"/>
-
-  <!-- LEARNING LAYER -->
-
-  <rect class="box" x="200" y="570" width="1000" height="120"/>
-  <text x="700" y="600" class="big-label" text-anchor="middle">Self-Optimization</text>
-  <text x="700" y="625" class="medium-label" text-anchor="middle">6 Core Loops + 3 Infrastructure Loops + 1 Meta Loop</text>
-
-  <!-- ARROWS DOWN -->
-  <path class="arrow" d="M 700 690 L 700 740"/>
-
-  <!-- COMPLIANCE LAYER -->
-
-  <rect class="box" x="150" y="800" width="280" height="100"/>
-  <text x="290" y="830" class="big-label" text-anchor="middle">Audit Trail</text>
-  <text x="290" y="855" class="medium-label" text-anchor="middle">Hash-chained</text>
-
-  <rect class="box" x="560" y="800" width="280" height="100"/>
-  <text x="700" y="830" class="big-label" text-anchor="middle">Consent Gate</text>
-  <text x="700" y="855" class="medium-label" text-anchor="middle">Deny-by-default</text>
-
-  <rect class="box" x="970" y="800" width="280" height="100"/>
-  <text x="1110" y="830" class="big-label" text-anchor="middle">Plugins</text>
-  <text x="1110" y="855" class="medium-label" text-anchor="middle">5 trust tiers</text>
 
 </svg>
