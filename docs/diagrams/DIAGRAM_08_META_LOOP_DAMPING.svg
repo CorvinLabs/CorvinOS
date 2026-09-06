@@ -6,9 +6,9 @@
       .title { font-size: 24px; font-weight: bold; fill: #ff006e; font-family: monospace; }
       .step { fill: #1a1a2e; stroke: #ff006e; stroke-width: 2; }
       .damping { fill: #16213e; stroke: #00ff88; stroke-width: 2; }
-      .label { font-size: 13px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 11px; fill: #888; font-family: monospace; }
-      .code { font-size: 12px; fill: #00ff88; font-family: monospace; }
+      .label { font-size: 16px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 14px; fill: #888; font-family: monospace; }
+      .code { font-size: 15px; fill: #00ff88; font-family: monospace; }
       .arrow { stroke: #ff006e; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
       .arrow-damping { stroke: #00ff88; stroke-width: 2; fill: none; marker-end: url(#arrowhead-damping); }
       .graph { stroke: #ffd700; stroke-width: 1.5; fill: none; }

@@ -7,12 +7,12 @@
       .step-box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2; }
       .audit-box { fill: #16213e; stroke: #ff006e; stroke-width: 1.5; }
       .gate-box { fill: #16213e; stroke: #ffd700; stroke-width: 2; }
-      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 12px; fill: #888; font-family: monospace; }
-      .code { font-size: 11px; fill: #00ff88; font-family: monospace; }
+      .label { font-size: 17px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 15px; fill: #888; font-family: monospace; }
+      .code { font-size: 14px; fill: #00ff88; font-family: monospace; }
       .arrow { stroke: #00d4ff; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
       .arrow-audit { stroke: #ff006e; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead-audit); }
-      .number { font-size: 18px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+      .number { font-size: 22px; font-weight: bold; fill: #ffd700; font-family: monospace; }
     </style>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
       <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />

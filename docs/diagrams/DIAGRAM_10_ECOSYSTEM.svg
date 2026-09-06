@@ -3,12 +3,12 @@
   <defs>
     <style>
       .bg { fill: #0f0f0f; }
-      .title { font-size: 28px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .section-title { font-size: 16px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+      .title { font-size: 36px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .section-title { font-size: 20px; font-weight: bold; fill: #ffd700; font-family: monospace; }
       .component { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2; }
       .core-component { fill: #16213e; stroke: #00d4ff; stroke-width: 2.5; }
-      .label { font-size: 13px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 11px; fill: #888; font-family: monospace; }
+      .label { font-size: 15px; fill: #a8dadc; font-family: monospace; }
+      .desc { font-size: 13px; fill: #888; font-family: monospace; }
       .arrow { stroke: #00ff88; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
       .arrow-feedback { stroke: #ff006e; stroke-width: 2; fill: none; marker-end: url(#arrowhead-feedback); stroke-dasharray: 5,5; }
     </style>
