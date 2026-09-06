@@ -1227,6 +1227,27 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         release_tier="alpha",
     ),
     FeatureFlag(
+        id="learning_enabled",
+        label="Learning Dashboard (ACP feedback loop)",
+        description=(
+            "Show the Console → Learning Dashboard panel: discovered method "
+            "patterns, the os.delegation_router config history (learned via "
+            "user feedback → hypothesis → optimizer, ADR-0549) with rollback, "
+            "and learned per-task-type preferences. The panel was registered in "
+            "PANELS and NAV_GROUPS with this requiredFlag but the flag itself was "
+            "never registered nor listed in GATED_FLAGS, so the entry stayed hidden "
+            "for every tenant (adversarial review 2026-09-06, F9). Off hides the "
+            "sidebar entry and the /app/learning-dashboard route; the "
+            "/v1/console/learning/* endpoints stay mounted. Listed in the "
+            "tenant.corvin.yaml features_whitelist template, so a fresh local "
+            "install shows it; toggle from Console → Settings → Features."
+        ),
+        owner="maintainer",
+        target_release="1.1.x",
+        tags=("learning", "console", "acp"),
+        release_tier="beta",
+    ),
+    FeatureFlag(
         id="skill_forge_enabled",
         label="Skill Forge 2.0 — Autonomous Skill Creation & Auto-Grading",
         description=(

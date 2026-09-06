@@ -124,6 +124,7 @@ GATED_FLAGS: tuple[str, ...] = (
     "learning_gap_3_attribution",
     "learning_gap_6_cost_learning",
     "learning_gap_7_operator_feedback",
+    "learning_enabled",
     "skill_forge_enabled",
 )
 

@@ -438,15 +438,16 @@ class TestQuotaResetAtDayBoundary:
         for _ in range(3):
             increment_and_check(tmp_path, "brain_tasks_per_day", "date-test-tenant")
 
-        # Reset call count for the count verification
-        mock_today_utc.call_count = 3
+        # The next _today_utc() call must STILL be Aug 17 (call_count <= 3
+        # → Aug 17), so rewind to 2: the 4th increment sees Aug 17 and fails.
+        mock_today_utc.call_count = 2
 
         # Try to use more on Aug 17 — should fail
         with pytest.raises(LicenseLimitError):
             increment_and_check(tmp_path, "brain_tasks_per_day", "date-test-tenant")
 
         # But on Aug 18, quota should reset
-        mock_today_utc.call_count = 4  # Move to Aug 18
+        mock_today_utc.call_count = 3  # next call is #4 → Aug 18
         count = increment_and_check(
             tmp_path, "brain_tasks_per_day", "date-test-tenant"
         )

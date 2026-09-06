@@ -57,9 +57,12 @@ class TestLearningEventStorageHostile:
                     except Exception as e:
                         errors.append(e)
 
-            # Launch 5 threads, each writing 20 events
+            # Launch 5 threads, each writing 20 events. All for the PROCESS
+            # tenant: the store is audit-first and the core chain refuses any
+            # other tenant (fail-closed, ADR-0007) — the race under test is the
+            # writer lock, not multi-tenancy.
             threads = [
-                threading.Thread(target=write_many, args=(f"tenant_{j}", 20))
+                threading.Thread(target=write_many, args=("_default", 20))
                 for j in range(5)
             ]
 
@@ -71,12 +74,8 @@ class TestLearningEventStorageHostile:
             # GREEN: No exceptions + all events persisted
             assert len(errors) == 0, f"Concurrent writes should not error: {errors}"
 
-            # Verify all events written (5 tenants * 20 events = 100 total)
-            all_events = []
-            for tenant_id in [f"tenant_{j}" for j in range(5)]:
-                results = store.query_events(tenant_id)
-                all_events.extend(results)
-
+            # Verify all events written (5 threads * 20 events = 100 total)
+            all_events = store.query_events("_default")
             assert len(all_events) == 100, "All concurrent writes should persist"
 
     def test_adversarial_malformed_event_fields(self):

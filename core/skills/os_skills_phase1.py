@@ -275,15 +275,52 @@ class DelegationRouterSkill(Skill):
             confidence = 0.80
             reasoning = "Code tasks prefer Sonnet over Haiku"
 
+        # Learned config (ADR-0549 loop closure, 2026-09-06): the tenant's
+        # SkillAdapter config is the OUTPUT of the feedback → hypothesis →
+        # optimizer chain; reading it here is what makes an accepted hypothesis
+        # change the next decision. ``confidence_threshold`` gates escalation:
+        # a heuristic decision the tenant has learned to distrust (confidence
+        # below the learned threshold) is escalated one engine tier. With the
+        # default config (0.70) no heuristic branch is below threshold, so a
+        # tenant that never gave feedback routes exactly as before.
+        tenant_id = input.get("tenant_id")
+        learned_version = None
+        threshold = None
+        if isinstance(tenant_id, str) and tenant_id:
+            from .os_skills.skill_adapter import load_skill_config  # noqa: PLC0415
+
+            try:
+                cfg, learned_version = load_skill_config("os.delegation_router", tenant_id)
+                threshold = cfg.confidence_threshold
+            except Exception as exc:  # noqa: BLE001 — a config problem must not break routing
+                logger.warning("DelegationRouter: learned config unreadable (%s)", type(exc).__name__)
+            if threshold is not None and confidence < threshold:
+                escalation = {"claude-haiku-4": "claude-sonnet-4", "claude-sonnet-4": "claude-opus-5"}
+                if engine in escalation:
+                    engine = escalation[engine]
+                    reasoning = (
+                        f"{reasoning}; escalated: confidence {confidence:.2f} below learned "
+                        f"threshold {threshold:.2f} ({learned_version or 'default'})"
+                    )
+
         logger.info(
             f"DelegationRouter: complexity={complexity}, task_type={task_type} → {engine}"
         )
 
-        return {
+        result: Dict[str, Any] = {
             "engine": engine,
             "confidence": confidence,
             "reasoning": reasoning,
         }
+        if threshold is not None:
+            result["confidence_threshold"] = threshold
+            result["learned_config_version"] = learned_version
+        if input.get("shadow"):
+            # Advisory execution (L5 shadow wiring): the bundled engine decided;
+            # record both so the learning store can measure agreement.
+            result["shadow"] = True
+            result["bundled_engine"] = input.get("bundled_engine")
+        return result
 
 
 class VibeEngineeringSkill(Skill):

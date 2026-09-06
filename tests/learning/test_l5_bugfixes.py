@@ -191,14 +191,16 @@ class TestBug4UnboundedMemoryGrowth:
         """Test that drift_signals is limited to 100 entries."""
         engine = AdvancedLearningEngine(tenant_id="_default")
 
-        # Add 150 drift signals
+        # 150 feedbacks whose recent window (all wrong) diverges from the
+        # historical window (all right) — every detection call then yields a
+        # drift signal, so 150 calls would produce 150 signals without pruning.
         for i in range(150):
             engine.feedback_history.append({
                 "operator_id": "user:alice",
                 "skill_id": "skill_a",
                 "metric_name": "latency",
                 "decision": "approve",
-                "correct": True,
+                "correct": i < 100,
                 "timestamp": datetime.utcnow().isoformat(),
             })
 
@@ -367,10 +369,8 @@ class TestBug8WeakRandomSeed:
         cohorts_selected = []
         for i in range(10):
             operator_ids = [f"op_{j}" for j in range(100)]
-            cohort = engine.select_canary_cohort(
-                canary.deployment_id + f"_{i}",
-                operator_ids,
-            )
+            # the registered canary; the seed also folds in the wall clock
+            cohort = engine.select_canary_cohort(canary.deployment_id, operator_ids)
             cohorts_selected.append(set(cohort))
 
         # With strong seed, cohorts should be different

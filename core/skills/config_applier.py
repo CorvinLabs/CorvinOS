@@ -55,6 +55,10 @@ class SkillConfigApplier:
         optimizer_with_gate,  # OptimizerWithApprovalGate
         audit_backend=None,
         tenant_id: str = "_default",
+        *,
+        config_getter=None,
+        config_applier=None,
+        config_restorer=None,
     ):
         """
         Initialize config applier.
@@ -64,7 +68,19 @@ class SkillConfigApplier:
             optimizer_with_gate: OptimizerWithApprovalGate instance
             audit_backend: Audit backend for logging (optional but recommended)
             tenant_id: Tenant ID for audit logging
+            config_getter: ``() -> dict`` returning the skill's CURRENT config
+                (hashed before/after every apply). Explicit injection replaces
+                the former "set the private attribute after construction"
+                contract, which every caller silently missed.
+            config_applier: ``(new_config_hash) -> dict`` applying a config.
+            config_restorer: ``(prev_config_hash) -> dict`` restoring one.
         """
+        if config_getter is not None:
+            self._config_getter = config_getter
+        if config_applier is not None:
+            self._config_applier = config_applier
+        if config_restorer is not None:
+            self._config_restorer = config_restorer
         self.skill_id = skill_id
         self.optimizer = optimizer_with_gate
         self.audit_backend = audit_backend

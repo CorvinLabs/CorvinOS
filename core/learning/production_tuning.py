@@ -640,8 +640,10 @@ class ProductionTuningEngine:
             # Deterministic for reproducibility, but with strong entropy
             seed_material = f"{deployment_id}:{datetime.utcnow().isoformat()}"
             strong_seed = int(hashlib.sha256(seed_material.encode()).hexdigest()[:16], 16)
-            random.seed(strong_seed)
-            selected = random.sample(operator_ids, min(cohort_size, len(operator_ids)))
+            # A LOCAL generator: seeding the module-global ``random`` here reset
+            # the randomness of every other consumer in the process.
+            rng = random.Random(strong_seed)
+            selected = rng.sample(operator_ids, min(cohort_size, len(operator_ids)))
 
             # Record cohort assignment
             for op_id in selected:

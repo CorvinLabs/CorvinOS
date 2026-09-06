@@ -50,12 +50,33 @@ class EventStore:
         return self.events_dir / f"{date_str}.jsonl"
 
     def write_event(self, event: LearningEvent) -> None:
-        """Write event to store (append-only, atomic)."""
+        """Write event: core audit chain FIRST (fail-closed), then disk.
+
+        ADR-0314 / CLAUDE.md § Phase 3: "write_event writes the core chain
+        FIRST; no chain commit → no disk record". Until 2026-09-06 only the
+        sibling ``event_persistence.EventStore`` honoured that; THIS store — the
+        one every live producer uses (``core/skills/boot.py``, the console
+        emitter, operator ratings) — appended plain JSONL and never touched the
+        hash chain, so every ACP ``skill_executed`` learning event was
+        unattributed in the audit trail.
+
+        The chain record is CONTENT-FREE (ids, type, skill, lom — never the
+        ``signal`` payload); the disk record carries the returned ``audit_ref``
+        so an operator can join the two.
+
+        Raises:
+            RuntimeError: the core audit writer is unavailable or the chain
+                write did not commit — nothing is written to disk then.
+            IOError: the disk append failed AFTER the chain committed (the
+                chain record stands; the disk copy is the lossy side).
+        """
         with self._lock:
+            audit_ref = self._audit_chain_first(event)
             event_file = self._get_event_file(event.timestamp)
 
             try:
                 event_dict = event.to_dict()
+                event_dict["audit_ref"] = audit_ref
                 line = json.dumps(event_dict, separators=(",", ":")) + "\n"
 
                 with open(event_file, "a") as f:
@@ -63,6 +84,29 @@ class EventStore:
 
             except IOError as e:
                 raise IOError(f"Failed to write learning event: {e}")
+
+    @staticmethod
+    def _audit_chain_first(event: LearningEvent) -> str:
+        """Commit a content-free record to the core hash chain; return audit_ref.
+
+        Shares ``event_persistence.core_audit_event`` (writer resolution +
+        commit verification by chain-tail read-back) so both stores have ONE
+        fail-closed path, not two.
+        """
+        from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
+
+        details = {
+            "event_id": event.event_id,
+            "event_type": event.event_type.value,
+            "skill_id": event.skill_id,
+            "skill_version": event.skill_version,
+            "lom": event.lom,
+        }
+        return core_audit_event(
+            f"learning.{event.event_type.value}",
+            tenant_id=event.tenant_id,
+            details=details,
+        )
 
     def query_events(
         self,

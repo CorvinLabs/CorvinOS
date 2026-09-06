@@ -796,6 +796,19 @@ Phase 3 builds the learning layer on top of Phase 2 (Skill System). It enables c
 
 → Full spec: See Corvin-ADR repo for ADR-0314 (learning-infrastructure-event-schema)
 
+**Loop closure (ADR-0613, 2026-09-06 — load-bearing):** the loop is CLOSED, not a log.
+Source = `delegation_policy.resolve_worker_engine` executes `os.delegation_router` in
+SHADOW mode (bundled answer stands; decision audited + emitted). Sink =
+`TaskManager.record_event` → `core/learning/outcome_sink.py` (OUTCOME per finished task,
+tenant from the task's own metadata). Store = `event_store.EventStore.write_event` is
+audit-FIRST (core chain record, then disk; no chain commit → no disk record). Consumption =
+`SkillAdapter` config (versioned, under `CORVIN_HOME`, rollback-able) is READ by
+`DelegationRouterSkill`. Console `/v1/console/learning/*` is real and audited — never mock.
+**Must NOT do:** let the shadow path alter routing · hard-wire `~/.corvin` anywhere in
+learning/skills (`core/paths/tenant.py::corvin_home` honours `CORVIN_HOME`) · reintroduce
+mock answers on learning endpoints · persist the free-text feedback `reason`.
+→ Reference: [learning-loop.md](docs/claude-ref/learning-loop.md)
+
 ---
 
 ## Skills 2.0 as Agentic Control Plane (load-bearing)

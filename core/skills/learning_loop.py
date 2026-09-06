@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import time
 from typing import Any, Callable, TypeVar
+
+logger = logging.getLogger(__name__)
 
 from core.concurrency.queue import Queue
 from core.context.helpers import get_current_context

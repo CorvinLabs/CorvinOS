@@ -34,7 +34,8 @@ export const useProgressPolling = (
     if (!jobId) return
 
     try {
-      const response = await fetch(`${BASE}/api/v2/marketplace/install/${jobId}/progress`)
+      // routes/marketplace_install.py (mounted under /api/v1/marketplace); there is no v2 API.
+      const response = await fetch(`${BASE}/api/v1/marketplace/install/${encodeURIComponent(jobId)}/progress`)
       if (!response.ok) {
         throw new Error(`Failed to fetch progress: ${response.statusText}`)
       }

@@ -99,9 +99,12 @@ class TestEventEmitterContract:
         emitter.stop()  # second call is a no-op
         assert emitter.emit(_ev()) is False, "after stop(), events are rejected (not silently lost)"
 
-    def test_tenant_validation_on_emit(self, event_emitter: EventEmitter, event_store: EventStore):
+    def test_tenant_validation_on_emit(self, event_emitter: EventEmitter, event_store: EventStore, monkeypatch):
         with pytest.raises(ValueError):
             LearningEvent.create(EventType.METRIC, skill_id="s", tenant_id="")
+        # Audit-first: the core chain admits only the PROCESS tenant, so the
+        # tenant_a event is emitted from a tenant_a process (ADR-0007).
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_a")
         good = _ev(tenant_id="tenant_a")
         assert event_emitter.emit(good) is True
         assert _wait_for(lambda: event_store.count_events("tenant_a") == 1)

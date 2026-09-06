@@ -218,9 +218,14 @@ class TestOperatorFeedbackHandler:
         assert 3.5 <= stats.average_rating <= 4.0
         assert stats.feedback_sentiment == "positive"
 
-    def test_feedback_stats_tenant_isolation(self, feedback_handler, event_store):
+    def test_feedback_stats_tenant_isolation(self, feedback_handler, event_store, monkeypatch):
+        # Audit-first store: a record enters the core chain only under the
+        # process tenant, so each tenant's event is written AS that tenant.
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_1")
         event_store.write_event(create_tool_rating_event(rating=5, tenant_id="tenant_1"))
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_2")
         event_store.write_event(create_tool_rating_event(rating=1, tenant_id="tenant_2"))
+        monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
         stats1 = feedback_handler.get_tool_feedback_stats(tool_id="tool_1", tenant_id="tenant_1")
         stats2 = feedback_handler.get_tool_feedback_stats(tool_id="tool_1", tenant_id="tenant_2")
         assert stats1.average_rating == 5.0 and stats1.sample_count == 1

@@ -22,7 +22,8 @@ def _integration(tenant_home):
     )
 
 
-def test_emit_and_read_back(tmp_path):
+def test_emit_and_read_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_TENANT_ID", "test_tenant")  # audit-first: chain admits the process tenant only
     tenant_home = tmp_path / "tenants" / "test_tenant" / "global"
     tenant_home.mkdir(parents=True)
     integ = _integration(tenant_home)

@@ -102,14 +102,18 @@ class TestTenantIsolationHostile:
 
             store = EventStore(event_dir)
 
-            # Write event for tenant_a
+            # Write event for tenant_a — AS tenant_a: the store is audit-first
+            # and the core chain admits only the process tenant (ADR-0007).
             event_a = LearningEvent.create(
                 EventType.SKILL_EXECUTED,
                 "test_skill",
                 "tenant_a",
                 {"output": "secret_a"}
             )
-            store.write_event(event_a)
+            import os
+            from unittest.mock import patch as _patch
+            with _patch.dict(os.environ, {"CORVIN_TENANT_ID": "tenant_a"}):
+                store.write_event(event_a)
 
             # Manually write event for tenant_b (simulating bypass)
             event_b = LearningEvent.create(
@@ -118,7 +122,8 @@ class TestTenantIsolationHostile:
                 "tenant_b",
                 {"output": "secret_b"}
             )
-            store.write_event(event_b)
+            with _patch.dict(os.environ, {"CORVIN_TENANT_ID": "tenant_b"}):
+                store.write_event(event_b)
 
             # GREEN: Query tenant_a should NOT see tenant_b's events
             results = store.query_events("tenant_a")

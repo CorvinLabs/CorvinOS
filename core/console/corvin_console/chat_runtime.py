@@ -4656,6 +4656,7 @@ async def stream_turn(
         instruction=prompt,
         persona="assistant",
         turn_number=sess.turn_count,
+        tenant_id=sess.tenant_id,  # ADR-0314 outcome sink: the task's own tenant, never env
     )
 
     # Phase 2a: Instantiate ExecutionContext builder — tracks engine, model,

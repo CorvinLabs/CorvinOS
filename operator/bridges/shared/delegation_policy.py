@@ -123,7 +123,100 @@ def permitted_engines(*, mode: str, bundled: str) -> frozenset[str]:
     return frozenset({bundled, WORKER_ENGINE_DEFAULT})
 
 
+def _acp_shadow_route(
+    *,
+    mode: str | None,
+    engine: str,
+    force_delegate: bool,
+    is_big_data: bool,
+    tenant_id: str,
+) -> None:
+    """L5 ACP wiring in SHADOW (advisory) mode — ADR-0532 Phase 1 call site.
+
+    Until 2026-09-06 ``os.delegation_router`` had zero production callers: the
+    Skill was booted, audited and "E2E-tested", and no real routing decision
+    ever reached it, so the ADR-0314 learning loop had no source signal
+    (adversarial review F1). This is the one shared decision function every
+    surface routes through, so it is the honest place to attach the Skill.
+
+    Shadow means: the bundled rule's answer (``engine``) STANDS. The Skill is
+    executed with the same signals, its decision lands in the hash-chained
+    audit trail (``skill_executed``) and the learning store, carrying both the
+    bundled engine and its own advice so agreement can be measured — and it
+    changes nothing on the wire. Promoting the advice to an actual override
+    goes through the ``engine.engine_selection`` extension point and its
+    permitted-engines bound, never through this function.
+
+    Never raises and never delays the turn beyond the Skill's own timeout: a
+    stripped install without ``core.skills``, an un-booted registry, or a Skill
+    failure all degrade to "no shadow record" and the caller's routing is
+    untouched.
+    """
+    try:
+        from core.skills import skill_registry_phase1 as _reg  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — bridge-only deployment without core.skills
+        return
+    try:
+        registry = getattr(_reg, "_global_registry", None)
+        if registry is None or registry.get("os.delegation_router") is None:
+            return  # not booted in this process → nothing to attribute to
+        complexity = 8 if is_big_data else (7 if force_delegate else 4)
+        task_type = "delegate" if force_delegate else ("big_data" if is_big_data else "chat")
+        registry.execute(
+            "os.delegation_router",
+            {
+                "complexity": complexity,
+                "task_type": task_type,
+                "user_context": {"mode": mode or "n/a"},
+                "tenant_id": tenant_id,
+                "shadow": True,
+                "bundled_engine": engine,
+            },
+            timeout_ms=1000,
+            lom="operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
+            tenant_id=tenant_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — advisory only; routing already decided
+        import logging as _log  # noqa: PLC0415
+
+        _log.getLogger(__name__).debug("ACP shadow route skipped: %s", type(exc).__name__)
+
+
 def resolve_worker_engine(
+    *,
+    mode: str,
+    force_delegate: bool,
+    is_big_data: bool,
+    tde_available: bool,
+    quota_ok: bool,
+    tenant_id: str = "_default",
+) -> str:
+    """:func:`_resolve_worker_engine` plus the ACP L5 shadow record.
+
+    The routing answer is computed by :func:`_resolve_worker_engine` (the rule
+    and the extension-point hook). Afterwards — never before, so no Skill can
+    delay or alter the decision — ``os.delegation_router`` is executed in
+    shadow mode with the same signals (see :func:`_acp_shadow_route`).
+    """
+    engine = _resolve_worker_engine(
+        mode=mode,
+        force_delegate=force_delegate,
+        is_big_data=is_big_data,
+        tde_available=tde_available,
+        quota_ok=quota_ok,
+        tenant_id=tenant_id,
+    )
+    _acp_shadow_route(
+        mode=mode,
+        engine=engine,
+        force_delegate=force_delegate,
+        is_big_data=is_big_data,
+        tenant_id=tenant_id,
+    )
+    return engine
+
+
+def _resolve_worker_engine(
     *,
     mode: str,
     force_delegate: bool,
@@ -200,6 +293,35 @@ def resolve_worker_engine(
 
 
 def resolve_delegation_route(
+    bundled_delegate: bool,
+    *,
+    tenant_id: str = "_default",
+    request: dict | None = None,
+) -> bool:
+    """:func:`_resolve_delegation_route` plus the ACP L5 shadow record for
+    turns that STAY native.
+
+    Every turn passes through this triage; only delegation-worthy turns go on
+    to :func:`resolve_worker_engine` (which carries its own shadow record). A
+    turn the classifier keeps in-process never reaches an engine decision, so
+    without this branch the learning store would only ever see the minority of
+    turns that are shaped for the ACS fan-out (live E2E, 2026-09-06). Exactly
+    one shadow record per turn results: here when the answer is "native",
+    there when an engine is actually chosen.
+    """
+    verdict = _resolve_delegation_route(bundled_delegate, tenant_id=tenant_id, request=request)
+    if not verdict:
+        _acp_shadow_route(
+            mode=None,
+            engine=WORKER_ENGINE_DEFAULT,
+            force_delegate=False,
+            is_big_data=False,
+            tenant_id=tenant_id,
+        )
+    return verdict
+
+
+def _resolve_delegation_route(
     bundled_delegate: bool,
     *,
     tenant_id: str = "_default",
