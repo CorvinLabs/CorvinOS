@@ -35,32 +35,32 @@
   <text x="600" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">Plugin System: 5 Trust Tiers</text>
   <line x1="100" y1="70" x2="1100" y2="70" stroke="#333" stroke-width="1"/>
 
-  <rect x="60" y="120" width="200" height="90" rx="8" fill="url(#g1)"/>
+  <rect x="60" y="120" width="200" height="90" rx="8" fill="#2d3e6e"/>
   <text x="160" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Compliance</text>
   <text x="160" y="165" text-anchor="middle" fill="#ddd" font-size="10">Locked • Mandatory</text>
   <text x="160" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">🔒</text>
 
-  <rect x="280" y="120" width="200" height="90" rx="8" fill="url(#g2)"/>
+  <rect x="280" y="120" width="200" height="90" rx="8" fill="#2d3e6e"/>
   <text x="380" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Core</text>
   <text x="380" y="165" text-anchor="middle" fill="#ddd" font-size="10">No bypass • Audited</text>
   <text x="380" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">🛡️</text>
 
-  <rect x="500" y="120" width="200" height="90" rx="8" fill="url(#g3)"/>
+  <rect x="500" y="120" width="200" height="90" rx="8" fill="#2d3e6e"/>
   <text x="600" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Bundled</text>
   <text x="600" y="165" text-anchor="middle" fill="#ddd" font-size="10">In-process • Vetted</text>
   <text x="600" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">✓</text>
 
-  <rect x="720" y="120" width="200" height="90" rx="8" fill="url(#g4)"/>
+  <rect x="720" y="120" width="200" height="90" rx="8" fill="#2d3e6e"/>
   <text x="820" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Installed</text>
   <text x="820" y="165" text-anchor="middle" fill="#ddd" font-size="10">Marketplace • Signed</text>
   <text x="820" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">📦</text>
 
-  <rect x="940" y="120" width="200" height="90" rx="8" fill="url(#g5)"/>
+  <rect x="940" y="120" width="200" height="90" rx="8" fill="#2d3e6e"/>
   <text x="1040" y="145" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Community</text>
   <text x="1040" y="165" text-anchor="middle" fill="#ddd" font-size="10">Sandboxed • Isolated</text>
   <text x="1040" y="185" text-anchor="middle" fill="#fff" font-size="9" opacity="0.8">🌐</text>
 
-  <rect x="60" y="280" width="1080" height="120" rx="8" fill="url(#g6)"/>
+  <rect x="60" y="280" width="1080" height="120" rx="8" fill="#2d3e6e"/>
   <text x="600" y="320" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Plugin Lifecycle</text>
   <text x="600" y="345" text-anchor="middle" fill="#ddd" font-size="11">Load → Register → Execute → Audit → Disable</text>
   <text x="600" y="365" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Zero-downtime upgrades • All actions logged • Versioned configs</text>

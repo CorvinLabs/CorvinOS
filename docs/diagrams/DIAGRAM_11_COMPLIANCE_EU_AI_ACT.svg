@@ -1,85 +1,34 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1000" width="1400" height="1000" font-family="Segoe UI, Arial, sans-serif">
-  <defs>
-    <linearGradient id="geu" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#2d3e6e"/>
-      <stop offset="100%" style="stop-color:#e74c3c"/>
-    </linearGradient>
-    <linearGradient id="ggdpr" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#f39c12"/>
-      <stop offset="100%" style="stop-color:#27ae60"/>
-    </linearGradient>
-    <linearGradient id="gload" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#3498db"/>
-      <stop offset="100%" style="stop-color:#9b59b6"/>
-    </linearGradient>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" width="1400" height="900" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1400" height="900" fill="#0f0f1e"/>
+  <text x="700" y="50" text-anchor="middle" fill="#00d4ff" font-size="32" font-weight="bold">Compliance Built-In</text>
+  <text x="700" y="80" text-anchor="middle" fill="#999" font-size="14">GDPR + EU AI Act 2026</text>
+  <line x1="100" y1="100" x2="1300" y2="100" stroke="#333" stroke-width="1"/>
 
-  <rect width="1400" height="1000" fill="#0f0f1e"/>
+  <rect x="50" y="130" width="320" height="100" rx="8" fill="#2d3e6e" stroke="#ff006e" stroke-width="2"/>
+  <text x="210" y="160" text-anchor="middle" fill="#ff006e" font-size="14" font-weight="bold">Art. 50: Disclose AI</text>
+  <text x="210" y="185" text-anchor="middle" fill="#a8dadc" font-size="11">bot_disclosure.py</text>
 
-  <text x="700" y="50" text-anchor="middle" fill="#e0e0e0" font-size="32" font-weight="bold">Compliance Built-In</text>
-  <text x="700" y="78" text-anchor="middle" fill="#999" font-size="12">GDPR + EU AI Act 2026 (Structural Constraints)</text>
-  <line x1="100" y1="95" x2="1300" y2="95" stroke="#333" stroke-width="1"/>
+  <rect x="400" y="130" width="320" height="100" rx="8" fill="#e74c3c" stroke="#ffd700" stroke-width="2"/>
+  <text x="560" y="160" text-anchor="middle" fill="#ffd700" font-size="14" font-weight="bold">Art. 5: Transparent Log</text>
+  <text x="560" y="185" text-anchor="middle" fill="#a8dadc" font-size="11">audit_backend.py</text>
 
-  <!-- EU AI ACT SECTION -->
-  <text x="50" y="145" fill="#ffd700" font-size="18" font-weight="bold">🏛️ EU AI ACT</text>
+  <rect x="750" y="130" width="320" height="100" rx="8" fill="#f39c12" stroke="#ffd700" stroke-width="2"/>
+  <text x="910" y="160" text-anchor="middle" fill="#ffd700" font-size="14" font-weight="bold">Art. 5: Acceptable Use</text>
+  <text x="910" y="185" text-anchor="middle" fill="#fff" font-size="11">house_rules.py</text>
 
-  <rect x="50" y="170" width="280" height="110" rx="8" fill="url(#geu)"/>
-  <text x="190" y="192" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 50</text>
-  <text x="190" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Disclose AI Use</text>
-  <text x="190" y="230" text-anchor="middle" fill="#ddd" font-size="10">One-time • Locked</text>
-  <text x="190" y="260" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">bot_disclosure.py</text>
+  <rect x="50" y="280" width="320" height="100" rx="8" fill="#27ae60" stroke="#00ff88" stroke-width="2"/>
+  <text x="210" y="310" text-anchor="middle" fill="#00ff88" font-size="14" font-weight="bold">Art. 6: Legal Basis</text>
+  <text x="210" y="335" text-anchor="middle" fill="#a8dadc" font-size="11">consent_gate.py</text>
 
-  <rect x="360" y="170" width="280" height="110" rx="8" fill="url(#geu)"/>
-  <text x="500" y="192" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 5</text>
-  <text x="500" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Transparent Logging</text>
-  <text x="500" y="230" text-anchor="middle" fill="#ddd" font-size="10">Immutable • Auditable</text>
-  <text x="500" y="260" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">audit_backend.py</text>
+  <rect x="400" y="280" width="320" height="100" rx="8" fill="#3498db" stroke="#00d4ff" stroke-width="2"/>
+  <text x="560" y="310" text-anchor="middle" fill="#00d4ff" font-size="14" font-weight="bold">Art. 30/32: Audit Trail</text>
+  <text x="560" y="335" text-anchor="middle" fill="#a8dadc" font-size="11">RFC 3161 Timestamping</text>
 
-  <rect x="670" y="170" width="280" height="110" rx="8" fill="url(#geu)"/>
-  <text x="810" y="192" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 5</text>
-  <text x="810" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Acceptable Use</text>
-  <text x="810" y="230" text-anchor="middle" fill="#ddd" font-size="10">Deny-by-default</text>
-  <text x="810" y="260" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">house_rules.py</text>
+  <rect x="750" y="280" width="320" height="100" rx="8" fill="#9b59b6" stroke="#00d4ff" stroke-width="2"/>
+  <text x="910" y="310" text-anchor="middle" fill="#00d4ff" font-size="14" font-weight="bold">Art. 17: Right to Erasure</text>
+  <text x="910" y="335" text-anchor="middle" fill="#a8dadc" font-size="11">erasure_orchestrator.py</text>
 
-  <rect x="980" y="170" width="300" height="110" rx="8" fill="url(#geu)"/>
-  <text x="1130" y="192" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 50</text>
-  <text x="1130" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">User Opt-Out</text>
-  <text x="1130" y="230" text-anchor="middle" fill="#ddd" font-size="10">Instant • No retention</text>
-  <text x="1130" y="260" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">/leave command</text>
-
-  <!-- GDPR SECTION -->
-  <text x="50" y="350" fill="#ffd700" font-size="18" font-weight="bold">🔒 GDPR 2016</text>
-
-  <rect x="50" y="375" width="280" height="110" rx="8" fill="url(#ggdpr)"/>
-  <text x="190" y="397" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 6</text>
-  <text x="190" y="417" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Legal Basis</text>
-  <text x="190" y="435" text-anchor="middle" fill="#ddd" font-size="10">Consent required</text>
-  <text x="190" y="465" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">consent_gate.py</text>
-
-  <rect x="360" y="375" width="280" height="110" rx="8" fill="url(#ggdpr)"/>
-  <text x="500" y="397" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 30, 32</text>
-  <text x="500" y="417" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Audit Trail</text>
-  <text x="500" y="435" text-anchor="middle" fill="#ddd" font-size="10">Hash-chained • Verified</text>
-  <text x="500" y="465" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">RFC 3161 TSA</text>
-
-  <rect x="670" y="375" width="280" height="110" rx="8" fill="url(#ggdpr)"/>
-  <text x="810" y="397" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 5</text>
-  <text x="810" y="417" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Data Minimization</text>
-  <text x="810" y="435" text-anchor="middle" fill="#ddd" font-size="10">Metadata only • No content</text>
-  <text x="810" y="465" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">_assert_safe()</text>
-
-  <rect x="980" y="375" width="300" height="110" rx="8" fill="url(#ggdpr)"/>
-  <text x="1130" y="397" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 17</text>
-  <text x="1130" y="417" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Right to Erasure</text>
-  <text x="1130" y="435" text-anchor="middle" fill="#ddd" font-size="10">Delete all • Proof logged</text>
-  <text x="1130" y="465" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">erasure_orchestrator.py</text>
-
-  <!-- KEY INSIGHT -->
-  <line x1="50" y1="550" x2="1350" y2="550" stroke="#333" stroke-width="1"/>
-
-  <rect x="50" y="590" width="1300" height="140" rx="8" fill="url(#gload)"/>
-  <text x="700" y="630" text-anchor="middle" fill="#fff" font-size="18" font-weight="bold">✅ Compliance = Hardcoded Fail-Closed Gates</text>
-  <text x="700" y="655" text-anchor="middle" fill="#ddd" font-size="12">NOT feature flags • NOT environment variables • NOT pluggable</text>
-  <text x="700" y="705" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">Every gate runs BEFORE business logic • Audit-first • No bypass possible</text>
-
+  <rect x="50" y="450" width="1020" height="90" rx="8" fill="#2d3e6e" stroke="#00ff88" stroke-width="2"/>
+  <text x="560" y="490" text-anchor="middle" fill="#00ff88" font-size="16" font-weight="bold">✓ Compliance = Hardcoded Fail-Closed Gates</text>
+  <text x="560" y="515" text-anchor="middle" fill="#a8dadc" font-size="12">NOT feature flags • NOT env vars • Runs BEFORE business logic</text>
 </svg>

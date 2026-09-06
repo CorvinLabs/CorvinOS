@@ -35,31 +35,31 @@
   <text x="700" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">6D Learning Loops</text>
   <line x1="100" y1="70" x2="1300" y2="70" stroke="#333" stroke-width="1"/>
 
-  <rect x="80" y="110" width="250" height="100" rx="8" fill="url(#g1)"/>
+  <rect x="80" y="110" width="250" height="100" rx="8" fill="#2d3e6e"/>
   <text x="205" y="135" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Routing Loop</text>
   <text x="205" y="155" text-anchor="middle" fill="#ddd" font-size="11">Pick best engine?</text>
   <text x="205" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <rect x="360" y="110" width="250" height="100" rx="8" fill="url(#g2)"/>
+  <rect x="360" y="110" width="250" height="100" rx="8" fill="#2d3e6e"/>
   <text x="485" y="135" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Context Loop</text>
   <text x="485" y="155" text-anchor="middle" fill="#ddd" font-size="11">Save important facts?</text>
   <text x="485" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <rect x="640" y="110" width="250" height="100" rx="8" fill="url(#g3)"/>
+  <rect x="640" y="110" width="250" height="100" rx="8" fill="#2d3e6e"/>
   <text x="765" y="135" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Execution Loop</text>
   <text x="765" y="155" text-anchor="middle" fill="#ddd" font-size="11">Fast enough?</text>
   <text x="765" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <rect x="920" y="110" width="250" height="100" rx="8" fill="url(#g4)"/>
+  <rect x="920" y="110" width="250" height="100" rx="8" fill="#2d3e6e"/>
   <text x="1045" y="135" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Confidence Loop</text>
   <text x="1045" y="155" text-anchor="middle" fill="#ddd" font-size="11">Am I right?</text>
   <text x="1045" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <rect x="1200" y="110" width="120" height="100" rx="8" fill="url(#g5)"/>
+  <rect x="1200" y="110" width="120" height="100" rx="8" fill="#2d3e6e"/>
   <text x="1260" y="135" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold">Compliance</text>
   <text x="1260" y="190" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">α=10%</text>
 
-  <rect x="200" y="280" width="1000" height="120" rx="8" fill="url(#g6)"/>
+  <rect x="200" y="280" width="1000" height="120" rx="8" fill="#2d3e6e"/>
   <text x="700" y="315" text-anchor="middle" fill="#fff" font-size="16" font-weight="bold">Meta Loop: Learns Optimal Weights</text>
   <text x="700" y="340" text-anchor="middle" fill="#ddd" font-size="12">α=1% • Converges all dimensions together</text>
   <text x="700" y="360" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">Damping prevents oscillation • Scales to N loops</text>

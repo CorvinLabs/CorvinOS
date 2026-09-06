@@ -1,31 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800" font-family="Segoe UI, Arial, sans-serif">
   <defs>
-    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#3d2550"/><stop offset="100%" style="stop-color:#1a1a6e"/></linearGradient>
-    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#2d3e7e"/><stop offset="100%" style="stop-color:#e74c3c"/></linearGradient>
-    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#f39c12"/><stop offset="100%" style="stop-color:#e74c3c"/></linearGradient>
-    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#27ae60"/><stop offset="100%" style="stop-color:#f39c12"/></linearGradient>
-    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#3498db"/><stop offset="100%" style="stop-color:#27ae60"/></linearGradient>
+    
+    
+    
+    
+    
   </defs>
   <rect width="1200" height="800" fill="#0f0f1e"/>
   <text x="600" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">Layer Stack Overview</text>
   <line x1="100" y1="70" x2="1100" y2="70" stroke="#333" stroke-width="1"/>
 
-  <rect x="100" y="120" width="1000" height="65" rx="8" fill="url(#g1)"/>
+  <rect x="100" y="120" width="1000" height="65" rx="8" fill="#2d3e6e"/>
   <text x="600" y="155" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L44: House-Rules (Acceptable Use Gate) 🏛️</text>
 
-  <rect x="100" y="200" width="1000" height="65" rx="8" fill="url(#g2)"/>
+  <rect x="100" y="200" width="1000" height="65" rx="8" fill="#2d3e6e"/>
   <text x="600" y="235" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L34: Data Flow Guard (Input Classification)</text>
 
-  <rect x="100" y="280" width="1000" height="65" rx="8" fill="url(#g3)"/>
+  <rect x="100" y="280" width="1000" height="65" rx="8" fill="#2d3e6e"/>
   <text x="600" y="315" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L22: Workflow + L16: Security + L10: Context</text>
 
-  <rect x="100" y="360" width="1000" height="65" rx="8" fill="url(#g4)"/>
+  <rect x="100" y="360" width="1000" height="65" rx="8" fill="#2d3e6e"/>
   <text x="600" y="395" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L5: Routing (Skills-driven) + Plugins</text>
 
-  <rect x="100" y="440" width="1000" height="65" rx="8" fill="url(#g5)"/>
+  <rect x="100" y="440" width="1000" height="65" rx="8" fill="#2d3e6e"/>
   <text x="600" y="475" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">L3: Audit Trail (Hash-chained)</text>
 
-  <rect x="100" y="550" width="1000" height="180" rx="8" fill="url(#g2)"/>
+  <rect x="100" y="550" width="1000" height="180" rx="8" fill="#2d3e6e"/>
   <text x="600" y="590" text-anchor="middle" fill="#fff" font-size="13" font-weight="bold">36+ Layers in CorvinOS</text>
   <text x="600" y="615" text-anchor="middle" fill="#ddd" font-size="11">Input → L5/L10/L22 → Learning → Audit</text>
   <text x="600" y="635" text-anchor="middle" fill="#fff" font-size="10" opacity="0.8">Every layer versioned, auditable, GDPR compliant</text>

@@ -36,17 +36,17 @@
   <line x1="100" y1="70" x2="1300" y2="70" stroke="#333" stroke-width="1"/>
 
   <text x="100" y="130" fill="#ffd700" font-size="16" font-weight="bold">TIER 1: Core Loops (α=10%)</text>
-  <rect x="100" y="150" width="1200" height="80" rx="8" fill="url(#g1)"/>
+  <rect x="100" y="150" width="1200" height="80" rx="8" fill="#2d3e6e"/>
   <text x="700" y="180" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Routing • Context • Execution • Confidence • Compliance • Learning</text>
   <text x="700" y="205" text-anchor="middle" fill="#ddd" font-size="11">6 independent feedback loops</text>
 
   <text x="100" y="290" fill="#ffd700" font-size="16" font-weight="bold">TIER 2: Infrastructure Loops (α=5%)</text>
-  <rect x="100" y="310" width="1200" height="80" rx="8" fill="url(#g2)"/>
+  <rect x="100" y="310" width="1200" height="80" rx="8" fill="#2d3e6e"/>
   <text x="700" y="340" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Memory • Plugins • Security</text>
   <text x="700" y="365" text-anchor="middle" fill="#ddd" font-size="11">Learn optimal configuration from hourly metrics</text>
 
   <text x="100" y="450" fill="#ffd700" font-size="16" font-weight="bold">TIER 3: Meta Loop (α=1%)</text>
-  <rect x="100" y="470" width="1200" height="100" rx="8" fill="url(#g3)"/>
+  <rect x="100" y="470" width="1200" height="100" rx="8" fill="#2d3e6e"/>
   <text x="700" y="510" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Learns Optimal Weight Vector</text>
   <text x="700" y="535" text-anchor="middle" fill="#ddd" font-size="12">Discovers best balance between all 9 dimensions</text>
   <text x="700" y="555" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">Converges <10K samples • No oscillation • Operator tunable</text>

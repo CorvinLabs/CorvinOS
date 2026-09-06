@@ -1,80 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 950" width="1200" height="950" font-family="Segoe UI, Arial, sans-serif">
-  <defs>
-    <linearGradient id="g0" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#1a1a3e"/>
-      <stop offset="100%" style="stop-color:#2d1b3e"/>
-    </linearGradient>
-    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#3d2550"/>
-      <stop offset="100%" style="stop-color:#1a1a5e"/>
-    </linearGradient>
-    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#2d3e6e"/>
-      <stop offset="100%" style="stop-color:#e74c3c"/>
-    </linearGradient>
-    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#f39c12"/>
-      <stop offset="100%" style="stop-color:#e74c3c"/>
-    </linearGradient>
-    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#27ae60"/>
-      <stop offset="100%" style="stop-color:#f39c12"/>
-    </linearGradient>
-    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#3498db"/>
-      <stop offset="100%" style="stop-color:#27ae60"/>
-    </linearGradient>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" width="1200" height="900" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1200" height="900" fill="#0f0f1e"/>
+  <text x="600" y="50" text-anchor="middle" fill="#00d4ff" font-size="32" font-weight="bold">CorvinOS Architecture</text>
+  <line x1="100" y1="70" x2="1100" y2="70" stroke="#333" stroke-width="1"/>
 
-  <!-- Background -->
-  <rect width="1200" height="950" rx="0" fill="#0f0f1e"/>
+  <rect x="80" y="110" width="1040" height="70" rx="8" fill="#1a3a4d" stroke="#00d4ff" stroke-width="2"/>
+  <text x="600" y="152" text-anchor="middle" fill="#00d4ff" font-size="16" font-weight="bold">INPUT: CLI • Web • Voice • A2A</text>
 
-  <!-- Title -->
-  <text x="600" y="50" text-anchor="middle" fill="#e0e0e0" font-size="28" font-weight="bold">CorvinOS Architecture</text>
-  <text x="600" y="75" text-anchor="middle" fill="#999" font-size="12">Self-learning • Auditable • Multi-engine</text>
-  <line x1="100" y1="90" x2="1100" y2="90" stroke="#333" stroke-width="1"/>
+  <rect x="80" y="210" width="1040" height="90" rx="8" fill="#2d3e6e" stroke="#00ff88" stroke-width="2"/>
+  <text x="600" y="245" text-anchor="middle" fill="#00ff88" font-size="16" font-weight="bold">L5 Routing • L10 Context • L22 Workflow</text>
+  <text x="600" y="268" text-anchor="middle" fill="#a8dadc" font-size="12">Skills 2.0: Versioned, learnable decisions</text>
 
-  <!-- INPUT LAYER -->
-  <rect x="60" y="120" width="1080" height="65" rx="8" fill="url(#g0)"/>
-  <text x="80" y="142" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">INPUTS</text>
-  <text x="80" y="160" fill="#fff" font-size="15" font-weight="bold">Multiple Channels</text>
-  <text x="1080" y="150" text-anchor="end" fill="#fff" font-size="11" opacity="0.8">CLI • Web • Voice • A2A</text>
+  <rect x="80" y="330" width="1040" height="70" rx="8" fill="#e74c3c" stroke="#ffd700" stroke-width="2"/>
+  <text x="600" y="372" text-anchor="middle" fill="#ffd700" font-size="16" font-weight="bold">9D Learning Loop: Self-Optimization</text>
 
-  <!-- ACP LAYER -->
-  <rect x="60" y="210" width="1080" height="130" rx="8" fill="url(#g1)"/>
-  <text x="80" y="232" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">L5-L22</text>
-  <text x="80" y="250" fill="#fff" font-size="15" font-weight="bold">Agentic Control Plane (Skills 2.0)</text>
-  <text x="80" y="270" fill="#ddd" font-size="11">Every decision made by versioned, learnable Skills</text>
-  <text x="1080" y="240" text-anchor="end" fill="#fff" font-size="11" opacity="0.8">L5: Routing | L10: Context | L22: Workflow</text>
-  <text x="1080" y="260" text-anchor="end" fill="#fff" font-size="11" opacity="0.8">Smart engine selection • Token optimization • DAG execution</text>
+  <rect x="80" y="430" width="1040" height="70" rx="8" fill="#f39c12" stroke="#ffd700" stroke-width="2"/>
+  <text x="600" y="472" text-anchor="middle" fill="#fff" font-size="16" font-weight="bold">Plugins + Marketplace: 5 Trust Tiers</text>
 
-  <!-- LEARNING LAYER -->
-  <rect x="60" y="365" width="1080" height="90" rx="8" fill="url(#g2)"/>
-  <text x="80" y="387" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">LEARNING</text>
-  <text x="80" y="405" fill="#fff" font-size="15" font-weight="bold">9D Self-Optimization Loop</text>
-  <text x="80" y="425" fill="#ddd" font-size="11">6 Core + 3 Infrastructure + 1 Meta Loop • Converges <10K samples</text>
+  <rect x="80" y="530" width="1040" height="70" rx="8" fill="#27ae60" stroke="#00ff88" stroke-width="2"/>
+  <text x="600" y="572" text-anchor="middle" fill="#fff" font-size="16" font-weight="bold">Compliance: Consent • House-Rules • Audit</text>
 
-  <!-- INFRASTRUCTURE LAYER -->
-  <rect x="60" y="480" width="1080" height="90" rx="8" fill="url(#g3)"/>
-  <text x="80" y="502" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">INFRASTRUCTURE</text>
-  <text x="80" y="520" fill="#fff" font-size="15" font-weight="bold">Plugins • Marketplace • 5 Trust Tiers</text>
-  <text x="80" y="540" fill="#ddd" font-size="11">Extensible, auditable, sandboxed execution</text>
-
-  <!-- COMPLIANCE LAYER -->
-  <rect x="60" y="595" width="1080" height="90" rx="8" fill="url(#g4)"/>
-  <text x="80" y="617" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">COMPLIANCE</text>
-  <text x="80" y="635" fill="#fff" font-size="15" font-weight="bold">Consent • House-Rules • Audit Trail</text>
-  <text x="80" y="655" fill="#ddd" font-size="11">GDPR + EU AI Act • Fail-closed • Hash-chained proof</text>
-
-  <!-- AUDIT LAYER -->
-  <rect x="60" y="710" width="1080" height="90" rx="8" fill="url(#g5)"/>
-  <text x="80" y="732" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">AUDIT</text>
-  <text x="80" y="750" fill="#fff" font-size="15" font-weight="bold">Immutable Audit Trail</text>
-  <text x="80" y="770" fill="#ddd" font-size="11">Every decision logged • Cryptographic proof • RFC 3161 timestamping</text>
-
-  <!-- OUTPUTS -->
-  <rect x="60" y="825" width="1080" height="65" rx="8" fill="url(#g0)"/>
-  <text x="80" y="847" fill="#fff" font-size="10" font-weight="bold" opacity="0.7">OUTPUTS</text>
-  <text x="80" y="865" fill="#fff" font-size="15" font-weight="bold">Response • Audit • Learning • Metrics</text>
-
+  <rect x="80" y="630" width="1040" height="70" rx="8" fill="#3498db" stroke="#00d4ff" stroke-width="2"/>
+  <text x="600" y="672" text-anchor="middle" fill="#fff" font-size="16" font-weight="bold">OUTPUT: Response • Audit Trail • Metrics</text>
 </svg>
