@@ -43,7 +43,7 @@ class TestCrashRecoveryE2E:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -99,7 +99,7 @@ class TestCrashRecoveryE2E:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -132,7 +132,7 @@ class TestCrashRecoveryE2E:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:00Z",
+                timestamp=f"2026-08-12T10:00:00Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -175,7 +175,7 @@ class TestCrashRecoveryE2E:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             manager1.record(entry)
 
@@ -224,7 +224,7 @@ class TestCrashRecoveryE2E:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -259,7 +259,7 @@ class TestCrashRecoveryE2E:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -302,7 +302,7 @@ class TestCrashRecoveryE2E:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:00Z",
+                timestamp=f"2026-08-12T10:00:00Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -328,7 +328,7 @@ class TestCrashRecoveryE2E:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:00Z",
+                timestamp=f"2026-08-12T10:00:00Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -378,7 +378,7 @@ class TestFileCorruptionHandling:
                 action="write",
                 resource="res",
                 result="success",
-                timestamp="2026-08-12T10:00:00Z",
+                timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
             )
             entry.finalize()
             json.dump(entry.__dict__, f)
@@ -410,7 +410,7 @@ class TestFileCorruptionHandling:
                 action="write",
                 resource="res",
                 result="success",
-                timestamp="2026-08-12T10:00:00Z",
+                timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
             )
             # This might raise or might degrade gracefully
             try:
@@ -446,7 +446,7 @@ class TestDurabilityUnderLoad:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:00Z",
+                timestamp=f"2026-08-12T10:00:00Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -473,7 +473,7 @@ class TestDurabilityUnderLoad:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:00Z",
+                timestamp=f"2026-08-12T10:00:00Z", tenant_id="_default",
             )
             manager.record(entry)
 

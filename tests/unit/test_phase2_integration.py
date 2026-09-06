@@ -14,7 +14,20 @@ from core.learning.token_metrics_store import TokenMetricsStore
 from core.learning.token_metrics_aggregator import TokenMetricsAggregator
 from core.learning.token_baseline import ComparisonEngine
 from core.learning.event_schema import LearningEventType
-from tests.unit.test_token_metrics_store_k2 import MockEventEmitter
+
+
+# Inlined from the retired test_token_metrics_store_k2.py (it described an
+# async SqliteMetricsDB that was never written; see token_metrics_db.py).
+class MockEventEmitter:
+    """Mock EventEmitter for testing (doesn't write to audit trail)."""
+
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event):
+        """Record event in memory."""
+        self.events.append(event)
+
 
 
 class TestTokenMetricsDB:
@@ -55,7 +68,7 @@ class TestTokenMetricsDB:
         asyncio.run(db.insert_token_metrics(event))
 
         # Verify in database
-        row = db.query_by_turn("t1")
+        row = db.query_by_turn("t1", "test")
         assert row is not None
         assert row["total_tokens"] == 1500
         assert row["task_type"] == "code"
@@ -77,7 +90,7 @@ class TestTokenMetricsDB:
             )
             asyncio.run(db.insert_token_metrics(event))
 
-        rows = db.query_by_session("sess1")
+        rows = db.query_by_session("sess1", "test")
         assert len(rows) == 3
 
     def test_aggregate_by_task_type(self, db):
@@ -98,7 +111,7 @@ class TestTokenMetricsDB:
             )
             asyncio.run(db.insert_token_metrics(event))
 
-        agg = db.aggregate_by_task_type("sess1")
+        agg = db.aggregate_by_task_type("sess1", "test")
 
         assert "code" in agg
         assert agg["code"]["turns"] == 2
@@ -121,7 +134,7 @@ class TestTokenMetricsDB:
         )
         asyncio.run(db.insert_token_metrics(event))
 
-        summary = db.summary("sess1")
+        summary = db.summary("sess1", "test")
 
         assert summary["turn_count"] == 1
         assert summary["total_tokens"] == 2000
@@ -165,7 +178,7 @@ class TestTokenMetricsStore_WithDB:
         assert cached is not None
 
         # Verify in DB (Phase 2)
-        db_row = db.query_by_turn("t1")
+        db_row = db.query_by_turn("t1", "test")
         assert db_row is not None
 
 
@@ -188,7 +201,7 @@ class TestTokenMetricsAggregator_Complete:
         for i in range(5):
             counter = TokenCounter(turn_id=f"t{i}", engine="claude")
             counter.record_llm_call(1000 + i * 100, 500 + i * 50)
-            counter.baseline_tokens = 2000
+            counter.baseline_tokens = 2500  # ~28 % savings vs. the 15 % significance rule
             counter.task_type = "code" if i < 3 else "analysis"
             counter.outcome_quality = "good"
             counter.finalize()

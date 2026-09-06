@@ -12,11 +12,22 @@ from core.learning.event_persistence import EventStore
 
 @pytest.fixture
 def temp_tenant_home():
-    """Create a temporary tenant home directory."""
+    """Create a temporary tenant home directory (and make it the live root).
+
+    ``EventStore`` is tenant-bound and resolves its directories from
+    ``CORVIN_HOME`` (core.paths.tenant); it is audit-first, so the core chain is
+    redirected to the same temp root and the process tenant is ``_default``."""
     with TemporaryDirectory() as tmpdir:
         tenant_home = Path(tmpdir) / "tenants" / "_default"
         tenant_home.mkdir(parents=True, exist_ok=True)
-        yield tenant_home
+        import os
+        from unittest.mock import patch as _patch
+        with _patch.dict(os.environ, {
+            "CORVIN_HOME": tmpdir,
+            "VOICE_AUDIT_PATH": str(Path(tmpdir) / "audit.jsonl"),
+            "CORVIN_TENANT_ID": "_default",
+        }):
+            yield tenant_home
 
 
 class TestEventStore:
@@ -25,7 +36,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_write_event_creates_file(self, temp_tenant_home):
         """Write event creates date-partitioned file."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         event = LearningEvent(
             event_type=LearningEventType.CONFIDENCE_SCORE,
@@ -48,7 +59,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_write_event_tenant_isolation(self, temp_tenant_home):
         """Write event with wrong tenant raises error."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         event = LearningEvent(
             event_type=LearningEventType.USER_FEEDBACK,
@@ -66,7 +77,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_read_events_empty(self, temp_tenant_home):
         """Read events from empty store returns empty list."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         events = await store.read_events(tenant_id="_default")
 
@@ -75,7 +86,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_write_and_read_event(self, temp_tenant_home):
         """Write event, then read it back."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         event = LearningEvent(
             event_type=LearningEventType.CONFIDENCE_SCORE,
@@ -98,7 +109,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_read_events_filter_by_type(self, temp_tenant_home):
         """Filter events by event type."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         event1 = LearningEvent(
             event_type=LearningEventType.CONFIDENCE_SCORE,
@@ -133,7 +144,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_read_events_filter_by_skill(self, temp_tenant_home):
         """Filter events by skill name."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         event1 = LearningEvent(
             event_type=LearningEventType.CONFIDENCE_SCORE,
@@ -166,7 +177,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_read_events_filter_by_session(self, temp_tenant_home):
         """Filter events by session ID."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         event1 = LearningEvent(
             event_type=LearningEventType.CONFIDENCE_SCORE,
@@ -199,7 +210,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_read_events_filter_by_since(self, temp_tenant_home):
         """Filter events by timestamp (since)."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         now = datetime.utcnow()
         past = now - timedelta(hours=2)
@@ -235,7 +246,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_read_events_tenant_isolation(self, temp_tenant_home):
         """Read only returns events from requested tenant."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         event1 = LearningEvent(
             event_type=LearningEventType.CONFIDENCE_SCORE,
@@ -269,7 +280,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_cleanup_old_events(self, temp_tenant_home):
         """Delete events older than retention period."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         now = datetime.utcnow()
         old_date = now - timedelta(days=100)
@@ -308,7 +319,7 @@ class TestEventStore:
     @pytest.mark.asyncio
     async def test_get_event_count(self, temp_tenant_home):
         """Get total event count for a tenant."""
-        store = EventStore(temp_tenant_home)
+        store = EventStore("_default")
 
         for i in range(5):
             event = LearningEvent(

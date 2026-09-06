@@ -24,7 +24,7 @@ class TestAuditEntry:
             action="login",
             resource="user_123",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         hash1 = entry.compute_hash()
         hash2 = entry.compute_hash()
@@ -38,7 +38,7 @@ class TestAuditEntry:
             action="login",
             resource="user_123",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         assert entry.self_hash == ""
         entry.finalize()
@@ -53,7 +53,7 @@ class TestAuditEntry:
             action="login",
             resource="user_123",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         entry.finalize()
         hash_with_self = entry.compute_hash()
@@ -65,7 +65,7 @@ class TestAuditEntry:
             action="login",
             resource="user_123",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
             self_hash="ignored",
         )
         hash_without_self = entry2.compute_hash()
@@ -97,7 +97,7 @@ class TestAuditChain:
             action="login",
             resource="user_1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         chain.record(entry)
 
@@ -113,7 +113,7 @@ class TestAuditChain:
             action="a",
             resource="r1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         chain.record(entry1)
 
@@ -123,7 +123,7 @@ class TestAuditChain:
             action="b",
             resource="r2",
             result="success",
-            timestamp="2026-08-11T10:00:01Z",
+            timestamp="2026-08-11T10:00:01Z", tenant_id="_default",
         )
         chain.record(entry2)
 
@@ -141,7 +141,7 @@ class TestAuditChain:
                 action="test",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-11T10:00:{i:02d}Z",
+                timestamp=f"2026-08-11T10:00:{i:02d}Z", tenant_id="_default",
             )
             chain.record(entry)
 
@@ -157,7 +157,7 @@ class TestAuditChain:
                 action="test",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-11T10:00:{i:02d}Z",
+                timestamp=f"2026-08-11T10:00:{i:02d}Z", tenant_id="_default",
             )
             chain.record(entry)
 
@@ -173,7 +173,7 @@ class TestAuditChain:
             action="test",
             resource="res_1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         chain1.record(entry)
 
@@ -191,7 +191,7 @@ class TestAuditChain:
             action="test",
             resource="res_1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         chain.record(entry1)
 
@@ -201,7 +201,7 @@ class TestAuditChain:
             action="test",
             resource="res_2",
             result="success",
-            timestamp="2026-08-11T10:00:01Z",
+            timestamp="2026-08-11T10:00:01Z", tenant_id="_default",
         )
         chain.record(entry2)
 
@@ -221,7 +221,7 @@ class TestAuditChain:
             action="test",
             resource="res_1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         chain.record(entry1)
 
@@ -231,7 +231,7 @@ class TestAuditChain:
             action="test",
             resource="res_2",
             result="success",
-            timestamp="2026-08-11T10:00:01Z",
+            timestamp="2026-08-11T10:00:01Z", tenant_id="_default",
         )
         chain.record(entry2)
 
@@ -253,7 +253,7 @@ class TestAuditChain:
             action="test",
             resource="res_1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         chain.record(entry)
 
@@ -268,7 +268,7 @@ class TestAuditChain:
             action="test",
             resource="res_1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         chain.record(entry)
 
@@ -288,7 +288,7 @@ class TestAuditChain:
                 action="test",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-11T10:00:{i:02d}Z",
+                timestamp=f"2026-08-11T10:00:{i:02d}Z", tenant_id="_default",
             )
             chain.record(entry)
 
@@ -312,7 +312,7 @@ class TestAuditChain:
             action="test",
             resource="res_1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
         )
         chain.record(entry)
 
@@ -329,7 +329,7 @@ class TestAuditChain:
             action="test",
             resource="res_1",
             result="success",
-            timestamp="2026-08-11T10:00:00Z",
+            timestamp="2026-08-11T10:00:00Z", tenant_id="_default",
             details={"key": "value", "nested": {"a": 1}},
         )
         chain.record(entry)
@@ -352,7 +352,7 @@ class TestAuditChain:
                 action="test",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-11T10:00:{i % 60:02d}Z",
+                timestamp=f"2026-08-11T10:00:{i % 60:02d}Z", tenant_id="_default",
             )
             chain.record(entry)
 

@@ -106,6 +106,7 @@ class TestAuditBackendHostile:
         """Test fanout handles malicious/unexpected input gracefully."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -131,6 +132,7 @@ class TestAuditBackendHostile:
         """Test fanout doesn't raise even under memory stress."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -154,6 +156,7 @@ class TestAuditBackendHostile:
         """Test tenant_id is not overwritten from details."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -175,6 +178,7 @@ class TestAuditBackendHostile:
         """Test plugin doesn't mutate caller's details dict."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -190,11 +194,12 @@ class TestAuditBackendHostile:
 
     def test_fanout_exception_in_queue_put_nomask(self):
         """Test fanout handles queue.Full gracefully (not masked)."""
-        plugin = AuditBackendPlugin()
-        plugin.MAX_QUEUED = 1
+        plugin = type("_Bounded", (AuditBackendPlugin,), {"MAX_QUEUED": 1})()  # bound BEFORE __init__ builds the queue
         plugin._queue = queue.Queue(maxsize=1)
 
         ctx = MagicMock(spec=PluginContext)
+
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -221,6 +226,7 @@ class TestAuditBackendRaceConditions:
         """Test fanout doesn't corrupt state under concurrent writes."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -263,6 +269,7 @@ class TestAuditBackendRaceConditions:
         """Test fanout during concurrent unload doesn't crash."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -291,6 +298,7 @@ class TestAuditBackendRaceConditions:
         """Test health_check is safe while fanout is active."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -332,6 +340,7 @@ class TestAuditBackendBoundaryConditions:
         """Test fanout accepts empty details dict."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -344,10 +353,11 @@ class TestAuditBackendBoundaryConditions:
 
     def test_fanout_max_queued_boundary(self):
         """Test behavior at MAX_QUEUED boundary."""
-        plugin = AuditBackendPlugin()
-        plugin.MAX_QUEUED = 10
+        plugin = type("_Bounded", (AuditBackendPlugin,), {"MAX_QUEUED": 10})()  # bound BEFORE __init__ builds the queue
 
         ctx = MagicMock(spec=PluginContext)
+
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -369,6 +379,7 @@ class TestAuditBackendBoundaryConditions:
         """Test fanout can be called repeatedly with same input."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 
@@ -386,6 +397,7 @@ class TestAuditBackendBoundaryConditions:
         """Test verify_chain never raises under any condition."""
         plugin = AuditBackendPlugin()
         ctx = MagicMock(spec=PluginContext)
+        ctx.config = {}  # dataclass FIELDS are not class attrs, so spec= hides them
         ctx.audit_registry = None
         plugin.on_load(ctx)
 

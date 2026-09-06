@@ -252,15 +252,37 @@ class LoadOrderTracker:
         })
 
     def assert_dependencies_satisfied(self) -> None:
-        """Assert that all dependencies were satisfied (loaded before dependent)"""
-        loaded_plugins = {evt["plugin_id"] for evt in self.load_events}
+        """Assert every dependency was loaded BEFORE its dependent, and that the
+        recorded dependency graph is acyclic (a cycle can never be satisfied)."""
+        position = {}
+        for evt in self.load_events:
+            position.setdefault(evt["plugin_id"], evt["order"])
         for evt in self.load_events:
             for dep in evt["depends_on"]:
-                if dep not in loaded_plugins:
+                if dep not in position:
                     raise AssertionError(
                         f"Dependency violation: {evt['plugin_id']} requires {dep}, "
                         f"but {dep} not in load order"
                     )
+                if position[dep] > evt["order"]:
+                    raise AssertionError(
+                        f"Dependency violation: {evt['plugin_id']} loaded before its dependency {dep}"
+                    )
+        graph = {evt["plugin_id"]: set(evt["depends_on"]) for evt in self.load_events}
+        state: Dict[str, int] = {}
+
+        def visit(node: str, trail: List[str]) -> None:
+            if state.get(node) == 1:
+                raise AssertionError(f"Circular dependency: {' -> '.join(trail + [node])}")
+            if state.get(node) == 2:
+                return
+            state[node] = 1
+            for dep in graph.get(node, ()):
+                visit(dep, trail + [node])
+            state[node] = 2
+
+        for node in graph:
+            visit(node, [])
 
 
 @dataclass

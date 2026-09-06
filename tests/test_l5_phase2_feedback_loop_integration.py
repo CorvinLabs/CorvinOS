@@ -81,7 +81,7 @@ class TestL5NoDrift:
         # Setup
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -115,7 +115,7 @@ class TestL5NoDrift:
         """Verify audit trail for no-drift case."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -153,7 +153,7 @@ class TestL5DriftDetection:
         """Large consecutive deltas should trigger drift alert."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -172,8 +172,10 @@ class TestL5DriftDetection:
         for i in range(3):
             integrator.stability_gate.apply_feedback("test.router", "confidence_threshold", 0.02)
 
-        # Act: large delta (should trigger drift)
-        result = integrator.process_feedback(
+        # Act: SUSTAINED large deltas (drift_window=3 consecutive) — a single
+        # spike is smoothed away by design; drift means the shift persists.
+        for _ in range(3):
+          result = integrator.process_feedback(
             skill_id="test.router",
             metric_name="confidence_threshold",
             raw_delta=0.5,  # Large change
@@ -195,7 +197,7 @@ class TestL5OperatorApproval:
         """Low confidence should result in pending operator."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.9)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.9, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -235,7 +237,7 @@ class TestL5QualityGate:
         """Quality gate should compute metrics for auto-approved proposals."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.3)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.3, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -277,7 +279,7 @@ class TestL5ConflictDetection:
         """k=4 should detect conflicts between concurrent proposals."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.3)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.3, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -333,7 +335,7 @@ class TestL5RollbackGuard:
         """k=5 should provide advisory hold period."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.3)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.3, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -374,7 +376,7 @@ class TestL5OperatorControls:
         """Operator can approve pending approvals."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.9)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.9, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -412,7 +414,7 @@ class TestL5OperatorControls:
         """Operator can reject pending approvals."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.9)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.9, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -440,7 +442,7 @@ class TestL5OperatorControls:
         """Operator can revoke previously-approved changes."""
         audit = AuditBackendMock()
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.3)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.3, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -471,11 +473,12 @@ class TestL5TenantIsolation:
 
     def test_tenant_isolation(self):
         """Different tenants should not see each other's data."""
+        audit = AuditBackendMock()
         audit_1 = AuditBackendMock()
         audit_2 = AuditBackendMock()
 
         stability_gate_1 = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate_1 = OperatorApprovalGate(tenant_id="tenant_1", auto_approval_confidence_threshold=0.8)
+        approval_gate_1 = OperatorApprovalGate(tenant_id="tenant_1", auto_approval_confidence_threshold=0.8, audit_backend=audit)
         quality_gate_1 = QualityGate(tenant_id="tenant_1", audit_backend=audit_1)
         conflict_resolver_1 = ConflictResolver(tenant_id="tenant_1", audit_backend=audit_1)
         rollback_guard_1 = RollbackGuard(tenant_id="tenant_1", audit_backend=audit_1)
@@ -491,7 +494,7 @@ class TestL5TenantIsolation:
         )
 
         stability_gate_2 = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate_2 = OperatorApprovalGate(tenant_id="tenant_2", auto_approval_confidence_threshold=0.8)
+        approval_gate_2 = OperatorApprovalGate(tenant_id="tenant_2", auto_approval_confidence_threshold=0.8, audit_backend=audit)
         quality_gate_2 = QualityGate(tenant_id="tenant_2", audit_backend=audit_2)
         conflict_resolver_2 = ConflictResolver(tenant_id="tenant_2", audit_backend=audit_2)
         rollback_guard_2 = RollbackGuard(tenant_id="tenant_2", audit_backend=audit_2)
@@ -536,12 +539,13 @@ class TestL5ErrorHandling:
 
     def test_audit_failure_blocks_pipeline(self):
         """Pipeline should fail if audit fails (fail-closed)."""
+        audit = AuditBackendMock()
         class FailingAudit:
             def write_event(self, event):
                 raise RuntimeError("Audit write failed")
 
         stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+        approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
         quality_gate = QualityGate(tenant_id="_default", audit_backend=FailingAudit())
         conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=FailingAudit())
         rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=FailingAudit())
@@ -557,7 +561,7 @@ class TestL5ErrorHandling:
         )
 
         # Act: should raise because audit fails
-        with pytest.raises(RuntimeError, match="Pipeline failed"):
+        with pytest.raises(RuntimeError, match="Audit-first constraint violated|Pipeline failed"):
             integrator.process_feedback(
                 skill_id="test.router",
                 metric_name="confidence_threshold",

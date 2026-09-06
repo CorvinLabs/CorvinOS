@@ -15,7 +15,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { graphTest, GraphE2EBase } from './base.spec';
+import { graphTest, GraphE2EBase } from './base';
 
 // ============================================================================
 // PERFORMANCE TESTS

@@ -10,7 +10,7 @@
  */
 
 import { test, expect, devices } from '@playwright/test';
-import { graphTest, GraphE2EBase } from './base.spec';
+import { graphTest, GraphE2EBase } from './base';
 
 // ============================================================================
 // RESPONSIVE DESIGN TESTS
