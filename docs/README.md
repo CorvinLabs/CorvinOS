@@ -1,303 +1,571 @@
-# CorvinOS — Documentation Hub
+# CorvinOS v2.0 — Complete Documentation (Phase A + 9D Learning Vector)
 
-CorvinOS doesn't just comply with the EU AI Act — it enforces it structurally in code. Disclosure cannot be disabled. Consent is deny-by-default. The audit chain is tamper-evident. These are not configuration options; they are code gates that run on every message, before any AI response is generated.
+**Status:** ✅ v1.0 Production Ready | **Extended:** 9D Learning Infrastructure | **Target:** Phase 1 Implementation (4 weeks)
 
-This directory is the entry point for every aspect of the system: how it works, what you can do with it, how it enforces compliance, and how to extend it.
+**Quick Links:** [Architecture](#1-core-architecture-phase-a) | [9D Learning](#2-9d-learning-vector-extended) | [Quality Discipline](#3-quality-discipline) | [Implementation](#4-implementation-roadmap)
 
 ---
 
-## Mental model in 30 seconds
+## 🎯 What's in This Docs Package?
 
-CorvinOS is a **runtime platform** that wraps a Claude Code agent and gives it five independently composable capabilities: voice I/O, multi-channel messaging, per-chat personas, automatic role-based routing, and a runtime tool factory with sandboxing, policy enforcement, and audit. The AI agent itself is unmodified. Everything in this repository sits on top of the vanilla agent as plugins and configuration — every layer is independently removable, and the platform keeps functioning with what remains.
+This is **TWO PROJECTS IN ONE:**
 
-<p align="center">
-  <img src="diagrams/01-layer-stack.svg" alt="The five layers of CorvinOS stacked on top of a vanilla Claude Code agent." width="900" />
-</p>
+1. **Phase A (DOCS REFACTOR):** Reorganize 533 scattered MD files → 15 organized docs (High→Low structure)
+2. **9D Learning Vector (NEW FEATURE):** Extend 6D proven loops → 9D system with Meta Loop + Damping
 
-**Five layers, bottom to top:**
+Both share the same **doc infrastructure** (this README + diagrams + ADRs).
 
-| Layer | What it owns |
+---
+
+## 📚 Table of Contents
+
+- [1. Core Architecture (Phase A)](#1-core-architecture-phase-a)
+- [2. 9D Learning Vector (Extended)](#2-9d-learning-vector-extended)
+- [3. Quality Discipline & LDD](#3-quality-discipline--ldd)
+- [4. Implementation Roadmap](#4-implementation-roadmap)
+- [5. Compliance & Security](#5-compliance--security)
+- [6. Layer Stack Reference](#6-layer-stack-reference)
+- [7. Glossary & FAQ](#7-glossary--faq)
+
+---
+
+# 1. Core Architecture (Phase A)
+
+## Five-Layer System Overview
+
+![ACP Vision Architecture](diagrams/DIAGRAM_01_ACP_VISION_HIGH_LEVEL.svg)
+
+### **Quick Mental Model**
+
+```
+INPUT (CLI, Web, Voice, A2A, MCP)
+    ↓
+L5: ROUTING (Skills: os.delegation_router)
+    ↓
+L10: CONTEXT (Hybrid: preserve→adapt→merge)
+    ↓
+L16/L22: SECURITY & WORKFLOW (Consent, audit, skill orchestration)
+    ↓
+PLUGINS + LEARNING (6D loss vector, backpropagation)
+    ↓
+AUDIT CHAIN (Hash-chained proof system, GDPR-compliant)
+```
+
+### **Read These (In Order)**
+
+| **#** | **Document** | **Time** | **Audience** | **Link** |
+|---|---|---|---|---|
+| 1 | **Architecture Overview** | 20 min | Architects | [05_ARCHITECTURE_OVERVIEW.md](architecture/05_ARCHITECTURE_OVERVIEW.md) |
+| 2 | **ACP Vision: Skills 2.0** | 15 min | Backend | [06_ACP_VISION.md](architecture/06_ACP_VISION.md) |
+| 3 | **Learning (6D Core)** | 18 min | ML Engineers | [07_LEARNING_INFRASTRUCTURE.md](architecture/07_LEARNING_INFRASTRUCTURE.md) |
+| 4 | **Plugin System** | 15 min | DevOps | [08_PLUGIN_SYSTEM.md](architecture/08_PLUGIN_SYSTEM.md) |
+| 5 | **Audit Chain** | 12 min | Security | [09_AUDIT_CHAIN.md](architecture/09_AUDIT_CHAIN.md) |
+
+### **Key Diagrams**
+
+| **Diagram** | **Purpose** |
 |---|---|
-| **Voice** | Speech-to-text, text-to-speech, listener profiles, voice-specific summarization |
-| **Bridges** | Per-channel protocol adapters (Discord, WhatsApp, Telegram, web console) |
-| **Personas + Routing** | Per-chat persona selection, heuristic and AI-powered auto-routing, role ACLs |
-| **Forge** | Runtime tool generation: sandboxed Python execution, policy gate, schema validation |
-| **Skills** | Runtime behavior extension via Markdown prompt-injection, with linting and promotion gates |
-
-Everything above this stack — data classification, egress lockdown, erasure, audit-at-rest encryption, agent-to-agent communication — is built as additional capability layers on the same substrate.
+| ![DIAGRAM_01](diagrams/DIAGRAM_01_ACP_VISION_HIGH_LEVEL.svg) | System architecture (5 layers) |
+| ![DIAGRAM_05](diagrams/DIAGRAM_05_DATA_FLOW_COMPLETE_REQUEST.svg) | 9-step complete request flow |
+| ![DIAGRAM_06](diagrams/DIAGRAM_06_LAYER_STACK_OVERVIEW.svg) | All 36+ security layers |
 
 ---
 
-## What you can do
+# 2. 9D Learning Vector (Extended)
 
-### Voice and messaging
-- Talk to the agent by voice across any configured channel. Speech is transcribed locally by default (pywhispercpp/whisper.cpp — cross-platform, incl. Windows), with fallback to OpenAI Whisper. Only metadata enters the audit log — transcript text never does.
-- Deploy the same agent across Discord, WhatsApp, Telegram, and the web console simultaneously. Each channel has independent configuration, rate limits, and whitelists that hot-reload without a restart.
-- Use `/btw <note>` to inject a side-channel remark into an active streaming response — the agent incorporates it mid-turn.
+## From 6D Core → 9D with Meta Loop
 
-### Team collaboration
-- Assign roles to participants: **owner**, **admin**, **member**, **observer**. Capabilities are bundled per role; admins cannot self-promote.
-- Collect proposals with `/propose` and trigger the AI over a curated stack with `/go`. The owner controls what reaches the model.
-- Set per-user message quotas and view scoped audit trails with `/audit me` or `/audit chat`.
-- New participants receive a one-time bot-disclosure card explaining they are interacting with an AI system, as required by EU AI Act Art. 50. `/join`, `/pass`, and `/leave` are structurally locked — they cannot be removed.
+![9D Learning Vector](diagrams/DIAGRAM_07_9D_LEARNING_VECTOR.svg)
 
-### Consent and data rights
-- Every user starts in a deny-by-default state. They opt in explicitly with `/consent on` (optionally with a TTL: `/consent on 7d`). Consent can be revoked at any time with `/consent off`.
-- Run `corvin-erasure <subject_id>` to execute a GDPR Art. 17 right-to-deletion across all layers: conversation recall, user model, artifacts, and identity mapping. The audit chain retains pseudonymous identifiers only — no traceable content survives.
+### **The Idea: Three Tiers of Learning**
 
-### AI-written tools and skills
-- Ask the agent to create a new tool. It writes a Python script, validates it against a JSON schema, and registers it through the Forge MCP server. The tool runs in a sandboxed subprocess — never in-process.
-- Ask the agent to capture a useful behavior as a skill. It writes a Markdown file, runs it through a prompt-injection linter, and injects it into future turns. Skills promote automatically based on usage grades.
-- Tools and skills created for a session stay in that session. Promote them to project or user scope explicitly.
+**TIER 1 (Core, Proven):** 6 independent feedback loops
+```
+L_routing, L_context, L_exec, L_conf, L_comply, L_learn
+Status: ✅ Live in production (2026-09-06)
+Convergence: ~2000 samples
+Damping: η = 10%
+```
 
-### Multi-engine deployment
-- Switch the underlying AI engine per chat or tenant: Claude Code (default), OpenCode, Hermes (fully local Ollama, zero egress), GitHub Copilot CLI, or Codex. Engine selection is gated by data classification — a CONFIDENTIAL task cannot be sent to a cloud engine without an explicit compliance exception.
-- Use `/engine hermes` to pin the current chat to local-only execution. No data leaves the host.
+**TIER 2 (Infrastructure, NEW):** 3 learnable system components
+```
+L_memory ← Learn preservation weights (per-request feedback)
+L_plugins ← Learn plugin config (hourly metrics)
+L_security ← Learn compliance thresholds (daily audit data)
+Status: 🆕 Phase 1 (4 weeks, ~800 LoC)
+Convergence: ~5000 samples
+Damping: α = 5%
+```
 
-### Agent-to-agent communication
-- Configure remote endpoints and allow other CorvinOS instances (or external agents) to delegate tasks via a signed, replay-proof envelope protocol. Every inbound instruction is sanitized, wrapped in a structural framing block, and executed in a hermetic temporary workspace. Results are filtered through a declared schema before being returned.
+**TIER 3 (Meta, NEW):** Hyperparameter self-tuning
+```
+Meta Optimizer ← Learn optimal weights (w₁..w₆) for Tier 1
+Status: 🆕 Phase 2 (3 weeks, ~1000 LoC)
+Convergence: ~10000 samples
+Damping: α = 1% (very slow, prevents oscillation)
+```
+
+### **Unified Loss Function (9D)**
+
+```
+L_total = w₁·L_routing + w₂·L_context + w₃·L_exec + w₄·L_conf + w₅·L_comply + w₆·L_learn
+        + w₇·L_memory + w₈·L_plugins + w₉·L_security
+        - λ·L_meta_stability
+
+where:
+  w₁..w₉ ∈ [0,1], Σwᵢ = 1.0
+  λ = 0.1 (penalizes large weight swings)
+  Converges: Tier 1 (2K) → Tier 2 (5K) → Tier 3 (10K) samples
+```
+
+### **Why Damping Works**
+
+![Meta Loop + Damping](diagrams/DIAGRAM_08_META_LOOP_DAMPING.svg)
+
+**Problem (Without Damping):** Meta optimizer swings weights wildly → oscillation forever
+
+**Solution (With Damping):** Tiered update rates (η₁ > α₂ > α₃) → stable convergence
+
+| **Tier** | **Rate** | **Converges** | **Why** |
+|---|---|---|---|
+| Tier 1 | 10% | 2K samples | Proven (per-request feedback) |
+| Tier 2 | 5% | 5K samples | Infrastructure (hourly/daily signals) |
+| Tier 3 | 1% | 10K samples | Meta (highest-order, most unstable) |
+
+**Result:** Smooth learning curve, no oscillation, predictable convergence time.
+
+### **Read These (In Order)**
+
+| **#** | **Document** | **Time** | **Audience** |
+|---|---|---|---|
+| 1 | **CONCEPT-0032 Design** | 25 min | Architects | [CONCEPT_0032_9D_LEARNING_VECTOR_DESIGN.md](learning/CONCEPT_0032_9D_DESIGN.md) |
+| 2 | **ADR-0620–0623** | 15 min | Backend | [ADR_0620-0623_9D_LEARNING_VECTOR.md](learning/ADR_0620-0623.md) |
+| 3 | **Phase 1 Roadmap** | 20 min | Implementation | [PHASE_1_ROADMAP_9D_TIER2.md](learning/PHASE_1_ROADMAP.md) |
+
+### **Key Insight: Dialektische Synthese**
+
+**Thesis:** "6D unified loss is complete"
+- We have 6 independent loops
+- They couple via backpropagation
+- Converges in <2000 samples
+
+**Antithesis:** "But three more loops are learnable"
+- Memory: Should we preserve this context?
+- Plugins: Should cache size be 1000 or 5000?
+- Security: Should PII threshold be 0.75 or 0.80?
+
+**Synthesis:** 9D = 6D core + 3 infrastructure + 1 meta
+- Tier 1: Core loops (proven, fast)
+- Tier 2: Infrastructure loops (learnable, medium speed)
+- Tier 3: Meta loop (self-tuning, very slow via damping)
 
 ---
 
-## Architecture overview
+## 2.1 Tier 2: Infrastructure Loops (Phase 1)
 
-The full message pipeline, from inbound channel event to outgoing reply, is documented in [data-flow.md](data-flow.md). The compliance enforcement flow — what runs before any AI turn — is documented in [eu-ai-act/architecture.md](eu-ai-act/architecture.md).
+### **L₇: Memory Loop** — Learn Preservation Weights
 
-<p align="center">
-  <img src="diagrams/02-data-flow.svg" alt="Message pipeline: channel event → adapter → persona resolution → pre-spawn gates → AI turn → audit → reply." width="900" />
-</p>
+**Current (Static):**
+```python
+preserve = {"task_id": 1.0, "user_prefs": 0.5, "prior_decisions": 0.2}
+```
 
-Key architectural properties:
+**Target (Learns):**
+```python
+preserve = {
+  "task_id": 1.0,  # Always
+  "user_prefs": sigmoid(feedback_score),  # ← LEARNS from "Was context helpful?"
+  "prior_decisions": sigmoid(0.5 * feedback),  # ← LEARNS (lower rate)
+}
+```
 
-- **Stateless per message.** Each AI turn spawns a fresh subprocess. There is no shared mutable agent state between turns.
-- **Hot-reload without restart.** Bridge settings, persona definitions, and forge policy all reload on mtime change. Only token configuration and structural daemon code require a bridge restart.
-- **Audit-first everywhere.** Every security-relevant event — consent changes, tool calls, engine spawns, session resets, erasure requests — is written to the hash-chained audit log *before* the action executes. A write failure blocks the action.
-- **Five scope axes.** Resources (tools, skills, memory, artifacts) exist at task, session, project, user, or tenant scope. Promotion between scopes is explicit and gated.
+**Feedback Signal:** User rates context relevance (1-5 scale) → updates preservation weights
+
+**Convergence:** ~1000 requests
+
+**Success Metric:** Correlation(learned_weights, user_feedback) > 0.8
 
 ---
 
-## Compliance enforcement
+### **L₈: Plugins Loop** — Learn Plugin Config
 
-<p align="center">
-  <img src="diagrams/22-eu-ai-act-compliance-overview.svg" alt="EU AI Act compliance map: all articles mapped to CorvinOS layers, with the audit spine as the convergence point." width="900" />
-</p>
+**Current (Static):**
+```yaml
+cache_size: 1000
+ttl: 3600
+batch_size: 100
+```
 
-CorvinOS is built against **EU AI Act 2026 + GDPR** as a structural design constraint, not a compliance checklist. The mechanisms below are code gates — they run on every request and cannot be disabled via configuration.
+**Target (Learns):**
+```python
+cache_size = adapt(metrics.hitrate)  # ← LEARNS from cache metrics
+ttl = adapt(metrics.staleness)        # ← LEARNS from staleness
+batch_size = adapt(metrics.latency)   # ← LEARNS from latency
+```
 
-| Mechanism | What it enforces | Locked invariant |
+**Feedback Signal:** CloudWatch metrics (hourly) → updates config
+
+**Convergence:** ~1000 requests
+
+**Success Metric:** Cache hitrate +10%, P99 latency -5%
+
+---
+
+### **L₉: Security Loop** — Learn Compliance Thresholds
+
+**Current (Static):**
+```python
+pii_threshold = 0.75
+house_rules_strictness = 0.80
+```
+
+**Target (Learns):**
+```python
+pii_threshold = adapt(fp_rate, fn_rate)           # ← LEARNS from ROC curve
+house_rules_strictness = adapt(false_positive_rate)  # ← LEARNS from feedback
+```
+
+**Feedback Signal:** Audit data (daily) + operator feedback → updates thresholds
+
+**Convergence:** ~1000 requests
+
+**Success Metrics:** FP rate <5%, FN rate <2%
+
+---
+
+## 2.2 Tier 3: Meta Loop (Phase 2)
+
+### **Meta Optimizer** — Learn Optimal Weights w₁..w₆
+
+**Today (Operator Manual):**
+```python
+Operator slides: w = [0.4, 0.3, 0.3, ...]  # Manual tuning via console
+```
+
+**Tomorrow (Meta Auto + Operator Hybrid):**
+```python
+w_meta = meta_optimizer.learn()  # ← Auto learns from L_total trend
+w_hybrid = (1 - operator_weight) * w_meta + operator_weight * w_target
+         = (0.7 * w_meta) + (0.3 * w_operator)  # 70% auto, 30% manual
+```
+
+**Update Rate:** α₃ = 1% per step (VERY slow)
+- Prevents oscillation (high-order system)
+- Takes ~10K samples to converge (~3 hours at 1 req/sec)
+- Stable + predictable
+
+**Operator Control:**
+- Set w_target via console slider (operator intent)
+- Meta learns around it (hybrid tuning)
+- Manual override anytime (no auto-reset)
+
+---
+
+# 3. Quality Discipline & LDD
+
+## Mandatory Workflow for Every Change
+
+### **LDD (Loss-Driven Development): 5 Gates**
+
+All non-trivial changes follow these gates:
+
+1. **Dialectical Reasoning** — Surface assumptions, argue for/against
+2. **E2E Design** — Design end-to-end before coding
+3. **Red/Green** — Fail first, then fix
+4. **Refinement** — Polish + tuning
+5. **Docs-as-Definition-of-Done** — Code + docs must sync
+
+**Read:** [quality-discipline.md](quality-discipline.md)
+
+### **Key Discipline Gates**
+
+| **Gate** | **When** | **High Bar** |
 |---|---|---|
-| **Bot-disclosure card** | EU AI Act Art. 50 §1 — users know they are interacting with an AI | One-time per user per channel; `/join`, `/pass`, `/leave` are structurally locked |
-| **Consent gate** | GDPR Art. 6+7 — processing requires explicit user consent | Deny-by-default; no auto-admit shortcut exists in code |
-| **Hash-chained audit log** | GDPR Art. 30+32 — tamper-evident processing record | Every event carries the SHA-256 of the previous event; `voice-audit verify` exits 1 on any gap |
-| **Data classification + flow guard** | EU AI Act Art. 14 — human oversight of data flows | Four tiers (PUBLIC / INTERNAL / CONFIDENTIAL / SECRET) × per-engine locality/egress matrix; fail-closed at every engine spawn |
-| **Egress lockdown** | EU AI Act Art. 14 — network-level data residency control | Declarative allow/deny host lists per tenant; `default_action: deny` in EU production presets |
-| **Compliance zone routing** | EU AI Act Art. 14 — engine reach limited to declared zones | `allowed_engines` and `data_residency` in tenant config; no runtime override path |
-| **GDPR Art. 17 erasure** | Right to deletion across all storage layers | Cross-layer orchestrator; pseudonymisation in audit chain is the Art. 17 mechanism |
-| **Audit-at-rest encryption** | GDPR Art. 32 — encryption of stored processing records | Segment rotation with `age`/`gpg` sealing; chain continuity verified across rotation boundaries |
-| **Voice transcription metadata-only** | GDPR Art. 5 — data minimization | Audit event records only duration and provider; transcript text is never written anywhere |
-| **Path-gate filesystem hook** | GDPR Art. 32 — prevents unauthorized writes to audit, policy, and system trees | Pre-tool-use hook; fail-closed; boot self-test emits CRITICAL on any miss |
-| **Secret vault isolation** | GDPR Art. 32 — secrets never reach LLM context | Secrets injected as bwrap environment variables; values never appear in any audit field or prompt |
-| **Content marking** | EU AI Act Art. 50 §4 — AI-generated content is labeled | `[AI]` prefix + `X-AI-Generated` header on every outbound envelope |
-
-**For regulators and auditors:** start with [eu-ai-act/README.md](eu-ai-act/README.md) and run `voice-audit verify` to confirm chain integrity. The complete compliance evidence is derivable from the live system without any running CorvinOS instance. A Declaration of Conformity is at [eu-ai-act/DECLARATION-OF-CONFORMITY.md](eu-ai-act/DECLARATION-OF-CONFORMITY.md).
-
-See [diagrams/23-consent-disclosure-flow.svg](diagrams/23-consent-disclosure-flow.svg) for the disclosure + consent lifecycle, and [diagrams/25-data-flow-guard.svg](diagrams/25-data-flow-guard.svg) for the data classification matrix.
+| **ADR Gate** | After architectural decision | Most changes DON'T need ADR |
+| **E2E Wiring Proof** | New entry points (functions, endpoints, CLI) | Prove it's reachable & works end-to-end |
+| **Concept Gate** | Reusable working methods | Most discoveries DON'T produce concepts |
 
 ---
 
-## Extensibility
+# 4. Implementation Roadmap
 
-CorvinOS is designed to be extended without forking the core. The extension surface has three layers:
+## Phase 1: Tier 2 Infrastructure Loops (4 Weeks)
 
-### Personas are JSON files
-A persona is a JSON file that declares a name, a system prompt, MCP servers, allowed tools, and optional role ACLs. Drop a file into `operator/cowork/personas/` (bundled) or `~/.corvin/cowork/personas/` (user override) and the persona is available immediately — no code change, no restart.
+**Goal:** Implement L_memory, L_plugins, L_security + integrate into unified loss
 
-Personas can include `append_system` content, `mcp_servers` for additional tool access, `add_dirs` for context roots, and a `persona` field to select a base character. Lists union; scalars use the persona value; `mcp_servers` is shallow-merged.
+**Deliverables:**
+- 3 learnable infrastructure loops (800 LoC)
+- 25 E2E tests + 12 adversarial tests
+- Dashboard: 9D loss trends + Pareto frontier
+- Full audit trail (all events hash-chained)
 
-See [extending.md](extending.md) and [personas-and-routing.md](personas-and-routing.md).
+**Success Gate:**
+- All 3 Tier 2 loops independently convergent
+- E2E tests: 25/25 PASS
+- Adversarial tests: 12/12 PASS
+- No oscillation detected over 24h run
+- Ready for Phase 2
 
-### Forge tools are Python scripts
-A forge tool is a Python script with a JSON schema for inputs and outputs, a `meta` block declaring its name and capability requirements, and optionally a `secrets` list (environment variable names, never values). The agent writes the script, registers it through the Forge MCP server, and it is available in the current session immediately.
+**Read:** [PHASE_1_ROADMAP_9D_TIER2.md](learning/PHASE_1_ROADMAP.md)
 
-All forge tools run in a sandboxed subprocess under bwrap. Network access is denied by default; the persona must explicitly declare `network: allow`. Policy (`operator/forge/policy.json`) hot-reloads per call — an operator can restrict or expand tool permissions without restarting the bridge.
+### **Week-by-Week Breakdown**
 
-See [forge.md](forge.md) and [diagrams/03-forge-lifecycle.svg](diagrams/03-forge-lifecycle.svg).
+**Week 1: L_memory** (Preservation Weights)
+- Implement MemoryLoss computation
+- Operator feedback loop
+- 5 E2E + 3 adversarial tests
 
-### Skills are Markdown files
-A skill is a Markdown file that is prompt-injected into future AI turns. The agent writes the skill, the linter checks it for prompt-injection patterns, oversized content, and persona-boundary violations, and — if it passes — it is registered in the current session scope.
+**Week 2: L_plugins** (Plugin Config)
+- Collect CloudWatch metrics
+- Plugin config adapter
+- 5 E2E + 3 adversarial tests
 
-Skills promote up a scope ladder (task → session → project → user) based on auto-grading after each turn and explicit outcome signals (approval, rejection, rephrase). Promotion requires a minimum number of positive grades; demotion is never automatic.
+**Week 3: L_security** (Compliance Thresholds)
+- ROC curve optimization
+- Operator feedback integration
+- 5 E2E + 3 adversarial tests
 
-See [skills.md](skills.md) and [diagrams/10-skill-lifecycle.svg](diagrams/10-skill-lifecycle.svg).
-
-### Bridge adapters
-New messaging channels can be added as bridge adapters under `operator/bridges/<channel>/`. Each bridge is an independent daemon (Node.js or Python) that speaks the internal adapter protocol. Settings in `operator/bridges/<channel>/settings.json` hot-reload immediately.
-
-See [layer-model.md](layer-model.md) §Layer 2 and [extending.md](extending.md) §Custom bridges.
-
-### External tool packages
-Reusable sets of forge tools and skills can be packaged as `.awpkg` archives and installed into any CorvinOS tenant. See [awpkg.md](awpkg.md).
+**Week 4: Integration**
+- Unify 9D loss computation
+- Dashboard panels (all 9 dimensions)
+- Convergence tests + production monitoring
+- 10 E2E + 3 adversarial tests
 
 ---
 
-## Document map
+## Phase 2: Meta Loop (3 Weeks)
 
-### Core concepts
+**Goal:** Implement Tier 3 meta optimizer with tiered damping
 
-| # | Document | Answers |
+**Deliverables:**
+- Meta optimizer learns w₁..w₆
+- Damping (α₃ = 1%) prevents oscillation
+- Operator control (hybrid tuning)
+- Divergence detection + recovery
+
+**Success Gate:**
+- 100-batch convergence test PASS
+- NO oscillation detected
+- Operator override works
+- Stability penalty working
+
+---
+
+## Phase 3: Production (3 Weeks)
+
+**Goal:** Full 9D system E2E + documentation + deployment
+
+**Deliverables:**
+- Complete 9D loss integration
+- Console dashboard (9D trends + Pareto)
+- Audit trail (all 9 dims logged)
+- Documentation + ADRs
+- SLA verification (monitoring config)
+
+**Success Gate:**
+- 30-day production run PASS
+- L_total -20% (loss reduction)
+- Data ready for research paper
+
+---
+
+# 5. Compliance & Security
+
+## EU AI Act 2026 + GDPR Constraints
+
+CorvinOS is **structurally constrained** by compliance. These are LOAD-BEARING:
+
+| **Regulation** | **Implementation** | **Absolute Rule** |
 |---|---|---|
-| 1 | [overview.md](overview.md) | What is CorvinOS, why does it exist, what are its design principles? |
-| 2 | [os-analogy.md](os-analogy.md) | How is CorvinOS an operating system for an agent? Where does the analogy hold, where does it break? |
-| 3 | [layer-model.md](layer-model.md) | What does each layer do, and where does it stop? |
-| 4 | [data-flow.md](data-flow.md) | What happens between "phone sends voice note" and "reply arrives back"? |
-| 5 | [personas-and-routing.md](personas-and-routing.md) | Who decides which persona handles a message? How does it switch? |
-| 6 | [forge.md](forge.md) | How does the agent register a new tool at runtime? What is "deterministic by construction"? |
-| 7 | [skills.md](skills.md) | How does the agent register a new skill at runtime? Linter, grading, promotion gates. |
-| 8 | [security.md](security.md) | Whitelist, persona ACL, forge policy, sandbox, path-gate, operator elevation — six surfaces, what each catches. |
-| 9 | [rights-and-teamwork.md](rights-and-teamwork.md) | Multi-user collaboration: owner/admin/member/observer roles, disclosure, consent gate, proposal stack, quotas. |
-| 10 | [agent-behavior.md](agent-behavior.md) | How does the agent work inside this system? What does hot-reload look like from the agent's perspective? |
-| 11 | [extending.md](extending.md) | Custom personas, forge tools, skills, bridges, workflow packages. |
-| 12 | [setup.md](setup.md) | How to install and configure CorvinOS from scratch. |
-| 13 | [troubleshooting.md](troubleshooting.md) | Symptom → cause → fix for the most common issues. |
-| 14 | [console.md](console.md) | How to access the web console in local, remote, and Docker deployments. |
-| 15 | [memory.md](memory.md) | `/profile`, `/memory`, `/vault`, `/forget` commands. |
-| 16 | [runtime-generation.md](runtime-generation.md) | Forge tools and skills as two parallel pipelines on one safety substrate. |
-| 17 | [engine-layer.md](engine-layer.md) | Backend-agnostic LLM execution: WorkerEngine protocol, engine selection, pre-spawn gates. |
-| 18 | [agent-communication.md](agent-communication.md) | Agent-to-agent communication: signed envelopes, binary attachments, replay protection, instance attestation. |
+| **EU AI Act Art. 50** | Bot disclosure card (one-time per user) | Never remove |
+| **GDPR Art. 6, 7** | Consent gate (deny-by-default, TTL-capped) | No auto-admit |
+| **GDPR Art. 30, 32** | Hash-chained audit log (daily RFC 3161 verify) | No tampering |
+| **GDPR Art. 5** | Metadata-only audit (never store prompts) | Fail-closed scrubbing |
+| **EU AI Act Art. 5** | House-Rules gate (fail-closed) | No disable flag |
 
-### EU AI Act and compliance
+**Read:** [compliance/10_COMPLIANCE_BASELINE.md](compliance/10_COMPLIANCE_BASELINE.md)
 
-| Document | Covers |
+---
+
+# 6. Layer Stack Reference
+
+## All 36+ Security/Compliance Layers
+
+Organized by category:
+
+**INPUT & ROUTING (L1–L5)**
+- L1: Telemetry & Observability
+- L2: User Session & Auth
+- L3: Tenant Namespace (ADR-0007)
+- L4: Cowork Hub (Plugin Registry)
+- **L5: Auto-Routing (Skills-Driven)** ← NEW v2.0
+
+**CONTEXT & PROCESSING (L6–L10)**
+- L6: Forge (Tool Generation)
+- L7: SkillForge (Skill Generation)
+- **L10: Path-Gate & Context (Hybrid Model)** ← NEW v2.0
+
+**SECURITY & COMPLIANCE (L16–L25, CRITICAL)**
+- **L16: Security Hardening** (consent, audit, TOCTOU)
+- L18–L21: User Management & Roles
+- **L22: WorkerEngine Protocol (Skills Orchestration)** ← NEW v2.0
+- L23: Speech-to-Text (metadata-only audit)
+
+**AUDIT, DATA FLOW & NETWORK (L28–L38)**
+- L28–L30: Conversation Recall, Delegation, Engine-Agnostic
+- L32–L33: Anonymization, Artifact Memory
+- **L34: Data Classification & Flow Guard** (fail-closed)
+- **L35: Network Egress Lockdown** (EU_PRODUCTION presets)
+- **L36: GDPR Art. 17 Erasure Orchestrator**
+- **L37: Audit-at-Rest Encryption** (RFC 3161 TSA)
+- L38: A2A Task Protocol (v6)
+
+**FINAL ENFORCEMENT (L44, CRITICAL)**
+- **L44: House-Rules Gate** (fail-closed, no disable)
+
+**Read:** [layer-stack-reference.md](layer-stack-reference.md)
+
+---
+
+# 7. Glossary & FAQ
+
+## Glossary
+
+| **Term** | **Definition** |
 |---|---|
-| [eu-ai-act/README.md](eu-ai-act/README.md) | Hub — risk classification, article map, operator quick-start |
-| [eu-ai-act/architecture.md](eu-ai-act/architecture.md) | Full message-pipeline compliance flow, layer-by-layer technical reference |
-| [eu-ai-act/article-50.md](eu-ai-act/article-50.md) | Art. 50 §1 bot-disclosure + Art. 50 §4 content marking |
-| [eu-ai-act/article-14.md](eu-ai-act/article-14.md) | Art. 14 human oversight — zone routing, data classification, egress lockdown |
-| [eu-ai-act/article-73.md](eu-ai-act/article-73.md) | Art. 73 serious incident reporting — 15-day timeline, auto-detection, notify draft |
-| [eu-ai-act/article-28-30.md](eu-ai-act/article-28-30.md) | Art. 28-30 operator obligations — Declaration Gate, DPIA, pre-deployment checklist |
-| [eu-ai-act/article-5.md](eu-ai-act/article-5.md) | Art. 5 prohibited AI practices |
-| [eu-ai-act/article-9.md](eu-ai-act/article-9.md) | Art. 9 risk management system |
-| [eu-ai-act/gdpr.md](eu-ai-act/gdpr.md) | GDPR Art. 5-7, 17, 30, 32 — consent gate, erasure, audit-at-rest |
-| [eu-ai-act/audit-chain.md](eu-ai-act/audit-chain.md) | Audit chain deep-dive — hash computation, storage, forensic audit procedure |
-| [eu-ai-act/agentic-safeguards.md](eu-ai-act/agentic-safeguards.md) | Agentic AI safeguards — prompt injection, tool confinement, A2A trust |
-| [eu-ai-act/gpai-deployer-obligations.md](eu-ai-act/gpai-deployer-obligations.md) | GPAI model deployer obligations |
-| [eu-ai-act/DECLARATION-OF-CONFORMITY.md](eu-ai-act/DECLARATION-OF-CONFORMITY.md) | Declaration of Conformity |
-| [audit-and-compliance.md](audit-and-compliance.md) | Audit commands, compliance reports, daily verify timer |
+| **ACP** | Agentic Control Plane — Skills 2.0 as unified OS subsystem |
+| **Skill** | Versioned program (Python + optional LLM + feedback loop + audit) |
+| **Plugin** | Extension (trusted in-process or sandboxed) |
+| **Boot Layer** | Five tiers of plugin loading (compliance → core → bundled → installed → community) |
+| **L-Layer** | Security/compliance layer (L1–L44). Skills implement L-layer contracts. |
+| **Audit Event** | Immutable, hash-chained record of an action |
+| **Tenant** | Isolated user/project scope (GDPR Art. 5, 6, 32) |
+| **LoM** | Line of Moral Responsibility — attribution (skill_id, version, code location) |
+| **Backprop** | Gradient flow from loss backward through decision DAG (learning signal) |
+| **Damping** | Update rate (α) that prevents oscillation in coupled loops |
+| **Tier 1/2/3** | Three tiers of learning (core, infrastructure, meta) |
 
-### Deployment and operations
+## FAQ
 
-| Document | Covers |
-|---|---|
-| [INSTALL-UNIVERSAL.md](INSTALL-UNIVERSAL.md) | Universal installation guide |
-| [DOCKER.md](DOCKER.md) | Docker deployment overview |
-| [docker-setup-guide.md](docker-setup-guide.md) | Docker setup guide |
-| [docker-headless-setup.md](docker-headless-setup.md) | Headless Docker setup |
-| [docker-troubleshooting.md](docker-troubleshooting.md) | Docker-specific troubleshooting |
-| [compute.md](compute.md) | Out-of-LLM-loop compute workers |
-| [data-and-compute.md](data-and-compute.md) | Large-data snapshots and the DSI v1 adapter interface |
-| [observability/](observability/) | Prometheus metrics, alerting, dashboards |
-| [OLLAMA-RELEASE.md](OLLAMA-RELEASE.md) | Local Ollama engine setup and release notes |
+**Q: I'm new. Where do I start?**  
+A: [Architecture Overview](#1-core-architecture-phase-a) (20 min), then [9D Learning](#2-9d-learning-vector-extended) (25 min).
 
-### Organization and enterprise
+**Q: How do I implement a feature?**  
+A: (1) [Quality Discipline](#3-quality-discipline--ldd) → Dialectical reasoning → (2) Design → (3) Code (LDD k=1–5) → (4) E2E Proof → (5) Docs → (6) Merge.
 
-| Document | Covers |
-|---|---|
-| [for-companies.md](for-companies.md) | CorvinOS as a team and enterprise platform |
-| [for-organizations.md](for-organizations.md) | Organizational deployment patterns |
-| [plugin-system.md](plugin-system.md) | Plugin architecture reference |
-| [awpkg.md](awpkg.md) | Workflow package format (.awpkg) |
-| [a2a-social-fabric.md](a2a-social-fabric.md) | Agent-to-agent network topology and use cases |
+**Q: What's the difference between Skills and Plugins?**  
+A: **Skills** = OS-level programs (versioned, self-learning). **Plugins** = extensions (trusted or sandboxed).
+
+**Q: Why damping α₃=1% and not 5%?**  
+A: Tier 3 is highest-order. 5% is too fast → oscillation. 1% is slow but STABLE (takes ~3 hours).
+
+**Q: Can operator still control weights?**  
+A: YES. Hybrid tuning: `w = 70% meta-learned + 30% operator-intent`.
+
+**Q: What if meta diverges?**  
+A: Auto-detect: if Δw variance >0.1 over 5 steps → pause learning + alert. Operator must approve resume.
 
 ---
 
-## Concept map — where does X live?
+## Reading Paths
 
-### Structural concepts
+### 🏗️ **Architect/Lead (Full Stack)** — 90 minutes
+1. [Architecture Overview](#1-core-architecture-phase-a)
+2. [ACP Vision](architecture/06_ACP_VISION.md)
+3. [9D Learning Design](learning/CONCEPT_0032_9D_DESIGN.md)
+4. [Phase 1 Roadmap](learning/PHASE_1_ROADMAP.md)
+5. [Quality Discipline](#3-quality-discipline--ldd)
 
-| Concept | Lives in | Authoritative doc |
-|---|---|---|
-| **Layer model** | The stack itself | [layer-model.md](layer-model.md) |
-| **Bridge** | `operator/bridges/<channel>/` | [data-flow.md](data-flow.md), [layer-model.md](layer-model.md) §Layer 2 |
-| **Persona** | `operator/cowork/personas/<name>.json` (bundle) + `~/.corvin/cowork/personas/<name>.json` (user) | [personas-and-routing.md](personas-and-routing.md) |
-| **Forge tool** | Registered through Forge MCP server; stored per-scope under `<corvin_home>/` | [forge.md](forge.md) |
-| **Skill** | Markdown file injected per turn; slot mirror at `operator/skill-forge/skills/dyn/` | [skills.md](skills.md) |
-| **Audit log** | Single chained file: `<tenant>/global/audit.jsonl` | [eu-ai-act/audit-chain.md](eu-ai-act/audit-chain.md) |
-| **Forge policy** | `operator/forge/policy.json` (hot-reloaded per call) | [security.md](security.md) §Policy |
-| **Five scope axes** | task / session / project / user / tenant | [layer-model.md](layer-model.md), [diagrams/16-corvin-axes.svg](diagrams/16-corvin-axes.svg) |
+### 💻 **Backend Engineer (Code Focus)** — 60 minutes
+1. [ACP Vision](architecture/06_ACP_VISION.md)
+2. [9D Learning Design](learning/CONCEPT_0032_9D_DESIGN.md)
+3. [Phase 1 Roadmap](learning/PHASE_1_ROADMAP.md)
+4. [Quality Discipline](#3-quality-discipline--ldd)
 
-### Runtime concepts
+### 🔐 **Security/Compliance** — 45 minutes
+1. [Audit Chain](architecture/09_AUDIT_CHAIN.md)
+2. [Compliance Baseline](#5-compliance--security)
+3. [Layer Stack](#6-layer-stack-reference)
 
-| Concept | Enforced by | Authoritative doc |
-|---|---|---|
-| **Hot-reload of bridge settings** | `currentSettings()` (JS) + `_load_channel_settings()` (Python), mtime cache | [data-flow.md](data-flow.md) §Hot-reload |
-| **Persona resolution per message** | `_resolve_chat_profile()` → cowork resolver → auto-router | [personas-and-routing.md](personas-and-routing.md) |
-| **Auto-routing decision** | `bridges/shared/router.py` (heuristic → embedding → fallback) | [personas-and-routing.md](personas-and-routing.md) §Auto-routing |
-| **Forge call lifecycle** | `forge.registry` + `forge.runner` + `forge.sandbox` + `forge.security_events` | [forge.md](forge.md), [security.md](security.md) |
-| **Skill promotion ladder** | Auto-grade after each turn; outcome signals at grade boundaries | [skills.md](skills.md) §Promotion |
-| **Engine selection + data gate** | `_run_pre_dispatch_gates()` before every non-default engine spawn | [engine-layer.md](engine-layer.md) |
-| **Session lifecycle** | `/new`, `/clear`, `/reset` purge session scope in order; audit-first | [security.md](security.md) §Session lifecycle |
+### 🚀 **DevOps/Platform** — 45 minutes
+1. [Plugin System](architecture/08_PLUGIN_SYSTEM.md)
+2. [Layer Stack](#6-layer-stack-reference)
+3. [Quality Discipline](#3-quality-discipline--ldd)
 
-### Compliance and security concepts
-
-| Concept | Enforced by | Authoritative doc |
-|---|---|---|
-| **Bot-disclosure card** | `operator/bridges/shared/disclosure.py` | [eu-ai-act/article-50.md](eu-ai-act/article-50.md) |
-| **Content marking** | `adapter.py _envelope()` — `[AI]` prefix, `X-AI-Generated` header | [eu-ai-act/article-50.md](eu-ai-act/article-50.md) §Content marking |
-| **Consent gate** | `operator/bridges/shared/consent.py` | [eu-ai-act/gdpr.md](eu-ai-act/gdpr.md) §Art. 6+7 |
-| **Data classification + flow guard** | `operator/bridges/shared/data_classification.py` | [eu-ai-act/article-14.md](eu-ai-act/article-14.md) |
-| **Egress lockdown** | `operator/bridges/shared/egress_gate.py` | [eu-ai-act/article-14.md](eu-ai-act/article-14.md) §Egress |
-| **Hash-chained audit log** | `forge/security_events.py` + `bridges/shared/audit.py` | [eu-ai-act/audit-chain.md](eu-ai-act/audit-chain.md) |
-| **Audit-at-rest encryption** | `operator/bridges/shared/audit_sealer.py` | [eu-ai-act/audit-chain.md](eu-ai-act/audit-chain.md) §Segments |
-| **Path-gate filesystem hook** | `operator/voice/hooks/path_gate.py` (PreToolUse) | [security.md](security.md) §Path-gate |
-| **GDPR Art. 17 erasure** | `operator/bridges/shared/erasure_orchestrator.py` | [eu-ai-act/gdpr.md](eu-ai-act/gdpr.md) §Art. 17 |
-| **Incident reporting** | `operator/voice/scripts/corvin_incident.py` | [eu-ai-act/article-73.md](eu-ai-act/article-73.md) |
-| **Operator Declaration Gate** | `operator/bridges/shared/operator_declaration.py` | [eu-ai-act/article-28-30.md](eu-ai-act/article-28-30.md) |
-| **Zone routing + engine allowlist** | `tenant.corvin.yaml::data_residency` / `allowed_engines` | [eu-ai-act/article-14.md](eu-ai-act/article-14.md) §Zone routing |
-| **Compliance manifest** | `operator/bridges/shared/compliance_manifest.py` | [eu-ai-act/article-28-30.md](eu-ai-act/article-28-30.md) §Compliance manifest |
+### 🎓 **New to CorvinOS** — 40 minutes
+1. [Architecture Overview](#1-core-architecture-phase-a)
+2. [9D Learning Vector](#2-9d-learning-vector-extended)
+3. [Glossary](#glossary) (this doc)
 
 ---
 
-## Diagrams
+## Document Map
 
-| File | What it shows |
-|---|---|
-| [01-layer-stack.svg](diagrams/01-layer-stack.svg) | The platform layers as a stack, with what each owns and what it does not |
-| [02-data-flow.svg](diagrams/02-data-flow.svg) | A message from channel to reply, with hot-reload boundaries marked |
-| [03-forge-lifecycle.svg](diagrams/03-forge-lifecycle.svg) | Forge tool: register → policy check → sandbox run → audit append |
-| [04-security-envelope.svg](diagrams/04-security-envelope.svg) | Defense-in-depth: ACL → policy → sandbox → audit, what each catches |
-| [05-persona-resolution.svg](diagrams/05-persona-resolution.svg) | How a message picks its persona (pinned → routed → fallback) |
-| [06-scope-boundary.svg](diagrams/06-scope-boundary.svg) | What CorvinOS is, and what it is deliberately not |
-| [07-agent-view.svg](diagrams/07-agent-view.svg) | What the agent sees per message, what is hidden, what changes between turns |
-| [08-os-analogy.svg](diagrams/08-os-analogy.svg) | Side-by-side: classic OS subsystems vs CorvinOS counterparts |
-| [09-process-lifecycle.svg](diagrams/09-process-lifecycle.svg) | Bash fork/exec timeline vs adapter spawning a fresh subprocess per message |
-| [10-skill-lifecycle.svg](diagrams/10-skill-lifecycle.svg) | Skill: create (linter + slot mirror) → inject → grade → promote |
-| [11-rights-hierarchy.svg](diagrams/11-rights-hierarchy.svg) | Capability bundles (owner / admin / member / observer) with delegation reach |
-| [12-user-onboarding.svg](diagrams/12-user-onboarding.svg) | Lifecycle of a new participant: first contact → disclosure → consent |
-| [13-proposal-flow.svg](diagrams/13-proposal-flow.svg) | Curated proposal stack: contributors propose → owner curates → `/go` triggers AI |
-| [14-audit-trail.svg](diagrams/14-audit-trail.svg) | Hash-chained audit log with scoped views and daily verify |
-| [15-business-integration.svg](diagrams/15-business-integration.svg) | Organisational integration map |
-| [16-corvin-axes.svg](diagrams/16-corvin-axes.svg) | The five orthogonal scope axes (task / session / project / user / tenant) |
-| [17-runtime-generation.svg](diagrams/17-runtime-generation.svg) | Forge tools and skills as two parallel pipelines on one safety substrate |
-| [18-memory-loadout.svg](diagrams/18-memory-loadout.svg) | Three memory layers (recall, user model, artifacts) and auto-inject path |
-| [19-data-compute.svg](diagrams/19-data-compute.svg) | Large-data snapshots and out-of-LLM-loop compute workers |
-| [20-audit-spine.svg](diagrams/20-audit-spine.svg) | Audit spine as the convergence point of every compliance gate |
-| [21-engine-layer.svg](diagrams/21-engine-layer.svg) | Backend-agnostic LLM execution via the WorkerEngine protocol |
-| [22-eu-ai-act-compliance-overview.svg](diagrams/22-eu-ai-act-compliance-overview.svg) | EU AI Act compliance map — all articles mapped to layers |
-| [23-consent-disclosure-flow.svg](diagrams/23-consent-disclosure-flow.svg) | Disclosure + consent lifecycle — first contact through consent gate |
-| [24-incident-response-timeline.svg](diagrams/24-incident-response-timeline.svg) | Art. 73 incident timeline — 15-day reporting window |
-| [25-data-flow-guard.svg](diagrams/25-data-flow-guard.svg) | Data classification matrix — classification tiers × engine locality/egress |
-| [26-eaos-architecture.svg](diagrams/26-eaos-architecture.svg) | Engine-agnostic OS shell — tool broker, skill compiler, engine command interface |
-| [27-a2a-decentralized-mesh.svg](diagrams/27-a2a-decentralized-mesh.svg) | Decentralized agent-to-agent mesh topology |
-| [28-a2a-user-company.svg](diagrams/28-a2a-user-company.svg) | A2A user-to-company delegation pattern |
-| [29-a2a-company-internal.svg](diagrams/29-a2a-company-internal.svg) | A2A company-internal multi-agent workflow |
+```
+docs/
+├── README.md (you are here)
+├── diagrams/
+│   ├── DIAGRAM_01_ACP_VISION_HIGH_LEVEL.svg
+│   ├── DIAGRAM_02_LEARNING_INFRASTRUCTURE_6D.svg
+│   ├── DIAGRAM_03_PLUGIN_SYSTEM_MARKETPLACE.svg
+│   ├── DIAGRAM_04_AUDIT_CHAIN_GROUND_TRUTH.svg
+│   ├── DIAGRAM_05_DATA_FLOW_COMPLETE_REQUEST.svg
+│   ├── DIAGRAM_06_LAYER_STACK_OVERVIEW.svg
+│   ├── DIAGRAM_07_9D_LEARNING_VECTOR.svg
+│   └── DIAGRAM_08_META_LOOP_DAMPING.svg
+│
+├── architecture/ (Phase A: ACP Vision)
+│   ├── 05_ARCHITECTURE_OVERVIEW.md
+│   ├── 06_ACP_VISION.md
+│   ├── 07_LEARNING_INFRASTRUCTURE.md
+│   ├── 08_PLUGIN_SYSTEM.md
+│   └── 09_AUDIT_CHAIN.md
+│
+├── learning/ (9D Learning Vector)
+│   ├── CONCEPT_0032_9D_DESIGN.md
+│   ├── ADR_0620-0623.md
+│   └── PHASE_1_ROADMAP.md
+│
+├── quality-discipline.md (LDD, ADR Gate, E2E Proof)
+├── layer-stack-reference.md (All 36+ layers)
+│
+├── compliance/
+│   └── 10_COMPLIANCE_BASELINE.md
+│
+└── implementation/ (Phase B)
+    ├── event-schemas.md
+    ├── skill-manifest.md
+    └── plugin-manifest.md
+```
 
 ---
 
-## House rules for these docs
+## Next Steps
 
-- **Mental model first, details after.** Every page leads with one or two sentences that fit in a head, then drills down.
-- **Code is the source of truth.** When prose disagrees with running code, the code wins and the doc is the bug.
-- **No verbatim source listings.** Diagrams and prose, not pasted Python. Link to modules by path when needed.
-- **Cross-references are mandatory.** A concept that names another concept must link to its authoritative doc.
-- **English.** Matches the rest of the repository, the commit history, and in-code comments.
-- **Diagrams stay in sync.** Every feature change that affects a diagram must update that diagram in the same commit. A stale diagram is a bug, not a cosmetic issue.
+### **Option A: Execute Phase A (Docs Refactor)**
+- Copy all diagrams + MD files to `docs/`
+- Migrate ADRs to `/Corvin-ADR/decisions/`
+- Commit + push to main
+- **Duration:** 1–2 hours
+
+### **Option B: Start Phase 1 (9D Tier 2)**
+- Scaffold code skeleton
+- Implement L_memory loop (Week 1)
+- Tests + integration
+- **Duration:** 4 weeks
+
+### **Option C: Both (Parallel)**
+- Execute Phase A (docs) → 2 hours
+- Start Phase 1 (code) → parallel development
+
+---
+
+**Status:** ✅ Phase A (Docs) Ready to Deploy | 🆕 Phase 1 (9D) Ready to Implement  
+**Last Updated:** 2026-09-06  
+**Owner:** shumway  
+**License:** Apache-2.0 + CLA v3.1  
+**Canonical ADR Repo:** `/home/shumway/projects/Corvin-ADR/decisions/`
+
+---
+
+**Ready?** Start with [Phase A README](PHASE_A_COMPLETE_DELIVERY.md) or [Phase 1 Roadmap](learning/PHASE_1_ROADMAP.md).
