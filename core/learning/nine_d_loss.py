@@ -30,6 +30,8 @@ from core.learning.memory_optimizer import MemoryOptimizer
 from core.learning.composition_optimizer import CompositionOptimizer
 from core.learning.plugin_optimizer import PluginOrchestrator
 from core.learning.live_collector_integration import LiveCollectorIntegration
+from core.learning.meta_optimizer import MetaOptimizer
+from core.learning.watchdog import WatchdogIntegration
 
 
 class NineD_LossOptimizer:
@@ -70,6 +72,10 @@ class NineD_LossOptimizer:
         self.memory_loop = MemoryOptimizer(tenant_id=tenant_id)
         self.skills_loop = CompositionOptimizer()
         self.plugins_loop = PluginOrchestrator()
+
+        # ===== META LOOP (Tier 3) =====
+        self.meta_optimizer = MetaOptimizer(tenant_id=tenant_id)
+        self.watchdog = WatchdogIntegration(self.meta_optimizer)
 
         # ===== UNIFIED LOSS TRACKING =====
         self.loss_history = []
@@ -291,6 +297,44 @@ class NineD_LossOptimizer:
         self.plugins_loop.emit_event(
             self.collector, feedback=plugin_feedback_per_plugin, task_type="generic"
         )
+
+        # ===== UPDATE TIER 3 (META) LOOP =====
+        # Every 100 steps, meta optimizer tunes hyperparameters for Tier 1 & 2
+
+        if self.step_count % 100 == 0:
+            L_core = self.compute_L_core()
+            L_infra = self.compute_L_infra(feedback)
+
+            meta_feedback = {
+                'core_loss': L_core,
+                'prev_core_loss': self.loss_history[-2] if len(self.loss_history) > 1 else L_core,
+                'infra_loss': L_infra,
+                'prev_infra_loss': self.loss_history[-2] if len(self.loss_history) > 1 else L_infra,
+                'core_loss_variance': self.memory_loop.get_loss_variance(100),
+                'infra_loss_variance': self.skills_loop.get_loss_variance(100),
+                'avg_gradient_magnitude': self.meta_optimizer.get_avg_gradient_magnitude(100),
+                'meta_loss': L_total,
+            }
+
+            # Compute meta loss and gradients
+            meta_loss = self.meta_optimizer.compute_loss(meta_feedback)
+            prev_meta_loss = self.meta_optimizer.loss_history[-2] if len(self.meta_optimizer.loss_history) > 1 else meta_loss
+            meta_gradients = self.meta_optimizer.compute_gradients(meta_loss, prev_meta_loss)
+
+            # Apply gradients with watchdog oversight
+            self.watchdog.validate_and_apply_gradients(
+                gradients=meta_gradients,
+                learning_rate=self.meta_optimizer.learning_rate,
+                damping=self.meta_optimizer.damping_factor,
+                feedback_signals=meta_feedback,
+            )
+
+            # Emit meta tuning event
+            self.meta_optimizer.emit_event(self.collector)
+
+            # Checkpoint every 100 steps
+            checkpoint_path = Path.home() / ".corvin" / f"meta_optimizer_checkpoint_{self.step_count}.json"
+            self.watchdog.checkpoint(str(checkpoint_path))
 
         return L_total
 
