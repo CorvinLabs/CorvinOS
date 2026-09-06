@@ -1,168 +1,102 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
       .bg { fill: #0f0f0f; }
-      .title { font-size: 36px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .section-title { font-size: 20px; font-weight: bold; fill: #ffd700; font-family: monospace; }
-      .component { fill: #1a1a2e; stroke: #00ff88; stroke-width: 2; }
-      .core-component { fill: #16213e; stroke: #00d4ff; stroke-width: 2.5; }
-      .label { font-size: 15px; fill: #a8dadc; font-family: monospace; }
-      .desc { font-size: 13px; fill: #888; font-family: monospace; }
-      .arrow { stroke: #00ff88; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
-      .arrow-feedback { stroke: #ff006e; stroke-width: 2; fill: none; marker-end: url(#arrowhead-feedback); stroke-dasharray: 5,5; }
+      .title { font-size: 40px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
+      .subtitle { font-size: 16px; fill: #888; font-family: monospace; }
+      .layer-title { font-size: 24px; font-weight: bold; fill: #ffd700; font-family: monospace; }
+      .box { fill: #1a1a2e; stroke: #00ff88; stroke-width: 3; }
+      .core-box { fill: #16213e; stroke: #00d4ff; stroke-width: 3; }
+      .big-label { font-size: 20px; font-weight: bold; fill: #00ff88; font-family: monospace; }
+      .medium-label { font-size: 18px; fill: #a8dadc; font-family: monospace; }
+      .small-text { font-size: 14px; fill: #888; font-family: monospace; }
+      .arrow { stroke: #00d4ff; stroke-width: 3; fill: none; marker-end: url(#arrowhead); }
     </style>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#00ff88" />
-    </marker>
-    <marker id="arrowhead-feedback" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#ff006e" />
+      <polygon points="0 0, 10 3, 0 6" fill="#00d4ff" />
     </marker>
   </defs>
 
-  <rect class="bg" width="1400" height="900"/>
+  <rect class="bg" width="1400" height="1000"/>
 
-  <text x="700" y="40" class="title" text-anchor="middle">CorvinOS Ecosystem Architecture</text>
-  <text x="700" y="62" class="desc" text-anchor="middle">Self-learning, auditable, multi-engine operating system</text>
+  <text x="700" y="50" class="title" text-anchor="middle">CorvinOS Architecture</text>
+  <text x="700" y="75" class="subtitle" text-anchor="middle">Self-learning • Auditable • Multi-engine</text>
 
-  <!-- TOP: Input Interfaces -->
-  <text x="50" y="100" class="section-title">Inputs (Any Channel)</text>
+  <!-- INPUT LAYER -->
+  <text x="700" y="130" class="layer-title" text-anchor="middle">📥 INPUT</text>
+  <rect class="box" x="200" y="150" width="200" height="80"/>
+  <text x="300" y="175" class="big-label" text-anchor="middle">CLI</text>
+  <text x="300" y="200" class="small-text" text-anchor="middle">Commands</text>
 
-  <rect class="component" x="50" y="115" width="130" height="60"/>
-  <text x="115" y="140" class="label" text-anchor="middle">CLI</text>
-  <text x="115" y="155" class="desc" text-anchor="middle">Commands</text>
+  <rect class="box" x="450" y="150" width="200" height="80"/>
+  <text x="550" y="175" class="big-label" text-anchor="middle">Web</text>
+  <text x="550" y="200" class="small-text" text-anchor="middle">Dashboard</text>
 
-  <rect class="component" x="200" y="115" width="130" height="60"/>
-  <text x="265" y="140" class="label" text-anchor="middle">Web Console</text>
-  <text x="265" y="155" class="desc" text-anchor="middle">Dashboard</text>
+  <rect class="box" x="700" y="150" width="200" height="80"/>
+  <text x="800" y="175" class="big-label" text-anchor="middle">Voice</text>
+  <text x="800" y="200" class="small-text" text-anchor="middle">Discord</text>
 
-  <rect class="component" x="350" y="115" width="130" height="60"/>
-  <text x="415" y="140" class="label" text-anchor="middle">Voice/Discord</text>
-  <text x="415" y="155" class="desc" text-anchor="middle">Bridge</text>
+  <rect class="box" x="950" y="150" width="200" height="80"/>
+  <text x="1050" y="175" class="big-label" text-anchor="middle">A2A</text>
+  <text x="1050" y="200" class="small-text" text-anchor="middle">App-to-App</text>
 
-  <rect class="component" x="500" y="115" width="130" height="60"/>
-  <text x="565" y="140" class="label" text-anchor="middle">A2A Protocol</text>
-  <text x="565" y="155" class="desc" text-anchor="middle">App-to-App</text>
+  <!-- ARROWS DOWN -->
+  <path class="arrow" d="M 300 230 L 300 280"/>
+  <path class="arrow" d="M 550 230 L 550 280"/>
+  <path class="arrow" d="M 800 230 L 800 280"/>
+  <path class="arrow" d="M 1050 230 L 1050 280"/>
 
-  <rect class="component" x="650" y="115" width="130" height="60"/>
-  <text x="715" y="140" class="label" text-anchor="middle">MCP Tools</text>
-  <text x="715" y="155" class="desc" text-anchor="middle">Claude API</text>
+  <!-- CORE LAYER: ACP SKILLS -->
+  <text x="700" y="310" class="layer-title" text-anchor="middle">🧠 AGENTIC CONTROL PLANE (Skills 2.0)</text>
 
-  <!-- Arrows down -->
-  <path class="arrow" d="M 115 175 L 115 210"/>
-  <path class="arrow" d="M 265 175 L 265 210"/>
-  <path class="arrow" d="M 415 175 L 415 210"/>
-  <path class="arrow" d="M 565 175 L 565 210"/>
-  <path class="arrow" d="M 715 175 L 715 210"/>
+  <rect class="core-box" x="150" y="340" width="280" height="100"/>
+  <text x="290" y="370" class="big-label" text-anchor="middle">L5: Routing</text>
+  <text x="290" y="395" class="medium-label" text-anchor="middle">Pick best engine</text>
+  <text x="290" y="415" class="small-text" text-anchor="middle">Learns from feedback</text>
 
-  <!-- MIDDLE: Core Skills (ACP) -->
-  <text x="50" y="210" class="section-title">Agentic Control Plane (Skills 2.0)</text>
+  <rect class="core-box" x="560" y="340" width="280" height="100"/>
+  <text x="700" y="370" class="big-label" text-anchor="middle">L10: Context</text>
+  <text x="700" y="395" class="medium-label" text-anchor="middle">Preserve important facts</text>
+  <text x="700" y="415" class="small-text" text-anchor="middle">Saves ~30% tokens</text>
 
-  <rect class="core-component" x="50" y="225" width="280" height="100"/>
-  <text x="190" y="250" class="label" text-anchor="middle">L5: Routing</text>
-  <text x="190" y="267" class="desc" text-anchor="middle">os.delegation_router (v2.1)</text>
-  <text x="190" y="281" class="desc" text-anchor="middle">Selects: Claude/Opus/Hermes</text>
-  <text x="190" y="295" class="desc" text-anchor="middle">Learns: Best engine per task</text>
+  <rect class="core-box" x="970" y="340" width="280" height="100"/>
+  <text x="1110" y="370" class="big-label" text-anchor="middle">L22: Workflow</text>
+  <text x="1110" y="395" class="medium-label" text-anchor="middle">Orchestrate Skills</text>
+  <text x="1110" y="415" class="small-text" text-anchor="middle">Optimal execution</text>
 
-  <rect class="core-component" x="360" y="225" width="280" height="100"/>
-  <text x="500" y="250" class="label" text-anchor="middle">L10: Context</text>
-  <text x="500" y="267" class="desc" text-anchor="middle">os.context_adapter (v1.0)</text>
-  <text x="500" y="281" class="desc" text-anchor="middle">Preserves: Important facts</text>
-  <text x="500" y="295" class="desc" text-anchor="middle">Learns: What to keep/drop</text>
+  <!-- ARROWS DOWN -->
+  <path class="arrow" d="M 290 440 L 290 500"/>
+  <path class="arrow" d="M 700 440 L 700 500"/>
+  <path class="arrow" d="M 1110 440 L 1110 500"/>
 
-  <rect class="core-component" x="670" y="225" width="280" height="100"/>
-  <text x="810" y="250" class="label" text-anchor="middle">L22: Workflow</text>
-  <text x="810" y="267" class="desc" text-anchor="middle">os.workflow_optimizer (v0.9)</text>
-  <text x="810" y="281" class="desc" text-anchor="middle">Orchestrates: Multi-Skill DAG</text>
-  <text x="810" y="295" class="desc" text-anchor="middle">Learns: Optimal execution order</text>
+  <!-- LEARNING LAYER -->
+  <text x="700" y="545" class="layer-title" text-anchor="middle">📊 LEARNING LOOP (9D Loss Vector)</text>
 
-  <!-- Arrows down -->
-  <path class="arrow" d="M 190 325 L 190 360"/>
-  <path class="arrow" d="M 500 325 L 500 360"/>
-  <path class="arrow" d="M 810 325 L 810 360"/>
+  <rect class="box" x="200" y="570" width="1000" height="120"/>
+  <text x="700" y="600" class="big-label" text-anchor="middle">Self-Optimization</text>
+  <text x="700" y="625" class="medium-label" text-anchor="middle">6 Core Loops + 3 Infrastructure Loops + 1 Meta Loop</text>
+  <text x="700" y="650" class="small-text" text-anchor="middle">Converges in <10K samples • Operator stays in control</text>
 
-  <!-- MIDDLE-LEFT: Learning Infrastructure -->
-  <text x="1000" y="210" class="section-title">Learning Infrastructure (9D)</text>
+  <!-- ARROWS DOWN -->
+  <path class="arrow" d="M 700 690 L 700 740"/>
 
-  <rect class="component" x="1000" y="225" width="370" height="170"/>
-  <text x="1185" y="247" class="label" text-anchor="middle">9D Loss Vector</text>
-  <text x="1185" y="265" class="desc" text-anchor="middle">TIER 1 (Core, α=10%): routing, context, exec, conf, comply, learn</text>
-  <text x="1185" y="280" class="desc" text-anchor="middle">TIER 2 (Infrastructure, α=5%): memory, plugins, security</text>
-  <text x="1185" y="295" class="desc" text-anchor="middle">TIER 3 (Meta, α=1%): learns optimal weights</text>
-  <text x="1185" y="310" class="desc" text-anchor="middle">Feedback: User ratings + metrics + audit data</text>
-  <text x="1185" y="325" class="desc" text-anchor="middle">Convergence: 2K → 5K → 10K samples</text>
-  <text x="1185" y="340" class="desc" text-anchor="middle">Outcome: System self-optimizes automatically</text>
-  <text x="1185" y="355" class="desc" text-anchor="middle">Operator: Always tunable via dashboard sliders</text>
+  <!-- COMPLIANCE LAYER -->
+  <text x="700" y="770" class="layer-title" text-anchor="middle">🔐 COMPLIANCE & AUDIT</text>
 
-  <!-- Feedback loops back -->
-  <path class="arrow-feedback" d="M 950 400 Q 950 500 500 400"/>
-  <text x="900" y="450" class="desc" fill="#ff006e">Continuous Feedback Loop</text>
+  <rect class="box" x="150" y="800" width="280" height="100"/>
+  <text x="290" y="830" class="big-label" text-anchor="middle">Audit Trail</text>
+  <text x="290" y="855" class="medium-label" text-anchor="middle">Hash-chained</text>
+  <text x="290" y="880" class="small-text" text-anchor="middle">GDPR + EU AI Act</text>
 
-  <!-- BOTTOM: Supporting Infrastructure -->
-  <text x="50" y="410" class="section-title">Compliance & Audit Layer</text>
+  <rect class="box" x="560" y="800" width="280" height="100"/>
+  <text x="700" y="830" class="big-label" text-anchor="middle">Consent Gate</text>
+  <text x="700" y="855" class="medium-label" text-anchor="middle">Deny-by-default</text>
+  <text x="700" y="880" class="small-text" text-anchor="middle">GDPR compliant</text>
 
-  <rect class="component" x="50" y="425" width="220" height="100"/>
-  <text x="160" y="450" class="label" text-anchor="middle">Audit Trail</text>
-  <text x="160" y="467" class="desc" text-anchor="middle">Hash-chained proof</text>
-  <text x="160" y="481" class="desc" text-anchor="middle">of every decision</text>
-  <text x="160" y="495" class="desc" text-anchor="middle">GDPR + EU AI Act</text>
-  <text x="160" y="509" class="desc" text-anchor="middle">compliant by design</text>
+  <rect class="box" x="970" y="800" width="280" height="100"/>
+  <text x="1110" y="830" class="big-label" text-anchor="middle">Plugins</text>
+  <text x="1110" y="855" class="medium-label" text-anchor="middle">5 trust tiers</text>
+  <text x="1110" y="880" class="small-text" text-anchor="middle">Sandboxed execution</text>
 
-  <rect class="component" x="300" y="425" width="220" height="100"/>
-  <text x="410" y="450" class="label" text-anchor="middle">Plugin Ecosystem</text>
-  <text x="410" y="467" class="desc" text-anchor="middle">5 trust tiers (compliance</text>
-  <text x="410" y="481" class="desc" text-anchor="middle">→ core → bundled →</text>
-  <text x="410" y="495" class="desc" text-anchor="middle">installed → community)</text>
-  <text x="410" y="509" class="desc" text-anchor="middle">Sandboxed execution</text>
-
-  <rect class="component" x="550" y="425" width="220" height="100"/>
-  <text x="660" y="450" class="label" text-anchor="middle">Consent & Compliance</text>
-  <text x="660" y="467" class="desc" text-anchor="middle">Deny-by-default gates</text>
-  <text x="660" y="481" class="desc" text-anchor="middle">House-rules enforcement</text>
-  <text x="660" y="495" class="desc" text-anchor="middle">Data flow validation</text>
-  <text x="660" y="509" class="desc" text-anchor="middle">PII detection + erasure</text>
-
-  <rect class="component" x="800" y="425" width="220" height="100"/>
-  <text x="910" y="450" class="label" text-anchor="middle">Multi-Engine Support</text>
-  <text x="910" y="467" class="desc" text-anchor="middle">Claude (v3, v3.5)</text>
-  <text x="910" y="481" class="desc" text-anchor="middle">Claude Opus</text>
-  <text x="910" y="495" class="desc" text-anchor="middle">Hermes (fallback)</text>
-  <text x="910" y="509" class="desc" text-anchor="middle">Cost-optimized routing</text>
-
-  <!-- BOTTOM: Outputs -->
-  <text x="50" y="580" class="section-title">Outputs (All Logged)</text>
-
-  <rect class="component" x="50" y="595" width="150" height="70"/>
-  <text x="125" y="620" class="label" text-anchor="middle">Response</text>
-  <text x="125" y="635" class="desc" text-anchor="middle">to User</text>
-  <text x="125" y="649" class="desc" text-anchor="middle">(Audited)</text>
-
-  <rect class="component" x="230" y="595" width="150" height="70"/>
-  <text x="305" y="620" class="label" text-anchor="middle">Audit Trail</text>
-  <text x="305" y="635" class="desc" text-anchor="middle">Full Proof Chain</text>
-  <text x="305" y="649" class="desc" text-anchor="middle">(Hash-Chained)</text>
-
-  <rect class="component" x="410" y="595" width="150" height="70"/>
-  <text x="485" y="620" class="label" text-anchor="middle">Learning Events</text>
-  <text x="485" y="635" class="desc" text-anchor="middle">Feedback Loop</text>
-  <text x="485" y="649" class="desc" text-anchor="middle">Data Stored</text>
-
-  <rect class="component" x="590" y="595" width="150" height="70"/>
-  <text x="665" y="620" class="label" text-anchor="middle">Dashboard Update</text>
-  <text x="665" y="635" class="desc" text-anchor="middle">Real-Time Metrics</text>
-  <text x="665" y="649" class="desc" text-anchor="middle">9D Visualization</text>
-
-  <rect class="component" x="770" y="595" width="150" height="70"/>
-  <text x="845" y="620" class="label" text-anchor="middle">Plugin Events</text>
-  <text x="845" y="635" class="desc" text-anchor="middle">Loaded/Executed</text>
-  <text x="845" y="649" class="desc" text-anchor="middle">Audit Trail</text>
-
-  <!-- Key Insight -->
-  <rect class="core-component" x="50" y="720" width="1300" height="150"/>
-  <text x="700" y="755" class="section-title" text-anchor="middle">🎯 Why This Architecture Works</text>
-  <text x="700" y="778" class="label" text-anchor="middle">No hardcoded behavior. Every decision is made by a versioned Skill that:</text>
-  <text x="700" y="796" class="desc" text-anchor="middle">✓ Learns from feedback (9D loss loops converge automatically)</text>
-  <text x="700" y="811" class="desc" text-anchor="middle">✓ Can be swapped instantly (versioning allows zero-downtime updates)</text>
-  <text x="700" y="826" class="desc" text-anchor="middle">✓ Is fully auditable (every execution + config change logged + hash-chained)</text>
-  <text x="700" y="841" class="desc" text-anchor="middle">✓ Is compliant by design (GDPR + EU AI Act constraints enforced structurally)</text>
 </svg>
