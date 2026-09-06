@@ -378,12 +378,82 @@ def _mutation_error(exc: Exception) -> HTTPException:
 # ── Read ──────────────────────────────────────────────────────────────────────
 
 
+def _running_builtins(exclude_ids: set[str]) -> list[PluginOut]:
+    """Builtin plugins LOADED in this process, as ``installed/active`` entries.
+
+    G3/G4: a builtin discovered + loaded at boot by ``bootstrap_builtin`` (from
+    the Corvin-Marketplace checkout, operator rule) must appear under "installed"
+    even without an explicit install click — otherwise the Console shows an empty
+    list while the plugin is demonstrably running. Source of the metadata is the
+    on-disk manifest (``_builtin_plugin_dirs(_marketplace_root())`` + the in-wheel
+    root); the entry is only emitted when the manifest's ``plugin_id`` is actually
+    in the process registry, so this reports RUNNING builtins, never merely
+    on-disk ones (which would be a false "active"). An id already in
+    ``registry.yaml`` (``exclude_ids``) is skipped — the explicit record wins.
+
+    Never raises into the request: a discovery failure degrades to "no builtins".
+    """
+    try:
+        from corvin_plugins import bootstrap as _bootstrap
+        from corvin_plugins.registry import get_registry
+
+        loaded = set(get_registry().discover())
+        if not loaded:
+            return []
+        dirs = list(_bootstrap._builtin_plugin_dirs(_bootstrap._BUILTIN_ROOT))
+        for d in _bootstrap._builtin_plugin_dirs(_bootstrap._marketplace_root()):
+            if d not in dirs:
+                dirs.append(d)
+    except Exception:  # noqa: BLE001
+        return []
+
+    out: list[PluginOut] = []
+    seen: set[str] = set(exclude_ids)
+    for plugin_dir in dirs:
+        try:
+            manifest = _bootstrap.load_from_manifest_safe(plugin_dir / "plugin.yaml")
+        except Exception:  # noqa: BLE001
+            continue
+        pid = str(manifest.get("plugin_id") or "").strip()
+        if not pid or pid in seen or pid not in loaded:
+            continue
+        seen.add(pid)
+        runtime_loaded, contained = _runtime_state(pid)
+        out.append(
+            PluginOut(
+                plugin_id=pid,
+                version=str(manifest.get("version", "0.0.0")),
+                display_name=str(manifest.get("display_name") or pid),
+                plugin_type=str(manifest.get("plugin_type") or "generic"),
+                origin="builtin",  # location-derived: these ship in a buildin/ tree
+                pii_risk=str(manifest.get("pii_risk", "none")),
+                locality=str(manifest.get("locality", "local")),
+                network_egress=str(manifest.get("network_egress", "none")),
+                egress_hosts=list(manifest.get("egress_hosts") or []),
+                enabled=True,
+                runtime_loaded=runtime_loaded,
+                contained_by=contained,
+                requires_consent=False,
+                settings={},
+                settings_schema={},
+                dependencies=list(manifest.get("dependencies") or []),
+                installed_at=None,
+                last_error_type=None,
+            )
+        )
+    return out
+
+
 @router.get("/plugins")
 async def list_plugins(
     rec: Annotated[Any, Depends(require_surface)],
 ) -> PluginListOut:
     registry = _load(rec.tenant_id)
     records = [_to_out(r) for r in sorted(registry.records.values(), key=lambda r: r.plugin_id)]
+    # Merge in builtins running in THIS process that are not already an explicit
+    # registry.yaml record (dedup by plugin_id; the registry record wins).
+    records.extend(_running_builtins({r.plugin_id for r in records}))
+    records.sort(key=lambda r: r.plugin_id)
     return PluginListOut(
         plugins=records,
         total=len(records),
