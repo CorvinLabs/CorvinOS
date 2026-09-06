@@ -1,8 +1,8 @@
-# CorvinOS 1.0.0 — Agentic Operating System
+# CorvinOS — Agentic Operating System
 
 [![CI/CD](https://img.shields.io/badge/ci%2Fcd-passing-brightgreen)](https://github.com/CorvinLabs/CorvinOS)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v1.0.0%20Production-blue)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-Production-blue)](CHANGELOG.md)
 [![Compliance](https://img.shields.io/badge/compliance-GDPR%20%2B%20EU%20AI%20Act%20Compliant-green)](docs/compliance/10_COMPLIANCE_BASELINE.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
@@ -10,7 +10,7 @@
 
 ## What is CorvinOS?
 
-**CorvinOS 1.0.0 is a self-learning, auditable operating system for AI agents.** It's built on three load-bearing principles:
+**CorvinOS is a self-learning, auditable operating system for AI agents.** It's built on three load-bearing principles:
 
 1. **Versioned Skills** — Every decision by a versioned, auditable Skill (not hardcoded logic or feature flags)
 2. **GDPR + EU AI Act Structural Compliance** — Compliance gates are fail-closed, load-bearing code (not features you can disable)
@@ -26,7 +26,7 @@ Think of it as **"Kubernetes for AI decisions"** — versioned, composable, obse
 
 ## 🏛️ Compliance Built-In (GDPR + EU AI Act 2026)
 
-**CorvinOS 1.0.0 doesn't add compliance on top — it IS compliance.**
+**CorvinOS doesn't add compliance on top — it IS compliance.**
 
 ### **Load-Bearing Compliance Mechanisms** (Structural, Not Features)
 
