@@ -36,8 +36,8 @@ class TestPluginManifestRegistration:
         registry_path = isolated_plugin_env["registry"]
 
         # Invalid manifest
-        invalid = plugin_manifest_factory.make_invalid()
-        assert invalid["plugin_id"] == "invalid-plugin"
+        invalid = plugin_manifest_factory.make_invalid(missing_fields=["version", "plugin_type", "display_name"])
+        assert invalid["plugin_id"] == "invalid"  # PluginManifestFactory.make_invalid()
 
         # Write to registry (but it should be flagged as invalid)
         plugin_dir = registry_path / "invalid-plugin"

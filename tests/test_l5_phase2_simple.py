@@ -44,7 +44,7 @@ def test_no_drift_auto_approves():
 
     audit = AuditBackendMock()
     stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
     quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
     conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
     rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -79,7 +79,7 @@ def test_audit_trail_recorded():
 
     audit = AuditBackendMock()
     stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
     quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
     conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
     rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -115,7 +115,7 @@ def test_operator_approve_recorded():
 
     audit = AuditBackendMock()
     stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
     quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
     conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
     rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -145,7 +145,7 @@ def test_operator_reject_recorded():
 
     audit = AuditBackendMock()
     stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
     quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
     conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
     rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -175,7 +175,7 @@ def test_operator_revoke_recorded():
 
     audit = AuditBackendMock()
     stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8)
+    approval_gate = OperatorApprovalGate(tenant_id="_default", auto_approval_confidence_threshold=0.8, audit_backend=audit)
     quality_gate = QualityGate(tenant_id="_default", audit_backend=audit)
     conflict_resolver = ConflictResolver(tenant_id="_default", audit_backend=audit)
     rollback_guard = RollbackGuard(tenant_id="_default", audit_backend=audit)
@@ -208,7 +208,7 @@ def test_tenant_isolation():
     audit_2 = AuditBackendMock()
 
     stability_gate_1 = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-    approval_gate_1 = OperatorApprovalGate(tenant_id="tenant_1", auto_approval_confidence_threshold=0.8)
+    approval_gate_1 = OperatorApprovalGate(tenant_id="tenant_1", auto_approval_confidence_threshold=0.8, audit_backend=audit_1)
     quality_gate_1 = QualityGate(tenant_id="tenant_1", audit_backend=audit_1)
     conflict_resolver_1 = ConflictResolver(tenant_id="tenant_1", audit_backend=audit_1)
     rollback_guard_1 = RollbackGuard(tenant_id="tenant_1", audit_backend=audit_1)
@@ -224,7 +224,7 @@ def test_tenant_isolation():
     )
 
     stability_gate_2 = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-    approval_gate_2 = OperatorApprovalGate(tenant_id="tenant_2", auto_approval_confidence_threshold=0.8)
+    approval_gate_2 = OperatorApprovalGate(tenant_id="tenant_2", auto_approval_confidence_threshold=0.8, audit_backend=audit_2)
     quality_gate_2 = QualityGate(tenant_id="tenant_2", audit_backend=audit_2)
     conflict_resolver_2 = ConflictResolver(tenant_id="tenant_2", audit_backend=audit_2)
     rollback_guard_2 = RollbackGuard(tenant_id="tenant_2", audit_backend=audit_2)

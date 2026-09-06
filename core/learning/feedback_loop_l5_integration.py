@@ -342,7 +342,13 @@ class L5FeedbackLoopIntegrator:
                     blocking=True,
                     advisory_data={
                         "drift_magnitude": drift_alert.smoothed_delta,
-                        "confidence": drift_alert.confidence,
+                        # DriftAlert carries no confidence of its own; the gate's
+                        # per-metric confidence is the right figure. (The former
+                        # ``drift_alert.confidence`` raised AttributeError, so the
+                        # drift branch — the one this gate exists for — always
+                        # failed closed and no drift ever reached k=2.)
+                        "confidence": smoothed.confidence,
+                        "consecutive_high_deltas": drift_alert.consecutive_high_deltas,
                     },
                 )
         except Exception as e:

@@ -48,7 +48,7 @@ class TestAuditDurabilityManager:
             action="login",
             resource="user_1",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -83,7 +83,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -101,7 +101,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -127,7 +127,7 @@ class TestAuditDurabilityManager:
                 action="test",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -143,7 +143,7 @@ class TestAuditDurabilityManager:
                 action="test",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -160,7 +160,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -179,7 +179,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -198,7 +198,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -214,7 +214,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -235,7 +235,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -255,7 +255,7 @@ class TestAuditDurabilityManager:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:00Z",
+                timestamp=f"2026-08-12T10:00:00Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -283,7 +283,7 @@ class TestAuditDurabilityManager:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:00Z",
+                timestamp=f"2026-08-12T10:00:00Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -305,7 +305,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -323,7 +323,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager1.record(entry)
 
@@ -380,7 +380,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 
@@ -400,7 +400,7 @@ class TestAuditDurabilityManager:
                 action="write",
                 resource=f"res_{i}",
                 result="success",
-                timestamp=f"2026-08-12T10:00:{i:02d}Z",
+                timestamp=f"2026-08-12T10:00:{i:02d}Z", tenant_id="_default",
             )
             manager.record(entry)
 
@@ -416,7 +416,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
             details={"key": "value", "nested": {"a": 1}},
         )
         manager.record(entry)
@@ -433,7 +433,7 @@ class TestAuditDurabilityManager:
             action="write",
             resource="res",
             result="success",
-            timestamp="2026-08-12T10:00:00Z",
+            timestamp="2026-08-12T10:00:00Z", tenant_id="_default",
         )
         manager.record(entry)
 

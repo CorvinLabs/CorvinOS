@@ -15,70 +15,70 @@ class TestPIIDetector:
     def test_detect_email(self):
         """Email detection."""
         text = "Contact me at user@example.com"
-        detected = PIIDetector.detect(text)
+        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
         assert "email" in detected
 
     def test_detect_phone(self):
         """Phone number detection."""
         text = "Call me at 555-123-4567"
-        detected = PIIDetector.detect(text)
+        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
         assert "phone" in detected
 
     def test_detect_credit_card(self):
         """Credit card detection."""
         text = "Card: 1234-5678-9012-3456"
-        detected = PIIDetector.detect(text)
+        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
         assert "credit_card" in detected
 
     def test_detect_ssn(self):
         """SSN detection."""
         text = "SSN is 123-45-6789"
-        detected = PIIDetector.detect(text)
-        assert "ssn" in detected
+        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        assert "us_ssn" in detected  # class id is jurisdiction-qualified
 
     def test_detect_ipv4(self):
         """IPv4 address detection."""
         text = "Server at 192.168.1.1"
-        detected = PIIDetector.detect(text)
+        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
         assert "ipv4" in detected
 
     def test_detect_ipv6(self):
         """IPv6 address detection."""
         text = "IPv6: 2001:db8::1"
-        detected = PIIDetector.detect(text)
+        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
         assert "ipv6" in detected
 
     def test_detect_multiple_types(self):
         """Multiple PII types detected."""
         text = "Email: user@example.com, Phone: 555-123-4567"
-        detected = PIIDetector.detect(text)
+        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
         assert "email" in detected
         assert "phone" in detected
 
     def test_detect_no_pii(self):
         """Text with no PII returns empty list."""
         text = "This is safe text"
-        detected = PIIDetector.detect(text)
+        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
         assert len(detected) == 0
 
     def test_detect_non_string(self):
         """Non-string input returns empty list."""
-        detected = PIIDetector.detect(123)
-        assert detected == []
+        detected = PIIDetector().detect_all(123)
+        assert not detected
 
     def test_has_pii_true(self):
         """has_pii returns True when PII present."""
         text = "Email: user@example.com"
-        assert PIIDetector.has_pii(text) is True
+        assert PIIDetector().has_pii(text) is True
 
     def test_has_pii_false(self):
         """has_pii returns False when no PII."""
         text = "Safe text"
-        assert PIIDetector.has_pii(text) is False
+        assert PIIDetector().has_pii(text) is False
 
     def test_has_pii_non_string(self):
         """has_pii returns False for non-string."""
-        assert PIIDetector.has_pii(123) is False
+        assert PIIDetector().has_pii(123) is False
 
 
 class TestPIIScrubber:

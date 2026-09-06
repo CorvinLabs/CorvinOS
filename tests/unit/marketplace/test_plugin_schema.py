@@ -11,7 +11,13 @@ from pathlib import Path
 from jsonschema import validate, ValidationError
 
 
-SCHEMA_PATH = Path(__file__).parent.parent.parent.parent / "operator/marketplace/schemas/plugin-schema.json"
+import os as _os
+
+# The plugin schema ships with the Corvin-Marketplace repo (operator rule:
+# plugin artefacts live there, not in CorvinOS). Resolve the sibling checkout.
+_MARKET = Path(_os.environ.get("CORVIN_MARKETPLACE_ROOT") or Path(__file__).resolve().parents[4] / "Corvin-Marketplace")
+SCHEMA_PATH = _MARKET / "plugin-schema.json"
+pytestmark = pytest.mark.skipif(not SCHEMA_PATH.is_file(), reason="Corvin-Marketplace checkout not found (set CORVIN_MARKETPLACE_ROOT)")
 
 
 @pytest.fixture

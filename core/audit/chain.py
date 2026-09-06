@@ -77,6 +77,10 @@ class AuditChain:
                         resource=data["resource"],
                         result=data["result"],
                         timestamp=data["timestamp"],
+                        # Serialized by asdict() since ADR-0007 but never read
+                        # back: every reload of a chain raised
+                        # ChainVerificationError ("missing tenant_id").
+                        tenant_id=data.get("tenant_id", "_default"),
                         details=data.get("details"),
                         prior_hash=data.get("prior_hash", "genesis"),
                         self_hash=data.get("self_hash", ""),
