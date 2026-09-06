@@ -1,9 +1,8 @@
-"""Unified EngineInterface for all compute engines (Phase 0).
+"""Unified EngineInterface for all compute engines (Phase 0, updated v2.0).
 
 Abstract base class defining the contract for all engines:
 - Claude, Haiku, Opus, Sonnet
-- Hermes (local)
-- Fallback chains
+(Hermes and Local removed in v2.0 — Claude Code only)
 """
 
 from __future__ import annotations
@@ -17,14 +16,12 @@ from datetime import datetime
 
 
 class EngineType(str, Enum):
-    """Supported engine types."""
+    """Supported engine types (Claude Code only in v2.0)."""
 
     CLAUDE = "claude"
     OPUS = "claude-opus-5"
     SONNET = "claude-sonnet-4"
     HAIKU = "claude-haiku"
-    HERMES = "hermes"
-    LOCAL = "local"
 
 
 class EngineStatus(str, Enum):

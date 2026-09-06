@@ -11,8 +11,6 @@ from typing import Optional, Dict, List
 from core.engines.engine_interface import EngineType, EngineStatus, EngineInterface
 from core.engines.claude_engine import ClaudeEngine
 from core.engines.haiku_engine import HaikuEngine
-from core.engines.hermes_engine import HermesEngine
-from core.engines.local_engine import LocalEngine
 
 
 class EngineRegistry:
@@ -33,11 +31,9 @@ class EngineRegistry:
         self._initialize_engines()
 
     def _initialize_engines(self) -> None:
-        """Initialize all 4 engines."""
+        """Initialize Claude Code engines only (v2.0)."""
         self.engines[EngineType.CLAUDE] = ClaudeEngine()
         self.engines[EngineType.HAIKU] = HaikuEngine()
-        self.engines[EngineType.HERMES] = HermesEngine()
-        self.engines[EngineType.LOCAL] = LocalEngine()
 
         # Set initial health to healthy
         for engine_type in self.engines:
