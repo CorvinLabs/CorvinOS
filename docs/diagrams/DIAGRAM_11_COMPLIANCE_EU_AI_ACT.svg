@@ -1,106 +1,85 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1000" width="1400" height="1000" font-family="Segoe UI, Arial, sans-serif">
   <defs>
-    <style>
-      .bg { fill: #0a0e27; }
-      .title { font-size: 44px; font-weight: bold; fill: #00d4ff; font-family: monospace; letter-spacing: 1px; }
-      .section { font-size: 26px; font-weight: bold; fill: #ffd700; font-family: monospace; }
-      .req-box { fill: #2a1a2e; stroke: #ff006e; stroke-width: 2.5; rx: 6; }
-      .impl-box { fill: #1a2847; stroke: #00d4ff; stroke-width: 2.5; rx: 6; }
-      .req-title { font-size: 18px; font-weight: bold; fill: #ff006e; font-family: monospace; }
-      .impl-title { font-size: 16px; font-weight: bold; fill: #00d4ff; font-family: monospace; }
-      .label { font-size: 14px; fill: #a8dadc; font-family: monospace; }
-      .divider { stroke: #333; stroke-width: 1; }
-    </style>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#ff006e;stop-opacity:0.08" />
-      <stop offset="100%" style="stop-color:#00d4ff;stop-opacity:0" />
+    <linearGradient id="geu" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2d3e6e"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="ggdpr" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f39c12"/>
+      <stop offset="100%" style="stop-color:#27ae60"/>
+    </linearGradient>
+    <linearGradient id="gload" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3498db"/>
+      <stop offset="100%" style="stop-color:#9b59b6"/>
     </linearGradient>
   </defs>
 
-  <rect class="bg" width="1400" height="1000"/>
-  <rect x="0" y="0" width="1400" height="1000" fill="url(#grad)"/>
+  <rect width="1400" height="1000" fill="#0f0f1e"/>
 
-  <!-- TITLE -->
-  <text x="700" y="60" class="title" text-anchor="middle">Compliance Built-In</text>
-  <line class="divider" x1="200" y1="80" x2="1200" y2="80"/>
-  <text x="700" y="105" style="font-size: 16px; fill: #888; font-family: monospace; text-anchor: middle;">GDPR + EU AI Act 2026 (Structural Constraints)</text>
+  <text x="700" y="50" text-anchor="middle" fill="#e0e0e0" font-size="32" font-weight="bold">Compliance Built-In</text>
+  <text x="700" y="78" text-anchor="middle" fill="#999" font-size="12">GDPR + EU AI Act 2026 (Structural Constraints)</text>
+  <line x1="100" y1="95" x2="1300" y2="95" stroke="#333" stroke-width="1"/>
 
   <!-- EU AI ACT SECTION -->
-  <text x="50" y="155" class="section">🏛️ EU AI ACT</text>
+  <text x="50" y="145" fill="#ffd700" font-size="18" font-weight="bold">🏛️ EU AI ACT</text>
 
-  <!-- Box 1 -->
-  <rect class="req-box" x="50" y="180" width="290" height="95" rx="6"/>
-  <text x="195" y="208" class="req-title" text-anchor="middle">Disclose AI</text>
-  <text x="195" y="228" class="label" text-anchor="middle">(Art. 50)</text>
+  <rect x="50" y="170" width="280" height="110" rx="8" fill="url(#geu)"/>
+  <text x="190" y="192" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 50</text>
+  <text x="190" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Disclose AI Use</text>
+  <text x="190" y="230" text-anchor="middle" fill="#ddd" font-size="10">One-time • Locked</text>
+  <text x="190" y="260" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">bot_disclosure.py</text>
 
-  <rect class="impl-box" x="50" y="285" width="290" height="65" rx="6"/>
-  <text x="195" y="316" class="impl-title" text-anchor="middle">bot_disclosure.py</text>
+  <rect x="360" y="170" width="280" height="110" rx="8" fill="url(#geu)"/>
+  <text x="500" y="192" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 5</text>
+  <text x="500" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Transparent Logging</text>
+  <text x="500" y="230" text-anchor="middle" fill="#ddd" font-size="10">Immutable • Auditable</text>
+  <text x="500" y="260" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">audit_backend.py</text>
 
-  <!-- Box 2 -->
-  <rect class="req-box" x="370" y="180" width="290" height="95" rx="6"/>
-  <text x="515" y="208" class="req-title" text-anchor="middle">Transparent Logging</text>
-  <text x="515" y="228" class="label" text-anchor="middle">(Art. 5)</text>
+  <rect x="670" y="170" width="280" height="110" rx="8" fill="url(#geu)"/>
+  <text x="810" y="192" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 5</text>
+  <text x="810" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Acceptable Use</text>
+  <text x="810" y="230" text-anchor="middle" fill="#ddd" font-size="10">Deny-by-default</text>
+  <text x="810" y="260" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">house_rules.py</text>
 
-  <rect class="impl-box" x="370" y="285" width="290" height="65" rx="6"/>
-  <text x="515" y="316" class="impl-title" text-anchor="middle">audit_backend.py</text>
-
-  <!-- Box 3 -->
-  <rect class="req-box" x="690" y="180" width="290" height="95" rx="6"/>
-  <text x="835" y="208" class="req-title" text-anchor="middle">Acceptable Use</text>
-  <text x="835" y="228" class="label" text-anchor="middle">(Art. 5)</text>
-
-  <rect class="impl-box" x="690" y="285" width="290" height="65" rx="6"/>
-  <text x="835" y="316" class="impl-title" text-anchor="middle">house_rules.py</text>
-
-  <!-- Box 4 -->
-  <rect class="req-box" x="1010" y="180" width="290" height="95" rx="6"/>
-  <text x="1155" y="208" class="req-title" text-anchor="middle">User Opt-Out</text>
-  <text x="1155" y="228" class="label" text-anchor="middle">(Art. 50)</text>
-
-  <rect class="impl-box" x="1010" y="285" width="290" height="65" rx="6"/>
-  <text x="1155" y="316" class="impl-title" text-anchor="middle">/leave command</text>
+  <rect x="980" y="170" width="300" height="110" rx="8" fill="url(#geu)"/>
+  <text x="1130" y="192" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 50</text>
+  <text x="1130" y="212" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">User Opt-Out</text>
+  <text x="1130" y="230" text-anchor="middle" fill="#ddd" font-size="10">Instant • No retention</text>
+  <text x="1130" y="260" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">/leave command</text>
 
   <!-- GDPR SECTION -->
-  <text x="50" y="415" class="section">🔒 GDPR 2016</text>
+  <text x="50" y="350" fill="#ffd700" font-size="18" font-weight="bold">🔒 GDPR 2016</text>
 
-  <!-- GDPR Box 1 -->
-  <rect class="req-box" x="50" y="440" width="290" height="95" rx="6"/>
-  <text x="195" y="468" class="req-title" text-anchor="middle">Legal Basis</text>
-  <text x="195" y="488" class="label" text-anchor="middle">(Art. 6)</text>
+  <rect x="50" y="375" width="280" height="110" rx="8" fill="url(#ggdpr)"/>
+  <text x="190" y="397" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 6</text>
+  <text x="190" y="417" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Legal Basis</text>
+  <text x="190" y="435" text-anchor="middle" fill="#ddd" font-size="10">Consent required</text>
+  <text x="190" y="465" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">consent_gate.py</text>
 
-  <rect class="impl-box" x="50" y="545" width="290" height="65" rx="6"/>
-  <text x="195" y="576" class="impl-title" text-anchor="middle">consent_gate.py</text>
+  <rect x="360" y="375" width="280" height="110" rx="8" fill="url(#ggdpr)"/>
+  <text x="500" y="397" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 30, 32</text>
+  <text x="500" y="417" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Audit Trail</text>
+  <text x="500" y="435" text-anchor="middle" fill="#ddd" font-size="10">Hash-chained • Verified</text>
+  <text x="500" y="465" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">RFC 3161 TSA</text>
 
-  <!-- GDPR Box 2 -->
-  <rect class="req-box" x="370" y="440" width="290" height="95" rx="6"/>
-  <text x="515" y="468" class="req-title" text-anchor="middle">Audit Trail</text>
-  <text x="515" y="488" class="label" text-anchor="middle">(Art. 30, 32)</text>
+  <rect x="670" y="375" width="280" height="110" rx="8" fill="url(#ggdpr)"/>
+  <text x="810" y="397" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 5</text>
+  <text x="810" y="417" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Data Minimization</text>
+  <text x="810" y="435" text-anchor="middle" fill="#ddd" font-size="10">Metadata only • No content</text>
+  <text x="810" y="465" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">_assert_safe()</text>
 
-  <rect class="impl-box" x="370" y="545" width="290" height="65" rx="6"/>
-  <text x="515" y="576" class="impl-title" text-anchor="middle">RFC 3161 TSA</text>
-
-  <!-- GDPR Box 3 -->
-  <rect class="req-box" x="690" y="440" width="290" height="95" rx="6"/>
-  <text x="835" y="468" class="req-title" text-anchor="middle">Data Minimization</text>
-  <text x="835" y="488" class="label" text-anchor="middle">(Art. 5)</text>
-
-  <rect class="impl-box" x="690" y="545" width="290" height="65" rx="6"/>
-  <text x="835" y="576" class="impl-title" text-anchor="middle">_assert_safe()</text>
-
-  <!-- GDPR Box 4 -->
-  <rect class="req-box" x="1010" y="440" width="290" height="95" rx="6"/>
-  <text x="1155" y="468" class="req-title" text-anchor="middle">Right to Erasure</text>
-  <text x="1155" y="488" class="label" text-anchor="middle">(Art. 17)</text>
-
-  <rect class="impl-box" x="1010" y="545" width="290" height="65" rx="6"/>
-  <text x="1155" y="576" class="impl-title" text-anchor="middle">erasure_orchestrator.py</text>
+  <rect x="980" y="375" width="300" height="110" rx="8" fill="url(#ggdpr)"/>
+  <text x="1130" y="397" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" opacity="0.7">Art. 17</text>
+  <text x="1130" y="417" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">Right to Erasure</text>
+  <text x="1130" y="435" text-anchor="middle" fill="#ddd" font-size="10">Delete all • Proof logged</text>
+  <text x="1130" y="465" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">erasure_orchestrator.py</text>
 
   <!-- KEY INSIGHT -->
-  <line class="divider" x1="200" y1="680" x2="1200" y2="680"/>
+  <line x1="50" y1="550" x2="1350" y2="550" stroke="#333" stroke-width="1"/>
 
-  <rect class="impl-box" x="80" y="710" width="1240" height="120" rx="8"/>
-  <text x="700" y="750" class="section" text-anchor="middle">✅ Compliance = Hardcoded Fail-Closed Gates</text>
-  <text x="700" y="785" class="label" text-anchor="middle">NOT feature flags • NOT environment variables • NOT pluggable • Runs BEFORE business logic</text>
+  <rect x="50" y="590" width="1300" height="140" rx="8" fill="url(#gload)"/>
+  <text x="700" y="630" text-anchor="middle" fill="#fff" font-size="18" font-weight="bold">✅ Compliance = Hardcoded Fail-Closed Gates</text>
+  <text x="700" y="655" text-anchor="middle" fill="#ddd" font-size="12">NOT feature flags • NOT environment variables • NOT pluggable</text>
+  <text x="700" y="705" text-anchor="middle" fill="#fff" font-size="11" opacity="0.8">Every gate runs BEFORE business logic • Audit-first • No bypass possible</text>
 
 </svg>

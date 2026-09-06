@@ -120,19 +120,21 @@ class TestConvergence100Batch:
     def test_parameters_converge(self):
         """Over 100 batches, parameters should stabilize."""
         meta = MetaOptimizer()
-        
+
         α_core_history = []
+        losses = []
         for batch in range(100):
             feedback = {'loss_delta_core': -0.001, 'loss_delta_infra': -0.0005}
             loss = meta.compute_loss(feedback)
-            
+            losses.append(loss)
+
             if batch > 0:
                 prev_loss = losses[batch - 1]
                 gradients = meta.compute_gradients(loss, prev_loss)
                 meta.apply_gradients(gradients)
-            
+
             α_core_history.append(meta.α_core)
-        
+
         # Variance in last 20 steps should be small (convergence)
         last_20 = α_core_history[-20:]
         variance = sum((x - sum(last_20)/len(last_20))**2 for x in last_20) / len(last_20)
@@ -141,16 +143,18 @@ class TestConvergence100Batch:
     def test_damping_converges(self):
         """Damping should converge to stable value."""
         meta = MetaOptimizer()
-        
+
+        losses = []
         for batch in range(100):
             feedback = {'loss_delta_core': -0.001, 'loss_delta_infra': -0.0005}
             loss = meta.compute_loss(feedback)
-            
+            losses.append(loss)
+
             if batch > 0:
                 prev_loss = losses[batch - 1]
                 gradients = meta.compute_gradients(loss, prev_loss)
                 meta.apply_gradients(gradients)
-        
+
         # Final damping should be in valid range
         assert 0.8 <= meta.damping_core <= 0.99
         assert 0.8 <= meta.damping_infra <= 0.99

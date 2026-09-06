@@ -140,5 +140,43 @@ class TestCheckpointIntegration:
         assert loop2.damping_infra == 0.92
 
 
+class TestFeedbackSignalProcessing:
+    def test_process_feedback_with_sufficient_samples(self):
+        loop = MetaOptimizer()
+        feedback_outcomes = [
+            {'outcome_feedback': 'yes', 'confidence': 0.9},
+            {'outcome_feedback': 'yes', 'confidence': 0.85},
+            {'outcome_feedback': 'no', 'confidence': 0.7},
+            {'outcome_feedback': 'yes', 'confidence': 0.8},
+        ] * 3  # 12 samples
+        result = loop.process_feedback_signal(feedback_outcomes)
+        assert isinstance(result, bool)
+
+    def test_process_feedback_insufficient_samples(self):
+        loop = MetaOptimizer()
+        feedback_outcomes = [
+            {'outcome_feedback': 'yes', 'confidence': 0.9},
+            {'outcome_feedback': 'no', 'confidence': 0.7},
+        ]  # only 2 samples
+        result = loop.process_feedback_signal(feedback_outcomes)
+        assert result is False
+
+
+class TestDivergenceDetectionViaFeedback:
+    def test_detect_worsening_via_feedback(self):
+        loop = MetaOptimizer()
+        old_loss = 0.3
+        new_loss = 0.45  # worsened by > 0.05
+        result = loop.detect_feedback_divergence(old_loss, new_loss)
+        assert result is True
+
+    def test_no_divergence_on_improvement(self):
+        loop = MetaOptimizer()
+        old_loss = 0.5
+        new_loss = 0.3  # improved
+        result = loop.detect_feedback_divergence(old_loss, new_loss)
+        assert result is False
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
