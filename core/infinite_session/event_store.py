@@ -34,41 +34,39 @@ class EventStore:
                     metadata.json (index)
     """
 
-    def __init__(self, corvin_home: str = None):
+    def __init__(self, tenant_home: str = None):
         """Initialize EventStore.
 
         Args:
-            corvin_home: Corvin home directory (defaults to ~/.corvin)
+            tenant_home: Tenant home directory (defaults to ~/.corvin/tenants/<tenant_id>)
         """
-        if corvin_home is None:
-            corvin_home = os.path.expanduser("~/.corvin")
-        self.corvin_home = Path(corvin_home)
+        if tenant_home is None:
+            tenant_home = os.path.expanduser("~/.corvin")
+        self.root_dir = Path(tenant_home) / "snapshots"
+        self.root_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_snapshot_dir(self, tenant_id: str, task_id: str, phase_id: str) -> Path:
         """Get directory path for snapshots (fail-closed on invalid tenant_id).
 
         Args:
             tenant_id: Tenant identifier (must not be empty)
-            task_id: Task identifier
+            task_id: Task identifier (must not contain path traversal)
             phase_id: Phase identifier
 
         Returns:
             Path to snapshot directory
 
         Raises:
-            ValueError: If tenant_id is empty or invalid
+            ValueError: If tenant_id is empty or invalid, or if task_id contains path traversal
         """
         if not tenant_id or not tenant_id.strip():
             raise ValueError("tenant_id is required and must not be empty (fail-closed)")
 
-        snapshot_dir = (
-            self.corvin_home
-            / "tenants"
-            / tenant_id
-            / "snapshots"
-            / task_id
-            / phase_id
-        )
+        # Validate task_id: reject path traversal sequences
+        if task_id and ('..' in task_id or task_id.startswith('/')):
+            raise ValueError("task_id contains invalid path sequence (fail-closed)")
+
+        snapshot_dir = self.root_dir / task_id / phase_id
         return snapshot_dir
 
     def write_snapshot(
