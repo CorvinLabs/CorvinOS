@@ -198,9 +198,11 @@ class TestEventQuerying:
         events = ranking_manager._query_tool_events(TENANT, None, None, self._cutoff())
         assert len(events) == 1
 
-    def test_query_is_tenant_scoped(self, event_store, ranking_manager):
+    def test_query_is_tenant_scoped(self, event_store, ranking_manager, monkeypatch):
         event_store.write_event(create_tool_event(tenant_id=TENANT))
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_b")  # audit-first: chain admits the process tenant only
         event_store.write_event(create_tool_event(tenant_id="tenant_b"))
+        monkeypatch.setenv("CORVIN_TENANT_ID", TENANT)
         assert len(ranking_manager._query_tool_events(TENANT, None, None, self._cutoff())) == 1
         assert len(ranking_manager._query_tool_events("tenant_b", None, None, self._cutoff())) == 1
 
@@ -340,9 +342,11 @@ class TestToolRanking:
         assert len(ranked) == 3
 
     @pytest.mark.asyncio
-    async def test_ranking_never_crosses_tenants(self, event_store, ranking_manager):
+    async def test_ranking_never_crosses_tenants(self, event_store, ranking_manager, monkeypatch):
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_b")  # audit-first: chain admits the process tenant only
         for _ in range(10):
             event_store.write_event(create_tool_event(tool_id="tool_b", tenant_id="tenant_b"))
+        monkeypatch.setenv("CORVIN_TENANT_ID", TENANT)
         assert await ranking_manager.get_ranked_tools(tenant_id=TENANT) == []
 
 

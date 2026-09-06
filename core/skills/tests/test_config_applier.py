@@ -48,6 +48,7 @@ def config_applier(mock_optimizer, mock_audit_backend):
         optimizer_with_gate=mock_optimizer,
         audit_backend=mock_audit_backend,
         tenant_id="_default",
+        config_getter=lambda: {"key": "current"},
     )
     return applier
 

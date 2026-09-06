@@ -106,12 +106,11 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
 
       if (patternsRes.ok) {
         const data = await patternsRes.json();
-        const patterns = data.data || data;
-        if (Array.isArray(patterns)) {
-          setPatterns(patterns);
-        } else if (patterns && typeof patterns === 'object' && !patterns.detail) {
-          setPatterns(Array.isArray(patterns) ? patterns : []);
-        }
+        // routes/learning.py answers { tenant_id, threshold, chain_verified, patterns: [...] }
+        // (ADR-0548). Reading `data.data || data` here treated that envelope as
+        // "not an array" and silently showed zero patterns forever.
+        const patterns = data.patterns ?? data.data ?? data;
+        setPatterns(Array.isArray(patterns) ? patterns : []);
       }
       if (versionsRes.ok) {
         const data = await versionsRes.json();

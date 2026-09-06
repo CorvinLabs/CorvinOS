@@ -10,6 +10,7 @@ must use these functions rather than constructing paths directly.
 GDPR Art. 5 (integrity) + ADR-0007 (multi-tenant axis).
 """
 
+import os
 from pathlib import Path
 
 from core.tenants import (
@@ -19,10 +20,30 @@ from core.tenants import (
 )
 
 
+def corvin_home() -> Path:
+    """The runtime root: ``$CORVIN_HOME``, else ``~/.corvin`` (CLAUDE.md § Project Identity).
+
+    Mirrors ``operator/bridges/shared/paths.py::corvin_home`` — the canonical
+    resolver. Until 2026-09-06 this module hard-wired ``~/.corvin`` and ignored
+    ``CORVIN_HOME`` entirely, so every learning/skills path built here (the
+    learning event dirs, the per-tenant audit file, skill configs) pointed at
+    the operator's HOME while the live services ran on a different root
+    (``CORVIN_HOME=<repo>/.corvin``): learning data and audit joins silently
+    landed outside the live install (adversarial review F25).
+    """
+    root = os.environ.get("CORVIN_HOME", "").strip()
+    if root:
+        return Path(os.path.expandvars(root)).expanduser()
+    repo_local = Path(__file__).resolve().parents[2] / ".corvin"
+    if repo_local.is_dir():  # source checkout: the repo-local root is the live one
+        return repo_local
+    return Path.home() / ".corvin"
+
+
 def tenant_home(tenant_id: str) -> Path:
     """Construct tenant home directory path.
 
-    Returns: ~/.corvin/tenants/<tenant_id>/
+    Returns: <corvin_home>/tenants/<tenant_id>/
 
     Args:
         tenant_id: Tenant identifier (validated)
@@ -34,7 +55,7 @@ def tenant_home(tenant_id: str) -> Path:
         ValueError: If tenant_id is invalid
     """
     validate_tenant_id(tenant_id)
-    return Path.home() / ".corvin" / "tenants" / tenant_id
+    return corvin_home() / "tenants" / tenant_id
 
 
 def tenant_skill_dir(tenant_id: str) -> Path:

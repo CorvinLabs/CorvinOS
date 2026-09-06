@@ -62,8 +62,13 @@ class PluginSnapshotManager:
                              Defaults to ~/.corvin/plugins/snapshots/
         """
         if snapshot_base_dir is None:
-            from pathlib import Path
-            corvin_home = Path.home() / ".corvin"
+            # No function-local ``from pathlib import Path`` here: it rebound
+            # ``Path`` for the whole method and raised UnboundLocalError on the
+            # ``Path(snapshot_base_dir)`` below whenever a dir WAS given.
+            import os  # noqa: PLC0415
+
+            root = os.environ.get("CORVIN_HOME")
+            corvin_home = Path(root) if root else Path.home() / ".corvin"
             snapshot_base_dir = corvin_home / "plugins" / "snapshots"
 
         self.base_dir = Path(snapshot_base_dir)
@@ -168,7 +173,10 @@ class PluginSnapshotManager:
             return []
 
         snapshots = []
-        for snapshot_file in plugin_dir.glob("snap-*.json"):
+        # Snapshot files are named ``<plugin_id>-snap-<hex>.json`` (create_snapshot);
+        # the former ``snap-*.json`` glob matched NONE of them, so every listing was
+        # empty and an automatic rollback could never find its pre-install snapshot.
+        for snapshot_file in plugin_dir.glob("*-snap-*.json"):
             try:
                 with open(snapshot_file, "r") as f:
                     data = json.load(f)
@@ -283,7 +291,7 @@ class RollbackProcedure:
         )
 
         if not pre_install:
-            return False, f"No pre-install snapshot found for {plugin_id}"
+            return False, f"pre-install snapshot not found for {plugin_id}"
 
         logger.warning(f"Initiating automatic rollback for {plugin_id}: {reason}")
         return self.snapshots.restore_snapshot(plugin_id, pre_install.snapshot_id)

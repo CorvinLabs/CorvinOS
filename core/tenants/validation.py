@@ -11,9 +11,13 @@ import re
 from typing import Optional
 
 
-# Tenant ID: alphanumeric, underscore only. Max 64 chars. No path traversal.
-# [PSEUDOCODE] Reserved names: ".", "..", "global", "bridges" + admin names
-TENANT_ID_REGEX = r"^[a-z0-9_]{1,64}$"
+# Tenant ID: lowercase alphanumeric + underscore, hyphen allowed after the
+# first character, max 63 chars. This is the SAME pattern as the canonical
+# resolver ``forge.tenants.validate_tenant_id`` (CLAUDE.md § Multi-tenant Axis).
+# Until 2026-09-06 this module rejected hyphens while forge accepted them, so a
+# tenant such as ``acme-corp`` could be created and audited by the core but
+# was refused by every learning/skills subsystem (adversarial review F21).
+TENANT_ID_REGEX = r"^[a-z0-9_][a-z0-9_-]{0,62}$"
 RESERVED_TENANT_NAMES = frozenset({
     ".", "..", "global", "bridges",
     # Admin/system names
@@ -60,11 +64,12 @@ def validate_tenant_id(tenant_id: str) -> str:
             f"tenant_id contains path traversal characters: {tenant_id!r}"
         )
 
-    # Format check: lowercase alphanumeric + underscore, 1-64 chars
+    # Format check: lowercase alphanumeric + underscore (+ hyphen after the
+    # first char), 1-63 chars — identical to forge.tenants.
     if not re.match(TENANT_ID_REGEX, tenant_id):
         raise ValueError(
             f"tenant_id contains invalid characters: {tenant_id!r}. "
-            f"Only lowercase alphanumeric and underscore allowed (1-64 chars)."
+            f"Only lowercase alphanumeric, underscore and hyphen (not leading) allowed (1-63 chars)."
         )
 
     # Reserved names check (fail-closed)

@@ -115,7 +115,7 @@ class TestMetricsCollection:
                 approval_id=f"approval_{i}",
                 decision="approved",
                 confidence=0.9,
-                operator_latency_ms=100.0 * i,
+                operator_latency_ms=100.0 * (i + 1),  # 0 ms = no operator wait, not tracked
                 auto_approved=(i < 8),
             )
 
@@ -435,7 +435,7 @@ class TestTuningHistory:
 
         assert len(history) == 3
         # Most recent first
-        assert history[0]["new_threshold"] == 0.8
+        assert history[0]["new_threshold"] == pytest.approx(0.8)
 
     def test_get_tuning_history_empty_skill(self, tuning_optimizer):
         """Test getting history for skill with no tunings."""

@@ -71,11 +71,16 @@ class TestAuditPathTenantAwareness:
         paths = {_audit_path(t) for t in ("_default", "tenant_acme", "tenant_beta")}
         assert len(paths) == 3
 
-    def test_hyphenated_tenant_id_is_rejected(self, scratch_home: Path) -> None:
+    def test_hyphenated_tenant_id_matches_canonical_rule(self, scratch_home: Path) -> None:
+        """core.tenants agrees with forge.tenants (^[a-z0-9_][a-z0-9_-]{0,62}$):
+        a hyphen is fine after the first char; a leading hyphen, uppercase or
+        traversal are not."""
         from core.tenants import validate_tenant_id
 
-        with pytest.raises(ValueError):
-            validate_tenant_id("tenant-acme")
+        assert validate_tenant_id("tenant-acme") == "tenant-acme"
+        for bad in ("-acme", "Tenant", "a/b", "..", "x" * 64):
+            with pytest.raises(ValueError):
+                validate_tenant_id(bad)
 
 
 class TestAuditEmissionWithTenantId:
@@ -128,9 +133,10 @@ class TestEventStorePathIsolation:
         assert store.events_dir == scratch_home / "tenants" / "tenant_test" / "learning" / "events"
         assert "global" not in store.events_dir.parts, "Store should not use 'global' path"
 
-    def test_eventstore_rejects_hyphenated_tenant(self, scratch_home: Path) -> None:
+    def test_eventstore_rejects_leading_hyphen_tenant(self, scratch_home: Path) -> None:
         with pytest.raises(ValueError):
-            EventStore("tenant-test")
+            EventStore("-tenant")
+        assert "tenant-test" in EventStore("tenant-test").events_dir.parts
 
     def test_eventstore_different_tenants_different_dirs(self, scratch_home: Path) -> None:
         store_a, store_b = EventStore("tenant_a"), EventStore("tenant_b")

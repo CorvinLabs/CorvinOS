@@ -17,6 +17,13 @@ from core.learning.hybrid_context import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _as_tenant_1(monkeypatch):
+    """HybridContextModel writes audit-first (core chain); the chain admits the
+    PROCESS tenant only (ADR-0007), so these tests run as ``tenant-1``."""
+    monkeypatch.setenv("CORVIN_TENANT_ID", "tenant-1")
+
+
 class TestImmutableBase:
     """Test immutable base context snapshots."""
 
@@ -156,19 +163,14 @@ class TestMergeWithFallback:
 
         base = model.base_snapshots["user-1:s1"]
 
-        # Create layers (all healthy)
-        layers = [
-            {
-                "layer_name": "user_style",
-                "data": {"tone": "professional"},
-                "status": "injected",
-            },
-            {
-                "layer_name": "session_context",
-                "data": {"depth": 3},
-                "status": "injected",
-            },
-        ]
+        # Create layers (all healthy) through the model, so they carry the
+        # hash chain merge_with_fallback verifies (L-04): a hand-built layer
+        # without hash/prev_hash is indistinguishable from a forged one and
+        # is dropped by design.
+        from dataclasses import asdict
+        model.inject_layer("user-1", "user_style", {"tone": "professional"}, lom="test:1")
+        model.inject_layer("user-1", "session_context", {"depth": 3}, lom="test:2")
+        layers = [asdict(l) for l in model.injected_layers["user-1"]]
 
         # Merge
         merged = model.merge_with_fallback(base, layers)
@@ -197,17 +199,19 @@ class TestMergeWithFallback:
 
         base = model.base_snapshots["user-1:s1"]
 
-        # Create layers: one good, one bad (PII)
-        layers = [
-            {
-                "layer_name": "user_style",
-                "data": {"tone": "verbose"},
-                "status": "injected",
-            },
+        # One good layer via the model (hash-chained), then a PII layer that
+        # is chain-consistent (so it is dropped for CONTENT, not as a forgery).
+        from dataclasses import asdict
+        good_hash = model.inject_layer("user-1", "user_style", {"tone": "verbose"}, lom="test:1")
+        bad_data = {"email": "user@example.com"}  # PII — will fail
+        layers = [asdict(l) for l in model.injected_layers["user-1"]] + [
             {
                 "layer_name": "bad_layer",
-                "data": {"email": "user@example.com"},  # PII — will fail
+                "data": bad_data,
                 "status": "injected",
+                "version": "1.0",
+                "prev_hash": good_hash,
+                "hash": model._compute_hash("1.0", bad_data, good_hash),
             },
         ]
 

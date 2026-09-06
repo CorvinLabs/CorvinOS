@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 /**
  * Unit Tests: Marketplace Panel Phase 3 Week 1 — Real Job API Wiring
- * Tests: POST /api/v2/marketplace/install + GET progress polling (mocked)
+ * Tests: POST /api/v1/marketplace/plugins/{id}/install + GET progress polling (mocked)
+ * (ADR-0511 v1 API — the former /api/v2 paths were never mounted)
  */
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -9,6 +10,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MarketplacePanel } from '@/panels/marketplace'
 import * as useProgressPollingModule from '@/hooks/useProgressPolling'
 import { BASE } from '@/lib/api/client'
+
+// MarketplacePanel reads the CSRF token from the auth context (install is a
+// mutation → require_csrf). Provide a session without mounting <AuthProvider>.
+vi.mock('@/lib/auth', () => ({
+  useAuth: () => ({
+    session: { tenant_id: '_default', csrf_token: 'csrf-test', tier: 'owner' },
+    loading: false,
+    refresh: vi.fn(),
+    logout: vi.fn(),
+  }),
+}))
 
 describe('Marketplace Panel - Phase 3 Real API', () => {
   let queryClient: QueryClient
@@ -25,23 +37,25 @@ describe('Marketplace Panel - Phase 3 Real API', () => {
     vi.unstubAllGlobals()
   })
 
-  test('handleInstall: POST /api/v2/marketplace/install + start polling', async () => {
+  test('handleInstall: POST /api/v1/marketplace/plugins/{id}/install + start polling', async () => {
     // Mock the index fetch
     ;vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        extensions: [
+        plugins: [
           {
-            plugin_id: 'test-plugin',
+            id: 'plugin:buildin-tools-test_plugin',
             name: 'Test Plugin',
             version: '1.0.0',
             category: 'Tools',
             description: 'Test',
-            author_id: 'author',
-            rating_average: 4.5,
-            download_count: 100,
+            tier: 'buildin',
+            author: 'author',
+            rating: 4.5,
+            install_count: 100,
           },
         ],
+        count: 1,
       }),
     })
 
@@ -88,13 +102,14 @@ describe('Marketplace Panel - Phase 3 Real API', () => {
 
     // Verify POST body
     const installCall = postCalls.find(call =>
-      call[0].includes(`${BASE}/api/v2/marketplace/install`)
+      String(call[0]).includes(
+        `${BASE}/api/v1/marketplace/plugins/${encodeURIComponent('plugin:buildin-tools-test_plugin')}/install`,
+      ),
     )
-    if (installCall) {
-      const body = JSON.parse(installCall[1].body)
-      expect(body.extension_id).toBe('test-plugin')
-      expect(body.version).toBe('1.0.0')
-    }
+    expect(installCall).toBeDefined()
+    const body = JSON.parse(installCall![1].body)
+    expect(body.version).toBe('1.0.0')
+    expect(body.tenant_id).toBeUndefined() // tenant is the session's, never the body's
   })
 
   test('handleInstall: error on POST should show error message', async () => {
@@ -102,18 +117,20 @@ describe('Marketplace Panel - Phase 3 Real API', () => {
     ;vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        extensions: [
+        plugins: [
           {
-            plugin_id: 'test-plugin',
+            id: 'plugin:buildin-tools-test_plugin',
             name: 'Test Plugin',
             version: '1.0.0',
             category: 'Tools',
             description: 'Test',
-            author_id: 'author',
-            rating_average: 4.5,
-            download_count: 100,
+            tier: 'buildin',
+            author: 'author',
+            rating: 4.5,
+            install_count: 100,
           },
         ],
+        count: 1,
       }),
     })
 
@@ -157,7 +174,8 @@ describe('Marketplace Panel - Phase 3 Real API', () => {
     ;vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        extensions: [{ plugin_id: 'test', name: 'Test', version: '1.0', category: 'Tools', description: 'Test', author_id: 'a', rating_average: 4.5, download_count: 100 }],
+        plugins: [{ id: 'plugin:buildin-tools-test', name: 'Test', version: '1.0', category: 'Tools', description: 'Test', tier: 'buildin', author: 'a', rating: 4.5, install_count: 100 }],
+        count: 1,
       }),
     })
 

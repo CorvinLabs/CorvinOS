@@ -173,6 +173,7 @@ spec:
     - cel_brief_includes_content    # inject memory/ADR BODIES, not just titles (ADR-0396); correctness 0.00->1.00
     - vibe_engineering_active       # CEL ACTIVE brain (LLM + Toolforge + SkillForge)
     - tree_of_thoughts              # Learning dashboard (Phase 1-7)
+    - learning_enabled              # Learning Dashboard panel (ACP feedback loop, ADR-0549)
     - learning_objectives           # User-defined learning objectives
     - token_metrics                 # Token usage + cost visualization
     - outcome_feedback_loop         # Auto-grade CEL stages post-turn
@@ -193,6 +194,9 @@ spec:
     - skill_creator_enabled         # Autonomous 6-phase skill builder (default ON)
     - adr_gate_enabled              # Architectural Decision Record enforcement
     - concept_gate_enabled          # Concept archiving for reusable patterns
+    # Plugin registry surface + runtime lifecycle (ADR-0233 / ADR-0511):
+    - plugin_console_surface        # GET /api/v1/plugins + Installed tab (else 404)
+    - plugin_runtime_lifecycle      # install/uninstall/enable/disable → registry.yaml (else refused)
     # Phase 8-12 features (proactive learning):
     # - learning_anomaly_detection   # Detect confidence drops
     # - learning_pattern_discovery   # Auto-discover patterns from failures

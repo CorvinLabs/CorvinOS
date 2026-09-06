@@ -140,7 +140,10 @@ class PreferenceInferencer:
         # Extract skills from successful tasks
         skill_counts = {}
         for task in successful:
-            for skill in task.get("skill_sequence", []):
+            # The documented observation shape says ``skill_seq``; callers also
+            # send ``skill_sequence``. Accept both (the code read only the latter
+            # and silently learned NOTHING from documented-shape observations).
+            for skill in task.get("skill_sequence") or task.get("skill_seq") or []:
                 skill_counts[skill] = skill_counts.get(skill, 0) + 1
 
         # Normalize to preference scores
@@ -216,11 +219,18 @@ class PreferenceInferencer:
             return 1.0  # No timestamp info
 
         if isinstance(last_time, str):
-            from datetime import datetime
+            # NOTE: no local ``from datetime import datetime`` here — a function-
+            # local import rebinds ``datetime`` for the WHOLE function body, so
+            # the ``datetime.now`` below raised UnboundLocalError whenever the
+            # timestamp was already a datetime (the branch not taken).
             try:
                 last_time = datetime.fromisoformat(last_time)
-            except:
+            except ValueError:
                 return 1.0
+        if not isinstance(last_time, datetime):
+            return 1.0
+        if last_time.tzinfo is None:
+            last_time = last_time.replace(tzinfo=timezone.utc)
 
         days_ago = (datetime.now(timezone.utc) - last_time).days
 

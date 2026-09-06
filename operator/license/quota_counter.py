@@ -126,6 +126,20 @@ def _save(path: Path, data: dict[str, Any]) -> None:
         raise
 
 
+def get_limit(feature: str) -> Any:
+    """Active-tier limit for ``feature`` (``None`` = unlimited).
+
+    Module-level indirection over ``validator.get_limit`` (imported lazily —
+    the validator imports this module). Being a module attribute is what
+    lets tests and operator tooling patch the limit; the previous function-
+    local ``from .validator import get_limit`` silently bypassed every such
+    patch (``monkeypatch.setattr(_quota, "get_limit", ...)`` was a no-op).
+    """
+    from .validator import get_limit as _gl  # type: ignore
+
+    return _gl(feature)
+
+
 def increment_and_check(
     corvin_home: Path,
     feature: str,
@@ -194,8 +208,6 @@ def _do_increment_and_check(
     tenant_id: str,
 ) -> int:
     """Inner implementation with no retry logic."""
-    from .validator import get_limit  # type: ignore
-
     today = _today_utc()
     path = _quota_path(corvin_home, tenant_id, feature, today)
     lock_path = _lock_path(corvin_home, tenant_id, feature, today)
@@ -211,9 +223,13 @@ def _do_increment_and_check(
                     pass
 
                 try:
+                    limit = get_limit(feature)
+                    if limit is None:
+                        # Unlimited tier: nothing to enforce and nothing to
+                        # track — no counter file is written (returns 0).
+                        return 0
                     data = _load(path)
                     current = max(0, int(data.get("count", 0)))
-                    limit = get_limit(feature)
 
                     if limit is not None:
                         try:

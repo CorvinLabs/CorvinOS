@@ -27,6 +27,7 @@ adapter.py ``main()`` "task-reaper").
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -36,6 +37,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+
+logger = logging.getLogger(__name__)
 
 class QuotaExceededError(Exception):
     """Raised when task creation would exceed quota limits."""
@@ -349,6 +352,26 @@ class TaskManager:
 
         return task_id
 
+    @staticmethod
+    def _emit_learning_outcome(task: "Task", event: dict[str, Any]) -> None:
+        """Hand a finished task to the learning outcome sink (fail-soft)."""
+        try:
+            from core.learning.outcome_sink import emit_task_outcome  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 — stripped install without core.learning
+            return
+        try:
+            emit_task_outcome(
+                tenant_id=task.input.get("tenant_id"),
+                task_id=task.task_id,
+                status="completed" if event["event"] == "task.completed" else "failed",
+                exit_code=task.exit_code,
+                duration_ms=task.duration_ms,
+                engine=event.get("engine") or task.input.get("engine"),
+                task_type=task.input.get("task_type"),
+            )
+        except Exception:  # noqa: BLE001 — never break the task lifecycle on learning
+            logger.debug("learning outcome not recorded for task %s", task.task_id, exc_info=True)
+
     def record_event(self, task_id: str, event: dict[str, Any]) -> int:
         """Record an event in the task's log, update metadata if needed.
 
@@ -376,6 +399,12 @@ class TaskManager:
                     task.exit_code = event.get("exit_code", 1)
                     if task.started_at and task.ended_at:
                         task.duration_ms = int((task.ended_at - task.started_at) * 1000)
+                if event["event"] in ("task.completed", "task.failed"):
+                    # ADR-0314 loop closure: every real task outcome becomes an
+                    # OUTCOME learning event (audit-first store). The tenant is
+                    # the task's OWN metadata (create_task(tenant_id=...)) —
+                    # never an env fallback; without it nothing is recorded.
+                    self._emit_learning_outcome(task, event)
                 elif event["event"] == "task.cancelled":
                     task.status = TaskStatus.CANCELLED
                     task.ended_at = time.time()

@@ -96,6 +96,7 @@ async def _route_ats_task(
             instruction=slots.get("name", "CCC task"),
             persona="assistant",
             turn_number=0,
+            tenant_id=tenant_id,  # ADR-0314 outcome sink: the task's own tenant
         )
         return ActionResult(
             action_id=action_id,
