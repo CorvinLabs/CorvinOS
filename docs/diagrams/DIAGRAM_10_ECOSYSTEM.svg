@@ -21,25 +21,19 @@
   <rect class="bg" width="1400" height="1000"/>
 
   <text x="700" y="50" class="title" text-anchor="middle">CorvinOS Architecture</text>
-  <text x="700" y="75" class="subtitle" text-anchor="middle">Self-learning • Auditable • Multi-engine</text>
 
   <!-- INPUT LAYER -->
-  <text x="700" y="130" class="layer-title" text-anchor="middle">📥 INPUT</text>
   <rect class="box" x="200" y="150" width="200" height="80"/>
   <text x="300" y="175" class="big-label" text-anchor="middle">CLI</text>
-  <text x="300" y="200" class="small-text" text-anchor="middle">Commands</text>
 
   <rect class="box" x="450" y="150" width="200" height="80"/>
   <text x="550" y="175" class="big-label" text-anchor="middle">Web</text>
-  <text x="550" y="200" class="small-text" text-anchor="middle">Dashboard</text>
 
   <rect class="box" x="700" y="150" width="200" height="80"/>
   <text x="800" y="175" class="big-label" text-anchor="middle">Voice</text>
-  <text x="800" y="200" class="small-text" text-anchor="middle">Discord</text>
 
   <rect class="box" x="950" y="150" width="200" height="80"/>
   <text x="1050" y="175" class="big-label" text-anchor="middle">A2A</text>
-  <text x="1050" y="200" class="small-text" text-anchor="middle">App-to-App</text>
 
   <!-- ARROWS DOWN -->
   <path class="arrow" d="M 300 230 L 300 280"/>
@@ -48,22 +42,18 @@
   <path class="arrow" d="M 1050 230 L 1050 280"/>
 
   <!-- CORE LAYER: ACP SKILLS -->
-  <text x="700" y="310" class="layer-title" text-anchor="middle">🧠 AGENTIC CONTROL PLANE (Skills 2.0)</text>
 
   <rect class="core-box" x="150" y="340" width="280" height="100"/>
   <text x="290" y="370" class="big-label" text-anchor="middle">L5: Routing</text>
   <text x="290" y="395" class="medium-label" text-anchor="middle">Pick best engine</text>
-  <text x="290" y="415" class="small-text" text-anchor="middle">Learns from feedback</text>
 
   <rect class="core-box" x="560" y="340" width="280" height="100"/>
   <text x="700" y="370" class="big-label" text-anchor="middle">L10: Context</text>
   <text x="700" y="395" class="medium-label" text-anchor="middle">Preserve important facts</text>
-  <text x="700" y="415" class="small-text" text-anchor="middle">Saves ~30% tokens</text>
 
   <rect class="core-box" x="970" y="340" width="280" height="100"/>
   <text x="1110" y="370" class="big-label" text-anchor="middle">L22: Workflow</text>
   <text x="1110" y="395" class="medium-label" text-anchor="middle">Orchestrate Skills</text>
-  <text x="1110" y="415" class="small-text" text-anchor="middle">Optimal execution</text>
 
   <!-- ARROWS DOWN -->
   <path class="arrow" d="M 290 440 L 290 500"/>
@@ -71,32 +61,26 @@
   <path class="arrow" d="M 1110 440 L 1110 500"/>
 
   <!-- LEARNING LAYER -->
-  <text x="700" y="545" class="layer-title" text-anchor="middle">📊 LEARNING LOOP (9D Loss Vector)</text>
 
   <rect class="box" x="200" y="570" width="1000" height="120"/>
   <text x="700" y="600" class="big-label" text-anchor="middle">Self-Optimization</text>
   <text x="700" y="625" class="medium-label" text-anchor="middle">6 Core Loops + 3 Infrastructure Loops + 1 Meta Loop</text>
-  <text x="700" y="650" class="small-text" text-anchor="middle">Converges in <10K samples • Operator stays in control</text>
 
   <!-- ARROWS DOWN -->
   <path class="arrow" d="M 700 690 L 700 740"/>
 
   <!-- COMPLIANCE LAYER -->
-  <text x="700" y="770" class="layer-title" text-anchor="middle">🔐 COMPLIANCE & AUDIT</text>
 
   <rect class="box" x="150" y="800" width="280" height="100"/>
   <text x="290" y="830" class="big-label" text-anchor="middle">Audit Trail</text>
   <text x="290" y="855" class="medium-label" text-anchor="middle">Hash-chained</text>
-  <text x="290" y="880" class="small-text" text-anchor="middle">GDPR + EU AI Act</text>
 
   <rect class="box" x="560" y="800" width="280" height="100"/>
   <text x="700" y="830" class="big-label" text-anchor="middle">Consent Gate</text>
   <text x="700" y="855" class="medium-label" text-anchor="middle">Deny-by-default</text>
-  <text x="700" y="880" class="small-text" text-anchor="middle">GDPR compliant</text>
 
   <rect class="box" x="970" y="800" width="280" height="100"/>
   <text x="1110" y="830" class="big-label" text-anchor="middle">Plugins</text>
   <text x="1110" y="855" class="medium-label" text-anchor="middle">5 trust tiers</text>
-  <text x="1110" y="880" class="small-text" text-anchor="middle">Sandboxed execution</text>
 
 </svg>

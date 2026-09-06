@@ -16,76 +16,34 @@
   <rect class="bg" width="1400" height="900"/>
 
   <text x="700" y="50" class="title" text-anchor="middle">CorvinOS: Core Features</text>
-  <text x="700" y="75" class="subtitle" text-anchor="middle">What makes it powerful</text>
 
   <!-- ROW 1 -->
   <rect class="feature-box" x="50" y="120" width="300" height="180"/>
-  <text x="200" y="155" class="icon" text-anchor="middle">🎯</text>
   <text x="200" y="190" class="feature-title" text-anchor="middle">Skills 2.0</text>
-  <text x="200" y="213" class="feature-desc" text-anchor="middle">Versioned programs</text>
-  <text x="65" y="235" class="benefit">✓ Swap instantly</text>
-  <text x="65" y="252" class="benefit">✓ Learn from feedback</text>
-  <text x="65" y="269" class="benefit">✓ Fully auditable</text>
 
   <rect class="feature-box" x="400" y="120" width="300" height="180"/>
-  <text x="550" y="155" class="icon" text-anchor="middle">🧠</text>
   <text x="550" y="190" class="feature-title" text-anchor="middle">Self-Learning</text>
-  <text x="550" y="213" class="feature-desc" text-anchor="middle">9D loss vector</text>
-  <text x="415" y="235" class="benefit">✓ Optimizes automatically</text>
-  <text x="415" y="252" class="benefit">✓ Converges <10K samples</text>
-  <text x="415" y="269" class="benefit">✓ Operator in control</text>
 
   <rect class="feature-box" x="750" y="120" width="300" height="180"/>
-  <text x="900" y="155" class="icon" text-anchor="middle">🔐</text>
   <text x="900" y="190" class="feature-title" text-anchor="middle">Complete Audit</text>
-  <text x="900" y="213" class="feature-desc" text-anchor="middle">Hash-chained proof</text>
-  <text x="765" y="235" class="benefit">✓ Immutable log</text>
-  <text x="765" y="252" class="benefit">✓ Cryptographic proof</text>
-  <text x="765" y="269" class="benefit">✓ GDPR compliant</text>
 
   <rect class="feature-box" x="1100" y="120" width="250" height="180"/>
-  <text x="1225" y="155" class="icon" text-anchor="middle">⚙️</text>
   <text x="1225" y="190" class="feature-title" text-anchor="middle">Multi-Engine</text>
-  <text x="1225" y="213" class="feature-desc" text-anchor="middle">Smart routing</text>
-  <text x="1115" y="235" class="benefit">✓ Claude/Opus</text>
-  <text x="1115" y="252" class="benefit">✓ Cost-optimized</text>
-  <text x="1115" y="269" class="benefit">✓ Learns best pick</text>
 
   <!-- ROW 2 -->
   <rect class="feature-box" x="50" y="370" width="300" height="170"/>
-  <text x="200" y="400" class="icon" text-anchor="middle">🧩</text>
   <text x="200" y="433" class="feature-title" text-anchor="middle">Hybrid Context</text>
-  <text x="200" y="453" class="feature-desc" text-anchor="middle">Never forgets</text>
-  <text x="65" y="475" class="benefit">✓ Survives truncation</text>
-  <text x="65" y="492" class="benefit">✓ Saves 30% tokens</text>
-  <text x="65" y="509" class="benefit">✓ Learns what matters</text>
 
   <rect class="feature-box" x="400" y="370" width="300" height="170"/>
-  <text x="550" y="400" class="icon" text-anchor="middle">🔌</text>
   <text x="550" y="433" class="feature-title" text-anchor="middle">Plugins</text>
-  <text x="550" y="453" class="feature-desc" text-anchor="middle">Marketplace</text>
-  <text x="415" y="475" class="benefit">✓ 5 trust tiers</text>
-  <text x="415" y="492" class="benefit">✓ Sandboxed</text>
-  <text x="415" y="509" class="benefit">✓ Auto-audited</text>
 
   <rect class="feature-box" x="750" y="370" width="300" height="170"/>
-  <text x="900" y="400" class="icon" text-anchor="middle">📊</text>
   <text x="900" y="433" class="feature-title" text-anchor="middle">Live Dashboard</text>
-  <text x="900" y="453" class="feature-desc" text-anchor="middle">See & tune</text>
-  <text x="765" y="475" class="benefit">✓ 9D loss trends</text>
-  <text x="765" y="492" class="benefit">✓ Weight tuning</text>
-  <text x="765" y="509" class="benefit">✓ Real-time metrics</text>
 
   <rect class="feature-box" x="1100" y="370" width="250" height="170"/>
-  <text x="1225" y="400" class="icon" text-anchor="middle">⚖️</text>
   <text x="1225" y="433" class="feature-title" text-anchor="middle">Compliance</text>
-  <text x="1225" y="453" class="feature-desc" text-anchor="middle">Built-in</text>
-  <text x="1115" y="475" class="benefit">✓ GDPR</text>
-  <text x="1115" y="492" class="benefit">✓ EU AI Act</text>
-  <text x="1115" y="509" class="benefit">✓ Structural</text>
 
   <!-- KEY INSIGHT -->
   <text x="700" y="620" class="feature-title" text-anchor="middle">No hardcoded behavior • No buried feature flags</text>
-  <text x="700" y="650" class="feature-desc" text-anchor="middle">Every decision is versioned, learnable, and provable</text>
 
 </svg>

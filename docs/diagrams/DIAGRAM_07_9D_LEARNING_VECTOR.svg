@@ -24,7 +24,6 @@
   <rect class="bg" width="1400" height="900"/>
 
   <text x="700" y="35" class="title" text-anchor="middle">9D Learning Vector: Tiered Architecture</text>
-  <text x="700" y="55" class="desc" text-anchor="middle">TIER 1 (Core) + TIER 2 (Infrastructure) + TIER 3 (Meta Loop) with Damping</text>
 
   <!-- TIER 1: Core Loops (6D, proven) -->
   <text x="50" y="100" class="label" fill="#00ff88">TIER 1: Core Loops (6D, Proven)</text>
@@ -32,34 +31,16 @@
   <g id="tier1">
     <!-- L1-L6 boxes -->
     <rect class="tier1-box" x="50" y="120" width="150" height="80"/>
-    <text x="125" y="145" class="number" text-anchor="middle">① L_route</text>
-    <text x="125" y="162" class="desc" text-anchor="middle">Routing decision</text>
-    <text x="125" y="175" class="desc" text-anchor="middle">α=10%</text>
 
     <rect class="tier1-box" x="220" y="120" width="150" height="80"/>
-    <text x="295" y="145" class="number" text-anchor="middle">② L_context</text>
-    <text x="295" y="162" class="desc" text-anchor="middle">Context quality</text>
-    <text x="295" y="175" class="desc" text-anchor="middle">α=10%</text>
 
     <rect class="tier1-box" x="390" y="120" width="150" height="80"/>
-    <text x="465" y="145" class="number" text-anchor="middle">③ L_exec</text>
-    <text x="465" y="162" class="desc" text-anchor="middle">SLA / latency</text>
-    <text x="465" y="175" class="desc" text-anchor="middle">α=10%</text>
 
     <rect class="tier1-box" x="560" y="120" width="150" height="80"/>
-    <text x="635" y="145" class="number" text-anchor="middle">④ L_conf</text>
-    <text x="635" y="162" class="desc" text-anchor="middle">Confidence</text>
-    <text x="635" y="175" class="desc" text-anchor="middle">α=10%</text>
 
     <rect class="tier1-box" x="730" y="120" width="150" height="80"/>
-    <text x="805" y="145" class="number" text-anchor="middle">⑤ L_comply</text>
-    <text x="805" y="162" class="desc" text-anchor="middle">PII / consent</text>
-    <text x="805" y="175" class="desc" text-anchor="middle">α=10%</text>
 
     <rect class="tier1-box" x="900" y="120" width="150" height="80"/>
-    <text x="975" y="145" class="number" text-anchor="middle">⑥ L_learn</text>
-    <text x="975" y="162" class="desc" text-anchor="middle">Convergence</text>
-    <text x="975" y="175" class="desc" text-anchor="middle">α=10%</text>
 
     <!-- Arrows down to unified loss -->
     <path class="arrow" d="M 125 200 L 400 250"/>
@@ -75,25 +56,10 @@
 
   <g id="tier2">
     <rect class="tier2-box" x="50" y="320" width="220" height="100"/>
-    <text x="160" y="345" class="number" text-anchor="middle">⑦ L_memory</text>
-    <text x="160" y="362" class="desc" text-anchor="middle">Preservation weights</text>
-    <text x="160" y="376" class="desc" text-anchor="middle">Feedback: "Context helpful?"</text>
-    <text x="160" y="390" class="desc" text-anchor="middle">Learn: preservation strategy</text>
-    <text x="160" y="404" class="desc" text-anchor="middle">Update: per-request</text>
 
     <rect class="tier2-box" x="300" y="320" width="220" height="100"/>
-    <text x="410" y="345" class="number" text-anchor="middle">⑧ L_plugins</text>
-    <text x="410" y="362" class="desc" text-anchor="middle">Plugin config</text>
-    <text x="410" y="376" class="desc" text-anchor="middle">Feedback: latency, errors</text>
-    <text x="410" y="390" class="desc" text-anchor="middle">Learn: cache_size, ttl</text>
-    <text x="410" y="404" class="desc" text-anchor="middle">Update: hourly</text>
 
     <rect class="tier2-box" x="550" y="320" width="220" height="100"/>
-    <text x="660" y="345" class="number" text-anchor="middle">⑨ L_security</text>
-    <text x="660" y="362" class="desc" text-anchor="middle">Compliance thresholds</text>
-    <text x="660" y="376" class="desc" text-anchor="middle">Feedback: FP/FN rates</text>
-    <text x="660" y="390" class="desc" text-anchor="middle">Learn: detection threshold</text>
-    <text x="660" y="404" class="desc" text-anchor="middle">Update: daily</text>
   </g>
 
   <!-- Arrows down to unified loss -->
@@ -106,23 +72,12 @@
 
   <g id="tier3">
     <rect class="tier3-box" x="200" y="520" width="600" height="120"/>
-    <text x="500" y="545" class="number" text-anchor="middle">🧠 Meta Optimizer</text>
-    <text x="500" y="562" class="desc" text-anchor="middle">Observes: L_total trend over ≥100 samples</text>
-    <text x="500" y="576" class="desc" text-anchor="middle">Learns: What (w₁..w₆) minimizes L_total?</text>
-    <text x="500" y="590" class="desc" text-anchor="middle">Updates: w_new = (1-α)·w_old + α·w'  (α=1% SLOW damping)</text>
-    <text x="500" y="604" class="desc" text-anchor="middle">Damping: Prevents oscillation (proven)</text>
-    <text x="500" y="618" class="desc" text-anchor="middle">Convergence: ~10K samples (~3 hours)</text>
 
     <!-- Feedback back to Tier 1 -->
     <path class="arrow-feedback" d="M 500 520 Q 500 400 400 450"/>
-    <text x="530" y="480" class="desc" fill="#ff006e">w'₁..w'₆ (updated weights)</text>
 
     <!-- Operator control -->
     <text x="850" y="560" class="label" fill="#00d4ff">Operator Control:</text>
-    <text x="850" y="576" class="desc">Set w_target via slider</text>
-    <text x="850" y="590" class="desc">Hybrid tuning:</text>
-    <text x="850" y="604" class="desc">w = 30% manual</text>
-    <text x="850" y="618" class="desc">    + 70% meta-optimized</text>
   </g>
 
   <!-- Unified Loss Function -->
@@ -132,15 +87,7 @@
 
   <text x="700" y="720" class="label" text-anchor="middle">L_total = w₁·L₁ + w₂·L₂ + ... + w₆·L₆ + w₇·L₇ + w₈·L₈ + w₉·L₉ - λ·L_meta_stability</text>
 
-  <text x="700" y="740" class="desc" text-anchor="middle">TIER 1 (Green, α=10%): w₁..w₆ core loops [routing, context, exec, conf, comply, learn]</text>
-  <text x="700" y="754" class="desc" text-anchor="middle">TIER 2 (Yellow, α=5%): w₇..w₉ infrastructure loops [memory, plugins, security]</text>
-  <text x="700" y="768" class="desc" text-anchor="middle">TIER 3 (Red, α=1%): Meta learns optimal w₁..w₆ SLOWLY via damping</text>
-  <text x="700" y="782" class="desc" text-anchor="middle">PENALTY: λ·L_meta_stability (λ=0.1) penalizes large weight swings, prevents oscillation</text>
 
-  <text x="700" y="800" class="desc" text-anchor="middle">Convergence: Tier 1 (2K) → Tier 2 (5K) → Tier 3 (10K) samples</text>
-  <text x="700" y="814" class="desc" text-anchor="middle">Audit: Every loss computation logged (all 9 dims + damping decisions hash-chained)</text>
 
   <!-- Legend -->
-  <text x="50" y="860" class="desc">Colors: 🟢 Tier 1 (proven, fast) | 🟡 Tier 2 (learnable, medium) | 🔴 Tier 3 (meta, slow + damped)</text>
-  <text x="50" y="875" class="desc">Invariant: No tier oscillates. Tier 3 damping (α=1%) prevents meta feedback loops. Operator always controls.</text>
 </svg>
