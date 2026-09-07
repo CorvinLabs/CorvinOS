@@ -307,23 +307,41 @@ def audit_path_not_redirected() -> TripwireResult:
 #: evidence, which is strictly worse for GDPR Art. 30 than a documented seam.
 TAIL_RECORDS = 200
 
-#: Cache: verifying 108k records costs ~0.9 s, and two tripwires read the result.
+#: In-process cache: two tripwires read the same result within one boot.
 _verify_cache: dict = {}
 
 
 def _verify_chain(path: Path):
     """``(ok, problems, total_records)`` for the core chain, verified once per file
-    state.  Uses the canonical ``verify_audit`` — a tail-only re-implementation
-    would duplicate the MAC primitive, and a second copy of a compliance primitive
-    is a second thing that can drift."""
+    state.  Uses the canonical verifier — a tail-only re-implementation would
+    duplicate the MAC primitive, and a second copy of a compliance primitive is a
+    second thing that can drift.
+
+    ADR-0640 R4 — the walk is O(n) in a file that only ever grows. On the
+    maintainer install a full walk is 315 MB / 588 827 records / ~5.7 s, paid
+    TWICE per boot (here and again by the line count) and paid by every test that
+    boots the console app. History verification is not skipped: the chain is
+    append-only, so ``verify_audit_incremental`` re-hashes the already-verified
+    prefix BYTES (~0.19 s) to prove it unchanged and only then reuses that
+    prefix's verdict, walking the suffix. Any change to any prefix byte — an
+    in-place edit, a truncation, a replacement, a prepend — misses the witness
+    and forces a full walk. A missing or unreadable witness falls back to a full
+    walk, never to trust. ``voice-audit verify`` and the daily ``verify --all``
+    unit still do an unconditional full walk.
+    """
     audit = _audit_module()
     stat = path.stat()
     key = (str(path), stat.st_mtime_ns, stat.st_size)
     if key in _verify_cache:
         return _verify_cache[key]
-    ok, problems = audit.verify_audit(path)
-    with path.open(encoding="utf-8", errors="replace") as fh:
-        total = sum(1 for _ in fh)
+    incremental = getattr(audit, "verify_audit_incremental", None)
+    if callable(incremental):
+        ok, problems, total = incremental(path)
+    else:
+        # Older bridge module on the path: full walk, never a free pass.
+        ok, problems = audit.verify_audit(path)
+        with path.open("rb") as fh:
+            total = sum(1 for _ in fh)
     result = (ok, problems, total)
     _verify_cache.clear()
     _verify_cache[key] = result

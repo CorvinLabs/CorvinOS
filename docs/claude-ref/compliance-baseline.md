@@ -84,6 +84,33 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
      `initial_prev` nor an authenticated rotation link is `unanchored_genesis`, reported
      WITHOUT a line number so `audit_chain_intact` blocks it as a current-state problem
      regardless of how long the attacker padded the file.
+   - **The boot verify memoises a PROVEN prefix, never a claim** (R4, 2026-09-07):
+     `audit_chain_history_clean` walks the whole chain on every boot, and the cost is
+     O(n) in a file that only ever grows — 315 MB / 588 827 records / ~5.7 s per walk on
+     the maintainer install, paid twice per boot. History verification is NOT skipped.
+     The boot path (`tripwire._verify_chain` → `audit.verify_audit_incremental` →
+     `security_events.verify_chain_incremental`) reuses the verdict of the append-only
+     chain's already-verified PREFIX only after re-hashing the prefix BYTES in the same
+     call and matching a SHA-256 recorded in `<anchor key dir>/chain_witness/<sha256(resolved
+     path)>` (0600, MAC'd under the anchor key). The byte digest — not a record count, not
+     the tail hash, not an mtime — is the security argument: an edit in the middle of the
+     prefix that does NOT rehash forward (the `tampered`/`mac_missing` class) leaves the
+     hash at the prefix's end untouched, and only a byte digest sees it. Missing,
+     unreadable, malformed, version-mismatched or MAC-invalid witness, a rotated/absent/
+     refused anchor key, a different `initial_prev`, a shorter file or any digest mismatch
+     → FULL walk, never trust. Only LINE-NUMBERED problems are memoised; every
+     current-state problem (`tail_truncated`, `chain_replaced`, `records_prepended`,
+     `unanchored_genesis`, `mac_stripped_chain`, `anchor_key_insecure_mode`) is recomputed
+     from the out-of-tree anchors after every walk, resumed or not. `voice-audit verify`
+     and the daily `verify --all` unit still do an unconditional full walk with no witness
+     involved. Measured: `assert_all()` 13.0 s → 6.3 s first boot → 0.66 s every boot
+     after. Regressions: `tests/security/test_chain_witness_regression.py`.
+     Related: `get_audit_chain_tail()` (which `clag.gate()` calls on every consent check,
+     i.e. on the `consent_gate_denies_by_default` tripwire) forward-walked and
+     `json.loads`-ed the entire chain to find the last hash — 2.8 s of that 13 s boot. It
+     now delegates to `_last_hash()`, the backwards-reading twin with identical semantics.
+     Don't reintroduce a forward full-file scan for a tail, and don't let a witness be
+     admitted on anything weaker than a re-computed byte digest.
    - **Tail anchor + key hygiene** (F-A12/F-A14): every chained write updates
      `<anchor key dir>/chain_tails/<genesis-hash>`; a verify whose recorded tail is gone
      reports `tail_truncated`, and the next writer stamps `_tail_truncated_since` into its
