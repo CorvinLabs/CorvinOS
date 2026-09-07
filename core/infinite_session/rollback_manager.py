@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from uuid import uuid4
 
 from core.infinite_session.crypto_binding import CryptoBinding, canonical_json
@@ -75,6 +75,15 @@ LOCK_RETRY_INTERVAL_SECONDS = 0.01
 # Stable prefix of the ``(False, reason)`` a lock-busy refusal carries, so the
 # console route can map it to 503 (temporarily unavailable) rather than 500.
 LOCK_BUSY_REASON_PREFIX = "rollback log lock busy"
+
+
+ApplyChange = Callable[[], Tuple[bool, str]]
+"""``() -> (ok, reason)`` — the transaction's real, irreversible state change.
+
+Executed by :meth:`RollbackManager.commit_transaction` *inside* the log lock so
+that every fallible step (lock acquisition, WAL validation) happens BEFORE it.
+See that method's docstring for why the ordering is load-bearing (R4-F1).
+"""
 
 
 class RollbackLockBusy(TimeoutError):
@@ -326,19 +335,26 @@ class RollbackManager:
         old_state: Dict[str, Any],
         new_state: Dict[str, Any],
         operation: str,
-    ) -> Tuple[bool, Optional[str]]:
+        apply_change: Optional[ApplyChange] = None,
+    ) -> Tuple[bool, bool, Optional[str]]:
         """Everything ``commit_transaction`` does while holding the log lock.
+
+        Returns ``(applied, committed, error)``:
+
+        - ``applied``  — ``apply_change`` ran and reported success (always
+          ``False`` when no ``apply_change`` was given);
+        - ``committed`` — a COMMITTED entry reached the chained log.
 
         Raises :class:`RollbackLockBusy` (never blocks); the caller converts it.
         """
         with self._lock():
             if not wal_file.exists():
-                return False, f"WAL entry not found for {transaction_id}"
+                return False, False, f"WAL entry not found for {transaction_id}"
             try:
                 with open(wal_file, "r", encoding="utf-8") as fh:
                     wal = json.load(fh)
             except (OSError, ValueError) as exc:
-                return False, f"WAL entry unreadable: {exc}"
+                return False, False, f"WAL entry unreadable: {exc}"
             base = {
                 "transaction_id": transaction_id,
                 "tenant_id": tenant_id,
@@ -358,14 +374,32 @@ class RollbackManager:
                     "error": "commit payload does not match WAL entry",
                 })
                 wal_file.unlink(missing_ok=True)
-                return False, "commit_transaction failed: payload does not match WAL entry"
+                return False, False, "commit_transaction failed: payload does not match WAL entry"
+
+            applied = False
+            if apply_change is not None:
+                # The IRREVERSIBLE half runs here — inside the lock, after the
+                # WAL check, before the log append. Every failure mode that
+                # used to strike AFTER the state change (a busy lock, a stale
+                # WAL, a payload mismatch) is now upstream of it, so a refusal
+                # leaves nothing applied and a retry is safe.
+                ok, err = apply_change()
+                if not ok:
+                    self._append_locked({
+                        **base, "status": TransactionStatus.FAILED.value,
+                        "error": f"state change refused: {err}",
+                    })
+                    wal_file.unlink(missing_ok=True)
+                    return False, False, f"commit_transaction aborted: {err}"
+                applied = True
+
             ok, err = self._append_locked({
                 **base, "status": TransactionStatus.COMMITTED.value, "error": None,
             })
             if not ok:
-                return False, f"commit_transaction failed: {err}"
+                return applied, False, f"commit_transaction failed: {err}"
             wal_file.unlink(missing_ok=True)
-        return True, None
+        return applied, True, None
 
     def commit_transaction(
         self,
@@ -376,9 +410,39 @@ class RollbackManager:
         new_state: Dict[str, Any],
         operation: str = "update",
         audit_callback=None,
+        apply_change: Optional[ApplyChange] = None,
     ) -> Tuple[bool, Optional[str]]:
         """Commit: chained log append, WAL removed. A failure is logged as FAILED
-        with the SAME chain/MAC treatment, so the chain stays verifiable."""
+        with the SAME chain/MAC treatment, so the chain stays verifiable.
+
+        ``apply_change`` (R4-F1) — an optional ``() -> (ok, reason)`` callable
+        carrying the transaction's ACTUAL, irreversible state change (for the
+        console revert: the append of the ``rollback_recovery`` snapshot onto
+        the append-only chain). It is executed INSIDE the log lock, after the
+        WAL check and BEFORE the COMMITTED entry is appended.
+
+        Why the ordering matters: the console route used to append the snapshot
+        first and commit afterwards. A busy log lock then produced a 503 while
+        the chain head was already the reverted state, the WAL sweep later
+        logged that permanent change as ``rolled_back — transaction never
+        committed``, and the operator's retry double-applied it. The chain is
+        append-only, so nothing can undo that write — which is exactly why the
+        un-undoable half must run LAST among the fallible steps, not first.
+
+        Return contract:
+
+        ==================  ============================================
+        ``(True,  None)``   the transaction stands (state applied when an
+                            ``apply_change`` was given) and the log has a
+                            COMMITTED entry.
+        ``(True,  reason)`` ONLY with ``apply_change``: the state change was
+                            applied but the log append failed. The caller
+                            MUST treat the change as done and report the
+                            log failure separately — never as "it failed".
+        ``(False, reason)`` nothing was applied and nothing was committed;
+                            a retry is safe.
+        ==================  ============================================
+        """
         error = self._bind(tenant_id)
         if error:
             return False, error
@@ -390,15 +454,24 @@ class RollbackManager:
             return False, str(exc)
 
         try:
-            ok, err = self._commit_locked(
+            applied, committed, err = self._commit_locked(
                 wal_file, transaction_id, tenant_id, config_path,
-                old_state, new_state, operation,
+                old_state, new_state, operation, apply_change=apply_change,
             )
         except RollbackLockBusy as exc:
             # Availability over completeness: the caller is an operator HTTP
             # request (dashboard revert); a wedged holder must not hang it.
+            # The lock was never taken, so ``apply_change`` never ran — nothing
+            # is applied and the caller may retry.
             return False, str(exc)
-        if not ok:
+        if apply_change is not None and applied and not committed:
+            logger.error(
+                "rollback transaction %s: state change APPLIED but the log append "
+                "failed (%s) — the change stands; the log is incomplete",
+                transaction_id, err,
+            )
+            return True, err
+        if not committed:
             return False, err
 
         if audit_callback:

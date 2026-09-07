@@ -20,8 +20,15 @@ Guarantees:
   visible; no chain commit → no snapshot (ADR-0232/0233).
 - Atomic + durable: temp file → fsync → rename; index updated under an
   exclusive file lock.
-- Append-only: snapshots are never rewritten; the chain per task is verified
-  with :meth:`verify_snapshot_chain`.
+- Append-only AND tamper-evident: snapshots are never rewritten, and every
+  stored snapshot carries a ``chain_mac`` = HMAC-SHA256(per-tenant
+  :class:`CryptoBinding` key, canonical JSON of the whole record minus the
+  MAC). :meth:`verify_snapshot_chain` recomputes it, so the LINK fields
+  (``prev_snapshot_hash``, ``snapshot_id``, ``task_id``, ``timestamp``) are
+  covered — not only ``state_dict``, which is all ``content_hash`` ever
+  committed to (R4-F2). A snapshot with no MAC is a chain written before the
+  scheme existed: it is reported UNSIGNED and never verifies (see
+  :data:`UNSIGNED_REASON`).
 - Content-free audit: records carry ids, hashes and byte sizes only.
 """
 
@@ -35,6 +42,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from core.infinite_session.crypto_binding import CryptoBinding, canonical_json
 from core.infinite_session.paths import (
     AuditFn,
     content_free,
@@ -65,6 +73,15 @@ LOCK_TIMEOUT_SECONDS = 2.0
 LOCK_RETRY_INTERVAL_SECONDS = 0.01
 EVENT_SNAPSHOT_CREATED = "infinite_session.snapshot_created"
 EVENT_SNAPSHOT_ARCHIVED = "infinite_session.snapshot_archived"
+
+# Stable prefix of the verification failure a pre-MAC (legacy) snapshot yields.
+# These chains are NOT migrated: re-signing data written before the scheme
+# existed would launder exactly the tampering the MAC is there to detect. They
+# report as unverifiable — `chain_valid: false` on /history, `degraded` on
+# /health, and `revert` refuses with 409 `chain_invalid` — until the operator
+# removes the old snapshot tree (it holds turn telemetry, not recoverable
+# context; see docs/claude-ref/infinite-session.md).
+UNSIGNED_REASON = "unsigned snapshot (written before the chain MAC, ADR-0651)"
 
 
 class SnapshotLockBusy(TimeoutError):
@@ -115,6 +132,8 @@ class EventStore:
         self.root_dir = tenant_root(self.tenant_id, corvin_home) / "snapshots"
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self._audit: AuditFn = audit or core_audit
+        # Same key material and same construction as the rollback log's MAC.
+        self.crypto = CryptoBinding(corvin_home)
 
     # ── tenant binding ───────────────────────────────────────────────────
 
@@ -177,6 +196,21 @@ class EventStore:
             data = json.load(fh)
         return [SnapshotMetadata.from_dict(item) for item in data]
 
+    # ── chain MAC (R4-F2) ────────────────────────────────────────────────
+
+    def sign_snapshot(self, snapshot: Snapshot) -> tuple[Optional[Snapshot], str]:
+        """Return ``snapshot`` carrying this tenant's ``chain_mac``.
+
+        Idempotent: the MAC is computed over :meth:`Snapshot.mac_payload`,
+        which excludes ``chain_mac`` itself.
+        """
+        mac, error = self.crypto.hmac_bytes(
+            self.tenant_id, canonical_json(snapshot.mac_payload())
+        )
+        if error or not mac:
+            return None, error or "chain MAC unavailable (fail-closed)"
+        return snapshot.signed(mac), ""
+
     # ── writes ───────────────────────────────────────────────────────────
 
     def write_snapshot(
@@ -202,6 +236,14 @@ class EventStore:
             target = self._snapshot_file(snapshot.task_id, snapshot.snapshot_id)
         except ValueError as exc:
             return False, str(exc)
+
+        # Sign BEFORE the audit-first write: a missing/unwritable key must
+        # refuse the snapshot cleanly, not leave an audit record for a file
+        # that was never written. Signing is idempotent (the MAC never covers
+        # itself), so re-signing an already-signed snapshot is a no-op.
+        snapshot, mac_error = self.sign_snapshot(snapshot)
+        if mac_error or snapshot is None:
+            return False, f"chain MAC failed (fail-closed): {mac_error}"
 
         payload = snapshot.to_dict()
         size_bytes = len(json.dumps(payload, sort_keys=True).encode("utf-8"))
@@ -348,6 +390,17 @@ class EventStore:
             snapshot, read_error = self.read_snapshot(tenant_id, task_id, meta.snapshot_id)
             if read_error:
                 return False, f"Cannot read snapshot {meta.snapshot_id}: {read_error}"
+            # Keyed MAC over the WHOLE record — this is what makes the link
+            # fields tamper-evident. ``content_hash`` covers only state_dict,
+            # so without this a middle snapshot could be excised and its
+            # successor re-pointed with no hash to recompute (R4-F2).
+            if not snapshot.chain_mac:
+                return False, f"{UNSIGNED_REASON}: {meta.snapshot_id}"
+            mac_ok, mac_error = self.crypto.verify_bytes(
+                self.tenant_id, canonical_json(snapshot.mac_payload()), snapshot.chain_mac
+            )
+            if not mac_ok:
+                return False, f"Chain MAC mismatch at snapshot {meta.snapshot_id}: {mac_error}"
             if snapshot.content_hash != meta.content_hash:
                 return False, f"Index/content hash mismatch at snapshot {meta.snapshot_id}"
             if snapshot.prev_snapshot_hash != prev_hash:
@@ -442,7 +495,10 @@ def snapshot_task_state(
         )
     except ValueError as exc:
         return None, str(exc)
-    ok, error = es.write_snapshot(snapshot)
+    signed, mac_error = es.sign_snapshot(snapshot)
+    if mac_error or signed is None:
+        return None, f"chain MAC failed (fail-closed): {mac_error}"
+    ok, error = es.write_snapshot(signed)
     if not ok:
         return None, error
-    return snapshot, ""
+    return signed, ""

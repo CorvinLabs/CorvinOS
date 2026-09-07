@@ -80,7 +80,11 @@ class TestCryptoBinding:
         sig, _ = crypto.sign_payload(TENANT, {"b": 2, "a": [1, {"z": 1, "y": 2}]})
         assert crypto.verify_payload(TENANT, {"a": [1, {"y": 2, "z": 1}], "b": 2}, sig) == (True, "")
         assert crypto.verify_payload(TENANT, {"a": [1, {"y": 2, "z": 1}], "b": 3}, sig)[0] is False
-        assert crypto.verify_payload(TENANT, {"b": 2, "a": [1, {"z": 1, "y": 2}]}, sig[:-1] + "0")[0] is False
+        # flip the last nibble deterministically — `sig[:-1] + "0"` was a no-op
+        # (and the assertion vacuous) whenever the digest already ended in "0"
+        flipped = sig[:-1] + ("1" if sig[-1] == "0" else "0")
+        assert flipped != sig
+        assert crypto.verify_payload(TENANT, {"b": 2, "a": [1, {"z": 1, "y": 2}]}, flipped)[0] is False
 
     def test_deterministic(self, crypto):
         assert crypto.sign_payload(TENANT, {"x": 1})[0] == crypto.sign_payload(TENANT, {"x": 1})[0]

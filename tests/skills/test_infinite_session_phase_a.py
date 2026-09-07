@@ -200,7 +200,12 @@ class TestEventStore:
         snap = Snapshot.create(TENANT, "task_1", "p1", {"a": 1})
         assert store.write_snapshot(snap) == (True, "")
         got, err = store.read_snapshot(TENANT, "task_1", snap.snapshot_id)
-        assert err == "" and got == snap
+        assert err == ""
+        # R4-F2: the store signs on write, so the stored record carries a
+        # chain_mac the in-memory original does not. Everything the MAC
+        # commits to must round-trip unchanged.
+        assert got.mac_payload() == snap.mac_payload()
+        assert got.chain_mac and got == snap.signed(got.chain_mac)
         assert store.list_tasks() == ["task_1"]
 
     def test_audit_first_and_content_free(self, home):
@@ -212,7 +217,11 @@ class TestEventStore:
         assert event_type == "infinite_session.snapshot_created" and tenant == TENANT
         assert details["snapshot_id"] == snap.snapshot_id and details["content_hash"] == snap.content_hash
         assert details["seq"] == 1 and "state_dict" not in details
-        assert "42" not in json.dumps(details)
+        # Content-freedom asserted on the KEY and the VALUE, not on the string
+        # "42": a random uuid4 snapshot_id contains "42" roughly 1 run in 5,
+        # which made this assertion flaky rather than meaningful.
+        assert "secret_value" not in json.dumps(details)
+        assert 42 not in details.values()
 
     def test_audit_failure_prevents_write(self, home):
         def refusing(event_type, *, tenant_id, details):
@@ -310,7 +319,10 @@ class TestAdversarial:
         data["prev_snapshot_hash"] = "f" * 64
         f.write_text(json.dumps(data))
         ok, err = store.verify_snapshot_chain(TENANT, "task_1")
-        assert not ok and "Chain link broken" in err
+        # R4-F2: the keyed chain MAC covers prev_snapshot_hash, so re-pointing
+        # a link is caught by the MAC before the link comparison is reached —
+        # which is the point: an attacker with file access cannot re-sign.
+        assert not ok and "Chain MAC mismatch" in err
 
     def test_index_tampering_detected(self, store):
         snapshot_task_state(TENANT, "task_1", {"a": 1}, store=store)

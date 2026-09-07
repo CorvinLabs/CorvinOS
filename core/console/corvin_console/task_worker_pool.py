@@ -153,26 +153,54 @@ def _task_audit_emit(
     task_id: str,
     tenant_id: str,
     **details,
-) -> None:
-    """Emit a task.* audit event to the L16 hash chain.
+) -> bool:
+    """Emit a task.* audit event to the L16 hash chain; ``True`` iff it committed.
 
     Allow-list enforced; fields not in the list are silently dropped to
     prevent accidental instruction-text leakage into the chain.
+
+    R4-F3 — the RETURN VALUE is load-bearing. This helper used to swallow every
+    failure and return ``None``, and ``_execute_task`` spawned regardless. For
+    any tenant other than the process tenant the writer raises
+    ``forge.security_events.AuditTenantMismatch`` (it compares ``tenant_id``
+    against ``CORVIN_TENANT_ID``), so "audit-first: write ``task.spawn_started``
+    BEFORE spawning (M4, load-bearing)" was fail-OPEN off ``_default``: an
+    ``acme`` task spawned, streamed and completed with no spawn record on any
+    chain. The caller now REFUSES to spawn when this returns ``False``.
     """
     if not _AUDIT_AVAILABLE or _forge_write_event is None:
-        return
+        # No writer at all → nothing can be recorded. Report the failure; the
+        # audit-first call site turns it into a refusal (never a silent spawn).
+        logger.error("audit writer unavailable — cannot record %s for task %s",
+                     event, task_id)
+        return False
     allowed = _AUDIT_ALLOWED.get(event, frozenset())
     safe = {k: v for k, v in details.items() if k in allowed}
     safe["task_id"] = task_id
     safe["tenant_id"] = tenant_id
     try:
         _forge_write_event(audit_path, event, details=safe)
+        return True
     except Exception:
         logger.exception("audit emit failed for %s", event)
+        return False
 
 
 def _audit_path_for_tenant(tenant_id: str) -> Path:
-    return _forge_paths.tenant_global_dir(tenant_id) / "audit.jsonl"
+    # R4: THE tenant chain. This used to compose ``tenant_global_dir/audit.jsonl``
+    # — one directory level above the chain the boot tripwire, audit_query and
+    # every compliance report read, so task-worker records landed in a file no
+    # auditor opens (2.0 MB of them on the maintainer install).
+    return _forge_paths.tenant_audit_chain(tenant_id)
+
+
+# Closed set of reason codes a snapshot may carry. These are CODES, never
+# operator or model text — the snapshot store must stay content-free.
+TURN_REASON_CODES = frozenset({
+    "", "payload-missing", "instruction-sanitization-failed",
+    "pre-spawn-gate-denied", "invalid-chat-key", "audit-refused",
+    "worker-exception", "cancelled",
+})
 
 
 def _snapshot_task_turn(
@@ -181,11 +209,13 @@ def _snapshot_task_turn(
     status: str,
     exit_code: int,
     duration_ms: int,
-    event_count: int,
-    result_text: str,
+    event_count: int = 0,
+    result_text: str = "",
+    reason_code: str = "",
+    phase_id: str = "turn",
 ) -> None:
     """Infinite-session producer (ADR-0540/0541): chain one content-free
-    snapshot of the finished turn onto the task's snapshot chain.
+    snapshot of a turn transition onto the task's snapshot chain.
 
     This is the ONLY production writer of task snapshots; without it the
     infinite-session dashboard is honestly empty (2026-09-07 review, F-S7).
@@ -193,12 +223,25 @@ def _snapshot_task_turn(
     prompt/transcript content reaches the snapshot store. A snapshot failure
     must not turn a completed task into a failed one, but it is never silent:
     it is logged at ERROR with the task id.
+
+    Call sites (R4-F7 — every terminal transition, not only the two
+    post-subprocess ones): the mid-turn ``running`` record written right after
+    the spawn, both post-subprocess branches, and every early return — payload
+    missing, sanitisation refused, pre-spawn gate denied, invalid chat key,
+    audit-first refusal, spawn failure, cancellation and the generic handler.
+    Before this, a denied or crashed turn was absent from ``/tasks``,
+    ``/history`` and the dashboard — a hole exactly where something went wrong.
+
+    ``reason_code`` is a CODE from :data:`TURN_REASON_CODES`; the free-text
+    refusal string and the instruction are never persisted.
     """
     try:
         import hashlib  # noqa: PLC0415
 
         from core.infinite_session import snapshot_task_state  # noqa: PLC0415
 
+        if reason_code not in TURN_REASON_CODES:  # fail-closed against free text
+            reason_code = "worker-exception"
         snapshot, err = snapshot_task_state(
             task.tenant_id,
             task.task_id,
@@ -209,8 +252,9 @@ def _snapshot_task_turn(
                 "event_count": event_count,
                 "chat_key_prefix": (task.chat_key or "")[:8],
                 "result_sha256": hashlib.sha256(result_text.encode("utf-8")).hexdigest(),
+                "reason_code": reason_code,
             },
-            phase_id="turn",
+            phase_id=phase_id,
         )
         if snapshot is None:
             logger.error("Task %s: infinite-session snapshot NOT written: %s", task.task_id, err)
@@ -442,6 +486,11 @@ class TaskWorkerPool:
                 if instruction_raw is None:
                     logger.warning("Task %s: payload file missing, skipping", task.task_id)
                     self.task_queue.update_status(task.task_id, TaskStatus.FAILED, exit_code=125)
+                    _snapshot_task_turn(
+                        task, status="failed", exit_code=125,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        reason_code="payload-missing",
+                    )
                     return
 
                 # Sanitize instruction (M4)
@@ -455,6 +504,11 @@ class TaskWorkerPool:
                         reason="instruction-sanitization-failed",
                     )
                     self.task_queue.update_status(task.task_id, TaskStatus.FAILED, exit_code=125)
+                    _snapshot_task_turn(
+                        task, status="denied", exit_code=125,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        reason_code="instruction-sanitization-failed",
+                    )
                     return
 
                 # ── Full fail-closed, audit-first pre-spawn gate (findings #2/#6) ──
@@ -483,6 +537,11 @@ class TaskWorkerPool:
                         reason="pre-spawn-gate-denied",
                     )
                     self.task_queue.update_status(task.task_id, TaskStatus.FAILED, exit_code=125)
+                    _snapshot_task_turn(
+                        task, status="denied", exit_code=125,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        reason_code="pre-spawn-gate-denied",
+                    )
                     return
 
                 # Derive working directory with path-traversal guard (M1)
@@ -496,18 +555,44 @@ class TaskWorkerPool:
                         reason="invalid-chat-key",
                     )
                     self.task_queue.update_status(task.task_id, TaskStatus.FAILED, exit_code=125)
+                    _snapshot_task_turn(
+                        task, status="denied", exit_code=125,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        reason_code="invalid-chat-key",
+                    )
                     return
 
                 workdir.mkdir(parents=True, exist_ok=True)
 
-                # Audit-first: write task.spawn_started BEFORE spawning (M4, load-bearing)
-                _task_audit_emit(
+                # Audit-first: write task.spawn_started BEFORE spawning (M4, load-bearing).
+                # R4-F3 — FAIL-CLOSED. A refused/dropped write (e.g. the L16
+                # writer's AuditTenantMismatch for any tenant other than the
+                # process tenant) used to be logged and ignored, and the spawn
+                # went ahead unrecorded. "Audit-first" only means anything if a
+                # failed audit stops the action.
+                if not _task_audit_emit(
                     "task.spawn_started", audit_path,
                     task_id=task.task_id,
                     tenant_id=task.tenant_id,
                     chat_key_prefix=task.chat_key[:8] if task.chat_key else "",
                     engine="claude_code",
-                )
+                ):
+                    logger.error(
+                        "Task %s (tenant=%s): task.spawn_started did NOT commit — "
+                        "refusing to spawn (audit-first, fail-closed)",
+                        task.task_id, task.tenant_id,
+                    )
+                    self.task_queue.update_status(task.task_id, TaskStatus.FAILED, exit_code=125)
+                    _snapshot_task_turn(
+                        task, status="denied", exit_code=125,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        reason_code="audit-refused",
+                    )
+                    _notify_task_done(
+                        task.task_id, ok=False,
+                        summary="blocked: the audit record for this spawn could not "
+                                "be written (fail-closed).")
+                    return
                 # ADR-0171 — engine.span.start (role=worker), audit-first like above.
                 _emit_task_engine_span("start", audit_path, task_id=task.task_id)
                 _span_started = True
@@ -538,6 +623,19 @@ class TaskWorkerPool:
 
                 # Register for abort (M6)
                 _active_procs[task.task_id] = proc
+
+                # R4-F4 — mid-turn record. Everything else this producer writes
+                # happens AFTER the subprocess exits, so a kill mid-turn (the
+                # infinite-session engine's headline case) left NOTHING on the
+                # chain. This one content-free ``running`` snapshot is the
+                # cheapest honest increment: after a crash the chain shows a
+                # turn that started and never reached a terminal snapshot. It is
+                # NOT resumable context — see docs/claude-ref/infinite-session.md
+                # § What session bridging does NOT do.
+                _snapshot_task_turn(
+                    task, status="running", exit_code=-1,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
 
                 # Feed the instruction as the single stdin message, then EOF —
                 # the CLI answers it and exits (verified live 2026-09-07). A
@@ -633,6 +731,11 @@ class TaskWorkerPool:
                     state="cancelled", duration_ms=int((time.time() - start_time) * 1000),
                     exit_code=-1,
                 )
+                _snapshot_task_turn(
+                    task, status="cancelled", exit_code=-1,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                    reason_code="cancelled",
+                )
                 if _span_started:
                     _emit_task_engine_span("end", audit_path, task_id=task.task_id,
                                            status="error",
@@ -648,6 +751,11 @@ class TaskWorkerPool:
                     task_id=task.task_id, tenant_id=task.tenant_id,
                     state="failed", duration_ms=int((time.time() - start_time) * 1000),
                     exit_code=1,
+                )
+                _snapshot_task_turn(
+                    task, status="failed", exit_code=1,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                    reason_code="worker-exception",
                 )
                 if _span_started:
                     _emit_task_engine_span("end", audit_path, task_id=task.task_id,
