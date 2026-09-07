@@ -219,9 +219,11 @@ def internal_func():
             audit_event = analyzer.get_audit_event_dict(report)
 
             # Verify cycle severity in audit details
-            assert "findings_count" in audit_event["details"]
             details = audit_event["details"]
             assert details.get("total_dependencies") > 0
+            assert details["circular_dependencies"], "cycle must be reported"
+            assert all(cd["severity"] for cd in details["circular_dependencies"])
+            assert audit_event["result"] == "circular_dependencies_found"
 
             entry = AuditEntry(
                 event_type=audit_event["event_type"],

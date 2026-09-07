@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 import hashlib
+import re
 import json
 from datetime import datetime
 import logging
@@ -106,32 +107,53 @@ class PipelineContext:
         self._update_entropy()
         return True
 
+    #: Negation tokens. Matched on WORD tokens, never substrings ("cannot"
+    #: must not fire on "not ", "note" must not fire on "no ").
+    _NEGATION_TOKENS = frozenset({"not", "don't", "dont", "no", "never", "avoid", "disable", "revert", "undo", "stop"})
+    _NEGATION_PREFIXES = ("contra",)  # contradict / contrary / contravene
+
+    @staticmethod
+    def _tokens(text: str) -> List[str]:
+        return re.findall(r"[a-z][a-z']*", text.lower())
+
     def _would_contradict(self, addition: ContextAddition) -> bool:
-        """Check if addition contradicts Original or prior additions (heuristic).
+        """Check if addition contradicts Original (heuristic, deterministic).
 
-        Deterministic: uses sorted keywords (no set ordering randomness).
+        A contradiction is a NEGATION signal (``_NEGATION_TOKENS`` /
+        ``contra*``) in the same addition as a keyword (>3 chars) of the
+        original task — "Do not migrate to PostgreSQL" against "Migrate MySQL
+        to PostgreSQL". Enable/disable of the primary verb is the strongest
+        signal and needs no keyword overlap. The negation set used to be
+        declared and never read; only "disable" was checked, so the k=3
+        checkpoint ("Do not migrate ..." must be rejected) never held.
         """
-        negation_patterns = ["not ", "don't ", "no ", "never ", "avoid ", "disable ", "contra"]
-        original_keywords = sorted(set(self.original.task_description.lower().split()))  # Sorted for determinism
         original_combined = self.original.task_description.lower()
-
+        original_keywords = sorted(
+            {t for t in self._tokens(original_combined) if len(t) > 3}
+        )
         addition_text = addition.text.lower()
+        addition_tokens = self._tokens(addition_text)
+        addition_set = set(addition_tokens)
 
-        # Check for explicit contradiction of primary verb (strongest signal)
-        if "enable" in original_combined and "disable" in addition_text:
+        # Explicit contradiction of the primary verb (strongest signal)
+        if "enable" in original_combined and "disable" in addition_set:
             return True
-        if "disable" in original_combined and "enable" in addition_text:
+        if "disable" in original_combined and "enable" in addition_set:
             return True
 
-        # Check for direct negation of original task (check top keywords only to avoid false positives)
-        for negation in ["disable"]:  # Stronger signal than generic "don't"
-            if negation in addition_text:
-                # Check only the top 5 most-common keywords (sorted for determinism)
-                for keyword in original_keywords[:5]:
-                    if len(keyword) > 3 and keyword in addition_text:
-                        logger.debug(f"Detected contradiction: '{negation}' + '{keyword}' in '{addition.text}'")
-                        return True
+        negated = bool(addition_set & self._NEGATION_TOKENS) or any(
+            t.startswith(self._NEGATION_PREFIXES) for t in addition_tokens
+        )
+        if not negated:
+            return False
 
+        # Negation + a keyword of the original task = contradiction. Stem-aware
+        # on whole tokens ("deployment" ~ "deploy"), never a bare substring.
+        for keyword in original_keywords:
+            for tok in addition_set:
+                if tok == keyword or tok.startswith(keyword) or (len(tok) > 3 and keyword.startswith(tok)):
+                    logger.debug(f"Detected contradiction: negation + '{keyword}' in '{addition.text}'")
+                    return True
         return False
 
     def _compute_entropy_with(self, hypothetical: ContextAddition) -> float:

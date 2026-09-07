@@ -294,27 +294,25 @@ class TestK1Metrics:
         """Test: Calculate false positive rate on relevance clauses."""
         pipeline = create_pipeline_context("test_metrics_fp")
 
-        # Simulate 10 additions (arbitrary numbers)
-        valid_count = 0
-        total_count = 10
+        # 10 well-formed additions with an explicit relevance clause
+        accepted = 0
+        attempted = 10
 
-        for i in range(total_count):
-            is_valid = (i % 3) != 0  # 2/3 are valid, 1/3 are "false positives"
-            if is_valid:
-                add = PipelineAddition(
-                    scope="session",
-                    source=f"memory:{i}",
-                    relevance=f"Relevant for reason {i}",
-                    content=f"Fact {i}",
-                )
-                if pipeline.add(add):
-                    valid_count += 1
+        for i in range(attempted):
+            add = PipelineAddition(
+                scope="session",
+                source=f"memory:{i}",
+                relevance=f"Relevant for reason {i}",
+                content=f"Fact {i}",
+            )
+            if pipeline.add(add):
+                accepted += 1
 
-        # FP rate = 1 - (valid / total)
-        fp_rate = 1.0 - (valid_count / total_count)
+        # FP rate = share of well-formed additions the pipeline wrongly rejected
+        fp_rate = 1.0 - (accepted / attempted)
 
         # k=1 target: <5% false positives
-        assert fp_rate < 0.05 or fp_rate == 0.0  # This test is flexible on exact rate
+        assert fp_rate < 0.05
 
     def test_k1_success_criteria(self):
         """Test: Verify k=1 success criteria are measurable."""

@@ -75,7 +75,7 @@ def lifecycle_manager():
 @pytest.fixture
 def checkpoint_manager(temp_checkpoint_dir):
     """Initialize CheckpointManager with temp directory."""
-    return CheckpointManager(checkpoint_dir=temp_checkpoint_dir)
+    return CheckpointManager(checkpoint_dir=temp_checkpoint_dir, tenant_id="_default")
 
 
 @pytest.fixture

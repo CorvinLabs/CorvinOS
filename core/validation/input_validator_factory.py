@@ -240,6 +240,10 @@ class FilePathValidator(Validator):
         if not isinstance(value, (str, Path)):
             raise ValidationError(f"Expected path, got {type(value)}")
 
+        # Traversal check on the RAW input, before resolve() collapses "..".
+        if ".." in Path(value).parts:
+            raise ValidationError(f"Path contains '..': {value}")
+
         path = Path(value).resolve()  # Canonicalize and resolve symlinks
 
         # Check against allowed directories
@@ -255,10 +259,6 @@ class FilePathValidator(Validator):
 
             if not allowed:
                 raise ValidationError(f"Path outside allowed directories: {path}")
-
-        # Prevent traversal attacks
-        if ".." in path.parts:
-            raise ValidationError(f"Path contains '..': {path}")
 
         return path
 

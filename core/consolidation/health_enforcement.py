@@ -210,11 +210,15 @@ class HealthEnforcer:
         # Enforce operation
         await self.enforce_operation(operation_id, operation_name)
 
-        # Execute operation
-        if hasattr(operation_fn, "__await__"):
-            return await operation_fn()
-        else:
-            return operation_fn()
+        # Execute operation. `hasattr(fn, "__await__")` tested the FUNCTION
+        # object (never awaitable), so async operations were returned as bare
+        # coroutines and never ran (2026-09-07 review). Await the RESULT.
+        import inspect as _inspect  # noqa: PLC0415
+
+        result = operation_fn()
+        if _inspect.isawaitable(result):
+            return await result
+        return result
 
     def get_decision_history(self, limit: int = 10) -> list[EnforcementDecision]:
         """Get recent enforcement decisions.

@@ -244,8 +244,8 @@ class TestAuditIntegration:
         assert len(audit_events) > 0
         assert audit_events[0]["event_type"] == "learning_conflict_detected"
 
-    def test_audit_failure_continues_processing(self, conflict_resolver):
-        """Test that audit failures don't block resolution."""
+    def test_audit_failure_blocks_resolution(self, conflict_resolver):
+        """Audit is fail-closed (C5): an audit write failure BLOCKS resolution."""
 
         class FailingAudit:
             def write_event(self, event):
@@ -265,10 +265,10 @@ class TestAuditIntegration:
             },
         }
 
-        # Should not raise; resolution should continue despite audit failure
-        resolutions = conflict_resolver.detect_and_resolve(pending)
-
-        assert len(resolutions) == 1
+        # Fail-closed: no audit record → no resolution is applied
+        with pytest.raises(RuntimeError, match="fail-closed"):
+            conflict_resolver.detect_and_resolve(pending)
+        assert conflict_resolver.get_conflicts() == []
 
 
 class TestConflictStorage:
