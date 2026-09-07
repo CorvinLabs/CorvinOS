@@ -58,18 +58,6 @@ from .helpers import (
     preserve_context,
 )
 
-# persona_aware_pipeline enforces the ADR-0302 deny-by-default capability gate.
-# This import is deliberately unguarded: it used to sit behind
-# `except (ImportError, AttributeError): pass`, which combined with a stub
-# fallback inside persona_aware_pipeline itself to hide the fact that the module
-# raised AttributeError at import time and the gate was never active. A security
-# gate that fails silently is worse than one that fails loudly.
-from .persona_aware_pipeline import (
-    PersonaAwarePipeline,
-    PersonaContextPolicy,
-    ContextVisibility,
-    create_persona_aware_pipeline,
-)
 
 __all__ += [
     "async_run_with_context",
@@ -82,8 +70,4 @@ __all__ += [
     "get_current_context",
     "set_context",
     "preserve_context",
-    "PersonaAwarePipeline",
-    "PersonaContextPolicy",
-    "ContextVisibility",
-    "create_persona_aware_pipeline",
 ]

@@ -41,6 +41,41 @@ from core.learning.event_persistence import EventStore
 from core.learning.event_schema import LearningEvent, LearningEventType
 from core.tenants.validation import validate_tenant_id
 
+
+def _register_chain_allowlists() -> None:
+    """Bind the field set of the method-discovery chain records (ADR-0129 M2).
+
+    ``EventStore.write_event`` commits a content-free record
+    (``event_id`` / ``event_type`` / ``skill_name`` / ``session_id`` / ``tags``
+    / ``audit_ref``) to the core chain BEFORE the disk append and verifies the
+    commit by finding ``audit_ref`` in the chain tail. The core writer's key
+    floor is default-deny, so without a registered allowlist ``audit_ref`` is
+    dropped, the commit check fails, and every observation is LOST (2026-09-07).
+    Metadata only — the observation payload itself never enters the chain.
+    """
+    try:
+        from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]
+    except ImportError:
+        # ``operator/`` has no __init__ (it would shadow the stdlib module);
+        # the forge package is reached by its directory, as the writer itself does.
+        import sys  # noqa: PLC0415
+
+        forge_dir = Path(__file__).resolve().parents[3] / "operator" / "forge"
+        if not forge_dir.is_dir():
+            return
+        if str(forge_dir) not in sys.path:
+            sys.path.insert(0, str(forge_dir))
+        try:
+            from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]
+        except ImportError:
+            return
+    fields = frozenset({"event_id", "event_type", "skill_name", "session_id", "tags", "audit_ref"})
+    for event_type in ("learning.method.observation", "learning.method.discovered"):
+        register_event_allowlist(event_type, fields)
+
+
+_register_chain_allowlists()
+
 __all__ = [
     "GENESIS_HASH",
     "MethodAuditSink",
@@ -245,6 +280,7 @@ class MethodAuditSink:
             payload=payload,
             tags=tags,
         )
+        _register_chain_allowlists()  # idempotent; the writer may have become importable since import
         return await self._store.write_event(event, self.tenant_id)
 
     # ── reads (tenant-filtered by the store itself) ─────────────────────

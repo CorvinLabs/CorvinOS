@@ -179,10 +179,11 @@ def _read_flags_uncached(tenant_id: str) -> dict[str, bool]:
 
     try:
         registry = get_registry()
-        result = registry.execute("os.capabilities", {
-            "tenant_id": tenant_id,
-            "gated_flags": list(GATED_FLAGS),
-        })
+        result = registry.execute(
+            "os.capabilities",
+            {"tenant_id": tenant_id, "gated_flags": list(GATED_FLAGS)},
+            lom="core/console/corvin_console/routes/capabilities.py:_read_flags_uncached",
+        )
 
         if result.status == "success":
             return result.output.get("flags", {flag: False for flag in GATED_FLAGS})

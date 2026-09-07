@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import List
 
 from core.skill_management.tenant_validator import validate_tenant_id
+from core.paths.tenant import tenant_home
 
 @dataclass
 class MigrationReport:
@@ -24,7 +25,7 @@ class SkillMigrator:
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self.source_base = Path.home() / ".claude" / "skills"
-        self.dest_base = Path.home() / ".corvin" / "tenants" / tenant_id / "_shared" / "skills"
+        self.dest_base = tenant_home(tenant_id) / "_shared" / "skills"
 
     def migrate_from_claude_global(self, backup: bool = True) -> MigrationReport:
         """Migrate ~/.claude/skills/* -> tenant/_shared/skills/"""
@@ -36,10 +37,14 @@ class SkillMigrator:
 
         # Step 1: Create backup
         if backup:
-            backup_path = Path.home() / ".corvin" / "tenants" / self.tenant_id / "backups" / f"pre_migration_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
-            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            stem = tenant_home(self.tenant_id) / "backups" / f"pre_migration_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            stem.parent.mkdir(parents=True, exist_ok=True)
             try:
-                shutil.make_archive(str(backup_path.with_suffix('')), 'gztar', self.source_base.parent, self.source_base.name)
+                # make_archive appends ".tar.gz" to the base name itself; a
+                # ".tar.gz"-suffixed path run through with_suffix('') kept
+                # ".tar" in the stem, so the reported backup path never existed.
+                backup_path = Path(shutil.make_archive(
+                    str(stem), 'gztar', self.source_base.parent, self.source_base.name))
             except Exception as e:
                 warnings.append(f"Backup failed: {str(e)}")
 
@@ -84,7 +89,7 @@ class SkillMigrator:
             if self.dest_base.exists():
                 shutil.rmtree(self.dest_base)
             # Restore from backup
-            shutil.unpack_archive(str(backup_path), Path.home() / ".corvin" / "tenants" / self.tenant_id / "backups")
+            shutil.unpack_archive(str(backup_path), tenant_home(self.tenant_id) / "backups")
             return True
         except Exception as e:
             print(f"Rollback failed: {e}")

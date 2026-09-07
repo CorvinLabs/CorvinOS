@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
 
-from core.plugins.corvin_plugins.capability_registry import get_registry
-from core.plugins.corvin_plugins.manifest_capabilities import Capability
+from corvin_plugins.capability_registry import get_registry
+from corvin_plugins.manifest_capabilities import Capability
 
 log = logging.getLogger(__name__)
 

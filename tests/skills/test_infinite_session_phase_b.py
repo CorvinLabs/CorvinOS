@@ -1,652 +1,260 @@
-"""Phase B: Session Bridging + Crypto Signatures — Full Test Suite (ADR-0541).
+"""Phase B — crypto binding, session bridging, audit verification (ADR-0541)."""
 
-Comprehensive tests for cryptographic binding, session bridging, and audit verification.
-Coverage:
-- Unit: HMAC correctness, key rotation, signature verification
-- Integration: snapshot signing + verification, bridge creation/resumption
-- E2E: cross-session audit chain continuity
-- Adversarial: tampering detection, tenant isolation, signature spoofing
+from __future__ import annotations
 
-Compliance:
-- GDPR Art. 30/32: Audit continuity, cryptographic proof
-- All operations fail-closed: any error → reject
-"""
+import json
+import os
+import stat
 
 import pytest
-import json
-import tempfile
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Any
 
-from core.infinite_session.crypto_binding import (
-    CryptoBinding,
-    SignatureMetadata,
-    KeyRotationStatus,
-)
-from core.infinite_session.session_bridger import (
-    SessionBridger,
-    SessionBridgeEvent,
-)
-from core.infinite_session.audit_verification import (
+from core.infinite_session import (
     AuditVerifier,
-    VerificationStatus,
-)
-from core.infinite_session.event_store import EventStore
-from core.infinite_session.snapshot_schema import (
+    CryptoBinding,
+    EventStore,
+    SessionBridgeEvent,
+    SessionBridger,
     Snapshot,
-    SnapshotType,
+    VerificationStatus,
+    snapshot_task_state,
 )
+
+TENANT = "_default"
+
+
+def _audit_sink():
+    sink: list = []
+
+    def emit(event_type, *, tenant_id, details):
+        sink.append((event_type, tenant_id, dict(details)))
+        return f"ref-{len(sink)}"
+
+    emit.sink = sink  # type: ignore[attr-defined]
+    return emit
+
+
+def _callback(events: list):
+    def cb(**kwargs):
+        events.append(kwargs)
+        return True
+    return cb
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
+def store(home):
+    return EventStore(TENANT, audit=_audit_sink())
+
+
+@pytest.fixture
+def crypto(home):
+    return CryptoBinding()
+
+
+@pytest.fixture
+def bridger(store, crypto):
+    return SessionBridger(store, crypto)
+
+
+def _chain(store, task_id="task_1", n=2):
+    return [snapshot_task_state(TENANT, task_id, {"i": i}, phase_id=f"p{i}", store=store)[0] for i in range(n)]
+
+
+# ── CryptoBinding ─────────────────────────────────────────────────────────
 
 
 class TestCryptoBinding:
-    """Unit tests for cryptographic binding (HMAC-SHA256)."""
+    def test_key_lives_under_tenant_root_0600(self, home, crypto):
+        sig, err = crypto.sign_payload(TENANT, {"a": 1})
+        assert err == "" and len(sig) == 64
+        key = home / "tenants" / TENANT / "infinite_session" / "keys" / "signing.key"
+        assert key.exists()
+        assert stat.S_IMODE(os.stat(key).st_mode) == 0o600
 
-    @pytest.fixture
-    def crypto_binding(self, tmp_path):
-        """Create crypto binding with temp directory."""
-        return CryptoBinding(corvin_home=str(tmp_path / ".corvin"))
+    def test_sign_verify_roundtrip_canonical(self, crypto):
+        sig, _ = crypto.sign_payload(TENANT, {"b": 2, "a": [1, {"z": 1, "y": 2}]})
+        assert crypto.verify_payload(TENANT, {"a": [1, {"y": 2, "z": 1}], "b": 2}, sig) == (True, "")
+        assert crypto.verify_payload(TENANT, {"a": [1, {"y": 2, "z": 1}], "b": 3}, sig)[0] is False
+        assert crypto.verify_payload(TENANT, {"b": 2, "a": [1, {"z": 1, "y": 2}]}, sig[:-1] + "0")[0] is False
 
-    @pytest.fixture
-    def audit_events(self):
-        """Collect audit events during tests."""
-        return []
+    def test_deterministic(self, crypto):
+        assert crypto.sign_payload(TENANT, {"x": 1})[0] == crypto.sign_payload(TENANT, {"x": 1})[0]
 
-    def audit_callback(self, audit_events):
-        """Return callback that collects audit events."""
-        def callback(**kwargs):
-            audit_events.append(kwargs)
-            return True
-        return callback
+    @pytest.mark.parametrize("tenant", ["", None, "../x"])
+    def test_bad_tenant_fails_closed(self, crypto, tenant):
+        assert crypto.sign_payload(tenant, {"x": 1})[0] is None
+        assert crypto.verify_payload(tenant, {"x": 1}, "ab")[0] is False
 
-    def test_sign_snapshot_creates_valid_signature(self, crypto_binding, audit_events):
-        """Test: snapshot hash can be signed and verified."""
-        tenant_id = "_default"
-        snapshot_hash = "abc123def456"
+    def test_empty_payload_and_signature_fail_closed(self, crypto):
+        assert crypto.sign_payload(TENANT, {})[0] is None
+        sig, _ = crypto.sign_payload(TENANT, {"x": 1})
+        assert crypto.verify_payload(TENANT, {"x": 1}, "")[0] is False
 
-        # Sign snapshot
-        signature, error = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-            audit_callback=self.audit_callback(audit_events),
-        )
+    def test_verify_never_creates_a_key(self, home, crypto):
+        assert crypto.verify_payload("tenant_new", {"x": 1}, "ab")[0] is False
+        assert not (home / "tenants" / "tenant_new").exists()
 
-        assert error == "", f"Sign failed: {error}"
-        assert signature is not None
-        assert len(signature) == 64  # SHA256 hex = 64 chars
-        assert len(audit_events) >= 1
+    def test_cross_tenant_key_isolation(self, crypto):
+        sig, _ = crypto.sign_payload("tenant_a", {"x": 1})
+        crypto.sign_payload("tenant_b", {"x": 1})
+        assert crypto.verify_payload("tenant_b", {"x": 1}, sig)[0] is False
 
-    def test_sign_snapshot_fail_closed_on_empty_tenant(self, crypto_binding):
-        """Test: signing fails (fail-closed) on empty tenant_id."""
-        signature, error = crypto_binding.sign_snapshot(
-            tenant_id="",
-            snapshot_hash="abc123",
-        )
+    def test_mismatch_is_audited(self, crypto):
+        events: list = []
+        sig, _ = crypto.sign_payload(TENANT, {"x": 1})
+        crypto.verify_payload(TENANT, {"x": 2}, sig, audit_callback=_callback(events))
+        assert events[-1]["event_type"] == "signature_verification_failed"
 
-        assert signature is None
-        assert "tenant_id is required" in error
+    def test_rotation_archives_and_invalidates(self, home, crypto):
+        sig, _ = crypto.sign_payload(TENANT, {"x": 1})
+        events: list = []
+        assert crypto.rotate_key(TENANT, audit_callback=_callback(events)) == (True, "")
+        assert events[-1]["event_type"] == "key_rotated"
+        archive = home / "tenants" / TENANT / "infinite_session" / "keys" / "archive"
+        assert len(list(archive.glob("*.key.old"))) == 1
+        assert crypto.verify_payload(TENANT, {"x": 1}, sig)[0] is False
 
-    def test_sign_snapshot_fail_closed_on_empty_hash(self, crypto_binding):
-        """Test: signing fails (fail-closed) on empty hash."""
-        signature, error = crypto_binding.sign_snapshot(
-            tenant_id="_default",
-            snapshot_hash="",
-        )
+    def test_string_hash_api(self, crypto):
+        sig, err = crypto.sign_snapshot(TENANT, "abc")
+        assert err == "" and crypto.verify_signature(TENANT, "abc", sig) == (True, "")
+        assert crypto.sign_snapshot(TENANT, "")[0] is None
 
-        assert signature is None
-        assert "snapshot_hash is required" in error
 
-    def test_verify_signature_accepts_valid_signature(self, crypto_binding, audit_events):
-        """Test: valid signature verifies successfully."""
-        tenant_id = "_default"
-        snapshot_hash = "abc123def456"
-
-        # Sign
-        signature, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-        )
-
-        # Verify
-        is_valid, error = crypto_binding.verify_signature(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-            signature=signature,
-            audit_callback=self.audit_callback(audit_events),
-        )
-
-        assert is_valid, f"Verification failed: {error}"
-        assert error == ""
-
-    def test_verify_signature_rejects_tampered_hash(self, crypto_binding, audit_events):
-        """Test: verification fails (fail-closed) if hash was tampered."""
-        tenant_id = "_default"
-        snapshot_hash = "abc123def456"
-        tampered_hash = "tampered999999"
-
-        # Sign original
-        signature, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-        )
-
-        # Verify with tampered hash
-        is_valid, error = crypto_binding.verify_signature(
-            tenant_id=tenant_id,
-            snapshot_hash=tampered_hash,
-            signature=signature,
-            audit_callback=self.audit_callback(audit_events),
-        )
-
-        assert not is_valid
-        assert "Signature mismatch" in error
-
-    def test_verify_signature_rejects_tampered_signature(self, crypto_binding, audit_events):
-        """Test: verification fails if signature was tampered."""
-        tenant_id = "_default"
-        snapshot_hash = "abc123def456"
-
-        # Sign
-        signature, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-        )
-
-        # Tamper with signature
-        tampered_sig = signature[:-2] + "ff"
-
-        # Verify
-        is_valid, error = crypto_binding.verify_signature(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-            signature=tampered_sig,
-            audit_callback=self.audit_callback(audit_events),
-        )
-
-        assert not is_valid
-        assert "Signature mismatch" in error
-
-    def test_verify_signature_fail_closed_on_empty_tenant(self, crypto_binding):
-        """Test: verification fails (fail-closed) on empty tenant_id."""
-        is_valid, error = crypto_binding.verify_signature(
-            tenant_id="",
-            snapshot_hash="abc123",
-            signature="deadbeef",
-        )
-
-        assert not is_valid
-        assert "tenant_id is required" in error
-
-    def test_key_rotation_archives_old_key(self, crypto_binding, audit_events):
-        """Test: key rotation archives old key and generates new one."""
-        tenant_id = "_default"
-
-        # Generate initial key by signing
-        sig1, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash="hash1",
-        )
-
-        # Rotate key
-        success, error = crypto_binding.rotate_key(
-            tenant_id=tenant_id,
-            audit_callback=self.audit_callback(audit_events),
-        )
-
-        assert success, f"Rotation failed: {error}"
-        assert len(audit_events) >= 1
-
-        # Verify new key is different
-        sig2, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash="hash1",
-        )
-
-        # Signatures should be different (different keys)
-        assert sig1 != sig2
-
-    def test_signature_is_deterministic(self, crypto_binding):
-        """Test: same input always produces same signature (determinism)."""
-        tenant_id = "_default"
-        snapshot_hash = "abc123def456"
-
-        sig1, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-        )
-
-        sig2, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-        )
-
-        assert sig1 == sig2, "Signature should be deterministic"
+# ── SessionBridger ────────────────────────────────────────────────────────
 
 
 class TestSessionBridger:
-    """Integration tests for session bridging."""
-
-    @pytest.fixture
-    def temp_dir(self):
-        """Create temporary directory."""
-        with tempfile.TemporaryDirectory() as tmp:
-            yield tmp
-
-    @pytest.fixture
-    def components(self, temp_dir):
-        """Create event_store, crypto_binding, session_bridger."""
-        event_store = EventStore(corvin_home=temp_dir)
-        crypto_binding = CryptoBinding(corvin_home=temp_dir)
-        session_bridger = SessionBridger(
-            event_store=event_store,
-            crypto_binding=crypto_binding,
-            corvin_home=temp_dir,
+    def test_create_signs_whole_event_and_persists(self, home, store, bridger):
+        s1, s2 = _chain(store)
+        events: list = []
+        bridge, err = bridger.create_bridge(
+            TENANT, "task_1", "sess_a", "sess_b", s2, "p1",
+            artifacts=["ADR-1"], metadata={"k": 1}, audit_callback=_callback(events),
         )
-        return event_store, crypto_binding, session_bridger
+        assert err == "" and bridge.snapshot_id == s2.snapshot_id
+        assert bridge.prev_hash == s1.content_hash
+        assert bridger.crypto_binding.verify_payload(TENANT, bridge.signed_payload(), bridge.signature) == (True, "")
+        path = home / "tenants" / TENANT / "infinite_session" / "bridges" / "task_1" / f"{bridge.bridge_id}.json"
+        assert path.exists()
+        assert [e["event_type"] for e in events][-1] == "task_session_bridged"
+        assert "state_dict" not in json.dumps(events)
 
-    def test_create_bridge_signs_and_persists(self, components):
-        """Test: bridge creation signs snapshot and persists to disk."""
-        event_store, crypto_binding, session_bridger = components
+    def test_fail_closed_on_bad_inputs(self, store, bridger):
+        s1, = _chain(store, n=1)
+        assert bridger.create_bridge("", "task_1", "a", "b", s1, "p")[0] is None
+        assert bridger.create_bridge("tenant_b", "task_1", "a", "b", s1, "p")[0] is None
+        assert bridger.create_bridge(TENANT, "task_1", "", "b", s1, "p")[0] is None
+        assert bridger.create_bridge(TENANT, "other_task", "a", "b", s1, "p")[0] is None
 
-        tenant_id = "_default"
-        task_id = "test_task"
-        snapshot = Snapshot.create(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            phase_id="phase_a",
-            state_dict={"key": "value"},
-        )
+    def test_unpersisted_snapshot_cannot_be_bridged(self, store, bridger):
+        floating = Snapshot.create(TENANT, "task_1", "p", {"x": 1})
+        bridge, err = bridger.create_bridge(TENANT, "task_1", "a", "b", floating, "p")
+        assert bridge is None and "not persisted" in err
 
-        # Create bridge
-        bridge, error = session_bridger.create_bridge(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            source_session_id="session_1",
-            dest_session_id="session_2",
-            snapshot=snapshot,
-            phase_completed="phase_a",
-            artifacts=["ADR-0541"],
-        )
+    def test_resume_returns_verified_state(self, store, bridger):
+        s1, s2 = _chain(store)
+        bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s2, "p1")
+        events: list = []
+        state, err = bridger.resume_from_bridge(TENANT, "task_1", bridge.bridge_id, audit_callback=_callback(events))
+        assert err == ""
+        assert state["state_dict"] == {"i": 1} and state["snapshot_hash"] == s2.content_hash
+        assert state["source_session_id"] == "a" and state["dest_session_id"] == "b"
+        assert events[-1]["event_type"] == "session_resumed"
 
-        assert error == "", f"Bridge creation failed: {error}"
-        assert bridge is not None
-        assert bridge.signature is not None
-        assert len(bridge.signature) == 64  # SHA256 hex
+    def test_resume_rejects_wrong_tenant_or_task(self, home, store, bridger):
+        s1, = _chain(store, n=1)
+        bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s1, "p0")
+        assert bridger.resume_from_bridge("tenant_b", "task_1", bridge.bridge_id)[0] is None
+        assert bridger.resume_from_bridge(TENANT, "task_2", bridge.bridge_id)[0] is None
+        assert bridger.resume_from_bridge(TENANT, "task_1", "../" + bridge.bridge_id)[0] is None
 
-    def test_create_bridge_fail_closed_on_empty_tenant(self, components):
-        """Test: bridge creation fails (fail-closed) on empty tenant_id."""
-        _, _, session_bridger = components
-
-        snapshot = Snapshot.create(
-            tenant_id="valid_tenant",
-            task_id="task_id",
-            phase_id="phase",
-            state_dict={},
-        )
-
-        bridge, error = session_bridger.create_bridge(
-            tenant_id="",
-            task_id="task_id",
-            source_session_id="s1",
-            dest_session_id="s2",
-            snapshot=snapshot,
-            phase_completed="phase",
-        )
-
-        assert bridge is None
-        assert "tenant_id is required" in error
-
-    def test_create_bridge_fail_closed_on_tenant_mismatch(self, components):
-        """Test: bridge creation fails if snapshot tenant doesn't match."""
-        _, _, session_bridger = components
-
-        snapshot = Snapshot.create(
-            tenant_id="tenant_a",
-            task_id="task_id",
-            phase_id="phase",
-            state_dict={},
-        )
-
-        bridge, error = session_bridger.create_bridge(
-            tenant_id="tenant_b",
-            task_id="task_id",
-            source_session_id="s1",
-            dest_session_id="s2",
-            snapshot=snapshot,
-            phase_completed="phase",
-        )
-
-        assert bridge is None
-        assert "tenant_id mismatch" in error
-
-    def test_resume_from_bridge_verifies_signature(self, components):
-        """Test: resuming from bridge verifies signature (fail-closed on mismatch)."""
-        _, _, session_bridger = components
-
-        tenant_id = "_default"
-        task_id = "test_task"
-        snapshot = Snapshot.create(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            phase_id="phase_a",
-            state_dict={"key": "value"},
-        )
-
-        # Create bridge
-        bridge, error = session_bridger.create_bridge(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            source_session_id="session_1",
-            dest_session_id="session_2",
-            snapshot=snapshot,
-            phase_completed="phase_a",
-        )
-
-        assert error == ""
-
-        # Resume from bridge
-        state, error = session_bridger.resume_from_bridge(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            bridge_id=bridge.bridge_id,
-        )
-
-        assert error == "", f"Resume failed: {error}"
-        assert state is not None
-        assert state["bridge_id"] == bridge.bridge_id
-
-    def test_list_bridges_returns_all_bridges(self, components):
-        """Test: list_bridges returns all bridges for a task."""
-        _, _, session_bridger = components
-
-        tenant_id = "_default"
-        task_id = "test_task"
-
-        # Create 3 bridges
-        for i in range(3):
-            snapshot = Snapshot.create(
-                tenant_id=tenant_id,
-                task_id=task_id,
-                phase_id=f"phase_{i}",
-                state_dict={"iteration": i},
-            )
-
-            session_bridger.create_bridge(
-                tenant_id=tenant_id,
-                task_id=task_id,
-                source_session_id=f"session_{i}",
-                dest_session_id=f"session_{i+1}",
-                snapshot=snapshot,
-                phase_completed=f"phase_{i}",
-            )
-
-        # List bridges
-        bridges, error = session_bridger.list_bridges(
-            tenant_id=tenant_id,
-            task_id=task_id,
-        )
-
-        assert error == ""
-        assert len(bridges) == 3
-
-
-class TestAuditVerifier:
-    """Tests for audit chain verification."""
-
-    @pytest.fixture
-    def temp_dir(self):
-        """Create temporary directory."""
-        with tempfile.TemporaryDirectory() as tmp:
-            yield tmp
-
-    @pytest.fixture
-    def verifier(self, temp_dir):
-        """Create verifier."""
-        event_store = EventStore(corvin_home=temp_dir)
-        crypto_binding = CryptoBinding(corvin_home=temp_dir)
-        verifier = AuditVerifier(
-            event_store=event_store,
-            crypto_binding=crypto_binding,
-            corvin_home=temp_dir,
-        )
-        return verifier
-
-    def test_verify_task_chain_returns_pass_for_empty_task(self, verifier):
-        """Test: verification passes for task with no events."""
-        result, error = verifier.verify_task_chain(
-            tenant_id="_default",
-            task_id="empty_task",
-        )
-
-        # Result should be available (even if no events)
-        assert result is not None or error != ""
-
-
-class TestAdversarialCryptoBinding:
-    """Adversarial tests for cryptographic binding."""
-
-    @pytest.fixture
-    def crypto_binding(self, tmp_path):
-        """Create crypto binding."""
-        return CryptoBinding(corvin_home=str(tmp_path / ".corvin"))
-
-    def test_timing_attack_resistance(self, crypto_binding):
-        """Test: signature verification is resistant to timing attacks.
-
-        Adversary scenario: attacker tries to guess signature bit-by-bit by timing
-        verification duration. Defense: HMAC.compare_digest() uses constant-time comparison.
-        """
-        tenant_id = "_default"
-        snapshot_hash = "abc123def456"
-
-        # Sign
-        signature, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash=snapshot_hash,
-        )
-
-        # Try multiple wrong signatures with same prefix
-        wrong_sigs = [
-            "0" * 64,  # All zeros
-            signature[:32] + "0" * 32,  # Same first half
-            signature[:2] + "0" * 62,  # Same first 2 chars
-        ]
-
-        # All should fail with similar timing (no timing leak)
-        for wrong_sig in wrong_sigs:
-            is_valid, _ = crypto_binding.verify_signature(
-                tenant_id=tenant_id,
-                snapshot_hash=snapshot_hash,
-                signature=wrong_sig,
-            )
-            assert not is_valid
-
-    def test_cross_tenant_key_isolation(self, crypto_binding):
-        """Test: keys are isolated per tenant (no cross-tenant tampering)."""
-        tenant_a = "tenant_a"
-        tenant_b = "tenant_b"
-        snapshot_hash = "abc123def456"
-
-        # Generate key for tenant_a
-        sig_a, _ = crypto_binding.sign_snapshot(
-            tenant_id=tenant_a,
-            snapshot_hash=snapshot_hash,
-        )
-
-        # Try to verify tenant_a's signature with tenant_b's key
-        is_valid, _ = crypto_binding.verify_signature(
-            tenant_id=tenant_b,
-            snapshot_hash=snapshot_hash,
-            signature=sig_a,
-        )
-
-        # Should fail: keys are different
-        assert not is_valid
-
-    def test_key_file_permissions(self, crypto_binding):
-        """Test: key files have restricted permissions (0o600)."""
-        tenant_id = "_default"
-
-        # Generate key
-        crypto_binding.sign_snapshot(
-            tenant_id=tenant_id,
-            snapshot_hash="test",
-        )
-
-        # Check file permissions
-        key_path = crypto_binding._get_key_path(tenant_id)
-        mode = key_path.stat().st_mode & 0o777
-
-        assert mode == 0o600, f"Key file has insecure permissions: {oct(mode)}"
+    def test_list_bridges(self, store, bridger):
+        s1, s2 = _chain(store)
+        bridger.create_bridge(TENANT, "task_1", "a", "b", s1, "p0")
+        bridger.create_bridge(TENANT, "task_1", "b", "c", s2, "p1")
+        bridges, err = bridger.list_bridges(TENANT, "task_1")
+        assert err == "" and [b.phase_completed for b in bridges] == ["p0", "p1"]
+        assert bridger.list_bridges("tenant_b", "task_1")[0] == []
 
 
 class TestAdversarialSessionBridger:
-    """Adversarial tests for session bridging."""
+    @pytest.mark.parametrize("field,value", [
+        ("phase_completed", "evil"),
+        ("artifacts", ["planted"]),
+        ("metadata", {"role": "admin"}),
+        ("dest_session_id", "attacker"),
+        ("snapshot_hash", "0" * 64),
+        ("prev_hash", "genesis"),
+        ("timestamp", "1999-01-01T00:00:00+00:00"),
+    ])
+    def test_any_field_tamper_invalidates(self, home, store, bridger, field, value):
+        s1, s2 = _chain(store)
+        bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s2, "p1", metadata={"role": "user"})
+        path = bridger._bridge_file("task_1", bridge.bridge_id)
+        data = json.loads(path.read_text())
+        data[field] = value
+        path.write_text(json.dumps(data))
+        state, err = bridger.resume_from_bridge(TENANT, "task_1", bridge.bridge_id)
+        assert state is None and "Signature verification failed" in err
 
-    @pytest.fixture
-    def temp_dir(self):
-        """Create temporary directory."""
-        with tempfile.TemporaryDirectory() as tmp:
-            yield tmp
+    def test_snapshot_swap_detected(self, home, store, bridger):
+        s1, s2 = _chain(store)
+        bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s2, "p1")
+        # Point the bridge at s1 with s1's hash by re-signing with a foreign key: impossible;
+        # simulate a store-side swap instead: delete s2 → resume must fail-closed
+        (store.root_dir / "task_1" / f"{s2.snapshot_id}.json").unlink()
+        state, err = bridger.resume_from_bridge(TENANT, "task_1", bridge.bridge_id)
+        assert state is None and "snapshot unavailable" in err
 
-    @pytest.fixture
-    def components(self, temp_dir):
-        """Create components."""
-        event_store = EventStore(corvin_home=temp_dir)
-        crypto_binding = CryptoBinding(corvin_home=temp_dir)
-        session_bridger = SessionBridger(
-            event_store=event_store,
-            crypto_binding=crypto_binding,
-            corvin_home=temp_dir,
-        )
-        return event_store, crypto_binding, session_bridger, temp_dir
+    def test_foreign_tenant_bridge_file_rejected(self, home, store, bridger):
+        s1, = _chain(store, n=1)
+        bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s1, "p0")
+        path = bridger._bridge_file("task_1", bridge.bridge_id)
+        data = json.loads(path.read_text())
+        data["tenant_id"] = "tenant_b"
+        path.write_text(json.dumps(data))
+        assert bridger.resume_from_bridge(TENANT, "task_1", bridge.bridge_id)[0] is None
 
-    def test_bridge_tampering_detection(self, components):
-        """Test: tampering with persisted bridge is detected on resume.
 
-        Adversary scenario: attacker modifies bridge file on disk (changes signature).
-        Defense: signature verification fails on resume.
-        """
-        _, _, session_bridger, temp_dir = components
+# ── AuditVerifier ─────────────────────────────────────────────────────────
 
-        tenant_id = "_default"
-        task_id = "test_task"
-        snapshot = Snapshot.create(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            phase_id="phase_a",
-            state_dict={"key": "value"},
-        )
 
-        # Create bridge
-        bridge, error = session_bridger.create_bridge(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            source_session_id="session_1",
-            dest_session_id="session_2",
-            snapshot=snapshot,
-            phase_completed="phase_a",
-        )
+class TestAuditVerifier:
+    def test_pass_and_persist(self, home, store, crypto, bridger):
+        s1, s2 = _chain(store)
+        bridger.create_bridge(TENANT, "task_1", "a", "b", s2, "p1")
+        v = AuditVerifier(store, crypto, bridger)
+        events: list = []
+        result, err = v.verify_task_chain(TENANT, "task_1", audit_callback=_callback(events))
+        assert err == "" and result.status == VerificationStatus.PASS
+        assert result.event_count == 2 and result.session_count == 2
+        assert events[-1]["event_type"] == "audit_chain_verified"
+        assert v.get_verification_status(TENANT, "task_1")[0].status == VerificationStatus.PASS
 
-        assert error == ""
+    def test_empty_task_passes(self, store, crypto):
+        result, err = AuditVerifier(store, crypto).verify_task_chain(TENANT, "nothing")
+        assert err == "" and result.status == VerificationStatus.PASS and result.event_count == 0
 
-        # Tamper with bridge file
-        bridge_file = (
-            Path(temp_dir) / "bridges" / tenant_id / task_id / f"{bridge.bridge_id}.json"
-        )
-        bridge_data = json.loads(bridge_file.read_text())
-        bridge_data["signature"] = "tampered" + bridge_data["signature"][8:]
-        bridge_file.write_text(json.dumps(bridge_data))
+    def test_detects_chain_break_and_bridge_tamper(self, home, store, crypto, bridger):
+        s1, s2 = _chain(store)
+        bridge, _ = bridger.create_bridge(TENANT, "task_1", "a", "b", s2, "p1")
+        v = AuditVerifier(store, crypto, bridger)
+        path = bridger._bridge_file("task_1", bridge.bridge_id)
+        data = json.loads(path.read_text()); data["phase_completed"] = "x"; path.write_text(json.dumps(data))
+        result, _ = v.verify_task_chain(TENANT, "task_1")
+        assert result.status == VerificationStatus.FAIL_SIGNATURE_MISMATCH
+        index = store.root_dir / "task_1" / "index.json"
+        data = json.loads(index.read_text()); data[0]["content_hash"] = "0" * 64; index.write_text(json.dumps(data))
+        result, _ = v.verify_task_chain(TENANT, "task_1")
+        assert result.status == VerificationStatus.FAIL_CHAIN_BROKEN and len(result.errors) >= 2
 
-        # Try to resume (should fail)
-        state, error = session_bridger.resume_from_bridge(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            bridge_id=bridge.bridge_id,
-        )
-
-        assert state is None
-        assert "Signature verification failed" in error or "Signature mismatch" in error
-
-    def test_bridge_snapshot_hash_tampering(self, components):
-        """Test: tampering with snapshot_hash in bridge is detected."""
-        _, _, session_bridger, temp_dir = components
-
-        tenant_id = "_default"
-        task_id = "test_task"
-        snapshot = Snapshot.create(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            phase_id="phase_a",
-            state_dict={"key": "value"},
-        )
-
-        # Create bridge
-        bridge, error = session_bridger.create_bridge(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            source_session_id="session_1",
-            dest_session_id="session_2",
-            snapshot=snapshot,
-            phase_completed="phase_a",
-        )
-
-        assert error == ""
-
-        # Tamper with snapshot_hash in bridge file
-        bridge_file = (
-            Path(temp_dir) / "bridges" / tenant_id / task_id / f"{bridge.bridge_id}.json"
-        )
-        bridge_data = json.loads(bridge_file.read_text())
-        bridge_data["snapshot_hash"] = "tampered" + bridge_data["snapshot_hash"][8:]
-        bridge_file.write_text(json.dumps(bridge_data))
-
-        # Try to resume (should fail: hash no longer matches signature)
-        state, error = session_bridger.resume_from_bridge(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            bridge_id=bridge.bridge_id,
-        )
-
-        assert state is None
-        assert "Signature verification failed" in error or "Signature mismatch" in error
-
-    def test_bridge_tenant_isolation_violation(self, components):
-        """Test: cross-tenant bridge attacks are detected (fail-closed).
-
-        Adversary scenario: attacker tries to use a bridge from one tenant in another.
-        Defense: resume_from_bridge verifies tenant_id matches.
-        """
-        _, _, session_bridger, temp_dir = components
-
-        tenant_a = "tenant_a"
-        tenant_b = "tenant_b"
-        task_id = "test_task"
-
-        # Create bridge in tenant_a
-        snapshot_a = Snapshot.create(
-            tenant_id=tenant_a,
-            task_id=task_id,
-            phase_id="phase_a",
-            state_dict={"key": "value"},
-        )
-
-        bridge_a, _ = session_bridger.create_bridge(
-            tenant_id=tenant_a,
-            task_id=task_id,
-            source_session_id="session_1",
-            dest_session_id="session_2",
-            snapshot=snapshot_a,
-            phase_completed="phase_a",
-        )
-
-        # Try to resume bridge in tenant_b (should fail)
-        # (Bridge file won't exist in tenant_b's directory, so it will be not found)
-        state, error = session_bridger.resume_from_bridge(
-            tenant_id=tenant_b,
-            task_id=task_id,
-            bridge_id=bridge_a.bridge_id,
-        )
-
-        assert state is None
-        assert "Bridge not found" in error or "fail" in error.lower()
+    def test_verify_all_tasks(self, store, crypto):
+        _chain(store, "t1"); _chain(store, "t2", n=1)
+        results, err = AuditVerifier(store, crypto).verify_all_tasks(TENANT)
+        assert err == "" and sorted(r.task_id for r in results) == ["t1", "t2"]
+        assert AuditVerifier(store, crypto).verify_all_tasks("tenant_b")[0] == []

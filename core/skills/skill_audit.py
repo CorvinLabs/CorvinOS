@@ -80,11 +80,20 @@ def emit_skill_audit(
     _ensure_operator_on_path()
     try:
         from forge.security_events import write_event  # type: ignore[import-not-found]
+        from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]
     except Exception:  # noqa: BLE001
         logger.error(
             "core audit writer unavailable — skill event %s NOT chained", event_type
         )
         return False
+    # Positive, content-free allowlist for every skill.* record this module
+    # emits (default-deny floor, ADR-0640). Structural keys only — never
+    # inputs, outputs, prompts or user content.
+    register_event_allowlist(event_type, {
+        "skill_id", "skill_version", "status", "operation", "flag_id", "enabled",
+        "latency_ms", "duration_ms", "error_type", "lom", "lom_hash", "decision",
+        "tenant_id", "audit_ref", "tool", "run_id", "tier", "reason_code",
+    })
     body: dict[str, Any] = dict(details or {})
     body["tenant_id"] = tenant_id
     try:

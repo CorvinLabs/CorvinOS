@@ -1,9 +1,19 @@
-"""OS-Skills Integration Layer — Wire Phase 1 Skills into Core Layers (L5, L10, etc).
+"""OS-Skills Integration Layer — boot wiring + Skill entry points.
 
-This module integrates Phase 1 Skills with Corvin OS layer stack:
-- L5 (Auto-routing): DelegationRouterSkill
-- L10 (Context): ContextAdapterSkill
-- Learning loop integration (ADR-0314)
+What is PRODUCTION-WIRED (verified 2026-09-07, adversarial review F-K4):
+
+- Boot: ``initialize_integration`` is called from ``core.skills.boot.boot_skills``
+  (← ``corvin_plugins.bootstrap.boot_platform``) and populates the global registry.
+- L5 (Auto-routing): ``os.delegation_router`` runs in SHADOW mode from the one
+  shared routing function, ``operator/bridges/shared/delegation_policy.py::
+  _acp_shadow_route`` — the bundled engine stands, the Skill's advice is audited
+  and learned from. ``route_task_l5`` below is the direct (non-shadow) entry
+  point; it has no production caller today and is exercised by tests only.
+- L10 (Context): ``adapt_context_l10`` / ``os.context_adapter`` has NO production
+  call site. The context pipeline (CEL stages, ``core/context_engineering``) does
+  not consult it. Do not describe L10 as "wired"; wiring it is a follow-up that
+  needs a call site in the context pipeline (out of this module's reach).
+- Learning loop integration (ADR-0314): every execution through the registry.
 
 Design:
 - Singleton registry (init once at boot)

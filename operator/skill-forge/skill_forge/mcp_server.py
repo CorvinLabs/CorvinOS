@@ -139,7 +139,6 @@ META_TOOLS: list[dict[str, Any]] = [
 
 class SkillForgeMCPServer:
     def __init__(self, *, stdin=None, stdout=None, stderr=None):
-        self.multi = MultiSkillRegistry()
         # Layer 9 — caller-persona namespace gate. The bridge adapter exports
         # CORVIN_CALLER_PERSONA per turn so any persona can opt into
         # skill-forge while only being able to register skills under its own
@@ -147,10 +146,14 @@ class SkillForgeMCPServer:
         # The persona_namespaces map is owned by forge.policy.Policy — both
         # plugins read the same source of truth so a coder may register both
         # ``code.foo`` (forge tool) and ``code.bar`` (skill-forge skill).
+        # The env var is this subprocess's TRANSPORT for the persona; the
+        # registry itself never reads it — it is handed the value explicitly
+        # and enforces the same gate on every mutation (defence in depth).
         self.caller_persona = (
             os.environ.get("CORVIN_CALLER_PERSONA")
             or ""
         )
+        self.multi = MultiSkillRegistry(caller_persona=self.caller_persona or None)
         self._policy: Any = None  # lazy — resolved on first need
         self._stdin = stdin or sys.stdin
         self._stdout = stdout or sys.stdout
@@ -461,11 +464,16 @@ class SkillForgeMCPServer:
         name = args.get("name", "")
         if self._deny_if_outside_namespace(msgid, name, tool="skill_grade"):
             return
+        # A grade with a run_id is the documented usage-grade path (the
+        # persona graded a skill it applied in THAT run); without one it is a
+        # self-award and the registry clamps it to AUTO_GRADE_CAP_MAX.
+        run_id = str(args.get("run_id", "") or "")
         spec = self.multi.grade(
             name=name,
-            run_id=args.get("run_id", ""),
+            run_id=run_id,
             score=float(args.get("score", 0.0)),
             notes=args.get("notes", ""),
+            organic=bool(run_id),
         )
         self._tool_envelope(msgid, ok=True, data={
             "ok": True, "n_grades": spec.n_grades,

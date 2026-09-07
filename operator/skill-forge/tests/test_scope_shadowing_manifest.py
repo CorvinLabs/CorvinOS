@@ -106,7 +106,7 @@ def test_audit_lands_in_tenant_core_chain_for_every_scope(env):
     for scope in ("task", "session", "project", "user"):
         mr.create(scope=scope, name=f"a.{scope}", type="domain",
                   body_md=BODY_USER, description="d", claim={})
-        mr.grade(f"a.{scope}", "r1", 0.9)
+        mr.grade(f"a.{scope}", "r1", 0.9, organic=True)
     ev = _events(home)
     created = {e["tool"] for e in ev if e["event_type"] == "skill.create"}
     assert created == {"a.task", "a.session", "a.project", "a.user"}
@@ -141,7 +141,7 @@ def test_registry_emits_resolver_manifest_and_resolver_sees_writes(env):
     assert entry["metadata"]["sha256"] == spec.sha256
     assert entry["metadata"]["n_grades"] == 0
 
-    mr.grade("res.skill", "r1", 0.8)               # another write, same process
+    mr.grade("res.skill", "r1", 0.8, organic=True)               # another write, same process
     entry2 = resolver.resolve("res.skill")
     assert entry2["metadata"]["n_grades"] == 1
     assert entry2["metadata"]["mean_score"] == 0.8
@@ -155,8 +155,8 @@ def test_promote_emits_one_event_and_copies_grades(env):
     mr = MultiSkillRegistry(channel_id="ch", task_id=tid)
     mr.create(scope="task", name="pr.skill", type="domain",
               body_md=BODY_USER, description="d", claim={})
-    mr.grade("pr.skill", "r1", 0.7)
-    mr.grade("pr.skill", "r2", 0.9)
+    mr.grade("pr.skill", "r1", 0.7, organic=True)
+    mr.grade("pr.skill", "r2", 0.9, organic=True)
     before = _events(home)
     grades_before = sum(1 for e in before if e["event_type"] == "skill.grade")
 

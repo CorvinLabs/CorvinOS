@@ -177,6 +177,8 @@ def main() -> int:
             c.initialize()
 
             # --- skill_create -------------------------------------------------
+            # CORVIN_FORCE_SCOPE=user: minting straight into a gated scope
+            # needs the explicit, audited operator force (D-05 scope gate).
             r1 = _call_tool(c, "skill_create", {
                 "name": "csv_diff_workflow",
                 "description": "deterministic CSV diff",
@@ -184,6 +186,7 @@ def main() -> int:
                 "claim": {"summary": "Two CSVs can be diffed deterministically "
                                      "by sorting on a primary key."},
                 "body_md": SAMPLE_BODY,
+                "force": True,
             })
             t("skill_create returned a result",
               "result" in r1,

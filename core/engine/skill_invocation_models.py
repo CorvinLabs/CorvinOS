@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 import uuid
 import json
+from types import MappingProxyType
 
 
 class WorkerEngine(Enum):
@@ -45,15 +46,35 @@ class SkillInvocationRequest:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __post_init__(self):
-        """Validate at construction time."""
-        if not self.tenant_id:
-            raise ValueError("tenant_id is required (fail-closed)")
+        """Validate at construction time (fail-closed)."""
+        # Canonical tenant validation (ADR-0007): same regex as every other
+        # tenant boundary — not just "non-empty".
+        from core.tenants.validation import validate_tenant_id
+
+        if not isinstance(self.tenant_id, str) or not self.tenant_id.strip():
+            raise ValueError("tenant_id required (fail-closed, GDPR Art. 32)")
+        try:
+            validate_tenant_id(self.tenant_id)
+        except ValueError as exc:
+            raise ValueError(f"tenant_id required to be valid: {exc}") from exc
         if not self.skill_id:
             raise ValueError("skill_id is required")
         if not self.skill_version:
             raise ValueError("skill_version is required")
         if self.engine is None:
             raise ValueError("engine is required")
+        # Accept the enum's string value; an unknown engine is refused.
+        if not isinstance(self.engine, WorkerEngine):
+            try:
+                object.__setattr__(self, "engine", WorkerEngine(self.engine))
+            except ValueError as exc:
+                raise ValueError(f"engine must be a WorkerEngine, got {self.engine!r}") from exc
+        # The request is IMMUTABLE — including its input mapping. A frozen
+        # dataclass only freezes the attribute; the dict behind it was still
+        # writable (``req.input["x"] = ...``), so a Skill or middleware could
+        # mutate a request after its input_hash was audited.
+        if not isinstance(self.input, MappingProxyType):
+            object.__setattr__(self, "input", MappingProxyType(dict(self.input)))
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict (for hashing, logging)."""
@@ -61,7 +82,7 @@ class SkillInvocationRequest:
             "tenant_id": self.tenant_id,
             "skill_id": self.skill_id,
             "skill_version": self.skill_version,
-            "input": self.input,
+            "input": dict(self.input),
             "engine": self.engine.value,
             "request_id": self.request_id,
             "user_id": self.user_id,
@@ -71,7 +92,7 @@ class SkillInvocationRequest:
 
     def input_hash(self) -> str:
         """Immutable hash of input (for audit)."""
-        return _hash_dict(self.input)
+        return _hash_dict(dict(self.input))
 
 
 @dataclass(frozen=True)

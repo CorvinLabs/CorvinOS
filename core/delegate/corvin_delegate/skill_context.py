@@ -143,6 +143,37 @@ def resolve_inject_skills(
     return False
 
 
+def resolve_inject_ungraded(
+    *,
+    env_floor: bool | None,
+    tool_arg: bool | None,
+    persona_default: bool | None = None,
+) -> bool:
+    """CONJUNCTIVE resolution for UNGRADED skills — env can only narrow.
+
+    Ungraded bodies have passed no grade gate, so widening their injection is
+    a content-trust decision the caller must make explicitly. Unlike
+    :func:`resolve_inject_skills`, ``CORVIN_DELEGATE_INJECT_SKILLS_UNGRADED=1``
+    alone therefore does NOT turn ungraded injection on — it only permits a
+    caller that opted in (tool-arg, else persona default). ``=0`` still wins
+    over everything (2026-09-07 adversarial review F-K8: the env var widened
+    injection past an explicit ``inject_ungraded=False`` tool-arg).
+
+    Truth table:
+      env=False, *                      → False
+      env=None|True, arg=True           → True
+      env=None|True, arg=False          → False
+      env=None|True, arg=None, persona  → persona (None → False)
+    """
+    if env_floor is False:
+        return False
+    if tool_arg is not None:
+        return bool(tool_arg)
+    if persona_default is not None:
+        return bool(persona_default)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Block builder
 # ---------------------------------------------------------------------------
@@ -294,7 +325,7 @@ def build_skill_context_block(
     if not final_inject:
         return None
 
-    final_ungraded = resolve_inject_skills(
+    final_ungraded = resolve_inject_ungraded(
         env_floor=env_floor_inject_ungraded(),
         tool_arg=inject_ungraded,
         persona_default=False,

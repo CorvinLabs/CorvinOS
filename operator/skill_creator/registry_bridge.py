@@ -124,12 +124,19 @@ def _load_registry_module():
         raise RegistryUnavailable(f"could not load SkillForge registry: {exc}") from exc
 
 
-def registry_for(root: Path):
+#: Persona the Skill-Creator mints as. Generated names are normalised to
+#: ``assistant.<name>`` (``skill_creator.normalize_skill_name``); the registry's
+#: Layer 9 gate enforces the same prefix so an LLM-chosen name can never land
+#: in another persona's namespace (F-K6).
+CALLER_PERSONA = "assistant"
+
+
+def registry_for(root: Path, *, caller_persona: str | None = CALLER_PERSONA):
     """Build a ``SkillRegistry`` rooted at ``<tenant-global>/skill-forge``."""
     module = _load_registry_module()
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    return module.SkillRegistry(root)
+    return module.SkillRegistry(root, caller_persona=caller_persona)
 
 
 def promote_to_registry(
@@ -165,7 +172,7 @@ def promote_to_registry(
     graded = False
     try:
         registry.grade(name, run_id=run_id or "skill-creator-bootstrap",
-                       score=grade, notes=BOOTSTRAP_NOTES)
+                       score=grade, notes=BOOTSTRAP_NOTES, organic=False)
         graded = True
     except Exception as exc:  # noqa: BLE001
         # A missing grade does not invalidate the registration, but it DOES

@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .registry import SkillRegistry, SkillSpec, PromotionGateError
+from .registry import SkillRegistry, SkillSpec, PromotionGateError, NamespaceDenied  # noqa: F401
 
 
 def _import_forge_scope():
@@ -68,6 +68,7 @@ class MultiSkillRegistry:
         task_id: str | None = None,
         project_root: Path | None = None,
         hash_chain: bool = True,
+        caller_persona: str | None = None,
     ):
         # Resolve tenant_id: explicit > env > _default (ADR-0433)
         # Import here to avoid circular dependency
@@ -81,6 +82,8 @@ class MultiSkillRegistry:
             project_root=project_root,
         )
         self._hash_chain = hash_chain
+        #: Layer 9 — the persona this registry acts for (see SkillRegistry).
+        self.caller_persona = caller_persona or None
         self._registries: dict[str, SkillRegistry] = {}
 
     # forge.scope.scope_root returns "<...>/forge" — we strip the trailing
@@ -105,6 +108,7 @@ class MultiSkillRegistry:
             self._registries[scope] = SkillRegistry(
                 root, hash_chain=self._hash_chain,
                 audit_path=self.audit_path(),
+                caller_persona=self.caller_persona,
             )
         return self._registries[scope]
 
@@ -212,11 +216,12 @@ class MultiSkillRegistry:
 
     def grade(
         self, name: str, run_id: str, score: float, *, notes: str = "",
+        organic: bool = False,
     ) -> SkillSpec:
         scope = self.find_scope(name)
         if scope is None:
             raise KeyError(name)
-        return self._registry(scope).grade(name, run_id, score, notes=notes)
+        return self._registry(scope).grade(name, run_id, score, notes=notes, organic=organic)
 
     # -- promotion --------------------------------------------------------
 
@@ -228,6 +233,10 @@ class MultiSkillRegistry:
         from_scope = self.find_scope(name)
         if from_scope is None:
             raise KeyError(f"skill not found in any scope: {name!r}")
+        # Layer 9 — gate the promotion on the name BEFORE any gate/dialectic
+        # work (the target-scope create() would refuse too, but only after the
+        # source copy's grades were read and the dialectic ran).
+        self._registry(to)._namespace_gate(name, operation="promote")
         if from_scope == to:
             return self._registry(to).get(name)  # already there
 

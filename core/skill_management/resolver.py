@@ -6,6 +6,7 @@ from typing import List, Dict, Set, Tuple
 from dataclasses import dataclass
 
 from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002
+from core.paths.tenant import tenant_home
 
 
 @dataclass
@@ -40,14 +41,15 @@ class SkillDependencyResolver:
     def __init__(self, tenant_id: str = "_default"):
         validate_tenant_id(tenant_id)  # TENANT-002
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        self.base_path = tenant_home(tenant_id)
         self._skill_cache = {}  # Cache loaded manifests
 
     def resolve(self, skill_id: str, scope: str = "_shared") -> ResolutionResult:
         """Resolve all transitive dependencies for a skill."""
         visited = set()
         resolved = []
-        missing = []
+        missing = []          # bare skill ids (the public field)
+        missing_paths = []    # scope/id, for the error text
         stack = [(skill_id, scope)]
 
         while stack:
@@ -62,7 +64,8 @@ class SkillDependencyResolver:
             # Load skill manifest
             skill = self._load_skill_manifest(sid, sscope)
             if not skill:
-                missing.append(full_id)
+                missing.append(sid)
+                missing_paths.append(full_id)
                 continue
 
             resolved.append(skill)
@@ -77,7 +80,7 @@ class SkillDependencyResolver:
             root_skill=skill_id,
             resolved_skills=resolved,
             missing_skills=missing,
-            error=f"Missing skills: {missing}" if missing else None
+            error=f"Missing skills: {missing_paths}" if missing else None
         )
 
     def resolve_with_versions(self, skill_id: str, scope: str = "_shared") -> Dict[str, str]:

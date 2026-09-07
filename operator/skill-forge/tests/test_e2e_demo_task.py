@@ -131,8 +131,8 @@ def main() -> int:
                 t("under-graded session->project blocked", False)
             except PromotionGateError:
                 t("under-graded session->project blocked", True)
-            mr.grade("demo.score_reviews", "r2", 0.6)
-            mr.grade("demo.score_reviews", "r3", 0.8)
+            mr.grade("demo.score_reviews", "r2", 0.6, organic=True)
+            mr.grade("demo.score_reviews", "r3", 0.8, organic=True)
             # n=3, mean=(0.7+0.6+0.8)/3 = 0.7 -> ok
             promoted2 = mr.promote("demo.score_reviews", to="project")
             t("session->project works (n=3, mean>=0.5)",

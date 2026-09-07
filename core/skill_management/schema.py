@@ -43,6 +43,10 @@ SKILL_METADATA_SCHEMA = {
             "items": {"type": "string"},
             "description": "Searchable tags"
         },
+        "task_id": {
+            "type": "string",
+            "description": "Originating task (_local scope only; stripped on promotion to _shared)"
+        },
         "dependencies": {
             "type": "array",
             "items": {

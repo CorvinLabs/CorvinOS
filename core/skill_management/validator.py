@@ -11,6 +11,7 @@ import jsonschema
 
 from core.skill_management.schema import SKILL_METADATA_SCHEMA, TOOL_METADATA_SCHEMA
 from core.skill_management.tenant_validator import validate_tenant_id
+from core.paths.tenant import tenant_home
 
 
 @dataclass
@@ -33,7 +34,7 @@ class MetadataValidator:
     def __init__(self, tenant_id: str = "_default"):
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        self.base_path = tenant_home(tenant_id)
 
     def validate_skill_metadata(self, skill_id: str, scope: str = "_shared") -> ValidationResult:
         """Validate a skill's meta.json."""
@@ -170,7 +171,7 @@ class DependencyValidator:
     def __init__(self, tenant_id: str = "_default"):
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        self.base_path = tenant_home(tenant_id)
 
     def validate_circular_dependencies(self, scope: str = "_shared") -> List[List[str]]:
         """Detect circular dependency chains."""

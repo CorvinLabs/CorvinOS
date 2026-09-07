@@ -21,7 +21,12 @@ Persistence (2026-09-06 adversarial review, F7):
     next start, so ``rollback()`` works after a restart — it used to reload
     only the current config and every rollback failed with "Version not found";
   * the optimizer epoch counter is persisted, so a restart does not restart the
-    50-epoch baseline phase.
+    50-epoch baseline phase;
+  * (2026-09-07, F-K5) every mutation runs under an exclusive ``fcntl.flock``
+    on ``<config>.lock`` and RELOADS the on-disk state inside the lock before
+    mutating it, so two concurrent feedback requests (each console request
+    builds its own adapter) cannot lose each other's epoch/version — the
+    load→mutate→persist sequence used to be unguarded (lost-update race).
 
 The config produced here is READ by ``DelegationRouterSkill`` via
 :func:`load_skill_config` — that is what closes the loop (feedback → hypothesis
@@ -30,13 +35,15 @@ The config produced here is READ by ``DelegationRouterSkill`` via
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from core.tenants.validation import validate_tenant_id
 from .feedback_loop import ConfigHypothesis
@@ -201,6 +208,28 @@ class SkillAdapter:
     def config_file(self) -> Path:
         return self.work_dir / f"{self.skill_id.replace('.', '_')}_config.json"
 
+    @property
+    def lock_file(self) -> Path:
+        return self.config_file.with_suffix(".lock")
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Exclusive advisory lock + reload: the only way state is mutated.
+
+        The reload inside the lock is what makes this a fix and not a decoration:
+        without it, two adapters that both loaded epoch N would serialise their
+        WRITES but still both persist N+1.
+        """
+        fd = os.open(self.lock_file, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.state = OptimizerState()
+            self._load_or_init()
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
     def _load_or_init(self) -> None:
         """Load prior config, versions and epoch from disk, or start fresh."""
         if not self.config_file.exists():
@@ -301,6 +330,15 @@ class SkillAdapter:
         Returns:
             (accepted, reason): whether hypothesis was accepted
         """
+        with self._locked():
+            return self._run_optimizer_epoch_locked(hypothesis, recent_successes, recent_total)
+
+    def _run_optimizer_epoch_locked(
+        self,
+        hypothesis: Optional[ConfigHypothesis],
+        recent_successes: int,
+        recent_total: int,
+    ) -> tuple[bool, str]:
         self.state.epoch += 1
         recent_success_rate = recent_successes / recent_total if recent_total > 0 else 0.0
 
@@ -363,13 +401,14 @@ class SkillAdapter:
 
     def rollback(self, to_version: str) -> SkillConfig:
         """Rollback to a prior version (user override, GDPR Art. 21)."""
-        for v in self.state.config_versions:
-            if v.version_id == to_version:
-                self.state.best_config = v.config
-                self._persist()
-                self._announce("rollback", to_version=to_version)
-                return v.config
-        raise ValueError(f"Version {to_version} not found")
+        with self._locked():
+            for v in self.state.config_versions:
+                if v.version_id == to_version:
+                    self.state.best_config = v.config
+                    self._persist()
+                    self._announce("rollback", to_version=to_version)
+                    return v.config
+            raise ValueError(f"Version {to_version} not found")
 
     def get_current_config(self) -> SkillConfig:
         """Get current configuration."""

@@ -69,13 +69,15 @@ def test_shadowing():
                   body_md=GOOD_BODY, description="user-version", claim={})
         mr.create(scope="session", name="dbl", type="domain",
                   body_md=GOOD_BODY, description="session-version", claim={})
+        # D-06: the HIGHER (curated) scope shadows the lower one — a throwaway
+        # session copy must never replace the user-scope body at injection.
         spec = mr.get("dbl")
-        t("get returns session version", spec is not None
-          and spec.description == "session-version")
-        user_spec = mr.get_in_scope("dbl", "user")
-        t("get_in_scope user still finds user", user_spec is not None
-          and user_spec.description == "user-version")
-        t("find_scope returns 'session'", mr.find_scope("dbl") == "session")
+        t("get returns user version (higher scope wins)", spec is not None
+          and spec.description == "user-version")
+        session_spec = mr.get_in_scope("dbl", "session")
+        t("get_in_scope session still finds session", session_spec is not None
+          and session_spec.description == "session-version")
+        t("find_scope returns 'user'", mr.find_scope("dbl") == "user")
         names = [s.name for s in mr.list()]
         t("list() dedupes shadowed name", names.count("dbl") == 1)
         _cleanup_task(tid)
@@ -114,7 +116,7 @@ def test_promote_gates():
         except PromotionGateError as e:
             t("ungraded task->session blocked", True, detail=str(e))
         # add a grade with score > 0
-        mr.grade("p1", "r1", 0.7)
+        mr.grade("p1", "r1", 0.7, organic=True)
         spec = mr.promote("p1", to="session")
         t("graded task->session works", spec is not None
           and mr.find_scope("p1") == "session")
@@ -125,8 +127,8 @@ def test_promote_gates():
             t("session->project blocked (only 1 grade)", False)
         except PromotionGateError:
             t("session->project blocked (only 1 grade)", True)
-        mr.grade("p1", "r2", 0.6)
-        mr.grade("p1", "r3", 0.8)
+        mr.grade("p1", "r2", 0.6, organic=True)
+        mr.grade("p1", "r3", 0.8, organic=True)
         # mean now = (0.7+0.6+0.8)/3 = 0.7 ; n=3
         spec = mr.promote("p1", to="project")
         t("session->project works (n=3, mean>=0.5)",
@@ -151,9 +153,9 @@ def test_promote_low_mean_blocked():
         mr = MultiSkillRegistry(channel_id="ch", task_id=tid)
         mr.create(scope="session", name="p2", type="domain",
                   body_md=GOOD_BODY, description="d", claim={})
-        mr.grade("p2", "r1", 0.1)
-        mr.grade("p2", "r2", 0.2)
-        mr.grade("p2", "r3", 0.3)
+        mr.grade("p2", "r1", 0.1, organic=True)
+        mr.grade("p2", "r2", 0.2, organic=True)
+        mr.grade("p2", "r3", 0.3, organic=True)
         from skill_forge.registry import PromotionGateError
         try:
             mr.promote("p2", to="project")
@@ -174,7 +176,7 @@ def test_promote_score_exactly_zero_blocked():
                   body_md=GOOD_BODY, description="d", claim={})
         # A real grade (not "no grades at all") but the score is exactly
         # 0.0 — must hit the `score <= 0` boundary, not the "no grades" path.
-        mr.grade("p3", "r1", 0.0)
+        mr.grade("p3", "r1", 0.0, organic=True)
         from skill_forge.registry import PromotionGateError
         try:
             mr.promote("p3", to="session")
@@ -198,8 +200,8 @@ def test_promote_n_grades_exactly_two_blocked():
         mr.create(scope="session", name="p4", type="domain",
                   body_md=GOOD_BODY, description="d", claim={})
         # mean is comfortably >= 0.5 — only the n_grades<3 edge is at play.
-        mr.grade("p4", "r1", 1.0)
-        mr.grade("p4", "r2", 1.0)
+        mr.grade("p4", "r1", 1.0, organic=True)
+        mr.grade("p4", "r2", 1.0, organic=True)
         from skill_forge.registry import PromotionGateError
         try:
             mr.promote("p4", to="project")
@@ -222,9 +224,9 @@ def test_promote_mean_exactly_half_allowed():
         mr = MultiSkillRegistry(channel_id="ch", task_id=tid)
         mr.create(scope="session", name="p5", type="domain",
                   body_md=GOOD_BODY, description="d", claim={})
-        mr.grade("p5", "r1", 0.5)
-        mr.grade("p5", "r2", 0.5)
-        mr.grade("p5", "r3", 0.5)
+        mr.grade("p5", "r1", 0.5, organic=True)
+        mr.grade("p5", "r2", 0.5, organic=True)
+        mr.grade("p5", "r3", 0.5, organic=True)
         spec = mr.get("p5")
         assert abs(spec.mean_score - 0.5) < 1e-9, (
             f"fixture broken: expected mean==0.5 exactly, got {spec.mean_score}"

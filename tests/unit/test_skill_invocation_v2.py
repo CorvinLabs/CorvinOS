@@ -95,7 +95,7 @@ class TestPhaseA:
 
         assert response.is_success is True
         assert response.phase_completed == 10
-        assert response.latency_ms > 0
+        assert response.latency_ms >= 0  # int ms; a stubbed Skill runs in µs
         assert "decision" in response.output
         assert len(response.execution_trace) > 0
 
@@ -206,13 +206,29 @@ class TestAdversarial:
         """Frozen dataclasses prevent mutation."""
         req = SkillInvocationRequest(
             engine="claude_code",
-            tenant_id="test",
+            tenant_id="tenant_test",  # "test" is a RESERVED tenant id
             skill_id="test",
             skill_version="1.0",
             input={},
         )
-        # All these should raise AttributeError
         with pytest.raises(AttributeError):
             req.tenant_id = "hacked"
-        with pytest.raises(AttributeError):
+        # input is a read-only mapping (MappingProxyType): item assignment
+        # raises TypeError — the dict behind a frozen dataclass used to be
+        # freely writable after the input_hash had been audited.
+        with pytest.raises(TypeError):
             req.input["added_field"] = "injected"
+        assert dict(req.input) == {}
+
+    def test_invalid_tenant_id_rejected(self):
+        """Canonical tenant validation (not just non-empty)."""
+        with pytest.raises(ValueError, match="tenant_id required"):
+            SkillInvocationRequest(
+                engine="claude_code", tenant_id="../etc", skill_id="s", skill_version="1.0", input={}
+            )
+
+    def test_unknown_engine_rejected(self):
+        with pytest.raises(ValueError, match="engine must be a WorkerEngine"):
+            SkillInvocationRequest(
+                engine="not_an_engine", tenant_id="_default", skill_id="s", skill_version="1.0", input={}
+            )

@@ -8,6 +8,7 @@ from typing import Dict, List
 from dataclasses import dataclass, asdict
 
 from core.skill_management.tenant_validator import validate_tenant_id
+from core.paths.tenant import tenant_home
 
 @dataclass
 class SkillDirectoryInfo:
@@ -31,7 +32,7 @@ class SkillDirectoryInitializer:
     def __init__(self, tenant_id: str = "_default"):
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        self.base_path = tenant_home(tenant_id)
 
     def init_tenant_structure(self) -> SkillDirectoryInfo:
         """Create all required directories for tenant skill structure."""

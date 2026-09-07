@@ -108,7 +108,7 @@ class TestSkillsRegistryE2E:
         """E2E: Execute Skill successfully + verify audit trail."""
         # Execute: call delegation router skill
         input_data = {"complexity": 8, "task_type": "analysis"}
-        result = registry.execute("os.delegation_router", input_data)
+        result = registry.execute("os.delegation_router", input_data, lom="test_phase1_skills_e2e.py:e2e")
 
         # Verify: execution succeeded
         assert result.status == "success"
@@ -128,7 +128,7 @@ class TestSkillsRegistryE2E:
     def test_skill_execution_not_found(self, registry, mock_audit):
         """E2E: Execute non-existent Skill → error with audit trail."""
         # Execute: call skill that doesn't exist
-        result = registry.execute("os.nonexistent", {})
+        result = registry.execute("os.nonexistent", {}, lom="test_phase1_skills_e2e.py:e2e")
 
         # Verify: failed as expected
         assert result.status == "error"
@@ -159,7 +159,7 @@ class TestSkillsRegistryE2E:
             "priority_hint": 5,
             "time_budget_ms": 60000,
         }
-        result = registry.execute("os.vibe_engineering", input_data)
+        result = registry.execute("os.vibe_engineering", input_data, lom="test_phase1_skills_e2e.py:e2e")
 
         # Verify: execution succeeded
         assert result.status == "success"
@@ -181,7 +181,7 @@ class TestSkillsRegistryE2E:
             "task_description": "Complex data analysis task",
             "priority_hint": 6,
         }
-        result = registry.execute("os.context_adapter", input_data)
+        result = registry.execute("os.context_adapter", input_data, lom="test_phase1_skills_e2e.py:e2e")
 
         # Verify: execution succeeded
         assert result.status == "success"
@@ -210,8 +210,8 @@ class TestSkillsRegistryE2E:
         register_builtin_skills(registry2)
 
         # Execute: skill in each tenant
-        registry1.execute("os.delegation_router", {"complexity": 5})
-        registry2.execute("os.delegation_router", {"complexity": 7})
+        registry1.execute("os.delegation_router", {"complexity": 5}, lom="test_phase1_skills_e2e.py:e2e")
+        registry2.execute("os.delegation_router", {"complexity": 7}, lom="test_phase1_skills_e2e.py:e2e")
 
         # Verify: audit events show correct tenant isolation
         events_a = [e for e in mock_audit.events if e.get("tenant_id") == "tenant_a"]
@@ -342,7 +342,7 @@ class TestFeatureFlagReplacement:
         #
         # New way (Skill):
         #   if registry.is_enabled("os.vibe_engineering", "0.2"):
-        #       result = registry.execute("os.delegation_router", task)
+        #       result = registry.execute("os.delegation_router", task, lom="test_phase1_skills_e2e.py:e2e")
 
         # Execute: new way (Skill-based)
         assert registry.is_enabled("os.delegation_router") is True
@@ -351,6 +351,7 @@ class TestFeatureFlagReplacement:
             result = registry.execute(
                 "os.delegation_router",
                 {"complexity": complexity, "task_type": "analysis"},
+                lom="test_phase1_skills_e2e.py:e2e",
             )
             assert result.status == "success"
             assert result.output["engine"] in [
@@ -381,7 +382,7 @@ class TestFeatureFlagReplacement:
 
         for test_case in test_cases:
             expected_engine = test_case.pop("expected_engine")
-            result = registry.execute("os.delegation_router", test_case)
+            result = registry.execute("os.delegation_router", test_case, lom="test_phase1_skills_e2e.py:e2e")
 
             assert result.status == "success"
             assert result.output["engine"] == expected_engine

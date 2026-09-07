@@ -1,199 +1,118 @@
-"""Tests for Skill System Integration (Phase 4)."""
+"""Skill learning hooks (Phase 4) — through the REAL emitter/store pair.
+
+Rewritten 2026-09-07: the previous version awaited ``EventEmitter.start()`` /
+``flush()`` and read ``store.read_decisions()`` — none of which ever existed
+(the emitter is a sync, thread-backed ``emit(LearningEvent)``; the store is
+``query_events``). Every test here persists through ``EventStore.write_event``,
+which is audit-FIRST: the core chain is redirected to the sandbox so the tests
+never touch the operator's live chain.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
-from pathlib import Path
-from tempfile import TemporaryDirectory
-import asyncio
 
-from core.learning.skill_integration import SkillLearningHooks
-from core.learning.event_store import EventStore as _LearningEventStore
 from core.learning.event_emitter import EventEmitter
+from core.learning.event_store import EventStore as _LearningEventStore
+from core.learning.learning_events import EventType
 from core.learning.outcome_feedback import OutcomeType
+from core.learning.skill_integration import SkillLearningHooks
+
+
+@pytest.fixture
+def sandbox(tmp_path: Path, monkeypatch):
+    home = tmp_path / "corvin-home"
+    tenant_home = home / "tenants" / "_default"
+    tenant_home.mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(home / "audit.jsonl"))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    store = _LearningEventStore(tenant_home)
+    emitter = EventEmitter(store)
+    yield store, emitter
+    emitter.stop(timeout=5.0)
+
+
+def _events(store, event_type):
+    return store.query_events(tenant_id="_default", event_type=event_type)
 
 
 @pytest.mark.asyncio
-async def test_skill_selection_hook():
-    """Hook: skill selection emits decision event."""
-    with TemporaryDirectory() as tmpdir:
-        tenant_home = Path(tmpdir) / "tenants" / "_default"
-        tenant_home.mkdir(parents=True, exist_ok=True)
+async def test_skill_selection_hook(sandbox):
+    """Hook: skill selection persists a DECISION event with the chosen skill."""
+    store, emitter = sandbox
+    hooks = SkillLearningHooks("_default", emitter)
 
-        emitter = EventEmitter(_LearningEventStore(tenant_home))
-        await emitter.start()
-        hooks = SkillLearningHooks("_default", emitter)
+    decision_id = await hooks.on_skill_selection(
+        candidates=["ranking", "summarizer", "code_review"],
+        chosen="ranking",
+        session_id="session-123",
+        confidence_score=0.85,
+        reasoning="High relevance",
+    )
+    assert decision_id
+    emitter.stop(timeout=5.0)
 
-        decision_id = await hooks.on_skill_selection(
-            candidates=["ranking", "summarizer", "code_review"],
-            chosen="ranking",
-            session_id="session-123",
-            confidence_score=0.85,
-            reasoning="High relevance",
-        )
-
-        assert decision_id is not None
-        await hooks.emitter.flush()
-
-        decisions = await hooks.emitter.store.read_decisions(
-            tenant_id="_default",
-            session_id="session-123"
-        )
-        assert len(decisions) == 1
-        assert decisions[0]["chosen"] == "ranking"
-
-        await emitter.stop()
+    decisions = _events(store, EventType.DECISION)
+    assert len(decisions) == 1
+    signal = decisions[0].signal
+    assert signal["chosen"] == "ranking"
+    assert signal["decision_id"] == decision_id
+    assert signal["session_id"] == "session-123"
+    assert decisions[0].skill_id == "ranking"
 
 
 @pytest.mark.asyncio
-async def test_skill_executed_hook():
-    """Hook: skill execution emits latency metric."""
-    with TemporaryDirectory() as tmpdir:
-        tenant_home = Path(tmpdir) / "tenants" / "_default"
-        tenant_home.mkdir(parents=True, exist_ok=True)
+async def test_skill_executed_hook_records_latency_metric(sandbox):
+    store, emitter = sandbox
+    hooks = SkillLearningHooks("_default", emitter)
 
-        emitter = EventEmitter(_LearningEventStore(tenant_home))
-        await emitter.start()
-        hooks = SkillLearningHooks("_default", emitter)
+    await hooks.on_skill_executed(
+        decision_id="d1", session_id="session-123", skill_name="ranking", latency_ms=250.0,
+    )
+    emitter.stop(timeout=5.0)
 
-        await hooks.on_skill_executed(
-            decision_id="d1",
-            session_id="session-123",
-            skill_name="ranking",
-            latency_ms=250.0,
-        )
-
-        await hooks.emitter.flush()
-
-        metrics = await hooks.emitter.store.read_metrics(
-            tenant_id="_default",
-            skill_name="ranking"
-        )
-        assert len(metrics) == 1
-        assert metrics[0]["metric_type"] == "latency"
-        assert metrics[0]["value"] == 250.0
-
-        await emitter.stop()
+    metrics = _events(store, EventType.METRIC)
+    assert len(metrics) == 1
+    assert metrics[0].signal["metric_name"] == "latency"
+    assert metrics[0].signal["value"] == 250.0
+    assert metrics[0].signal["decision_id"] == "d1"
 
 
 @pytest.mark.asyncio
-async def test_skill_outcome_hook():
-    """Hook: user feedback emits outcome event."""
-    with TemporaryDirectory() as tmpdir:
-        tenant_home = Path(tmpdir) / "tenants" / "_default"
-        tenant_home.mkdir(parents=True, exist_ok=True)
+async def test_full_lifecycle_links_decision_metric_outcome(sandbox):
+    """select → execute → outcome, all joined by decision_id; content-free."""
+    store, emitter = sandbox
+    hooks = SkillLearningHooks("_default", emitter)
 
-        emitter = EventEmitter(_LearningEventStore(tenant_home))
-        await emitter.start()
-        hooks = SkillLearningHooks("_default", emitter)
+    decision_id = await hooks.on_skill_selection(
+        candidates=["skill-a", "skill-b"], chosen="skill-a",
+        session_id="session-456", confidence_score=0.9,
+    )
+    await hooks.on_skill_executed(
+        decision_id=decision_id, session_id="session-456", skill_name="skill-a", latency_ms=120.0,
+    )
+    await hooks.on_skill_outcome(
+        decision_id=decision_id, session_id="session-456",
+        outcome=OutcomeType.SUCCESS, user_feedback="Excellent", rating=5,
+    )
+    await hooks.on_preference_changed(
+        preference_type="decision_style", preference_value="pragmatic", session_id="session-456",
+    )
+    emitter.stop(timeout=5.0)
 
-        await hooks.on_skill_outcome(
-            decision_id="d1",
-            session_id="session-123",
-            outcome=OutcomeType.SUCCESS,
-            user_feedback="Correct result",
-            rating=5,
-        )
-
-        await hooks.emitter.flush()
-
-        outcomes = await hooks.emitter.store.read_outcomes(
-            tenant_id="_default",
-            session_id="session-123"
-        )
-        assert len(outcomes) == 1
-        assert outcomes[0]["outcome"] == "success"
-        assert outcomes[0]["rating"] == 5
-
-        await emitter.stop()
-
-
-@pytest.mark.asyncio
-async def test_preference_changed_hook():
-    """Hook: preference change emits preference event."""
-    with TemporaryDirectory() as tmpdir:
-        tenant_home = Path(tmpdir) / "tenants" / "_default"
-        tenant_home.mkdir(parents=True, exist_ok=True)
-
-        emitter = EventEmitter(_LearningEventStore(tenant_home))
-        await emitter.start()
-        hooks = SkillLearningHooks("_default", emitter)
-
-        await hooks.on_preference_changed(
-            preference_type="decision_style",
-            preference_value="pragmatic",
-            session_id="session-123",
-        )
-
-        await hooks.emitter.flush()
-
-        prefs = await hooks.emitter.store.read_preferences(
-            tenant_id="_default"
-        )
-        assert len(prefs) == 1
-        assert prefs[0]["preference_type"] == "decision_style"
-        assert prefs[0]["preference_value"] == "pragmatic"
-
-        await emitter.stop()
-
-
-@pytest.mark.asyncio
-async def test_full_lifecycle():
-    """Full skill lifecycle: select → execute → outcome."""
-    with TemporaryDirectory() as tmpdir:
-        tenant_home = Path(tmpdir) / "tenants" / "_default"
-        tenant_home.mkdir(parents=True, exist_ok=True)
-
-        emitter = EventEmitter(_LearningEventStore(tenant_home))
-        await emitter.start()
-        hooks = SkillLearningHooks("_default", emitter)
-
-        # 1. Select skill
-        decision_id = await hooks.on_skill_selection(
-            candidates=["skill-a", "skill-b"],
-            chosen="skill-a",
-            session_id="session-456",
-            confidence_score=0.9,
-        )
-
-        # 2. Execute skill (measure latency)
-        await hooks.on_skill_executed(
-            decision_id=decision_id,
-            session_id="session-456",
-            skill_name="skill-a",
-            latency_ms=120.0,
-        )
-
-        # 3. User provides outcome feedback
-        await hooks.on_skill_outcome(
-            decision_id=decision_id,
-            session_id="session-456",
-            outcome=OutcomeType.SUCCESS,
-            user_feedback="Excellent",
-            rating=5,
-        )
-
-        await hooks.emitter.flush()
-
-        # Verify full lifecycle
-        decisions = await hooks.emitter.store.read_decisions(
-            tenant_id="_default",
-            session_id="session-456"
-        )
-        assert len(decisions) == 1
-
-        metrics = await hooks.emitter.store.read_metrics(
-            tenant_id="_default",
-            session_id="session-456"
-        )
-        assert len(metrics) == 1
-
-        outcomes = await hooks.emitter.store.read_outcomes(
-            tenant_id="_default",
-            session_id="session-456"
-        )
-        assert len(outcomes) == 1
-
-        # All linked via decision_id
-        assert decisions[0]["decision_id"] == decision_id
-        assert outcomes[0]["decision_id"] == decision_id
-
-        await emitter.stop()
+    assert len(_events(store, EventType.DECISION)) == 1
+    assert len(_events(store, EventType.METRIC)) == 1
+    outcomes = _events(store, EventType.OUTCOME)
+    assert len(outcomes) == 1
+    assert outcomes[0].signal["decision_id"] == decision_id
+    assert outcomes[0].signal["outcome_type"] == "success"
+    assert outcomes[0].signal["outcome_value"] == 5
+    # the free-text feedback never reaches the learning store
+    assert "Excellent" not in str(outcomes[0].signal)
+    prefs = _events(store, EventType.PREFERENCE)
+    assert len(prefs) == 1
+    assert prefs[0].signal["preference_key"] == "decision_style"
+    assert hooks.dropped_events == 0

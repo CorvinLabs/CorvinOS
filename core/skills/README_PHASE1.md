@@ -36,12 +36,21 @@
 ✅ Tenant isolation (whitelist-based, fail-closed)  
 ✅ PII scrubbing (regex patterns for passwords, keys, emails, cc, ssn)  
 ✅ Learning integration (ADR-0314 events emitted)  
-✅ Auto-disable (after 3+ consecutive failures)  
-✅ Timeout handling (asyncio with configurable timeouts)  
+✅ Auto-disable (after 3+ consecutive failures) — REFUSED for `tier=compliance`
+   Skills (`os.capabilities`): no unregister, no auto-disable, audited
+   `skill.disable.refused` (F-K3)  
+✅ LoM REQUIRED on every `execute()` — `lom="<file>:<function>"`; a missing LoM
+   is an audited error result, the Skill does not run (F-K2, ADR-0537)  
+✅ Chain record carries an allowlisted `decision` summary (engine / enabled /
+   flag count + hash), never raw output  
+✅ Timeout handling (daemon-thread join with configurable timeouts)  
 
 ### Integration Layer (os_skills_integration.py)
-✅ L5 entry point: `route_task_l5()`  
-✅ L10 entry point: `adapt_context_l10()`  
+✅ L5 production wiring: `os.delegation_router` in SHADOW mode from
+   `operator/bridges/shared/delegation_policy.py::_acp_shadow_route` (ADR-0613)  
+⚠️ `route_task_l5()` — direct (non-shadow) entry point, tests only, no production caller  
+❌ L10: `adapt_context_l10()` / `os.context_adapter` has NO production call site
+   (the context pipeline does not consult it) — stated, not hidden (F-K4)  
 ✅ Fallback logic (deterministic defaults when Skills fail)  
 ✅ Tenant isolation enforcement  
 
@@ -185,7 +194,7 @@ Every Skill execution emits a learning event:
     "execution_time_ms": 42,
     "timestamp": "2026-09-03T12:34:56.789Z",
     "tenant_id": "_default",
-    "lom": "core/skills/integration.py:route_task_l5:L120",
+    "lom": "core/skills/os_skills_integration.py:route_task_l5:L137",
     "confidence_score": {
         "skill_id": "os.delegation_router",
         "reliability": 0.95,
