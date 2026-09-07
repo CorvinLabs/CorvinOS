@@ -101,7 +101,12 @@ def sandbox(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         _paths, "tenant_audit_file", lambda t: tmp_path / "tenants" / t / "audit.jsonl"
     )
-    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "chain" / "audit.jsonl"))
+    # Isolate the chain by moving CORVIN_HOME, not by redirecting the chain out
+    # of it: the boot tripwire refuses a VOICE_AUDIT_PATH pointing outside the
+    # CORVIN_HOME root (ADR-0641 round-2 amendment — the redirect was an
+    # env-var override of a mechanism that must not have one).
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "global" / "forge" / "audit.jsonl"))
     monkeypatch.setenv("CORVIN_TENANT_ID", TENANT)
     return tmp_path
 
@@ -125,7 +130,7 @@ async def _run_five_tasks(md: MethodDiscovery) -> list:
 
 
 def _chain_records(tmp_path: Path) -> list[dict]:
-    chain = tmp_path / "chain" / "audit.jsonl"
+    chain = tmp_path / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
     return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
