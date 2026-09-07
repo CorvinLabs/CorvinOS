@@ -639,7 +639,7 @@ function EngineGrid({
   detectedStatus: Record<string, { installed: boolean; has_credential: boolean }>;
 }) {
   const allEngines = Array.from(
-    new Set([...settings.valid_engines, ...settings.valid_worker_engines]),
+    new Set([...settings.valid_engines, ...(settings.valid_worker_engines ?? [])]),
   );
 
   return (
@@ -654,7 +654,7 @@ function EngineGrid({
         const isActiveOs = id === activeOs;
         const isActiveWorker = id === activeWorker;
         const isOsCapable = settings.valid_engines.includes(id);
-        const isWorkerCapable = settings.valid_worker_engines.includes(id);
+        const isWorkerCapable = (settings.valid_worker_engines ?? []).includes(id);
         const isHermes = id === "hermes";
         const ollamaOk = health?.ollama_reachable ?? false;
         const ollamaModels = health?.model_count ?? 0;
