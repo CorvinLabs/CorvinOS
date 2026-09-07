@@ -191,9 +191,9 @@ class TestCheckpointB2_QualityGateAccuracy:
         gate = ContextQualityGate(tier_policy=ContextTier.TIER_1)
 
         additions = [
-            ContextAddition("High conf", ContextTier.TIER_1, "src", 0.95),
-            ContextAddition("Med conf", ContextTier.TIER_2, "src", 0.75),
-            ContextAddition("Low conf", ContextTier.TIER_3, "src", 0.50),
+            ContextAddition(text="High conf", tier=ContextTier.TIER_1, source="src", confidence=0.95),
+            ContextAddition(text="Med conf", tier=ContextTier.TIER_2, source="src", confidence=0.75),
+            ContextAddition(text="Low conf", tier=ContextTier.TIER_3, source="src", confidence=0.50),
         ]
 
         filtered = gate.filter_additions(additions)

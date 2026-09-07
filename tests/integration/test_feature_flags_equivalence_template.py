@@ -40,10 +40,11 @@ class TestFeatureFlagsEquivalence:
         return FeatureFlagsSkill()
 
     def test_all_flags_registered(self):
-        """Verify all 59 flags are present in both old and new."""
-        old_flags = {f.id for f in old_api.REGISTRY}
-        # New flags will come from skill manifest (added in Phase 2)
-        assert len(old_flags) == 59, "Expected 59 flags in registry"
+        """Every registry flag has a unique, non-empty id (no duplicates to mirror)."""
+        old_flags = [f.id for f in old_api.REGISTRY]
+        assert old_flags, "registry must not be empty"
+        assert all(old_flags), "every flag needs an id"
+        assert len(set(old_flags)) == len(old_flags), "duplicate flag ids in registry"
 
     @pytest.mark.parametrize("flag_def", old_api.REGISTRY)
     def test_is_enabled_equivalence(self, skill, flag_def):

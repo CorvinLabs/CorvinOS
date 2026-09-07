@@ -38,6 +38,13 @@ class QuestionQueue:
     async def enqueue(self, question: UserQuestion) -> bool:
         """Enqueue a question. Returns False if dropped due to overflow.
 
+        Overflow contract (queue at ``max_size``): the lowest-priority question
+        among the queued PENDING ones and the new one is dropped. A new
+        question that does not strictly outrank the lowest queued one is the
+        one dropped (``False``); a higher-priority arrival evicts the lowest
+        queued question and is admitted (``True``). Equal priority never
+        evicts — first come, first kept.
+
         Args:
             question: Question to enqueue
 
@@ -46,14 +53,26 @@ class QuestionQueue:
         """
         async with self.lock:
             if len(self.queue) >= self.max_size:
-                # Drop oldest low-priority question to make room
+                # Overflow: the lowest-priority question among {queued ∪ new}
+                # is the one dropped. If the NEW question does not outrank the
+                # lowest pending one it is the one that goes — never evict a
+                # higher-priority queued question for a lower-priority arrival.
+                lowest = self._lowest_pending_priority()
+                if lowest is not None and question.priority.value <= lowest.value:
+                    self.metrics.total_questions += 1
+                    logger.warning(
+                        f"Question queue full; dropped incoming {question.id} "
+                        f"(priority={question.priority.name} does not outrank "
+                        f"queued {lowest.name})"
+                    )
+                    return False
                 dropped = self._drop_lowest_priority()
                 if dropped:
                     logger.warning(
                         f"Question queue full; dropped {dropped.id} "
                         f"(priority={dropped.priority.name})"
                     )
-                    # Continue to add the new question
+                    # Continue to add the new (higher-priority) question
 
             self.queue.append((question, QuestionState.PENDING))
             self.queue.sort(key=lambda x: x[0].priority.value, reverse=True)
@@ -155,6 +174,13 @@ class QuestionQueue:
                     return True
 
             return False
+
+    def _lowest_pending_priority(self) -> Optional[QuestionPriority]:
+        """Priority of the lowest-ranked PENDING question, or None if none pending."""
+        pending = [q for q, state in self.queue if state == QuestionState.PENDING]
+        if not pending:
+            return None
+        return min(pending, key=lambda q: q.priority.value).priority
 
     def _drop_lowest_priority(self) -> Optional[UserQuestion]:
         """Drop the lowest-priority question from queue.

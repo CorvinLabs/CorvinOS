@@ -6,6 +6,7 @@ learning event persistence. Covers template loading hierarchy and jsonl persiste
 
 import sys
 import json
+import pytest
 import tempfile
 from pathlib import Path
 
@@ -287,7 +288,7 @@ def test_persist_learning_event():
         })
 
         # Verify event was written
-        events_file = memory_root / "tenants" / "_default" / "learning" / "events.jsonl"
+        events_file = memory_root / "tenants" / "tenant_a" / "learning" / "events.jsonl"
         assert events_file.exists()
 
         with open(events_file, "r") as f:
@@ -316,7 +317,7 @@ def test_persist_multiple_learning_events():
             })
 
         # Verify all events were written
-        events_file = memory_root / "tenants" / "_default" / "learning" / "events.jsonl"
+        events_file = memory_root / "tenants" / "tenant_a" / "learning" / "events.jsonl"
         with open(events_file, "r") as f:
             lines = f.readlines()
 
@@ -344,7 +345,7 @@ def test_persist_learning_events_batch():
         coordinator.persist_learning_events_batch("task_001", "tenant_a", events)
 
         # Verify all events were written
-        events_file = memory_root / "tenants" / "_default" / "learning" / "events.jsonl"
+        events_file = memory_root / "tenants" / "tenant_a" / "learning" / "events.jsonl"
         with open(events_file, "r") as f:
             lines = f.readlines()
 
@@ -362,7 +363,7 @@ def test_persist_batch_empty_list():
         coordinator.persist_learning_events_batch("task_001", "tenant_a", [])
 
         # File should not be created
-        events_file = memory_root / "tenants" / "_default" / "learning" / "events.jsonl"
+        events_file = memory_root / "tenants" / "tenant_a" / "learning" / "events.jsonl"
         assert not events_file.exists()
         print("✓ Persist batch empty list PASSED")
     finally:
@@ -374,7 +375,7 @@ def test_persist_event_creates_directories():
     tmpdir, memory_root = create_temp_memory_structure()
     try:
         # Remove learning directory
-        learning_dir = memory_root / "tenants" / "_default" / "learning"
+        learning_dir = memory_root / "tenants" / "tenant_a" / "learning"
         if learning_dir.exists():
             import shutil
             shutil.rmtree(learning_dir)
@@ -399,7 +400,10 @@ def test_read_learning_events():
         # Persist some events
         coordinator.persist_learning_event("task_001", "tenant_a", "type1", {"x": 1})
         coordinator.persist_learning_event("task_001", "tenant_a", "type2", {"x": 2})
-        coordinator.persist_learning_event("task_002", "tenant_b", "type1", {"x": 3})
+        coordinator.persist_learning_event("task_002", "tenant_a", "type1", {"x": 3})
+        # A foreign tenant's event is refused (fail-closed) — never mixed in
+        with pytest.raises(ValueError, match="tenant_id mismatch"):
+            coordinator.persist_learning_event("task_003", "tenant_b", "type1", {"x": 4})
 
         # Read all events
         events = coordinator.read_learning_events()

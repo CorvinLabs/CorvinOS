@@ -18,7 +18,11 @@ from pathlib import Path
 # Add repo root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core.console.corvin_core.execution_context import (
+# Same module object the bridge imports (``corvin_core.execution_context`` via
+# sys.path). Importing it a second time as ``core.console.corvin_core...``
+# creates a SECOND ModelSource/DelegationMode class, so the bridge's
+# ``isinstance`` checks fail and enums serialize as "ModelSource.CLAUDE".
+from corvin_core.execution_context import (
     ExecutionContext as ExecutionContextV1,
     EngineId,
     ModelSource,

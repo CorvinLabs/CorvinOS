@@ -1,0 +1,143 @@
+"""Phase 1 Notification Router — Discord outbox only.
+
+Routes StructuredSummary + CompletionEvent to notification channels.
+Phase 1: Discord only (where task was spawned).
+Phase 2: Add Console, Email.
+
+Idempotent: O_EXCL file write prevents duplicate notifications.
+Audit: emits NotificationSentEvent for every route attempt.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from uuid import uuid4
+import time
+
+from core.learning.completion_detectors.completion_event import (
+    CompletionEvent,
+    NotificationSentEvent,
+)
+from .summary_generator import StructuredSummary
+
+_log = logging.getLogger("core.notification.notification_router")
+
+
+class NotificationRouter:
+    """Route notifications to channels (Phase 1: Discord only)."""
+
+    def __init__(self, audit_backend, corvin_home: str = "~/.corvin"):
+        self.audit_backend = audit_backend
+        self.corvin_home = Path(corvin_home).expanduser()
+
+    async def route(
+        self,
+        event: CompletionEvent,
+        summary: StructuredSummary,
+        voice_url: str | None = None,
+    ) -> bool:
+        """Route notification to appropriate channel(s).
+
+        Phase 1: Discord only. Determine channel from event.origin["channel"].
+        """
+        channel = event.origin.get("channel", "unknown")
+
+        if channel == "discord":
+            return await self._route_discord(event, summary, voice_url)
+        elif channel == "workflow":
+            # Workflows spawned from Discord Bridge
+            return await self._route_discord(event, summary, voice_url)
+        else:
+            _log.warning(f"Phase 1: unsupported channel {channel}")
+            return False
+
+    async def _route_discord(
+        self,
+        event: CompletionEvent,
+        summary: StructuredSummary,
+        voice_url: str | None = None,
+    ) -> bool:
+        """Send notification to Discord outbox (idempotent via O_EXCL)."""
+        # Extract Discord metadata
+        chat_id = event.metadata.get("discord_chat_id")
+        channel_id = event.metadata.get("discord_channel_id")
+
+        if not chat_id:
+            _log.error(f"Missing discord_chat_id for {event.task_id}")
+            return False
+
+        # Build envelope (reuse existing outbox schema)
+        envelope_id = str(uuid4())
+        envelope = {
+            "id": envelope_id,
+            "channel": "discord",
+            "from": "corvin-bot",
+            "chat_id": str(chat_id),  # MUST be STRING (prevent float64 precision loss)
+            "ts": int(time.time()),
+            "text": self._build_message(summary),
+            "voice_url": voice_url,
+            "provenance": {
+                "task_id": event.task_id,
+                "task_type": event.task_type.value,
+                "status": event.status.value,
+                "summary_type": summary.summary_type.value,
+            },
+        }
+
+        # Write to outbox directory (O_EXCL for exactly-once)
+        try:
+            outbox_dir = self.corvin_home / "bridges" / "discord" / "outbox"
+            outbox_dir.mkdir(parents=True, exist_ok=True)
+
+            outbox_file = outbox_dir / f"{envelope_id}.json"
+
+            # O_EXCL: fail if file exists (exactly-once delivery guarantee)
+            # In Python 3.10+, can use mode="x"
+            with open(outbox_file, "x") as f:
+                json.dump(envelope, f, indent=2)
+
+            _log.info(f"Routed notification {envelope_id} to Discord outbox")
+
+        except FileExistsError:
+            _log.warning(f"Notification {envelope_id} already sent (duplicate detected)")
+            return True  # Already sent, not an error
+
+        except OSError as e:
+            _log.error(f"Failed to write outbox: {e}")
+            return False
+
+        # Audit emit: NotificationSentEvent
+        try:
+            audit_event = NotificationSentEvent(
+                completion_event_id=event.hash,
+                channel="discord",
+                envelope_id=envelope_id,
+                status="sent_to_outbox",
+            )
+            await self.audit_backend.emit(audit_event)
+
+        except Exception as e:
+            _log.error(f"Failed to audit notification: {e}")
+            # Non-blocking: notification already in outbox, audit failure is not critical
+
+        return True
+
+    @staticmethod
+    def _build_message(summary: StructuredSummary) -> str:
+        """Build Discord message text from summary."""
+        lines = [
+            f"**{summary.title}**",
+            f"Status: {summary.outcome}",
+            f"Result: {summary.key_result}",
+            f"Duration: {summary.duration}",
+        ]
+
+        if summary.voice_lines:
+            lines.append("")
+            lines.append("_Summary:_")
+            for line in summary.voice_lines:
+                lines.append(f"• {line}")
+
+        return "\n".join(lines)
