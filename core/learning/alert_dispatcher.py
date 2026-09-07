@@ -683,13 +683,21 @@ class AlertDispatcher:
         )
 
         # Find the original alert and execute action
+        result = False
         for alert in self.alert_history:
             if alert.alert_id == confirmation.alert_id:
-                await self._execute_alert_action(alert)
-                return True
+                result = await self._execute_alert_action(alert)
+                break
 
-        logger.error(f"Alert not found: {confirmation.alert_id}")
-        return False
+        if not result:
+            logger.error(f"Alert not found: {confirmation.alert_id}")
+            return False
+
+        # Clean up confirmed confirmation (no longer pending)
+        del self.confirmation_manager.pending_confirmations[confirmation_id]
+        logger.info(f"Removed confirmed confirmation: {confirmation_id}")
+
+        return True
 
     async def _execute_alert_action(self, alert: SecureAlert) -> bool:
         """Execute the alert's action.

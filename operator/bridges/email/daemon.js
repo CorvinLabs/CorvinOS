@@ -144,46 +144,96 @@ function safeAttachmentName(filename) {
 // UIDVALIDITY so a mailbox reset starts over. \Seen is now set ONLY for mail
 // the bridge actually accepted (inbox write / in-chat reply) — rejected mail
 // stays unread in the owner's mailbox, where a human can still look at it.
+//
+// R2-B3 (adversarial review round 2, 2026-09-07): the set used to evict by
+// COUNT alone (keep the newest 5000). With more than 5000 unread rejected
+// mails in the mailbox the oldest UIDs fell out of the set every poll and
+// were re-downloaded forever — an unbounded per-poll download loop (DoS) that
+// the attacker could sustain with unauthenticated mail. Two structural fixes:
+//   * a LOW-WATER MARK `min_uid`: every UID below it counts as processed.
+//     IMAP UIDs are assigned monotonically (RFC 3501 §2.3.1.1) and the poll
+//     handles the smallest unseen UIDs first, so raising the mark on eviction
+//     forgets nothing that is still pending;
+//   * a PER-POLL DOWNLOAD CAP (`IMAP_POLL_MAX_DOWNLOADS`): a flood of unread
+//     mail is drained in bounded slices, never fetched wholesale in one tick.
+// The state file is also validated on load: only finite non-negative integer
+// UIDs survive (a corrupted file with "abc"/1e300/-5 used to plant NaN in
+// the set and stringly-typed UIDVALIDITY triggered a spurious reset).
 const IMAP_STATE_FILE = path.join(path.dirname(SETTINGS_FILE), 'imap_state.json');
 const IMAP_STATE_MAX_UIDS = 5000;
-let imapState = { uidvalidity: null, uids: [] };
+const IMAP_POLL_MAX_DOWNLOADS = 200;
+let imapState = { uidvalidity: null, min_uid: 0, uids: [] };
 let imapStateSet = new Set();
+function normalizeUid(v) {
+  const n = typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v;
+  return (typeof n === 'number' && Number.isSafeInteger(n) && n >= 0) ? n : null;
+}
 function loadImapState() {
   try {
     const raw = JSON.parse(fs.readFileSync(IMAP_STATE_FILE, 'utf8'));
-    if (raw && Array.isArray(raw.uids)) {
-      imapState = { uidvalidity: raw.uidvalidity ?? null, uids: raw.uids.map(Number) };
+    if (raw && typeof raw === 'object' && Array.isArray(raw.uids)) {
+      const uidv = normalizeUid(raw.uidvalidity);
+      const minUid = normalizeUid(raw.min_uid) ?? 0;
+      const uids = [];
+      for (const u of raw.uids) {
+        const n = normalizeUid(u);
+        if (n !== null && n >= minUid) uids.push(n);
+      }
+      imapState = { uidvalidity: uidv, min_uid: minUid, uids };
       imapStateSet = new Set(imapState.uids);
     }
   } catch { /* first run */ }
 }
+function compactImapState() {
+  if (imapState.uids.length <= IMAP_STATE_MAX_UIDS) return;
+  const sorted = imapState.uids.slice().sort((a, b) => a - b);
+  const kept = sorted.slice(-IMAP_STATE_MAX_UIDS);
+  // Everything evicted is smaller than the smallest kept UID → raise the mark.
+  imapState.min_uid = Math.max(imapState.min_uid, kept[0]);
+  imapState.uids = kept;
+  imapStateSet = new Set(kept);
+}
 function saveImapState() {
   try {
-    if (imapState.uids.length > IMAP_STATE_MAX_UIDS) {
-      imapState.uids = imapState.uids.slice(-IMAP_STATE_MAX_UIDS);
-      imapStateSet = new Set(imapState.uids);
-    }
+    compactImapState();
     const tmp = IMAP_STATE_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(imapState), { mode: 0o600 });
     fs.renameSync(tmp, IMAP_STATE_FILE);
   } catch (e) { log(`imap-state: save failed: ${e.message}`); }
 }
 function resetImapStateIfMailboxChanged(uidValidity) {
-  if (uidValidity == null) return;
-  if (imapState.uidvalidity !== null && imapState.uidvalidity !== uidValidity) {
-    log(`imap-state: UIDVALIDITY changed ${imapState.uidvalidity} → ${uidValidity}; resetting processed set`);
-    imapState = { uidvalidity: uidValidity, uids: [] };
+  const uidv = normalizeUid(uidValidity);
+  if (uidv === null) return;
+  if (imapState.uidvalidity !== null && imapState.uidvalidity !== uidv) {
+    log(`imap-state: UIDVALIDITY changed ${imapState.uidvalidity} → ${uidv}; resetting processed set`);
+    imapState = { uidvalidity: uidv, min_uid: 0, uids: [] };
     imapStateSet = new Set();
   } else if (imapState.uidvalidity === null) {
-    imapState.uidvalidity = uidValidity;
+    imapState.uidvalidity = uidv;
   }
 }
+function isUidProcessed(uid) {
+  const n = normalizeUid(uid);
+  if (n === null) return true; // an unparsable UID is never fetched
+  return n < imapState.min_uid || imapStateSet.has(n);
+}
 function markUidProcessed(uid) {
-  const n = Number(uid);
-  if (imapStateSet.has(n)) return;
+  const n = normalizeUid(uid);
+  if (n === null || isUidProcessed(n)) return;
   imapStateSet.add(n);
   imapState.uids.push(n);
   saveImapState();
+}
+// The bounded, ordered slice of UIDs one poll may download: unprocessed only,
+// smallest first (so the low-water mark stays sound), at most the cap.
+function selectUidsForPoll(unseenAll) {
+  const pending = [];
+  for (const u of (unseenAll || [])) {
+    const n = normalizeUid(u);
+    if (n !== null && !isUidProcessed(n)) pending.push(n);
+  }
+  pending.sort((a, b) => a - b);
+  return { batch: pending.slice(0, IMAP_POLL_MAX_DOWNLOADS), pending: pending.length };
 }
 loadImapState();
 
@@ -263,7 +313,10 @@ function inboundAuthPasses(parsed, fromAddr) {
 
   const raw = topAuthResultsLine(parsed);
   if (!raw) return { ok: false, reason: 'no-authentication-results' };
-  const line = raw.toLowerCase();
+  // R2-B1: comments / quoted strings are stripped before ANY token is read —
+  // including the authserv-id below (a leading `(mx.google.com)` comment
+  // must not become the id).
+  const line = stripAuthResultsCfws(raw.toLowerCase());
 
   // Invariant: trust the top AR line ONLY if its authserv-id is provably the
   // receiver's — otherwise a non-stamping IMAP provider lets an attacker inject
@@ -278,23 +331,30 @@ function inboundAuthPasses(parsed, fromAddr) {
       return { ok: false, reason: `authserv-id ${authservId || '(none)'} != pinned ${pinned}` };
     }
   } else if (cs.dev_mode !== true) {
-    // No operator pin: fall back to a built-in allowlist of well-known
-    // receiving-provider authserv-ids (match = exact host or sub-domain). An
-    // authserv-id outside it is NOT a provable receiver → fail-closed.
-    const KNOWN_RECEIVERS = [
-      'google.com', 'gmail.com',
-      'icloud.com', 'me.com', 'apple.com',
-      'outlook.com', 'protection.outlook.com', 'hotmail.com', 'office365.com',
-      'yahoo.com', 'yahoodns.net',
-      'mimecast.com', 'proofpoint.com', 'pphosted.com',
-    ];
+    // No operator pin (R2-B2, 2026-09-07): the expected authserv-id family is
+    // DERIVED FROM THE MAILBOX WE ARE ACTUALLY READING (imap_host), never from
+    // the mail itself. The old built-in allowlist accepted ANY well-known
+    // authserv-id — so on a self-hosted / non-stamping IMAP provider the
+    // attacker simply wrote `Authentication-Results: mx.google.com; dmarc=pass`
+    // and was trusted. Now: imap.gmail.com trusts only Google's ids, Outlook
+    // only Microsoft's, … and an imap_host outside the known families with no
+    // pin is fail-closed (the operator must set auth_results_authserv_id).
+    const expected = expectedAuthservIds(cs.imap_host);
+    if (!expected) {
+      return {
+        ok: false,
+        reason: `no auth_results_authserv_id pinned and imap_host `
+              + `${(cs.imap_host || '(unset)')} is not a known receiver `
+              + `(set auth_results_authserv_id to your provider's id)`,
+      };
+    }
     const idOk = !!authservId
-      && KNOWN_RECEIVERS.some((d) => authservId === d || authservId.endsWith('.' + d));
+      && expected.some((d) => authservId === d || authservId.endsWith('.' + d));
     if (!idOk) {
       return {
         ok: false,
-        reason: `authserv-id ${authservId || '(none)'} not a known receiver `
-              + `(set auth_results_authserv_id to your provider's id)`,
+        reason: `authserv-id ${authservId || '(none)'} is not the receiver for `
+              + `imap_host ${cs.imap_host} (set auth_results_authserv_id to pin a different id)`,
       };
     }
   }
@@ -331,22 +391,77 @@ function inboundAuthPasses(parsed, fromAddr) {
   return { ok: false, reason: 'no-aligned-pass' };
 }
 
+// Receiving-provider families: which Authentication-Results authserv-ids a
+// given imap_host may legitimately stamp (R2-B2). Match = exact host or
+// sub-domain on both sides. Gateways that sit in front of a self-hosted
+// mailbox (Mimecast, Proofpoint, …) are NOT here on purpose — the operator
+// pins them explicitly via auth_results_authserv_id.
+const RECEIVER_FAMILIES = [
+  { hosts: ['gmail.com', 'googlemail.com', 'google.com'],
+    ids: ['google.com', 'gmail.com'] },
+  { hosts: ['icloud.com', 'me.com', 'mac.com', 'apple.com'],
+    ids: ['icloud.com', 'me.com', 'apple.com'] },
+  { hosts: ['outlook.com', 'office365.com', 'office.com', 'hotmail.com', 'live.com'],
+    ids: ['outlook.com', 'protection.outlook.com', 'hotmail.com', 'office365.com'] },
+  { hosts: ['yahoo.com', 'yahoodns.net', 'aol.com'],
+    ids: ['yahoo.com', 'yahoodns.net'] },
+];
+function expectedAuthservIds(imapHost) {
+  const h = String(imapHost || '').toLowerCase().trim();
+  if (!h) return null;
+  for (const fam of RECEIVER_FAMILIES) {
+    if (fam.hosts.some((d) => h === d || h.endsWith('.' + d))) return fam.ids;
+  }
+  return null;
+}
+
+// Remove RFC 5322 CFWS comments (nested parentheses, backslash escapes) and
+// quoted strings from a header value BEFORE any structural parse (R2-B1).
+// A comment can carry `; dkim=pass header.d=example.com` and a quoted string
+// can carry `header.d=example.com` inside a header.i local-part — both were
+// matched by the property regexes and forged an aligned pass. Quoted strings
+// are replaced by an empty token (so `header.i="…"@evil.com` yields
+// `header.i=@evil.com`), comments by a single space.
+function stripAuthResultsCfws(value) {
+  const src = String(value || '');
+  let out = '';
+  let depth = 0;
+  let inQuote = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === '\\' && (inQuote || depth > 0)) { i++; continue; }  // escaped char
+    if (inQuote) { if (c === '"') inQuote = false; continue; }
+    if (depth > 0) {
+      if (c === '(') depth++;
+      else if (c === ')') { depth--; if (depth === 0) out += ' '; }
+      continue;
+    }
+    if (c === '"') { inQuote = true; continue; }
+    if (c === '(') { depth++; continue; }
+    out += c;
+  }
+  return out;
+}
+
 // Split an (already lower-cased) Authentication-Results line into method
 // clauses. The first `;`-segment is the authserv-id (+ optional version) and
 // carries no verdict. Each following segment is `<method>=<result> [props]`;
 // `domains` holds the signing-domain candidates of THAT clause only:
 // `header.d=<dom>` and the domain part of `header.i=[local@]<dom>` (the
 // old regex captured the local-part of `header.i=user@dom`, not the domain).
+// Comments / quoted strings are stripped first and every property name is
+// anchored at a token boundary, so `xheader.d=`, `header.i="header.d=…"@…`
+// and `(… header.d=…)` can no longer smuggle an aligned domain (R2-B1).
 function parseAuthResultsClauses(line) {
-  const body = String(line || '').replace(/^authentication-results:\s*/, '');
+  const body = stripAuthResultsCfws(String(line || '')).replace(/^authentication-results:\s*/, '');
   const segs = body.split(';').slice(1);
   const out = [];
   for (const seg of segs) {
-    const m = seg.trim().match(/^([a-z0-9_-]+)\s*=\s*([a-z0-9_-]+)/);
+    const m = seg.trim().match(/^([a-z0-9_-]+)\s*=\s*([a-z0-9_-]+)(?=$|[\s;])/);
     if (!m) continue;
     const domains = [];
-    for (const d of seg.matchAll(/header\.d\s*=\s*([a-z0-9._-]+)/g)) domains.push(d[1]);
-    for (const i of seg.matchAll(/header\.i\s*=\s*(?:[^@\s;]*@)?([a-z0-9._-]+)/g)) domains.push(i[1]);
+    for (const d of seg.matchAll(/(?:^|\s)header\.d\s*=\s*([a-z0-9._-]+)(?=$|[\s;])/g)) domains.push(d[1]);
+    for (const i of seg.matchAll(/(?:^|\s)header\.i\s*=\s*(?:[^@\s;]*@)?([a-z0-9._-]+)(?=$|[\s;])/g)) domains.push(i[1]);
     out.push({ method: m[1], result: m[2], domains });
   }
   return out;
@@ -374,9 +489,10 @@ async function pollOnce() {
     resetImapStateIfMailboxChanged(imap.mailbox && imap.mailbox.uidValidity != null
       ? Number(imap.mailbox.uidValidity) : null);
     const unseenAll = await imap.search({ seen: false }, { uid: true });
-    const unseen = (unseenAll || []).filter((u) => !imapStateSet.has(Number(u)));
+    const { batch: unseen, pending } = selectUidsForPoll(unseenAll);
     if (unseen.length === 0) return;
-    log(`imap: ${unseen.length} new message(s) in ${mailbox}`);
+    log(`imap: ${unseen.length} new message(s) in ${mailbox}`
+        + (pending > unseen.length ? ` (${pending - unseen.length} more deferred to the next poll)` : ''));
     for (const uid of unseen) {
       try {
         const { content } = await imap.download(uid, undefined, { uid: true });
