@@ -40,28 +40,27 @@ def _audit_path(tenant_id: str = "_default") -> Path:
     if env:
         return Path(env)
 
-    # Use tenant-native path: ~/.corvin/tenants/<tenant_id>/audit.jsonl
+    # THE tenant chain: <corvin_home>/tenants/<tid>/global/forge/audit.jsonl
     try:
-        from core.paths import tenant_audit_file
-        return tenant_audit_file(tenant_id)
+        from core.paths import tenant_audit_chain
+        return tenant_audit_chain(tenant_id)
     except (ImportError, ValueError):
         # Fallback for bootstrap or core.paths unavailable
         pass
 
-    # Fallback: construct path manually (same as tenant_audit_file)
-    # This is for compatibility during bootstrap before core.paths can be imported
+    # Bootstrap fallback, before core.paths can be imported. R4: the tail is
+    # ``global/forge/audit.jsonl`` — THE tenant chain — not ``<tenant>/audit.jsonl``,
+    # which nothing verifies and no compliance report covers.
+    _tail = ("tenants", tenant_id, "global", "forge", "audit.jsonl")
     corvin_home = os.environ.get("CORVIN_HOME")
     if corvin_home:
-        return Path(corvin_home) / "tenants" / tenant_id / "audit.jsonl"
+        return Path(corvin_home).joinpath(*_tail)
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
-        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():  # legacy fallback during migration
-            for sub in (".corvin",):
-                candidate = parent / sub
-                if candidate.is_dir():
-                    return candidate / "tenants" / tenant_id / "audit.jsonl"
-            return parent / ".corvin" / "tenants" / tenant_id / "audit.jsonl"
-    return Path.home() / ".corvin" / "tenants" / tenant_id / "audit.jsonl"
+        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+            candidate = parent / ".corvin"
+            return candidate.joinpath(*_tail)
+    return Path.home().joinpath(".corvin", *_tail)
 
 
 def _try_forge_write(event_type: str, *, tenant_id: str = "_default", **details: Any) -> bool:

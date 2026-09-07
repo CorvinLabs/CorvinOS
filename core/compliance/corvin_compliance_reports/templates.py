@@ -19,6 +19,10 @@ from reportlab.platypus import (
     TableStyle, KeepTogether,
 )
 
+from .sanitize import (
+    MAX_LEN_CELL, pdf_markup, pdf_text, validated_tenant_id,
+)
+
 
 # ── Branding tokens — track ADR-0017 Phase IV design tokens ───────────
 #
@@ -38,13 +42,28 @@ BRAND_DANGER      = colors.HexColor("#dc2626")
 
 @dataclass
 class ReportMetadata:
-    """Stamped onto every PDF for traceability."""
+    """Stamped onto every PDF for traceability.
+
+    ``tenant_id`` and ``title`` reach the cover Paragraph, the per-page
+    canvas header and the PDF ``Title``/``Subject`` metadata fields, so they
+    are normalised HERE — the one place they enter the document. The tenant
+    id is a closed vocabulary and is validated (rejected on violation, see
+    :func:`sanitize.validated_tenant_id`); the title is operator-facing text
+    and is stripped of control/bidi characters.
+    """
     title: str
     tenant_id: str
     period_start_ts: int
     period_end_ts: int
     generator_version: str
     generated_at_ts: int
+
+    def __post_init__(self) -> None:
+        self.tenant_id = validated_tenant_id(self.tenant_id)
+        self.title = pdf_text(self.title, max_len=MAX_LEN_CELL)
+        self.generator_version = pdf_text(
+            self.generator_version, max_len=32,
+        )
 
 
 def _fmt_ts(epoch: int | None, *, with_seconds: bool = True) -> str:
@@ -125,7 +144,10 @@ def _header_footer(meta: ReportMetadata):
         canvas.setFont("Helvetica", 8.5)
         canvas.drawRightString(
             w - 15 * mm, h - 13 * mm,
-            f"Tenant {meta.tenant_id}  ·  {meta.title}",
+            pdf_text(
+                f"Tenant {meta.tenant_id}  ·  {meta.title}",
+                max_len=MAX_LEN_CELL,
+            ),
         )
         # Hairline under header
         canvas.setStrokeColor(BRAND_BORDER)
@@ -156,9 +178,16 @@ def build_doc(output_path: Path, meta: ReportMetadata) -> tuple[BaseDocTemplate,
         pagesize=A4,
         leftMargin=15 * mm, rightMargin=15 * mm,
         topMargin=22 * mm, bottomMargin=22 * mm,
-        title=meta.title,
+        # PDF metadata (Title / Author / Subject / Keywords) is a document
+        # surface of its own — a reader's tab caption, a DMS index entry.
+        # meta.* is already normalised by ReportMetadata.__post_init__; the
+        # explicit call keeps the guarantee local to the write.
+        title=pdf_text(meta.title, max_len=MAX_LEN_CELL),
         author="Corvin",
-        subject=f"Compliance report for tenant {meta.tenant_id}",
+        subject=pdf_text(
+            f"Compliance report for tenant {meta.tenant_id}",
+            max_len=MAX_LEN_CELL,
+        ),
     )
     frame = Frame(
         doc.leftMargin, doc.bottomMargin,
@@ -181,12 +210,18 @@ def cover_page(
     intro_paragraphs: list[str],
     styles: dict[str, ParagraphStyle],
 ) -> list[Any]:
-    """A consistent cover block for every report."""
+    """A consistent cover block for every report.
+
+    ``intro_paragraphs`` are TRUSTED code literals from each generator's
+    ``_intro_paragraphs()`` and deliberately carry markup (``<b>``, ``<i>``,
+    ``<font face="Courier">``); they are rendered as-is. ``meta`` is
+    normalised by :meth:`ReportMetadata.__post_init__`.
+    """
     out: list[Any] = []
     out.append(Spacer(1, 12 * mm))
-    out.append(Paragraph(meta.title, styles["title"]))
+    out.append(Paragraph(pdf_markup(meta.title), styles["title"]))
     out.append(Paragraph(
-        f"Tenant <b>{meta.tenant_id}</b>  &nbsp;·&nbsp;  "
+        f"Tenant <b>{pdf_markup(meta.tenant_id)}</b>  &nbsp;·&nbsp;  "
         f"Period <b>{_fmt_date(meta.period_start_ts)}</b> "
         f"to <b>{_fmt_date(meta.period_end_ts)}</b>",
         styles["subtitle"],
@@ -207,6 +242,13 @@ def styled_table(
     zebra: bool = True,
 ) -> Table:
     """Reusable table with brand-coloured header + optional zebra rows."""
+    # A reportlab Table does NOT parse markup in a str cell, so ``<`` stays
+    # ``<`` and reads correctly — but control/bidi characters still reorder
+    # or corrupt the cell, and an uncapped value (an ``event_type`` read
+    # straight from the chain, an engine id) overflows its column. This is
+    # the chokepoint for every table the three reports render.
+    rows = [[pdf_text(cell, max_len=MAX_LEN_CELL) for cell in row]
+            for row in rows]
     t = Table(rows, colWidths=col_widths, repeatRows=1)
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), BRAND_PRIMARY),
@@ -234,20 +276,29 @@ def styled_table(
 
 
 def section_heading(text: str, styles: dict[str, ParagraphStyle]) -> Paragraph:
+    """``text`` is a TRUSTED code literal (it may carry intentional markup).
+
+    Never pass chain- or caller-derived data here; route that through
+    :func:`sanitize.pdf_markup` first.
+    """
     return Paragraph(text, styles["h2"])
 
 
 def subsection(text: str, styles: dict[str, ParagraphStyle]) -> Paragraph:
+    """``text`` is a TRUSTED code literal — see :func:`section_heading`."""
     return Paragraph(text, styles["h3"])
 
 
 def stat_box(
     label: str, value: str, styles: dict[str, ParagraphStyle],
 ) -> list[Any]:
-    """Two-line key/value tile used in summary sections."""
+    """Two-line key/value tile used in summary sections.
+
+    ``label`` is a code literal; ``value`` may be external, so it is escaped.
+    """
     return [
         Paragraph(label.upper(), styles["h3"]),
-        Paragraph(value, styles["body"]),
+        Paragraph(pdf_markup(value), styles["body"]),
     ]
 
 
@@ -282,7 +333,10 @@ def integrity_banner(
     if problems:
         out.append(Spacer(1, 4 * mm))
         for p in problems[:10]:
-            out.append(Paragraph(f"&bull; {p}", styles["small"]))
+            # A problem dict carries ``actual_hash`` / ``actual_prev`` /
+            # ``event_type`` read verbatim out of the (by definition
+            # untrusted, because broken) chain file.
+            out.append(Paragraph(f"&bull; {pdf_markup(p)}", styles["small"]))
     return out
 
 
@@ -309,7 +363,11 @@ def signed_footer_block(
     ))
     out.append(Spacer(1, 2 * mm))
     out.append(Paragraph(
-        f"<font name=\"Courier\" size=\"8\">{h}</font>",
+        # ``h`` is the last event's ``hash`` field as it appears on disk —
+        # a computed hex digest on an intact chain, an arbitrary string on a
+        # tampered one. Escaped, so a crafted value renders as its own
+        # literal text instead of repainting the anchor.
+        f"<font name=\"Courier\" size=\"8\">{pdf_markup(h, max_len=128)}</font>",
         styles["code"],
     ))
     out.append(Spacer(1, 4 * mm))

@@ -81,15 +81,25 @@ nothing crosses the tenant boundary. The isolation is structural
 │   │   ├── forge/, skill-forge/, voice/, cowork/
 │   └── acme/               ← provisioned via gateway or operator CLI
 │       └── global/, sessions/, forge/, ...
-├── global → tenants/_default/global   (back-compat symlinks)
+├── global → tenants/_default/global   (back-compat symlink — MIGRATED installs only)
 ├── sessions → tenants/_default/sessions
 └── ...
 ```
 
 Single-operator setups never touch `tenants/`. The migration helper
-moves an existing `~/.corvin/` into `tenants/_default/` and creates
-back-compat symlinks the first time the adapter boots after a version
-bump — idempotent, audit-first, opt-out via `CORVIN_TENANT_MIGRATE=0`.
+(`forge.tenant_migrate`) moves an existing pre-tenant `~/.corvin/` into
+`tenants/_default/` and leaves back-compat symlinks behind, the first time the
+adapter boots after a version bump — idempotent, audit-first, opt-out via
+`CORVIN_TENANT_MIGRATE=0`.
+
+**Those symlinks exist only on an install that was actually migrated in place.**
+The helper skips any subdirectory whose tenant target already exists, so a
+tenant-native install — and any install where a writer created
+`tenants/_default/global/` before the migration ran — keeps two independent real
+directories and no symlink. Code must never assume the two paths converge;
+resolve through `forge.paths` (and, for the audit chain, through
+`tenant_audit_chain()` — there is exactly one chain per tenant, at
+`tenants/<tid>/global/forge/audit.jsonl`).
 
 Multi-tenant deployments add `tenants/<other_id>/` directories.
 Resolution is keyword-only — every state-store function carries an

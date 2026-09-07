@@ -320,6 +320,25 @@ class Registry:
         "promote": "promoted",
     }
 
+    def _audit_chain(self) -> Path:
+        """THE tenant audit chain — never ``<workspace>/audit.jsonl``.
+
+        R4 (2026-09-07): this wrote beside the forge workspace, which produced
+        two more chain files for one tenant (``<corvin_home>/forge/audit.jsonl``
+        for the legacy global scope and ``<tenant>/forge/audit.jsonl`` for the
+        tenant scope) on top of the chain the boot tripwire, ``audit_query`` and
+        every compliance report read. A workspace is a real boundary for TOOLS;
+        it is not one for the GDPR Art. 30 trail. A root outside ``corvin_home``
+        (tests, standalone checkouts) keeps the sibling default so a unit test
+        can never append to the operator's real chain.
+        """
+        try:
+            from .paths import audit_chain_for_workspace  # noqa: PLC0415
+            return audit_chain_for_workspace(
+                self.root, fallback=self.root / self.AUDIT_NAME)
+        except Exception:  # noqa: BLE001 — never lose a record over path resolution
+            return self.root / self.AUDIT_NAME
+
     def _audit(self, action: str, spec: ToolSpec) -> None:
         from .security_events import write_event
         persona = os.environ.get("FORGE_PERSONA", "")
@@ -340,7 +359,7 @@ class Registry:
                 details["secrets_declared"] = list(secret_refs)
         event_type = f"tool.{self._AUDIT_ACTION_MAP.get(action, action)}"
         write_event(
-            self.root / self.AUDIT_NAME,
+            self._audit_chain(),
             event_type,
             tool=spec.name,
             details=details,

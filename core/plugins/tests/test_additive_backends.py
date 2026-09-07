@@ -757,9 +757,7 @@ class TestMandatoryMechanismTripwires(unittest.TestCase):
         # tolerates a redirect just because the process is a pytest run.
         self._prev_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = self._tmp.name
-        os.environ["VOICE_AUDIT_PATH"] = str(
-            Path(self._tmp.name) / "global" / "forge" / "audit.jsonl"
-        )
+        os.environ.pop("VOICE_AUDIT_PATH", None)
 
     def tearDown(self):
         os.environ.pop("VOICE_AUDIT_PATH", None)
@@ -1044,10 +1042,11 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
         # R2-A3: chain at the resolver's own path under a matching CORVIN_HOME.
         self._prev_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = str(tmp)
-        path = Path(tmp) / "global" / "forge" / "audit.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        os.environ["VOICE_AUDIT_PATH"] = str(path)
+        os.environ.pop("VOICE_AUDIT_PATH", None)
         import audit as _audit  # type: ignore[import-not-found]
+
+        path = Path(_audit.audit_path())
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         if _audit._se is None:
             self.skipTest("forge.security_events not importable in this layout")

@@ -261,7 +261,11 @@ async def _cmd_serve(args: argparse.Namespace) -> int:
     # unified hash chain (was a no-op default → all compute audit was lost in
     # production). Metadata-only via the compute allow-list in audit.emit().
     from . import audit as _compute_audit
-    _audit_chain = home / "global" / "forge" / "audit.jsonl"
+    # R4: THE tenant chain. This composed the PRE-ADR-0007 host-global path,
+    # which is tenant-agnostic — so every compute.* record for every tenant
+    # landed in one file that the tripwire, audit_query and the compliance
+    # reports (all tenant-scoped) do not read.
+    _audit_chain = home / "tenants" / args.tenant / "global" / "forge" / "audit.jsonl"
     _tid = args.tenant
 
     def _audit_emit(event: str, **fields) -> None:
@@ -412,7 +416,8 @@ def _cmd_reap(args: argparse.Namespace) -> int:
                          indent=2))
         return 0
 
-    _audit_chain = home / "global" / "forge" / "audit.jsonl"
+    _audit_chain = (home / "tenants" / args.tenant
+                    / "global" / "forge" / "audit.jsonl")  # R4: THE tenant chain
     reaped = _recovery.reap_orphaned(
         home, args.tenant,
         older_than_s=older_than_s,

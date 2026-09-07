@@ -110,10 +110,16 @@ class TestAssertCompliance(unittest.TestCase):
         # redirect merely because the process is a pytest run, so a chain parked
         # outside the root now reads as the redirect attack it is.
         self._prev = {k: os.environ.get(k) for k in ("VOICE_AUDIT_PATH", "CORVIN_HOME")}
+        # R4 (2026-09-07): the redirect is GONE. ``CORVIN_HOME`` above already
+        # isolates this test's chain, so ``VOICE_AUDIT_PATH`` only re-stated the
+        # resolver's answer — and re-stated it as the PRE-ADR-0007
+        # ``<home>/global/forge`` path, which stopped being the resolver's answer
+        # when the chain converged on the tenant path (ADR-0654). A test that
+        # needs an isolated chain sets CORVIN_HOME and lets the resolver decide;
+        # it must never name the location, or it pins a default instead of a
+        # behaviour and re-breaks on the next move.
         os.environ["CORVIN_HOME"] = self._tmp.name
-        os.environ["VOICE_AUDIT_PATH"] = str(
-            Path(self._tmp.name) / "global" / "forge" / "audit.jsonl"
-        )
+        os.environ.pop("VOICE_AUDIT_PATH", None)
 
     def tearDown(self):
         for k, v in self._prev.items():
@@ -139,7 +145,7 @@ class TestAssertCompliance(unittest.TestCase):
         if _audit._se is None:
             self.skipTest("forge.security_events not importable in this layout")
 
-        path = Path(os.environ["VOICE_AUDIT_PATH"])
+        path = Path(_audit.audit_path())  # R4: ask the resolver, never name the location
         _audit.audit_event("bridge.login", channel="test", user="u1")
         _audit.audit_event("bridge.login", channel="test", user="u2")
         lines = path.read_text().splitlines()
@@ -175,7 +181,7 @@ class TestAssertCompliance(unittest.TestCase):
         if _audit._se is None:
             self.skipTest("forge.security_events not importable in this layout")
 
-        path = Path(os.environ["VOICE_AUDIT_PATH"])
+        path = Path(_audit.audit_path())  # R4: ask the resolver, never name the location
         _audit.audit_event("bridge.login", channel="test", user="u1")
         _audit.audit_event("bridge.login", channel="test", user="u2")
         lines = path.read_text().splitlines()

@@ -280,3 +280,36 @@ def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
     if kind in ("settings", "root"):
         return channel_dir
     return channel_dir / kind
+
+
+# ── R4 — THE audit chain resolver (byte-identical mirror) ────────────────────
+# Mirrors ``operator/forge/forge/paths.py::tenant_audit_chain`` /
+# ``legacy_audit_chains`` / ``all_audit_chains`` and
+# ``core/paths/tenant.py``'s copies. There is exactly ONE hash-chained audit
+# file per tenant and this names it; see the forge copy for the measured
+# six-way split this closes. Guard: tests/security/test_audit_chain_ssot.py.
+
+AUDIT_CHAIN_NAME = "audit.jsonl"
+
+
+def tenant_audit_chain(tenant_id: str | None = None) -> Path:
+    """``<corvin_home>/tenants/<tid>/global/forge/audit.jsonl`` — THE chain."""
+    return tenant_global_dir(tenant_id) / "forge" / AUDIT_CHAIN_NAME
+
+
+def legacy_audit_chains(tenant_id: str | None = None) -> "dict[str, Path]":
+    """``{label: path}`` for every NON-canonical location historically written."""
+    root = corvin_home()
+    tenant = tenant_home(tenant_id)
+    return {
+        "host_global_forge": root / "global" / "forge" / AUDIT_CHAIN_NAME,
+        "host_forge":        root / "forge" / AUDIT_CHAIN_NAME,
+        "tenant_global":     tenant / "global" / AUDIT_CHAIN_NAME,
+        "tenant_forge":      tenant / "forge" / AUDIT_CHAIN_NAME,
+        "tenant_root":       tenant / AUDIT_CHAIN_NAME,
+    }
+
+
+def all_audit_chains(tenant_id: str | None = None) -> "dict[str, Path]":
+    """``{"canonical": ..., **legacy}`` — every chain location this host knows."""
+    return {"canonical": tenant_audit_chain(tenant_id), **legacy_audit_chains(tenant_id)}

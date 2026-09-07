@@ -174,6 +174,13 @@ EVENT_SEVERITY: dict[str, str] = {
     "secret.vault_malformed":    "ERROR",
     # integrity
     "audit.integrity_violation": "CRITICAL",
+    # R4 — chain-convergence seam. Emitted ONCE into the canonical chain when a
+    # writer that used to resolve a different file for the same tenant scope
+    # starts writing here; names the superseded chain's path key, its final tail
+    # hash and its record count so an auditor following the canonical chain can
+    # reach the historical file and verify it. Never a merge, never a rewrite —
+    # the chains are append-only.
+    "audit.chain_supersedes":    "WARNING",
     # Layer 34 — Data classification + flow guard (ADR-0042)
     "data_flow.approved":        "INFO",
     "data_flow.blocked":         "CRITICAL",
@@ -1300,6 +1307,184 @@ def _record_chain_path_state(chain_path: Path, *, genesis: str, tail: str,
     _write_chain_path_record(chain_path, existing)
 
 
+# ── R4 — chain-convergence seams: make a SPLIT reachable, never merged ───────
+#
+# Six chain files held one tenant's GDPR Art. 30 trail on the maintainer install
+# (see ``forge/paths.py::tenant_audit_chain`` for the measured breakdown). The
+# forward fix is that every writer now resolves ONE path. That leaves the
+# historical files: append-only and hash-chained, so merging, reordering or
+# deleting them would destroy the exact integrity property the trail exists for.
+#
+# What is admissible is a POINTER. When a writer converges onto the canonical
+# chain and a sibling chain for the same scope exists, we
+#   (a) append ONE chained ``audit.chain_supersedes`` record to the CANONICAL
+#       chain naming the sibling's path key, genesis, final tail hash, byte size
+#       and record count — so an auditor reading the canonical chain learns the
+#       sibling exists and can verify it end-to-end against the recorded tail;
+#   (b) write the reverse pointer (``superseded_by``) into the SIBLING's
+#       out-of-tree chain-identity record — so an auditor who starts from the
+#       sibling is led forward. The reverse pointer is deliberately NOT appended
+#       to the sibling file: the seam must not itself extend a chain that is
+#       being frozen, and the identity record already lives outside the audit
+#       tree next to the anchor key, where a filesystem attacker who can rewrite
+#       audit.jsonl cannot reach it.
+#
+# Both halves are idempotent — a seam is recorded once per (canonical, sibling)
+# pair, keyed on the sibling's tail at the moment of convergence.
+
+CHAIN_SEAM_EVENT = "audit.chain_supersedes"
+
+
+def chain_path_key(chain_path: Path) -> str:
+    """Stable, host-independent handle for a chain FILE: sha256(realpath)[:32].
+
+    The same digest ``_chain_path_record_path`` indexes identity records by, so a
+    seam record's ``superseded_key`` names a record an auditor can actually open.
+    """
+    try:
+        real = str(Path(chain_path).resolve())
+    except OSError:
+        real = os.path.abspath(str(chain_path))
+    return hashlib.sha256(real.encode("utf-8")).hexdigest()[:32]
+
+
+def _chain_stats(chain_path: Path) -> tuple[int, int]:
+    """``(size_bytes, record_count)``; ``(0, 0)`` when the file is absent."""
+    try:
+        size = chain_path.stat().st_size
+    except OSError:
+        return 0, 0
+    n = 0
+    try:
+        with chain_path.open("rb") as fh:
+            for _ in fh:
+                n += 1
+    except OSError:
+        return size, 0
+    return size, n
+
+
+def record_chain_supersession(
+    canonical: Path, superseded: Path, *, reason: str = "chain_convergence",
+    tenant_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Link a live canonical chain to a sibling chain it supersedes.
+
+    Returns the written seam record, or ``None`` when there is nothing to link
+    (the sibling is absent/empty, is the same file, or the seam already exists).
+    Never merges, rewrites, reorders or truncates either chain.
+    """
+    try:
+        canonical = Path(canonical)
+        superseded = Path(superseded)
+        if not superseded.is_file():
+            return None
+        try:
+            if canonical.resolve() == superseded.resolve():
+                return None  # one file, two names (the ADR-0007 compat symlink)
+        except OSError:
+            pass
+        size, records = _chain_stats(superseded)
+        if size == 0 or records == 0:
+            return None
+        tail = _read_chain_tail(superseded) or ""
+        genesis = _chain_identity(superseded) or ""
+        sup_key = chain_path_key(superseded)
+        can_key = chain_path_key(canonical)
+
+        # Idempotence: the sibling's identity record remembers the seam we wrote
+        # for it. Re-seam only when its tail has MOVED since (a writer we have
+        # not converged yet is still appending there — worth recording again).
+        existing = _read_chain_path_record(superseded) or {}
+        prior = existing.get("superseded_by")
+        if isinstance(prior, dict) and prior.get("canonical_key") == can_key \
+                and prior.get("tail") == tail:
+            return None
+
+        rec = write_event(
+            canonical, CHAIN_SEAM_EVENT, severity="WARNING",
+            details={
+                "seam": "chain_convergence",
+                "seam_reason": str(reason)[:64],
+                "superseded_key": sup_key,
+                "superseded_genesis": genesis[:32],
+                "superseded_tail": tail[:32],
+                "superseded_size_bytes": size,
+                "superseded_records": records,
+                "canonical_key": can_key,
+            },
+        )
+        # (b) reverse pointer, out-of-tree, next to the anchor key.
+        if not _skip_out_of_tree_markers(superseded):
+            merged = dict(existing)
+            if not merged.get("genesis"):
+                merged["genesis"] = genesis
+            merged["tail"] = tail or merged.get("tail", "")
+            merged["superseded_by"] = {
+                "canonical_key": can_key,
+                "canonical_path": _resolved_str(canonical),
+                "tail": tail,
+                "seam_hash": str(rec.get("hash", "")),
+                "ts": time.time(),
+            }
+            _write_chain_path_record(superseded, merged)
+        return rec
+    except Exception:  # noqa: BLE001 — a seam must never break an audit write
+        return None
+
+
+def chain_seam_links(chain_path: Path) -> list[dict[str, Any]]:
+    """Every sibling chain reachable from *chain_path*, in either direction.
+
+    Traversal for an auditor (and for ``tests/security/test_audit_chain_seam.py``):
+
+    * FORWARD — reading the canonical chain, every ``audit.chain_supersedes``
+      record yields ``{"direction": "supersedes", "key", "genesis", "tail",
+      "records", "size_bytes"}``: enough to locate the sibling's identity record
+      and verify the sibling against the tail hash recorded here.
+    * BACKWARD — reading a superseded chain, its out-of-tree identity record
+      yields ``{"direction": "superseded_by", "key", "path", "tail", "seam_hash"}``,
+      pointing at the chain that took over.
+
+    Returns ``[]`` when the chain stands alone.
+    """
+    out: list[dict[str, Any]] = []
+    try:
+        with Path(chain_path).open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if CHAIN_SEAM_EVENT not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if r.get("event_type") != CHAIN_SEAM_EVENT:
+                    continue
+                d = r.get("details") or {}
+                out.append({
+                    "direction":  "supersedes",
+                    "key":        d.get("superseded_key", ""),
+                    "genesis":    d.get("superseded_genesis", ""),
+                    "tail":       d.get("superseded_tail", ""),
+                    "records":    d.get("superseded_records", 0),
+                    "size_bytes": d.get("superseded_size_bytes", 0),
+                    "seam_hash":  r.get("hash", ""),
+                })
+    except OSError:
+        pass
+    rec = _read_chain_path_record(chain_path) or {}
+    back = rec.get("superseded_by")
+    if isinstance(back, dict):
+        out.append({
+            "direction": "superseded_by",
+            "key":       back.get("canonical_key", ""),
+            "path":      back.get("canonical_path", ""),
+            "tail":      back.get("tail", ""),
+            "seam_hash": back.get("seam_hash", ""),
+        })
+    return out
+
+
 def note_chain_rotation(chain_path: Path, *, link_hash: str) -> None:
     """Layer 37 rotation hook: the sealer just replaced ``chain_path`` with a
     fresh live file whose only record is the ``audit.rotation_link`` hashing
@@ -1876,11 +2061,13 @@ _AUDIT_KNOWN_KEYS: frozenset[str] = frozenset({
     "grantor_role", "has_audio", "has_signature", "hash", "healing_action", "hook",
     "hook_registered", "host", "ibc_jti", "id", "incident_id", "input_keys", "input_tokens",
     "installed_by", "instance_id_match", "instruction_hash", "instruction_len", "interval_s",
-    "issue", "issuer", "iteration", "jti", "k_max", "keypair_path_prefix", "keys_after",
+    "issue", "issuer", "iteration", "iterations", "job_id", "converge", "jti", "k_max",
+    "keypair_path_prefix", "keys_after",
     "keys_before", "killed", "kind", "lang", "last_break_line", "last_error", "last_status",
     "last_ts", "latency_ms", "layer", "layer_count", "layer_id", "layer_name", "len", "level",
     "levels", "limit", "limit_msgs", "limit_tokens", "limit_value", "lint_errors",
-    "llm_confidence", "locality", "lockout_s", "lom", "lom_audit_write", "lom_hash", "loop_id",
+    "llm_confidence", "locality", "lockout_s", "lom", "lom_audit_write", "lom_bound",
+    "lom_hash", "loop_id",
     "loss_delta", "loss_gap", "loss_total", "manifest", "manifest_age_days",
     "matched_pattern_count", "matched_rule", "matcher", "max_attempts", "max_bytes",
     "max_depth", "max_loops", "member_prefix", "messages_total", "method", "metric", "mime",
@@ -1911,7 +2098,9 @@ _AUDIT_KNOWN_KEYS: frozenset[str] = frozenset({
     "solicited", "source", "span_id", "spawn_nonce", "spawned", "stack_size", "stage",
     "started_at", "state", "state_purged", "status", "step", "strategy",
     "strategy_correction_rate", "subdir_count", "subdirs", "subject", "subtask_count",
-    "succeeded", "success_rate", "success_rate_percent", "successful_runs", "tag_count",
+    "succeeded", "success_rate", "success_rate_percent", "successful_runs",
+    "superseded_key", "superseded_genesis", "superseded_tail", "superseded_size_bytes",
+    "superseded_records", "canonical_key", "tag_count",
     "tail_hash_prefix", "target", "target_engine", "target_instance_id_prefix", "target_role",
     "task_id", "task_type", "tenant_check", "tenant_count", "tenant_id", "tenant_zone",
     "text_len", "threshold_bytes", "throttled_count", "tier", "timed_out", "timeout_s", "to",
@@ -2215,7 +2404,253 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "console.action_denied": frozenset({
         "action", "target_id", "target_type", "tenant_id", "sid_fingerprint", "ok", "reason_code", "reason",
     }),
+    # ── R4-A: GDPR Art. 17 erasure (L36, ADR-0045) ──────────────────────────
+    # The orchestrator (operator/bridges/shared/erasure_orchestrator.py) built a
+    # careful metadata-only vocabulary — a closed ``ReasonCode`` enum, a
+    # fail-closed ``_assert_safe_audit_value`` that refuses any value carrying a
+    # path separator or exception shape — and then had NO allowlist here, so the
+    # ADR-0640 default-deny floor threw away exactly the fields that design
+    # exists to carry. Measured 2026-09-07: ``erasure.requested`` reached the
+    # chain as ``{"request_id": ..., "scope": ..., "_dropped_fields":
+    # ["requester", "subject_id"]}`` and ``erasure.completed`` lost
+    # ``subject_id``, ``overall_status`` AND ``applied_count`` while
+    # ``failed_count`` survived — an asymmetry nobody could see by eye. The
+    # immutable Art. 30 trail recorded that AN erasure happened and not who was
+    # erased, who asked, or whether it worked.
+    #
+    # ``subject_id`` / ``requester`` are IDENTIFIERS, and on a bridge install
+    # they can be an e-mail or a phone number. Writing one verbatim into an
+    # append-only never-redactable chain — as the record of that subject's
+    # ERASURE — would be its own Art. 17 defect, so both are listed in
+    # ``_AUDIT_PSEUDONYM_KEYS`` below: a PII-shaped value is fingerprinted to
+    # the same sha256[:8] pseudonym the reserved spine uses, never dropped.
+    "erasure.requested": frozenset({
+        "request_id", "subject_id", "requester", "scope", "tenant_id",
+    }),
+    "erasure.applied": frozenset({
+        "request_id", "subject_id", "layer_id", "status", "count", "code",
+        "duration_ms", "tenant_id",
+    }),
+    "erasure.skipped": frozenset({
+        "request_id", "subject_id", "layer_id", "status", "count", "code",
+        "duration_ms", "tenant_id",
+    }),
+    "erasure.failed": frozenset({
+        "request_id", "subject_id", "layer_id", "status", "count", "code",
+        "duration_ms", "tenant_id",
+    }),
+    "erasure.completed": frozenset({
+        "request_id", "subject_id", "overall_status", "applied_count",
+        "failed_count", "tenant_id",
+    }),
+    "erasure.trail_failed": frozenset({
+        "request_id", "subject_id", "error_type", "tenant_id",
+    }),
+    # ── R4-B: L37 / ADR-0044 audit-at-rest sealing ──────────────────────────
+    # Same root cause. Reproduced through the real ``rotate_and_seal``:
+    # ``audit.segment_sealed`` landed as ``{"_dropped_fields": [...],
+    # "chain_dna": ...}`` — the record carried nothing but the list of what was
+    # thrown away. ``audit.unseal_requested`` lost BOTH ``requester`` and
+    # ``sealed_segment``, so a decryption of an encrypted segment was
+    # unattributable. All values are file NAMES (never paths — the emitters pass
+    # ``.name``), an operator-config sealer kind, and counters.
+    "audit.segment_sealed": frozenset({
+        "sealed_segment", "sealer_cmd", "rotated_size_bytes",
+    }),
+    "audit.segment_timestamped": frozenset({
+        "sealed_segment", "timestamp_token_name", "tsa_success",
+    }),
+    "audit.segment_retired": frozenset({"sealed_segment", "age_days"}),
+    "audit.unseal_requested": frozenset({
+        "sealed_segment", "requester", "sealer_cmd",
+    }),
+    # ── R4-B: supply-chain verifier (operator/voice/scripts/supply_chain_verify.py)
+    # It carries its own ``_ALLOWED_FIELDS`` map and never registered it here, so
+    # ``supply_chain.cve_detected`` reached the chain without ``cve_id`` or
+    # ``package_name`` and ``capability_drift`` landed empty. Mirrored verbatim.
+    "supply_chain.cve_detected": frozenset({
+        "plugin_name", "package_name", "package_version", "cve_id", "severity",
+        "fix_available", "cadence",
+    }),
+    "supply_chain.cve_check_skipped": frozenset({"plugin_name", "reason"}),
+    "supply_chain.capability_drift": frozenset({
+        "plugin_name", "undeclared_imports", "unused_declared",
+    }),
+    # ── R4-B: HAC coordinator (L25 compute), console setup, A2A manifest ─────
+    # Numeric/identifier telemetry that landed with an empty body.
+    "compute.hac_started": frozenset({
+        "hac_id", "manager_count", "budget", "backprop_gate",
+    }),
+    "compute.hac_round_started": frozenset({"hac_id", "round", "managers_to_run"}),
+    "compute.hac_root_loss_computed": frozenset({
+        "hac_id", "round", "root_loss", "sub_losses",
+    }),
+    "compute.backprop_gate_opened": frozenset({
+        "hac_id", "round", "attributions", "budget_remaining",
+    }),
+    "compute.hac_budget_reallocated": frozenset({
+        "hac_id", "from_manager", "to_manager", "fraction", "trigger",
+    }),
+    "setup.onboarding_complete": frozenset({"default_engine", "engine_count"}),
+    "setup.engine_probe_run": frozenset({"engine_ids", "found_count"}),
+    "a2a.manifest_fetched": frozenset({"age_days", "revoked_count", "sig_verified"}),
+    "a2a.manifest_stale": frozenset({"age_days", "sig_verified"}),
+    "a2a.manifest_cache_sig_invalid": frozenset({"age_days"}),
+    # ── R4-B: L25 compute (ADR-0013) — mirror of
+    # ``core/compute/corvin_compute/audit.py::_ALLOWED_FIELDS``. That dict was
+    # enforced on the way IN and unknown to this floor on the way OUT.
+    # Mirrored here (not registered at import time from there) so the floor is
+    # import-order independent; guarded against drift by
+    # tests/security/test_audit_detail_floor_coverage.py.
+    "compute.batch_api_error": frozenset({
+        "batch_id_prefix", "error_class", "run_id", "tenant_id"
+    }),
+    "compute.batch_cancelled": frozenset({
+        "batch_id_prefix", "reason", "run_id", "tenant_id"
+    }),
+    "compute.batch_completed": frozenset({
+        "batch_id_prefix", "candidate_count", "duration_ms", "run_id", "tenant_id"
+    }),
+    "compute.batch_fallback": frozenset({
+        "candidate_count", "reason", "run_id", "tenant_id"
+    }),
+    "compute.batch_gate_blocked": frozenset({
+        "reason", "run_id", "tenant_id"
+    }),
+    "compute.batch_partial": frozenset({
+        "batch_id_prefix", "candidate_count", "failed_candidate_count", "run_id",
+        "tenant_id"
+    }),
+    "compute.batch_submitted": frozenset({
+        "batch_id_prefix", "candidate_count", "run_id", "tenant_id"
+    }),
+    "compute.iteration_completed": frozenset({
+        "cache_hit", "iter", "loss", "param_fingerprint", "run_id", "strategy",
+        "tenant_id", "wall_ms"
+    }),
+    "compute.run_aborted": frozenset({
+        "engine_id", "iterations_done", "run_id", "tenant_id"
+    }),
+    "compute.run_failed": frozenset({
+        "error_class", "error_message", "iter", "run_id", "tenant_id"
+    }),
+    "compute.run_recovering": frozenset({
+        "history_size", "resume_from_iter", "run_id", "tenant_id"
+    }),
+    "compute.run_started": frozenset({
+        "budget", "run_id", "strategy", "tenant_id", "tool_name"
+    }),
+    "compute.run_terminal": frozenset({
+        "best_loss", "convergence_reason", "run_id", "state", "tenant_id",
+        "total_iterations", "total_wall_s"
+    }),
+    "compute.worker_unreachable": frozenset({
+        "attempted_socket", "tenant_id"
+    }),
+    # ── R4-B: ADR-0026 compute fabric — mirror of
+    # ``core/compute/corvin_compute/fabric/audit_events.py::FABRIC_AUDIT_EVENTS``
+    # (hashes and counts only: ``checkpoint_path_hash`` never a path,
+    # ``steering_keys`` never a magnitude, never a model weight or a param value).
+    "compute.aggregation_completed": frozenset({
+        "final_metric", "n_shards", "run_id", "strategy", "tenant_id"
+    }),
+    "compute.artifact_registered": frozenset({
+        "artifact_path_hash", "artifact_size_b", "backend", "run_id", "tenant_id"
+    }),
+    "compute.backend_plugin_disabled": frozenset({
+        "plugin_name", "tenant_id"
+    }),
+    "compute.backend_plugin_enabled": frozenset({
+        "plugin_name", "plugin_version", "tenant_id"
+    }),
+    "compute.backend_session_started": frozenset({
+        "backend", "backend_version", "run_id", "shard_index", "tenant_id"
+    }),
+    "compute.checkpoint_written": frozenset({
+        "checkpoint_path_hash", "epoch", "run_id", "tenant_id",
+        # A SECOND emitter, operator/bridges/shared/compute_awp_importer.py:732
+        # (awpkg watermark restore), carries the checkpoint's file NAME and a
+        # controlled provenance token instead of a run/epoch. The floor is the
+        # UNION of what every legitimate emitter needs — an allowlist narrower
+        # than its emitters is how a record lands with an empty body.
+        "checkpoint_name", "source"
+    }),
+    "compute.epoch_completed": frozenset({
+        "epoch", "metric_value", "primary_metric", "run_id", "shard_index",
+        "tenant_id", "wall_ms"
+    }),
+    "compute.oracle_steer_applied": frozenset({
+        "divergence_detected", "epoch", "run_id", "steering_keys", "tenant_id"
+    }),
+    "compute.oracle_subprocess_failed": frozenset({
+        "epoch", "failure_reason", "run_id", "tenant_id"
+    }),
+    "compute.resource_slot_denied": frozenset({
+        "available_slots", "backend", "requested_slots", "run_id", "tenant_id"
+    }),
+    "compute.shard_completed": frozenset({
+        "final_metric", "run_id", "shard_index", "tenant_id", "total_shards"
+    }),
+    # ── R4-B: ADR-0026 DataSourceAdapter — mirror of
+    # ``fabric/datasources/audit_events.py::DATASOURCE_AUDIT_EVENTS``
+    # (secret key NAMES only, watermark HASHES only, PII class COUNTS only).
+    "datasource.adapter_disabled": frozenset({
+        "adapter_name", "tenant_id"
+    }),
+    "datasource.adapter_enabled": frozenset({
+        "adapter_name", "adapter_version", "tenant_id"
+    }),
+    "datasource.connection_failed": frozenset({
+        "adapter", "error_class", "name"
+    }),
+    "datasource.connection_tested": frozenset({
+        "adapter", "latency_ms", "name", "ok"
+    }),
+    "datasource.pii_detected": frozenset({
+        "name", "pii_class_counts"
+    }),
+    "datasource.preview_generated": frozenset({
+        "n_rows_requested", "n_rows_returned", "name", "pii_columns_redacted"
+    }),
+    "datasource.registered": frozenset({
+        "adapter", "auth_secret_key_names", "estimated_rows", "name",
+        "pii_columns_detected", "region"
+    }),
+    "datasource.residency_violation": frozenset({
+        "datasource_name", "declared_region", "tenant_zone"
+    }),
+    "datasource.schema_refreshed": frozenset({
+        "adapter", "columns", "name", "pii_tagged_columns"
+    }),
+    "datasource.unregistered": frozenset({
+        "adapter", "had_checkpoint", "name"
+    }),
+    "datasource.watermark_advanced": frozenset({
+        "name", "new_watermark_hash", "previous_watermark_hash", "rows_read"
+    }),
+    # R4 — chain-convergence seam (see EVENT_SEVERITY above). Content-free by
+    # construction: a label from a closed set, two sha256 path keys, the
+    # superseded chain's genesis + final tail hash, its size and record count.
+    # The absolute PATH is deliberately NOT here — it is host-specific and lives
+    # in the out-of-tree chain-identity record, which the path key indexes.
+    "audit.chain_supersedes": frozenset({
+        "seam", "seam_reason", "superseded_key", "superseded_genesis",
+        "superseded_tail", "superseded_size_bytes", "superseded_records",
+        "canonical_key", "tenant_id",
+    }),
 }
+
+#: R4-A: keys whose value is an IDENTIFIER that may legitimately carry a PII
+#: SHAPE (an e-mail, a phone) on a bridge install. They are neither dropped
+#: (a record of an erasure with no subject is useless) nor written verbatim
+#: (an append-only chain can never be redacted): a PII-shaped value is replaced
+#: by ``sha256(value)[:8]`` — the SAME transform ``adapter._pii_fp`` and the
+#: reserved spine apply, so all three collide into one pseudonym namespace and
+#: an operator can still correlate. Non-PII-shaped values (a uuid request id, an
+#: opaque uid) pass through untouched.
+_AUDIT_PSEUDONYM_KEYS: frozenset[str] = frozenset({
+    "subject_id", "requester",
+})
 
 # ADR-0152 — count-map fields: a registered (event_type, field) whose value is a
 # {label: count} dict where KEYS are a controlled vocabulary of category labels
@@ -2257,6 +2692,12 @@ def _is_safe_count_map(v: Any) -> bool:
 _VETTED_FORBIDDEN_ALLOWLIST_FIELDS: frozenset[tuple[str, str]] = frozenset({
     ("tool.secrets_injected", "secrets_used"),
     ("gateway.webhook_secret_missing", "secret_ref"),
+    # R4-B (2026-09-07), same class as the two above: the ADR-0026 DataSource
+    # manifest's ``auth.secret_keys`` is a list of vault key NAMES and its owning
+    # module says so at the field ("list of key NAMES, never values",
+    # fabric/datasources/audit_events.py). It trips the "secret" substring
+    # denylist. Vetted, not claimable by a caller.
+    ("datasource.registered", "auth_secret_key_names"),
 })
 
 
@@ -2482,7 +2923,8 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
         if drop:
             dropped.append(str(k))
             continue
-        if reserved and isinstance(sv, str) and sv and _audit_value_pii(sv):
+        if ((reserved or ks in _AUDIT_PSEUDONYM_KEYS)
+                and isinstance(sv, str) and sv and _audit_value_pii(sv)):
             sv = hashlib.sha256(sv.encode("utf-8", "surrogatepass")).hexdigest()[:8]
             fingerprinted.append(str(k))
         cleaned[k if isinstance(k, str) else str(k)] = sv
@@ -2499,47 +2941,212 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def lom_hash_for(lom: str) -> str:
+#: Path segments a LoM source may never live under — vendored interpreters,
+#: runtime-writable tenant state, VCS internals. Mirrors
+#: ``core/skills/skill_registry_phase1.py::_LOM_EXCLUDED_PARTS``.
+_LOM_EXCLUDED_PARTS: frozenset[str] = frozenset({
+    ".corvin", ".venv", "venv", "site-packages", "dist-packages",
+    "node_modules", ".git",
+    # ``.claude/worktrees/`` holds seventeen .py-bearing copies of the repo
+    # INSIDE the repo root, rewritten by running agents. A LoM must never bind
+    # to one: the "source" it names would change under the record.
+    ".claude",
+})
+# NOTE — this is the SECOND copy of this list; the first is
+# ``core/skills/skill_registry_phase1.py::_LOM_EXCLUDED_PARTS``. Two copies is
+# exactly how the ``.claude`` fix failed to take effect everywhere the first
+# time (it landed in the registry only, while THIS module is what stamps
+# ``lom_hash`` for every non-skill emitter). They cannot be collapsed today —
+# ``forge`` is importable from a bridge daemon that has no ``core/`` on
+# sys.path, and ``core.skills`` imports nothing from ``forge.paths`` — so
+# ``tests/security/test_lom_binding_contract.py::test_the_two_exclusion_lists_agree``
+# fails the moment they drift again. See ADR-0654.
+#: A 2 MB .py is not a LoM target — refuse rather than read+parse it.
+_LOM_MAX_SOURCE_BYTES = 2 * 1024 * 1024
+
+#: Memoised on (lom, resolved path, st_mtime_ns, st_size) exactly like the
+#: registry's cache: an edit to the named file invalidates the entry, so the
+#: hash always binds to the source as it is on disk NOW.
+_LOM_HASH_CACHE: dict[tuple, str | None] = {}
+_LOM_HASH_CACHE_LOCK = threading.Lock()
+_LOM_HASH_CACHE_MAX = 1024
+
+
+def _lom_source_path(file_part: str) -> Path | None:
+    """The admissible source file a LoM names, or None (fail-closed).
+
+    Byte-for-byte the registry's ``_resolve_lom_source`` rule: inside the repo
+    root, a ``.py`` file that exists, not under a vendored/runtime-writable
+    segment. Everything else is refused BEFORE the file is read, so this is
+    never a hash oracle over arbitrary readable content (``/etc/passwd:root``).
+    """
+    if not file_part:
+        return None
+    src = Path(file_part)
+    root = _repo_root()
+    if not src.is_absolute():
+        src = root / src
+    try:
+        src = src.resolve()
+    except OSError:
+        return None
+    try:
+        if not src.is_relative_to(root):
+            return None
+    except AttributeError:  # pragma: no cover - Python < 3.9
+        if root not in src.parents:
+            return None
+    if src.suffix != ".py" or not src.is_file():
+        return None
+    if any(part in _LOM_EXCLUDED_PARTS for part in src.relative_to(root).parts):
+        return None
+    return src
+
+
+def _lom_find_functions(tree: "Any", func_name: str) -> list:
+    """Every ``def``/``async def`` a LoM's function part can name.
+
+    ``Class.method`` binds to that method inside that class; a bare name binds
+    to any def with that name. Mirrors the registry's ``_find_lom_function``.
+    """
+    import ast as _ast  # noqa: PLC0415
+    cls_name, _, meth_name = func_name.rpartition(".")
+    matches: list = []
+    if cls_name:
+        for cls in _ast.walk(tree):
+            if isinstance(cls, _ast.ClassDef) and cls.name == cls_name:
+                for node in cls.body:
+                    if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == meth_name:
+                        matches.append(node)
+        return matches
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == func_name:
+            matches.append(node)
+    return matches
+
+
+def lom_hash_for(lom: str) -> str | None:
     """SHA256 binding a Line-of-Moral-Responsibility label to the source it names.
 
-    ``file:function`` hashes the named function's source (resolved with
-    ``ast``); ``file:function:L<line>`` / ``file:function:<line>`` hashes that
-    one source line. Falls back to the hash of the label itself when the source
-    cannot be resolved or lies outside the repo (a non-binding hash is still a
-    hash — the record never goes out without one). Same contract as
-    ``core/skills/skill_registry_phase1.py::_compute_lom_hash``.
+    ``file:function`` hashes the named function's source segment (resolved with
+    ``ast``, so it survives line drift above it); ``file:function:L<line>`` /
+    ``file:function:<line>`` hashes that one source line, which **must fall
+    inside the named function** (decorators included).
+
+    Returns ``None`` when the LoM does not bind. That is the whole point, and it
+    is what changed on 2026-09-07 (R4-C): this function used to fall back to
+    ``sha256(lom)`` for an unresolvable label, so a fabricated LoM
+    (``totally/made/up.py:fabricated``, ``/etc/passwd:root``,
+    ``core/skills/boot.py:boot_skills:L1``) produced a hash indistinguishable
+    from a real source binding — in a hash-chained, append-only file that
+    CLAUDE.md cites as the anti-spoofing binding. Rounds 2 and 3 removed exactly
+    that fallback from ``core/skills/skill_registry_phase1.py::_compute_lom_hash``
+    and the fix never reached the writer, which is what stamps ``lom_hash`` for
+    every NON-skill emitter.
+
+    The caller (:func:`write_event`) still writes the record when this returns
+    ``None`` — dropping a compliance record because its attribution label is
+    wrong would be the worse failure — but it stamps ``lom_bound: false`` and no
+    ``lom_hash``, so the two cases are distinguishable in the chain and
+    :func:`verify_lom_binding` can re-derive the verdict later.
+
+    Same contract as ``core/skills/skill_registry_phase1.py::_compute_lom_hash``;
+    ``tests/security/test_lom_binding_contract.py`` pins the two together.
     """
-    label_hash = hashlib.sha256(lom.encode("utf-8")).hexdigest()
+    if not lom or not isinstance(lom, str):
+        return None
+    parts = lom.split(":")
+    if len(parts) < 2:
+        return None
+    src_path = _lom_source_path(parts[0])
+    if src_path is None:
+        return None
     try:
-        parts = lom.split(":")
-        if len(parts) < 2:
-            return label_hash
-        file_part, func_name = parts[0], parts[1].strip()
-        src_path = Path(file_part)
-        if not src_path.is_absolute():
-            src_path = _repo_root() / src_path
-        src_path = src_path.resolve()
-        if _repo_root() not in src_path.parents or not src_path.is_file():
-            return label_hash
-        source = src_path.read_text(encoding="utf-8")
+        st = src_path.stat()
+    except OSError:
+        return None
+    if st.st_size > _LOM_MAX_SOURCE_BYTES:
+        return None
+    key = (lom, str(src_path), st.st_mtime_ns, st.st_size)
+    with _LOM_HASH_CACHE_LOCK:
+        if key in _LOM_HASH_CACHE:
+            return _LOM_HASH_CACHE[key]
+    value = _lom_hash_uncached(lom, parts, src_path)
+    with _LOM_HASH_CACHE_LOCK:
+        if len(_LOM_HASH_CACHE) >= _LOM_HASH_CACHE_MAX:
+            _LOM_HASH_CACHE.clear()
+        _LOM_HASH_CACHE[key] = value
+    return value
+
+
+def _lom_hash_uncached(lom: str, parts: list[str], src_path: Path) -> str | None:
+    """The read + ast-parse half of :func:`lom_hash_for` (memoised there)."""
+    try:
+        import ast as _ast  # noqa: PLC0415
+        func_name = parts[1].strip()
+        if not func_name:
+            return None
+        text = src_path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            tree = _ast.parse(text)
+        except SyntaxError:
+            return None
+        matches = _lom_find_functions(tree, func_name)
+        if not matches:
+            return None
         if len(parts) >= 3:
-            ln = parts[2].strip().lstrip("Ll")
-            if ln.isdigit():
-                lines = source.splitlines()
-                idx = int(ln) - 1
-                if 0 <= idx < len(lines):
-                    return hashlib.sha256(lines[idx].encode("utf-8")).hexdigest()
-            return label_hash
-        import ast as _ast
-        tree = _ast.parse(source)
-        for node in _ast.walk(tree):
-            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == func_name:
-                seg = _ast.get_source_segment(source, node)
-                if seg:
-                    return hashlib.sha256(seg.encode("utf-8")).hexdigest()
-        return label_hash
+            line_str = parts[2].strip()
+            if line_str[:1] in ("L", "l"):
+                line_str = line_str[1:]
+            try:
+                line_num = int(line_str)
+            except ValueError:
+                return None
+            lines = text.split("\n")
+            if line_num < 1 or line_num > len(lines):
+                return None
+            # The line must lie INSIDE the named function (decorators included)
+            # — otherwise the function part is decorative and any fabricated
+            # name binds (R3-B1, never applied to this writer copy until R4).
+            inside = any(
+                min([n.lineno] + [d.lineno for d in getattr(n, "decorator_list", [])])
+                <= line_num <= (n.end_lineno or n.lineno)
+                for n in matches
+            )
+            if not inside:
+                return None
+            line = lines[line_num - 1]
+            if not line.strip():
+                # sha256("") is the same constant for every blank line in every
+                # file — a hash that binds to nothing.
+                return None
+            return hashlib.sha256(line.encode("utf-8")).hexdigest()
+        for node in matches:
+            segment = _ast.get_source_segment(text, node)
+            if segment:
+                return hashlib.sha256(segment.encode("utf-8")).hexdigest()
+        return None
     except Exception:  # noqa: BLE001 — never block a write on a binding lookup
-        return label_hash
+        return None
+
+
+def verify_lom_binding(lom: str, lom_hash: str | None) -> bool:
+    """Re-derive a record's LoM binding and compare (ADR-0537's ``verify_lom_binding``).
+
+    ADR-0537 specified this verifier and nothing in the tree implemented it, so
+    ``lom_hash`` was computed on write and never checked on read — an auditor had
+    no way to tell a source-bound hash from a label hash. Returns True iff *lom*
+    still resolves to source and hashes to *lom_hash*.
+
+    A False verdict is NOT proof of tampering on its own: the named source may
+    have been legitimately edited since the record was written. It is proof that
+    the record's attribution cannot be confirmed against the tree as it is now,
+    which is exactly what an auditor needs to see.
+    """
+    if not lom_hash or not isinstance(lom_hash, str):
+        return False
+    expected = lom_hash_for(lom)
+    return expected is not None and hmac.compare_digest(expected, lom_hash)
 
 
 #: How much of the tail to read per step when looking for the last chain entry.
@@ -2648,7 +3255,13 @@ def write_event(
     if isinstance(_filtered, dict):
         _lom = _filtered.get("lom")
         if isinstance(_lom, str) and _lom and not _filtered.get("lom_hash"):
-            _filtered = {**_filtered, "lom_hash": lom_hash_for(_lom)}
+            _lh = lom_hash_for(_lom)
+            # R4-C: an unresolvable LoM no longer gets a sha256(label) that reads
+            # exactly like a source binding. The record is still written (an audit
+            # record must never be lost over a bad attribution label) but it says
+            # so: ``lom_bound: false`` and NO ``lom_hash``.
+            _filtered = ({**_filtered, "lom_hash": _lh, "lom_bound": True} if _lh
+                         else {**_filtered, "lom_bound": False})
     # F-A6 / ADR-0007: tenant isolation at the chokepoint. A record tagged with
     # another tenant's id is refused; the refusal itself is recorded (type +
     # count only, never the foreign details) under the CONTEXT tenant.

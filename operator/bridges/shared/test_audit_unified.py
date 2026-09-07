@@ -47,16 +47,24 @@ def t(label: str, ok: bool, *, detail: str = "") -> None:
 
 
 def test_voice_default_audit_path_matches_forge_workspace():
-    """The single-file claim in voice/SKILL.md only holds if the voice
-    side defaults to the forge workspace's audit.jsonl. Otherwise
+    """The single-file claim in voice/SKILL.md only holds if the voice side
+    defaults to the SAME chain every other writer resolves. Otherwise
     voice-audit verify only sees half the chain.
 
     J.1.4a: the unified default moved from
     ``~/.config/corvin-voice/forge/audit.jsonl`` to
-    ``corvin_home()/global/forge/audit.jsonl`` — scope-independent
-    so a single chain still covers all bridges + forge scopes.
+    ``corvin_home()/global/forge/audit.jsonl`` — scope-independent, so one
+    chain covered all bridges + forge scopes.
+
+    R4 (2026-09-07): it moved again, to the TENANT chain
+    ``<corvin_home>/tenants/<tid>/global/forge/audit.jsonl``. The J.1.4a value
+    is the PRE-ADR-0007 host-global location; after the tenant migration the
+    console + gateway resolved the tenant path while the bridge adapter kept
+    resolving that one, and both files were receiving writes — six chain files
+    for one tenant in total. Asserted against ``paths.tenant_audit_chain``, the
+    single resolver, rather than against a literal re-composition here.
     """
-    print("\n[default audit_path() == forge workspace's audit.jsonl]")
+    print("\n[default audit_path() == the tenant audit chain]")
     # ensure no env override
     saved = {}
     for k in ("VOICE_AUDIT_PATH", "FORGE_ROOT"):
@@ -68,12 +76,12 @@ def test_voice_default_audit_path_matches_forge_workspace():
         # Resolve the expected default the same way audit.py does so
         # the test stays correct under CORVIN_HOME overrides too.
         try:
-            from paths import corvin_home  # type: ignore
+            from paths import tenant_audit_chain  # type: ignore
         except ImportError:
             sys.path.insert(0, str(REPO_ROOT / "operator/bridges/shared"))
-            from paths import corvin_home  # type: ignore
-        forge_default = corvin_home() / "global" / "forge" / "audit.jsonl"
-        t("voice default audit_path is the forge workspace audit.jsonl",
+            from paths import tenant_audit_chain  # type: ignore
+        forge_default = tenant_audit_chain()
+        t("voice default audit_path is THE tenant audit chain",
           _voice_audit.audit_path() == forge_default,
           detail=f"got {_voice_audit.audit_path()}")
     finally:
