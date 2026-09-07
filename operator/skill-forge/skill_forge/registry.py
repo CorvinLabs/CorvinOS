@@ -240,6 +240,39 @@ class NamespaceDenied(PermissionError):
     """Layer 9 namespace gate: the caller persona does not own this name."""
 
 
+# ── Bounded registry locking (never hang an operator request) ───────────
+# ``SkillRegistry._locked`` used to be a plain ``fcntl.flock(fd, LOCK_EX)`` with
+# no timeout, no ``LOCK_NB``. It guards every mutation reachable from the
+# console (``routes/skills_manual.py`` create/update/delete) — a wedged
+# holder (a crashed CLI whose fd the kernel had not reaped, an NFS mount, a
+# debugger-stopped process) hung the operator's HTTP request FOREVER, and no
+# ``try/except`` can catch a hang. `create`/`delete`/`grade`/`set_grades`/
+# `bind_content_hash` are sync ``def`` handlers on the console side, so this
+# burned a threadpool worker rather than the event loop — still an unbounded
+# hang with no 503.
+#
+# Bounded now (``LOCK_EX | LOCK_NB`` + hard deadline), matching
+# ``core.infinite_session.event_store``, ``corvin_plugins.state`` and
+# ``core.skills.os_skills.skill_adapter``. Refusing at the deadline is the
+# only safe direction: proceeding without the lock is precisely the lost
+# update the lock exists to prevent, and a write that answered 200 without
+# actually landing would tell the operator a skill was created/updated/
+# deleted when it was not.
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_INTERVAL_SECONDS = 0.02
+
+
+class SkillRegistryLockBusy(TimeoutError):
+    """The SkillForge registry lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
+
+    A ``TimeoutError`` (hence an ``OSError``), matching
+    :class:`core.infinite_session.event_store.SnapshotLockBusy` and
+    :class:`core.skills.os_skills.skill_adapter.SkillConfigLockBusy`. Callers
+    that also catch ``OSError`` for storage failures MUST check this (or its
+    superclass ``TimeoutError``) FIRST — see ``routes/skills_manual.py``.
+    """
+
+
 #: Hard cap for a NON-organic grade — one the grading party awards itself
 #: (a persona grading a skill it just used through the MCP tool without a real
 #: run behind it, the post-turn auto-grade, a bootstrap seed). Mirrors
@@ -415,13 +448,35 @@ class SkillRegistry:
     # -- locking + atomic IO ----------------------------------------------
 
     @contextlib.contextmanager
-    def _locked(self) -> Iterator[None]:
+    def _locked(self, *, timeout: float | None = None) -> Iterator[None]:
+        """``LOCK_EX | LOCK_NB`` with a hard deadline — never blocks forever.
+
+        Raises :class:`SkillRegistryLockBusy` at ``LOCK_TIMEOUT_SECONDS``
+        (or ``timeout`` when given, e.g. by a test shortening the deadline)
+        instead of hanging the caller — see the module-level comment above
+        ``LOCK_TIMEOUT_SECONDS`` for why an unbounded flock here was unsafe.
+        """
+        limit = LOCK_TIMEOUT_SECONDS if timeout is None else float(timeout)
+        deadline = time.monotonic() + limit
         fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise SkillRegistryLockBusy(
+                            f"skill-forge registry lock busy: still held after "
+                            f"{limit:g}s — refusing to block the caller"
+                        ) from None
+                    time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            if locked:
+                fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
     @staticmethod
@@ -847,7 +902,26 @@ class SkillRegistry:
         """
         if self._audit_path_override is not None:
             return self._audit_path_override
-        return self.root.parent / self.AUDIT_NAME
+        # R4 (2026-09-07): the sibling default put SkillForge records in
+        # ``<tenant_home>/audit.jsonl`` — a seventh chain file for one tenant
+        # that nothing verifies (757 ``skill.create`` records sat there on the
+        # maintainer install). ``MultiSkillRegistry`` already passed the tenant
+        # core chain explicitly; every OTHER construction path
+        # (context_engineering's skillforge stage + prompt_assembly, the
+        # skill_creator bridge, the cleanup script) used this default. A root
+        # outside ``corvin_home`` — a test sandbox — keeps the sibling, so a
+        # unit test can never append to the operator's real chain.
+        fallback = self.root.parent / self.AUDIT_NAME
+        try:
+            import sys as _sys  # noqa: PLC0415
+            from pathlib import Path as _P  # noqa: PLC0415
+            _fd = str(_P(__file__).resolve().parents[3] / "forge")
+            if _fd not in _sys.path:
+                _sys.path.append(_fd)
+            from forge.paths import audit_chain_for_workspace  # noqa: PLC0415
+            return audit_chain_for_workspace(self.root, fallback=fallback)
+        except Exception:  # noqa: BLE001 — never lose a record over path resolution
+            return fallback
 
     def _audit(
         self,

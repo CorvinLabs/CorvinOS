@@ -202,11 +202,18 @@ class GeneratedSkill(BaseModel):
 @router.post("/generate", status_code=202)
 async def generate_skill(
     req: SkillGenerationRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> Dict[str, Any]:
     """POST /skill-creator/generate
 
     Generate a new skill using async 6-phase LDD orchestration.
+
+    CSRF-gated (round-4 review F6): this mutates state (spawns a real
+    generation run, eventually creating a registry skill) and — unlike a
+    pure JSON-only POST — spawns a real ``claude -p`` subprocess per
+    request, the largest blast radius of any no-CSRF route found. Was
+    ``require_session`` only; ``require_csrf`` is a strict superset (it
+    re-derives the session first), so this only ADDS the CSRF check.
 
     Request:
     {
