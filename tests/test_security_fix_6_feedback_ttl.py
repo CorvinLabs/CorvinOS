@@ -82,7 +82,7 @@ class TestFeedbackTTLValidator:
     def test_feedback_fresh_accepted(self):
         """Fresh feedback (1 min old) is accepted."""
         validator = FeedbackTTLValidator()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         one_min_ago = (now - timedelta(minutes=1)).isoformat() + "Z"
 
         result = validator.validate_timestamp(
@@ -98,7 +98,7 @@ class TestFeedbackTTLValidator:
     def test_feedback_stale_rejected(self):
         """Stale feedback (61 min old) is rejected."""
         validator = FeedbackTTLValidator()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         stale_time = (now - timedelta(minutes=61)).isoformat() + "Z"
 
         result = validator.validate_timestamp(
@@ -166,7 +166,7 @@ class TestFeedbackTTLValidator:
     def test_feedback_at_ttl_boundary_accepted(self):
         """Feedback at exact TTL boundary (3600s) is accepted."""
         validator = FeedbackTTLValidator(max_age_seconds=3600)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         at_boundary = (now - timedelta(seconds=3600)).isoformat() + "Z"
 
         result = validator.validate_timestamp(
@@ -181,7 +181,7 @@ class TestFeedbackTTLValidator:
     def test_feedback_beyond_ttl_boundary_rejected(self):
         """Feedback beyond TTL boundary (3601s) is rejected."""
         validator = FeedbackTTLValidator(max_age_seconds=3600)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         beyond_boundary = (now - timedelta(seconds=3601)).isoformat() + "Z"
 
         result = validator.validate_timestamp(
@@ -196,7 +196,7 @@ class TestFeedbackTTLValidator:
     def test_feedback_slightly_future_accepted(self):
         """Feedback slightly in future (within clock skew tolerance) is accepted."""
         validator = FeedbackTTLValidator(allow_future_seconds=5)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         slight_future = (now + timedelta(seconds=3)).isoformat() + "Z"
 
         result = validator.validate_timestamp(
@@ -210,7 +210,7 @@ class TestFeedbackTTLValidator:
     def test_feedback_far_future_rejected(self):
         """Feedback far in future (beyond clock skew tolerance) is rejected."""
         validator = FeedbackTTLValidator(allow_future_seconds=5)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         far_future = (now + timedelta(seconds=10)).isoformat() + "Z"
 
         result = validator.validate_timestamp(
@@ -227,7 +227,7 @@ class TestFeedbackTTLValidator:
         mock_audit_backend = Mock()
         validator = FeedbackTTLValidator(audit_backend=mock_audit_backend)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         stale_time = (now - timedelta(minutes=61)).isoformat() + "Z"
 
         result = validator.validate_timestamp(
@@ -249,7 +249,7 @@ class TestFeedbackTTLValidator:
         validator_30min = FeedbackTTLValidator(max_age_seconds=1800)  # 30 min
         validator_120min = FeedbackTTLValidator(max_age_seconds=7200)  # 120 min
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         old_60_min = (now - timedelta(minutes=60)).isoformat() + "Z"
 
         result_30 = validator_30min.validate_timestamp(old_60_min)
@@ -290,7 +290,7 @@ class TestFeedbackTTLValidator:
         assert validator_b.max_age_seconds == 7200
 
         # Verify they operate independently
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         old_60_min = (now - timedelta(minutes=60)).isoformat() + "Z"
 
         result_a = validator_a.validate_timestamp(old_60_min)
@@ -306,7 +306,7 @@ class TestFeedbackTTLValidatorAttackVectors:
     def test_attack_stale_feedback_injection(self):
         """Attack: Inject 1-hour-old feedback to poison learning loop."""
         validator = FeedbackTTLValidator()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Attacker sends feedback from 70 minutes ago
         attack_timestamp = (now - timedelta(minutes=70)).isoformat() + "Z"
@@ -360,7 +360,7 @@ class TestFeedbackTTLValidatorAttackVectors:
     def test_attack_future_timestamp_clock_reset(self):
         """Attack: Use far-future timestamp to evade clock checks."""
         validator = FeedbackTTLValidator(allow_future_seconds=5)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Attacker sends feedback from 1 day in the future
         attack_future = (now + timedelta(days=1)).isoformat() + "Z"
@@ -381,7 +381,7 @@ class TestFeedbackTTLValidatorAttackVectors:
         mock_audit_backend.write_event.side_effect = Exception("Audit backend error")
 
         validator = FeedbackTTLValidator(audit_backend=mock_audit_backend)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         stale_time = (now - timedelta(minutes=70)).isoformat() + "Z"
 
         # Validation should still work despite audit failure

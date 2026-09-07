@@ -1,10 +1,15 @@
 """
-Divergence Watchdog (ADR-0625)
+Divergence Watchdog (ADR-0625 + Fix #2: Watchdog Circumvention Mitigation)
 
 Three-layer safeguard:
 1. Bounds enforcement (immutable)
 2. Divergence detection (NaN, Inf, loss explosion)
 3. Conservative mode (adaptive learning rate reduction)
+
+Security Enhancement (Fix #2):
+- All checkpoints are signed with Merkle root + HMAC tenant signature
+- Verification fails if checkpoint is tampered (fail-closed)
+- Tenant isolation: checkpoints from one tenant cannot be used by another
 """
 
 import math
@@ -12,6 +17,8 @@ import json
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
+
+from core.learning.checkpoint_signer import CheckpointSigner, CheckpointSignatureError
 
 
 class DivergenceWatchdog:
@@ -22,6 +29,9 @@ class DivergenceWatchdog:
     whole 9D optimizer unimportable (adversarial review F-L1). The optimizer now
     drives this class directly: ``save_checkpoint`` → ``apply_gradients`` →
     ``validate_state`` → ``restore_checkpoint`` on divergence.
+
+    Security (Fix #2): All checkpoints are now signed with Merkle root + tenant
+    signature. Restoration verifies signature; any tampering → fail-closed.
     """
 
     def __init__(self, tenant_id: str = "_default"):
@@ -29,6 +39,10 @@ class DivergenceWatchdog:
         self.checkpoint_count = 0
         self.last_checkpoint = None
         self.rollback_count = 0
+
+        # Checkpoint signing (Fix #2)
+        self.signer = CheckpointSigner(tenant_id)
+        self.signed_checkpoints = {}  # id -> {state, merkle_root, signature}
 
         # Bounds (immutable)
         self.bounds = {
@@ -72,28 +86,79 @@ class DivergenceWatchdog:
         The on-disk copy lives under the caller-supplied directory — the 9D
         optimizer passes ``<CORVIN_HOME>/tenants/<tenant>/learning/meta_checkpoints``;
         this class never derives a path from ``Path.home()``.
+
+        Security (Fix #2): Checkpoints are signed with Merkle root + HMAC tenant signature.
         """
         checkpoint_id = f"ckpt_{self.checkpoint_count:04d}_{int(datetime.now().timestamp())}"
+
+        # Sign checkpoint (Fix #2)
+        state_copy = state.copy()
+        signing_result = self.signer.sign_checkpoint(state_copy)
+
         self.last_checkpoint = {
             'id': checkpoint_id,
-            'state': state.copy(),
+            'state': state_copy,
             'timestamp': datetime.now().isoformat(),
+            'merkle_root': signing_result['merkle_root'],
+            'signature': signing_result['signature'],
         }
+
+        # Store signed checkpoint for verification
+        self.signed_checkpoints[checkpoint_id] = self.last_checkpoint
+
         self.checkpoint_count += 1
+
         if directory is not None:
             directory = Path(directory)
             directory.mkdir(parents=True, exist_ok=True)
-            payload = dict(self.last_checkpoint, tenant_id=self.tenant_id)
+
+            # Write signed checkpoint to disk
+            payload = {
+                'id': checkpoint_id,
+                'state': state_copy,
+                'timestamp': self.last_checkpoint['timestamp'],
+                'merkle_root': signing_result['merkle_root'],
+                'signature': signing_result['signature'],
+                'tenant_id': self.tenant_id,
+            }
             (directory / f"{checkpoint_id}.json").write_text(
                 json.dumps(payload, sort_keys=True, default=str), encoding="utf-8"
             )
+
         return checkpoint_id
 
     def restore_checkpoint(self, checkpoint_id: str) -> Dict[str, Any]:
-        """Restore from checkpoint."""
+        """Restore from checkpoint.
+
+        Security (Fix #2): Verifies checkpoint signature before restoration.
+        Fail-closed: raises CheckpointSignatureError if verification fails.
+
+        Args:
+            checkpoint_id: ID of checkpoint to restore
+
+        Returns:
+            Restored state dict
+
+        Raises:
+            CheckpointSignatureError: If checkpoint signature invalid
+        """
         if self.last_checkpoint and self.last_checkpoint['id'] == checkpoint_id:
+            # Verify signature before restoration (fail-closed)
+            try:
+                self.signer.verify_checkpoint(
+                    self.last_checkpoint['state'],
+                    self.last_checkpoint['merkle_root'],
+                    self.last_checkpoint['signature'],
+                    self.tenant_id
+                )
+            except CheckpointSignatureError as e:
+                raise CheckpointSignatureError(
+                    f"Checkpoint {checkpoint_id} verification failed: {e}"
+                )
+
             self.rollback_count += 1
             return self.last_checkpoint['state'].copy()
+
         return None
 
     def on_divergence(self, reason: str):
