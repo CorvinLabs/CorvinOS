@@ -869,6 +869,32 @@ a synonym for another:
 | `tier` | What is it allowed to do, and what does the license gate? | Tier A/B/C | ADR-0156 |
 | `origin` | Where did it come from? | `builtin` · `vetted` · `community` | ADR-0233 D7, `manifest.py::PluginOrigin` |
 
+**`origin` is DERIVED FROM LOCATION, never read from a record (R2-A4, 2026-09-07).**
+`registry.yaml` is per-tenant, operator-writable state — the same side of the
+trust boundary as `tenant.corvin.yaml`, which is why a privileged `boot_layer`
+claimed there is already downgraded. Its `origin:` line was believed verbatim,
+and `builtin` is the single most valuable claim in the file: `trust.evaluate`
+(ADR-0249) returns `Verdict.BUILTIN` — "ships with CorvinOS", no signature — and
+`tenant_scope.evaluate` (ADR-0250) exempts it from the multi-tenant provider-slot
+refusal. Two lines of YAML naming any importable class therefore took a
+process-wide slot that sees every tenant's data.
+
+* `bootstrap._origin_for_class_path()` resolves the class's module FILE with
+  `importlib.util.find_spec` (no import, so it can run before the trust gate
+  decides whether the code may be imported at all) and feeds the directory to
+  `origin_for_plugin_dir()`. That derived value — never `record.origin` — is what
+  the trust gate and `_register_instance` receive. A module that cannot be
+  located yields `None`, which means "not builtin", never a fallback to the claim.
+* A mismatch is audited as `plugin.origin_downgraded` (claimed vs derived).
+* `state._downgrade_claimed_origin()` additionally rewrites a *contradicted*
+  stored `builtin` to `community` on read. Narrow on purpose: `vetted` is NOT
+  rewritten, because the install path derives it from location too (ADR-0643)
+  so the stored value is normally a fact — blanket-downgrading it turns every
+  installed plugin into one needing fresh consent and breaks enable/disable.
+* The registry keeps the pair it actually used (`registry.provenance_of()`), and
+  `plugin.loaded` records the same one, so the console and the chain cannot
+  disagree about provenance (R2-A9).
+
 "Tier A/B/C" means **ADR-0156's capability boundary + license gate**, repo-wide.
 Three different Tier A/B/C meanings existed before that rule; do not reintroduce
 one. The boot-layer axis added in ADR-0243 is deliberately **not** called `tier`

@@ -110,10 +110,31 @@ class PluginOut(BaseModel):
     last_error_type: str | None = None
 
 
+class RefusedPluginOut(BaseModel):
+    """A plugin this process refused or failed to load (R2-A9).
+
+    The console used to list only what LOADED, so a plugin refused a provider
+    slot on a multi-tenant install, refused by the ADR-0249 trust gate, or
+    crashed on import was simply absent — indistinguishable from one that was
+    never installed. Each entry here has a matching hash-chained record; this is
+    the read surface for it, not a second source of truth."""
+    plugin_id: str
+    event_type: str
+    reason: str
+    tenant_id: str = ""
+    plugin_type: str | None = None
+    origin: str | None = None
+    claimed_origin: str | None = None
+    verdict: str | None = None
+    error_type: str | None = None
+
+
 class PluginListOut(BaseModel):
     plugins: list[PluginOut]
     total: int
     lifecycle_enabled: bool
+    refused: list[RefusedPluginOut] = []
+    refused_total: int = 0
 
 
 class ScaffoldOut(BaseModel):
@@ -399,6 +420,117 @@ def _mutation_error(exc: Exception) -> HTTPException:
 # ── Read ──────────────────────────────────────────────────────────────────────
 
 
+def _live_origin(plugin_id: str, manifest: dict) -> str:
+    """The origin the REGISTRY used for this plugin, not a guess (R2-A9).
+
+    This said ``"builtin"`` for everything it found in either plugin root, so
+    ``bridge_adapter`` and ``cowork_hub`` — loaded from the Corvin-Marketplace
+    checkout, recorded in the chain as ``vetted`` (ADR-0643: the marketplace
+    does not ship in the wheel) — were displayed as wheel code. An operator
+    surface disagreeing with the audit chain about provenance is worse than one
+    that says "unknown": it is confidently wrong about a trust boundary.
+    """
+    try:
+        from corvin_plugins.registry import provenance_of
+
+        prov = provenance_of(plugin_id)
+        if prov and prov[0]:
+            return prov[0]
+    except Exception:  # noqa: BLE001 — never fail a listing on provenance
+        pass
+    return "unknown"
+
+
+def _live_source(plugin_id: str) -> str | None:
+    try:
+        from corvin_plugins.registry import provenance_of
+
+        prov = provenance_of(plugin_id)
+        return prov[1] if prov else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _refused_plugins() -> list[RefusedPluginOut]:
+    """What this process refused/failed to load. Never raises into the request."""
+    try:
+        from corvin_plugins.bootstrap import refused_plugins
+
+        out: list[RefusedPluginOut] = []
+        for entry in refused_plugins():
+            if not entry.get("plugin_id"):
+                continue
+            out.append(RefusedPluginOut(
+                plugin_id=str(entry.get("plugin_id")),
+                event_type=str(entry.get("event_type") or ""),
+                reason=str(entry.get("reason") or ""),
+                tenant_id=str(entry.get("tenant_id") or ""),
+                plugin_type=entry.get("plugin_type"),
+                origin=entry.get("origin"),
+                claimed_origin=entry.get("claimed_origin"),
+                verdict=entry.get("verdict"),
+                error_type=entry.get("error_type"),
+            ))
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _running_unlisted(exclude_ids: set[str]) -> list[PluginOut]:
+    """Plugins REGISTERED in this process that no manifest scan found (R2-A9).
+
+    The listing was assembled from ``registry.yaml`` plus a filesystem scan of
+    the two plugin roots, so a plugin loaded by any OTHER path was invisible —
+    notably the bundled bridge supervisors, which come from a declaration
+    (``spec.plugins.installed`` / ``_bundled_bridge_declarations``) and have no
+    manifest in a scanned root. Eight of them were running and none was shown.
+
+    Metadata is read off the live plugin object and the registry's provenance
+    record, which is the same pair the ``plugin.loaded`` chain record carries —
+    so the surface cannot claim a provenance the chain contradicts. Fields the
+    object does not carry are reported honestly rather than defaulted to
+    something reassuring.
+    """
+    try:
+        from corvin_plugins.registry import get_registry
+
+        registry = get_registry()
+        loaded = list(registry.discover())
+    except Exception:  # noqa: BLE001 — a listing must not fail on this
+        return []
+
+    out: list[PluginOut] = []
+    for pid in sorted(loaded):
+        if pid in exclude_ids:
+            continue
+        try:
+            plugin = registry.get(pid)
+        except Exception:  # noqa: BLE001
+            plugin = None
+        runtime_loaded, contained = _runtime_state(pid)
+        out.append(PluginOut(
+            plugin_id=pid,
+            version=str(getattr(plugin, "version", "") or "0.0.0"),
+            display_name=str(getattr(plugin, "display_name", "") or pid),
+            plugin_type=str(getattr(plugin, "plugin_type", "") or "generic"),
+            origin=_live_origin(pid, {}),
+            pii_risk="unknown",
+            locality="unknown",
+            network_egress="unknown",
+            egress_hosts=[],
+            enabled=True,
+            runtime_loaded=runtime_loaded,
+            contained_by=contained,
+            requires_consent=False,
+            settings={},
+            settings_schema={},
+            dependencies=[],
+            installed_at=None,
+            last_error_type=None,
+        ))
+    return out
+
+
 def _running_builtins(exclude_ids: set[str]) -> list[PluginOut]:
     """Builtin plugins LOADED in this process, as ``installed/active`` entries.
 
@@ -446,7 +578,7 @@ def _running_builtins(exclude_ids: set[str]) -> list[PluginOut]:
                 version=str(manifest.get("version", "0.0.0")),
                 display_name=str(manifest.get("display_name") or pid),
                 plugin_type=str(manifest.get("plugin_type") or "generic"),
-                origin="builtin",  # location-derived: these ship in a buildin/ tree
+                origin=_live_origin(pid, manifest),
                 pii_risk=str(manifest.get("pii_risk", "none")),
                 locality=str(manifest.get("locality", "local")),
                 network_egress=str(manifest.get("network_egress", "none")),
@@ -474,13 +606,20 @@ async def list_plugins(
     # Merge in builtins running in THIS process that are not already an explicit
     # registry.yaml record (dedup by plugin_id; the registry record wins).
     records.extend(_running_builtins({r.plugin_id for r in records}))
+    # …and anything else actually registered in this process (bridge
+    # supervisors and other declaration-loaded plugins have no manifest in a
+    # scanned root, so the two passes above never saw them).
+    records.extend(_running_unlisted({r.plugin_id for r in records}))
     records.sort(key=lambda r: r.plugin_id)
+    refused = _refused_plugins()
     return PluginListOut(
         plugins=records,
         total=len(records),
         lifecycle_enabled=_feature_flags.is_enabled(
             "plugin_runtime_lifecycle", rec.tenant_id
         ),
+        refused=refused,
+        refused_total=len(refused),
     )
 
 

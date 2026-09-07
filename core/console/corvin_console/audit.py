@@ -122,6 +122,41 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
 }
 
 
+def _register_console_allowlists() -> None:
+    """Fold the console's allowlist into the CORE writer's registry (R2-A8).
+
+    Two allowlists guard every console record and they were never introduced to
+    each other. This module checks ``details`` against ``_ALLOWED_FIELDS`` and
+    raises on anything unexpected — a strict pre-write gate. It then hands the
+    record to ``security_events.write_event``, whose own default-deny floor
+    (ADR-0640) admits only keys from a registered per-event allowlist or, absent
+    one, the universal vocabulary. Nothing registered the console's, so the
+    floor silently dropped every console-specific key it did not happen to know:
+
+      * ``console.action_performed`` lost ``target_kind`` — the writer's own
+        literal names ``target_type``, and the console emits ``target_kind``;
+      * ``console.session_started`` lost ``token_fingerprint`` and
+        ``user_agent_class``.
+
+    Both landed in ``_dropped_fields`` instead of the record, so the chain kept
+    "an action was performed" without saying on WHAT — in the surface whose
+    entire job is operator attribution (ADR-0015). Registered here, next to the
+    definition, so the two lists cannot drift apart again. Both spellings of the
+    target key are registered: the console emits ``target_kind`` and other
+    emitters use ``target_type``.
+    """
+    for event_type, fields in _ALLOWED_FIELDS.items():
+        extra = set()
+        if "target_kind" in fields:
+            extra.add("target_type")
+        if "target_type" in fields:
+            extra.add("target_kind")
+        _security_events.register_event_allowlist(event_type, set(fields) | extra)
+
+
+_register_console_allowlists()
+
+
 class AuditFieldNotAllowed(Exception):
     """A detail key is on the forbidden or off-allowlist list."""
 

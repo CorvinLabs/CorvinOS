@@ -507,3 +507,92 @@ class TestLoadGuardForTenant(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTenantOverridesCannotWeakenTheFloor(unittest.TestCase):
+    """R2-A5: the three tenant-config overrides that silently widened L34.
+
+    Each one is a config line that made a compliance guarantee weaker than the
+    matrix it is written in, with nothing in the audit chain marking the moment.
+    """
+
+    def _guard(self, yaml_text: str):
+        import yaml as _yaml
+        return DataFlowGuard.from_tenant_config(_yaml.safe_load(yaml_text))
+
+    def test_secret_row_may_not_be_widened_to_us_cloud(self):
+        with self.assertRaises(ValueError) as cm:
+            self._guard(
+                "spec:\n"
+                "  data_classification:\n"
+                "    matrix:\n"
+                "      SECRET: [local, us_cloud]\n"
+            )
+        self.assertIn("SECRET", str(cm.exception))
+        self.assertIn("us_cloud", str(cm.exception))
+
+    def test_secret_row_may_still_be_stated_as_local(self):
+        """The rule refuses widening, not the row itself — a config that
+        restates the shipped default must keep working."""
+        guard = self._guard(
+            "spec:\n"
+            "  data_classification:\n"
+            "    matrix:\n"
+            "      SECRET: [local]\n"
+        )
+        self.assertEqual(guard.matrix[DataClassification.SECRET], frozenset({"local"}))
+
+    def test_unknown_is_not_an_admissible_locality_in_any_row(self):
+        with self.assertRaises(ValueError) as cm:
+            self._guard(
+                "spec:\n"
+                "  data_classification:\n"
+                "    matrix:\n"
+                "      CONFIDENTIAL: [local, unknown]\n"
+            )
+        self.assertIn("unknown", str(cm.exception))
+
+    def test_claude_code_network_egress_cannot_be_overridden(self):
+        """The other half of the ADR-0072 pin: ``validate`` admits SECRET only
+        on ``network_egress == "none"``, so claiming that for claude_code routed
+        SECRET data to api.anthropic.com exactly as ``locality: local`` would."""
+        with self.assertRaises(ValueError) as cm:
+            self._guard(
+                "spec:\n"
+                "  data_classification:\n"
+                "    engine_compliance:\n"
+                "      - engine_id: claude_code\n"
+                "        network_egress: none\n"
+            )
+        self.assertIn("claude_code", str(cm.exception))
+        self.assertIn("network_egress", str(cm.exception))
+
+    def test_claude_code_locality_pin_still_holds(self):
+        with self.assertRaises(ValueError):
+            self._guard(
+                "spec:\n"
+                "  data_classification:\n"
+                "    engine_compliance:\n"
+                "      - engine_id: claude_code\n"
+                "        locality: local\n"
+            )
+
+    def test_a_legitimate_widening_still_works(self):
+        """INTERNAL/CONFIDENTIAL widening is the documented operator lever and
+        must not be collateral damage — only SECRET and 'unknown' are pinned."""
+        guard = self._guard(
+            "spec:\n"
+            "  data_classification:\n"
+            "    matrix:\n"
+            "      CONFIDENTIAL: [local, eu_cloud, us_cloud]\n"
+        )
+        d = guard.validate(classification=DataClassification.CONFIDENTIAL,
+                           engine_id="claude_code")
+        self.assertTrue(d.allowed, d)
+
+    def test_secret_to_claude_code_is_still_denied_end_to_end(self):
+        """The property all three rules exist to protect."""
+        guard = DataFlowGuard.from_tenant_config(None)
+        d = guard.validate(classification=DataClassification.SECRET,
+                           engine_id="claude_code")
+        self.assertFalse(d.allowed, d)

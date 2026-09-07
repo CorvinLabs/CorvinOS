@@ -95,6 +95,32 @@ def build_context(
     )
 
 
+#: R2-A9: every plugin this process REFUSED or failed to load, in order —
+#: ``{plugin_id, event_type, reason, ...}``. The audit chain already records
+#: each one, but an operator surface cannot read the chain per request, so the
+#: console listing showed only what loaded: 23 provider plugins refused a
+#: tenant slot were simply absent from the UI, which is indistinguishable from
+#: "never installed" and is the failure mode this module keeps producing.
+#: Bounded so a pathological boot cannot grow it without limit.
+_REFUSALS: list[dict] = []
+_REFUSALS_MAX = 256
+
+#: The refusal/failure events worth surfacing (all are already audited).
+_REFUSAL_EVENTS = frozenset({
+    "plugin.load_refused", "plugin.provider_slot_refused", "plugin.load_failed",
+    "plugin.boot_layer_rejected", "plugin.origin_downgraded",
+})
+
+
+def refused_plugins() -> list[dict]:
+    """What this process refused or failed to load, newest last (R2-A9)."""
+    return list(_REFUSALS)
+
+
+def _clear_refusals() -> None:
+    _REFUSALS.clear()
+
+
 def _audit_degradation(
     tenant_id: str, event_type: str, details: dict
 ) -> None:
@@ -109,6 +135,19 @@ def _audit_degradation(
 
     Exception CLASS only, never str(exc) — a loader error routinely carries a path.
     """
+    # R2-A9: keep a process-local copy of the refusal so an operator surface can
+    # report it. The chain remains the record of truth; this is a read cache for
+    # the console, never a substitute (it is lost on restart, the chain is not).
+    if event_type in _REFUSAL_EVENTS and len(_REFUSALS) < _REFUSALS_MAX:
+        entry = {"event_type": event_type,
+                 "plugin_id": str(details.get("plugin_id") or "")[:128],
+                 "reason": str(details.get("reason") or "")[:128],
+                 "tenant_id": str(details.get("tenant_id") or "")[:64]}
+        for k in ("plugin_type", "origin", "claimed_origin", "verdict",
+                  "error_type", "declared_boot_layer", "tenant_count"):
+            if details.get(k) is not None:
+                entry[k] = str(details[k])[:64]
+        _REFUSALS.append(entry)
     try:
         _default_audit_emit(tenant_id)(event_type, details)
     except Exception:  # noqa: BLE001 - visibility must not become a boot failure
@@ -160,6 +199,20 @@ def assert_compliance() -> list[Any]:
             "tripwire module unavailable — running the inline core audit assertion"
         )
         return _assert_core_audit_inline()
+    # R2-A11: both shipped hosts run assert_all() in their lifespan and THEN
+    # call boot_platform(), which lands here — two full tripwire runs per boot,
+    # two COMPLIANCE FINDING log sets, and two `compliance.chain_discontinuity`
+    # seam records appended for the same break. The lifespan call is the
+    # authoritative one (it must run before anything else happens, including
+    # this package's import); this one is the duplicate, so it stands down when
+    # the SAME chain has already passed in this process. A chain that has not
+    # been asserted — a host that does not call the tripwire itself, a test, a
+    # tool — still gets the full run, and a FAILED assertion is never recorded
+    # as asserted, so nothing can skip past a refusal.
+    already = getattr(tripwire, "already_asserted", None)
+    if callable(already) and already():
+        log.debug("compliance tripwires already asserted for this chain — not re-running")
+        return []
     return tripwire.assert_all()
 
 
@@ -1525,7 +1578,8 @@ def bootstrap_all(
 
 
 def _trust_permits(
-    record: PluginRecord, *, tenant_id: str, corvin_home: Path
+    record: PluginRecord, *, tenant_id: str, corvin_home: Path,
+    record_dict: dict | None = None,
 ) -> bool:
     """Provenance gate (ADR-0249). True = this plugin may be imported.
 
@@ -1533,6 +1587,11 @@ def _trust_permits(
     abort a boot. The refusal itself is audited, because "an operator installed a
     plugin and it silently never loaded" is the failure mode this whole area keeps
     producing.
+
+    ``record_dict`` lets the caller hand in the record with a LOCATION-DERIVED
+    ``origin`` (R2-A4). Without it the gate reads ``record.origin``, which on the
+    registry path is a tenant-writable claim — and ``origin: builtin`` is exactly
+    the value that short-circuits this gate to "ships with CorvinOS".
     """
     try:
         from . import trust
@@ -1542,7 +1601,7 @@ def _trust_permits(
     try:
         enforcement = trust.enforcement_enabled(tenant_id)
         decision = trust.evaluate(
-            record.to_dict(),
+            record_dict if record_dict is not None else record.to_dict(),
             corvin_home=corvin_home,
             tenant_id=tenant_id,
             enforcement=enforcement,
@@ -1589,6 +1648,40 @@ def _trust_permits(
     return False
 
 
+def _origin_for_class_path(class_path: str) -> tuple[str | None, str | None]:
+    """``(origin, source)`` derived from where a ``class_path``'s module FILE
+    lives, or ``(None, None)`` when that cannot be established (R2-A4).
+
+    ``registry.yaml`` is per-tenant, operator-writable state — the same side of
+    the trust boundary as ``tenant.corvin.yaml`` — so its ``origin:`` line is a
+    CLAIM. Believing it granted ``builtin``, which is the one value the ADR-0249
+    trust gate treats as "ships with CorvinOS, no signature needed" and the one
+    value ADR-0250 exempts from the multi-tenant provider-slot refusal. Two
+    lines of YAML naming an arbitrary importable class therefore bought a
+    process-wide provider slot on a multi-tenant install.
+
+    The location is the fact, exactly as it already is for the discovery path
+    (:func:`origin_for_plugin_dir`). Resolved WITHOUT importing the module —
+    ``find_spec`` reads the loader's file path — so this can run BEFORE the
+    trust gate decides whether the code may be imported at all, which is the
+    whole point of that gate's placement.
+    """
+    import importlib.util  # noqa: PLC0415
+
+    module_path = class_path.rsplit(":", 1)[0] if ":" in class_path else class_path.rsplit(".", 1)[0]
+    try:
+        spec = importlib.util.find_spec(module_path)
+    except Exception:  # noqa: BLE001 — unimportable/absent → cannot establish a fact
+        return None, None
+    origin_file = getattr(spec, "origin", None) if spec is not None else None
+    if not origin_file or origin_file in ("built-in", "frozen", "namespace"):
+        return None, None
+    try:
+        return origin_for_plugin_dir(Path(origin_file).resolve().parent)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 def _load_one(
     record: PluginRecord,
     *,
@@ -1622,7 +1715,31 @@ def _load_one(
     # placed after it would be asking "may we run this?" about something already
     # running. Ships dark — with plugin_trust_enforcement off, evaluate() still
     # returns a verdict but allows everything, so an existing install is unchanged.
-    if not _trust_permits(record, tenant_id=tenant_id, corvin_home=corvin_home):
+    # R2-A4: provenance is derived from WHERE THE CODE IS, never from what the
+    # record says. Established before the trust gate below, because that gate's
+    # verdict is a function of the origin: fed the record's own claim, it
+    # answered BUILTIN for any class an operator-writable file named.
+    # ``None`` — the module cannot be located — is the restrictive answer
+    # ("not builtin"), not a reason to fall back to the claim.
+    derived_origin, derived_source = _origin_for_class_path(record.class_path)
+    if derived_origin != record.origin.value:
+        log.warning(
+            "plugin %r: registry.yaml claims origin=%s; the class file resolves to "
+            "%s — using the derived value (registry.yaml is tenant-writable state)",
+            record.plugin_id, record.origin.value, derived_origin or "unknown",
+        )
+        _audit_degradation(tenant_id, "plugin.origin_downgraded", {
+            "plugin_id": record.plugin_id, "tenant_id": tenant_id,
+            "claimed_origin": record.origin.value,
+            "origin": derived_origin or "unknown",
+            "source": derived_source or "unknown",
+            "reason": "origin_claim_from_tenant_registry",
+        })
+    _trust_record = record.to_dict()
+    _trust_record["origin"] = derived_origin or "community"
+
+    if not _trust_permits(record, tenant_id=tenant_id, corvin_home=corvin_home,
+                          record_dict=_trust_record):
         return False
 
     try:
@@ -1657,11 +1774,12 @@ def _load_one(
         corvin_home=corvin_home,
         config=record.settings,
         boot_layer=boot_layer,
-        # The runtime path is the one with a manifest, so it is the one that can
-        # answer the ADR-0250 provider-slot question honestly. The declarative
-        # path cannot and deliberately does not (see _register_instance).
-        origin=record.origin.value,
-        source="tenant_registry",
+        # R2-A4: the LOCATION-derived origin, never ``record.origin`` — that is
+        # the tenant-writable claim whose whole effect was to buy an ADR-0250
+        # provider-slot exemption. ``None`` (module not locatable) reaches
+        # _register_instance as "not builtin", which is the restrictive answer.
+        origin=derived_origin,
+        source=derived_source or "tenant_registry",
         **registries,
     )
 
@@ -1993,6 +2111,7 @@ __all__ = [
     "GlobalComplianceLoadFailed",
     "assert_compliance",
     "boot_platform",
+    "refused_plugins",
     "bootstrap_all",
     "bootstrap_builtin",
     "bootstrap_declared",

@@ -49,7 +49,13 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolated_audit_chain_for_plugin_tests(monkeypatch, tmp_path):
-    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    # R2-A3: point at the resolver's own path under the CORVIN_HOME the
+    # fixture below pins, so the redirect is a no-op rather than a chain
+    # parked outside the sandbox root (which the boot tripwire now refuses).
+    monkeypatch.setenv(
+        "VOICE_AUDIT_PATH",
+        str(tmp_path / "corvin_home" / "global" / "forge" / "audit.jsonl"),
+    )
 
 
 @pytest.fixture(autouse=True)

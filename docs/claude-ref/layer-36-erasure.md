@@ -299,6 +299,36 @@ needing to re-walk the audit chain.
 
 ---
 
+## Attribution and the snapshot seam (R2-A7, 2026-09-07)
+
+**`_SUBJECT_KEYS` IS the attribution rule.** A record naming the subject under a
+key that is not in that tuple survives the purge while the orchestrator reports
+`COMPLETED` — the worst combination, because the operator ends up holding a
+signed statement that the data is gone. The review found the subject under
+`speaker` in transcript-shaped stores; the tuple now also covers `author`,
+`actor`/`actor_id`, `sender`, `from_user`, `created_by`, `requested_by`,
+`participant`, `user`, `username`, `account_id`, `owner_id`, `session_key` and
+`subject`. Adding a key is cheap; omitting one fails silently.
+
+**Erasing a snapshot is a lawful chain discontinuity.** The infinite-session
+index (`<task_id>/index.json`) is an ordered `SnapshotMetadata` list whose `seq`
+must be contiguous — `EventStore.verify_snapshot_chain` reports a hole as
+"Chain gap at seq N", which is what a tamper looks like too. So on erasure the
+index is rewritten entry-wise (the old filter read `m["path"]`; the metadata key
+is `file_path`, so it never dropped anything and the index kept naming deleted
+snapshots) and the gap is recorded as `erasure.chain_seam` with the removed
+sequence numbers. The seam record is content-free and deliberately does NOT
+carry the subject id — writing the erased identifier into an append-only chain
+would undo the erasure it documents.
+
+**The coverage guard boots the real writers.** `tests/security/
+test_erasure_coverage_guard.py` used to hand-seed `mkdir`s mirroring what the
+writers were believed to do, so it could only confirm its author's own picture —
+which is why four live stores went uncovered. It now drives the production code
+paths (the workflows route helpers, `CheckpointManager.save`, `RollbackManager`,
+the browser and datasource path resolvers) and fails on any directory under the
+tenant home that no handler claims.
+
 ## Built-in stubs
 
 `StubHandler` returns `SKIPPED` with a reason describing which real
@@ -323,6 +353,15 @@ silent.
   `/v1/admin/tenants/{tid}/erasure` was removed with the admin plugin.)
 * **Per-layer handlers (partial — done where feasible):**
   `operator/bridges/shared/erasure_handlers.py` ships:
+  * `WorkflowChatHandler` (R2-A7) — `<tenant>/workflows/`: the authoring
+    transcript `<wid>.chat.jsonl` (verbatim user turns), the run logs under
+    `<wid>/runs/`, and the whole workflow when its `.meta.json` names the
+    subject as author/owner
+  * `BrowserSessionHandler` (R2-A7) — `<tenant>/browser/sessions/<session_id>/`,
+    the per-session Chromium user-data dir (cookies, local storage, cached
+    pages); attributed by directory name, which is the session id
+  * `VibeCheckpointHandler` (R2-A7) — `<tenant>/vibe/checkpoints/*.json`
+  * `DatasourceConnectionHandler` (R2-A7) — `<tenant>/datasource_connections/*.json`
   * `L28RecallHandler` (full SQL DELETE)
   * `L28UserModelHandler` (full FS purge, ADR-0072 V-001) — deletes distilled user model JSON files for the subject
   * `L33ArtifactHandler` (full FS purge of unpinned session artifacts)

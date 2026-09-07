@@ -1054,43 +1054,78 @@ def _skip_out_of_tree_markers(chain_path: Path) -> bool:
     return _is_tmp_path(chain_path) and not _is_tmp_path(_anchor_key_path().parent)
 
 
-_GENESIS_CACHE: dict[tuple[str, int], str] = {}
+#: (abspath, inode) → (genesis, legacy_prefix, genesis_prev, genesis_has_mac,
+#: byte offset of the genesis line, the genesis line's bytes). The last two
+#: VALIDATE the cache: an in-place rewrite of the file keeps the inode, so an
+#: inode-keyed cache alone kept answering the OLD genesis for a file whose
+#: first chained record had been replaced (R2-A1: the reviewer's whole-file
+#: rewrite passed verify in the same process that had cached the genesis).
+_GENESIS_CACHE: dict[tuple[str, int], tuple[str, int, str, bool, int, bytes]] = {}
 _GENESIS_SCAN_LIMIT = 20000
 
 
-def _chain_identity(chain_path: Path) -> str | None:
-    """Stable identity of a chain: the ``hash`` of its first hash-bearing record.
+def _chain_identity_ex(chain_path: Path) -> tuple[str | None, int, str, bool]:
+    """``(genesis, legacy_prefix, genesis_prev, genesis_has_mac)`` of a chain.
 
-    Keyed by content rather than path (F-A14) so a chain keeps its markers
-    when the install moves and two paths to one file share one marker. Cached
-    per (path, inode); a rotated/replaced file gets a new inode."""
+    ``genesis`` is the ``hash`` of the first hash-bearing record (``None`` for
+    an absent/empty/hash-less file); ``legacy_prefix`` counts the hash-less
+    records BEFORE it (the pre-chain prefix the verifier tolerates, R2-A2);
+    ``genesis_prev`` is that record's ``prev_hash`` (non-empty after a Layer 37
+    rotation); ``genesis_has_mac`` says whether the chain started under the
+    MAC epoch — a chain that did can never legitimately grow a hash-less
+    prefix.
+
+    Keyed by content rather than path (F-A14) so a chain keeps its
+    genesis-keyed markers when the install moves. The (path, inode) cache is
+    validated by re-reading the genesis line at its recorded offset, so an
+    in-place rewrite invalidates it instead of being masked by it."""
     try:
         st = chain_path.stat()
     except OSError:
-        return None
+        return None, 0, "", False
     key = (os.path.abspath(str(chain_path)), st.st_ino)
     cached = _GENESIS_CACHE.get(key)
     if cached:
-        return cached
+        g, prefix, gprev, gmac, off, line = cached
+        try:
+            with chain_path.open("rb") as fh:
+                fh.seek(off)
+                if fh.readline() == line:
+                    return g, prefix, gprev, gmac
+        except OSError:
+            pass
+        _GENESIS_CACHE.pop(key, None)
+    prefix = 0
     try:
         with chain_path.open("rb") as fh:
+            off = 0
             for i, raw in enumerate(fh):
+                line_off, off = off, off + len(raw)
                 if i > _GENESIS_SCAN_LIMIT:
                     break
-                raw = raw.strip()
-                if not raw:
+                s = raw.strip()
+                if not s:
                     continue
                 try:
-                    rec = json.loads(raw)
+                    rec = json.loads(s)
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
                 h = rec.get("hash") if isinstance(rec, dict) else None
                 if isinstance(h, str) and h:
-                    _GENESIS_CACHE[key] = h
-                    return h
+                    gprev = rec.get("prev_hash")
+                    gprev = gprev if isinstance(gprev, str) else ""
+                    gmac = "mac" in rec
+                    _GENESIS_CACHE[key] = (h, prefix, gprev, gmac, line_off, raw)
+                    return h, prefix, gprev, gmac
+                prefix += 1
     except OSError:
-        return None
-    return None
+        return None, 0, "", False
+    return None, prefix, "", False
+
+
+def _chain_identity(chain_path: Path) -> str | None:
+    """Stable identity of a chain: the ``hash`` of its first hash-bearing record."""
+    return _chain_identity_ex(chain_path)[0]
 
 
 def _marker_name(genesis: str) -> str:
@@ -1154,6 +1189,169 @@ def _read_chain_tail(chain_path: Path) -> str | None:
         return t if isinstance(t, str) and t else None
     except Exception:  # noqa: BLE001
         return None
+
+
+# ── R2-A1/R2-A2: PATH-keyed chain identity record ───────────────────────────
+#
+# The genesis-keyed markers above (tail anchor, per-chain mac marker) answer
+# "what do we know about the chain whose first record hashes to G?". They are
+# silent about a file whose first record was REPLACED: a whole-file rewrite
+# with a fresh genesis (recomputed hashes, every mac stripped) simply has no
+# markers, verifies hash-only, and the tripwire boots on it. The path-keyed
+# record below answers the other question — "which chain is supposed to live
+# at this path?" — and is written beside the anchor key, where an in-tree
+# attacker cannot reach it:
+#
+#     <key dir>/chain_ids/<sha256(abspath)[:32]> =
+#         {"genesis": G, "tail": T, "legacy_prefix": N, "mac": bool,
+#          "ts": ..., "rotated_from": [...]}
+#
+# * ``genesis`` is set the first time this process chains a record onto the
+#   file and NEVER changed by the writer. A file at that path whose genesis
+#   differs is ``chain_replaced`` (verify fails, the boot tripwire refuses;
+#   the writer also stamps ``_chain_replaced_from`` into its next record so
+#   the fact survives in-tree). The one legitimate genesis change — a Layer 37
+#   rotation — updates the record through :func:`note_chain_rotation`, called
+#   by the sealer under the rotation lock right after it wrote the link.
+# * ``tail`` is the path-keyed tail anchor (same tolerance window as the
+#   genesis-keyed one).
+# * ``legacy_prefix`` is the number of hash-less records before the genesis
+#   when the chain was first anchored; a prefix that has GROWN was prepended.
+# * ``mac`` records that this chain has carried a mac — the path-keyed
+#   strip marker, independent of the genesis.
+#
+# Like every other marker, never written for a throwaway (tmp) chain unless
+# the anchor key itself is in tmp (``_skip_out_of_tree_markers``).
+
+
+def _chain_path_record_path(chain_path: Path) -> Path:
+    digest = hashlib.sha256(os.path.abspath(str(chain_path)).encode("utf-8")).hexdigest()[:32]
+    return _mac_sentinel_path().parent / "chain_ids" / digest
+
+
+def _read_chain_path_record(chain_path: Path) -> dict | None:
+    try:
+        rp = _chain_path_record_path(chain_path)
+        if not rp.exists():
+            return None
+        d = json.loads(rp.read_text())
+        if not isinstance(d, dict) or not isinstance(d.get("genesis"), str) or not d["genesis"]:
+            return None
+        return d
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _write_chain_path_record(chain_path: Path, rec: dict) -> None:
+    """Atomic (tmp + os.replace), 0600. Best-effort: never breaks an audit write."""
+    try:
+        rp = _chain_path_record_path(chain_path)
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        tmp = rp.with_name(rp.name + f".{os.getpid()}.tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(rec))
+        os.replace(tmp, rp)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _record_chain_path_state(chain_path: Path, *, genesis: str, tail: str,
+                             legacy_prefix: int, mac: bool) -> None:
+    """Writer side, under the chain lock, after every chained write.
+
+    Creates the record on first sight; afterwards only ``tail`` and ``mac``
+    move. A genesis mismatch is NOT reconciled here — the record keeps naming
+    the chain that was anchored, so every later verify reports
+    ``chain_replaced`` until the operator restores the chain (or, for a
+    legitimate rotation, the sealer called :func:`note_chain_rotation`)."""
+    if not genesis or not tail or _skip_out_of_tree_markers(chain_path):
+        return
+    existing = _read_chain_path_record(chain_path)
+    if existing is None:
+        _write_chain_path_record(chain_path, {
+            "genesis": genesis, "tail": tail, "legacy_prefix": int(legacy_prefix),
+            "mac": bool(mac), "ts": time.time(),
+        })
+        return
+    if existing.get("genesis") != genesis:
+        return  # chain_replaced — leave the anchored identity untouched
+    existing["tail"] = tail
+    existing["mac"] = bool(existing.get("mac")) or bool(mac)
+    existing["ts"] = time.time()
+    _write_chain_path_record(chain_path, existing)
+
+
+def note_chain_rotation(chain_path: Path, *, link_hash: str) -> None:
+    """Layer 37 rotation hook: the sealer just replaced ``chain_path`` with a
+    fresh live file whose only record is the ``audit.rotation_link`` hashing
+    to ``link_hash``. Re-anchor the path-keyed identity to that genesis and
+    remember where it came from. Called under the rotation lock; best-effort."""
+    if not link_hash or _skip_out_of_tree_markers(chain_path):
+        return
+    existing = _read_chain_path_record(chain_path) or {}
+    history = list(existing.get("rotated_from") or [])
+    if existing.get("genesis"):
+        history.append(str(existing["genesis"])[:16])
+    _write_chain_path_record(chain_path, {
+        "genesis": link_hash, "tail": link_hash, "legacy_prefix": 0,
+        "mac": bool(existing.get("mac")), "ts": time.time(),
+        "rotated_from": history[-32:],
+    })
+
+
+def _is_legitimate_rotation(chain_path: Path, pathrec: dict,
+                            genesis: str | None, genesis_prev: str) -> bool:
+    """True when a changed genesis is a Layer 37 rotation, not a replacement.
+
+    ``audit_sealer.rotate()`` renames the live file away and writes a fresh one
+    holding exactly one ``audit.rotation_link`` whose ``prev_hash`` is the
+    ROTATED segment's tail. That tail is what the path record already holds, and
+    the path record lives beside the anchor key — a rewriter who can edit
+    ``audit.jsonl`` cannot read it, so it cannot mint a link that binds to it.
+    Recognising the shape here means the rotation path needs no cooperation from
+    the sealer (``note_chain_rotation`` remains available for an explicit call).
+
+    Deliberately narrow: the genesis record must BE a rotation_link, its
+    ``prev_hash`` must equal the recorded tail exactly, and the recorded tail
+    must be non-empty. Anything else is a replacement."""
+    if not genesis or not genesis_prev:
+        return False
+    recorded_tail = pathrec.get("tail")
+    if not isinstance(recorded_tail, str) or not recorded_tail:
+        return False
+    if genesis_prev != recorded_tail:
+        return False
+    try:
+        with Path(chain_path).open("rb") as fh:
+            for raw in fh:
+                s = raw.strip()
+                if not s:
+                    continue
+                try:
+                    rec = json.loads(s)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if isinstance(rec, dict) and rec.get("hash"):
+                    return str(rec.get("event_type", "")) == "audit.rotation_link"
+    except OSError:
+        return False
+    return False
+
+
+def _is_primary_live_layout(chain_path: Path) -> bool:
+    """True for ``<root>/global/forge/audit.jsonl`` — the chain every
+    ``write_event`` default resolver and the boot tripwire point at (repo
+    ``.corvin``, ``~/.corvin`` and every ``tenants/<id>/global/forge``). The
+    host-wide ``audit_mac_active`` sentinel is consulted ONLY for this layout:
+    per-session / per-tenant-root chains that legitimately never carried a mac
+    (incident 2026-06-17) are not under ``global/forge``."""
+    try:
+        p = Path(chain_path)
+        return (p.name == "audit.jsonl" and p.parent.name == "forge"
+                and p.parent.parent.name == "global")
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _mac_chain_marker_path(chain_path: Path, *, genesis: str | None = None) -> Path:
@@ -1297,6 +1495,7 @@ _AUDIT_FORBIDDEN_EXACT: frozenset[str] = frozenset({
     # Writer-only markers — deny on INPUT so a caller can't forge them; the
     # writer re-injects the genuine ones after filtering (review HIGH #2/#3).
     "_dropped_fields", "_unfiltered", "_tail_truncated_since",
+    "_chain_replaced_from",
 })
 _AUDIT_FORBIDDEN_SUBSTR: tuple[str, ...] = (
     "password", "passphrase", "secret", "credential", "private_key",
@@ -1773,14 +1972,86 @@ def _is_safe_count_map(v: Any) -> bool:
     return True
 
 
+#: R2-A6: the two field names on a shipped allowlist that ARE denylisted and are
+#: nevertheless permitted — each a maintainer decision recorded here, not a
+#: property any caller can claim. Both carry NAMES only, never a value:
+#: ``secrets_used`` is a list of vault KEY names, ``secret_ref`` is a config
+#: pointer. Anything else that trips the denylist is refused, so a future
+#: allowlist cannot quietly re-open the floor by naming a content field.
+_VETTED_FORBIDDEN_ALLOWLIST_FIELDS: frozenset[tuple[str, str]] = frozenset({
+    ("tool.secrets_injected", "secrets_used"),
+    ("gateway.webhook_secret_missing", "secret_ref"),
+})
+
+
+class AuditAllowlistRefused(ValueError):
+    """An event allowlist named a field the M1 denylist forbids (R2-A6)."""
+
+
 def register_event_allowlist(event_type: str, fields: "set[str] | frozenset[str]") -> None:
     """Register/extend the positive allowlist for an event type (ADR-0129 M2).
-    Other modules (console, compute) may fold their allowlists in here."""
-    _EVENT_ALLOWLIST[event_type] = frozenset(fields) | _EVENT_ALLOWLIST.get(event_type, frozenset())
+    Other modules (console, compute) may fold their allowlists in here.
+
+    R2-A6: a registered allowlist EXEMPTS its keys from the M1 denylist floor,
+    so registering ``prompt`` / ``text`` / ``email`` would turn the positive
+    allowlist — the tightening mechanism — into the widest hole in the floor,
+    from any importable module, with no maintainer in the loop. A denylisted
+    name is therefore refused at registration (:class:`AuditAllowlistRefused`)
+    rather than honoured; the caller renames the field to something
+    content-free. The two shipped exceptions are enumerated above.
+    """
+    et = str(event_type)
+    forbidden = sorted(
+        f for f in fields
+        if _audit_key_forbidden(str(f).lower())
+        and (et, str(f)) not in _VETTED_FORBIDDEN_ALLOWLIST_FIELDS
+    )
+    if forbidden:
+        raise AuditAllowlistRefused(
+            f"event allowlist for {et!r} names denylisted field(s) {forbidden} — "
+            "an allowlist may not re-admit content/PII/secret key names; rename "
+            "the field to a content-free one (an id, a count, a code, a hash prefix)"
+        )
+    _EVENT_ALLOWLIST[et] = frozenset(fields) | _EVENT_ALLOWLIST.get(et, frozenset())
+
+
+def _assert_shipped_allowlists_clean() -> None:
+    """The literal ``_EVENT_ALLOWLIST`` above obeys the same rule as a runtime
+    registration (R2-A6) — enforced at import so the module cannot ship a
+    denylisted field name that ``register_event_allowlist`` would refuse."""
+    bad = sorted(
+        f"{et}.{f}"
+        for et, fields in _EVENT_ALLOWLIST.items()
+        for f in fields
+        if _audit_key_forbidden(str(f).lower())
+        and (et, str(f)) not in _VETTED_FORBIDDEN_ALLOWLIST_FIELDS
+    )
+    if bad:
+        raise AuditAllowlistRefused(
+            f"shipped event allowlists name denylisted field(s) {bad} — add a "
+            "maintainer entry to _VETTED_FORBIDDEN_ALLOWLIST_FIELDS or rename them"
+        )
+
+
+#: R2-A6: keys whose VALUE is free text by nature. Their values are scanned for
+#: e-mail / phone shapes on EVERY event type — including one with a registered
+#: allowlist, which otherwise skipped the value scan entirely and wrote a
+#: ``reason`` carrying an address or a number verbatim into the chain. The
+#: vocabulary floor decides whether a key may be written at all; this decides
+#: what may ride inside the ones that are, by design, prose.
+_AUDIT_FREETEXT_KEYS: frozenset[str] = frozenset({
+    "reason", "detail", "details", "summary", "description",
+    "note", "notes", "message", "error_message", "error", "msg",
+})
 
 
 def _audit_key_forbidden(ks: str) -> bool:
     return ks in _AUDIT_FORBIDDEN_EXACT or any(tok in ks for tok in _AUDIT_FORBIDDEN_SUBSTR)
+
+
+# Runs here, not at the definition above: the check needs _audit_key_forbidden,
+# which this module defines after the allowlist literal.
+_assert_shipped_allowlists_clean()
 
 
 def _audit_value_leaks(v: Any) -> bool:
@@ -1902,7 +2173,12 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
         if on_allowlist and cmf and ks in cmf and _is_safe_count_map(v):
             cleaned[k if isinstance(k, str) else str(k)] = v
             continue
-        sv, drop = _audit_scrub(v, pii_scan=default_deny and not reserved)
+        # R2-A6: the PII value scan is not a property of the EVENT (registered
+        # or not) — it is a property of the KEY. A free-text key is scanned
+        # always; every other key keeps the vocabulary-floor behaviour.
+        sv, drop = _audit_scrub(
+            v, pii_scan=(default_deny and not reserved) or ks in _AUDIT_FREETEXT_KEYS
+        )
         if drop:
             dropped.append(str(k))
             continue
@@ -2154,7 +2430,7 @@ def write_event(
             try:
                 # Identity of the chain BEFORE this write (None on a fresh file:
                 # then this record's own hash becomes the genesis).
-                _genesis = _chain_identity(path)
+                _genesis, _legacy_prefix, _gen_prev, _gen_mac = _chain_identity_ex(path)
                 if not hash_chain:
                     # F-A1: the gap marker binds to the tail it was written
                     # after — prev_hash + keyed mac, no hash — so verify_chain
@@ -2195,6 +2471,36 @@ def write_event(
                                 )
                             except Exception:  # noqa: BLE001
                                 pass
+                        # R2-A1 (writer side): the PATH-keyed identity record
+                        # says which chain belongs at this path. A file whose
+                        # genesis differs from the anchored one was REPLACED —
+                        # the whole-file-rewrite attack, which leaves no
+                        # genesis-keyed marker behind to contradict it. Stamp
+                        # the fact into the chain so it survives in-tree too,
+                        # exactly like the truncation marker above; the
+                        # verifier reports it from BOTH sides.
+                        _pathrec = _read_chain_path_record(path)
+                        if _pathrec is not None and _pathrec.get("genesis") != _genesis:
+                            if _is_legitimate_rotation(path, _pathrec, _genesis, _gen_prev):
+                                # Layer 37 rotation: the fresh live file starts
+                                # with the rotation_link that binds to the tail
+                                # we recorded out-of-tree. Re-anchor, don't accuse.
+                                note_chain_rotation(path, link_hash=_genesis)
+                            else:
+                                rec["details"] = {
+                                    **rec["details"],
+                                    "_chain_replaced_from": str(_pathrec.get("genesis"))[:16],
+                                }
+                                try:
+                                    import logging as _lg
+                                    _lg.getLogger("corvin.audit").critical(
+                                        "audit chain at this path was REPLACED (anchored genesis "
+                                        "%s, file now starts at %s) — marker written into %s",
+                                        str(_pathrec.get("genesis"))[:16], str(_genesis)[:16],
+                                        event_type,
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass
                     # ADR-0232/0233: Store the initial tail hash to detect if the
                     # file was modified by another writer while we held the lock.
                     # This catches broken cross-process locks on Windows that allow
@@ -2361,6 +2667,19 @@ def write_event(
                     if hash_chain:
                         # F-A12: the tail now lives out-of-tree too.
                         _record_chain_tail(path, rec["hash"], genesis=_genesis or rec["hash"])
+                        # R2-A1/R2-A2: and so does the PATH-keyed identity of the
+                        # chain that belongs here (genesis + tail + the length of
+                        # the tolerated hash-less legacy prefix + whether this
+                        # chain has ever carried a mac). Resolvable without the
+                        # genesis, so a replaced/prepended file cannot hide by
+                        # having no genesis-keyed marker.
+                        _record_chain_path_state(
+                            path,
+                            genesis=_genesis or rec["hash"],
+                            tail=rec["hash"],
+                            legacy_prefix=_legacy_prefix,
+                            mac="mac" in rec,
+                        )
                 except OSError as _werr:
                     # FND-03b: a failed audit write (full / read-only fs) was
                     # silently swallowed by best-effort callers, making lost
@@ -2515,6 +2834,7 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
     # R2-FND-04/06: MAC-epoch + full-strip detection state.
     mac_required = False       # set once a mac'd record is seen under an available key
     mac_seen_count = 0         # total records carrying a mac field
+    _nonlink_chained = 0       # chained records that are not a rotation link
     _no_key_ok = os.environ.get("CORVIN_AUDIT_VERIFY_NO_KEY_OK", "").strip() in ("1", "true", "yes")
     recent_hashes: collections.deque = collections.deque(maxlen=_TAIL_ANCHOR_WINDOW)
     line_no = 0
@@ -2577,12 +2897,21 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
 
             chain_started = True
             recent_hashes.append(rec["hash"])
+            if str(rec.get("event_type", "")) != "audit.rotation_link":
+                _nonlink_chained += 1
             _d = rec.get("details")
             if isinstance(_d, dict) and _d.get("_tail_truncated_since"):
                 # Writer-side truncation marker (F-A12): permanent, line-bound.
                 problems.append({"line": line_no, "issue": "tail_truncated",
                                  "recorded_tail": str(_d["_tail_truncated_since"])[:16],
                                  "detail": "records deleted before this write"})
+            if isinstance(_d, dict) and _d.get("_chain_replaced_from"):
+                # Writer-side replacement marker (R2-A1): permanent, line-bound,
+                # so the fact survives even if the out-of-tree record is later
+                # re-anchored by a legitimate rotation.
+                problems.append({"line": line_no, "issue": "chain_replaced",
+                                 "anchored_genesis": str(_d["_chain_replaced_from"])[:16],
+                                 "detail": "a chain replacement was recorded at this write"})
             actual_prev = rec.get("prev_hash", "")
             if actual_prev != prev:
                 problems.append({
@@ -2713,11 +3042,78 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
     # _no_key_ok is intentionally NOT consulted here (R3-04): it must suppress
     # ONLY the key-ABSENT diagnostic above, never the strip detector, which
     # already requires the key to be present.
+    # R2-A1: the per-chain marker is keyed by the GENESIS, so a rewrite that
+    # mints a NEW genesis has no marker and the detector above stayed silent —
+    # which is precisely the whole-file-rewrite attack. Two genesis-independent
+    # sources are consulted as well:
+    #   * the PATH-keyed chain record (``chain_ids/<sha256(path)>``), which
+    #     remembers that the chain living at this path carried a mac;
+    #   * for the primary live layout (``<root>/global/forge/audit.jsonl``) the
+    #     host sentinel ``audit_mac_active``. Restricted to that layout on
+    #     purpose: gating every chain on the host-wide sentinel is what broke
+    #     20+ legacy/session chains in incident 2026-06-17, and those chains are
+    #     never at this path.
+    _pathrec = None if _skip_out_of_tree_markers(path) else _read_chain_path_record(path)
+    _genesis, _legacy_prefix, _gen_prev, _gen_mac = _chain_identity_ex(path)
+    _rotated = bool(
+        _pathrec is not None
+        and _genesis
+        and str(_pathrec.get("genesis") or "") != _genesis
+        and _is_legitimate_rotation(path, _pathrec, _genesis, _gen_prev)
+    )
     _is_live_chain = path.name == "audit.jsonl"
+    _mac_expected = (
+        _chain_had_mac(path)
+        or bool(_pathrec and _pathrec.get("mac"))
+        or (_is_primary_live_layout(path) and _mac_active_since() is not None)
+    )
+    # A chain that holds nothing but the ``audit.rotation_link`` a Layer 37
+    # rotation just wrote is not a stripped chain: the sealer writes that record
+    # by hand, without a mac, and the next real write_event re-establishes the
+    # epoch. Requiring one non-link chained record (and skipping a recognised
+    # rotation outright) keeps the widened detector off that legitimate window.
     if (_is_live_chain and chain_started and mac_seen_count == 0
-            and _anchor_key() is not None and _chain_had_mac(path)):
+            and _nonlink_chained > 0 and not _rotated
+            and _anchor_key() is not None and _mac_expected):
         problems.append({"issue": "mac_stripped_chain",
                          "detail": "MAC active on this chain but it now carries no mac"})
+
+    # R2-A1: a chain whose genesis is not the one anchored for this PATH was
+    # replaced wholesale — recomputed hashes and stripped macs make such a file
+    # self-consistent, so nothing INSIDE it can expose the swap. Only the
+    # out-of-tree record can. A Layer 37 rotation is the one legitimate genesis
+    # change and is recognised by its rotation_link binding to the recorded tail.
+    if _pathrec is not None and chain_started:
+        _anchored = str(_pathrec.get("genesis") or "")
+        if _anchored and _genesis and _anchored != _genesis and not _rotated:
+            problems.append({
+                "issue": "chain_replaced", "anchored_genesis": _anchored[:16],
+                "actual_genesis": str(_genesis)[:16],
+                "detail": "the chain anchored at this path was replaced by a different one",
+            })
+        # R2-A2: records PREPENDED before the genesis. The pre-chain legacy
+        # prefix is tolerated (chains predating hash chaining really have one),
+        # but its length is a fact recorded when the chain was anchored — a
+        # prefix that GREW was written by someone, and a hash-less record binds
+        # to nothing, so it cannot be caught by the walk above.
+        try:
+            _anchored_prefix = int(_pathrec.get("legacy_prefix", 0))
+        except (TypeError, ValueError):
+            _anchored_prefix = 0
+        if _legacy_prefix > _anchored_prefix:
+            problems.append({
+                "issue": "records_prepended", "expected_prefix": _anchored_prefix,
+                "actual_prefix": _legacy_prefix,
+                "detail": "hash-less records were inserted before the chain genesis",
+            })
+    # NOT a rule here: "the genesis carries a mac, therefore the chain can have
+    # no legacy prefix". It reads well and is false — a legacy install really
+    # does carry a hash-less prefix, and its FIRST chained record is written
+    # today, hence mac'd (operator/forge/tests/test_tenant_migration_roundtrip.py
+    # R5 is exactly that shape). The mac on the genesis dates the genesis, not
+    # the prefix. The recorded prefix LENGTH above is the discriminator: it is
+    # frozen when the chain is first anchored, and it lives beside the anchor
+    # key where the in-tree attacker this defends against cannot reach it.
 
     # F-A12: compare the on-file tail against the out-of-tree tail anchor.
     # The anchor may lag the file by a few writes (a verify racing a writer)
@@ -2726,11 +3122,23 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
     # _TAIL_ANCHOR_WINDOW hashes, nor the file's tail right now, names a
     # record that is gone: the tail was truncated.
     if chain_started and not _skip_out_of_tree_markers(path):
-        recorded = _read_chain_tail(path)
-        if recorded and recorded != prev and recorded not in recent_hashes \
-                and recorded != _last_hash(path):
-            problems.append({"issue": "tail_truncated",
-                             "recorded_tail": recorded, "actual_tail": prev})
+        # Two recorded tails, same tolerance: the GENESIS-keyed anchor (F-A12)
+        # and the PATH-keyed one (R2-A1). The second is what still answers when
+        # the genesis itself was swapped, so truncation cannot be laundered by
+        # rewriting the first record. Skipped right after a legitimate rotation,
+        # where the recorded tail names the segment that was rotated away.
+        _recorded_tails = {_read_chain_tail(path)}
+        if _pathrec is not None and not _rotated:
+            _recorded_tails.add(_pathrec.get("tail"))
+        _file_tail = None
+        for recorded in sorted(t for t in _recorded_tails if isinstance(t, str) and t):
+            if recorded == prev or recorded in recent_hashes:
+                continue
+            if _file_tail is None:
+                _file_tail = _last_hash(path)
+            if recorded != _file_tail:
+                problems.append({"issue": "tail_truncated",
+                                 "recorded_tail": recorded, "actual_tail": prev})
 
     # F-A14: a present-but-refused anchor key is a broken anchor, not an
     # absent one — surface it so the boot tripwire fails closed.

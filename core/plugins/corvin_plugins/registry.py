@@ -312,6 +312,14 @@ class PluginRegistry:
         self._plugins: dict[str, CorvinPlugin] = {}
         self._contexts: dict[str, PluginContext] = {}
         self._boot_layers: dict[str, BootLayer] = {}
+        #: R2-A9: the provenance actually used at load, per plugin_id —
+        #: ``(origin, source)``, the SAME pair written into the ``plugin.loaded``
+        #: chain record. Kept so an operator surface can report what the
+        #: registry did rather than re-deriving a guess from the filesystem
+        #: (the console listing stamped every running builtin ``origin=builtin``
+        #: while the chain said ``vetted``, because it re-scanned the plugin
+        #: directories instead of asking the registry).
+        self._provenance: dict[str, tuple[str, str]] = {}
         self._lock = threading.Lock()
         #: One lock per plugin_id, held across a WHOLE register or unregister.
         #: `self._lock` only guards the maps and is released before any call
@@ -573,6 +581,9 @@ class PluginRegistry:
             self._plugins[plugin.plugin_id] = plugin
             self._contexts[plugin.plugin_id] = ctx
             self._boot_layers[plugin.plugin_id] = resolved
+            self._provenance[plugin.plugin_id] = (
+                str(origin or "unknown")[:32], str(source or "unknown")[:160],
+            )
             if len(self._tenant_history) >= self.MAX_TENANT_HISTORY:
                 self._tenant_history.clear()
             self._tenant_history[plugin.plugin_id] = ctx.tenant_id
@@ -612,6 +623,7 @@ class PluginRegistry:
                 self._plugins.pop(plugin.plugin_id, None)
                 self._contexts.pop(plugin.plugin_id, None)
                 self._boot_layers.pop(plugin.plugin_id, None)
+                self._provenance.pop(plugin.plugin_id, None)
             raise
 
         # ADR-0233 D5: Record that this plugin_id was granted this privilege in this epoch.
@@ -682,6 +694,7 @@ class PluginRegistry:
             self._plugins.pop(plugin_id, None)
             self._contexts.pop(plugin_id, None)
             boot_layer = self._boot_layers.pop(plugin_id, BootLayer.INSTALLED)
+            self._provenance.pop(plugin_id, None)
             # ADR-0233 D5: Track that this plugin_id was unregistered in the current epoch.
             # If a thread tries to re-register it with higher privilege in the same epoch,
             # the re-escalation check will catch it.
@@ -1033,6 +1046,14 @@ class PluginRegistry:
 
     # ── Discovery ─────────────────────────────────────────────────────────────
 
+    def provenance_of(self, plugin_id: str) -> tuple[str, str] | None:
+        """``(origin, source)`` recorded when this plugin was registered.
+
+        The same pair the ``plugin.loaded`` chain record carries, so an operator
+        surface and the audit trail cannot disagree (R2-A9)."""
+        with self._lock:
+            return self._provenance.get(plugin_id)
+
     def discover(self) -> list[str]:
         """Return a sorted list of all registered plugin_ids."""
         with self._lock:
@@ -1101,6 +1122,10 @@ def get(plugin_id: str) -> CorvinPlugin:
 
 def health_check_all() -> dict[str, HealthStatus]:
     return _registry.health_check_all()
+
+
+def provenance_of(plugin_id: str) -> tuple[str, str] | None:
+    return _registry.provenance_of(plugin_id)
 
 
 def discover() -> list[str]:

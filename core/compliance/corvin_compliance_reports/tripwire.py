@@ -252,9 +252,20 @@ def audit_path_not_redirected() -> TripwireResult:
     sandbox the chain. They also let an attacker with env access point every
     tripwire at an EMPTY file while the real chain — the one this process would
     otherwise write to — is never looked at (``assert_all`` passed on a fresh,
-    zero-record file). A redirect is therefore tolerated only when the
-    redirected path resolves UNDER ``CORVIN_HOME``'s root, or the process is a
-    pytest run (``PYTEST_CURRENT_TEST``, which conftest-level redirects rely on).
+    zero-record file).
+
+    R2-A3 (2026-09-07). Two holes closed:
+
+    * The ``PYTEST_CURRENT_TEST`` tolerance is REMOVED. A compliance tripwire
+      whose docstring says "there is no override" must not have one, and that
+      was one: exporting that variable disabled this check in any process, test
+      or not. Tests now point ``CORVIN_HOME`` at their sandbox, which makes
+      their redirect an ordinary in-root one.
+    * "Under the root" is no longer enough. A redirect to a DIFFERENT file
+      inside the root is the same attack with a shorter path — an empty file
+      one directory over reads as a fresh install. The redirect must resolve to
+      exactly the path the resolver would have chosen on its own; then it
+      changes nothing and is accepted.
     """
     name = "audit_path_not_redirected"
     audit = _audit_module()
@@ -263,22 +274,29 @@ def audit_path_not_redirected() -> TripwireResult:
     redirect = getattr(audit, "audit_redirect", None)
     if not callable(redirect):
         return TripwireResult(name, False, "audit module exposes no audit_redirect() — not the core audit module")
-    redirected, under_pytest = redirect()
+    redirected, differs_from_default = redirect()
     if not redirected:
         return TripwireResult(name, True, "no env redirect")
-    if under_pytest:
-        return TripwireResult(name, True, f"redirect via {redirected} tolerated under pytest")
     try:
         path = Path(audit.audit_path()).expanduser().resolve()
         root = _corvin_root(audit).expanduser().resolve()
     except Exception as exc:  # noqa: BLE001
         return TripwireResult(name, False, f"path resolution failed: {type(exc).__name__}")
-    if root == path or root in path.parents:
-        return TripwireResult(name, True, f"redirect via {redirected} stays under the CORVIN_HOME root")
+    if not (root == path or root in path.parents):
+        return TripwireResult(
+            name, False,
+            f"audit chain redirected by {redirected} OUTSIDE the CORVIN_HOME root — "
+            "unset the redirect or point CORVIN_HOME at the same root",
+        )
+    if differs_from_default:
+        return TripwireResult(
+            name, False,
+            f"audit chain redirected by {redirected} to a path INSIDE the CORVIN_HOME "
+            "root that is not the resolver's own chain — the real chain would go "
+            "unverified; unset the redirect or point CORVIN_HOME at the intended root",
+        )
     return TripwireResult(
-        name, False,
-        f"audit chain redirected by {redirected} OUTSIDE the CORVIN_HOME root — "
-        "unset the redirect or point CORVIN_HOME at the same root",
+        name, True, f"redirect via {redirected} resolves to the default chain",
     )
 
 
@@ -849,6 +867,43 @@ def check_all() -> List[TripwireResult]:
     return results
 
 
+#: Chains this PROCESS has already asserted, by resolved path (R2-A11). Both
+#: shipped hosts call ``assert_all()`` in their lifespan and then call
+#: ``boot_platform()``, which asserts again — so every boot produced two full
+#: tripwire runs: duplicate ``COMPLIANCE FINDING`` log sets and, worse, a second
+#: ``compliance.chain_discontinuity`` seam record appended to the chain for the
+#: same break. The host lifespan is authoritative; the second caller skips.
+#:
+#: Keyed by the chain PATH, not by a bare flag: a process that legitimately
+#: moves to another chain (a test with its own ``CORVIN_HOME``, a tool that
+#: verifies several tenants) must still get a real assertion for each one.
+_ASSERTED_CHAINS: set = set()
+
+
+def _current_chain_key() -> str:
+    """Resolved path of the chain the tripwires would check right now, or ""."""
+    audit = _audit_module()
+    if audit is None:
+        return ""
+    try:
+        return str(Path(audit.audit_path()).expanduser().resolve())
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def already_asserted() -> bool:
+    """True when :func:`assert_all` has already PASSED for this chain in this
+    process. Only ever suppresses a duplicate run — a failure never records,
+    so a refused boot can never be skipped past."""
+    key = _current_chain_key()
+    return bool(key) and key in _ASSERTED_CHAINS
+
+
+def reset_asserted() -> None:
+    """Forget the per-process record (tests that re-boot in one interpreter)."""
+    _ASSERTED_CHAINS.clear()
+
+
 def assert_all() -> List[TripwireResult]:
     """Run every tripwire; raise :class:`TripwireError` on the first failure set.
 
@@ -867,6 +922,12 @@ def assert_all() -> List[TripwireResult]:
 
     fatal = [r for r in failed if r.name not in REPORTING_ONLY]
     if not fatal:
+        # R2-A11: remember the chain that passed, so the second caller in the
+        # same boot (host lifespan → boot_platform) does not re-run every probe
+        # and append a second seam record for the same discontinuity.
+        key = _current_chain_key()
+        if key:
+            _ASSERTED_CHAINS.add(key)
         return results
 
     summary = "; ".join(f"{r.name}: {r.detail}" for r in fatal)
