@@ -156,3 +156,141 @@ class TestCompletionPathProducer:
         assert elapsed < 5.0, f"completion path blocked for {elapsed:.1f}s"
         messages = [r.getMessage() for r in caplog.records]
         assert any("snapshot NOT written" in m and "lock busy" in m for m in messages), messages
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Same defect class, second holder: the ROLLBACK log lock (ADR-0542).
+#
+# ``rollback_manager.RollbackManager._lock`` took the identical unbounded
+# ``fcntl.flock(LOCK_EX)``. It is taken by ``recover_pending`` (which runs in
+# ``__init__``) and by ``commit_transaction`` — both on the console HTTP revert
+# path (``routes/infinite_session_api.py::revert_to_checkpoint``), where a
+# wedged holder hangs an OPERATOR REQUEST rather than a background task. It is
+# now ``LOCK_EX | LOCK_NB`` with the same bounded retry, every caller converts
+# ``RollbackLockBusy`` into its documented ``(False, reason)``, and the route
+# answers 503 ``transaction_lock_busy``.
+# ─────────────────────────────────────────────────────────────────────────
+
+from core.infinite_session import rollback_manager as rollback_mod  # noqa: E402
+from core.infinite_session.rollback_manager import (  # noqa: E402
+    RollbackLockBusy,
+    RollbackManager,
+)
+
+ROLLBACK_CONFIG = "task.rollback_lock_probe.state"
+
+
+@pytest.fixture
+def short_rollback_deadline(monkeypatch):
+    monkeypatch.setattr(rollback_mod, "LOCK_TIMEOUT_SECONDS", 0.2)
+    return 0.2
+
+
+class _HeldRollbackLock:
+    """Hold the rollback log lock from an independent file description."""
+
+    def __init__(self, log_dir: Path):
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.path = log_dir / ".lock"
+
+    def __enter__(self):
+        self.fh = open(self.path, "a+")
+        fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        self.fh.close()
+
+
+class TestRollbackManagerNeverBlocks:
+    def test_construction_returns_under_a_wedged_lock(
+        self, home, short_rollback_deadline, caplog
+    ):
+        """``__init__`` runs WAL recovery, which takes the lock. The console
+        builds a manager per request — construction must not hang."""
+        primer = RollbackManager(TENANT)  # creates the dirs
+        with _HeldRollbackLock(primer.log_dir):
+            with caplog.at_level(logging.WARNING):
+                started = time.monotonic()
+                manager = RollbackManager(TENANT)
+                elapsed = time.monotonic() - started
+
+        assert manager is not None
+        assert elapsed < 5.0, f"construction blocked for {elapsed:.1f}s"
+        assert any("recovery skipped" in r.getMessage() for r in caplog.records), [
+            r.getMessage() for r in caplog.records
+        ]
+
+    def test_recover_pending_raises_instead_of_hanging(
+        self, home, short_rollback_deadline
+    ):
+        manager = RollbackManager(TENANT)
+        with _HeldRollbackLock(manager.log_dir):
+            started = time.monotonic()
+            with pytest.raises(RollbackLockBusy):
+                manager.recover_pending(max_age_s=0)
+            elapsed = time.monotonic() - started
+        assert elapsed < 5.0, f"recover_pending blocked for {elapsed:.1f}s"
+
+    def test_commit_returns_a_reason_instead_of_hanging(
+        self, home, short_rollback_deadline
+    ):
+        manager = RollbackManager(TENANT)
+        tx_id, err = manager.begin_transaction(
+            TENANT, ROLLBACK_CONFIG, old_state={"n": 1}, new_state={"n": 2}
+        )
+        assert err is None, err
+
+        with _HeldRollbackLock(manager.log_dir):
+            started = time.monotonic()
+            ok, error = manager.commit_transaction(
+                tx_id, TENANT, ROLLBACK_CONFIG, old_state={"n": 1}, new_state={"n": 2}
+            )
+            elapsed = time.monotonic() - started
+
+        assert ok is False
+        assert "lock busy" in error, error
+        assert elapsed < 5.0, f"commit blocked for {elapsed:.1f}s"
+
+        # The WAL entry survives a busy lock — nothing was half-committed.
+        assert manager._wal_file(tx_id).exists()
+
+    def test_rollback_transaction_refuses_instead_of_hanging(
+        self, home, short_rollback_deadline
+    ):
+        manager = RollbackManager(TENANT)
+        tx_id, err = manager.begin_transaction(
+            TENANT, ROLLBACK_CONFIG, old_state={"n": 1}, new_state={"n": 2}
+        )
+        assert err is None, err
+        ok, err = manager.commit_transaction(
+            tx_id, TENANT, ROLLBACK_CONFIG, old_state={"n": 1}, new_state={"n": 2}
+        )
+        assert ok, err
+
+        with _HeldRollbackLock(manager.log_dir):
+            started = time.monotonic()
+            ok, error = manager.rollback_transaction(TENANT, tx_id)
+            elapsed = time.monotonic() - started
+
+        assert ok is False
+        assert "lock busy" in error, error
+        assert elapsed < 5.0, f"rollback blocked for {elapsed:.1f}s"
+
+    def test_the_lock_still_serialises_when_it_is_free(self, home):
+        """The bounded lock must remain a real mutex, not a no-op."""
+        manager = RollbackManager(TENANT)
+        for n in range(3):
+            tx_id, err = manager.begin_transaction(
+                TENANT, ROLLBACK_CONFIG, old_state={"n": n}, new_state={"n": n + 1}
+            )
+            assert err is None, err
+            ok, err = manager.commit_transaction(
+                tx_id, TENANT, ROLLBACK_CONFIG,
+                old_state={"n": n}, new_state={"n": n + 1},
+            )
+            assert ok, err
+        ok, chain_error = manager.verify_chain_integrity(TENANT)
+        assert ok, chain_error
+        assert len(manager.get_transaction_history(TENANT)) == 3

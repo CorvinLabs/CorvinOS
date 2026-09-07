@@ -445,25 +445,45 @@ class TestErrorHandlingAndEdgeCases:
 
     def test_smooth_with_large_delta(self):
         """Test that large deltas are handled correctly."""
-        smoother = WeightSmoother()
+        smoother = WeightSmoother()  # default ema_alpha = 0.3
 
         output = smoother.smooth('weight_large', 1e6)
         assert output.filtered_delta > 0  # Should be positive
 
-        # Should converge correctly
+        # EMA maths (ema_0 = 0, constant input d, alpha = 0.3):
+        #   ema_n = d * (1 - 0.7**n)  ->  residual = d * 0.7**n
+        # After 2 samples the residual is still 0.49*d, so the old
+        # `abs(ema_2 - 1e6) < 1e5` (= 0.1*d) assertion was unreachable by
+        # construction. Assert the exact 2-sample value instead...
         output2 = smoother.smooth('weight_large', 1e6)
-        assert abs(output2.filtered_delta - 1e6) < 1e5
+        assert abs(output2.filtered_delta - 1e6 * (1 - 0.7 ** 2)) < 1.0
+
+        # ...and then let it actually converge: 0.7**6 = 0.118 > 0.1 but
+        # 0.7**7 = 0.082 < 0.1, so n = 7 is the first sample count at which a
+        # 0.1*d tolerance is mathematically reachable.
+        for _ in range(5):  # 2 + 5 = 7 samples total
+            output_converged = smoother.smooth('weight_large', 1e6)
+        assert abs(output_converged.filtered_delta - 1e6) < 1e5
 
     def test_smooth_with_negative_delta(self):
         """Test that negative deltas work correctly."""
-        smoother = WeightSmoother()
+        smoother = WeightSmoother()  # default ema_alpha = 0.3
 
         output1 = smoother.smooth('weight_neg', -0.5)
         output2 = smoother.smooth('weight_neg', -0.5)
 
-        # Should converge to -0.5
+        assert output1.filtered_delta < 0
         assert output2.filtered_delta < 0
-        assert abs(output2.filtered_delta + 0.5) < 0.1
+
+        # Same EMA maths as test_smooth_with_large_delta: after 2 samples the
+        # residual is 0.7**2 * 0.5 = 0.245, so the old `< 0.1` tolerance was
+        # unreachable. Exact 2-sample value: -0.5 * (1 - 0.7**2) = -0.255.
+        assert abs(output2.filtered_delta + 0.5 * (1 - 0.7 ** 2)) < 1e-9
+
+        # Converge for real: 0.7**7 * 0.5 = 0.041 < 0.1.
+        for _ in range(5):  # 2 + 5 = 7 samples total
+            output_converged = smoother.smooth('weight_neg', -0.5)
+        assert abs(output_converged.filtered_delta + 0.5) < 0.1
 
     def test_smooth_output_immutability(self):
         """Test that SmootherOutput is properly dataclass (hashable and frozen)."""
@@ -556,6 +576,91 @@ class TestIntegrationScenarios:
             f"Light smoothing should track input more: "
             f"light_swing={swing_light:.3f}, heavy_swing={swing_heavy:.3f}"
         )
+
+
+class TestConfigFailClosed:
+    """Regression: SmootherConfig refuses out-of-domain hyperparameters (fail-closed)."""
+
+    @pytest.mark.parametrize('bad', [1.5, -0.1, float('nan'), float('inf'), float('-inf'), 'x', None, True])
+    def test_ema_alpha_out_of_domain_is_refused(self, bad):
+        with pytest.raises(ValueError) as exc_info:
+            SmootherConfig(ema_alpha=bad)
+        assert 'ema_alpha must be in [0, 1]' in str(exc_info.value)
+
+    @pytest.mark.parametrize('bad', [1.5, -0.1, float('nan'), float('inf'), 'x', None, True])
+    def test_fft_energy_threshold_out_of_domain_is_refused(self, bad):
+        with pytest.raises(ValueError) as exc_info:
+            SmootherConfig(fft_energy_threshold=bad)
+        assert 'fft_energy_threshold must be in [0, 1]' in str(exc_info.value)
+
+    @pytest.mark.parametrize('bad', [0, -1, 2.5, 'x', None, True])
+    def test_smoothing_window_size_out_of_domain_is_refused(self, bad):
+        with pytest.raises(ValueError) as exc_info:
+            SmootherConfig(smoothing_window_size=bad)
+        assert 'smoothing_window_size must be a positive int' in str(exc_info.value)
+
+    def test_boundary_values_are_accepted(self):
+        assert SmootherConfig(ema_alpha=0.0).ema_alpha == 0.0
+        assert SmootherConfig(ema_alpha=1.0).ema_alpha == 1.0
+        assert SmootherConfig(fft_energy_threshold=0.0).fft_energy_threshold == 0.0
+        assert SmootherConfig(fft_energy_threshold=1.0).fft_energy_threshold == 1.0
+
+    def test_post_construction_mutation_is_refused_by_smoother(self):
+        """SmootherConfig is a mutable dataclass; WeightSmoother re-validates."""
+        config = SmootherConfig(ema_alpha=0.3)
+        config.ema_alpha = 3.0  # bypasses __post_init__
+        with pytest.raises(ValueError) as exc_info:
+            WeightSmoother(config)
+        assert 'ema_alpha must be in [0, 1]' in str(exc_info.value)
+
+    def test_rejection_log_is_content_free(self, caplog):
+        """The rejection log line names the parameter only — no payload values."""
+        import logging
+        with caplog.at_level(logging.WARNING, logger='core.learning.weight_smoother'):
+            with pytest.raises(ValueError):
+                SmootherConfig(ema_alpha=42.0)
+        assert caplog.records, 'expected a rejection log record'
+        for record in caplog.records:
+            assert '42' not in record.getMessage()
+
+
+class TestEMAPreviousStateTracking:
+    """Regression: ema_prev must hold the PREVIOUS ema, not a copy of ema_value."""
+
+    def test_ema_prev_lags_ema_value(self):
+        smoother = WeightSmoother(SmootherConfig(ema_alpha=0.3))
+        smoother.smooth('w', 1.0)   # ema = 0.3, prev = 0.0
+        smoother.smooth('w', 1.0)   # ema = 0.51, prev = 0.3
+        state = smoother.get_state('w')
+        assert abs(state.ema_prev - 0.3) < 1e-9
+        assert abs(state.ema_value - 0.51) < 1e-9
+        assert state.ema_value != state.ema_prev
+
+    def test_ema_output_unchanged_by_prev_tracking(self):
+        """The filter output itself is exactly d * (1 - (1-alpha)**n)."""
+        smoother = WeightSmoother(SmootherConfig(ema_alpha=0.3))
+        for n in range(1, 8):
+            out = smoother.smooth('w', 2.0)
+            assert abs(out.filtered_delta - 2.0 * (1 - 0.7 ** n)) < 1e-9
+
+
+class TestHarmonicBandSplit:
+    """Regression: the DC bin must not be the whole low-frequency band."""
+
+    def test_smooth_ramp_scores_below_oscillation(self):
+        config = SmootherConfig(ema_alpha=0.3, enable_fft_detection=True)
+
+        smooth = WeightSmoother(config)
+        for delta in [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5]:
+            smooth_out = smooth.smooth('lf', delta)
+
+        osc = WeightSmoother(config)
+        for i in range(11):
+            osc_out = osc.smooth('hf', 1.0 if i % 2 == 0 else -1.0)
+
+        assert smooth_out.harmonic_energy < 0.5
+        assert osc_out.harmonic_energy > 0.5
+        assert smooth_out.harmonic_energy < osc_out.harmonic_energy
 
 
 if __name__ == '__main__':

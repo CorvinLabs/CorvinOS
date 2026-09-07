@@ -12,6 +12,8 @@ Security Threat Model (Fix #7 — Oscillation Attack):
 
 Mitigation Deployment Status:
   ✓ EMA filter: Exponential moving average with configurable alpha [0, 1]
+    (SmootherConfig REFUSES alpha / fft_energy_threshold outside [0, 1] and
+     any NaN/inf value at construction — fail-closed, no tolerant fallback)
   ✓ Harmonic detection: FFT-based (with numpy) or sign-change fallback
   ✓ Confidence scoring: Per-weight quality metric [0, 1]
   ✓ State tracking: Circular buffers for recent history (20-sample window)
@@ -24,6 +26,12 @@ Mitigation Strategy:
      - Formula: ema_t = alpha * input_t + (1 - alpha) * ema_{t-1}
      - Lower alpha = more smoothing, higher lag
      - Higher alpha = more responsive, less smoothing
+     - Convergence: starting from ema_0 = 0, a constant input d gives
+       ema_n = d * (1 - (1 - alpha)^n), i.e. the residual decays GEOMETRICALLY
+       as d * (1 - alpha)^n. At the default alpha = 0.3 that is 0.49*d after
+       2 samples and first drops below 0.1*d at n = 7. The filter makes no
+       claim of converging within a couple of samples — that is the whole
+       point of a low-pass filter.
 
   2. Frequency detection layer:
      - Tracks update frequency in a sliding 60-second window
@@ -65,13 +73,57 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _validate_unit_interval(name: str, value) -> float:
+    """Validate that a hyperparameter is a finite real number inside [0, 1].
+
+    Fail-closed, in the same spirit as ``MetaOptimizer.validate_state``: a
+    hyperparameter outside its documented domain is REFUSED at construction
+    rather than silently changing the filter's behaviour (e.g. ``ema_alpha``
+    outside [0, 1] turns the EMA recurrence into an amplifier instead of a
+    low-pass filter, which is exactly the oscillation the smoother exists to
+    suppress).
+
+    Raises:
+      ValueError: if the value is a bool, a non-number, NaN/inf, or out of range.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        # Content-free log: parameter name + rejection reason only, never a payload.
+        logger.warning("SmootherConfig rejected: %s is not a real number", name)
+        raise ValueError(f"{name} must be in [0, 1], got a non-numeric value")
+    value = float(value)
+    if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+        logger.warning("SmootherConfig rejected: %s outside [0, 1]", name)
+        raise ValueError(f"{name} must be in [0, 1], got {value!r}")
+    return value
+
+
 @dataclass
 class SmootherConfig:
-    """Configuration for weight smoother."""
+    """Configuration for weight smoother.
+
+    All fields are validated at construction (``__post_init__``) and refused
+    when out of their documented domain — there is no "tolerant" fallback.
+    """
     ema_alpha: float = 0.3  # EMA blending factor [0, 1]
     enable_fft_detection: bool = False  # Enable Fourier analysis (CPU-intensive)
     fft_energy_threshold: float = 0.6  # Threshold for harmonic energy
     smoothing_window_size: int = 20  # Number of samples for energy analysis
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Re-validate the config (the dataclass is mutable; callers may edit it)."""
+        self.ema_alpha = _validate_unit_interval("ema_alpha", self.ema_alpha)
+        self.fft_energy_threshold = _validate_unit_interval(
+            "fft_energy_threshold", self.fft_energy_threshold
+        )
+        window = self.smoothing_window_size
+        if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+            logger.warning("SmootherConfig rejected: smoothing_window_size out of domain")
+            raise ValueError(
+                f"smoothing_window_size must be a positive int, got {window!r}"
+            )
 
 
 @dataclass
@@ -122,11 +174,9 @@ class WeightSmoother:
         self.config = config or SmootherConfig()
         self.states: Dict[str, SmootherState] = {}
 
-        # Validate configuration
-        if not (0.0 <= self.config.ema_alpha <= 1.0):
-            raise ValueError(f"ema_alpha must be in [0, 1], got {self.config.ema_alpha}")
-        if not (0.0 <= self.config.fft_energy_threshold <= 1.0):
-            raise ValueError(f"fft_energy_threshold must be in [0, 1]")
+        # Re-validate: SmootherConfig validates at construction, but it is a
+        # mutable dataclass, so a caller may have edited it afterwards.
+        self.config.validate()
 
     def smooth(self, weight_id: str, delta: float) -> SmootherOutput:
         """
@@ -208,11 +258,14 @@ class WeightSmoother:
         """
         alpha = self.config.ema_alpha
 
-        # Compute new EMA value
-        ema_new = alpha * delta + (1.0 - alpha) * state.ema_prev
+        # Compute new EMA value from the CURRENT state (ema_value is the
+        # previous output; ema_prev is kept as the one before it so that
+        # |ema_value - ema_prev| is a real step size, not a constant 0).
+        previous = state.ema_value
+        ema_new = alpha * delta + (1.0 - alpha) * previous
 
         # Update state
-        state.ema_prev = ema_new
+        state.ema_prev = previous
         state.ema_value = ema_new
 
         return ema_new
@@ -227,6 +280,10 @@ class WeightSmoother:
           1. Compute FFT of recent deltas
           2. Split spectrum: low-freq (0-25% of Nyquist) vs high-freq (25-100%)
           3. Harmonic energy = high_freq_power / (low_freq_power + high_freq_power)
+
+        The DC bin is excluded from both bands: the mean is subtracted before
+        the transform, so bin 0 is structurally ~0 and would otherwise make the
+        low-frequency band empty.
 
         Returns value in [0, 1]:
           - 0.0 = purely low-frequency (smooth, no oscillation)
@@ -254,14 +311,21 @@ class WeightSmoother:
         fft_vals = np.fft.rfft(deltas_centered)
         power_spectrum = np.abs(fft_vals) ** 2
 
-        # Split into low and high frequency bands
-        # Low freq: indices 0 to 25% of spectrum
-        # High freq: indices 25% to 100% of spectrum
-        n_freqs = len(power_spectrum)
-        boundary = max(1, n_freqs // 4)
+        # Split into low and high frequency bands.
+        # Bin 0 is the DC component, which the centering above set to ~0 — it
+        # carries no information and must NOT be used as the low-frequency
+        # band. (It was: `boundary = max(1, n_freqs // 4)` made the low band
+        # exactly the zeroed DC bin for every spectrum with < 8 bins, so the
+        # detector returned 1.0 for EVERY signal, smooth or oscillating.)
+        # Split the AC spectrum instead: low = lowest 25% of the AC bins.
+        ac_spectrum = power_spectrum[1:]
+        n_ac = len(ac_spectrum)
+        if n_ac == 0:
+            return 0.0
+        boundary = max(1, int(round(n_ac * 0.25)))
 
-        low_freq_power = np.sum(power_spectrum[:boundary])
-        high_freq_power = np.sum(power_spectrum[boundary:])
+        low_freq_power = np.sum(ac_spectrum[:boundary])
+        high_freq_power = np.sum(ac_spectrum[boundary:])
 
         total_power = low_freq_power + high_freq_power
 
