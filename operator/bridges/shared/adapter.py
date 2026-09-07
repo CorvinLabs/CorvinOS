@@ -482,6 +482,21 @@ def _audit_event(event_type, *args, user="", chat_key="", details=None, **kwargs
     )
 
 
+# Positive detail allowlists for the bridge-emitted audit events introduced by
+# the 2026-09-07 hardening. forge.security_events keeps a per-event positive
+# allowlist and DROPS every unregistered detail key (named in
+# ``_dropped_fields``) — an unregistered event therefore lands in the chain
+# with its reason/count stripped. Metadata only, never user content.
+try:
+    from forge.security_events import register_event_allowlist as _reg_allow  # type: ignore
+    _reg_allow("bridge.inbox_poison_quarantined", {"file", "bytes", "reason"})
+    _reg_allow("bridge.processed_swept", {"removed", "bytes", "retention_days"})
+    _reg_allow("bridge.persona_routed", {"confidence", "why_len", "why_sha256"})
+    _reg_allow("house_rules.allowed_after_lowconf",
+               {"rule_id", "reason_code", "confidence", "channel", "chat_key", "overrides"})
+except Exception:  # noqa: BLE001 — forge absent: events still chain with default keys
+    pass
+
 # ADR-0171 — Universal Engine-Span: the bridge (messenger) OS turn is the third
 # spawn site. A span on EVERY engine invocation (here too, not just console + ACS)
 # is what makes "no engine runs without a span" structurally true. Guarded: a
@@ -1944,12 +1959,21 @@ def _check_compliance_or_fail(
 
     Returns ``None`` when the spawn is permitted (gate passes, no tenant
     config, or operational error — fail-open).  Returns a user-facing
-    refusal string when the gate explicitly denies.
+    refusal string when the gate explicitly denies, or when the engine
+    carries no name (nothing to classify against — fail-closed).
     """
     engine_name = getattr(engine, "name", None)
     if not isinstance(engine_name, str) or not engine_name:
-        log("compliance gate: engine.name missing, fail-open")
-        return None
+        # F-B9 (adversarial hardening 2026-09-07): an engine without a name
+        # cannot be looked up in the L34 locality matrix, so the gate has NO
+        # basis to permit the spawn. Returning None here was a fail-OPEN that
+        # let any nameless/misregistered engine bypass data-classification
+        # enforcement entirely (SECRET payloads to an unclassified engine).
+        # Compliance gates fail CLOSED (CLAUDE.md, GDPR Art. 32).
+        log("compliance gate: engine.name missing — fail-closed refuse")
+        return ("[compliance] Spawn rejected: the engine has no registered name, "
+                "so its data-classification locality cannot be verified "
+                "(fail-closed).")
     tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
     try:
         from spawn_gates import check_l34 as _sg_l34  # type: ignore
@@ -2402,8 +2426,28 @@ def _check_house_rules_or_fail(
                     "happening an operator will review it."
                 )
             # clear_low_confidence: classifier ran successfully and did NOT flag the
-            # request — it was merely uncertain. Allow through silently so normal
-            # questions are never blocked by classifier confidence noise.
+            # request — it was merely uncertain. Allow through so normal questions
+            # are never blocked by classifier confidence noise.
+            #
+            # F-B4 (adversarial hardening 2026-09-07): NOT silently. house_rules.py
+            # has already written `house_rules.escalated` for this decision, and
+            # the adapter then overrides it with an allow — without a matching
+            # record the audit chain says "escalated/blocked" for a request that
+            # actually ran. Emit the override so the chain tells the truth
+            # (GDPR Art. 30: the record must reflect what happened). Metadata
+            # only: rule id, reason code, confidence — never the task text.
+            try:
+                _audit_write("house_rules.allowed_after_lowconf", "WARNING", {
+                    "rule_id": rid,
+                    "reason_code": decision.reason,
+                    "confidence": round(float(decision.confidence), 3),
+                    "channel": channel,
+                    "chat_key": _pii_fp(chat_key),
+                    "overrides": "house_rules.escalated",
+                })
+            except Exception as _aw_exc:  # noqa: BLE001 — never block the turn
+                log(f"[house-rules] allowed_after_lowconf audit failed "
+                    f"({type(_aw_exc).__name__})")
             return None
         return (
             f"[house-rules] This request needs operator approval before it can run "
@@ -8666,6 +8710,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
                "--max-chars", str(max_chars)]
 
         # summarize_smart.py uses --tone instead of --audience/--output-language
+        summarizer_input = pre  # smart branch: raw text on stdin (no task envelope)
         if use_smart:
             cmd += ["--tone", "warm"]  # Direct generation with tone respect
         else:
@@ -8688,12 +8733,16 @@ def build_voice_summary(text: str, max_chars: int = 400,
             # CalledProcessError then degraded the voice note to "head of
             # answer", the verbatim readout this whole path exists to prevent
             # (observed live 2026-07-26 00:04, VOICE-F9).
+            # F-B5 (2026-09-07): the question is user content — it goes to
+            # summarize.py inside the stdin JSON envelope, never as an argv
+            # value (argv is world-readable via /proc/<pid>/cmdline).
             task_text = task.strip()
-            if task_text:
-                cmd += ["--task", task_text]
+            cmd += ["--stdin-json"]
+            summarizer_input = json.dumps({"text": pre, "task": task_text},
+                                          ensure_ascii=False)
         proc = subprocess.run(
             cmd,
-            input=pre, capture_output=True, text=True,
+            input=summarizer_input, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             # Parent cap for the main summary ladder (VOICE-F7/F8): summarize.py
             # runs its CLI backend (90s) then the Hermes fallback (45s) = 135s
@@ -10045,12 +10094,48 @@ def _plugin_builder_bridge_reply(
         return "Something went wrong starting Plugin-Builder — try again in a moment."
 
 
+def _quarantine_poison(inbox_file: Path, reason: str) -> None:
+    """Move an unparsable inbox envelope to ``processed/poison/`` (F-B3).
+
+    The envelope is a user's message the daemon accepted; unlinking it on a
+    parse error destroyed the only copy and left no trace. Quarantine keeps
+    the bytes for the operator and records the event in the hash chain —
+    metadata only (file name + size + reason code), never the content.
+    """
+    poison_dir = PROCESSED / "poison"
+    try:
+        poison_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(poison_dir, 0o700)
+        except OSError:
+            pass
+        target = poison_dir / inbox_file.name
+        if target.exists():
+            target = poison_dir / f"{inbox_file.stem}.{int(time.time())}{inbox_file.suffix}"
+        shutil.move(str(inbox_file), target)
+        size = target.stat().st_size
+    except OSError as e:
+        log(f"poison quarantine failed for {inbox_file.name}: {type(e).__name__}")
+        return
+    log(f"bad inbox file {inbox_file.name}: quarantined ({reason}, {size} bytes)")
+    try:
+        _audit_event("bridge.inbox_poison_quarantined",
+                     details={"file": inbox_file.name, "bytes": size, "reason": reason})
+    except Exception as e:  # noqa: BLE001 — audit is best-effort here; the file is kept
+        log(f"poison audit failed: {type(e).__name__}")
+
+
 def process_one(inbox_file: Path, settings: dict) -> None:
     try:
         msg = json.loads(inbox_file.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        log(f"bad inbox file {inbox_file}: {e}")
-        inbox_file.unlink(missing_ok=True)
+    except json.JSONDecodeError:
+        _quarantine_poison(inbox_file, "json-decode-error")
+        return
+    except UnicodeDecodeError:
+        _quarantine_poison(inbox_file, "unicode-decode-error")
+        return
+    if not isinstance(msg, dict):
+        _quarantine_poison(inbox_file, "not-an-object")
         return
 
     msg_id = msg.get("id") or inbox_file.stem
@@ -10424,7 +10509,16 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             from forge.scope import scope_root as _fscope  # type: ignore
             from forge.registry import Registry as _FReg  # type: ignore
             _fchan_id = f"{channel}:{chat_key}"
-            _forge_tool_root = _fscope("session", channel_id=_fchan_id)
+            # ADR-0007 / ADR-0433: scope_root is tenant-native and tenant_id
+            # is keyword-only + mandatory. The call omitted it after the
+            # Phase-B signature change, so EVERY /reset logged
+            # "forge-tools purge failed (TypeError …)" and left the session's
+            # forge tools in place (seen live 2026-09-07). Resolve the tenant
+            # the same way the artifact purge above does — session-bound,
+            # env fallback (one tenant per bridge process).
+            _forge_tenant_id = os.environ.get("CORVIN_TENANT_ID") or "_default"
+            _forge_tool_root = _fscope("session", tenant_id=_forge_tenant_id,
+                                       channel_id=_fchan_id)
             if _forge_tool_root.exists():
                 _freg = _FReg(_forge_tool_root)
                 for _tool_spec in _freg.list():
@@ -11177,7 +11271,12 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 persona=profile.get("_auto_routed", ""),
                 details={
                     "confidence": profile.get("_auto_routed_confidence"),
-                    "why":        profile.get("_auto_routed_why"),
+                    # `why` is router/judge MODEL TEXT — never on the chain
+                    # (2026-09-07 hardening); keep a length + digest only.
+                    "why_len":    len(str(profile.get("_auto_routed_why") or "")),
+                    "why_sha256": _audit_hashlib.sha256(
+                        str(profile.get("_auto_routed_why") or "").encode("utf-8")
+                    ).hexdigest()[:16],
                 },
             )
 
@@ -11465,14 +11564,16 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 import mid_turn_heartbeat as _mth  # type: ignore[no-redef]
             if _bg_flag("bridge_mid_turn_task_notify"):
                 _mth_sk = f"{channel}:{chat_id or sender}"
+                # F-B8: markers live under CORVIN_HOME, never in the repo tree.
+                _mth_dir = _mth.default_state_dir()
                 for _lbl in _mth.parse_markers(answer):
-                    _mth.mark_active(ROOT, _mth_sk, channel=channel,
+                    _mth.mark_active(_mth_dir, _mth_sk, channel=channel,
                                      chat_id=chat_id, sender=sender, label=_lbl)
                 for _lbl, _st in _mth.parse_steps(answer):
-                    _mth.update_status(ROOT, _mth_sk, channel=channel, chat_id=chat_id,
+                    _mth.update_status(_mth_dir, _mth_sk, channel=channel, chat_id=chat_id,
                                        sender=sender, label=_lbl, status=_st)
                 for _lbl in _mth.parse_done(answer):
-                    _mth.clear_task(ROOT, _mth_sk, _lbl)
+                    _mth.clear_task(_mth_dir, _mth_sk, _lbl)
             # ADR-0553 Phase 3 — self-delegation (ship-dark, bridge_self_delegation
             # default OFF). A ⟦bgtask-run:<label>|<instruction>⟧ marker in the FINAL
             # reply hands the long work off to a DETACHED bg_task_worker that
@@ -11847,6 +11948,88 @@ def _cleanup_last_turn_skills() -> int:
         log(f"last-turn-skills cleanup: dropped {removed} stale entry/entries")
     return removed
 
+
+
+PROCESSED_RETENTION_DAYS_DEFAULT = 30
+
+
+def _processed_retention_days() -> float | None:
+    """Retention for ``processed/`` (F-B12). Precedence: env
+    ``ADAPTER_PROCESSED_RETENTION_DAYS`` → shared settings.json
+    ``processed_retention_days`` → 30. ``0`` or a negative value disables the
+    sweep (operator opt-out for archival deployments)."""
+    raw = os.environ.get("ADAPTER_PROCESSED_RETENTION_DAYS")
+    if raw is None or not str(raw).strip():
+        raw = load_settings().get("processed_retention_days", PROCESSED_RETENTION_DAYS_DEFAULT)
+    try:
+        days = float(raw)
+    except (TypeError, ValueError):
+        days = float(PROCESSED_RETENTION_DAYS_DEFAULT)
+    return days if days > 0 else None
+
+
+def _sweep_processed(max_age_days: float | None = None, *, now: float | None = None) -> int:
+    """Delete ``processed/`` envelopes and attachments older than the retention
+    window (F-B12). ``processed/`` is an archive of every user message the
+    bridge ever handled (264 MB / 8k files on the reference install) — an
+    unbounded copy of personal data with no purpose after the turn completed
+    (GDPR Art. 5(1)(e) storage limitation). Only regular files directly under
+    ``processed/`` are swept; ``poison/`` and any other sub-directory are kept
+    for the operator. Audited as a count — never file names or content."""
+    days = _processed_retention_days() if max_age_days is None else max_age_days
+    if not days:
+        return 0
+    cutoff = (time.time() if now is None else now) - days * 86400.0
+    removed = 0
+    freed = 0
+    try:
+        for p in PROCESSED.iterdir():
+            try:
+                if not p.is_file():
+                    continue
+                st = p.stat()
+                if st.st_mtime < cutoff:
+                    p.unlink()
+                    removed += 1
+                    freed += st.st_size
+            except OSError:
+                continue
+    except OSError:
+        return 0
+    if removed:
+        log(f"processed sweep: removed {removed} file(s) older than {days:g}d ({freed} bytes)")
+        try:
+            _audit_event("bridge.processed_swept",
+                         details={"removed": removed, "bytes": freed, "retention_days": days})
+        except Exception as e:  # noqa: BLE001
+            log(f"processed sweep audit failed: {type(e).__name__}")
+    return removed
+
+
+def _sweep_sysprompt_tmp(max_age_s: float = 3600.0, *, now: float | None = None) -> int:
+    """Remove leftover ``.corvin-sysprompt-*.txt`` files (F-B12).
+
+    ``_build_claude_args`` writes the system prompt (memory, recall, vault
+    hints — user data) into a temp file inside the session dir;
+    ``call_claude`` unlinks it in ``finally``, but a SIGKILL / OOM / power
+    loss between mkstemp and that finally leaves it behind forever. Any such
+    file older than ``max_age_s`` cannot belong to a live spawn (the bridge
+    turn cap is well below an hour) and is swept on the cleanup tick."""
+    cutoff = (time.time() if now is None else now) - max_age_s
+    removed = 0
+    try:
+        for p in SESSIONS_ROOT.rglob(".corvin-sysprompt-*.txt"):
+            try:
+                if p.is_file() and p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    removed += 1
+            except OSError:
+                continue
+    except OSError:
+        return 0
+    if removed:
+        log(f"sysprompt sweep: removed {removed} leftover temp file(s)")
+    return removed
 
 def _cleanup_in_flight() -> int:
     """Remove in_flight entries older than IN_FLIGHT_TTL whose runner is
@@ -12664,13 +12847,13 @@ def main() -> int:
                         except ImportError:
                             import mid_turn_heartbeat as _mth2  # type: ignore[no-redef]
                         if _bg_flag("bridge_mid_turn_task_notify"):
-                            hb = _mth2.deliver_due(ROOT, OUTBOX)
+                            hb = _mth2.deliver_due(_mth2.default_state_dir(), OUTBOX)
                             if hb:
                                 log(f"mid_turn_heartbeat: delivered {hb} heartbeat(s)")
                         else:
                             # Flag OFF: still GC residual markers (deliver_due, which
                             # normally expires them, is gated) — emit nothing.
-                            _mth2.sweep(ROOT)
+                            _mth2.sweep(_mth2.default_state_dir())
                     except Exception as e:
                         log(f"mid_turn_heartbeat tick failed: {e}")
                     last_cn_poll = time.monotonic()
@@ -12678,6 +12861,11 @@ def main() -> int:
                     _cleanup_in_flight()
                     _cleanup_outbox_voice_files()
                     _cleanup_chat_locks()
+                    try:  # F-B12: bounded archive + no orphaned system-prompt files
+                        _sweep_processed()
+                        _sweep_sysprompt_tmp()
+                    except Exception as e:  # noqa: BLE001 — never break the tick
+                        log(f"retention sweep failed: {type(e).__name__}")
                     _cleanup_last_turn_skills()
                     # Phase-4.3 hygiene: process_table accumulates exited
                     # session records indefinitely without this sweep.

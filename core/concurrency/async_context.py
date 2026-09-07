@@ -27,9 +27,11 @@ class AsyncContextPropagator:
 
         Args:
             coro: Coroutine to run
-            context: (Deprecated) ContextVar context parameter. Ignored; Python's
-                     asyncio.create_task() handles context copying automatically.
-                     Kept for API compatibility.
+            context: Explicit ``contextvars.Context`` the task runs in (e.g. a
+                     ``copy_context()`` prepared with a different tenant_id).
+                     Passed straight to ``asyncio.create_task(context=...)``
+                     (Python 3.11+); ``None`` keeps the automatic copy of the
+                     caller's context.
 
         Returns:
             asyncio.Task with context preserved
@@ -40,8 +42,12 @@ class AsyncContextPropagator:
         if not asyncio.iscoroutine(coro):
             raise TypeError(f"Expected coroutine, got {type(coro)}")
 
-        # Python 3.7+ automatically copies current context when creating a task
-        # The explicit context parameter is deprecated and ignored
+        if context is not None:
+            # Python 3.11+: run the task in the caller-supplied context. Silently
+            # ignoring it (the previous behaviour) made a tenant-scoped context
+            # handed in by the caller vanish — the task ran as the parent tenant.
+            return asyncio.create_task(coro, context=context)
+        # Python 3.7+ automatically copies the current context when creating a task
         return asyncio.create_task(coro)
 
     @staticmethod

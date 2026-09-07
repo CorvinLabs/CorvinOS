@@ -154,6 +154,34 @@ def _validate_details(event_type: str, details: dict[str, Any]) -> dict[str, Any
     return out
 
 
+_CHAIN_ALLOWLIST_REGISTERED: set[str] = set()
+
+
+def _register_chain_allowlist(event_type: str) -> None:
+    """Hand this module's per-event field allow-list to the forge chain writer.
+
+    ``forge.security_events`` (F-A4, 2026-09-07) is DEFAULT-DENY: an event
+    type without a registered positive allow-list is cut down to a universal
+    vocabulary floor, which silently dropped delegate-specific fields
+    (``mcp_servers``, ``skill_count``/``skill_chars``, ``verdict``/``replaced``,
+    ``tenant_zone``/``engine_zone``) into ``_dropped_fields``. The allow-list
+    below is already the metadata-only contract ``_validate_details`` enforces
+    on the way in — registering it makes the chain keep exactly those fields.
+    Idempotent; ``register_event_allowlist`` unions, never narrows.
+    """
+    if event_type in _CHAIN_ALLOWLIST_REGISTERED:
+        return
+    allowed = _ALLOWED_FIELDS.get(event_type)
+    if allowed is None:
+        return
+    try:
+        from forge.security_events import register_event_allowlist  # type: ignore
+    except Exception:  # noqa: BLE001 — pre-F-A4 forge: floor absent, nothing to do
+        return
+    register_event_allowlist(event_type, frozenset(allowed))
+    _CHAIN_ALLOWLIST_REGISTERED.add(event_type)
+
+
 def _write(event_type: str, **fields: Any) -> None:
     """Common emit path. Best-effort — failures swallow silently."""
     audit_path = _resolve_audit_path()
@@ -165,6 +193,7 @@ def _write(event_type: str, **fields: Any) -> None:
     except Exception:  # noqa: BLE001
         return
     safe_details = _validate_details(event_type, fields)
+    _register_chain_allowlist(event_type)
     try:
         write_event(
             audit_path,

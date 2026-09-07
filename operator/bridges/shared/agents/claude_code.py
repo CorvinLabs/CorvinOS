@@ -309,6 +309,17 @@ class ClaudeCodeEngine:
         feeds the prompt via stream-json stdin. Must be combined with
         `streaming=True` to add `--input-format stream-json`.
 
+        Positional prompt (``prompt_via_stdin=False``): the prompt is the
+        LAST element and is preceded by a literal ``--`` end-of-options
+        sentinel. Without it, a prompt beginning with ``-`` — e.g. a
+        ``/task --add-dir / ...`` instruction, or ``--version`` — is
+        parsed by the claude CLI as a FLAG (argv injection: ``--add-dir``,
+        ``--mcp-config``, ``--dangerously-skip-permissions``). The sentinel
+        must come after every option because the CLI treats everything
+        after ``--`` as positional (verified 2026-09-07: options placed
+        after ``--`` are silently ignored), which is why the prompt moved
+        from "right after -p" to the tail of argv.
+
         `continue_session=True`: insert `--continue` between the binary
         and the `-p` flag (matches adapter.py's slice insertion).
 
@@ -334,8 +345,6 @@ class ClaudeCodeEngine:
         elif continue_session:
             args.append("--continue")
         args.append("-p")
-        if not prompt_via_stdin:
-            args.append(prompt)
 
         if system_prompt_file:
             args += ["--append-system-prompt-file", str(system_prompt_file)]
@@ -387,6 +396,11 @@ class ClaudeCodeEngine:
             if prompt_via_stdin:
                 args += ["--input-format", "stream-json"]
             args += ["--output-format", "stream-json", "--verbose"]
+
+        if not prompt_via_stdin:
+            # End-of-options sentinel + prompt LAST (see docstring): a
+            # prompt that starts with "-" can never become a CLI flag.
+            args += ["--", prompt]
 
         return args
 

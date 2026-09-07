@@ -620,6 +620,15 @@ def emit_audit(event_type: str, details: dict[str, Any]) -> None:
     if str(forge_path) not in sys.path:
         sys.path.insert(0, str(forge_path))
     from forge import security_events as _se
+    # forge.security_events keeps a POSITIVE per-event allowlist and drops every
+    # unregistered detail key (2026-09-07) — fold this module's allow-list in so
+    # the drift/probe metadata (scores, window) survives into the chain record.
+    _reg = getattr(_se, "register_event_allowlist", None)
+    if callable(_reg):
+        try:
+            _reg(event_type, _AUDIT_ALLOWED_FIELDS[event_type])
+        except Exception:  # noqa: BLE001 — best-effort; the write still chains
+            pass
     p = _audit_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     _se.write_event(p, event_type, details=details)

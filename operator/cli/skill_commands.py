@@ -10,6 +10,7 @@ from core.skill_management.migrator import migrate_skills
 from core.skill_management.validator import MetadataValidator, DependencyValidator
 from core.skill_management.resolver import SkillDependencyResolver
 from core.skill_management.tenant_validator import validate_tenant_id
+from core.paths.tenant import tenant_home
 
 
 def _ck_tenant(tenant: str) -> str:
@@ -58,7 +59,8 @@ def list_skills(tenant: str, scope: str, format: str):
     scopes = ["_platform", "_shared", "_local"] if scope == "all" else [scope]
     skills = []
 
-    tenant_path = Path.home() / ".corvin" / "tenants" / tenant
+    # CORVIN_HOME-aware SSOT (core.paths.tenant) -- never Path.home()/".corvin".
+    tenant_path = tenant_home(tenant)
     for s in scopes:
         skills_dir = tenant_path / s / "skills"
         if not skills_dir.exists():
@@ -102,11 +104,12 @@ def skill_info(skill_id: str, tenant: str, scope: str):
     tenant = _ck_tenant(tenant)
     _ck_segment(skill_id, "skill-id")
     _ck_segment(scope, "--scope")
-    meta_path = Path.home() / ".corvin" / "tenants" / tenant / scope / "skills" / skill_id / "meta.json"
+    meta_path = tenant_home(tenant) / scope / "skills" / skill_id / "meta.json"
 
     if not meta_path.exists():
-        click.echo(f"❌ Skill not found: {scope}/{skill_id}", err=True)
-        return
+        # Non-zero exit (rc 1): a missing skill is a failed lookup, not success --
+        # scripts chaining `corvin skill info` must be able to branch on it.
+        raise click.ClickException(f"Skill not found: {scope}/{skill_id}")
 
     with open(meta_path) as f:
         metadata = json.load(f)

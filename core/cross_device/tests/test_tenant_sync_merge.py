@@ -127,3 +127,58 @@ def test_two_instance_git_sync(tmp_path: Path):
     events = (b_dir / "events.jsonl").read_text()
     assert '{"a":1}' in events and '{"b":2}' in events  # event union
     assert (b_dir / "memory" / "note.md").exists()  # A's memory file arrived at B
+
+
+def test_pat_never_in_argv_or_remote_url(tmp_path: Path, monkeypatch):
+    """Adversarial hardening 2026-09-07: the PAT must reach git only via the
+    askpass helper + environment — never argv (/proc/<pid>/cmdline) and never
+    the persisted remote URL in clone/.git/config."""
+    import subprocess
+    seen: list[dict] = []
+    real_run = subprocess.run
+
+    def spy(cmd, **kw):
+        seen.append({"argv": list(cmd), "env": dict(kw.get("env") or {})})
+        # Do not actually hit a remote: fake a successful git (a real clone
+        # would create the working tree — mirror that so the sync proceeds).
+        if len(cmd) > 1 and cmd[1] == "clone":
+            (Path(cmd[-1]) / ".git").mkdir(parents=True, exist_ok=True)
+        class _P:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return _P()
+
+    monkeypatch.setattr(ts.subprocess, "run", spy)
+    monkeypatch.setattr(ts, "gpg_available", lambda: True)
+    monkeypatch.setattr(ts, "gpg_encrypt", lambda blob, pw: b"ciphertext")
+    monkeypatch.setattr(ts, "assert_no_raw_pii", lambda blob: None)
+    local = tmp_path / "local"; _write(local / "events.jsonl", '{"a":1}\n')
+    cache = tmp_path / "cache"
+    ts.run_git_sync(local, "https://git.example.invalid/org/repo.git", cache, "pw",
+                    pat="ghp_SECRET_TOKEN_123")
+    assert seen, "git was never invoked"
+    for call in seen:
+        assert not any("ghp_SECRET_TOKEN_123" in a for a in call["argv"]), call["argv"]
+        assert not any("SECRET_TOKEN_123@" in a for a in call["argv"]), call["argv"]
+    clone_call = next(c for c in seen if c["argv"][1] == "clone")
+    assert clone_call["env"]["GIT_ASKPASS"].endswith(".git-askpass.sh")
+    assert clone_call["env"]["CORVIN_SYNC_GIT_PAT"] == "ghp_SECRET_TOKEN_123"
+    helper = Path(clone_call["env"]["GIT_ASKPASS"])
+    assert helper.is_file() and (helper.stat().st_mode & 0o777) == 0o700
+    assert "SECRET_TOKEN" not in helper.read_text()
+    # local-only git commands (config) never receive the PAT
+    cfg_call = next(c for c in seen if c["argv"][1] == "config")
+    assert "CORVIN_SYNC_GIT_PAT" not in cfg_call["env"]
+    # the helper answers username/password prompts from the environment
+    env = {"CORVIN_SYNC_GIT_PAT": "ghp_SECRET_TOKEN_123", "PATH": "/usr/bin:/bin"}
+    assert real_run([str(helper), "Username for 'https://x': "], env=env, capture_output=True,
+                    text=True).stdout.strip() == "x-access-token"
+    assert real_run([str(helper), "Password for 'https://x': "], env=env, capture_output=True,
+                    text=True).stdout.strip() == "ghp_SECRET_TOKEN_123"
+
+
+def test_credentialed_remote_url_is_refused(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ts, "gpg_available", lambda: True)
+    with pytest.raises(ts.SyncError):
+        ts.run_git_sync(tmp_path / "l", "https://ghp_x@host/r.git", tmp_path / "c", "pw", pat="ghp_x")

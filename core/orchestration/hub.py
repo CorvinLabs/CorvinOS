@@ -61,7 +61,20 @@ class SubsystemHub:
 
         self.subsystems[name] = subsystem
         logger.info(f"Registering subsystem: {name} v{subsystem.version}")
-        subsystem.startup(self)
+        try:
+            subsystem.startup(self)
+        except Exception:
+            # Fail-closed registration: a subsystem whose startup hook raised
+            # is NOT registered, and any subscriptions it managed to add
+            # before failing are withdrawn — no half-started handler may
+            # receive events or answer requests.
+            del self.subsystems[name]
+            for handlers in self.subscribers.values():
+                handlers[:] = [
+                    h for h in handlers
+                    if getattr(h, "__self__", None) is not subsystem
+                ]
+            raise
 
     def unregister_subsystem(self, name: str) -> None:
         """Unregister a subsystem and call its shutdown hook."""

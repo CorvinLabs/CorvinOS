@@ -140,16 +140,31 @@ spec:
             self.assertIsNone(msg)
 
 
-class TestEngineWithoutNameFailsOpen(unittest.TestCase):
+class TestEngineWithoutNameFailsClosed(unittest.TestCase):
+    """F-B9 (2026-09-07): a nameless engine cannot be matched against the
+    locality matrix — the gate must REFUSE, not wave it through. This used to
+    assert fail-open (None), which is exactly the bypass."""
 
-    def test_missing_engine_name_returns_none(self):
+    def test_missing_engine_name_refuses(self):
         with _Sandbox(yaml_content="spec:\n  data_classification:\n    matrix:\n      INTERNAL: [local]\n"):
-            engine = _FakeEngine(name="")
+            for engine in (_FakeEngine(name=""), object()):
+                msg = adapter._check_compliance_or_fail(
+                    engine, prompt="x",
+                    persona=None, channel="discord", chat_key="dm:42",
+                )
+                self.assertIsNotNone(msg)
+                self.assertIn("Spawn rejected", msg or "")
+                self.assertIn("fail-closed", msg or "")
+
+    def test_missing_engine_name_refuses_even_without_tenant_yaml(self):
+        """No tenant config normally means no-op — but a nameless engine is a
+        structural fault, not a policy choice, and stays refused."""
+        with _Sandbox(yaml_content=None):
             msg = adapter._check_compliance_or_fail(
-                engine, prompt="x",
+                _FakeEngine(name=""), prompt="x",
                 persona=None, channel="discord", chat_key="dm:42",
             )
-            self.assertIsNone(msg)
+            self.assertIsNotNone(msg)
 
 
 class TestMtimeReload(unittest.TestCase):

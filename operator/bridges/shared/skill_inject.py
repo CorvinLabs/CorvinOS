@@ -974,9 +974,15 @@ def grade_from_user_followup(
     graded: list[dict] = []
     for name in prev_skill_names:
         try:
+            # ORGANIC: this grade is backed by a real prior run (prev_run_id
+            # is required above) and by the operator's own follow-up turn —
+            # the one grade source that may lift a skill over the promotion
+            # bar. Auto-grade (usage detection) and bootstrap seeds stay
+            # non-organic and are clamped to AUTO_GRADE_CAP_MAX.
             res = reg.grade(
                 name, prev_run_id, float(score),
                 notes=f"outcome ({signal}) prev_run={prev_run_id}",
+                organic=True,
             )
             graded.append({
                 "name": name, "signal": signal,

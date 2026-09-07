@@ -3,7 +3,28 @@
  * Phase 4 K=2: Verify embed rendering for execution context.
  */
 
-const { describe, it, expect } = require('@jest/globals');
+// Plain-node harness (the bridges suite runs `node <file>`; jest is not a
+// dependency of this repo). Minimal describe/it/expect over node:assert.
+const assert = require('node:assert/strict');
+let _failed = 0, _passed = 0;
+const describe = (name, fn) => { console.log(`# ${name}`); fn(); };
+const it = (name, fn) => {
+  try { fn(); _passed++; console.log(`  ok - ${name}`); }
+  catch (e) { _failed++; console.log(`  not ok - ${name}\n    ${e.message}`); }
+};
+const expect = (v) => ({
+  not: { toBeNull: () => assert.notStrictEqual(v, null), toBe: (e) => assert.notStrictEqual(v, e) },
+  toBe: (e) => assert.strictEqual(v, e),
+  toEqual: (e) => assert.deepStrictEqual(v, e),
+  toBeDefined: () => assert.notStrictEqual(v, undefined),
+  toBeUndefined: () => assert.strictEqual(v, undefined),
+  toBeNull: () => assert.strictEqual(v, null),
+  toBeGreaterThanOrEqual: (e) => assert.ok(v >= e, `${v} >= ${e}`),
+  toContain: (e) => assert.ok((typeof v === 'string' ? v.includes(e) : Array.from(v).includes(e)), `expected ${JSON.stringify(v)} to contain ${JSON.stringify(e)}`),
+});
+process.on('exit', (code) => {
+  if (code === 0) { console.log(`\n${_passed} passed, ${_failed} failed`); if (_failed) process.exitCode = 1; }
+});
 
 // Mock the execution context renderer since Discord daemon isn't directly exportable
 const {

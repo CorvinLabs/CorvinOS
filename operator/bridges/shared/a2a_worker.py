@@ -570,7 +570,15 @@ def spawn_a2a_worker(
     try:
         _lic_root = str(Path(__file__).resolve().parents[2])
         if _lic_root not in sys.path:
-            sys.path.insert(0, _lic_root)
+            # APPEND, never insert(0): ``operator/`` at the FRONT of sys.path
+            # made ``import forge`` resolve to the ``operator/forge/`` DIRECTORY
+            # (an implicit namespace package whose ``security_events`` is the
+            # CLI shim) instead of the real ``operator/forge/forge`` package.
+            # audit.py then died at import (``forge.security_events`` has no
+            # ``AuditTenantMismatch``) and EVERY A2A spawn crashed after the
+            # quota gate (adversarial hardening 2026-09-07). The B1 shadow
+            # check below still verifies the license modules' origin.
+            sys.path.append(_lic_root)
         from license.compute_quota import increment_and_check as _cq_increment  # type: ignore
         from license.limits import LicenseLimitError as _CQError  # type: ignore[assignment]
         # ADR-0144 A2A-CQ-NO-B1-02: the standalone a2a_http_server entrypoint never

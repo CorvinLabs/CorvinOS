@@ -821,6 +821,17 @@ def emit_violation_event(
 
     _validate_audit_details(event_type, details)
 
+    # forge.security_events keeps a POSITIVE per-event allowlist and drops every
+    # unregistered detail key (2026-09-07) — fold this module's allow-list in,
+    # otherwise `actual_tier` / `min_tier` / `valid_until` are stripped from the
+    # chain record and the event no longer explains the refusal.
+    _reg = getattr(_se, "register_event_allowlist", None)
+    if callable(_reg):
+        try:
+            _reg(event_type, _AUDIT_ALLOWED_FIELDS[event_type])
+        except Exception:  # noqa: BLE001 — best-effort; the write below still chains
+            pass
+
     audit_path.parent.mkdir(parents=True, exist_ok=True)
     _se.write_event(
         audit_path,

@@ -239,10 +239,12 @@ class TestToolCoherence:
         )
 
         # tool_1: 2/2 (100%), tool_3: 2/3 (67%)
+        # confidence == total_count / 30 (pinned above): 2–3 samples give
+        # 0.07–0.10, so the gate must be off to rank by success rate here.
         recommendations = parent_coherence.get_recommended_tools_for_error(
             error_class="syntax",
             top_n=3,
-            min_confidence=0.2,
+            min_confidence=0.0,
         )
 
         assert len(recommendations) == 2
@@ -636,9 +638,11 @@ class TestContextCoherenceIntegration:
 
         # Verify inheritance
         coh_2_obj = coherence_manager.get_coherence("task_2")
+        # One inherited sample → confidence 1/30; disable the gate (see above).
         recommendations = coh_2_obj.get_recommended_tools_for_error(
             error_class="syntax",
             top_n=1,
+            min_confidence=0.0,
         )
 
         assert len(recommendations) > 0

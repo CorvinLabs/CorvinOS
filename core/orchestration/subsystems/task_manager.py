@@ -54,7 +54,8 @@ class TaskPatternStore:
 
     def __init__(self, tenant_id: str, corvin_home: str = None):
         if not corvin_home:
-            corvin_home = str(Path.home() / ".corvin")
+            from core.paths.tenant import corvin_home as _corvin_home  # CORVIN_HOME-aware (never Path.home())
+            corvin_home = str(_corvin_home())
         self.db_path = Path(corvin_home) / "tenants" / tenant_id / "global" / "task_patterns.jsonl"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.last_hash = None

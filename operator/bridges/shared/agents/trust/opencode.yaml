@@ -3,9 +3,9 @@ kind: EngineTrust
 metadata:
   engine_id: opencode
   trust_tier: low
-  evaluated_at: "2026-05-15T00:00:00Z"
+  evaluated_at: "2026-09-07T00:00:00Z"
   evaluated_against: "opencode-2025-q4 + ollama/qwen3-1.7b"
-  valid_until: "2026-08-15T00:00:00Z"
+  valid_until: "2026-12-07T00:00:00Z"
 spec:
   binary_sha256: null
   jailbreak_resistance: 0.65
@@ -28,3 +28,11 @@ spec:
 
     Kürzere valid_until (3 Monate statt 6), weil OpenCode +
     Backend-Modell-Combo häufiger updatet.
+
+    Re-Evaluation 2026-09-07 (adversarial hardening): das Manifest war
+    seit 2026-08-15 abgelaufen — jeder opencode-Spawn wurde damit still
+    auf effective_tier=low heruntergestuft und mit "manifest-expired"
+    statt einem echten Tier-Verdict abgelehnt (L30.1-Tests brachen
+    deshalb). Tier bleibt "low" (keine neue Messung; Einstufung ist
+    bereits die konservativste), evaluated_at/valid_until nachgeführt.
+    Nächste Pflicht-Re-Evaluation: 2026-12-07.

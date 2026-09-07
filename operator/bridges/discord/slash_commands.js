@@ -54,13 +54,11 @@ const COMMANDS = [
   // ── Help / introspection ───────────────────────────────────────────
   { name: 'help',     description: 'Full overview of slash-commands.' },
   { name: 'hilfe',    description: 'Full overview of slash-commands (German).' },
-  { name: 'whoami',   description: 'Current persona + capabilities.' },
+  { name: 'whoami',   description: 'Current role + capabilities.' },
   { name: 'skills',   description: 'What this role can do right now.' },
-  { name: 'personas', description: 'List available cowork personas.' },
-
-  // ── Persona switch ─────────────────────────────────────────────────
-  { name: 'persona', description: 'Pin a cowork persona to this chat.',
-    options: [{ name: 'args', description: 'Persona name (or "reset")', type: 3, required: false }] },
+  // `persona` / `personas` are NOT registered any more — personas were
+  // retired in e7e3560e (Skills replaced them). The typed `/persona` still
+  // gets a retirement notice from in_chat_commands.js.
 
   // ── Voice / TTS reading mode ───────────────────────────────────────
   { name: 'voice-on',      description: 'Enable read-aloud of replies.' },

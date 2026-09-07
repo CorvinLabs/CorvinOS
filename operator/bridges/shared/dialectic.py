@@ -46,6 +46,7 @@ dialectic decisions for that one chat regardless of global state.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -69,6 +70,21 @@ try:
     if _FORGE_TOP.is_dir() and str(_FORGE_TOP) not in _sys.path:
         _sys.path.insert(0, str(_FORGE_TOP))
     from forge.security_events import write_event as _audit_writer  # type: ignore # noqa: E402
+    from forge.security_events import register_event_allowlist as _register_allowlist  # type: ignore # noqa: E402
+    # Positive, content-free allow-list for the decision record. The synthesis
+    # itself is model TEXT and must never enter the chain — only its length,
+    # digest and whether it changed the thesis (``corrected``).
+    _register_allowlist("decision.dialectical", {
+        "decision_id", "site", "mode", "heat", "choice", "reason",
+        "corrected", "synthesis_len", "synthesis_sha256",
+        "why_len", "why_sha256",
+        "persona", "channel_id", "audit_ref", "tenant_id",
+    })
+    # Rate-limit record: counters + identifiers only.
+    _register_allowlist("dialectic.rate_limited", {
+        "site", "active_mode", "cap", "window_s",
+        "persona", "channel_id", "audit_ref", "tenant_id",
+    })
 except Exception:  # noqa: BLE001
     _audit_writer = None
 
@@ -125,6 +141,13 @@ class Decision:
     mode: str
     heat: float
     decision_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    #: True when the synthesis departed from the thesis (judge CORRECTED the
+    #: candidate, cli/fast picked the antithesis). Audited instead of the text.
+    corrected: bool = False
+    #: Controlled reason CODE for the audit record (closed vocabulary set by
+    #: the code path, never by a model). ``why`` stays the human rationale
+    #: for in-process consumers — it may be model text and is NOT audited.
+    reason: str = ""
     ts: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -634,6 +657,8 @@ def judge_summary(*,
             site=site, choice=verdict, synthesis=line,
             thesis=candidate, antithesis=None,
             why=why, mode="cli", heat=1.0,
+            corrected=(verdict == "corrected"),
+            reason=f"judge-{verdict}",
         )
         _audit(d, persona=persona, channel_id=channel_id)
         return final_text, verdict, why
@@ -771,8 +796,18 @@ def _audit(decision: Decision, *, persona: str = "", channel_id: str = "") -> No
                 "mode":        decision.mode,
                 "heat":        decision.heat,
                 "choice":      _json_safe(decision.choice)[:200],
-                "synthesis":   decision.synthesis[:300],
-                "why":         decision.why[:200],
+                # Content-free view of the synthesis (model text): never the
+                # text itself — its length, digest and the verdict bit.
+                "corrected":        bool(decision.corrected),
+                "synthesis_len":    len(decision.synthesis or ""),
+                "synthesis_sha256": hashlib.sha256(
+                    (decision.synthesis or "").encode("utf-8")).hexdigest(),
+                # ``why`` may be model text (judge / cli rationale) — audit
+                # the controlled code + a content-free view only.
+                "reason":       decision.reason or "",
+                "why_len":      len(decision.why or ""),
+                "why_sha256":   hashlib.sha256(
+                    (decision.why or "").encode("utf-8")).hexdigest(),
                 "persona":     persona,
                 "channel_id":  channel_id,
             },
@@ -831,6 +866,7 @@ def decide(*,
                 site=site, choice=thesis, synthesis=_json_safe(thesis),
                 thesis=thesis, antithesis=None,
                 why=f"below-threshold (heat={heat:.2f} < {threshold:.2f})",
+                reason="below-threshold",
                 mode="off", heat=heat,
             )
             cfg = load_config()
@@ -843,7 +879,7 @@ def decide(*,
             d = Decision(
                 site=site, choice=thesis, synthesis=_json_safe(thesis),
                 thesis=thesis, antithesis=antithesis,
-                why="recursion-guard: depth>=1 → off",
+                why="recursion-guard: depth>=1 → off", reason="recursion-guard",
                 mode="off", heat=heat,
             )
             return d
@@ -855,7 +891,7 @@ def decide(*,
             d = Decision(
                 site=site, choice=thesis, synthesis=_json_safe(thesis),
                 thesis=thesis, antithesis=None,
-                why="mode=off (toggle)", mode="off", heat=heat,
+                why="mode=off (toggle)", mode="off", heat=heat, reason="mode-off",
             )
             _audit(d, persona=persona, channel_id=channel_id)
             # EU AI Act Art. 14 — emit human_oversight.override when an
@@ -876,7 +912,7 @@ def decide(*,
                 d = Decision(
                     site=site, choice=thesis, synthesis=_json_safe(thesis),
                     thesis=thesis, antithesis=antithesis,
-                    why="fast: no synthesizer registered",
+                    why="fast: no synthesizer registered", reason="fast-no-synthesizer",
                     mode="fast", heat=heat,
                 )
             else:
@@ -885,6 +921,7 @@ def decide(*,
                     site=site, choice=choice, synthesis=synthesis,
                     thesis=thesis, antithesis=antithesis,
                     why=why, mode="fast", heat=heat,
+                    corrected=bool(choice != thesis), reason="fast-synthesized",
                 )
             _audit(d, persona=persona, channel_id=channel_id)
             return d
@@ -899,6 +936,7 @@ def decide(*,
             d = Decision(
                 site=site, choice=thesis, synthesis=_json_safe(thesis),
                 thesis=thesis, antithesis=antithesis,
+                reason="rate-limit",
                 why=(f"rate-limit: {site} exceeded {cap} calls / "
                      f"{int(_RATE_WINDOW_SECONDS)}s — degraded to thesis"),
                 mode="off", heat=heat,
@@ -936,6 +974,7 @@ def decide(*,
                 synthesis=block,
                 thesis=thesis, antithesis=antithesis,
                 why="skill: caller's Claude completes the synthesis in its turn",
+                reason="skill-placeholder",
                 mode="skill", heat=heat,
             )
             _audit(d, persona=persona, channel_id=channel_id)
@@ -948,8 +987,12 @@ def decide(*,
             parts = [p.strip() for p in line.split("|", 2)]
             choice = thesis
             why = "cli: parse-fallback"
+            reason = "cli-parse-fallback"
             if parts and parts[0].upper().startswith("B"):
                 choice = antithesis
+                reason = "cli-antithesis"
+            elif len(parts) >= 2:
+                reason = "cli-thesis"
             if len(parts) >= 3:
                 why = f"cli: {parts[2]}"
             elif len(parts) >= 2:
@@ -958,6 +1001,7 @@ def decide(*,
                 site=site, choice=choice, synthesis=line,
                 thesis=thesis, antithesis=antithesis,
                 why=why, mode="cli", heat=heat,
+                corrected=bool(choice is antithesis), reason=reason,
             )
             _audit(d, persona=persona, channel_id=channel_id)
             return d
@@ -966,7 +1010,7 @@ def decide(*,
         return Decision(
             site=site, choice=thesis, synthesis=_json_safe(thesis),
             thesis=thesis, antithesis=antithesis,
-            why=f"unknown-mode={active!r} → thesis fallback",
+            why=f"unknown-mode={active!r} → thesis fallback", reason="unknown-mode",
             mode="off", heat=heat,
         )
     finally:

@@ -10,6 +10,7 @@ Test Coverage:
 ADR-0280: Voice-Native Midstream Guidance Classifier
 """
 
+import os
 import pytest
 import asyncio
 from datetime import datetime
@@ -159,19 +160,64 @@ class TestLLMClassifier:
 
     @pytest.mark.asyncio
     async def test_llm_classify_guidance(self):
-        """Test LLM classification of guidance event."""
+        """LLM response parsing/mapping contract (SDK call mocked at the same
+        seam the fallback test uses — no network, no key)."""
+        import json
         event = GuidanceEvent(
             id="test_llm_001",
             input_text="use Opus for better quality"
         )
+        response = Mock()
+        response.content = [Mock(text=json.dumps({
+            "guidance_class": GuidanceClass.MIDSTREAM_GUIDANCE.value,
+            "risk_level": RiskLevel.SAFE.value,
+            "confidence": 0.9,
+            "subsystem_hint": "model_router",
+            "explanation": "model preference",
+            "keywords": ["opus"],
+        }))]
 
-        result = await self.classifier.classify(event)
+        with patch.object(self.classifier.client.messages, "create", return_value=response) as create:
+            result = await self.classifier.classify(event)
 
+        create.assert_called_once()
+        assert create.call_args.kwargs["model"] == self.classifier.model
+        assert event.input_text in create.call_args.kwargs["messages"][0]["content"]
         assert result.event_id == event.id
-        assert result.guidance_class in [
-            GuidanceClass.MIDSTREAM_GUIDANCE,
-            GuidanceClass.TASK_INPUT,
-        ]
+        assert result.guidance_class == GuidanceClass.MIDSTREAM_GUIDANCE
+        assert result.risk_level == RiskLevel.SAFE
+        assert result.confidence == 0.9
+        assert result.subsystem_hint == "model_router"
+        assert result.matched_keywords == ["opus"]
+        assert result.model_used == "llm"
+        assert self.classifier.stats["classifications_total"] == 1
+
+    @pytest.mark.asyncio
+    async def test_llm_malformed_response_is_parse_error(self):
+        """Non-JSON model output → ValueError, counted as parsing error (fail-closed)."""
+        event = GuidanceEvent(id="test_llm_003", input_text="use Opus")
+        response = Mock()
+        response.content = [Mock(text="not json")]
+        with patch.object(self.classifier.client.messages, "create", return_value=response):
+            with pytest.raises(ValueError, match="Failed to parse LLM response"):
+                await self.classifier.classify(event)
+        assert self.classifier.stats["parsing_errors"] == 1
+
+    @pytest.mark.live
+    @pytest.mark.skipif(
+        os.environ.get("CLAUDE_LIVE_E2E") != "1",
+        reason="live LLM E2E: set CLAUDE_LIVE_E2E=1",
+    )
+    @pytest.mark.asyncio
+    async def test_llm_classify_guidance_live(self):
+        """REAL model call through LLMClassifier (Anthropic SDK). The SDK needs
+        an API key — it does not use the local `claude` CLI login."""
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            pytest.skip("LLMClassifier uses the Anthropic SDK: ANTHROPIC_API_KEY required")
+        event = GuidanceEvent(id="test_llm_live", input_text="use Opus for better quality")
+        result = await self.classifier.classify(event)
+        assert result.event_id == event.id
+        assert result.guidance_class in [GuidanceClass.MIDSTREAM_GUIDANCE, GuidanceClass.TASK_INPUT]
         assert 0.0 <= result.confidence <= 1.0
         assert result.model_used == "llm"
 

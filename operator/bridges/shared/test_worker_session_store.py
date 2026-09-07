@@ -20,6 +20,15 @@ import os
 import sys
 import tempfile
 import unittest
+
+# Isolate EVERY tenant-scoped ledger the a2a_worker spawn gates consult
+# (compute_units_per_day quota, L34 tenant config, audit chain) from the live
+# install: without this the suite shared the developer's real CORVIN_HOME, and
+# once the day's free-tier compute quota was spent by other runs every spawn
+# came back ``rejected: compute_quota_exceeded`` instead of reaching the
+# behaviour under test (adversarial hardening 2026-09-07).
+_ISOLATED_HOME = tempfile.mkdtemp(prefix="test-wss-home-")
+os.environ["CORVIN_HOME"] = _ISOLATED_HOME
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -336,8 +345,12 @@ class TestSessionResetPurgesWorkerSessions(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _make_session_dir(self, chan_id: str) -> Path:
-        """Create a minimal forge session dir structure."""
-        d = self.tmp / "sessions" / chan_id / "worker_sessions"
+        """Create a minimal forge session dir structure in the TENANT-NATIVE
+        layout (ADR-0007: ``<corvin_home>/tenants/<tid>/sessions/``) — the
+        only layout ``session_reset._sessions_root`` purges since 2026-08-28.
+        The pre-migration ``<corvin_home>/sessions/`` fixture this test used to
+        build was never reached (fixture drift, fixed 2026-09-07)."""
+        d = self.tmp / "tenants" / "_default" / "sessions" / chan_id / "worker_sessions"
         d.mkdir(parents=True)
         return d
 
@@ -350,13 +363,18 @@ class TestSessionResetPurgesWorkerSessions(unittest.TestCase):
 
         # Call _purge_worker_sessions directly.
         from session_reset import _purge_worker_sessions
+        # Restore (never delete) CORVIN_HOME: deleting it here leaked into every
+        # later test class in this file, which then ran against NO home at all.
+        _prev_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = str(self.tmp)
-        os.environ.setdefault("CORVIN_HOME", str(self.tmp))
         try:
             failures: list[str] = []
             removed = _purge_worker_sessions(forge_chan_id=chan_id, failures=failures)
         finally:
-            del os.environ["CORVIN_HOME"]
+            if _prev_home is None:
+                os.environ.pop("CORVIN_HOME", None)
+            else:
+                os.environ["CORVIN_HOME"] = _prev_home
 
         self.assertEqual(removed, 2, f"expected 2 removed, failures={failures}")
         self.assertEqual(list(ws.glob("*.session.json")), [])

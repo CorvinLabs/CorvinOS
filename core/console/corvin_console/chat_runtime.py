@@ -1320,19 +1320,24 @@ def _configured_os_engine(tenant_id: str) -> str:
     return "claude_code"
 
 
-def _effective_os_engine(tenant_id: str) -> str:
-    """Like _configured_os_engine but with automatic Hermes fallback.
+def _resolve_os_engine(tenant_id: str) -> tuple[str, str, str | None]:
+    """Resolve ``(configured, effective, reason)`` for the tenant's OS engine.
 
-    When the tenant has claude_code configured (or defaulted) but the
-    claude binary is absent — typical on a fresh Windows install where
-    Claude Code was not installed — and the HermesEngine module is
-    available, we transparently route to Hermes instead of surfacing
-    a raw "claude binary not found" error.  The user gets a working
-    response; they can switch to Claude Code later via Settings → Engines.
+    ``configured`` is spec.default_engine (→ claude_code); ``effective`` is what
+    the turn will actually run on; ``reason`` names the substitution
+    (``claude-binary-missing`` / ``claude-not-authenticated``) or is ``None``
+    when configured == effective. Pure — no audit side effect — so the
+    WebSocket pre-turn guard can call it without double-emitting.
+
+    When the tenant has claude_code configured (or defaulted) but the claude
+    binary is absent — typical on a fresh Windows install where Claude Code
+    was not installed — we transparently route to Hermes instead of surfacing
+    a raw "claude binary not found" error. The user gets a working response;
+    they can switch to Claude Code later via Settings → Engines.
     """
-    engine = _configured_os_engine(tenant_id)
-    if engine != "claude_code":
-        return engine
+    configured = _configured_os_engine(tenant_id)
+    if configured != "claude_code":
+        return configured, configured, None
     binary = _claude_binary()
     # For absolute paths (CORVIN_CLAUDE_BIN set explicitly) check file existence
     # and executability — shutil.which only searches PATH and skips absolute paths,
@@ -1346,7 +1351,7 @@ def _effective_os_engine(tenant_id: str) -> str:
         # (vendored path issue on wheel installs). The hermes dispatch path will
         # surface a clearer "Ollama not running" error if needed, which is far
         # more actionable than "claude binary not found".
-        return "hermes"
+        return configured, "hermes", "claude-binary-missing"
     # Binary present but NOT authenticated (OAuth session / API key absent): the
     # wizard installs the claude binary but login is skippable and commonly
     # deferred, so spawning it would fail every turn with a raw CLI auth error
@@ -1356,9 +1361,48 @@ def _effective_os_engine(tenant_id: str) -> str:
     # no macOS keychain path is used anywhere, so this introduces no new
     # false-negative). The user can `claude auth login` and switch back any time.
     if not _claude_authenticated():
-        return "hermes"
-    return engine
+        return configured, "hermes", "claude-not-authenticated"
+    return configured, configured, None
 
+
+# Positive detail allowlist for the substitution event (same mechanism
+# engine_span.py uses): without it the chain writer's vocabulary floor
+# (security_events F-A4) drops `configured` / `effective` as unknown keys
+# and the record degrades to {reason} + `_dropped_fields`.
+_ENGINE_SUBSTITUTED_EVENT = "os_turn.engine_substituted"
+try:
+    from forge import security_events as _fse  # type: ignore  # noqa: E402
+    _fse.register_event_allowlist(
+        _ENGINE_SUBSTITUTED_EVENT, frozenset({"configured", "effective", "reason"}),
+    )
+except Exception:  # noqa: BLE001 — forge missing: _console_audit itself is unusable
+    pass
+
+
+def _effective_os_engine(tenant_id: str, *, audit: bool = True) -> str:
+    """Like _configured_os_engine but with automatic Hermes fallback.
+
+    Every substitution (configured != effective) is AUDITED on the tenant's
+    console chain as ``os_turn.engine_substituted {configured, effective,
+    reason}`` (F-E2, 2026-09-07) — the swap used to be silent, so an operator
+    reading the chain saw Hermes turns for a Claude-configured tenant with no
+    record of why. ``audit=False`` is for the pre-turn WebSocket guard
+    (``get_engine_unavailable_message``), which resolves the same answer
+    before the turn that audits it — one event per turn, not two.
+    """
+    configured, effective, reason = _resolve_os_engine(tenant_id)
+    if reason is not None and audit:
+        _console_audit.system_event(
+            tenant_id=tenant_id,
+            event=_ENGINE_SUBSTITUTED_EVENT,
+            details={
+                "configured": configured,
+                "effective": effective,
+                "reason": reason,
+            },
+            severity="WARNING",
+        )
+    return effective
 
 def _claude_authenticated() -> bool:
     """Cheap, subprocess-free Claude Code auth probe — mirrors the credential
@@ -1450,7 +1494,7 @@ def get_engine_unavailable_message(tenant_id: str) -> str | None:
     be driven by the web chat, else None.  Used by the WebSocket handler to guard
     the quota charge — no turn should be billed when the engine isn't even set up.
     """
-    return _engine_unavailable_message(_effective_os_engine(tenant_id))
+    return _engine_unavailable_message(_effective_os_engine(tenant_id, audit=False))
 
 
 def will_delegate(sess: "WebChatSession", prompt: str) -> bool:

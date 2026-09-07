@@ -175,13 +175,15 @@ class ToolCoherence:
             old_rate = self.success_rates_per_error[error_class][tool_id]
             new_success_count = old_rate.success_count + (1 if succeeded else 0)
             new_total_count = old_rate.total_count + 1
-            # Weighted average
+            # Running mean: the old mean covers old_rate.total_count samples
+            # (using total_count - 1 here under-weighted history and made the
+            # second sample's mean equal to the first sample).
             new_latency = int(
-                (old_rate.avg_latency_ms * (old_rate.total_count - 1) + latency_ms)
+                (old_rate.avg_latency_ms * old_rate.total_count + latency_ms)
                 / new_total_count
             )
             new_cost = int(
-                (old_rate.avg_cost_cents * (old_rate.total_count - 1) + cost_cents)
+                (old_rate.avg_cost_cents * old_rate.total_count + cost_cents)
                 / new_total_count
             )
         else:

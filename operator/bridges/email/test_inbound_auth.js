@@ -39,7 +39,7 @@ function extractFn(src, name) {
   throw new Error(`unbalanced braces in ${name}`);
 }
 
-const fnSrc = ['domainOf', 'domainsAligned', 'topAuthResultsLine', 'inboundAuthPasses']
+const fnSrc = ['domainOf', 'domainsAligned', 'topAuthResultsLine', 'parseAuthResultsClauses', 'inboundAuthPasses']
   .map((n) => extractFn(SRC, n)).join('\n\n');
 
 t('helper functions present in daemon.js', /function inboundAuthPasses/.test(fnSrc));
@@ -48,7 +48,7 @@ t('helper functions present in daemon.js', /function inboundAuthPasses/.test(fnS
 function makeHelpers(settings) {
   const factory = new Function(
     'currentSettings',
-    `${fnSrc}\n; return { domainOf, domainsAligned, topAuthResultsLine, inboundAuthPasses };`,
+    `${fnSrc}\n; return { domainOf, domainsAligned, topAuthResultsLine, parseAuthResultsClauses, inboundAuthPasses };`,
   );
   return factory(() => settings);
 }
@@ -180,6 +180,59 @@ function rawMail(headerLines, from = 'Owner <owner@example.com>') {
     ]));
     const r = Hp.inboundAuthPasses(p, 'owner@example.com');
     t('ok=true when top authserv-id matches pin', r.ok === true, r.reason);
+  }
+
+  // 12. F-B1 (2026-09-07): TWO dkim clauses — the From-aligned d= belongs to a
+  //     FAILED signature, the pass belongs to an unrelated domain. The old
+  //     whole-line regex paired them and forged an owner. Per-clause parse
+  //     must drop it.
+  console.log('\n[dkim=fail d=aligned; dkim=pass d=unaligned → drop]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; dkim=fail header.d=example.com header.s=s1; dkim=pass header.d=attacker.tld header.s=x',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=false (aligned d= from a failed clause is not a pass)', r.ok === false, r.reason);
+  }
+
+  // 13. F-B1: dmarc=fail + aligned dkim=pass → the receiver's DMARC verdict
+  //     wins; the DKIM fallback must NOT reopen the gate.
+  console.log('\n[dmarc=fail + dkim=pass aligned → drop]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; dkim=pass header.d=example.com; dmarc=fail (p=reject) header.from=example.com',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=false on dmarc=fail despite dkim=pass', r.ok === false, r.reason);
+    t('reason names dmarc verdict', /dmarc=fail/.test(r.reason), r.reason);
+  }
+
+  // 14. F-B1: header.i=user@dom — the domain (not the local-part) must be the
+  //     alignment candidate. Old regex captured "attacker" as a domain here
+  //     and "owner" for the legitimate case (never aligned → false negative).
+  console.log('\n[header.i=local@domain → domain part is the candidate]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; dkim=pass header.i=owner@example.com header.s=s1',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=true (domain of header.i aligned)', r.ok === true, r.reason);
+    const p2 = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; dkim=pass header.i=example.com@attacker.tld',
+    ]));
+    const r2 = H.inboundAuthPasses(p2, 'owner@example.com');
+    t('ok=false (local-part that looks like the From domain is ignored)', r2.ok === false, r2.reason);
+  }
+
+  // 15. F-B1: dkim=pass clause aligned, an unrelated dkim=fail clause (e.g. a
+  //     list re-sign) must not poison it — still authorized.
+  console.log('\n[dkim=pass aligned + dkim=fail unrelated → authorized]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; dkim=pass header.d=example.com; dkim=fail header.d=lists.tld',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=true', r.ok === true, r.reason);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

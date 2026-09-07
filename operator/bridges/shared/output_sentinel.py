@@ -468,6 +468,18 @@ _AUDIT_ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     }),
 }
 
+# The audit writer is DEFAULT-DENY for keys outside its universal vocabulary;
+# ``output_chars`` / ``verdict_raw_chars`` are module-specific counts. Mirror
+# the allow-list into the writer (plus the reserved ``audit_ref`` /
+# ``tenant_id``) so the counts survive the floor — the local list above stays
+# the caller-facing gate (SentinelAuditFieldNotAllowed).
+try:
+    from forge.security_events import register_event_allowlist as _register_allowlist  # noqa: WPS433
+    for _evt, _keys in _AUDIT_ALLOWED_FIELDS.items():
+        _register_allowlist(_evt, set(_keys) | {"audit_ref", "tenant_id"})
+except Exception:  # noqa: BLE001 — forge absent: emit_audit() fails the same way below
+    pass
+
 _FORBIDDEN_FIELDS: frozenset[str] = frozenset({
     "prompt", "prompt_text", "output", "output_text", "final_text",
     "verdict_text", "verdict_raw", "stdout",

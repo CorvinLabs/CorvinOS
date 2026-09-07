@@ -42,6 +42,19 @@ class SkillDispatcher:
             try:
                 skill_fn = self.skills[skill_id]
                 output = skill_fn(current_input)
+                # Result contract: a skill fails by RAISING or by returning a
+                # mapping with a truthy "error" key (the {"error": ...} shape
+                # every other CorvinOS worker uses). Treating such a return as
+                # success fed the error dict to the next skill as its input and
+                # marked the phase — and the task — successful.
+                if isinstance(output, dict) and output.get("error"):
+                    results.append(SkillResult(
+                        skill_id=skill_id,
+                        success=False,
+                        output={},
+                        error=f"skill {skill_id} returned error: {output['error']}",
+                    ))
+                    break
                 result = SkillResult(skill_id=skill_id, success=True, output=output)
                 results.append(result)
                 current_input = output  # Pass output as input to next skill

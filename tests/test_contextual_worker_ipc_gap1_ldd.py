@@ -9,13 +9,15 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 
-# Ensure operator package is in path
-_op_root = Path(__file__).parent.parent / "operator"
-if str(_op_root) not in sys.path:
-    sys.path.insert(0, str(_op_root))
+# Import the TDE package the way every other tde test does (operator/orchestration
+# on sys.path, `tde` as a top-level package). Importing it as `orchestration.tde`
+# collided with `core/orchestration` when the full suite had already bound the
+# name `orchestration` to that package (collection error, 2026-09-07).
+_tde_root = Path(__file__).parent.parent / "operator" / "orchestration"
+if str(_tde_root) not in sys.path:
+    sys.path.insert(0, str(_tde_root))
 
-# Now we can import
-from orchestration.tde.contextual_worker_ipc import (
+from tde.contextual_worker_ipc import (
     ContextualSubprocessWorkerIPC,
     ContextualWorkerIPC,
     StepMemory,

@@ -100,10 +100,11 @@ class Queue:
             blocking: Wait for all items (default True)
 
         Returns:
-            List of items (may be < count if non-blocking and queue too small)
+            List of items — fewer than `count` when non-blocking and the queue is
+            too small, or when blocking and the timeout elapses with a partial batch.
 
         Raises:
-            QueueError: If timeout
+            QueueError: If blocking and the timeout elapses with NO item at all
         """
         deadline = time.time() + self.timeout if blocking else None
         items = []
@@ -111,13 +112,13 @@ class Queue:
         with self._not_empty:
             while len(items) < count:
                 if len(self._queue) == 0:
-                    if not blocking or len(items) > 0:
+                    if not blocking:
                         break
 
-                    remaining = (
-                        deadline - time.time() if deadline else self.timeout
-                    )
+                    remaining = deadline - time.time()
                     if remaining <= 0:
+                        if items:
+                            break  # deadline reached: hand back the partial batch
                         raise QueueError(f"Get_batch timeout after {self.timeout}s")
 
                     self._not_empty.wait(timeout=remaining)

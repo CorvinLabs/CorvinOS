@@ -164,6 +164,32 @@ class TestQuestionQueue:
         assert size == 3
 
     @pytest.mark.asyncio
+    async def test_queue_overflow_higher_priority_evicts_lowest(self):
+        """A higher-priority arrival evicts the lowest queued question."""
+        queue = QuestionQueue(max_size=2)
+        low = UserQuestion(question_text="low", priority=QuestionPriority.LOW)
+        normal = UserQuestion(question_text="normal", priority=QuestionPriority.NORMAL)
+        critical = UserQuestion(question_text="critical", priority=QuestionPriority.CRITICAL)
+
+        await queue.enqueue(low)
+        await queue.enqueue(normal)
+        assert await queue.enqueue(critical) is True  # admitted, `low` evicted
+
+        assert await queue.get_queue_size() == 2
+        active = await queue.get_active_question()
+        assert active.id == critical.id
+
+    @pytest.mark.asyncio
+    async def test_queue_overflow_equal_priority_keeps_queued(self):
+        """Equal priority never evicts an already-queued question (FIFO fairness)."""
+        queue = QuestionQueue(max_size=1)
+        first = UserQuestion(question_text="first", priority=QuestionPriority.NORMAL)
+        second = UserQuestion(question_text="second", priority=QuestionPriority.NORMAL)
+        await queue.enqueue(first)
+        assert await queue.enqueue(second) is False
+        assert (await queue.get_active_question()).id == first.id
+
+    @pytest.mark.asyncio
     async def test_ttl_expiration(self):
         """Test automatic question expiration on TTL."""
         queue = QuestionQueue(ttl_seconds=1)

@@ -236,7 +236,13 @@ class TestE2EIntegration:
 
             # Verify rollback event was recorded
             events = store.query_tenant_scoped(task_id=task_id)
-            rollback_events = [e for e in events if "rollback" in e.event_type.lower()]
+            # ADR-0542 canonical event names: task_rolled_back / rollback_failed
+            # ("rollback" is not a substring of "rolled_back" — the old filter
+            # could never match the success event).
+            rollback_events = [
+                e for e in events
+                if e.event_type in ("task_rolled_back", "rollback_failed")
+            ]
             assert len(rollback_events) > 0, "Rollback event should be in audit trail"
 
             print(f"✅ E2E: Full task lifecycle with rollback validated ({len(events)} audit events)")

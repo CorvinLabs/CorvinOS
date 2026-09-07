@@ -188,7 +188,12 @@ mr.create(
     scope=sys.argv[7],
 )
 if payload.get('grade') is not None:
-    mr.grade(payload['name'], 'run-1', float(payload['grade']))
+    # organic=True: the fixture models a grade EARNED by a real run. The
+    # registry clamps every non-organic grade to AUTO_GRADE_CAP_MAX (0.3),
+    # which would collapse case-E's strictly-decreasing scores into a 7-way
+    # tie and make the mean_score sort meaningless. The injection gate itself
+    # (n_grades >= 1 and mean_score > 0) is NOT widened by this.
+    mr.grade(payload['name'], 'run-1', float(payload['grade']), organic=True)
 """
     payload = {"name": name, "body": body, "description": description, "grade": grade}
     subprocess.run(

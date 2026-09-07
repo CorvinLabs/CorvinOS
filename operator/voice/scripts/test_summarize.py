@@ -955,7 +955,13 @@ def test_session_recap_threads_output_language_into_the_cli_backend() -> None:
     captured: dict = {}
 
     def fake_run(argv, **kw):  # noqa: ANN001
-        captured["system_prompt"] = argv[argv.index("--append-system-prompt") + 1]
+        # F-B5 (2026-09-07): the system prompt travels in a 0600 temp file
+        # (--append-system-prompt-file), the payload on stdin — never argv.
+        from pathlib import Path as _P
+        assert "--append-system-prompt" not in argv
+        captured["system_prompt"] = _P(argv[argv.index("--append-system-prompt-file") + 1]).read_text(encoding="utf-8")
+        assert kw.get("input"), "payload must be handed over on stdin"
+        assert not any("User: X" in a for a in argv), "transcript leaked into argv"
         class _R:
             stdout = "recap"
         return _R()

@@ -97,16 +97,18 @@ def test_poison_quarantine() -> None:
 
 
 def test_process_one_non_dict_top_level_json() -> None:
-    """Blind spot: process_one()'s `json.loads(inbox_file.read_text())` is
-    only guarded against `json.JSONDecodeError`. A syntactically valid but
-    non-object top-level JSON payload — an int, a bare string, or a list —
-    parses fine, and the very next line, `msg.get("id")`, raises an
-    unguarded AttributeError. There is a second internal call site for
-    process_one() besides submit_inbox_item(); this test calls it directly
-    to prove process_one() itself has no defense of its own against the
-    non-dict shape (today's safety net, if any, lives strictly in the
-    caller — see test_submit_inbox_item_non_dict_json_is_not_quarantined
-    below for why that caller-side net is weaker than it looks)."""
+    """FIXED (2026-09-07): a syntactically valid but non-object top-level
+    JSON payload — an int, a bare string, or a list — used to parse fine and
+    crash process_one() on the very next line (`msg.get("id")`, unguarded
+    AttributeError). process_one() now has its own `isinstance(msg, dict)`
+    guard and routes the envelope through the same poison quarantine as a
+    JSON decode error: the file moves to processed/poison/ (bytes kept for
+    the operator), a `bridge.inbox_poison_quarantined` event with
+    reason="not-an-object" lands in the sandbox audit chain (metadata only —
+    file name, size, reason code; never the content), and no exception
+    escapes. This test pins that contract through the real inbox path.
+    (See test_submit_inbox_item_non_dict_json_is_not_quarantined below for
+    the caller-side gap that is still open.)"""
     _section("process_one-non-dict-top-level-json")
     tmp = Path(tempfile.mkdtemp(prefix="adapter-nondict-"))
     try:
@@ -118,6 +120,8 @@ def test_process_one_non_dict_top_level_json() -> None:
                 del sys.modules[mod]
         import adapter  # type: ignore
 
+        poison_dir = Path(adapter.PROCESSED) / "poison"
+        audit_jsonl = Path(os.environ["VOICE_AUDIT_PATH"])
         for label, payload in (
             ("int", "42"),
             ("string", '"just a string"'),
@@ -125,19 +129,39 @@ def test_process_one_non_dict_top_level_json() -> None:
         ):
             inbox_path = Path(adapter.INBOX) / f"nondict_{label}.json"
             inbox_path.write_text(payload)
+            # Must not raise — the non-dict shape is handled inside process_one().
+            adapter.process_one(inbox_path, {})
+            assert not inbox_path.exists(), (
+                f"process_one({label!r}): inbox file still present — not quarantined"
+            )
+            assert (poison_dir / inbox_path.name).exists(), (
+                f"process_one({label!r}): file not moved to processed/poison/"
+            )
+            assert (poison_dir / inbox_path.name).read_text() == payload, (
+                f"process_one({label!r}): quarantined bytes must be kept verbatim"
+            )
+            print(f"PASS: process_one({label}) quarantined → poison/{inbox_path.name}")
+
+        events = []
+        for line in audit_jsonl.read_text().splitlines():
             try:
-                adapter.process_one(inbox_path, {})
-            except AttributeError as e:
-                print(f"PASS(documents bug): process_one({label}) raised "
-                      f"unguarded AttributeError: {e}")
-            else:
-                raise AssertionError(
-                    f"process_one({label!r}) did NOT raise — has an "
-                    f"isinstance(msg, dict) guard been added to "
-                    f"process_one()? If so, update this test to assert "
-                    f"graceful quarantine/skip instead of documenting the "
-                    f"crash."
-                )
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        quarantined = [e for e in events
+                       if e.get("event_type") == "bridge.inbox_poison_quarantined"
+                       and e.get("details", {}).get("reason") == "not-an-object"]
+        assert len(quarantined) == 3, (
+            f"expected 3 bridge.inbox_poison_quarantined(not-an-object) events, "
+            f"got {len(quarantined)}: {[e.get('event_type') for e in events]}"
+        )
+        for e in quarantined:
+            det = e.get("details", {})
+            assert det.get("file", "").startswith("nondict_"), det
+            assert isinstance(det.get("bytes"), int) and det["bytes"] > 0, det
+            # Metadata only — the envelope bytes never enter the chain.
+            assert "just a string" not in json.dumps(e), e
+        print("PASS: 3 bridge.inbox_poison_quarantined(not-an-object) audit events, content-free")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         for k in ("ADAPTER_INBOX", "ADAPTER_OUTBOX", "ADAPTER_PROCESSED",

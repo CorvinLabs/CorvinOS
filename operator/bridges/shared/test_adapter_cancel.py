@@ -520,20 +520,43 @@ def test_late_popen_after_spawn_timeout_orphans_subprocess() -> None:
         adapter._ClaudeCodeEngine = _FakeSlowPopenEngine
 
         chat_key = "chat-late-popen"
+        # The deadline under test is the proc-wait loop. What follows it on
+        # the timeout branch — `task.failed` → TaskManager.record_event →
+        # ADR-0613 outcome sink → audit-first hash-chain write — is failure
+        # BOOKKEEPING, not waiting, and costs ~0.8s on this machine. Measure
+        # the deadline where the adapter announces it (the "never appeared"
+        # log line) so a slower audit write can never masquerade as a
+        # deadline overrun, and bound the bookkeeping separately.
+        deadline_hit = {"t": None}
+        _orig_log = adapter.log
+        def _log_probe(msg, *a, **kw):
+            if "engine.proc never appeared" in str(msg) and deadline_hit["t"] is None:
+                deadline_hit["t"] = time.time()
+            return _orig_log(msg, *a, **kw)
+        adapter.log = _log_probe
         t0 = time.time()
-        result = adapter.call_claude_streaming(
-            prompt="hi",
-            channel="test",
-            chat_key=chat_key,
-            profile={"permission_mode": "bypassPermissions"},
-        )
+        try:
+            result = adapter.call_claude_streaming(
+                prompt="hi",
+                channel="test",
+                chat_key=chat_key,
+                profile={"permission_mode": "bypassPermissions"},
+            )
+        finally:
+            adapter.log = _orig_log
         elapsed = time.time() - t0
 
         assert "timed out before producing a process" in result, \
             f"unexpected result: {result!r}"
-        assert elapsed < 5.5, \
-            f"caller should give up at the ~5s deadline, took {elapsed:.1f}s"
-        print(f"PASS: adapter reported spawn-timeout after {elapsed:.2f}s: {result!r}")
+        assert deadline_hit["t"] is not None, "adapter never logged the spawn deadline"
+        waited = deadline_hit["t"] - t0
+        assert waited < 5.5, \
+            f"caller should give up at the ~5s deadline, waited {waited:.1f}s"
+        bookkeeping = elapsed - waited
+        assert bookkeeping < 3.0, \
+            f"post-deadline failure bookkeeping took {bookkeeping:.1f}s (audit chain stalled?)"
+        print(f"PASS: adapter reported spawn-timeout after {waited:.2f}s "
+              f"(+{bookkeeping:.2f}s task.failed bookkeeping): {result!r}")
 
         # Give the fake engine's background spawn thread time to actually
         # reach Popen() — it sleeps 6s total from the call above.

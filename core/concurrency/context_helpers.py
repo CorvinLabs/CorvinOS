@@ -1,6 +1,6 @@
 """ADR-0424: Context Propagation Helpers — Utilities for decorator + pipeline integration."""
 
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Dict, Any, Optional
 
 
@@ -46,15 +46,36 @@ class TenantContextVar:
     _tenant_var = ContextVar("tenant_id", default=None)
 
     @classmethod
-    def set(cls, tenant_id: str) -> None:
+    def set(cls, tenant_id: str) -> Token:
         """Set tenant_id in current context.
 
         Args:
             tenant_id: Tenant identifier
+
+        Returns:
+            The ``contextvars.Token`` for ``reset()`` — callers that set the
+            tenant for a bounded scope (request handler, test fixture) restore
+            the previous value with it instead of leaking the tenant into the
+            surrounding context.
         """
         if not tenant_id:
             raise ValueError("tenant_id cannot be empty")
-        cls._tenant_var.set(tenant_id)
+        return cls._tenant_var.set(tenant_id)
+
+    @classmethod
+    def clear(cls) -> Token:
+        """Unset tenant_id in the current context (returns the reset token).
+
+        Used by scope boundaries (and the test-suite autouse fixture) so a
+        tenant set in one scope can never be observed by the next one —
+        ``get_or_fail()`` must fail-closed there.
+        """
+        return cls._tenant_var.set(None)
+
+    @classmethod
+    def reset(cls, token: Token) -> None:
+        """Restore the value that was current before the matching set()/clear()."""
+        cls._tenant_var.reset(token)
 
     @classmethod
     def get(cls) -> Optional[str]:

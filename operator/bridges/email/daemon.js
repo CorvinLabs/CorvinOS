@@ -35,6 +35,7 @@ const { startHealthServer }     = require('../shared/js/health-server');
 const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
+const { writeInboxAtomic }      = require('../shared/js/inbox_write');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
 const { countPending }          = require('../shared/js/outbox');
@@ -79,29 +80,112 @@ const announce = makeAnnouncer({
   pluginRoot: PLUGIN_ROOT, channelLabel: 'Email', currentSettings, logger: log,
 });
 
-const IMAP_USER = process.env.EMAIL_IMAP_USER || settings.imap_user;
-const IMAP_PASS = process.env.EMAIL_IMAP_PASSWORD || settings.imap_password;
-const SMTP_USER = process.env.EMAIL_SMTP_USER || settings.smtp_user;
-const SMTP_PASS = process.env.EMAIL_SMTP_PASSWORD || settings.smtp_password;
+// Credential resolution order: channel-specific env → settings.json →
+// GMAIL_APP_PASSWORD (F-B7, 2026-09-07). The Gmail app password is the ONE
+// secret most operators already export for the rest of CorvinOS (a2a_worker /
+// ACS pass it through); honouring it here means the password need not be
+// copied into settings.json at all. Env-only secrets never touch disk.
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
+const IMAP_USER = process.env.EMAIL_IMAP_USER || settings.imap_user || process.env.GMAIL_USER;
+const IMAP_PASS = process.env.EMAIL_IMAP_PASSWORD || settings.imap_password || GMAIL_APP_PASSWORD;
+const SMTP_USER = process.env.EMAIL_SMTP_USER || settings.smtp_user || IMAP_USER;
+const SMTP_PASS = process.env.EMAIL_SMTP_PASSWORD || settings.smtp_password || GMAIL_APP_PASSWORD;
 
 if (!IMAP_USER || !IMAP_PASS || !SMTP_USER || !SMTP_PASS) {
   log('FATAL: imap_user / imap_password / smtp_user / smtp_password all required');
-  log('       (env vars EMAIL_IMAP_USER etc., or settings.json)');
+  log('       (env vars EMAIL_IMAP_USER etc., GMAIL_APP_PASSWORD, or settings.json)');
   process.exit(1);
 }
 
 function writeInbox(payload) {
   const id = newMsgId();
-  fs.writeFileSync(path.join(INBOX, `${id}.json`),
-    JSON.stringify({ id, channel: CHANNEL, ...payload }, null, 2));
+  // Atomic tmp+rename (F-B3) — the adapter's 1 Hz `*.json` poll must never see
+  // a half-written envelope; see shared/js/inbox_write.js.
+  writeInboxAtomic(INBOX, id, { id, channel: CHANNEL, ...payload });
   const kind = payload.audio_path ? 'voice'
              : payload.image_path ? 'image'
              : payload.document_path ? 'document'
              : payload.video_path ? 'video' : 'text';
-  log(`inbox: ${id} from=${payload.from} kind=${kind}`);
+  log(`inbox: ${id} from=${addrFp(payload.from)} kind=${kind}`);
   announce(payload, kind);
   return id;
 }
+
+// F-B10 (2026-09-07): log lines never carry a sender/recipient address —
+// an email address is PII (GDPR Art. 4(1)) and voice.log is long-lived and
+// often pasted into bug reports. A short one-way fingerprint is enough to
+// correlate lines of the same conversation.
+function addrFp(addr) {
+  return crypto.createHash('sha256').update(String(addr || '').toLowerCase()).digest('hex').slice(0, 12);
+}
+
+// F-B6 (2026-09-07): attachment filenames come from the sender. `.` / `..` /
+// '' collapsed to a directory or an unwritable path and threw inside
+// handleParsed BEFORE the \Seen flag was set — the same mail was re-parsed
+// on every poll, forever. Sanitise to a safe basename, never empty, bounded.
+const ATTACH_NAME_MAX = 120;
+function safeAttachmentName(filename) {
+  let base = String(filename || '').split(/[\\/]/).pop() || '';
+  base = base.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '');
+  if (!base || base === '.' || base === '..') base = 'file';
+  if (base.length > ATTACH_NAME_MAX) {
+    const dot = base.lastIndexOf('.');
+    const ext = dot > 0 && base.length - dot <= 16 ? base.slice(dot) : '';
+    base = base.slice(0, ATTACH_NAME_MAX - ext.length) + ext;
+  }
+  return base;
+}
+
+// F-B6: processed-UID state. The daemon used to rely on the \Seen flag alone
+// as its "already handled" memory, which (a) marked rejected/spoofed mail as
+// read for the human owner too and (b) re-looped on any throw before the
+// flag was set. The state file is the daemon's own memory: a UID is recorded
+// after a DECISION was reached (accepted, rejected, or failed), keyed by
+// UIDVALIDITY so a mailbox reset starts over. \Seen is now set ONLY for mail
+// the bridge actually accepted (inbox write / in-chat reply) — rejected mail
+// stays unread in the owner's mailbox, where a human can still look at it.
+const IMAP_STATE_FILE = path.join(path.dirname(SETTINGS_FILE), 'imap_state.json');
+const IMAP_STATE_MAX_UIDS = 5000;
+let imapState = { uidvalidity: null, uids: [] };
+let imapStateSet = new Set();
+function loadImapState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(IMAP_STATE_FILE, 'utf8'));
+    if (raw && Array.isArray(raw.uids)) {
+      imapState = { uidvalidity: raw.uidvalidity ?? null, uids: raw.uids.map(Number) };
+      imapStateSet = new Set(imapState.uids);
+    }
+  } catch { /* first run */ }
+}
+function saveImapState() {
+  try {
+    if (imapState.uids.length > IMAP_STATE_MAX_UIDS) {
+      imapState.uids = imapState.uids.slice(-IMAP_STATE_MAX_UIDS);
+      imapStateSet = new Set(imapState.uids);
+    }
+    const tmp = IMAP_STATE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(imapState), { mode: 0o600 });
+    fs.renameSync(tmp, IMAP_STATE_FILE);
+  } catch (e) { log(`imap-state: save failed: ${e.message}`); }
+}
+function resetImapStateIfMailboxChanged(uidValidity) {
+  if (uidValidity == null) return;
+  if (imapState.uidvalidity !== null && imapState.uidvalidity !== uidValidity) {
+    log(`imap-state: UIDVALIDITY changed ${imapState.uidvalidity} → ${uidValidity}; resetting processed set`);
+    imapState = { uidvalidity: uidValidity, uids: [] };
+    imapStateSet = new Set();
+  } else if (imapState.uidvalidity === null) {
+    imapState.uidvalidity = uidValidity;
+  }
+}
+function markUidProcessed(uid) {
+  const n = Number(uid);
+  if (imapStateSet.has(n)) return;
+  imapStateSet.add(n);
+  imapState.uids.push(n);
+  saveImapState();
+}
+loadImapState();
 
 function classifyAttachment(filename, contentType) {
   const fn = (filename || '').toLowerCase();
@@ -215,23 +299,57 @@ function inboundAuthPasses(parsed, fromAddr) {
     }
   }
 
-  // DMARC already enforces From-identifier alignment, so dmarc=pass is enough.
-  if (/\bdmarc\s*=\s*pass\b/.test(line)) return { ok: true, reason: 'dmarc=pass' };
-
-  // Fallback: dkim=pass with a signing domain aligned to the From domain.
-  if (/\bdkim\s*=\s*pass\b/.test(line)) {
-    const cands = [];
-    for (const m of line.matchAll(/header\.d\s*=\s*([a-z0-9._-]+)/g)) cands.push(m[1]);
-    for (const m of line.matchAll(/header\.i\s*=\s*@?([a-z0-9._-]+)/g)) cands.push(m[1]);
-    for (const d of cands) {
-      if (domainsAligned(fromDomain, d)) {
-        return { ok: true, reason: `dkim=pass d=${d}` };
-      }
-    }
-    return { ok: false, reason: 'dkim=pass but d= not aligned to From' };
+  // Per-clause evaluation (adversarial review 2026-09-07, F-B1). An AR line is
+  // a `;`-separated list of independent method clauses (RFC 8601 §2.2), e.g.
+  //   `dkim=fail header.d=example.com; dkim=pass header.d=attacker.tld; dmarc=fail`
+  // A whole-line regex conflated them: `dkim=pass` matched anywhere, then
+  // EVERY `header.d=` on the line became an alignment candidate — so the
+  // From-aligned `d=` of a FAILED signature paired with an unrelated `pass`
+  // and forged an authenticated owner. `header.d` / `header.i` are therefore
+  // read ONLY from the clause that itself says `dkim=pass`, and a `dmarc=`
+  // verdict other than `pass` closes the gate regardless of any DKIM clause
+  // (the receiver already evaluated alignment; we never second-guess a fail).
+  const clauses = parseAuthResultsClauses(line);
+  const dmarc = clauses.filter((c) => c.method === 'dmarc');
+  if (dmarc.some((c) => c.result !== 'pass')) {
+    return { ok: false, reason: `dmarc=${dmarc.find((c) => c.result !== 'pass').result}` };
   }
+  if (dmarc.length > 0) return { ok: true, reason: 'dmarc=pass' };
+
+  // Fallback (no DMARC verdict at all): a dkim=pass clause whose OWN signing
+  // domain is aligned to the From domain.
+  let sawDkimPass = false;
+  for (const c of clauses) {
+    if (c.method !== 'dkim' || c.result !== 'pass') continue;
+    sawDkimPass = true;
+    for (const d of c.domains) {
+      if (domainsAligned(fromDomain, d)) return { ok: true, reason: `dkim=pass d=${d}` };
+    }
+  }
+  if (sawDkimPass) return { ok: false, reason: 'dkim=pass but d= not aligned to From' };
 
   return { ok: false, reason: 'no-aligned-pass' };
+}
+
+// Split an (already lower-cased) Authentication-Results line into method
+// clauses. The first `;`-segment is the authserv-id (+ optional version) and
+// carries no verdict. Each following segment is `<method>=<result> [props]`;
+// `domains` holds the signing-domain candidates of THAT clause only:
+// `header.d=<dom>` and the domain part of `header.i=[local@]<dom>` (the
+// old regex captured the local-part of `header.i=user@dom`, not the domain).
+function parseAuthResultsClauses(line) {
+  const body = String(line || '').replace(/^authentication-results:\s*/, '');
+  const segs = body.split(';').slice(1);
+  const out = [];
+  for (const seg of segs) {
+    const m = seg.trim().match(/^([a-z0-9_-]+)\s*=\s*([a-z0-9_-]+)/);
+    if (!m) continue;
+    const domains = [];
+    for (const d of seg.matchAll(/header\.d\s*=\s*([a-z0-9._-]+)/g)) domains.push(d[1]);
+    for (const i of seg.matchAll(/header\.i\s*=\s*(?:[^@\s;]*@)?([a-z0-9._-]+)/g)) domains.push(i[1]);
+    out.push({ method: m[1], result: m[2], domains });
+  }
+  return out;
 }
 
 // ─── IMAP inbound ───────────────────────────────────────────────────────────
@@ -253,8 +371,11 @@ async function pollOnce() {
   const mailbox = (currentSettings().imap_mailbox || 'INBOX');
   const lock = await imap.getMailboxLock(mailbox);
   try {
-    const unseen = await imap.search({ seen: false }, { uid: true });
-    if (!unseen || unseen.length === 0) return;
+    resetImapStateIfMailboxChanged(imap.mailbox && imap.mailbox.uidValidity != null
+      ? Number(imap.mailbox.uidValidity) : null);
+    const unseenAll = await imap.search({ seen: false }, { uid: true });
+    const unseen = (unseenAll || []).filter((u) => !imapStateSet.has(Number(u)));
+    if (unseen.length === 0) return;
     log(`imap: ${unseen.length} new message(s) in ${mailbox}`);
     for (const uid of unseen) {
       try {
@@ -263,6 +384,10 @@ async function pollOnce() {
         await handleParsed(parsed, uid);
       } catch (e) {
         log(`imap: failed to handle uid ${uid}: ${e.message}`);
+      } finally {
+        // A decision was reached (accepted / rejected / threw) — never look at
+        // this UID again, whatever the \Seen flag says (F-B6).
+        markUidProcessed(uid);
       }
     }
   } finally {
@@ -270,11 +395,16 @@ async function pollOnce() {
   }
 }
 
+// \Seen is set ONLY for mail the bridge accepted (F-B6) — see IMAP_STATE_FILE.
+async function markAccepted(uid) {
+  try { await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true }); }
+  catch (e) { log(`imap: \\Seen flag failed for uid ${uid}: ${e.message}`); }
+}
+
 async function handleParsed(parsed, uid) {
   const fromAddr = normalizeAddress(parsed.from?.value?.[0]?.address);
   if (!fromAddr) {
     log('imap: no From address, skipping');
-    await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
     return;
   }
 
@@ -283,10 +413,9 @@ async function handleParsed(parsed, uid) {
   // principal (owner / whitelist / PIN claim). Fail-closed: drop spoofable mail.
   const inboundAuth = inboundAuthPasses(parsed, fromAddr);
   if (!inboundAuth.ok) {
-    log(`auth: inbound authentication failed for ${fromAddr} (${inboundAuth.reason}); dropping unverified From (possible spoof)` +
+    log(`auth: inbound authentication failed for from=${addrFp(fromAddr)} (${inboundAuth.reason}); dropping unverified From (possible spoof)` +
         (inboundAuth.reason && String(inboundAuth.reason).includes('authserv') ?
          ` — your IMAP provider is not in the built-in receiver list; set "auth_results_authserv_id" in settings.json to your provider's Authentication-Results authserv-id to accept its DMARC/DKIM stamps` : ''));
-    await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
     return;
   }
 
@@ -304,15 +433,13 @@ async function handleParsed(parsed, uid) {
   // and keep their normal post-auth budget below.
   if (classify(fromAddr, fromAddr) !== 'owner') {
     if (!rateAllow(fromAddr, currentSettings().rate_limit_per_hour || 30)) {
-      log(`rate: blocked pre-auth ${fromAddr} (throttling brute-force)`);
-      await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
-      return;
+      log(`rate: blocked pre-auth from=${addrFp(fromAddr)} (throttling brute-force)`);
+        return;
     }
   }
 
   if (!authOk(fromAddr, text, fromAddr)) {
-    log(`auth: rejected ${fromAddr}`);
-    await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+    log(`auth: rejected from=${addrFp(fromAddr)}`);
     return;
   }
   // Layer-19 — EU AI Act Art. 50: proactive bot-disclosure on first encounter.
@@ -332,15 +459,14 @@ async function handleParsed(parsed, uid) {
       try {
         await sendReply(fromAddr, subject, card, []);
         inChatCmds.disclosureMarkSeen({ channel: CHANNEL, chatKey: fromAddr, uid: fromAddr, action: 'pending' });
-        log(`disclosure shown addr=${fromAddr}`);
+        log(`disclosure shown addr=${addrFp(fromAddr)}`);
       } catch (e) {
-        log(`disclosure send failed addr=${fromAddr}: ${e && e.message || e} (not marking seen; will retry next turn)`);
+        log(`disclosure send failed addr=${addrFp(fromAddr)}: ${e && e.message || e} (not marking seen; will retry next turn)`);
       }
     }
   }
   if (!rateAllow(fromAddr, currentSettings().rate_limit_per_hour || 30)) {
-    log(`rate: blocked ${fromAddr}`);
-    await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+    log(`rate: blocked from=${addrFp(fromAddr)}`);
     return;
   }
 
@@ -351,8 +477,8 @@ async function handleParsed(parsed, uid) {
   });
   if (cwk) {
     await sendReply(fromAddr, subject, cwk.reply, []);
-    log(`in-chat-cmd ${cwk.kind} -> ${fromAddr}`);
-    await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+    log(`in-chat-cmd ${cwk.kind} -> from=${addrFp(fromAddr)}`);
+    await markAccepted(uid);
     return;
   }
 
@@ -363,10 +489,10 @@ async function handleParsed(parsed, uid) {
   {
     const cmdLower = (text || '').trim().toLowerCase();
     if (cmdLower === '/stop' || cmdLower === '/cancel' || cmdLower === '/abbruch' || cmdLower === '/halt') {
-      log(`cancel cmd from ${fromAddr}`);
+      log(`cancel cmd from from=${addrFp(fromAddr)}`);
       writeInbox({ from: fromAddr, chat_id: fromAddr, _cancel: true, ts: Date.now(),
                    reply_subject: subject });
-      await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+      await markAccepted(uid);
       return;
     }
   }
@@ -384,7 +510,7 @@ async function handleParsed(parsed, uid) {
     const bag = path.join(ATTACH, id);
     fs.mkdirSync(bag, { recursive: true });
     for (const a of atts) {
-      const safe = (a.filename || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const safe = safeAttachmentName(a.filename);
       const dest = path.join(bag, safe);
       fs.writeFileSync(dest, a.content);
       const kind = classifyAttachment(a.filename, a.contentType);
@@ -395,14 +521,14 @@ async function handleParsed(parsed, uid) {
       else { pl.document_path = dest; pl.document_name = a.filename; pl.mimetype = a.contentType; }
       writeInbox(pl);
     }
-    await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+    await markAccepted(uid);
     return;
   }
 
   if (text.trim()) {
     writeInbox({ ...base, text });
+    await markAccepted(uid);
   }
-  await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
 }
 
 // ─── SMTP outbound ──────────────────────────────────────────────────────────
@@ -428,7 +554,7 @@ async function sendReply(toAddr, replySubject, body, attachments) {
     from, to: toAddr, subject, text: body,
     attachments: (attachments || []).map(p => ({ path: p })),
   });
-  log(`smtp: replied to ${toAddr} (${attachments?.length || 0} attachment(s))`);
+  log(`smtp: replied to to=${addrFp(toAddr)} (${attachments?.length || 0} attachment(s))`);
 }
 
 /**
@@ -540,13 +666,13 @@ startHealthServer({
     await imap.connect();
     imapReady = true;
     connectedAddress = IMAP_USER;
-    log(`imap connected as ${IMAP_USER}`);
+    log(`imap connected as ${addrFp(IMAP_USER)}`);
 
     // Verify SMTP credentials early so the user gets a clear error if the
     // password is wrong, instead of a silent send-failure on the first reply.
     try {
       await smtp.verify();
-      log(`smtp ready as ${SMTP_USER}`);
+      log(`smtp ready as ${addrFp(SMTP_USER)}`);
     } catch (e) {
       log(`WARNING: smtp.verify failed: ${e.message} (replies may not go through)`);
     }

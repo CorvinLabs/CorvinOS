@@ -77,7 +77,10 @@ def _create_eligible_skill(reg: MultiSkillRegistry, name: str) -> None:
         claim={"summary": "Two CSVs can be diffed by sorting on a key."},
         scope="user",
     )
-    reg.grade(name, "seed-run", 0.6, notes="seed grade")
+    # organic=True: the seed models a grade EARNED by a real run, so the
+    # cap assertions below can tell a clamped auto-grade (0.3) apart from an
+    # unclamped one — a non-organic seed would itself be clamped to 0.3.
+    reg.grade(name, "seed-run", 0.6, notes="seed grade", organic=True)
 
 
 def main() -> int:
@@ -283,7 +286,7 @@ def main() -> int:
         claim={"summary": "cap test"},
         scope="user",
     )
-    reg.grade("cap.probe", "seed-cap", 0.6, notes="seed")
+    reg.grade("cap.probe", "seed-cap", 0.6, notes="seed", organic=True)
     skill_inject.auto_grade_from_output(
         channel_id=None,
         profile={},

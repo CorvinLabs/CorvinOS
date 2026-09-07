@@ -44,6 +44,7 @@ const { queueStats }            = require('../shared/js/queue_stats');
 const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
+const { writeInboxAtomic }      = require('../shared/js/inbox_write');
 const { makeStickyProgress }    = require('../shared/js/sticky_progress');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
@@ -235,8 +236,9 @@ const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
 function writeInbox(payload) {
   const id = newMsgId();
-  fs.writeFileSync(path.join(INBOX, `${id}.json`),
-    JSON.stringify({ id, channel: CHANNEL, ...payload }, null, 2));
+  // Atomic tmp+rename (F-B3) — the adapter's 1 Hz `*.json` poll must never see
+  // a half-written envelope; see shared/js/inbox_write.js.
+  writeInboxAtomic(INBOX, id, { id, channel: CHANNEL, ...payload });
   const kind = payload.audio_path ? 'voice'
              : payload.image_path ? 'image'
              : payload.document_path ? 'document'
@@ -310,42 +312,6 @@ client.on('interactionCreate', async (interaction) => {
     const userId = interaction.user.id;
     const channelId = interaction.channelId;
 
-    // /task — route to the SAME durable background backbone the typed
-    // `/task <text>` command uses (adapter.py's /task handler → completion_notify
-    // register → detached bg_task_worker → completion delivered back to THIS
-    // channel). The previous implementation POSTed to /v1/console/tasks, which
-    // (a) is CSRF-protected so this unauthenticated call got 401, and (b) even
-    // on success dropped channel/chat_id/sender — they are not fields of
-    // TaskCreateRequest — so a completion had no route back here. It promised
-    // "Updates will arrive here" and delivered nothing. We now hand the request
-    // to the working backbone by writing a normal `/task …` inbox message with
-    // the real routing, exactly as a typed message would (R5, 2026-09-01).
-    if (interaction.commandName === 'task') {
-      const instruction = interaction.options.getString('args') || '';
-      log(`/task from=${userId} ch=${channelId} instr="${instruction.slice(0, 50)}..."`);
-      try {
-        await interaction.deferReply({ ephemeral: false });
-        // The adapter's /task handler parses `text` as "/task <instruction>".
-        writeInbox({
-          from: String(userId),
-          chat_id: String(channelId),
-          text: `/task ${instruction}`.trim(),
-          ts: Date.now(),
-        });
-        // The adapter emits its own acknowledgement AND the eventual completion
-        // through the outbox into this channel; keep the slash reply honest and
-        // minimal so we don't promise a result the backbone will actually send.
-        await interaction.editReply(
-          instruction
-            ? '🛠️ Running in the background — I\'ll message you here when it\'s done.'
-            : 'Usage: `/task <what to do>` — I\'ll run it in the background and message you here when it\'s done.'
-        );
-      } catch (e) {
-        log(`/task inbox-write failed: ${e.message}`);
-        try { await interaction.editReply(`❌ Error: ${e.message}`); } catch {}
-      }
-      return;  // Don't process as normal command
-    }
 
     const text = slashCommands.interactionToText(interaction);
     log(`interaction cmd=${interaction.commandName} from=${userId} ch=${channelId}`);
@@ -455,6 +421,47 @@ client.on('interactionCreate', async (interaction) => {
 
     const cmdLower = text.trim().toLowerCase();
     const base = { from: String(userId), chat_id: channelId, ts: Date.now() };
+
+    // /task — route to the SAME durable background backbone the typed
+    // `/task <text>` command uses (adapter.py's /task handler → completion_notify
+    // register → detached bg_task_worker → completion delivered back to THIS
+    // channel). The previous implementation POSTed to /v1/console/tasks, which
+    // (a) is CSRF-protected so this unauthenticated call got 401, and (b) even
+    // on success dropped channel/chat_id/sender — they are not fields of
+    // TaskCreateRequest — so a completion had no route back here. We hand the
+    // request to the working backbone by writing a normal `/task …` inbox
+    // message with the real routing, exactly as a typed message would (R5,
+    // 2026-09-01).
+    //
+    // F-B2 (adversarial review 2026-09-07): this branch sits BELOW the shared
+    // prelude on purpose — readOnlyOk → _isOwnerCheck/SPG → Art.50 disclosure →
+    // rateAllow have all run by the time we get here. It used to short-circuit
+    // ABOVE them, so any Discord user who could see the bot could spawn a
+    // detached bg_task_worker with arbitrary instructions, unauthenticated,
+    // undisclosed and unthrottled. Do not move it back up. The log line carries
+    // only the instruction LENGTH — never the text (GDPR Art. 5 data
+    // minimisation; the instruction is user content).
+    if (interaction.commandName === 'task') {
+      const instruction = (interaction.options && interaction.options.getString
+        ? interaction.options.getString('args') : '') || '';
+      log(`/task from=${userId} ch=${channelId} len=${instruction.length}`);
+      try {
+        // The adapter's /task handler parses `text` as "/task <instruction>".
+        writeInbox({ ...base, text: `/task ${instruction}`.trim() });
+        // The adapter emits its own acknowledgement AND the eventual completion
+        // through the outbox into this channel; keep the slash reply honest and
+        // minimal so we don't promise a result the backbone will actually send.
+        await interaction.editReply(
+          instruction
+            ? '🛠️ Running in the background — I\'ll message you here when it\'s done.'
+            : 'Usage: `/task <what to do>` — I\'ll run it in the background and message you here when it\'s done.'
+        );
+      } catch (e) {
+        log(`/task inbox-write failed: ${e.message}`);
+        try { await interaction.editReply(`❌ Error: ${e.message}`); } catch {}
+      }
+      return;
+    }
 
     // /on /off /status — owner-side chat-toggle (mirror of messageCreate
     // gate at daemon.js:406). Without this branch the slash-command path

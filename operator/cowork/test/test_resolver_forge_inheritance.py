@@ -25,7 +25,15 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "operator" / "cowork" / "lib"))
-import resolver  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _fixture_personas as fx  # noqa: E402
+
+# Bundle personas were removed in e7e3560e (Skills replaced them); the resolver
+# still serves operator-shipped personas from $COWORK_USER_DIR, so the
+# forge-inheritance contract is pinned against fixture personas.
+_SANDBOX, _USER_DIR = fx.sandbox("cowork-forge-inherit-")
+fx.write_personas(_USER_DIR, fx.DEFAULT_SET)
+resolver = fx.reload_resolver()
 
 
 PASS = 0

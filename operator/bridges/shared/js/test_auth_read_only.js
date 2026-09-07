@@ -93,8 +93,13 @@ t('event has chat_key=chat-1',
   (evs[0]?.details || {}).chat_key === 'chat-1');
 t('event details.first_drop=true',
   (evs[0]?.details || {}).first_drop === true);
-t('event details.snippet captures attempt',
-  (evs[0]?.details || {}).snippet === 'rm -rf /');
+// F-B10 (2026-09-07): the chain records the LENGTH of the dropped text, never
+// the text itself (user content; GDPR Art. 5 minimisation, chain is permanent).
+t('event details.text_len records the attempt size',
+  (evs[0]?.details || {}).text_len === 'rm -rf /'.length);
+t('event details carry NO snippet of the dropped text',
+  !('snippet' in (evs[0]?.details || {})) &&
+  !JSON.stringify(evs[0]).includes('rm -rf'));
 
 // 3. same sender again on chat-1 → firstDrop=false but still audited
 console.log('\n[read_only sender, second drop on same chat]');

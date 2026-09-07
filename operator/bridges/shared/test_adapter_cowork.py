@@ -31,11 +31,23 @@ TEST_CHANNEL = "coworktest"
 TEST_CHANNEL_DIR = ROOT.parent / TEST_CHANNEL
 
 
+def _seed_personas() -> None:
+    """Bundle personas were removed in e7e3560e (Skills replaced them). The
+    adapter still resolves chat_profiles[].persona / router picks through
+    cowork.resolver against OPERATOR-shipped personas in $COWORK_USER_DIR —
+    that is the contract under test, so lay down the fixture set there
+    (re-seeded after every rmtree of the sandbox)."""
+    sys.path.insert(0, str(ROOT.parent.parent / "cowork" / "test"))
+    import _fixture_personas as fx  # type: ignore  # noqa: PLC0415
+    fx.write_personas(SANDBOX / "cowork-user", fx.DEFAULT_SET)
+
+
 def setup_sandbox(profiles: dict) -> None:
     if SANDBOX.exists():
         shutil.rmtree(SANDBOX)
     for d in (INBOX, OUTBOX, PROCESSED):
         d.mkdir(parents=True, exist_ok=True)
+    _seed_personas()
     TEST_CHANNEL_DIR.mkdir(exist_ok=True)
     (TEST_CHANNEL_DIR / "settings.json").write_text(
         json.dumps({"chat_profiles": profiles}, indent=2)
@@ -296,7 +308,7 @@ def main() -> int:
     env_router = env.copy()
     env_router["ROUTER_FAKE"] = "1"
     env_router["ROUTER_FAKE_RESULT"] = (
-        '{"persona":"browser","confidence":0.95,"why":"explicit web task"}'
+        '{"persona":"research","confidence":0.95,"why":"explicit web task"}'
     )
     proc = run_adapter_once(env_router)
     try:
@@ -396,7 +408,7 @@ def main() -> int:
         env_off = env.copy()
         env_off["ROUTER_FAKE"] = "1"
         env_off["ROUTER_FAKE_RESULT"] = (
-            '{"persona":"browser","confidence":0.99,"why":"x"}'
+            '{"persona":"research","confidence":0.99,"why":"x"}'
         )
         env_off["ADAPTER_ROUTING_MODE"] = "off"
         proc = run_adapter_once(env_off)

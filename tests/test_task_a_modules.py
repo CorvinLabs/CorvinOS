@@ -1,4 +1,7 @@
-"""Test stubs for Task A modules (nervous_system, audit.engine_span, notifications).
+"""Test stubs for Task A modules (nervous_system, audit.engine_span).
+
+core/notifications/bus.py was deleted 2026-09-07 (adversarial hardening): it had
+no production caller — the only importer was this stub file.
 
 Full test suite to implement in next session.
 """
@@ -7,7 +10,6 @@ import pytest
 from datetime import datetime
 from core.nervous_system.registry import TaskRegistry, TaskState, TaskRecord
 from core.audit.engine_span import EngineSpanTracker, EngineSpan
-from core.notifications.bus import NotificationBus, NotificationLevel, NotificationChannel
 
 # === NERVOUS_SYSTEM TESTS ===
 
@@ -111,65 +113,8 @@ class TestEngineSpanTracker:
         assert audit_dict["span_id"] == "span-1"
         assert audit_dict["phase"] == "gather"
         # No PII should be present
-        assert all(k in audit_dict for k in ["created_at", "status"])
+        assert all(k in audit_dict for k in ["started_at", "status"])
+        assert audit_dict["started_at"]
 
 
 # === NOTIFICATIONS TESTS ===
-
-class TestNotificationBus:
-    """Test NotificationBus (80 LoC target for full implementation)."""
-
-    @pytest.mark.asyncio
-    async def test_publish_notification(self):
-        """Publish a notification to the bus."""
-        bus = NotificationBus("tenant-123")
-        await bus.publish(
-            "notif-1",
-            "task-1",
-            "Phase 1: gather data",
-            level=NotificationLevel.INFO,
-            channel=NotificationChannel.DISCORD,
-        )
-        delivered = bus.get_delivered()
-        assert len(delivered) == 1
-        assert delivered[0].message == "Phase 1: gather data"
-
-    @pytest.mark.asyncio
-    async def test_subscribe_and_deliver(self):
-        """Subscribe handler and deliver notification."""
-        bus = NotificationBus("tenant-123")
-        received = []
-
-        async def handler(notif):
-            received.append(notif)
-
-        bus.subscribe(NotificationChannel.DISCORD, handler)
-        # Manually trigger delivery (process_queue runs in background)
-        notif = bus._subscribers[NotificationChannel.DISCORD][0].__self__  # type: ignore
-
-    @pytest.mark.asyncio
-    async def test_notification_to_dict(self):
-        """Serialize notification for wire transmission."""
-        bus = NotificationBus("tenant-123")
-        await bus.publish(
-            "n1",
-            "t1",
-            "Working...",
-            metadata={"phase": "gather"},
-        )
-        notif = bus.get_delivered()[0]
-        data = notif.to_dict()
-        assert data["task_id"] == "t1"
-        assert data["message"] == "Working..."
-        assert data["metadata"]["phase"] == "gather"
-
-    @pytest.mark.asyncio
-    async def test_filter_delivered_by_task(self):
-        """Filter notifications by task_id."""
-        bus = NotificationBus("tenant-123")
-        await bus.publish("n1", "task-a", "msg1")
-        await bus.publish("n2", "task-b", "msg2")
-        await bus.publish("n3", "task-a", "msg3")
-        task_a_notifs = bus.get_delivered("task-a")
-        assert len(task_a_notifs) == 2
-        assert all(n.task_id == "task-a" for n in task_a_notifs)

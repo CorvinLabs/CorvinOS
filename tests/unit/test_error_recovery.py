@@ -62,12 +62,14 @@ class TestCheckpoint:
 
     def test_checkpoint_hashable(self):
         """Test Checkpoint is hashable."""
-        ckpt1 = Checkpoint(state_snapshot={"a": 1}, operation_id="op1")
-        ckpt2 = Checkpoint(state_snapshot={"a": 1}, operation_id="op1")
+        ts = datetime(2026, 1, 1, 12, 0, 0)
+        ckpt1 = Checkpoint(timestamp=ts, state_snapshot={"a": 1}, operation_id="op1")
+        ckpt2 = Checkpoint(timestamp=ts, state_snapshot={"a": 1}, operation_id="op1")
 
         # Both should be hashable
         s = {ckpt1, ckpt2}
         assert len(s) == 1  # Same hash due to same timestamp+operation_id
+        assert hash(ckpt1) != hash(Checkpoint(timestamp=ts, operation_id="op2"))
 
 
 class TestStateRollback:

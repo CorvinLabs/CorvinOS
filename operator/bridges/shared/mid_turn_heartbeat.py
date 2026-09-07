@@ -190,23 +190,55 @@ def _safe(s: str) -> str:
     return s2[:100] or "_none"
 
 
+def default_state_dir() -> Path:
+    """Where the adapter keeps heartbeat markers: ``<corvin_home>/bridges``.
+
+    F-B8 (adversarial hardening 2026-09-07): the adapter used to pass its own
+    source directory (``operator/bridges/shared/``) as ``state_dir``, so the
+    markers — which carry chat ids, sender ids and task labels — landed INSIDE
+    the repo tree, un-ignored by git and world-readable. Runtime state belongs
+    under CORVIN_HOME (``paths.bridges_home()``), like every other bridge queue.
+    """
+    try:
+        from . import paths as _paths  # type: ignore
+    except ImportError:
+        import paths as _paths  # type: ignore[no-redef]
+    return _paths.bridges_home()
+
+
 def _dir(state_dir: str | Path) -> Path:
     return Path(state_dir) / "mid_turn_heartbeats"
 
 
+def _session_fp(session_key: str) -> str:
+    """One-way fingerprint of the session key for the marker FILENAME.
+
+    The session key is ``<channel>:<chat_id-or-sender>`` — a platform UID is
+    PII (GDPR Art. 4(1)); it stays inside the 0600 marker body (needed to route
+    the ping) but never in a directory listing."""
+    return hashlib.sha256(str(session_key or "").encode("utf-8")).hexdigest()[:16]
+
+
 def _marker_path(state_dir: str | Path, session_key: str, label: str) -> Path:
     h = hashlib.sha1(label.encode("utf-8")).hexdigest()[:10]
-    return _dir(state_dir) / f"{_safe(session_key)}__{h}.json"
+    return _dir(state_dir) / f"{_session_fp(session_key)}__{h}.json"
 
 
 def _atomic_write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
     # UNIQUE tmp name per writer (pid + random) — a fixed ``.tmp`` sibling let two
     # concurrent writers to the same marker clobber each other's tmp file and
     # replace() a half-written one into place. Uniqueness makes the write-then-
     # atomic-replace safe across processes; ``_lock`` covers threads.
     tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    # 0600 from creation: the marker body carries chat/sender ids (F-B8).
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(data, ensure_ascii=False))
     tmp.replace(path)
 
 
@@ -287,7 +319,7 @@ def clear_session(state_dir: str | Path, session_key: str) -> int:
         d = _dir(state_dir)
         if not d.is_dir():
             return 0
-        for p in d.glob(f"{_safe(session_key)}__*.json"):
+        for p in d.glob(f"{_session_fp(session_key)}__*.json"):
             try:
                 p.unlink(); n += 1
             except OSError:

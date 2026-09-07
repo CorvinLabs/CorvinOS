@@ -23,6 +23,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { bridgeSettingsPath } = require('../shared/js/bridge_paths');
+const { writeInboxAtomic } = require('../shared/js/inbox_write');
 const { countPending } = require('../shared/js/outbox');
 const { computeReconnectDelay } = require('./reconnect_backoff');
 
@@ -148,8 +149,9 @@ function saveSettings() {
   // a hot-reload would silently overwrite external changes with stale RAM.
   const live = currentSettings();
   const tmp = SETTINGS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(live, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(live, null, 2), { mode: 0o600 });  // F-B7: credentials file
   fs.renameSync(tmp, SETTINGS_FILE);
+  try { fs.chmodSync(SETTINGS_FILE, 0o600); } catch { /* non-POSIX FS */ }
 }
 
 // Hot-reload: read paths go through currentSettings(), which reloads the file
@@ -455,7 +457,11 @@ function authOk(sender, text, chatKey, fromMe) {
       const given = text.trim().slice(6).trim();
       if (given === cs.pin) {
         settings.whitelist = (settings.whitelist || []).concat([sNorm]);
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+        // F-B7: atomic + owner-only, same as saveSettings() (a bare
+        // writeFileSync here left the PIN/whitelist file at umask perms).
+        const _tmp = SETTINGS_FILE + '.tmp';
+        fs.writeFileSync(_tmp, JSON.stringify(settings, null, 2), { mode: 0o600 });
+        fs.renameSync(_tmp, SETTINGS_FILE);
         log(`auth: PIN accepted, added ${sNorm} to whitelist`);
         return true;
       }
@@ -468,8 +474,9 @@ function authOk(sender, text, chatKey, fromMe) {
 
 function writeInbox(payload) {
   const id = newMsgId();
-  const file = path.join(INBOX, `${id}.json`);
-  fs.writeFileSync(file, JSON.stringify({ id, channel: CHANNEL, ...payload }, null, 2));
+  // Atomic tmp+rename (F-B3) — the adapter's 1 Hz `*.json` poll must never see
+  // a half-written envelope; see shared/js/inbox_write.js.
+  writeInboxAtomic(INBOX, id, { id, channel: CHANNEL, ...payload });
   const kind = payload.audio_path ? 'voice'
              : payload.image_path ? 'image'
              : payload.document_path ? 'document'
