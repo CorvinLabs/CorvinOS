@@ -982,6 +982,12 @@ def run_delegate(
             # ADR-0049 — pass resume_session_id when session is pinned.
             if _pin_can and _pin_resume_sid:
                 spawn_kwargs["resume_session_id"] = _pin_resume_sid
+            # ADR-0648 amendment 2: `prompt` reaches here from the
+            # `delegate_*` MCP tools (`mcp_server.py::_handle_tools_call`)
+            # after `_validate_prompt`, which checks type and length only.
+            # The neutraliser is applied inside `ClaudeCodeEngine.spawn()`,
+            # so the worker cannot be started on an unguarded payload; keep
+            # the engine abstraction rather than building argv here.
             events = worker.spawn(prompt, **spawn_kwargs)
             spawn_result = collect(events)
 

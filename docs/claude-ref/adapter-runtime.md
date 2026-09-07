@@ -444,6 +444,55 @@ live: `test_spawn_prompt_guard.py::test_live_at_reference_does_not_leak_the_host
 unguarded control run on the same prompt answered "als Dateireferenz aufgelöst ergibt er
 `shumway`".
 
+### Round 4, second pass (2026-09-07) — the guard moves INSIDE the engine
+
+Round 4's ledger was green while three HIGH-severity routes were live and unguarded. The
+defect was in the ledger's **discovery**, not in the neutraliser: `_DASH_P` required a
+quoted literal `-p` argv element, and every module that spawns through
+`ClaudeCodeEngine.spawn()` writes none — `_build_args` appends `-p` itself. Eight modules
+were therefore structurally invisible, including `adapter.py`, `a2a_worker.py`,
+`gateway/dispatcher.py` and `delegate/delegation.py`.
+
+| Finding | Mechanism | Where | Contract |
+|---|---|---|---|
+| **R4b-F1** | **`/btw` mid-stream injection reached the CLI raw** `[CRITICAL]` | `agents/claude_code.py::ClaudeCodeEngine.inject` ← `adapter.py::inject_btw` ← `eci/dispatcher.py::dispatch_btw` ← `daemon.js` (`discord:781`, `telegram:313`, `slack:317`, `whatsapp:1281`, `teams:244`) | `inject()` writes a **second** user message into the live `claude` process and called no guard — a surface the round-1..3 model ("a spawn site builds an argv or a first stdin message") does not contain. The CLI applies its client-side expansions to **every** user message: measured live over `--input-format stream-json` with `--disallowedTools "*"`, a line whose content was `/r4probe` ran a project slash command and one containing `@cC.txt` inlined that file. Any chat user typing `/btw look at @/etc/hostname` (or `@~/.corvin/audit.jsonl`, `@.env`) read that file, inside a turn that runs `--dangerously-skip-permissions`. `inject()` now neutralises before framing. The **buffered** `/btw` transport was safe by accident: it lands in `--append-system-prompt`, which is **not** scanned for `@`. |
+| **R4b-F2** | **Gateway tenant Run route** `[HIGH]` | `core/gateway/corvin_gateway/dispatcher.py:381` → `:846` (`engine.spawn(prompt, env=env)`), route `app.py::submit_run` | `POST /v1/tenants/{tid}/runs` handed raw `spec.input` to the engine with `permission_mode is None` → `--dangerously-skip-permissions` and the prompt as the last positional argv element. On that transport a byte-0 `!cmd` is **local shell execution** (proven: `!echo R4BANG_OK_MARKER` ran with every tool disallowed, `permission_denials []`). Behind the tenant JWT — which does not remove it: a *tenant* is not the *operator* (ADR-0007). |
+| **R4b-F3** | **A2A worker, plus an ordering trap** `[HIGH]` | `operator/bridges/shared/a2a_worker.py:658` → `:778`, `_CONTROL_CHARS` at `:147` | The A2A framing block neutralises byte 0 (the payload starts `<a2a_instruction`) but nothing touched `@`, so a remote peer read arbitrary local files through an instruction body that passed every existing A2A defence. The guard is **not** a drop-in at this call site: `sanitize_instruction` strips U+2060 (`0x2060, # WORD JOINER — MED-04 fix`), so a guard applied *before* it silently re-arms the `@`. Correct order is `sanitize_instruction → frame_instruction → engine.spawn`, which the engine-level guard makes automatic. An ORDERING HAZARD comment now sits at `_CONTROL_CHARS` and `test_sanitize_instruction_would_strip_the_joiner_if_applied_first` pins it. |
+| **R4b-F4** | **Ledger discovery rebuilt** | `core/console/tests/test_claude_spawn_site_ledger.py` | Discovery now recognises **both** shapes — hand-built argv (`"-p"` + a claude-binary reference) and engine-mediated (`ClaudeCodeEngine`/`claude_code` + a `.spawn(`/`.inject(` call) — and scans the **whole repo** minus `_SKIP_DIRS` instead of `core`/`operator`/`scripts` (which had left three `benchmark/` spawns unclassified). Categories: `_MUST_GUARD` (builds the payload itself → must call the helper; `adapter.py` added, since its own guard calls are load-bearing for the legacy raw-stdin `/btw` path), `_ENGINE_GUARDED` (guarded by the engine; asserted to build no argv of its own), `_NO_CLI_TEXT`, `_OFFLINE_FIXTURE_HARNESS` (operator-run `benchmark/` measurement scripts, asserted to live under `benchmark/` — deliberately unguarded because a sentinel line would corrupt the token counts they measure), `_PENDING` (empty, asserted empty). `adapter.py`'s raising import stub is a third fail-closed shape (`_RAISING_STUB`). |
+| **R4b-F5** | **`delegate_*` MCP tools** `[MEDIUM]` | `core/delegate/corvin_delegate/mcp_server.py:448` → `delegation.py:985/:1003` | `worker.spawn(prompt)` with zero `guard_prompt_head` references in the package; `_validate_prompt` is a type/length check, not an injection guard. Covered by the engine-level guard. |
+
+**The structural change:** `guard_prompt_head()` is now called by
+`ClaudeCodeEngine._build_args()` (positional-argv transport),
+`ClaudeCodeEngine.spawn()` (which writes the initial `stream-json` stdin message itself)
+and `ClaudeCodeEngine.inject()` (the second and later user messages). The invariant
+changes from *"did every caller remember?"* to *"the engine cannot emit an unguarded
+payload"* — the only shape that survives the discovery gap above. Existing call-site
+guards are **kept**: the helper is idempotent, so guarding twice is byte-for-byte
+identical (`test_guarding_twice_is_a_byte_for_byte_no_op`).
+
+**Transport asymmetry** (measured, recorded because "stdin is safer" is a tempting and
+wrong simplification): `@<path>` and byte-0 `/cmd` fire on **both** the positional-argv
+and the `stream-json` stdin transport; byte-0 `!cmd` fires on the **positional-argv
+transport only**; `#` routes to memory-add. The sentinel + joiner cover the union.
+
+**Behaviour change:** the positional prompt of `ClaudeCodeEngine._build_args()` is now
+the guarded payload, so argv snapshots carry the `User input:\n` sentinel
+(`agents/test_engines_e2e.py::BuildArgsTests`,
+`core/console/tests/test_task_worker_pool_argv.py`), and a `/btw` note echoed by a fake
+CLI comes back with the sentinel line (`test_adapter_engine_path.py`).
+
+Regression tests: `operator/bridges/shared/test_engine_guarded_spawn.py` — real
+`subprocess.Popen` of a recording stand-in, asserting on the bytes that reached argv and
+the stdin **pipe**, for `inject()`, the stdin transport, the argv transport, idempotency
+and the A2A worker driven through the real `spawn_a2a_worker`;
+`core/gateway/tests/test_dispatcher_prompt_guard.py` — real FastAPI `TestClient` against
+the real router + real `RunDispatcher` + real `ClaudeCodeEngine`;
+`core/console/tests/test_claude_spawn_site_ledger.py` (10 tests). All four fail on the
+pre-fix engine. Live: `test_engine_guarded_spawn.py::test_live_engine_spawn_does_not_inline_a_canary_file`
+(`CLAUDE_LIVE_E2E=1`) spawns the REAL CLI through the guarded engine with a token-start
+`@<abs path>` to a temp-dir canary and asserts the token is absent from the reply —
+guarded reply `'NONE'`, while the same prompt run unguarded returns the canary verbatim.
+
 **Known, unrelated:** `acs_classify._llm_classify` passes `--no-tools`, which the installed
 CLI rejects (`error: unknown option '--no-tools'`), so that Stage-2 fallback currently always
 returns `path="llm_error"`. Guarding it is still correct — the flag is a separate defect and

@@ -489,10 +489,17 @@ def test_engine_path_btw_routes_through_engine() -> None:
         t.join(timeout=15)
         assert not t.is_alive(), \
             "call_claude_streaming did not return in time"
-        assert result_box.get("final") == "reply for: btw-followup-engine", \
-            f"second reply did not win: {result_box.get('final')!r}"
+        final = result_box.get("final")
+        # R4-F1 (2026-09-07): `ClaudeCodeEngine.inject()` now neutralises the
+        # payload before framing it, so what the CLI echoes back is the
+        # GUARDED text — the sentinel line plus the user's own text intact.
+        # The fake CLI's reply is the ground truth for what it received.
+        assert final == "reply for: User input:\nbtw-followup-engine", \
+            f"second reply did not win: {final!r}"
+        assert "btw-followup-engine" in final, \
+            f"the guard altered the user's own text: {final!r}"
         print("PASS: engine.inject was called once and produced "
-              f"final_text={result_box.get('final')!r}")
+              f"final_text={final!r}")
     finally:
         os.environ["PATH"] = saved_path
         if saved_home is not None:

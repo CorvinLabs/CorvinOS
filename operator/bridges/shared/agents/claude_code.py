@@ -144,8 +144,29 @@ CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 # chose the file-exfiltration side.
 #
 # Both halves live HERE, in the ONE shared helper (ADR-0648 single point of
-# control), so every present and future spawn site inherits them by calling
-# `guard_prompt_head()`.
+# control). Round 4 (2026-09-07) went one step further: the helper is now
+# invoked by `ClaudeCodeEngine._build_args()`, `ClaudeCodeEngine.spawn()` and
+# `ClaudeCodeEngine.inject()` themselves, so a spawn site inherits the guard by
+# USING THE ENGINE rather than by remembering to call the helper. Round 3's
+# per-caller model was a discovery problem, not a coding one: four callers
+# (gateway `POST /v1/tenants/{tid}/runs`, the A2A worker, the delegate MCP
+# tools and the `/btw` live inject) reached the CLI unguarded and none of them
+# was visible to the spawn-site ledger, because none of them writes a literal
+# `-p` — the engine does. Call-site guards remain correct and are kept: the
+# helper is idempotent, so guarding twice is a byte-for-byte no-op.
+#
+# TRANSPORT ASYMMETRY (measured 2026-09-07, round 4) — the four expansions are
+# NOT uniform across the two transports this engine uses:
+#   * `@<path>`   fires on BOTH the positional-argv and the stream-json stdin
+#                 transport, anywhere in the message;
+#   * `/cmd`      fires at byte 0 on BOTH transports;
+#   * `!cmd`      fires at byte 0 on the positional-argv transport ONLY (it
+#                 executed a local shell command with `--disallowedTools "*"`
+#                 set), and is inert over stream-json stdin;
+#   * `#note`     routes to memory-add at byte 0.
+# The sentinel + joiner cover the union, so the asymmetry does not change the
+# guard — it is recorded because "the stdin transport is safer" is a tempting
+# and WRONG simplification: `/` and `@` fire there too.
 PROMPT_HEAD_SENTINEL = "User input:"
 
 #: Zero-width, non-breaking joiner inserted in front of a neutralised ``@``.
@@ -486,6 +507,17 @@ class ClaudeCodeEngine:
             raise ValueError(
                 "continue_session and resume_session_id are mutually exclusive"
             )
+
+        # ADR-0648 amendment 2 (adversarial review round 4, 2026-09-07):
+        # the neutraliser runs HERE, inside the argv builder, not only at the
+        # call sites. Round 3 applied it per caller, which made the invariant
+        # "did every author remember?" — and round 4 found four callers that
+        # had not (gateway dispatcher, A2A worker, delegate MCP tools, the
+        # `/btw` live inject). `guard_prompt_head` is idempotent, so a caller
+        # that already guarded gets a byte-identical payload back and every
+        # existing argv snapshot keeps holding.
+        prompt = guard_prompt_head(prompt)
+
         args: list[str] = [binary]
         if resume_session_id:
             args += ["--resume", resume_session_id]
@@ -586,6 +618,16 @@ class ClaudeCodeEngine:
             raise ValueError(
                 "continue_session and resume_session_id are mutually exclusive"
             )
+
+        # ADR-0648 amendment 2 — engine-enforced prompt neutralisation.
+        # Guarded HERE (not only in `_build_args`) because the stream-json
+        # transport writes `prompt` into the child's stdin as the initial user
+        # message below, bypassing argv entirely. One call covers both
+        # transports; idempotent, so a caller that already guarded is a no-op.
+        # `self.spawn()` is the only public way to start the CLI, which is what
+        # turns "every caller must remember" into "the engine cannot emit an
+        # unguarded payload".
+        prompt = guard_prompt_head(prompt)
 
         # Windows fresh-install fix (mirrors corvin_console/chat_runtime.py):
         # the merged system prompt (persona + user profile + memory index +
@@ -774,10 +816,22 @@ class ClaudeCodeEngine:
         Thread-safe: holds `_stdin_guard` for the whole write+flush so
         the streaming loop's stdin-close on result can't race the
         injection.
+
+        ADR-0648 amendment 2 (round 4, 2026-09-07): the payload is routed
+        through :func:`guard_prompt_head` before it is framed. This is a
+        SECOND user message into an already-running CLI, and the CLI applies
+        its client-side expansions to every user message, not only the first:
+        a `/btw /cost` typed in Discord ran a slash command, and a
+        `/btw look at @/etc/hostname` inlined that file — both measured live
+        over `--input-format stream-json` with `--disallowedTools "*"`. Every
+        chat bridge (`daemon.js` forwards the text after `/btw ` verbatim →
+        `adapter.inject_btw` → here) reaches this method, so the guard cannot
+        live at the call site.
         """
         text = (text or "").strip()
         if not text:
             return False
+        text = guard_prompt_head(text)
         with self._stdin_guard:
             stdin = self._stdin
             if stdin is None:

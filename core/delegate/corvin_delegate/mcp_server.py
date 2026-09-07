@@ -445,6 +445,12 @@ class DelegateServer:
             self._error(msgid, INVALID_PARAMS, "arguments must be an object")
             return
 
+        # ADR-0648 amendment 2 (R4-F5): the prompt is forwarded raw and is
+        # neutralised inside the claude engine itself — byte-0 sentinel plus
+        # the `@<path>` joiner, applied by `ClaudeCodeEngine` before it starts
+        # the CLI (see `delegation.py`'s worker spawn, which is the ledgered
+        # site). `delegation._validate_prompt` below is a type/length check,
+        # NOT a prompt-injection guard — do not mistake it for one.
         prompt = args.get("prompt")
         model = args.get("model")
         budget_s = args.get("budget_s", BUDGET_DEFAULT_S)
