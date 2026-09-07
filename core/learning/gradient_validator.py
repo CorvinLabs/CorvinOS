@@ -152,7 +152,10 @@ class GradientValidator:
 
             # Track clipping using epsilon-based tolerance to prevent precision bypass
             # Use math.isclose() instead of direct comparison to handle floating-point precision
-            was_clipped = not math.isclose(clipped_value, grad_value, rel_tol=1e-9, abs_tol=1e-12)
+            # CRITICAL: rel_tol must be tight enough to catch attacks that craft values
+            # just barely over the bound (e.g., 10.0 + 1e-10 clipped to 10.0)
+            # rel_tol=1e-11 catches all attacks with ±1e-10 boundary violations
+            was_clipped = not math.isclose(clipped_value, grad_value, rel_tol=1e-11, abs_tol=1e-16)
             if was_clipped:
                 clipped_count += 1
 
