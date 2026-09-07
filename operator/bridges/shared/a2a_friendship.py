@@ -49,6 +49,27 @@ try:
 except ImportError:  # Windows — no fcntl module.
     fcntl = None  # type: ignore[assignment]
 
+from _bounded_lock import (  # noqa: E402
+    LockBusy as FriendshipLockBusy,
+    acquire_exclusive as _acquire_exclusive,
+)
+
+# ── Bounded config locking (never hang an operator request) ─────────────
+# ``config_file_lock`` used to ``flock(LOCK_EX)`` with no timeout. A wedged
+# holder hung POST /remote-trigger/pair/friendship/set-url (and the relay ack
+# handler) forever. The acquire is now bounded and REFUSES at the deadline
+# with :class:`FriendshipLockBusy`.
+#
+# Refusing — not the module's existing "advisory fail-soft" degrade — is the
+# right choice HERE: fail-soft covers the case where no lock can be OBTAINED
+# at all (exotic FS, container without flock), where proceeding unlocked is
+# the only option. A CONTENDED lock is the opposite situation: it proves
+# another writer is mid read-modify-write, and continuing unlocked is exactly
+# the lost update this lock was added to prevent (A2, 2026-07-20) — on the
+# peer-URL field that decides where A2A tasks get relayed.
+# Deadline + refusal semantics follow core.infinite_session.event_store.
+LOCK_TIMEOUT_SECONDS = 2.0
+
 # ── constants ──────────────────────────────────────────────────────────
 
 TOKEN_PREFIX = "corvin-a2a:ft1:"
@@ -525,6 +546,11 @@ def config_file_lock(*dirs: Path):
     if a lock file cannot be created/locked (exotic FS, containers), proceed
     unlocked rather than break the operation — matching compute_quota's
     documented degradation.
+
+    A lock that is merely BUSY is not that case and does NOT fail soft: the
+    acquire is bounded by ``LOCK_TIMEOUT_SECONDS`` and raises
+    :class:`FriendshipLockBusy`, which callers on a request path map to 503.
+    Every lock taken before the failure is released on the way out.
     """
     handles: list[tuple[Any, bool]] = []
     try:
@@ -546,8 +572,16 @@ def config_file_lock(*dirs: Path):
                     msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
                     locked = True
                 elif fcntl is not None:
-                    fcntl.flock(lf, fcntl.LOCK_EX)
+                    _acquire_exclusive(
+                        lf, f"a2a friendship config ({d.name})",
+                        timeout=LOCK_TIMEOUT_SECONDS,
+                    )
                     locked = True
+            except FriendshipLockBusy:
+                # NOT fail-soft: another writer holds it. Release what we
+                # already took, close this handle, and refuse.
+                handles.append((lf, False))
+                raise
             except OSError:
                 pass  # advisory fail-soft (mirrors compute_quota)
             handles.append((lf, locked))

@@ -7,13 +7,15 @@ can be enforced on the issuing instance.
 Storage: ``<corvin_home>/global/remote_trigger/invites.json``  (mode 0600)
 Format:  dict keyed by ``ikey`` (16-hex-char sig prefix).
 
-Thread-safety: ``fcntl.flock`` on every write.
+Thread-safety: a bounded ``fcntl.flock`` on a stable ``.lock`` sidecar on
+every write (see :data:`LOCK_TIMEOUT_SECONDS`).
 
 CI lint: module MUST NOT ``import anthropic``.
 """
 from __future__ import annotations
 
 from _compat_fcntl import fcntl  # portable: real fcntl on POSIX, no-op flock on Windows
+from _bounded_lock import LockBusy as InviteLockBusy, acquire_exclusive as _acquire_exclusive
 import json
 import os
 import time
@@ -21,6 +23,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+
+# ── Bounded registry locking (never hang an operator request) ───────────
+# ``_save`` used to ``flock(LOCK_EX)`` the freshly created ``.tmp`` file with
+# no timeout. That was wrong twice over: the lock was taken on a file NOBODY
+# else had open (it is created here and renamed away, so it serialised
+# nothing — two concurrent writers still lost each other's entries), and the
+# unbounded acquire could hang POST /remote-trigger/pair/cli-invite forever.
+# The lock now sits on a STABLE ``invites.json.lock`` sidecar and is bounded;
+# a busy sidecar REFUSES (the route maps it to 503) because an invite write
+# that answers 200 without landing hands out a token the registry cannot
+# revoke or single-use.
+# Deadline + refusal semantics follow core.infinite_session.event_store.
+LOCK_TIMEOUT_SECONDS = 2.0
 
 _REGISTRY_ENV = "CORVIN_A2A_INVITE_REGISTRY_PATH"
 _DEFAULT_SUBPATH = "global/remote_trigger/invites.json"
@@ -111,16 +126,30 @@ class InviteRegistry:
             return {}
 
     def _save(self, data: dict[str, dict[str, Any]]) -> None:
+        """Atomically replace the registry under a bounded sidecar lock.
+
+        Raises :class:`InviteLockBusy` when the sidecar is still held at
+        ``LOCK_TIMEOUT_SECONDS`` — never blocks the caller.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            json.dump(data, fh, sort_keys=True, indent=2)
-            fh.write("\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self._path)
-        if self._path.exists():
-            os.chmod(self._path, 0o600)
+        lock_path = self._path.with_name(self._path.name + ".lock")
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
+        try:
+            _acquire_exclusive(lock_fd, "a2a invite registry", timeout=LOCK_TIMEOUT_SECONDS)
+            locked = True
+            tmp = self._path.with_suffix(".tmp")
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump(data, fh, sort_keys=True, indent=2)
+                fh.write("\n")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self._path)
+            if self._path.exists():
+                os.chmod(self._path, 0o600)
+        finally:
+            if locked:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
 
     # ── public API ────────────────────────────────────────────────────
 

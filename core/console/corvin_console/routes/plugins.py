@@ -68,6 +68,7 @@ try:
         LifecycleDisabled,
         PluginLifecycle,
         RegistryCorrupt,
+        RegistryLockBusy,
         TenantRegistry,
     )
 
@@ -383,6 +384,16 @@ def _audit_denied(rec: Any, action: str, plugin_id: str, reason: str) -> None:
 
 def _mutation_error(exc: Exception) -> HTTPException:
     """Map a lifecycle exception to a status code without leaking internals."""
+    # A wedged registry lock is an AVAILABILITY failure, not a client error:
+    # nothing was written, and a retry is the correct next step. 503, matching
+    # ``infinite_session_api``'s ``transaction_lock_busy`` and
+    # ``routes/workflows.py``'s ``lock_busy``. Placed FIRST because
+    # RegistryLockBusy derives from TimeoutError/OSError and would otherwise
+    # reach the 500 fallback.
+    if isinstance(exc, RegistryLockBusy):
+        return HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="lock_busy"
+        )
     # FIRST, and by class rather than by route: PluginDisableRefused derives from
     # PermissionError, so it matches none of the PluginError branches below and
     # used to reach the 500 fallback.

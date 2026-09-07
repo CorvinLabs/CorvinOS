@@ -33,7 +33,11 @@ Single JSON file per (channel, chat) at
 `<corvin_home>/global/roles/<safe_channel>__<safe_chat>.json`. Mtime
 hot-reload via lazy-prune-on-read; concurrent writes use a `.lock`
 sidecar (POSIX flock). Mirror of the `consent.py` /
-`auth_elevation.py` pattern.
+`auth_elevation.py` pattern. The acquire is BOUNDED
+(`roles.LOCK_TIMEOUT_SECONDS`, 2 s) and REFUSES with `RolesLockBusy` at the
+deadline — roles are an authorisation mechanism, so a grant/revoke that did
+not land must reach the caller rather than look successful. Role READS
+(`effective_role`) take no lock and therefore never block.
 
 ### Audit chain
 

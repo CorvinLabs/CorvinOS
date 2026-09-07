@@ -66,6 +66,7 @@ Design notes
 from __future__ import annotations
 
 from _compat_fcntl import fcntl  # portable: real fcntl on POSIX, no-op flock on Windows
+from _bounded_lock import LockBusy as ConsentLockBusy, acquire_exclusive as _acquire_exclusive
 import hashlib as _hashlib
 import json
 import os
@@ -93,6 +94,14 @@ def _uid_hash(uid: str) -> str:
 
 class ConsentStoreCorrupted(RuntimeError):
     """Raised when the consent JSON file exists but cannot be parsed."""
+
+
+# ── Bounded store locking (never hang an operator request) ──────────────
+# The two flock() sites below used to be plain ``flock(LOCK_EX)`` with no
+# timeout, on the L16 consent path that every bridge message and the L38
+# remote-trigger receiver traverse. A wedged holder hung them forever.
+# Deadline + refusal semantics follow core.infinite_session.event_store.
+LOCK_TIMEOUT_SECONDS = 2.0
 
 
 # Public TTL clamps. Operators can override via slash-command, but the
@@ -342,12 +351,21 @@ def _locked_update(path: Path, update_fn):
     This closes the TOCTOU race in grant()/revoke() where two concurrent
     callers could each read the same snapshot, both modify, and the last
     write would silently overwrite the first.
+
+    The acquire is BOUNDED (``LOCK_TIMEOUT_SECONDS``) and REFUSES at the
+    deadline with :class:`ConsentLockBusy` instead of blocking forever. It
+    refuses rather than degrades because this is the consent WRITE path
+    (``grant`` / ``revoke``): a busy lock must never look like a successful
+    grant, and a revoke that did not land must reach the caller, not be
+    swallowed. Callers on a request path map it to 503.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _acquire_exclusive(fd, "consent store", timeout=LOCK_TIMEOUT_SECONDS)
+        locked = True
         data, expired = _prune(_load_store(path))
         fn_result = update_fn(data)
         tmp = path.with_suffix(path.suffix + ".tmp")
@@ -355,32 +373,53 @@ def _locked_update(path: Path, update_fn):
         os.replace(tmp, path)
         return expired, fn_result
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        if locked:
+            fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 
 def _save_store(path: Path, data: dict[str, dict]) -> None:
+    """Atomically write the store. BOUNDED lock; raises ConsentLockBusy."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_suffix(path.suffix + ".lock")
     fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _acquire_exclusive(fd, "consent store", timeout=LOCK_TIMEOUT_SECONDS)
+        locked = True
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
         os.replace(tmp, path)
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        if locked:
+            fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 
 def _save_store_with_retry(path: Path, data: dict[str, dict], *,
                            max_attempts: int = 3) -> None:
-    """_save_store with exponential backoff retry on OSError (best-effort)."""
+    """_save_store with exponential backoff retry on OSError (best-effort).
+
+    A busy LOCK is NOT retried: the bounded acquire already waited
+    ``LOCK_TIMEOUT_SECONDS``, and re-waiting it ``max_attempts`` times would
+    put a multi-second stall back on the ``is_granted`` request path — exactly
+    the hang this replaced. It DEGRADES here, and that is safe by
+    construction: the only caller is the lazy expiry prune inside
+    :func:`is_granted`, whose decision is taken from the pruned IN-MEMORY
+    snapshot. An unpersisted prune therefore never grants anything — the
+    expired entry is dropped again on the next call.
+    """
     delay = 0.1
     for attempt in range(max_attempts):
         try:
             _save_store(path, data)
             return
+        except ConsentLockBusy:
+            import logging as _log
+            _log.getLogger("corvin.consent").warning(
+                "consent prune-write skipped (store lock busy): %s", path,
+            )
+            return  # best-effort: decision already taken from the pruned snapshot
         except OSError:
             if attempt == max_attempts - 1:
                 import logging as _log
@@ -837,4 +876,14 @@ def _cli_main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     import sys as _sys
-    raise SystemExit(_cli_main(_sys.argv[1:]))
+
+    try:
+        _rc = _cli_main(_sys.argv[1:])
+    except ConsentLockBusy as _busy:
+        # The JS slash-command handler parses this stdout JSON; a traceback
+        # would surface to the operator as an opaque crash. A busy store lock
+        # is a retry, never a silent grant.
+        print(json.dumps({"ok": False, "error": "lock_busy",
+                          "hint": "consent store is busy — retry in a moment"}))
+        _rc = 1
+    raise SystemExit(_rc)

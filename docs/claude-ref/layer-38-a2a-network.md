@@ -305,7 +305,12 @@ the reconnect-driven `update_endpoint_url` in the bridge receiver, and the
 `corvin-a2a` CLI writers `label-endpoint` and `migrate-attestation` (A2
 residual) — runs under `a2a_friendship.config_file_lock` (per-directory
 `.a2a_config.lock`, `fcntl.flock` on POSIX / `msvcrt.locking` on Windows) in
-addition to the console's in-process `_pair_lock`. This closes the
+addition to the console's in-process `_pair_lock`. The POSIX acquire is
+BOUNDED (`LOCK_TIMEOUT_SECONDS`, 2 s, `LOCK_EX | LOCK_NB` + retry): a wedged
+holder raises `FriendshipLockBusy` and `friendship_set_url` answers 503
+`lock_busy` instead of hanging forever. The module's advisory fail-soft still
+covers a lock that cannot be *obtained*; a *contended* lock refuses, because
+proceeding unlocked is the very lost update this section is about. This closes the
 cross-process lost-update window where a peer could time reconnect
 notifications — or a concurrent CLI edit could overwrite a lock-holding
 console PATCH — to silently revert a fresh operator edit such as

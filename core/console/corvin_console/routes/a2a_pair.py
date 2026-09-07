@@ -115,6 +115,35 @@ def _pending_friendships_dir() -> Path:
     return Path(env) if env else _PENDING_FRIENDSHIPS_DEFAULT
 
 
+# ── Busy advisory lock → 503 ──────────────────────────────────────────
+
+def _refuse_lock_busy(
+    rec: session_auth.SessionRecord, action: str, target_kind: str, target_id: str
+) -> HTTPException:
+    """Turn a busy A2A registry / friendship-config lock into an audited 503.
+
+    ``a2a_invite_registry._save`` and ``a2a_friendship.config_file_lock`` used
+    to take an UNBOUNDED ``flock(LOCK_EX)``, so a wedged holder hung these
+    console requests forever. Both are bounded now and raise a
+    ``TimeoutError`` subclass at the deadline. 503 (not 500) because nothing
+    was written and a retry is the correct client behaviour — same mapping as
+    ``routes/workflows.py`` and ``infinite_session_api``. Content-free record:
+    action + id only, never a token or a peer URL.
+    """
+    try:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action=action,
+            target_kind=target_kind,
+            target_id=target_id,
+            reason="lock_busy",
+        )
+    except Exception:  # noqa: BLE001 - the refusal must not depend on the audit sink
+        pass
+    return HTTPException(status_code=503, detail="lock_busy")
+
+
 # ── crypto helpers ────────────────────────────────────────────────────
 
 def _gen_key() -> str:
@@ -590,14 +619,19 @@ def generate_cli_invite(
         raise HTTPException(status_code=400, detail="invalid request") from exc
 
     registry = _reg.InviteRegistry()
-    registry.create(_reg.InviteEntry(
-        ikey=token.ikey,
-        oid=token.oid,
-        lbl=token.lbl or "",
-        iat=token.iat,
-        exp=token.exp,
-        su=token.su,
-    ))
+    try:
+        registry.create(_reg.InviteEntry(
+            ikey=token.ikey,
+            oid=token.oid,
+            lbl=token.lbl or "",
+            iat=token.iat,
+            exp=token.exp,
+            su=token.su,
+        ))
+    except _reg.InviteLockBusy:
+        # The token was minted but never recorded — refuse, so the operator is
+        # never handed a token the registry cannot revoke or single-use.
+        raise _refuse_lock_busy(rec, "a2a.invite.created", "a2a_invite", token.ikey) from None
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -666,7 +700,15 @@ def accept_cli_invite(
         _write_secure(endpoint_path, _inv.invite_to_endpoint_dict(token, local_instance_id=local_iid))
 
     if registry is not None:
-        registry.mark_accepted(token.ikey)
+        try:
+            registry.mark_accepted(token.ikey)
+        except _reg.InviteLockBusy:
+            # Single-use bookkeeping did not land. Refuse rather than report
+            # success: a token reported accepted but still "pending" on disk
+            # is a replayable single-use invite.
+            raise _refuse_lock_busy(
+                rec, "a2a.invite.accepted", "a2a_invite", token.ikey
+            ) from None
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -730,7 +772,10 @@ def revoke_invite(
     import a2a_invite_registry as _reg  # type: ignore[import-not-found]
 
     registry = _reg.InviteRegistry()
-    ok = registry.revoke(ikey)
+    try:
+        ok = registry.revoke(ikey)
+    except _reg.InviteLockBusy:
+        raise _refuse_lock_busy(rec, "a2a.invite.revoked", "a2a_invite", ikey) from None
     if not ok:
         raise HTTPException(status_code=404, detail=f"invite {ikey!r} not found")
     console_audit.action_performed(
@@ -1178,6 +1223,13 @@ def friendship_set_url(
                 origins_dir=_origins_dir(),
                 endpoints_dir=_endpoints_dir(),
             )
+    except _ft.FriendshipLockBusy:
+        # Another writer holds the origin/endpoint config lock. Refuse — the
+        # peer URL decides where A2A tasks are relayed, so a lost update here
+        # is a routing change nobody asked for.
+        raise _refuse_lock_busy(
+            rec, "a2a.friendship.activated", "a2a_friendship", body.kid
+        ) from None
     except _ft.FriendshipError as exc:
         raise HTTPException(status_code=404, detail="not found") from exc
     console_audit.action_performed(

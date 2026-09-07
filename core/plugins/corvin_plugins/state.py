@@ -31,10 +31,11 @@ import logging
 import os
 import tempfile
 import threading
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
 
 import yaml
 
@@ -58,6 +59,33 @@ log = logging.getLogger("corvin.plugins.state")
 #: In-process guard. Two threads in ONE process (two Console requests) would
 #: otherwise interleave load → modify → save and lose one of the two writes.
 _MUTATION_LOCK = threading.RLock()
+
+# ── Bounded registry locking (never hang an operator request) ───────────
+# Both locks below used to be unbounded: ``with _MUTATION_LOCK`` and a plain
+# ``fcntl.flock(LOCK_EX)``. Every plugin lifecycle transition goes through
+# them, and those are console request paths (POST /plugins/{id}/enable,
+# /disable, /settings, /uninstall, the admin plane, marketplace install), so a
+# wedged holder — a crashed CLI whose fd the kernel had not reaped, an NFS
+# mount, a debugger-stopped gateway — hung the operator's request FOREVER. No
+# ``try/except`` can catch a hang.
+#
+# Both now REFUSE at the deadline with :class:`RegistryLockBusy`; the routes
+# map it to 503. Refusing is the only safe direction: proceeding without the
+# lock is precisely the lost update the lock exists to prevent (measured
+# before it existed: 12 concurrent installs left 2 records on disk), and a
+# registry write that answered 200 without landing would tell the operator a
+# plugin is enabled when it is not.
+# Deadline + refusal semantics follow core.infinite_session.event_store.
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_INTERVAL_SECONDS = 0.01
+
+
+class RegistryLockBusy(TimeoutError):
+    """The registry lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
+
+    A ``TimeoutError`` (hence an ``OSError``), matching
+    :class:`core.infinite_session.event_store.SnapshotLockBusy`.
+    """
 
 
 def _fcntl_shim():
@@ -105,11 +133,18 @@ def registry_mutation(
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(".registry.lock")
     fcntl = _fcntl_shim()
-    with _MUTATION_LOCK:
+    if not _MUTATION_LOCK.acquire(timeout=LOCK_TIMEOUT_SECONDS):
+        raise RegistryLockBusy(
+            f"plugin registry mutation lock busy: still held after "
+            f"{LOCK_TIMEOUT_SECONDS:g}s — refusing to block the caller"
+        )
+    try:
         lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
         try:
             if fcntl is not None:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                _acquire_registry_flock(fcntl, lock_fd)
+                locked = True
             registry = TenantRegistry.load(
                 tenant_id=tenant_id, corvin_home_path=corvin_home_path
             )
@@ -117,10 +152,31 @@ def registry_mutation(
             registry.save()
         finally:
             try:
-                if fcntl is not None:
+                if locked:
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
             finally:
                 os.close(lock_fd)
+    finally:
+        _MUTATION_LOCK.release()
+
+
+def _acquire_registry_flock(fcntl: Any, lock_fd: int) -> None:
+    """``LOCK_EX | LOCK_NB`` with a hard deadline — never blocks forever.
+
+    Raises :class:`RegistryLockBusy` at ``LOCK_TIMEOUT_SECONDS``.
+    """
+    deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise RegistryLockBusy(
+                    f"plugin registry file lock busy: still held after "
+                    f"{LOCK_TIMEOUT_SECONDS:g}s — refusing to block the caller"
+                ) from None
+            time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
 
 #: Schema version of registry.yaml itself.  Bumped only for a breaking layout
 #: change; from_dict() already fails closed on unknown record fields.
