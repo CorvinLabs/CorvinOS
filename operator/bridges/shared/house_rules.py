@@ -60,6 +60,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 _hr_log = logging.getLogger(__name__)
 
 
@@ -830,7 +845,20 @@ def _house_rules_classify_chunk_once(chunk: str, rules_block: str, auth_str: str
     instead of the bare JSON object asked for."""
     import json as _json
     norm = _house_rules_normalize_chunk(chunk)
-    prompt = _house_rules_make_prompt(norm, rules_block, auth_str, strict_json=strict_json)
+    # R4: whole-payload guard. `norm` is the raw user window and it is
+    # interleaved with the rule block inside the template, so only the
+    # concatenated payload can be neutralised safely. The payload rides
+    # POSITIONALLY in argv, so byte 0 must be a letter too. A missing guard is
+    # NOT an unguarded spawn and NOT an allow — it is raised as a classifier
+    # error so the existing fail-closed escalate path in
+    # `_house_rules_classify_chunk` handles it exactly like `spawn_missing`.
+    try:
+        prompt = _guard_prompt_head(
+            _house_rules_make_prompt(norm, rules_block, auth_str,
+                                     strict_json=strict_json)
+        )
+    except Exception as e:  # noqa: BLE001 - PromptGuardUnavailable & friends
+        raise _HouseRulesClassifierError("guard_missing", str(e)) from e
     try:
         import helper_model as _hm  # type: ignore
         model_args = _hm.claude_args(_hm.SITE_HOUSE_RULES)
@@ -900,7 +928,11 @@ def _house_rules_classify_chunk(chunk: str, rules_block: str, auth_str: str) -> 
             # logged in / bad key) are NON-transient — retrying only burns the
             # budget + backoff. Break immediately; the gate still fails CLOSED
             # (the cause propagates and the secondary provider / escalate runs).
-            if e.cause in ("spawn_missing", "auth_missing") or attempt >= _HOUSE_RULES_RETRIES:
+            # guard_missing (R4): the shared prompt neutraliser is unimportable.
+            # Non-transient like the two below — retrying cannot make it appear,
+            # and the gate must escalate rather than spawn unguarded.
+            if e.cause in ("spawn_missing", "auth_missing", "guard_missing") \
+                    or attempt >= _HOUSE_RULES_RETRIES:
                 break
             _hr_log.info(
                 "[house-rules] cloud classifier attempt %d failed (cause=%s) — retry in %.1fs",

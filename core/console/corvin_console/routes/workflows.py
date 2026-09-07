@@ -97,6 +97,33 @@ from ..utils import read_json_or_none as _read_json
 
 # ── Path resolution ────────────────────────────────────────────────────────
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# The claude CLI expands `/`, `!` and `#` at byte 0 and `@<path>` ANYWHERE in a
+# prompt — client-side, BEFORE the model runs, so no tool policy, permission
+# mode or `--disallowedTools` restricts them. Every payload this module hands
+# to the CLI therefore goes through the ONE shared neutraliser. The fallback is
+# a RAISING stub, never a pass-through: an unimportable guard refuses the
+# spawn, it never downgrades it to an unguarded one.
+try:  # pragma: no cover - import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_d = _pg_os.path.dirname(_pg_os.path.abspath(__file__))
+    while _pg_d != _pg_os.path.dirname(_pg_d):
+        _pg_c = _pg_os.path.join(_pg_d, "operator", "bridges", "shared")
+        if _pg_os.path.isdir(_pg_c):
+            if _pg_c not in _pg_sys.path:
+                _pg_sys.path.insert(0, _pg_c)
+            break
+        _pg_d = _pg_os.path.dirname(_pg_d)
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except Exception:  # pragma: no cover - guard unavailable => refuse, never bypass
+    def _guard_prompt_head(_text):  # type: ignore[misc]
+        raise RuntimeError(
+            "shared claude-CLI prompt guard unavailable "
+            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "unguarded `claude -p` payload"
+        )
+
+
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
 _FORGE_PATH = _REPO / "operator" / "forge"
@@ -472,7 +499,11 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None) -> str:
     try:
         result = subprocess.run(
             cmd,
-            input=prompt,
+            # R4: whole-payload guard - workflow node instructions are authored
+            # in the console and can embed forwarded chat/mail content. STDIN is
+            # expanded by the CLI exactly like a positional prompt. Reply
+            # contract unaffected: stdout is returned verbatim.
+            input=_guard_prompt_head(prompt),
             capture_output=True,
             text=True,
             timeout=180,
@@ -3665,7 +3696,9 @@ def explain_workflow(
     try:
         result = subprocess.run(
             ["claude", "-p", "--max-turns", "1", "--tools", "", "--model", "claude-haiku-4-5",
-             "--system-prompt", system, yaml_text],
+             # R4: the workflow YAML is user-authored and rides POSITIONALLY
+             # in argv. Reply contract unaffected: stdout is the explanation.
+             "--system-prompt", system, _guard_prompt_head(yaml_text)],
             capture_output=True, text=True, timeout=30, encoding="utf-8",
         )
         explanation = result.stdout.strip() or "Erklärung nicht verfügbar."
@@ -3902,7 +3935,9 @@ def _run_claude_for_design(prompt: str) -> str:
     try:
         result = subprocess.run(
             ["claude", "-p", "--output-format", "text"],
-            input=prompt,
+            # R4: the design-chat prompt is the operator's live conversation.
+            # Reply contract unaffected: stdout is returned verbatim.
+            input=_guard_prompt_head(prompt),
             capture_output=True,
             text=True,
             timeout=90,

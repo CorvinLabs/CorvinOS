@@ -71,6 +71,21 @@ from typing import Any, Literal
 # ---------------------------------------------------------------------------
 
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 _THIS = Path(__file__).resolve()
 
 # Curated set of block-reason classes the judge is asked to pick from.
@@ -327,9 +342,16 @@ def _spawn_judge(prompt: str, output: str, *,
 
     truncated_output = _truncate_for_judge(output)
     truncated_prompt = _truncate_for_judge(prompt)
-    judge_prompt = _JUDGE_PROMPT_TEMPLATE.format(
+    # R4: whole-payload guard. Both halves the judge screens are
+    # attacker-influenceable (the user's prompt AND the model output it
+    # produced) and both are interpolated into the template, so the guard is
+    # applied to the concatenation. `judge_prompt` rides POSITIONALLY in argv,
+    # so the sentinel also keeps a `-`-leading payload from becoming a flag.
+    # Reply contract unaffected: the verdict is still `CLEAN|BLOCKED` parsed
+    # from stdout, and the guard never touches stdout.
+    judge_prompt = _guard_prompt_head(_JUDGE_PROMPT_TEMPLATE.format(
         prompt=truncated_prompt, output=truncated_output,
-    )
+    ))
     try:
         from . import helper_model as _hm  # type: ignore
     except ImportError:

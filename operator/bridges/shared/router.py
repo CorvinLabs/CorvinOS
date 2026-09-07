@@ -45,6 +45,22 @@ import re
 import subprocess
 import sys
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
+
 def _resolve_default_router_model() -> str:
     """Layer-29.5 cost-split: router LLM calls route through helper_model
     so an operator can pin them globally via CORVIN_HELPER_MODEL[_ROUTER_CLI].
@@ -178,8 +194,12 @@ def _call_cli(system: str, user: str, model: str, timeout: float) -> dict | None
         except ImportError:
             _hm = None
     _bin = _hm.resolve_claude_bin() if _hm else "claude"
+    # R4: `user` is raw chat text and rides POSITIONALLY in argv. The guard
+    # gives it a letter at byte 0 (so it can neither be parsed as a CLI flag
+    # nor trigger the `/`,`!`,`#` client-side handlers) and disarms `@<path>`
+    # file expansion. Reply contract unaffected: `_parse_json` reads stdout.
     cmd = [
-        _bin, "-p", user,
+        _bin, "-p", _guard_prompt_head(user),
         "--append-system-prompt", system,
         "--model", model,
         "--output-format", "text",

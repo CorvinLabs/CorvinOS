@@ -15,6 +15,33 @@ from typing import Any
 
 from .engines import EngineCall
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# The claude CLI expands `/`, `!` and `#` at byte 0 and `@<path>` ANYWHERE in a
+# prompt — client-side, BEFORE the model runs, so no tool policy, permission
+# mode or `--disallowedTools` restricts them. Every payload this module hands
+# to the CLI therefore goes through the ONE shared neutraliser. The fallback is
+# a RAISING stub, never a pass-through: an unimportable guard refuses the
+# spawn, it never downgrades it to an unguarded one.
+try:  # pragma: no cover - import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_d = _pg_os.path.dirname(_pg_os.path.abspath(__file__))
+    while _pg_d != _pg_os.path.dirname(_pg_d):
+        _pg_c = _pg_os.path.join(_pg_d, "operator", "bridges", "shared")
+        if _pg_os.path.isdir(_pg_c):
+            if _pg_c not in _pg_sys.path:
+                _pg_sys.path.insert(0, _pg_c)
+            break
+        _pg_d = _pg_os.path.dirname(_pg_d)
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except Exception:  # pragma: no cover - guard unavailable => refuse, never bypass
+    def _guard_prompt_head(_text):  # type: ignore[misc]
+        raise RuntimeError(
+            "shared claude-CLI prompt guard unavailable "
+            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "unguarded `claude -p` payload"
+        )
+
+
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 _DEFAULT_MODEL = "haiku"  # cheapest tier — this engine is for structural E2E proof, not quality
 _DEFAULT_TIMEOUT_S = 60
@@ -80,8 +107,12 @@ class ClaudeCliEngine:
     def spawn(self, call: EngineCall) -> dict[str, Any]:
         self.history.append(call)
         prompt = _build_prompt(call)
+        # R4: whole-payload guard - `_build_prompt(call)` embeds the workflow
+        # step's instructions and upstream node output. POSITIONAL argv, so the
+        # sentinel also keeps a `-`-leading payload from becoming a CLI flag.
+        # Reply contract unaffected: `_extract_json` parses stdout.
         cmd = [
-            "claude", "-p", prompt,
+            "claude", "-p", _guard_prompt_head(prompt),
             "--model", self.model,
             "--disallowedTools", _DENIED_TOOLS,
         ]

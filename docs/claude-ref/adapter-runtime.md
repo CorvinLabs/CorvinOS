@@ -423,6 +423,32 @@ live: `core/console/tests/test_task_worker_pool_argv.py::test_live_at_path_refer
 asserts the machine's host name is absent from the answer — this is what pins the
 neutralisation against a future CLI change, not the doc.
 
+### Round 4 (2026-09-07) — the ledger's `_PENDING` backlog is closed
+
+| Finding | Mechanism | Where | Contract |
+|---|---|---|---|
+| **R4-C1** | **26 unguarded spawn sites** | the 12 bridge helper models in `operator/bridges/shared/` (`router`, `acs_classify`, `acs_gate_chain`, `acs_runtime`, `house_rules`, `output_sentinel`, `user_style`, `user_model`, `memory_bridge`, `ulo_compliance`, `dialectic`, `compute_narrator`) plus `context_engineering/stages/llm_synthesis.py`, `compute/fabric/oracle/oracle.py`, `console/browser/agent.py`, `console/routes/workflows.py` (3 spawns), `delegate/{output_judge,prompt_safety}.py`, `workflows/engines_claude.py`, `tde/{analysis_runner,loss_judge,tde_engine}.py`, `skill_creator/llm_client.py`, `voice/hooks/artifact_register.py`, `voice/scripts/engine_canary.py`, `scripts/run_spotify_workflow_demo.py` | Round 3's ledger listed these as `_PENDING`; the first twelve are fed the message body of a public Discord / Telegram / WhatsApp / e-mail turn **verbatim**, so `@/etc/hostname` in one chat message was a file read on every one of them. Each site now guards the **WHOLE payload** it hands to the CLI — never a substring — because the template and the attacker-influenced text are interleaved by the time the payload exists, and the sentinel additionally keeps a `-`-leading payload from being parsed as a CLI flag at the ~14 sites that pass the prompt **positionally**. Reply contracts are untouched: the guard edits only the prompt, and every one of these parses its verdict out of **stdout**. |
+| **R4-C2** | **One fail-closed import surface** | `operator/bridges/shared/prompt_guard.py` | Copying a defensive `try: import … except: _guard = None` block into thirty modules is thirty chances to forget the `is None` branch and spawn unguarded. The shim imports `agents.claude_code.guard_prompt_head` once and **raises `PromptGuardUnavailable`** from its own `guard_prompt_head()` when that fails — there is no code path that returns the caller's text, so callers need no `None` check. Sites outside `operator/bridges/shared/` bootstrap the shim by walking up to the repo root; their fallback is a **raising stub**, never a pass-through. The three round-1..3 sites keep their inline `is None` refusal and are listed in the ledger's `_INLINE_NONE_CHECK`; `chat_runtime.py` / `summarize.py` import the helper directly with no fallback at all (`_DIRECT_HARD_IMPORT`). |
+| **R4-C3** | **L44 stays fail-closed** | `house_rules.py::_house_rules_classify_chunk_once` | A raising guard inside a compliance gate must not become a silent allow **or** a pointless retry storm. The guard failure is converted to `_HouseRulesClassifierError("guard_missing")` — the module's own error contract — and `guard_missing` joins `spawn_missing`/`auth_missing` as a **non-transient** cause, so the retry wrapper breaks immediately and the gate escalates. |
+| **R4-C4** | **Ledger categories** | `core/console/tests/test_claude_spawn_site_ledger.py` | `_PENDING` is now **empty and asserted empty** — anything landing there is an open finding, not a blessed exemption. A new `_NO_CLI_TEXT` category holds the two files the discovery regex finds that hand **no text at all** to the CLI (`compute/fabric/config.py` — an argv *template* dataclass default; `bridges/shared/engines/system_prompt_injector.py` — `claude -p` appears only in docstrings). `test_guarded_sites_fail_closed_when_the_helper_is_missing` now covers **every** `_MUST_GUARD` entry, not three of them. |
+
+Regression tests: `operator/bridges/shared/test_spawn_prompt_guard.py` — three of the most
+exposed sites (`router.route`, `acs_classify.classify`, `house_rules._house_rules_classifier`)
+driven through their own entry points against a **recording `claude` stand-in the module
+actually execs**, asserting on what the CLI RECEIVED (argv + stdin), plus the shim's
+refusal contract and L44's `guard_missing` mapping;
+`core/console/tests/test_claude_spawn_site_ledger.py` (7 tests, `_PENDING` empty);
+live: `test_spawn_prompt_guard.py::test_live_at_reference_does_not_leak_the_host_name_through_memory_bridge`
+(`CLAUDE_LIVE_E2E=1`) drives the REAL CLI through `memory_bridge._run_haiku` with
+`@/etc/hostname` between markers and asserts this machine's host name is absent — the
+unguarded control run on the same prompt answered "als Dateireferenz aufgelöst ergibt er
+`shumway`".
+
+**Known, unrelated:** `acs_classify._llm_classify` passes `--no-tools`, which the installed
+CLI rejects (`error: unknown option '--no-tools'`), so that Stage-2 fallback currently always
+returns `path="llm_error"`. Guarding it is still correct — the flag is a separate defect and
+was left untouched here.
+
 ## Per-chat profiles (layer 1)
 
 Default without `chat_profiles`: max-open (`--dangerously-skip-permissions`, all tools).

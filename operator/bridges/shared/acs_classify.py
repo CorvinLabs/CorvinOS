@@ -25,6 +25,21 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Final
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
 HEURISTIC_THRESHOLD: Final[float] = 0.70
@@ -208,7 +223,15 @@ def _llm_classify(task: str) -> ACSBlueprint:
                                 path="llm_opt_out", reason="helper model opted out")
 
         bin_path = _hm.resolve_claude_bin()
-        prompt = _LLM_CLASSIFY_PROMPT.replace("{task}", task[:2000])
+        # R4: the whole payload is guarded, not just `{task}` — the template
+        # and the user's task are concatenated here and the attacker-influenced
+        # half can land anywhere in the result. `prompt` also rides
+        # POSITIONALLY in argv, so the sentinel additionally stops a task that
+        # starts with `-` from being parsed as a CLI flag.
+        # Reply contract unaffected: the JSON verdict is read from stdout.
+        prompt = _guard_prompt_head(
+            _LLM_CLASSIFY_PROMPT.replace("{task}", task[:2000])
+        )
         cmd = (
             [bin_path, "-p", prompt, "--max-turns", "1", "--no-tools",
              "--output-format", "text"]

@@ -1127,7 +1127,12 @@ not deleted — they now assert the fixed behaviour),
 | **Fail-open guard import** | `../../operator/bridges/shared/adapter.py` (double-`ImportError` branch) | `_guard_prompt_head` was set to `None`, so the three spawn sites raised an opaque `TypeError: 'NoneType' object is not callable` deep in the spawn path instead of the explicit refusal `task_worker_pool._worker_stdin_payload` uses. It is now a stand-in that raises `RuntimeError` naming the cause. Same outcome — no unguarded prompt ever reaches `claude -p` — with an operator-readable message. |
 
 See `adapter-runtime.md` § "Round 3" for the `@<path>` client-side file-expansion
-finding (R3-C2) and the spawn-site ledger (R3-C1).
+finding (R3-C2) and the spawn-site ledger (R3-C1), and § "Round 4" for the closure of
+the ledger's `_PENDING` backlog — 26 further `claude -p` spawn sites (the 12 bridge
+helper models fed raw public-channel chat text among them) now route their WHOLE
+payload through the shared neutraliser via the fail-closed shim
+`operator/bridges/shared/prompt_guard.py`, whose `guard_prompt_head` raises rather than
+ever returning unguarded text.
 
 Regression tests: `core/console/tests/test_console_r2_hardening.py`
 (`test_nat64_wrapped_ipv4_is_unwrapped_and_blocked`,

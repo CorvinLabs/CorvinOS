@@ -68,6 +68,21 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 # ── Audit hash chain (best-effort import) ──────────────────────────────────
 _audit_writer: Callable[..., Any] | None = None
 try:
@@ -351,9 +366,15 @@ def _default_judge(cluster: Cluster, draft: str, *, timeout_s: int = 20) -> bool
     model_args = _hm.claude_args(_hm.SITE_USER_STYLE_JUDGE) if _hm else []
     try:
         cli = os.environ.get("CLAUDE_CLI") or (_hm.resolve_claude_bin() if _hm else "claude")
+        # R4: whole-payload guard — the draft rule and the skill name are
+        # derived from user-authored turns and are interleaved with the
+        # template, and the CLI expands `/`/`!`/`#` at byte 0 and `@<path>`
+        # anywhere in a STDIN prompt exactly as in a positional one.
+        # Reply contract unaffected: the FAITHFUL/OVERFIT verdict is read from
+        # stdout, which the guard never touches.
         r = subprocess.run(
             [cli, "-p", "--max-turns", "1", "--tools", "", *model_args],
-            input=prompt, capture_output=True, text=True,
+            input=_guard_prompt_head(prompt), capture_output=True, text=True,
             timeout=timeout_s, check=False,
         )
         out = (r.stdout or "").strip().splitlines()

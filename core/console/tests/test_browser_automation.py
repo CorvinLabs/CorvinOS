@@ -809,8 +809,11 @@ def test_spawn_claude_untrusted_prompt_goes_via_stdin_not_argv():
     # the malicious payload is NOT anywhere on the command line …
     assert all(payload not in str(a) for a in argv), argv
     assert "calc.exe" not in " ".join(str(a) for a in argv)
-    # … it was routed through stdin instead
-    assert kwargs.get("input") == payload
+    # … it was routed through stdin instead, behind the shared claude-CLI
+    # neutraliser (R4, 2026-09-07): byte 0 is the fixed sentinel line so a
+    # scraped page element starting with `/`, `!` or `#` cannot become a
+    # client-side command, and the operator's text follows verbatim.
+    assert kwargs.get("input") == "User input:\n" + payload
     # a positional prompt must not sneak back in: `-p` is the last meaningful
     # flag before its trusted `--system-prompt` value; no untrusted trailer.
     assert argv[-2] == "--system-prompt"
