@@ -20,12 +20,13 @@ class TestConcurrentCheckpointWrites:
     def setup_method(self):
         """Create isolated temp directory for each test."""
         self.tmpdir = tempfile.mkdtemp()
-        self.manager = CheckpointManager(Path(self.tmpdir))
+        self.manager = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
 
     def create_test_checkpoint(self, task_id: str, iter_num: int) -> CheckpointState:
         """Create a minimal test checkpoint."""
         return CheckpointState(
             checkpoint_id=f"ckpt_{iter_num}",
+            tenant_id="_default",
             task_id=task_id,
             session_id="session_concurrent",
             phase="execution",

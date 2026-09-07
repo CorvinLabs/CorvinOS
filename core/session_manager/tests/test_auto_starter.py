@@ -48,6 +48,8 @@ async def test_split_on_context_limit(auto_starter):
         tenant_id="_default",
     )
 
+    original_session = auto_starter.get_task_state("task_1")["session_id"]
+
     # Progress until context limit
     new_session_id = await auto_starter.on_task_progress(
         task_id="task_1",
@@ -58,7 +60,8 @@ async def test_split_on_context_limit(auto_starter):
     )
 
     assert new_session_id is not None
-    assert new_session_id != auto_starter.get_task_state("task_1")["session_id"]
+    assert new_session_id != original_session
+    assert new_session_id == auto_starter.get_task_state("task_1")["session_id"]
     assert auto_starter.get_task_state("task_1")["split_count"] == 1
 
 
@@ -85,28 +88,29 @@ async def test_no_split_when_context_ok(auto_starter):
 
 @pytest.mark.asyncio
 async def test_goal_drift_prevents_split(auto_starter):
-    """Test: goal drift is detected and split refused (fail-closed)."""
+    """Test: goal drift is detected and the split refused (fail-closed, CRITICAL-009)."""
     await auto_starter.on_task_start(
         task_id="task_3",
         goal="Audit codebase",  # Original goal
         tenant_id="_default",
     )
+    original_session = auto_starter.get_task_state("task_3")["session_id"]
 
-    # Simulate goal change (drift)
+    # The executor now works towards a DIFFERENT goal (drift) → RuntimeError
+    with pytest.raises(RuntimeError, match="Goal drift detected"):
+        await auto_starter.on_task_progress(
+            task_id="task_3",
+            context_usage_pct=0.85,  # Would trigger split
+            iterations=10,
+            context={"tokens_used": 50000, "tokens_available": 100000},
+            audit_trail_hash="audit_hash_789",
+            goal="Deploy to production",  # CHANGED GOAL
+        )
+
+    # No split happened
     state = auto_starter.get_task_state("task_3")
-    state["goal"] = "Deploy to production"  # CHANGED GOAL
-
-    # Try to split with new goal
-    new_session_id = await auto_starter.on_task_progress(
-        task_id="task_3",
-        context_usage_pct=0.85,  # Would trigger split
-        iterations=10,
-        context={"tokens_used": 50000, "tokens_available": 100000},
-        audit_trail_hash="audit_hash_789",
-    )
-
-    # Split should be refused (goal mismatch)
-    assert new_session_id is None
+    assert state["session_id"] == original_session
+    assert state["split_count"] == 0
 
 
 @pytest.mark.asyncio

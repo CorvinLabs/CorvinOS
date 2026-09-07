@@ -19,7 +19,7 @@ from core.workflows.execution_engine import (
     WorkflowExecutionState,
     WorkflowNodeEvent,
 )
-from core.context_engineering.execution_context import ExecutionContext
+from core.context_engineering.execution_context import ContextStack, ExecutionContext
 
 
 class TestWorkflowCheckpointIntegration:
@@ -117,6 +117,8 @@ class TestWorkflowCheckpointIntegration:
         execution_context = ExecutionContext(
             task_id="task-004",
             tenant_id="default",
+            task_template={},
+            context_stack=ContextStack(),
         )
 
         # Create executor with mock DAGRunner (None for now, just testing state capture)
@@ -150,6 +152,8 @@ class TestWorkflowCheckpointIntegration:
         execution_context = ExecutionContext(
             task_id="task-005",
             tenant_id="default",
+            task_template={},
+            context_stack=ContextStack(),
         )
 
         executor = WorkflowExecutor(
@@ -189,6 +193,8 @@ class TestWorkflowCheckpointIntegration:
         execution_context = ExecutionContext(
             task_id="task-006",
             tenant_id="default",
+            task_template={},
+            context_stack=ContextStack(),
         )
 
         # Record decisions during execution

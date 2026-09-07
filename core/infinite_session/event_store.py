@@ -1,181 +1,221 @@
 """Phase A: Event Store with Snapshot Persistence (ADR-0540, Infinite Session Engine).
 
-Manages snapshot storage, retrieval, and replay.
-Persistence to ~/.corvin/tenants/<tenant_id>/snapshots/
-All operations are audit-first: audit event emitted before disk write.
+The ONE persistence layer of the infinite-session engine. The dashboard API,
+the session bridger, the audit verifier and the task-turn producer all read
+and write snapshots exclusively through this class — there is no second
+"checkpoints" layout.
 
-Compliance:
-- GDPR Art. 32: Tenant isolation, fail-closed on missing tenant_id
-- Audit Trail: Every write operation is logged before persistence
-- Immutability: Snapshots are append-only (never update/delete)
+Storage layout (per tenant, built via :mod:`core.infinite_session.paths`):
+
+    <corvin_home>/tenants/<tenant_id>/infinite_session/snapshots/
+        <task_id>/
+            index.json              # ordered SnapshotMetadata list (seq asc)
+            <snapshot_id>.json      # full Snapshot
+
+Guarantees:
+- Tenant-bound: the store is constructed for ONE tenant; every call re-checks
+  the tenant it is given against the binding (fail-closed).
+- Audit-first: the core hash-chained audit writer commits an
+  ``infinite_session.snapshot_created`` record BEFORE the snapshot becomes
+  visible; no chain commit → no snapshot (ADR-0232/0233).
+- Atomic + durable: temp file → fsync → rename; index updated under an
+  exclusive file lock.
+- Append-only: snapshots are never rewritten; the chain per task is verified
+  with :meth:`verify_snapshot_chain`.
+- Content-free audit: records carry ids, hashes and byte sizes only.
 """
 
 from __future__ import annotations
 
-import hashlib
+import fcntl
 import json
 import os
-from dataclasses import asdict
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
-from datetime import datetime
+from typing import Any, Iterator, Optional
 
-from core.infinite_session.snapshot_schema import Snapshot, SnapshotType, SnapshotMetadata
+from core.infinite_session.paths import (
+    AuditFn,
+    content_free,
+    core_audit,
+    safe_child,
+    tenant_root,
+    validate_id,
+)
+from core.infinite_session.snapshot_schema import (
+    Snapshot,
+    SnapshotMetadata,
+    SnapshotType,
+)
+from core.tenants import validate_tenant_id
+
+INDEX_FILE = "index.json"
+EVENT_SNAPSHOT_CREATED = "infinite_session.snapshot_created"
+EVENT_SNAPSHOT_ARCHIVED = "infinite_session.snapshot_archived"
+
+
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_atomic(target: Path, payload: dict[str, Any]) -> None:
+    tmp = target.with_name(target.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, target)
+    _fsync_dir(target.parent)
 
 
 class EventStore:
-    """Append-only event store for snapshots (ADR-0540).
+    """Append-only, tenant-bound snapshot store (ADR-0540)."""
 
-    Storage layout:
-        ~/.corvin/tenants/<tenant_id>/snapshots/
-            <task_id>/
-                <phase_id>/
-                    <snapshot_id>.json
-                    metadata.json (index)
-    """
-
-    def __init__(self, tenant_home: str = None):
-        """Initialize EventStore.
+    def __init__(
+        self,
+        tenant_id: str,
+        corvin_home: Optional[str | Path] = None,
+        audit: Optional[AuditFn] = None,
+    ):
+        """Bind the store to ``tenant_id``.
 
         Args:
-            tenant_home: Tenant home directory (defaults to ~/.corvin/tenants/<tenant_id>)
+            tenant_id: The ONLY tenant this store may read or write.
+            corvin_home: Optional root override (tests); default honours
+                ``CORVIN_HOME`` via :func:`core.paths.tenant.corvin_home`.
+            audit: ``audit(event_type, *, tenant_id, details) -> audit_ref``.
+                Defaults to the core hash-chained writer. Must raise on failure.
         """
-        if tenant_home is None:
-            tenant_home = os.path.expanduser("~/.corvin")
-        self.root_dir = Path(tenant_home) / "snapshots"
+        self.tenant_id = validate_tenant_id(tenant_id)
+        self.root_dir = tenant_root(self.tenant_id, corvin_home) / "snapshots"
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        self._audit: AuditFn = audit or core_audit
 
-    def _get_snapshot_dir(self, tenant_id: str, task_id: str, phase_id: str) -> Path:
-        """Get directory path for snapshots (fail-closed on invalid tenant_id).
+    # ── tenant binding ───────────────────────────────────────────────────
 
-        Args:
-            tenant_id: Tenant identifier (must not be empty)
-            task_id: Task identifier (must not contain path traversal)
-            phase_id: Phase identifier
+    def _bind(self, tenant_id: Any) -> str:
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise ValueError("tenant_id is required (fail-closed)")
+        validate_tenant_id(tenant_id)
+        if tenant_id != self.tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: store is bound to {self.tenant_id!r}, got {tenant_id!r}"
+            )
+        return tenant_id
 
-        Returns:
-            Path to snapshot directory
+    # ── paths ────────────────────────────────────────────────────────────
 
-        Raises:
-            ValueError: If tenant_id is empty or invalid, or if task_id contains path traversal
-        """
-        if not tenant_id or not tenant_id.strip():
-            raise ValueError("tenant_id is required and must not be empty (fail-closed)")
+    def _task_dir(self, task_id: str) -> Path:
+        return safe_child(self.root_dir, task_id)
 
-        # Validate task_id: reject path traversal sequences
-        if task_id and ('..' in task_id or task_id.startswith('/')):
-            raise ValueError("task_id contains invalid path sequence (fail-closed)")
+    def _snapshot_file(self, task_id: str, snapshot_id: str) -> Path:
+        validate_id(snapshot_id, "snapshot_id")
+        return safe_child(self.root_dir, task_id, f"{snapshot_id}.json")
 
-        snapshot_dir = self.root_dir / task_id / phase_id
-        return snapshot_dir
+    @contextmanager
+    def _task_lock(self, task_dir: Path) -> Iterator[None]:
+        task_dir.mkdir(parents=True, exist_ok=True)
+        lock = task_dir / ".lock"
+        with open(lock, "a+") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+    def _read_index(self, task_dir: Path) -> list[SnapshotMetadata]:
+        index = task_dir / INDEX_FILE
+        if not index.exists():
+            return []
+        with open(index, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return [SnapshotMetadata.from_dict(item) for item in data]
+
+    # ── writes ───────────────────────────────────────────────────────────
 
     def write_snapshot(
         self,
         snapshot: Snapshot,
-        audit_callback: Optional[callable] = None,
+        audit_callback: Optional[AuditFn] = None,
     ) -> tuple[bool, str]:
-        """Write snapshot to storage (audit-first).
+        """Persist ``snapshot`` (audit-first, atomic, chained).
 
-        Args:
-            snapshot: Snapshot to write
-            audit_callback: Optional callback to emit audit event before write
-
-        Returns:
-            (success, error_message)
-
-        Notes:
-            - Audit event is emitted BEFORE disk write (audit-first)
-            - If audit_callback returns False, snapshot is NOT written
-            - Fail-closed on any error
+        Returns ``(True, "")`` or ``(False, reason)``. Refuses a snapshot whose
+        ``tenant_id`` is not the bound tenant, a duplicate ``snapshot_id``, and a
+        ``prev_snapshot_hash`` that does not equal the task's current chain
+        head (a non-empty chain requires a correct link; the first snapshot
+        may carry ``None``).
         """
         try:
-            # Validate snapshot
-            if not snapshot.tenant_id or not snapshot.tenant_id.strip():
-                return False, "snapshot.tenant_id is empty (fail-closed)"
+            self._bind(snapshot.tenant_id)
+        except ValueError as exc:
+            return False, str(exc)
 
-            # Emit audit event FIRST (audit-first design)
-            if audit_callback:
-                audit_emitted = audit_callback(
-                    event_type="snapshot_created",
-                    task_id=snapshot.task_id,
-                    phase_id=snapshot.phase_id,
-                    snapshot_id=snapshot.snapshot_id,
-                    tenant_id=snapshot.tenant_id,
-                    content_hash=snapshot.content_hash,
-                    size_bytes=len(json.dumps(snapshot.to_dict())),
+        try:
+            task_dir = self._task_dir(snapshot.task_id)
+            target = self._snapshot_file(snapshot.task_id, snapshot.snapshot_id)
+        except ValueError as exc:
+            return False, str(exc)
+
+        payload = snapshot.to_dict()
+        size_bytes = len(json.dumps(payload, sort_keys=True).encode("utf-8"))
+
+        with self._task_lock(task_dir):
+            index = self._read_index(task_dir)
+            if any(m.snapshot_id == snapshot.snapshot_id for m in index) or target.exists():
+                return False, f"snapshot {snapshot.snapshot_id} already exists (append-only)"
+            head = index[-1].content_hash if index else None
+            if snapshot.prev_snapshot_hash != head:
+                return False, (
+                    "chain link mismatch: prev_snapshot_hash must equal the current "
+                    f"head ({head!r}) (fail-closed)"
                 )
-                if not audit_emitted:
-                    return False, "Audit event emission failed (fail-closed)"
+            seq = (index[-1].seq + 1) if index else 1
 
-            # Create directories
-            snapshot_dir = self._get_snapshot_dir(
-                snapshot.tenant_id,
-                snapshot.task_id,
-                snapshot.phase_id,
-            )
-            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            # Audit FIRST (core chain); no commit → nothing on disk.
+            details = content_free({
+                "task_id": snapshot.task_id,
+                "phase_id": snapshot.phase_id,
+                "snapshot_id": snapshot.snapshot_id,
+                "snapshot_type": snapshot.snapshot_type.value,
+                "content_hash": snapshot.content_hash,
+                "prev_snapshot_hash": snapshot.prev_snapshot_hash or "",
+                "seq": seq,
+                "size_bytes": size_bytes,
+            })
+            emit = audit_callback or self._audit
+            try:
+                audit_ref = emit(
+                    EVENT_SNAPSHOT_CREATED, tenant_id=snapshot.tenant_id, details=details
+                )
+            except Exception as exc:  # fail-closed: writer refused / unavailable
+                return False, f"audit write did not commit (fail-closed): {exc}"
+            if not audit_ref:
+                return False, "audit write did not commit (fail-closed)"
 
-            # Write snapshot to file
-            snapshot_file = snapshot_dir / f"{snapshot.snapshot_id}.json"
-            snapshot_data = snapshot.to_dict()
-            with open(snapshot_file, "w") as f:
-                json.dump(snapshot_data, f, indent=2)
+            try:
+                _write_atomic(target, payload)
+                meta = SnapshotMetadata.from_snapshot(snapshot, str(target), seq=seq)
+                index.append(meta)
+                _write_atomic(task_dir / INDEX_FILE, [m.to_dict() for m in index])  # type: ignore[arg-type]
+            except OSError as exc:
+                return False, f"Failed to write snapshot: {exc}"
 
-            # Write metadata index
-            metadata = SnapshotMetadata.from_snapshot(snapshot, str(snapshot_file))
-            metadata_file = snapshot_dir / "metadata.json"
-            metadata_list = []
-            if metadata_file.exists():
-                with open(metadata_file, "r") as f:
-                    metadata_list = json.load(f)
-            metadata_list.append(metadata.to_dict())
-            with open(metadata_file, "w") as f:
-                json.dump(metadata_list, f, indent=2)
+        return True, ""
 
-            return True, ""
+    # ── reads ────────────────────────────────────────────────────────────
 
-        except Exception as e:
-            return False, f"Failed to write snapshot: {str(e)}"
-
-    def read_snapshot(
-        self,
-        tenant_id: str,
-        task_id: str,
-        phase_id: str,
-        snapshot_id: str,
-    ) -> tuple[Optional[Snapshot], str]:
-        """Read snapshot from storage.
-
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            phase_id: Phase identifier
-            snapshot_id: Snapshot identifier
-
-        Returns:
-            (snapshot, error_message)
-        """
-        try:
-            if not tenant_id or not tenant_id.strip():
-                return None, "tenant_id is required (fail-closed)"
-
-            snapshot_dir = self._get_snapshot_dir(tenant_id, task_id, phase_id)
-            snapshot_file = snapshot_dir / f"{snapshot_id}.json"
-
-            if not snapshot_file.exists():
-                return None, f"Snapshot not found: {snapshot_id}"
-
-            with open(snapshot_file, "r") as f:
-                snapshot_data = json.load(f)
-
-            # Reconstruct snapshot from dict
-            snapshot_data["snapshot_type"] = SnapshotType(snapshot_data["snapshot_type"])
-            snapshot = Snapshot(**snapshot_data)
-
-            return snapshot, ""
-
-        except Exception as e:
-            return None, f"Failed to read snapshot: {str(e)}"
+    def list_tasks(self) -> list[str]:
+        """Task ids that have at least one snapshot (sorted)."""
+        tasks = []
+        for child in sorted(self.root_dir.iterdir()):
+            if child.is_dir() and (child / INDEX_FILE).exists():
+                tasks.append(child.name)
+        return tasks
 
     def list_snapshots(
         self,
@@ -183,195 +223,172 @@ class EventStore:
         task_id: str,
         phase_id: Optional[str] = None,
     ) -> tuple[list[SnapshotMetadata], str]:
-        """List snapshots for a task/phase.
-
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            phase_id: Optional phase identifier (if None, list all phases)
-
-        Returns:
-            (metadata_list, error_message)
-        """
+        """Ordered (seq asc) metadata for ``task_id``, optionally one phase."""
         try:
-            if not tenant_id or not tenant_id.strip():
-                return [], "tenant_id is required (fail-closed)"
+            self._bind(tenant_id)
+            task_dir = self._task_dir(task_id)
+            if phase_id is not None:
+                validate_id(phase_id, "phase_id")
+        except ValueError as exc:
+            return [], str(exc)
+        if not task_dir.exists():
+            return [], ""
+        try:
+            with self._task_lock(task_dir):
+                index = self._read_index(task_dir)
+        except (OSError, ValueError, KeyError) as exc:
+            return [], f"Failed to list snapshots: {exc}"
+        if phase_id is not None:
+            index = [m for m in index if m.phase_id == phase_id]
+        return sorted(index, key=lambda m: m.seq), ""
 
-            base_dir = self.corvin_home / "tenants" / tenant_id / "snapshots" / task_id
-
-            if not base_dir.exists():
-                return [], ""
-
-            metadata_list = []
-            if phase_id:
-                # List snapshots for specific phase
-                phase_dir = base_dir / phase_id
-                if phase_dir.exists():
-                    metadata_file = phase_dir / "metadata.json"
-                    if metadata_file.exists():
-                        with open(metadata_file, "r") as f:
-                            data = json.load(f)
-                            for item in data:
-                                item["snapshot_type"] = SnapshotType(item["snapshot_type"])
-                                metadata_list.append(SnapshotMetadata(**item))
-            else:
-                # List snapshots for all phases
-                for phase_subdir in base_dir.iterdir():
-                    if phase_subdir.is_dir():
-                        metadata_file = phase_subdir / "metadata.json"
-                        if metadata_file.exists():
-                            with open(metadata_file, "r") as f:
-                                data = json.load(f)
-                                for item in data:
-                                    item["snapshot_type"] = SnapshotType(item["snapshot_type"])
-                                    metadata_list.append(SnapshotMetadata(**item))
-
-            return metadata_list, ""
-
-        except Exception as e:
-            return [], f"Failed to list snapshots: {str(e)}"
+    def read_snapshot(
+        self,
+        tenant_id: str,
+        task_id: str,
+        snapshot_id: str,
+    ) -> tuple[Optional[Snapshot], str]:
+        """Load one snapshot; the content hash is re-verified on load."""
+        try:
+            self._bind(tenant_id)
+            target = self._snapshot_file(task_id, snapshot_id)
+        except ValueError as exc:
+            return None, str(exc)
+        if not target.exists():
+            return None, f"Snapshot not found: {snapshot_id}"
+        try:
+            with open(target, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            snapshot = Snapshot.from_dict(data)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return None, f"Failed to read snapshot {snapshot_id}: {exc}"
+        if snapshot.tenant_id != self.tenant_id or snapshot.task_id != task_id:
+            return None, f"Snapshot {snapshot_id} does not belong to {task_id} (fail-closed)"
+        return snapshot, ""
 
     def get_latest_snapshot(
         self,
         tenant_id: str,
         task_id: str,
-        phase_id: str,
+        phase_id: Optional[str] = None,
     ) -> tuple[Optional[Snapshot], str]:
-        """Get the latest snapshot for a phase (most recent by timestamp).
-
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            phase_id: Phase identifier
-
-        Returns:
-            (snapshot, error_message)
-        """
-        try:
-            if not tenant_id or not tenant_id.strip():
-                return None, "tenant_id is required (fail-closed)"
-
-            metadata_list, error = self.list_snapshots(tenant_id, task_id, phase_id)
-            if error:
-                return None, error
-
-            if not metadata_list:
-                return None, "No snapshots found"
-
-            # Sort by timestamp, get latest
-            latest = max(metadata_list, key=lambda m: m.timestamp)
-
-            # Read and return the snapshot
-            return self.read_snapshot(
-                tenant_id,
-                task_id,
-                phase_id,
-                latest.snapshot_id,
-            )
-
-        except Exception as e:
-            return None, f"Failed to get latest snapshot: {str(e)}"
+        """The chain head of ``task_id`` (or the last snapshot of ``phase_id``)."""
+        index, error = self.list_snapshots(tenant_id, task_id, phase_id)
+        if error:
+            return None, error
+        if not index:
+            return None, "No snapshots found"
+        return self.read_snapshot(tenant_id, task_id, index[-1].snapshot_id)
 
     def verify_snapshot_chain(
         self,
         tenant_id: str,
         task_id: str,
-        phase_id: str,
     ) -> tuple[bool, str]:
-        """Verify hash chain integrity for a phase's snapshots.
+        """Re-hash every snapshot of ``task_id`` and verify the prev-hash links."""
+        index, error = self.list_snapshots(tenant_id, task_id)
+        if error:
+            return False, error
+        prev_hash: Optional[str] = None
+        expected_seq = 1
+        for meta in index:
+            if meta.seq != expected_seq:
+                return False, f"Chain gap at seq {expected_seq} (found {meta.seq})"
+            snapshot, read_error = self.read_snapshot(tenant_id, task_id, meta.snapshot_id)
+            if read_error:
+                return False, f"Cannot read snapshot {meta.snapshot_id}: {read_error}"
+            if snapshot.content_hash != meta.content_hash:
+                return False, f"Index/content hash mismatch at snapshot {meta.snapshot_id}"
+            if snapshot.prev_snapshot_hash != prev_hash:
+                return False, f"Chain link broken at snapshot {meta.snapshot_id}"
+            prev_hash = snapshot.content_hash
+            expected_seq += 1
+        return True, ""
 
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            phase_id: Phase identifier
-
-        Returns:
-            (is_valid, error_message)
-        """
-        try:
-            if not tenant_id or not tenant_id.strip():
-                return False, "tenant_id is required (fail-closed)"
-
-            metadata_list, error = self.list_snapshots(tenant_id, task_id, phase_id)
-            if error:
-                return False, error
-
-            if not metadata_list:
-                return True, ""  # Empty chain is valid
-
-            # Sort by timestamp
-            sorted_metadata = sorted(metadata_list, key=lambda m: m.timestamp)
-
-            # Verify chain links
-            prev_hash = None
-            for metadata in sorted_metadata:
-                snapshot, read_error = self.read_snapshot(
-                    tenant_id,
-                    task_id,
-                    phase_id,
-                    metadata.snapshot_id,
-                )
-                if read_error:
-                    return False, f"Cannot read snapshot {metadata.snapshot_id}: {read_error}"
-
-                if prev_hash is not None and snapshot.prev_snapshot_hash != prev_hash:
-                    return False, f"Chain link broken at snapshot {metadata.snapshot_id}"
-
-                prev_hash = snapshot.content_hash
-
-            return True, ""
-
-        except Exception as e:
-            return False, f"Failed to verify chain: {str(e)}"
+    # ── archival ─────────────────────────────────────────────────────────
 
     def delete_snapshots_before(
         self,
         tenant_id: str,
         task_id: str,
-        timestamp: str,  # ISO 8601
-        audit_callback: Optional[callable] = None,
+        timestamp: str,
+        audit_callback: Optional[AuditFn] = None,
     ) -> tuple[int, str]:
-        """Delete snapshots older than timestamp (for pruning/archival).
+        """Archive (delete) snapshots older than ``timestamp`` — audited per file.
 
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            timestamp: ISO 8601 timestamp (delete snapshots before this)
-            audit_callback: Optional callback to emit audit event
-
-        Returns:
-            (num_deleted, error_message)
-
-        Notes:
-            - This is an archival operation, not a data loss
-            - Audit events are emitted for tracking
+        Only a PREFIX of the chain may be pruned: the newest snapshot is always
+        kept, so the chain head (and every later link) stays verifiable.
         """
         try:
-            if not tenant_id or not tenant_id.strip():
-                return 0, "tenant_id is required (fail-closed)"
+            self._bind(tenant_id)
+            task_dir = self._task_dir(task_id)
+        except ValueError as exc:
+            return 0, str(exc)
+        if not task_dir.exists():
+            return 0, ""
+        emit = audit_callback or self._audit
+        count = 0
+        with self._task_lock(task_dir):
+            index = self._read_index(task_dir)
+            keep: list[SnapshotMetadata] = []
+            prunable = True
+            for meta in index:
+                if prunable and meta.timestamp < timestamp and meta is not index[-1]:
+                    try:
+                        emit(EVENT_SNAPSHOT_ARCHIVED, tenant_id=tenant_id, details={
+                            "task_id": task_id, "snapshot_id": meta.snapshot_id,
+                            "content_hash": meta.content_hash, "seq": meta.seq,
+                        })
+                    except Exception as exc:
+                        return count, f"audit write did not commit (fail-closed): {exc}"
+                    target = self._snapshot_file(task_id, meta.snapshot_id)
+                    if target.exists():
+                        target.unlink()
+                    count += 1
+                else:
+                    prunable = False
+                    keep.append(meta)
+            if count:
+                _write_atomic(task_dir / INDEX_FILE, [m.to_dict() for m in keep])  # type: ignore[arg-type]
+        return count, ""
 
-            metadata_list, error = self.list_snapshots(tenant_id, task_id)
-            if error:
-                return 0, error
 
-            count = 0
-            for metadata in metadata_list:
-                if metadata.timestamp < timestamp:
-                    # Delete the snapshot file
-                    if metadata.file_path and Path(metadata.file_path).exists():
-                        Path(metadata.file_path).unlink()
-                        count += 1
+def snapshot_task_state(
+    tenant_id: str,
+    task_id: str,
+    state: dict[str, Any],
+    *,
+    phase_id: str = "turn",
+    snapshot_type: SnapshotType = SnapshotType.PHASE_CHECKPOINT,
+    base_commit: Optional[str] = None,
+    worktree_path: Optional[str] = None,
+    store: Optional[EventStore] = None,
+) -> tuple[Optional[Snapshot], str]:
+    """Producer entry point: chain a new snapshot of ``state`` onto ``task_id``.
 
-                    # Emit audit event
-                    if audit_callback:
-                        audit_callback(
-                            event_type="snapshot_archived",
-                            task_id=task_id,
-                            snapshot_id=metadata.snapshot_id,
-                            tenant_id=tenant_id,
-                        )
+    Looks up the task's current chain head, creates a ``Snapshot`` linked to it
+    and writes it audit-first. ``state`` must be content-free of PII (the schema
+    rejects e-mail/phone/card shapes) and ≤ 50 MB.
 
-            return count, ""
-
-        except Exception as e:
-            return 0, f"Failed to delete snapshots: {str(e)}"
+    Intended call site: the console task worker, right after a task turn
+    finishes (see ``docs/claude-ref/infinite-session.md`` § Producer).
+    """
+    try:
+        es = store or EventStore(tenant_id)
+        latest, _ = es.get_latest_snapshot(tenant_id, task_id)
+        snapshot = Snapshot.create(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            phase_id=phase_id,
+            state_dict=state,
+            snapshot_type=snapshot_type,
+            prev_snapshot_hash=latest.content_hash if latest else None,
+            base_commit=base_commit,
+            worktree_path=worktree_path,
+        )
+    except ValueError as exc:
+        return None, str(exc)
+    ok, error = es.write_snapshot(snapshot)
+    if not ok:
+        return None, error
+    return snapshot, ""

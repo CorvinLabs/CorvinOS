@@ -15,7 +15,22 @@ import hashlib
 import tempfile
 import os
 
+from core.paths.tenant import tenant_home
+
 logger = logging.getLogger(__name__)
+
+#: Checkpoints written before 2026-09-07 carry no ``tenant_id``. They were only
+#: ever written under ``<corvin_home>/vibe/checkpoints`` — the backward-compat
+#: symlink of the ``_default`` tenant — so that is the ONLY tenant such a file
+#: may be attributed to. A manager bound to any other tenant refuses them.
+_LEGACY_TENANT_ID = "_default"
+
+
+def _require_tenant_id(tenant_id: Any) -> str:
+    """Fail-closed tenant check (GDPR Art. 5, 6, 32)."""
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        raise ValueError("tenant_id must be a non-empty string (GDPR Art. 32, fail-closed)")
+    return tenant_id
 
 @dataclass(frozen=True)
 class CheckpointState:
@@ -26,6 +41,7 @@ class CheckpointState:
     """
     # Metadata
     checkpoint_id: str
+    tenant_id: str  # Owning tenant (ADR-0007) — every checkpoint is tenant-scoped
     task_id: str
     session_id: str
     phase: str
@@ -72,24 +88,48 @@ class CheckpointManager:
     Guarantees:
     - Round-trip fidelity (serialize → deserialize = identity)
     - Idempotent: same task state always produces same checkpoint ID
-    - Filesystem-backed: persists to ~/.corvin/vibe/checkpoints/
+    - Filesystem-backed: persists to ``<tenant_home>/vibe/checkpoints/``
+    - Tenant-bound (GDPR Art. 5, 6, 32): a manager is constructed FOR one
+      tenant, every checkpoint it creates carries that tenant, every read
+      re-verifies it (defense in depth), and a mismatching ``tenant_id`` on
+      any call raises ``ValueError("Tenant mismatch ...")`` — never a silent
+      default. Until 2026-09-07 this class had no tenant at all: one process
+      could read every tenant's checkpoints from one directory.
     """
 
-    def __init__(self, checkpoint_dir: Optional[Path] = None):
+    def __init__(self, checkpoint_dir: Optional[Path] = None, *, tenant_id: str):
         """
-        Initialize checkpoint manager.
+        Initialize checkpoint manager bound to one tenant.
 
         Args:
-            checkpoint_dir: Where to persist checkpoints.
-                           Defaults to ~/.corvin/vibe/checkpoints/
+            checkpoint_dir: Where to persist checkpoints. Defaults to
+                ``tenant_home(tenant_id) / "vibe" / "checkpoints"`` (honours
+                ``CORVIN_HOME``; never ``Path.home()/.corvin``).
+            tenant_id: Keyword-only, REQUIRED (ADR-0007). Empty/None raises.
         """
-        if checkpoint_dir is None:
-            checkpoint_dir = Path.home() / ".corvin" / "vibe" / "checkpoints"
+        self.tenant_id = _require_tenant_id(tenant_id)
 
-        self.checkpoint_dir = checkpoint_dir
+        if checkpoint_dir is None:
+            checkpoint_dir = tenant_home(self.tenant_id) / "vibe" / "checkpoints"
+
+        self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"CheckpointManager initialized at {self.checkpoint_dir}")
+        logger.info(
+            f"CheckpointManager initialized at {self.checkpoint_dir} (tenant={self.tenant_id})"
+        )
+
+    def _bind(self, tenant_id: Optional[str]) -> str:
+        """Resolve the tenant for a call: ``None`` → the bound tenant; anything
+        else must EQUAL the bound tenant (fail-closed)."""
+        if tenant_id is None:
+            return self.tenant_id
+        _require_tenant_id(tenant_id)
+        if tenant_id != self.tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: manager is bound to {self.tenant_id!r}, got {tenant_id!r}"
+            )
+        return tenant_id
 
     def create_checkpoint(
         self,
@@ -103,14 +143,20 @@ class CheckpointManager:
         learning_state: Dict[str, Any],
         open_subgoals: list,
         artifacts: list,
-        recovery_reason: Optional[str] = None
+        recovery_reason: Optional[str] = None,
+        *,
+        tenant_id: Optional[str] = None,
     ) -> CheckpointState:
         """
-        Create a checkpoint snapshot.
+        Create a checkpoint snapshot for the bound tenant.
+
+        Args:
+            tenant_id: Optional cross-check; must equal the manager's tenant.
 
         Returns:
             CheckpointState with unique ID (derived from content hash).
         """
+        tenant_id = self._bind(tenant_id)
         timestamp_iso = datetime.now().isoformat()
 
         # Generate deterministic checkpoint ID from content hash
@@ -126,6 +172,7 @@ class CheckpointManager:
 
         checkpoint = CheckpointState(
             checkpoint_id=checkpoint_id,
+            tenant_id=tenant_id,
             task_id=task_id,
             session_id=session_id,
             phase=phase,
@@ -169,9 +216,18 @@ class CheckpointManager:
         """
         data = json.loads(json_str)
 
+        # A pre-2026-09-07 file has no tenant_id: attributable to _default ONLY
+        # (see _LEGACY_TENANT_ID). ``load`` then verifies it against the bound
+        # tenant, so a non-default manager refuses it.
+        tenant_id = data.get("tenant_id")
+        if tenant_id is None:
+            tenant_id = _LEGACY_TENANT_ID
+        _require_tenant_id(tenant_id)
+
         # Reconstruct CheckpointState from dict
         checkpoint = CheckpointState(
             checkpoint_id=data["checkpoint_id"],
+            tenant_id=tenant_id,
             task_id=data["task_id"],
             session_id=data["session_id"],
             phase=data["phase"],
@@ -205,6 +261,9 @@ class CheckpointManager:
         Returns:
             Path where checkpoint was saved.
         """
+        # A checkpoint of another tenant must never land in this tenant's dir.
+        self._bind(checkpoint.tenant_id)
+
         filename = f"{checkpoint.task_id}_{checkpoint.checkpoint_id}_{checkpoint.iteration_num:03d}.json"
         filepath = self.checkpoint_dir / filename
 
@@ -267,19 +326,26 @@ class CheckpointManager:
         try:
             json_str = filepath.read_text()
             checkpoint = self.deserialize(json_str)
+            # Defense in depth: even a file that leaked into this directory
+            # is refused when it belongs to another tenant.
+            self._bind(checkpoint.tenant_id)
             logger.info(f"Checkpoint loaded: {filepath}")
             return checkpoint
         except Exception as e:
             logger.error(f"Failed to load checkpoint from {filepath}: {e}")
             raise
 
-    def list_checkpoints(self, task_id: str) -> list:
+    def list_checkpoints(self, task_id: str, *, tenant_id: Optional[str] = None) -> list:
         """
-        List all checkpoints for a task (newest first).
+        List all checkpoints for a task (newest first), bound tenant only.
+
+        Args:
+            tenant_id: Optional cross-check; must equal the manager's tenant.
 
         Returns:
             List of CheckpointMetadata sorted by timestamp (descending).
         """
+        self._bind(tenant_id)
         pattern = f"{task_id}_*.json"
         checkpoints = []
 
@@ -314,27 +380,32 @@ class CheckpointManager:
                          reverse=True)
         return checkpoints
 
-    def get_latest(self, task_id: str) -> Optional[CheckpointState]:
+    def get_latest(self, task_id: str, *, tenant_id: Optional[str] = None) -> Optional[CheckpointState]:
         """
-        Get latest checkpoint for a task.
+        Get latest checkpoint for a task (bound tenant only).
 
         Returns:
             Latest CheckpointState, or None if no checkpoints exist.
         """
+        self._bind(tenant_id)
         checkpoints = self.list_checkpoints(task_id)
         if checkpoints:
             latest = checkpoints[0]  # Sorted newest first
             return self.load(latest.file_path)
         return None
 
-    def delete_old_checkpoints(self, task_id: str, keep_count: int = 5):
+    def delete_old_checkpoints(
+        self, task_id: str, keep_count: int = 5, *, tenant_id: Optional[str] = None
+    ):
         """
         Delete old checkpoints for a task, keeping only the most recent N.
 
         Args:
             task_id: Task ID to clean up.
             keep_count: Number of recent checkpoints to keep.
+            tenant_id: Optional cross-check; must equal the manager's tenant.
         """
+        self._bind(tenant_id)
         checkpoints = self.list_checkpoints(task_id)
 
         # Keep only the first keep_count (already sorted newest first)

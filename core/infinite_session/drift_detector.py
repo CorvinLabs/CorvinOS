@@ -1,42 +1,43 @@
 """Phase C: Drift Detector (ADR-0542).
 
-Detects configuration drift in infinite sessions using EMA-based anomaly detection.
-Provides drift-detection gates that block config changes if drift exceeds threshold.
-Implements revert button for operator intervention.
+EMA-based drift detection over numeric configuration series, drift gates, and
+the operator revert button (undo via :class:`RollbackManager`).
 
-Guarantees:
-- Drift-detection gate type (blocks changes if drift > threshold)
-- Revert button implementation (undo config via rollback)
-- Drift alert signal (banner, dashboard notification)
-- Audit trail for all drift events
-- Fail-closed on invalid inputs
+Tenant-bound: alerts live at ``<tenant_root>/drift/alerts/<alert_id>.json``;
+``alert_id`` is validated and the path resolve-checked before any open.
 
-Compliance:
-- GDPR Art. 30/32: Audit trail for drift detection and reversals
-- Operator control: drift gates require operator acknowledgment
-- Immutability: drift history is append-only
+Two entry points:
+- :meth:`assess_series` — PURE (no disk side effects): classify a numeric
+  series into a :class:`DriftLevel`; used by the dashboard API on every read.
+- :meth:`check_drift` — the gate: same assessment plus a persisted
+  :class:`DriftAlert` when sustained drift is detected.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
-from dataclasses import dataclass, asdict, field
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Optional, Tuple, Dict, List
+import numbers
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from core.infinite_session.ema_smoother import EMASmoother, EMASample, DriftLevel
+from core.infinite_session.ema_smoother import DriftLevel, EMASmoother
+from core.infinite_session.paths import safe_child, tenant_root
 from core.infinite_session.rollback_manager import RollbackManager
+from core.tenants import validate_tenant_id
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class DriftGateType(str, Enum):
-    """Types of drift gates."""
-    STRICT = "strict"  # Block all changes if drift detected
-    WARNING = "warning"  # Warn but allow changes
-    ADVISORY = "advisory"  # Log drift but don't block
+    STRICT = "strict"      # Block changes if drift detected
+    WARNING = "warning"    # Warn but allow
+    ADVISORY = "advisory"  # Log only
 
 
 @dataclass(frozen=True)
@@ -45,21 +46,20 @@ class DriftAlert:
 
     alert_id: str
     tenant_id: str
-    timestamp: str  # ISO 8601
+    timestamp: str
     config_path: str
     current_value: float
     ema: float
     drift_magnitude: float
     drift_level: DriftLevel
     gate_type: DriftGateType
-    action_taken: str  # "blocked", "warned", "logged"
+    action_taken: str  # "blocked" | "warned" | "logged" | "error"
     message: str
     dismissed: bool = False
     dismissal_timestamp: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict."""
-        return {
+        data = {
             "alert_id": self.alert_id,
             "tenant_id": self.tenant_id,
             "timestamp": self.timestamp,
@@ -74,112 +74,150 @@ class DriftAlert:
             "dismissed": self.dismissed,
             "dismissal_timestamp": self.dismissal_timestamp,
         }
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DriftAlert":
+        payload = dict(data)
+        payload["drift_level"] = DriftLevel(payload["drift_level"])
+        payload["gate_type"] = DriftGateType(payload["gate_type"])
+        return cls(**payload)
 
 
-@dataclass
+@dataclass(frozen=True)
+class DriftAssessment:
+    """Result of a pure series assessment."""
+    level: DriftLevel
+    magnitude: float
+    ema: float
+    sustained: bool
+    message: str
+
+
+def numeric_leaves(state: Dict[str, Any], prefix: str = "", max_depth: int = 6) -> Dict[str, float]:
+    """Flatten the numeric (non-bool) leaves of a state dict: ``{"a.b": 1.0}``."""
+    out: Dict[str, float] = {}
+    if max_depth <= 0 or not isinstance(state, dict):
+        return out
+    for key, value in state.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, numbers.Real):
+            out[path] = float(value)
+        elif isinstance(value, dict):
+            out.update(numeric_leaves(value, path, max_depth - 1))
+    return out
+
+
 class DriftDetector:
-    """Detects configuration drift in infinite sessions.
+    """Tenant-bound drift detection (ADR-0542)."""
 
-    Properties:
-    - EMA-based smoothing (alpha=0.3)
-    - Drift threshold: 0.15
-    - Gate types: STRICT, WARNING, ADVISORY
-    - Audit trail: all drift events logged
-    """
-
-    corvin_home: str
-    smoother: EMASmoother = field(default_factory=EMASmoother)
-
-    def __post_init__(self):
-        """Initialize paths."""
-        if not self.corvin_home:
-            raise ValueError("corvin_home is required")
-
-        self.alerts_dir = Path(self.corvin_home) / "infinite_session" / "drift_alerts"
+    def __init__(
+        self,
+        tenant_id: str,
+        corvin_home: Optional[str | Path] = None,
+        smoother: Optional[EMASmoother] = None,
+    ):
+        self.tenant_id = validate_tenant_id(tenant_id)
+        root = tenant_root(self.tenant_id, corvin_home) / "drift"
+        self.alerts_dir = root / "alerts"
         self.alerts_dir.mkdir(parents=True, exist_ok=True)
+        self.smoother = smoother or EMASmoother()
 
-        self.history_dir = (
-            Path(self.corvin_home) / "infinite_session" / "drift_history"
+    def _bind(self, tenant_id: Any) -> Optional[str]:
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            return "tenant_id is required"
+        try:
+            validate_tenant_id(tenant_id)
+        except ValueError as exc:
+            return str(exc)
+        if tenant_id != self.tenant_id:
+            return f"Tenant mismatch: detector is bound to {self.tenant_id!r}, got {tenant_id!r}"
+        return None
+
+    # ── pure assessment ──────────────────────────────────────────────────
+
+    def assess_series(self, samples: List[Tuple[str, float]]) -> DriftAssessment:
+        """Classify a ``[(timestamp, value), ...]`` series; no side effects."""
+        if not samples:
+            return DriftAssessment(DriftLevel.NORMAL, 0.0, 0.0, False, "no samples")
+        ema_samples = self.smoother.process_samples(samples)
+        latest = ema_samples[-1]
+        sustained, recommendation = self.smoother.detect_sustained_drift(
+            ema_samples, min_critical_samples=3
         )
-        self.history_dir.mkdir(parents=True, exist_ok=True)
+        level = latest.drift_level
+        if sustained and level != DriftLevel.CRITICAL:
+            level = DriftLevel.CRITICAL
+        message = recommendation or f"drift={latest.drift:.3f} ({level.value})"
+        return DriftAssessment(level, latest.drift, latest.ema, sustained, message)
+
+    def assess_states(self, states: List[Tuple[str, Dict[str, Any]]]) -> DriftAssessment:
+        """Worst drift across every numeric key of an ordered ``[(ts, state)]`` list."""
+        series: Dict[str, List[Tuple[str, float]]] = {}
+        for ts, state in states:
+            for key, value in numeric_leaves(state).items():
+                series.setdefault(key, []).append((ts, value))
+        worst = DriftAssessment(DriftLevel.NORMAL, 0.0, 0.0, False, "no numeric state")
+        rank = {DriftLevel.NORMAL: 0, DriftLevel.WARNING: 1, DriftLevel.CRITICAL: 2}
+        for key, samples in series.items():
+            a = self.assess_series(samples)
+            if (rank[a.level], a.magnitude) > (rank[worst.level], worst.magnitude):
+                worst = DriftAssessment(a.level, a.magnitude, a.ema, a.sustained, f"{key}: {a.message}")
+        return worst
+
+    # ── gate ─────────────────────────────────────────────────────────────
 
     def check_drift(
         self,
         tenant_id: str,
         config_path: str,
-        samples: List[Tuple[str, float]],  # (timestamp, value) pairs
+        samples: List[Tuple[str, float]],
         gate_type: DriftGateType = DriftGateType.STRICT,
     ) -> Tuple[bool, Optional[DriftAlert]]:
-        """Check if configuration has drifted beyond threshold.
-
-        Args:
-            tenant_id: Tenant identifier
-            config_path: Path to configuration
-            samples: List of (timestamp, value) samples
-            gate_type: Type of drift gate (STRICT, WARNING, ADVISORY)
-
-        Returns:
-            (should_block, alert): Alert if drift detected, else None
-        """
-        if not tenant_id:
+        """``(should_block, alert)`` — alert persisted when sustained drift is found."""
+        if self._bind(tenant_id) or not samples:
             return False, None
-        if not samples:
-            return False, None
-
         try:
-            # Process samples with EMA smoother
             ema_samples = self.smoother.process_samples(samples)
-
-            # Check for sustained drift
             sustained, recommendation = self.smoother.detect_sustained_drift(
                 ema_samples, min_critical_samples=3
             )
-
             if not sustained:
                 return False, None
-
-            # Get anomaly score
             anomaly_score, anom_recommendation = self.smoother.get_anomaly_score(
                 ema_samples, window_size=5
             )
-
-            # Determine action based on gate type
             should_block = gate_type == DriftGateType.STRICT and anomaly_score > 0.7
-            action_taken = (
-                "blocked" if should_block else "warned"
-                if gate_type == DriftGateType.WARNING
-                else "logged"
-            )
-
-            # Get latest sample for alert
-            latest_sample = ema_samples[-1]
-
-            # Create alert
+            if should_block:
+                action_taken = "blocked"
+            elif gate_type == DriftGateType.WARNING:
+                action_taken = "warned"
+            else:
+                action_taken = "logged"
+            latest = ema_samples[-1]
             alert = DriftAlert(
                 alert_id=str(uuid4()),
                 tenant_id=tenant_id,
-                timestamp=latest_sample.timestamp,
+                timestamp=latest.timestamp,
                 config_path=config_path,
-                current_value=latest_sample.value,
-                ema=latest_sample.ema,
-                drift_magnitude=latest_sample.drift,
-                drift_level=latest_sample.drift_level,
+                current_value=latest.value,
+                ema=latest.ema,
+                drift_magnitude=latest.drift,
+                drift_level=latest.drift_level,
                 gate_type=gate_type,
                 action_taken=action_taken,
                 message=f"Drift detected: {anom_recommendation or recommendation}",
-                dismissed=False,
             )
-
-            # Log alert
             self._log_alert(alert)
-
             return should_block, alert
-        except Exception as e:
-            # Fail-closed: on error, treat as drift
+        except (TypeError, ValueError) as exc:
+            # Fail-closed: an unassessable series blocks.
             alert = DriftAlert(
                 alert_id=str(uuid4()),
                 tenant_id=tenant_id,
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=_now(),
                 config_path=config_path,
                 current_value=0.0,
                 ema=0.0,
@@ -187,10 +225,12 @@ class DriftDetector:
                 drift_level=DriftLevel.CRITICAL,
                 gate_type=gate_type,
                 action_taken="error",
-                message=f"Drift check failed (fail-closed): {str(e)}",
+                message=f"Drift check failed (fail-closed): {exc}",
             )
             self._log_alert(alert)
             return True, alert
+
+    # ── revert button ────────────────────────────────────────────────────
 
     def create_revert_button(
         self,
@@ -199,215 +239,95 @@ class DriftDetector:
         rollback_manager: RollbackManager,
         audit_callback=None,
     ) -> Tuple[bool, Optional[str]]:
-        """Operator presses revert button to undo configuration changes.
-
-        Args:
-            tenant_id: Tenant identifier
-            alert_id: ID of the alert to revert
-            rollback_manager: Rollback manager instance
-            audit_callback: Optional audit callback
-
-        Returns:
-            (success, error)
-        """
-        if not tenant_id:
-            return False, "tenant_id is required"
+        """Operator revert: roll back the latest transaction of the alert's config_path."""
+        error = self._bind(tenant_id)
+        if error:
+            return False, error
         if not alert_id:
             return False, "alert_id is required"
-
-        try:
-            # Load alert
-            alert = self._load_alert(tenant_id, alert_id)
-            if not alert:
-                return False, f"Alert {alert_id} not found"
-
-            # Get transaction history for this config_path
-            history = rollback_manager.get_transaction_history(
-                tenant_id, config_path=alert.config_path, limit=1
-            )
-
-            if not history:
-                return False, (
-                    f"No transaction to revert for {alert.config_path}"
+        alert = self._load_alert(tenant_id, alert_id)
+        if not alert:
+            return False, f"Alert {alert_id} not found"
+        history = rollback_manager.get_transaction_history(
+            tenant_id, config_path=alert.config_path, limit=1
+        )
+        if not history:
+            return False, f"No transaction to revert for {alert.config_path}"
+        transaction_id = history[0].get("transaction_id")
+        success, error = rollback_manager.rollback_transaction(
+            tenant_id=tenant_id,
+            transaction_id_to_undo=transaction_id,
+            audit_callback=audit_callback,
+        )
+        if success:
+            self._dismiss_alert(tenant_id, alert_id)
+            if audit_callback:
+                audit_callback(
+                    event_type="infinite_session.drift_revert_button_pressed",
+                    alert_id=alert_id,
+                    transaction_id=transaction_id,
+                    tenant_id=tenant_id,
+                    config_path=alert.config_path,
+                    timestamp=_now(),
                 )
+        return success, error
 
-            latest_tx = history[0]
-            transaction_id = latest_tx.get("transaction_id")
+    # ── alert storage ────────────────────────────────────────────────────
 
-            # Perform rollback
-            success, error = rollback_manager.rollback_transaction(
-                tenant_id=tenant_id,
-                transaction_id_to_undo=transaction_id,
-                audit_callback=audit_callback,
-            )
-
-            if success:
-                # Mark alert as dismissed
-                self._dismiss_alert(tenant_id, alert_id)
-
-                if audit_callback:
-                    try:
-                        now = datetime.utcnow().isoformat() + "Z"
-                        audit_callback(
-                            event_type="drift_revert_button_pressed",
-                            alert_id=alert_id,
-                            transaction_id=transaction_id,
-                            tenant_id=tenant_id,
-                            config_path=alert.config_path,
-                            timestamp=now,
-                        )
-                    except Exception:
-                        pass
-
-            return success, error
-        except Exception as e:
-            return False, f"create_revert_button failed: {str(e)}"
+    def _alert_file(self, alert_id: str) -> Path:
+        return safe_child(self.alerts_dir, f"{alert_id}.json")
 
     def get_active_alerts(
-        self,
-        tenant_id: str,
-        config_path: Optional[str] = None,
+        self, tenant_id: str, config_path: Optional[str] = None
     ) -> List[DriftAlert]:
-        """Get active (non-dismissed) drift alerts.
-
-        Args:
-            tenant_id: Tenant identifier
-            config_path: Optional filter by config path
-
-        Returns:
-            List of DriftAlert objects
-        """
-        if not tenant_id:
+        if self._bind(tenant_id):
             return []
-
-        try:
-            alerts = []
-            alert_dir = self.alerts_dir / tenant_id
-            if not alert_dir.exists():
-                return []
-
-            for alert_file in alert_dir.glob("*.json"):
-                try:
-                    with open(alert_file, "r") as f:
-                        data = json.load(f)
-                        if not data.get("dismissed"):
-                            if config_path and data.get("config_path") != config_path:
-                                continue
-                            # Reconstruct alert
-                            alert = DriftAlert(
-                                alert_id=data["alert_id"],
-                                tenant_id=data["tenant_id"],
-                                timestamp=data["timestamp"],
-                                config_path=data["config_path"],
-                                current_value=data["current_value"],
-                                ema=data["ema"],
-                                drift_magnitude=data["drift_magnitude"],
-                                drift_level=DriftLevel(data["drift_level"]),
-                                gate_type=DriftGateType(data["gate_type"]),
-                                action_taken=data["action_taken"],
-                                message=data["message"],
-                                dismissed=data.get("dismissed", False),
-                                dismissal_timestamp=data.get("dismissal_timestamp"),
-                            )
-                            alerts.append(alert)
-                except Exception:
-                    pass
-
-            return alerts
-        except Exception:
-            return []
+        alerts: List[DriftAlert] = []
+        for alert_file in sorted(self.alerts_dir.glob("*.json")):
+            try:
+                with open(alert_file, "r", encoding="utf-8") as fh:
+                    alert = DriftAlert.from_dict(json.load(fh))
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+            if alert.dismissed or alert.tenant_id != tenant_id:
+                continue
+            if config_path and alert.config_path != config_path:
+                continue
+            alerts.append(alert)
+        return alerts
 
     def _log_alert(self, alert: DriftAlert) -> None:
-        """Log drift alert to disk.
+        target = self._alert_file(alert.alert_id)
+        tmp = target.with_name(target.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(alert.to_dict(), fh, indent=2, sort_keys=True)
+        tmp.replace(target)
 
-        Args:
-            alert: DriftAlert to log
-        """
-        try:
-            alert_dir = self.alerts_dir / alert.tenant_id
-            alert_dir.mkdir(parents=True, exist_ok=True)
-
-            alert_file = alert_dir / f"{alert.alert_id}.json"
-            with open(alert_file, "w") as f:
-                json.dump(alert.to_dict(), f, indent=2)
-        except Exception:
-            pass
-
-    def _load_alert(
-        self,
-        tenant_id: str,
-        alert_id: str,
-    ) -> Optional[DriftAlert]:
-        """Load a drift alert from disk.
-
-        Args:
-            tenant_id: Tenant identifier
-            alert_id: Alert ID
-
-        Returns:
-            DriftAlert if found, else None
-        """
-        try:
-            alert_file = self.alerts_dir / tenant_id / f"{alert_id}.json"
-            if not alert_file.exists():
-                return None
-
-            with open(alert_file, "r") as f:
-                data = json.load(f)
-                return DriftAlert(
-                    alert_id=data["alert_id"],
-                    tenant_id=data["tenant_id"],
-                    timestamp=data["timestamp"],
-                    config_path=data["config_path"],
-                    current_value=data["current_value"],
-                    ema=data["ema"],
-                    drift_magnitude=data["drift_magnitude"],
-                    drift_level=DriftLevel(data["drift_level"]),
-                    gate_type=DriftGateType(data["gate_type"]),
-                    action_taken=data["action_taken"],
-                    message=data["message"],
-                    dismissed=data.get("dismissed", False),
-                    dismissal_timestamp=data.get("dismissal_timestamp"),
-                )
-        except Exception:
+    def _load_alert(self, tenant_id: str, alert_id: str) -> Optional[DriftAlert]:
+        if self._bind(tenant_id):
             return None
-
-    def _dismiss_alert(
-        self,
-        tenant_id: str,
-        alert_id: str,
-    ) -> None:
-        """Mark an alert as dismissed.
-
-        Args:
-            tenant_id: Tenant identifier
-            alert_id: Alert ID to dismiss
-        """
         try:
-            alert = self._load_alert(tenant_id, alert_id)
-            if alert:
-                # Create updated alert with dismissal timestamp
-                dismissed_alert = DriftAlert(
-                    alert_id=alert.alert_id,
-                    tenant_id=alert.tenant_id,
-                    timestamp=alert.timestamp,
-                    config_path=alert.config_path,
-                    current_value=alert.current_value,
-                    ema=alert.ema,
-                    drift_magnitude=alert.drift_magnitude,
-                    drift_level=alert.drift_level,
-                    gate_type=alert.gate_type,
-                    action_taken=alert.action_taken,
-                    message=alert.message,
-                    dismissed=True,
-                    dismissal_timestamp=datetime.utcnow().isoformat() + "Z",
-                )
+            target = self._alert_file(alert_id)
+        except ValueError:
+            return None
+        if not target.exists():
+            return None
+        try:
+            with open(target, "r", encoding="utf-8") as fh:
+                alert = DriftAlert.from_dict(json.load(fh))
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+        return alert if alert.tenant_id == tenant_id else None
 
-                # Save updated alert
-                alert_file = (
-                    self.alerts_dir / tenant_id / f"{alert_id}.json"
-                )
-                with open(alert_file, "w") as f:
-                    json.dump(dismissed_alert.to_dict(), f, indent=2)
-        except Exception:
-            pass
+    def _dismiss_alert(self, tenant_id: str, alert_id: str) -> None:
+        alert = self._load_alert(tenant_id, alert_id)
+        if alert is None:
+            return
+        dismissed = DriftAlert(**{
+            **alert.to_dict(),
+            "drift_level": alert.drift_level,
+            "gate_type": alert.gate_type,
+            "dismissed": True,
+            "dismissal_timestamp": _now(),
+        })
+        self._log_alert(dismissed)

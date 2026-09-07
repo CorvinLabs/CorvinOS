@@ -55,7 +55,11 @@ class TaskHeartbeat:
                     task_id, phase_id, phase_handler, timeout_s,
                     on_heartbeat, on_stall
                 ),
-                timeout=timeout_s + self.config.timeout_grace_s
+                # Hard deadline is timeout_s. ``timeout_grace_s`` is the lead
+                # time for the "timeout approaching" warning inside the
+                # heartbeat loop — it used to be ADDED here, so a 1 s phase
+                # was only killed after 61 s and the timeout was unenforced.
+                timeout=timeout_s,
             )
             return result
         finally:

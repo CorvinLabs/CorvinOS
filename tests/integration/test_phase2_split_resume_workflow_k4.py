@@ -27,7 +27,7 @@ from core.workflows.execution_engine import (
     WorkflowExecutor,
     WorkflowExecutionState,
 )
-from core.context_engineering.execution_context import ExecutionContext
+from core.context_engineering.execution_context import ContextStack, ExecutionContext
 
 
 class TestPhase2SplitResumeWorkflow:
@@ -57,6 +57,8 @@ class TestPhase2SplitResumeWorkflow:
         exec_context_a = ExecutionContext(
             task_id=task_id,
             tenant_id=tenant_id,
+            task_template={},
+            context_stack=ContextStack(),
         )
 
         # Create workflow executor for session A
@@ -151,6 +153,8 @@ class TestPhase2SplitResumeWorkflow:
         exec_context_b = ExecutionContext(
             task_id=task_id,
             tenant_id=tenant_id,
+            task_template={},
+            context_stack=ContextStack(),
         )
 
         # Create workflow executor for session B
@@ -227,6 +231,8 @@ class TestPhase2SplitResumeWorkflow:
         exec_context_a = ExecutionContext(
             task_id=task_id,
             tenant_id=tenant_id,
+            task_template={},
+            context_stack=ContextStack(),
         )
 
         for i in range(5):
@@ -271,6 +277,8 @@ class TestPhase2SplitResumeWorkflow:
         exec_context = ExecutionContext(
             task_id="task-001",
             tenant_id="default",
+            task_template={},
+            context_stack=ContextStack(),
         )
 
         executor = WorkflowExecutor(

@@ -81,7 +81,12 @@ chmod 700 ~/.corvin/vibe/checkpoints/
 from core.vibe_engineering.checkpoint_manager import CheckpointManager
 from core.vibe_engineering.recovery_engine import RecoveryEngine
 
-manager = CheckpointManager()
+# Tenant-BOUND since 2026-09-07 (GDPR Art. 5/6/32): ``tenant_id`` is keyword-only and
+# REQUIRED; checkpoints default to ``<tenant_home>/vibe/checkpoints`` (CORVIN_HOME-aware).
+# Every CheckpointState carries ``tenant_id``; save/load/list/get_latest/delete refuse a
+# mismatching tenant with ``ValueError("Tenant mismatch ...")``. Pre-existing files without
+# ``tenant_id`` are attributable to ``_default`` only.
+manager = CheckpointManager(tenant_id="_default")
 recovery = RecoveryEngine()
 
 # Load and inspect checkpoint

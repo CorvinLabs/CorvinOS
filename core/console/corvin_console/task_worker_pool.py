@@ -173,6 +173,49 @@ def _audit_path_for_tenant(tenant_id: str) -> Path:
     return _forge_paths.tenant_global_dir(tenant_id) / "audit.jsonl"
 
 
+def _snapshot_task_turn(
+    task,
+    *,
+    status: str,
+    exit_code: int,
+    duration_ms: int,
+    event_count: int,
+    result_text: str,
+) -> None:
+    """Infinite-session producer (ADR-0540/0541): chain one content-free
+    snapshot of the finished turn onto the task's snapshot chain.
+
+    This is the ONLY production writer of task snapshots; without it the
+    infinite-session dashboard is honestly empty (2026-09-07 review, F-S7).
+    The payload never carries the model output — only its SHA-256 — so no
+    prompt/transcript content reaches the snapshot store. A snapshot failure
+    must not turn a completed task into a failed one, but it is never silent:
+    it is logged at ERROR with the task id.
+    """
+    try:
+        import hashlib  # noqa: PLC0415
+
+        from core.infinite_session import snapshot_task_state  # noqa: PLC0415
+
+        snapshot, err = snapshot_task_state(
+            task.tenant_id,
+            task.task_id,
+            {
+                "status": status,
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+                "event_count": event_count,
+                "chat_key_prefix": (task.chat_key or "")[:8],
+                "result_sha256": hashlib.sha256(result_text.encode("utf-8")).hexdigest(),
+            },
+            phase_id="turn",
+        )
+        if snapshot is None:
+            logger.error("Task %s: infinite-session snapshot NOT written: %s", task.task_id, err)
+    except Exception:  # noqa: BLE001 — never fail the task on the persistence layer
+        logger.error("Task %s: infinite-session snapshot raised", task.task_id, exc_info=True)
+
+
 # ── Instruction sanitization (M4) ────────────────────────────────────────────
 
 _MAX_INSTRUCTION_BYTES = 32_000
@@ -203,6 +246,51 @@ def _sanitize_instruction(raw: str) -> str:
 
 
 # ── Worker pool ───────────────────────────────────────────────────────────────
+
+def _worker_stdin_payload(instruction: str) -> bytes:
+    """One stream-json ``user`` message carrying the /task instruction.
+
+    The instruction NEVER goes into argv (F-E1, 2026-09-07): as a positional
+    after ``-p`` an instruction beginning with ``-`` (``--add-dir /``,
+    ``--mcp-config ...``, ``--version``) was parsed by the claude CLI as a
+    FLAG — argv injection straight from chat text. It travels as the first
+    (and only) stdin message instead — the same wire the bridge adapter uses
+    for every turn (``prompt_via_stdin=True``) and for ``/btw`` injection.
+    """
+    return (json.dumps(
+        {"type": "user", "message": {"role": "user", "content": instruction}},
+        ensure_ascii=False,
+    ) + "\n").encode("utf-8")
+
+
+def _build_worker_argv(*, model: str | None = None) -> list[str]:
+    """argv for the /task worker subprocess — prompt-free by construction.
+
+    Uses ``ClaudeCodeEngine._build_args(prompt_via_stdin=True, streaming=True)``
+    (correct hook config, ``--input-format stream-json``) when the engine
+    module is importable, else the minimal equivalent. Either way the argv
+    carries no user text: the instruction goes over stdin
+    (``_worker_stdin_payload``), so no instruction can become a CLI flag.
+    """
+    if _ENGINE_AVAILABLE and _ClaudeCodeEngine is not None:
+        # _build_args() is a @staticmethod — resolve the binary separately so
+        # CLAUDE_BIN / PATH fallback logic runs exactly once at spawn time.
+        binary = _ClaudeCodeEngine().binary
+        return _ClaudeCodeEngine._build_args(
+            "",  # prompt_via_stdin=True: never placed in argv
+            binary=binary,
+            permission_mode="bypassPermissions",
+            model=model,
+            prompt_via_stdin=True,
+            streaming=True,
+        )
+    argv = [os.environ.get("CLAUDE_BIN", "claude"), "-p"]
+    if model:
+        argv += ["--model", model]
+    argv += ["--input-format", "stream-json",
+             "--output-format", "stream-json", "--verbose"]
+    return argv
+
 
 class TaskWorkerPool:
     """Independent worker pool processing tasks from queue.
@@ -410,22 +498,9 @@ class TaskWorkerPool:
                 _span_started = True
 
                 # Build argv via ClaudeCodeEngine._build_args() for correct hook config (M4).
-                # _build_args() is a @staticmethod — we resolve the binary separately so
-                # CLAUDE_BIN / PATH fallback logic runs exactly once at spawn time.
-                if _ENGINE_AVAILABLE and _ClaudeCodeEngine is not None:
-                    _binary = _ClaudeCodeEngine().binary  # resolves CLAUDE_BIN + PATH fallback
-                    argv = _ClaudeCodeEngine._build_args(
-                        instruction,
-                        binary=_binary,
-                        permission_mode="bypassPermissions",
-                        streaming=True,
-                    )
-                else:
-                    argv = [
-                        os.environ.get("CLAUDE_BIN", "claude"),
-                        "-p", instruction,
-                        "--output-format", "stream-json", "--verbose",
-                    ]
+                # The instruction is NOT in argv — it is fed over stdin (F-E1).
+                argv = _build_worker_argv()
+                stdin_payload = _worker_stdin_payload(instruction)
 
                 self.task_queue.update_status(task.task_id, TaskStatus.RUNNING)
 
@@ -440,7 +515,7 @@ class TaskWorkerPool:
                 # Spawn subprocess (M4: uses engine-built argv)
                 proc = await asyncio.create_subprocess_exec(
                     *argv,
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=str(workdir),
@@ -448,6 +523,14 @@ class TaskWorkerPool:
 
                 # Register for abort (M6)
                 _active_procs[task.task_id] = proc
+
+                # Feed the instruction as the single stdin message, then EOF —
+                # the CLI answers it and exits (verified live 2026-09-07). A
+                # worker that dies before reading stdin surfaces here as a
+                # broken pipe and is handled by the generic failure path below.
+                proc.stdin.write(stdin_payload)
+                await proc.stdin.drain()
+                proc.stdin.close()
 
                 # Stream output
                 event_count = 0
@@ -489,6 +572,10 @@ class TaskWorkerPool:
                     )
                     _emit_task_engine_span("end", audit_path, task_id=task.task_id,
                                            status="ok", duration_ms=duration_ms)
+                    _snapshot_task_turn(
+                        task, status="completed", exit_code=0, duration_ms=duration_ms,
+                        event_count=event_count, result_text=result_text,
+                    )
                     _notify_task_done(
                         task.task_id, ok=True,
                         summary=(result_text.strip()[:1500]
@@ -513,6 +600,10 @@ class TaskWorkerPool:
                     )
                     _emit_task_engine_span("end", audit_path, task_id=task.task_id,
                                            status="error", duration_ms=duration_ms)
+                    _snapshot_task_turn(
+                        task, status=state, exit_code=rc, duration_ms=duration_ms,
+                        event_count=event_count, result_text=result_text,
+                    )
                     _notify_task_done(task.task_id, ok=False,
                                       summary=f"{state} (exit code {rc}).")
                     logger.warning("Task %s %s (rc=%d)", task.task_id, state, rc)

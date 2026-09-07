@@ -11,9 +11,14 @@ Phase B: Session Bridging + Crypto Signatures (ADR-0541)
 - audit_verification: Audit chain verification (AuditVerifier, VerificationResult)
 
 Phase C: Rollback Atomicity + Drift Detection (ADR-0542)
-- rollback_manager: WAL-based rollback with atomic commits (RollbackManager, TransactionLog)
+- rollback_manager: WAL-based rollback with a keyed hash chain (RollbackManager, TransactionLog)
 - ema_smoother: Exponential Moving Average filter (EMASmoother, EMASample, DriftLevel)
 - drift_detector: Drift-detection gates and revert button (DriftDetector, DriftAlert)
+
+Every store is TENANT-BOUND (constructed for one tenant, re-checked per call),
+every id is validated against ``paths.ID_PATTERN``, every root is derived from
+``core.paths.tenant.corvin_home()``. ``snapshot_task_state`` is the producer
+entry point (see docs/claude-ref/infinite-session.md).
 """
 
 from core.infinite_session.snapshot_schema import (
@@ -29,7 +34,8 @@ from core.infinite_session.task_def_parser import (
     AutonomyLevel,
     GateType,
 )
-from core.infinite_session.event_store import EventStore
+from core.infinite_session.event_store import EventStore, snapshot_task_state
+from core.infinite_session.paths import ID_PATTERN, InvalidIdentifier, PathEscape, validate_id
 from core.infinite_session.crypto_binding import (
     CryptoBinding,
     SignatureMetadata,
@@ -57,6 +63,7 @@ from core.infinite_session.ema_smoother import (
 from core.infinite_session.drift_detector import (
     DriftDetector,
     DriftAlert,
+    DriftAssessment,
     DriftGateType,
 )
 
@@ -72,6 +79,11 @@ __all__ = [
     "AutonomyLevel",
     "GateType",
     "EventStore",
+    "snapshot_task_state",
+    "ID_PATTERN",
+    "InvalidIdentifier",
+    "PathEscape",
+    "validate_id",
     # Phase B
     "CryptoBinding",
     "SignatureMetadata",
@@ -90,5 +102,6 @@ __all__ = [
     "DriftLevel",
     "DriftDetector",
     "DriftAlert",
+    "DriftAssessment",
     "DriftGateType",
 ]

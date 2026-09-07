@@ -132,7 +132,7 @@ class ConsistencyValidator(MonitorBase):
                 task_id=state.task_id,
                 tenant_id=state.tenant_id,
                 severity="critical",
-                reason=f"Detected {len(contradictions)} contradictory decision(s)",
+                reason=f"Detected {len(contradictions)} contradiction(s) between decisions",
                 metadata={
                     "contradiction_count": len(contradictions),
                     "conflicts": conflict_summary[:5],  # Top 5 conflicts
@@ -194,22 +194,48 @@ class ConsistencyValidator(MonitorBase):
         text1_lower = text1.lower()
         text2_lower = text2.lower()
 
-        # Extract key subject (first few words)
-        words1 = text1_lower.split()[:5]
-        words2 = text2_lower.split()[:5]
+        negation_words = {"not", "no", "never", "won't", "can't", "shouldn't", "don't"}
 
-        # Check if they talk about the same subject
-        subject_overlap = len(set(words1) & set(words2))
-        if subject_overlap < 2:
+        # Subject = stemmed content words of the WHOLE text ("caching" and
+        # "cache" must meet); the first-5-words heuristic missed subjects that
+        # appear after a leading verb ("Enable caching …" vs "Do not cache …").
+        subject1 = self._content_stems(text1_lower, negation_words)
+        subject2 = self._content_stems(text2_lower, negation_words)
+        needed = min(2, len(subject1), len(subject2))
+        if needed == 0 or len(subject1 & subject2) < needed:
             return False
 
         # Check for negation polarity
-        negation_words = {"not", "no", "never", "won't", "can't", "shouldn't", "don't"}
-        has_negation1 = any(word in text1_lower for word in negation_words)
-        has_negation2 = any(word in text2_lower for word in negation_words)
+        tokens1 = set(text1_lower.split())
+        tokens2 = set(text2_lower.split())
+        has_negation1 = bool(tokens1 & negation_words)
+        has_negation2 = bool(tokens2 & negation_words)
 
         # Contradiction if one is negated and the other isn't (same subject)
         return has_negation1 != has_negation2
+
+    _STOPWORDS = {
+        "a", "an", "the", "for", "to", "of", "in", "on", "at", "by", "with", "and",
+        "or", "is", "are", "be", "will", "we", "all", "any", "do", "does", "it",
+        "this", "that", "should", "must", "can",
+    }
+
+    @classmethod
+    def _content_stems(cls, text_lower: str, negation_words: set[str]) -> set[str]:
+        """Crude suffix stemming of the non-stopword, non-negation tokens."""
+        stems = set()
+        for raw in text_lower.split():
+            word = raw.strip(".,;:!?()[]\"'")
+            if not word or word in cls._STOPWORDS or word in negation_words:
+                continue
+            for suffix in ("ing", "es", "ed", "s"):
+                if len(word) > len(suffix) + 2 and word.endswith(suffix):
+                    word = word[: -len(suffix)]
+                    break
+            if len(word) > 3 and word.endswith("e"):  # cache/caching → cach
+                word = word[:-1]
+            stems.add(word)
+        return stems
 
     def create_or_get_consistency_state(
         self, session_id: str, task_id: str, tenant_id: str

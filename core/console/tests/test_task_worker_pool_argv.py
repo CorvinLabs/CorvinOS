@@ -1,0 +1,227 @@
+"""/task worker spawn: the instruction can never become a claude CLI flag.
+
+F-E1 (adversarial review 2026-09-07): ``task_worker_pool`` built
+``["claude", "-p", <instruction>, ...]`` — an instruction beginning with
+``-`` (``--add-dir /``, ``--mcp-config …``, ``--version``) was parsed by the
+CLI as a FLAG. The worker now feeds the instruction as one stream-json user
+message on stdin (``_worker_stdin_payload``) and the argv is prompt-free by
+construction (``_build_worker_argv``). ``ClaudeCodeEngine._build_args`` was
+hardened too: a positional prompt sits LAST behind a literal ``--``.
+
+Three layers of proof:
+
+1. argv/stdin construction (pure).
+2. The REAL pool path — ``TaskWorkerPool._execute_task`` → audit-first →
+   pre-spawn gate → ``create_subprocess_exec`` — against a fake ``claude``
+   binary that records what it received on argv and stdin.
+3. ``live``: the real ``claude -p --model haiku`` answers the instruction
+   ``--version`` as chat, not as the CLI version flag
+   (``CLAUDE_LIVE_E2E=1``).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+_REPO = Path(__file__).resolve().parents[3]
+_CONSOLE_PKG = _REPO / "core" / "console"
+if str(_CONSOLE_PKG) not in sys.path:
+    sys.path.insert(0, str(_CONSOLE_PKG))
+
+from corvin_console import task_worker_pool as twp  # noqa: E402
+from corvin_console.task_queue import TaskQueue, TaskStatus  # noqa: E402
+
+HOSTILE = "--add-dir / --mcp-config /tmp/evil.json --dangerously-skip-permissions"
+
+_FAKE_CLAUDE = r'''#!/usr/bin/env bash
+# Fake `claude` for tests: record argv + stdin, answer like `claude -p`.
+out="${FAKE_CLAUDE_OUT:?}"
+python3 - "$@" <<'PY' > /dev/null
+import json, os, sys
+json.dump(sys.argv[1:], open(os.path.join(os.environ["FAKE_CLAUDE_OUT"], "argv.json"), "w"))
+PY
+cat > "$out/stdin.txt"
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"fake answer"}'
+exit 0
+'''
+
+
+@pytest.fixture
+def fake_claude(tmp_path, monkeypatch):
+    """A recording `claude` stand-in, pinned via CORVIN_CLAUDE_BIN + CLAUDE_BIN."""
+    out = tmp_path / "fake_out"
+    out.mkdir()
+    binary = tmp_path / "claude"
+    binary.write_text(_FAKE_CLAUDE, encoding="utf-8")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("FAKE_CLAUDE_OUT", str(out))
+    monkeypatch.setenv("CORVIN_CLAUDE_BIN", str(binary))
+    monkeypatch.setenv("CLAUDE_BIN", str(binary))
+    return out
+
+
+@pytest.fixture
+def corvin_home(tmp_path, monkeypatch):
+    home = tmp_path / "corvin_home"
+    (home / "tenants" / "_default" / "global").mkdir(parents=True)
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    return home
+
+
+# ---------------------------------------------------------------------------
+# 1. construction
+# ---------------------------------------------------------------------------
+
+def test_worker_argv_is_prompt_free_and_stdin_carries_instruction(fake_claude):
+    argv = twp._build_worker_argv()
+    assert HOSTILE not in argv
+    assert "--add-dir" not in argv and "--mcp-config" not in argv
+    assert argv[argv.index("--input-format") + 1] == "stream-json"
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
+    # no positional prompt → no `--` sentinel either
+    assert "--" not in argv
+
+    payload = twp._worker_stdin_payload(HOSTILE)
+    msg = json.loads(payload.decode("utf-8"))
+    assert msg["type"] == "user"
+    assert msg["message"] == {"role": "user", "content": HOSTILE}
+
+
+def test_engine_build_args_positional_prompt_sits_behind_sentinel():
+    from agents.claude_code import ClaudeCodeEngine  # bridges/shared on sys.path via twp
+
+    args = ClaudeCodeEngine._build_args(
+        HOSTILE, binary="claude", permission_mode="bypassPermissions",
+        streaming=True,
+    )
+    assert args[-2:] == ["--", HOSTILE]
+    sentinel = args.index("--")
+    assert "--add-dir" not in args and "--mcp-config" not in args
+    # every real option precedes the sentinel (the CLI ignores options after it)
+    assert args.index("--output-format") < sentinel
+
+
+# ---------------------------------------------------------------------------
+# 2. real pool path against a recording binary
+# ---------------------------------------------------------------------------
+
+def _run_pool_once(corvin_home: Path, instruction: str) -> str:
+    queue = TaskQueue(corvin_home / "tenants" / "_default" / "global")
+    task_id = queue.enqueue(
+        "_default", "test-chat-key", instruction, check_quota=False,
+    )
+    entry = queue.dequeue("_default")
+    assert entry is not None and entry.task_id == task_id
+    pool = twp.TaskWorkerPool(queue)
+    asyncio.run(pool._execute_task(entry))
+    return task_id
+
+
+def test_pool_spawns_fake_binary_with_instruction_on_stdin_only(
+    fake_claude, corvin_home,
+):
+    task_id = _run_pool_once(corvin_home, HOSTILE)
+
+    argv = json.loads((fake_claude / "argv.json").read_text())
+    stdin_text = (fake_claude / "stdin.txt").read_text()
+
+    # argv: no instruction text, no injected flags
+    assert HOSTILE not in argv
+    assert "--add-dir" not in argv
+    assert "--mcp-config" not in argv
+    assert "/tmp/evil.json" not in argv
+    assert "stream-json" in argv
+    # stdin: exactly one user message carrying the instruction
+    lines = [ln for ln in stdin_text.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert json.loads(lines[0])["message"]["content"] == HOSTILE
+
+    # and the task completed through the real status path
+    queue = TaskQueue(corvin_home / "tenants" / "_default" / "global")
+    entry = queue.get_task(task_id, "_default")
+    assert entry is not None and entry.status == TaskStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# 3. live: real claude answers "--version" as chat, not as a flag
+# ---------------------------------------------------------------------------
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.environ.get("CLAUDE_LIVE_E2E") != "1",
+    reason="real claude call — set CLAUDE_LIVE_E2E=1",
+)
+def test_live_instruction_version_is_a_chat_answer_not_cli_version(tmp_path):
+    argv = twp._build_worker_argv(model="haiku")
+    argv += ["--max-turns", "1"]
+    proc = subprocess.run(
+        argv, input=twp._worker_stdin_payload("--version"),
+        capture_output=True, timeout=120, cwd=str(tmp_path),
+    )
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")[-500:]
+    results = [
+        json.loads(ln) for ln in out.splitlines()
+        if ln.startswith("{") and '"type":"result"' in ln.replace(" ", "")
+    ]
+    assert results, out[-800:]
+    answer = results[-1].get("result") or ""
+    # `claude --version` prints e.g. "2.1.3 (Claude Code)"; a chat answer does not.
+    assert not re.fullmatch(r"\s*\d+\.\d+\.\d+.*", answer), answer
+    assert len(answer) > 10, answer
+
+
+# ---------------------------------------------------------------------------
+# 4. infinite-session producer: a finished turn lands on the snapshot chain
+# ---------------------------------------------------------------------------
+
+def test_pool_writes_infinite_session_snapshot_for_finished_turn(
+    fake_claude, corvin_home,
+):
+    """F-S7 (2026-09-07): the task worker is the ONE production producer of
+    infinite-session snapshots. Drive the real pool against the fake binary
+    and read the chain back through the real EventStore + console route."""
+    from core.infinite_session import EventStore
+
+    task_id = _run_pool_once(corvin_home, "summarise the plan")
+
+    store = EventStore("_default")
+    latest, err = store.get_latest_snapshot("_default", task_id)
+    assert latest is not None, err
+    state = latest.state_dict
+    assert state["status"] == "completed"
+    assert state["exit_code"] == 0
+    assert len(state["result_sha256"]) == 64
+    # content-free: the model answer itself never reaches the snapshot store
+    assert "fake answer" not in json.dumps(state)
+    ok, problems = store.verify_snapshot_chain("_default", task_id)
+    assert ok, problems
+
+    # and the console route lists it (real router, session dep overridden)
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from corvin_console import deps as _deps
+    from corvin_console.routes import infinite_session_api as api
+
+    app = FastAPI()
+    app.include_router(api.router, prefix="/v1/console")
+
+    class _Rec:
+        tenant_id = "_default"
+        sid_fingerprint = "test"
+        csrf_token = "t"
+
+    app.dependency_overrides[_deps.require_session] = lambda: _Rec()
+    resp = TestClient(app).get("/v1/console/api/infinite-session/tasks")
+    assert resp.status_code == 200, resp.text
+    assert any(t.get("task_id") == task_id for t in resp.json().get("tasks", [])), resp.json()
+

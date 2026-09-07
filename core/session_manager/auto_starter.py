@@ -6,6 +6,7 @@ sessions with checkpoint injection — zero operator intervention.
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from typing import Optional, Any
 from dataclasses import dataclass
@@ -133,6 +134,7 @@ class SessionAutoStarter:
         iterations: int,
         context: dict,
         audit_trail_hash: str,
+        goal: Optional[str] = None,
     ) -> Optional[str]:
         """Called on each task iteration.
 
@@ -145,6 +147,9 @@ class SessionAutoStarter:
             iterations: Total iterations so far
             context: Current context snapshot
             audit_trail_hash: Hash-chain from previous session
+            goal: The goal the executor is CURRENTLY working towards. Compared
+                against the goal captured at on_task_start (CRITICAL-009): a
+                mismatch raises RuntimeError and refuses the split.
 
         Returns:
             New session_id if split occurred, None otherwise
@@ -184,9 +189,10 @@ class SessionAutoStarter:
                 f"trigger={split_decision.trigger.value} reason={split_decision.reason}"
             )
 
-            # Create checkpoint
+            # Create checkpoint (lifecycle manager) and persist it (checkpoint
+            # manager) — a split may only proceed on a durable checkpoint.
             try:
-                checkpoint = await self.checkpoint_mgr.create_checkpoint(
+                checkpoint = await self.lifecycle_mgr.create_checkpoint(
                     session_id=state["session_id"],
                     goal=state["goal"],
                     context=context,
@@ -196,11 +202,16 @@ class SessionAutoStarter:
             except Exception as e:
                 logger.exception(f"[SessionAutoStarter] Checkpoint creation failed: {e}")
                 return None
+            if not await self.checkpoint_mgr.save_checkpoint(checkpoint):
+                logger.error(
+                    f"[SessionAutoStarter] Checkpoint persistence failed — split refused: task={task_id}"
+                )
+                return None
 
             # Verify continuity (fail-closed)
             is_continuous = await self.lifecycle_mgr.verify_continuity(
                 checkpoint,
-                new_session_goal=state["goal"],
+                new_session_goal=goal if goal is not None else state["goal"],
             )
             if not is_continuous:
                 # CRITICAL-009 fix: Raise exception instead of silent None
@@ -249,7 +260,11 @@ class SessionAutoStarter:
         for attempt in range(self.retry_engine.policy.max_attempts):
             try:
                 # Generate new session ID
-                new_session_id = f"session_{task_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_split{attempt}"
+                # uuid suffix: two splits within one second must not collide
+                new_session_id = (
+                    f"session_{task_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    f"_split{attempt}_{uuid.uuid4().hex[:8]}"
+                )
 
                 # TODO: Call actual session init API (to be wired in Phase 1.2)
                 # new_session = await session_api.init_from_checkpoint(checkpoint)

@@ -20,13 +20,14 @@ class TestCheckpointFallback:
 
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.manager = CheckpointManager(Path(self.tmpdir))
+        self.manager = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
         self.recovery = RecoveryEngine()
         self.fallback = CheckpointFallback(self.manager, self.recovery)
 
     def create_test_checkpoint(self, iter_num: int = 1) -> CheckpointState:
         return CheckpointState(
             checkpoint_id=f"ckpt_{iter_num}",
+            tenant_id="_default",
             task_id="task_fallback",
             session_id="session_fallback",
             phase="execution",

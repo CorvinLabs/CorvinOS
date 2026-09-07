@@ -172,12 +172,13 @@ class TestCheckpointSerializationFidelity:
 
     def setup_method(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            self.manager = CheckpointManager(Path(tmpdir))
+            self.manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
 
     def test_serialize_deserialize_preserves_all_fields(self):
         """Round-trip: serialize → deserialize → identity."""
         checkpoint = CheckpointState(
             checkpoint_id="test_123",
+            tenant_id="_default",
             task_id="task_001",
             session_id="session_xyz",
             phase="execution",
@@ -205,6 +206,7 @@ class TestCheckpointSerializationFidelity:
         """Serialized output is valid JSON."""
         checkpoint = CheckpointState(
             checkpoint_id="test", task_id="task", session_id="sess",
+            tenant_id="_default",
             phase="run", trigger="test", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=1, task_state={}, context_essentials={},
             learning_state={}, open_subgoals=[], artifacts=[]
@@ -219,6 +221,7 @@ class TestCheckpointSerializationFidelity:
         """Deserialization handles optional recovery_reason."""
         checkpoint = CheckpointState(
             checkpoint_id="test", task_id="task", session_id="sess",
+            tenant_id="_default",
             phase="run", trigger="error", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=1, task_state={}, context_essentials={},
             learning_state={}, open_subgoals=[], artifacts=[],
@@ -243,6 +246,7 @@ class TestCheckpointSerializationFidelity:
 
         checkpoint = CheckpointState(
             checkpoint_id="complex_123",
+            tenant_id="_default",
             task_id="audit_001",
             session_id="sess_complex",
             phase="analysis",
@@ -283,6 +287,7 @@ class TestCheckpointSerializationFidelity:
 
         checkpoint1 = CheckpointState(
             checkpoint_id="", task_id="task_001", session_id="sess",
+            tenant_id="_default",
             phase="exec", trigger="iter", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=10, task_state=task_state, context_essentials={},
             learning_state={}, open_subgoals=[], artifacts=[]
@@ -290,6 +295,7 @@ class TestCheckpointSerializationFidelity:
 
         checkpoint2 = CheckpointState(
             checkpoint_id="", task_id="task_001", session_id="sess",
+            tenant_id="_default",
             phase="exec", trigger="iter", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=10, task_state=task_state, context_essentials={},
             learning_state={}, open_subgoals=[], artifacts=[]
@@ -310,10 +316,11 @@ class TestCheckpointPersistence:
     def test_save_creates_checkpoint_file(self):
         """Saving creates a JSON file on disk."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manager = CheckpointManager(Path(tmpdir))
+            manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
 
             checkpoint = CheckpointState(
                 checkpoint_id="save_test", task_id="task_001", session_id="sess",
+                tenant_id="_default",
                 phase="run", trigger="test", timestamp_iso="2026-08-24T15:00:00",
                 iteration_num=5, task_state={}, context_essentials={},
                 learning_state={}, open_subgoals=[], artifacts=[]
@@ -326,10 +333,11 @@ class TestCheckpointPersistence:
     def test_load_retrieves_saved_checkpoint(self):
         """Loading restores a previously saved checkpoint."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manager = CheckpointManager(Path(tmpdir))
+            manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
 
             original = CheckpointState(
                 checkpoint_id="load_test", task_id="task_002", session_id="sess",
+                tenant_id="_default",
                 phase="run", trigger="test", timestamp_iso="2026-08-24T15:00:00",
                 iteration_num=7, task_state={"data": "test"},
                 context_essentials={}, learning_state={}, open_subgoals=[], artifacts=[]
@@ -344,12 +352,13 @@ class TestCheckpointPersistence:
     def test_list_checkpoints_discovers_all_for_task(self):
         """Listing finds all checkpoints for a task."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manager = CheckpointManager(Path(tmpdir))
+            manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
 
             # Create 3 checkpoints for same task
             for i in range(3):
                 cp = CheckpointState(
                     checkpoint_id=f"list_test_{i}",
+                    tenant_id="_default",
                     task_id="task_list", session_id="sess",
                     phase="run", trigger="test", timestamp_iso="2026-08-24T15:00:00",
                     iteration_num=i*10, task_state={},
@@ -363,12 +372,13 @@ class TestCheckpointPersistence:
     def test_get_latest_returns_newest_checkpoint(self):
         """get_latest() returns most recent checkpoint for task."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manager = CheckpointManager(Path(tmpdir))
+            manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
 
             # Create checkpoints with different iteration numbers
             for iter_num in [10, 5, 20]:
                 cp = CheckpointState(
                     checkpoint_id=f"latest_test_{iter_num}",
+                    tenant_id="_default",
                     task_id="task_latest", session_id="sess",
                     phase="run", trigger="test", timestamp_iso="2026-08-24T15:00:00",
                     iteration_num=iter_num, task_state={},
@@ -383,12 +393,13 @@ class TestCheckpointPersistence:
     def test_delete_old_checkpoints_keeps_most_recent(self):
         """Cleanup keeps only the N most recent checkpoints."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manager = CheckpointManager(Path(tmpdir))
+            manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
 
             # Create 7 checkpoints
             for i in range(7):
                 cp = CheckpointState(
                     checkpoint_id=f"del_test_{i}",
+                    tenant_id="_default",
                     task_id="task_delete", session_id="sess",
                     phase="run", trigger="test", timestamp_iso="2026-08-24T15:00:00",
                     iteration_num=i*10, task_state={},
@@ -405,10 +416,11 @@ class TestCheckpointPersistence:
     def test_checkpoint_file_naming_includes_metadata(self):
         """Checkpoint filenames encode task_id, checkpoint_id, iteration."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manager = CheckpointManager(Path(tmpdir))
+            manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
 
             cp = CheckpointState(
                 checkpoint_id="file_name_test",
+                tenant_id="_default",
                 task_id="task_fname", session_id="sess",
                 phase="run", trigger="test", timestamp_iso="2026-08-24T15:00:00",
                 iteration_num=42, task_state={},

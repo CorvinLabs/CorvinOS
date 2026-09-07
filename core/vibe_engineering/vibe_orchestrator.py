@@ -119,17 +119,23 @@ class VibeOrchestrator:
     def __init__(
         self,
         checkpoint_dir: Optional[Path] = None,
-        context_reduction_target_pct: int = 91
+        context_reduction_target_pct: int = 91,
+        *,
+        tenant_id: str = "_default",
     ):
         """
         Initialize orchestrator with component managers.
 
         Args:
             checkpoint_dir: Where to persist checkpoints.
-                           Defaults to ~/.corvin/vibe/checkpoints/
+                           Defaults to ``<tenant_home>/vibe/checkpoints/``.
             context_reduction_target_pct: Target compression (typically 91%).
+            tenant_id: Tenant this orchestrator (and its CheckpointManager) is
+                bound to (ADR-0007, keyword-only). Every checkpoint it writes
+                carries this tenant; ``_default`` is the five-scope default.
         """
-        self.checkpoint_manager = CheckpointManager(checkpoint_dir)
+        self.tenant_id = tenant_id
+        self.checkpoint_manager = CheckpointManager(checkpoint_dir, tenant_id=tenant_id)
         self.context_reducer = ContextReducer(context_reduction_target_pct)
         self.recovery_engine = RecoveryEngine()
         self.session_lifecycle_manager = SessionLifecycleManager()

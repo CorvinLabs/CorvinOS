@@ -467,7 +467,7 @@ class TestRound2IntegrationFaultInjection:
     async def test_session_manager_tool_invocation_checkpoint(self):
         """SessionManager invokes tool; tool crashes mid-execution; checkpoint must save state."""
         session_mgr = SessionLifecycleManager()
-        checkpoint_mgr = CheckpointManager(Path(self.tmpdir))
+        checkpoint_mgr = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
 
         session = SessionState(
             session_id="session_001",
@@ -529,7 +529,7 @@ class TestRound2IntegrationFaultInjection:
     async def test_session_split_all_events_flushed_before_split(self):
         """SessionManager triggers brain split; all in-flight events flushed to audit."""
         session_mgr = SessionLifecycleManager()
-        checkpoint_mgr = CheckpointManager(Path(self.tmpdir))
+        checkpoint_mgr = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
 
         session = SessionState(
             session_id="session_001",
@@ -546,6 +546,7 @@ class TestRound2IntegrationFaultInjection:
             # All events should be flushed before split
             checkpoint = CheckpointState(
                 checkpoint_id="ckpt_001",
+                tenant_id="_default",
                 task_id="task_001",
                 session_id="session_001",
                 phase=session.phase,
@@ -566,7 +567,7 @@ class TestRound2IntegrationFaultInjection:
     async def test_session_split_no_event_loss(self):
         """Session split operation; verify no events lost between sessions."""
         session_mgr = SessionLifecycleManager()
-        checkpoint_mgr = CheckpointManager(Path(self.tmpdir))
+        checkpoint_mgr = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
         recovery_engine = RecoveryEngine()
 
         session1 = SessionState(
@@ -579,6 +580,7 @@ class TestRound2IntegrationFaultInjection:
         # Create checkpoint at split point
         ckpt = CheckpointState(
             checkpoint_id="ckpt_split",
+            tenant_id="_default",
             task_id="task_001",
             session_id="session_001",
             phase=session1.phase,
@@ -804,7 +806,7 @@ class TestRound3ProductionStressChaos:
         memory = MemoryPalace()
         skills = SkillsEngine()
         brain = Brain(memory, skills)
-        checkpoint_mgr = CheckpointManager(Path(self.tmpdir))
+        checkpoint_mgr = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
         recovery_engine = RecoveryEngine()
 
         killed_tasks = set()
@@ -818,6 +820,7 @@ class TestRound3ProductionStressChaos:
                         # Create checkpoint and exit
                         checkpoint = CheckpointState(
                             checkpoint_id=f"ckpt_{task_id}_{iteration}",
+                            tenant_id="_default",
                             task_id=f"task_{task_id:03d}",
                             session_id=f"session_{task_id:03d}",
                             phase="execution",
@@ -972,7 +975,7 @@ class TestRound3ProductionStressChaos:
     @pytest.mark.asyncio
     async def test_scenario_16hour_audit_task(self):
         """Simulate 16-hour audit task; 4 phases, 50 iterations, context grows 4x."""
-        checkpoint_mgr = CheckpointManager(Path(self.tmpdir))
+        checkpoint_mgr = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
         recovery_engine = RecoveryEngine()
         memory = MemoryPalace()
         skills = SkillsEngine()
@@ -1009,6 +1012,7 @@ class TestRound3ProductionStressChaos:
                 if iteration == iterations_per_phase - 1:
                     checkpoint = CheckpointState(
                         checkpoint_id=f"ckpt_audit_{phase_idx}_{iteration}",
+                        tenant_id="_default",
                         task_id="task_audit_16h",
                         session_id=f"session_{phase_idx}",
                         phase=phase,
@@ -1167,7 +1171,7 @@ class TestE2EFakeTaskScenarios:
     def setup_method(self):
         """Set up E2E test infrastructure."""
         self.tmpdir = tempfile.mkdtemp()
-        self.checkpoint_mgr = CheckpointManager(Path(self.tmpdir))
+        self.checkpoint_mgr = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
         self.recovery_engine = RecoveryEngine()
         self.session_mgr = SessionLifecycleManager()
 
@@ -1262,6 +1266,7 @@ class TestE2EFakeTaskScenarios:
                 # Create checkpoint
                 checkpoint = CheckpointState(
                     checkpoint_id=f"ckpt_{task_id}_split1",
+                    tenant_id="_default",
                     task_id=task_id,
                     session_id=session_id,
                     phase="execution",
@@ -1413,6 +1418,7 @@ class TestE2EFakeTaskScenarios:
             if (iteration + 1) % checkpoint_interval == 0:
                 checkpoint = CheckpointState(
                     checkpoint_id=f"ckpt_{task_id}_{iteration}",
+                    tenant_id="_default",
                     task_id=task_id,
                     session_id=f"session_e2e_007_v{iteration // checkpoint_interval}",
                     phase="execution",

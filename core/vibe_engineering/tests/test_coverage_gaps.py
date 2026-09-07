@@ -78,13 +78,14 @@ class TestEdgeCases:
     def test_checkpoint_manager_idempotency_edge_case(self):
         """Test that same state always produces same checkpoint ID."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            manager = CheckpointManager(Path(tmpdir))
+            manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
 
             # Create checkpoint multiple times with same state
             cp_states = []
             for _ in range(3):
                 cp = CheckpointState(
                     checkpoint_id="",  # Will be derived from hash
+                    tenant_id="_default",
                     task_id="task_idem",
                     session_id="sess",
                     phase="exec",
@@ -108,6 +109,7 @@ class TestEdgeCases:
         for trigger in ["phase_exit", "context_limit", "token_burn", "iteration_cap", "stall_detected"]:
             cp = CheckpointState(
                 checkpoint_id=f"ckpt_{trigger}",
+                tenant_id="_default",
                 task_id="task",
                 session_id="sess",
                 phase="exec",
@@ -140,6 +142,7 @@ class TestEdgeCases:
         """Test checkpoint with recovery reason (error state)."""
         cp = CheckpointState(
             checkpoint_id="ckpt_error",
+            tenant_id="_default",
             task_id="task",
             session_id="sess",
             phase="exec",
@@ -166,12 +169,13 @@ class TestIntegrationPaths:
         with tempfile.TemporaryDirectory() as tmpdir:
             session_manager = SessionLifecycleManager()
             reducer = ContextReducer()
-            checkpoint_manager = CheckpointManager(Path(tmpdir))
+            checkpoint_manager = CheckpointManager(Path(tmpdir), tenant_id="_default")
             recovery_engine = RecoveryEngine()
 
             # Simulate error scenario
             cp = CheckpointState(
                 checkpoint_id="ckpt_err",
+                tenant_id="_default",
                 task_id="task_err",
                 session_id="sess_err",
                 phase="execution",

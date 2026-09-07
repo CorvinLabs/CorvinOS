@@ -62,7 +62,7 @@ class TestSessionManagerInitializeTask:
             assert result["session_id"] == "sess-123"
             assert result["task_id"] == "task-456"
             assert result["goal_context"] is not None
-            assert result["goal_context"]["goal"] == goal
+            assert result["goal_context"]["original_goal"] == goal
 
             # Verify session was updated
             updated_session = manager.get_session("sess-123")
@@ -156,7 +156,7 @@ class TestSessionManagerResumeFromCheckpoint:
             assert result["task_id"] == "task-456"
             assert result["integrity_verified"] is True
             assert result["goal_context"] is not None
-            assert result["goal_context"]["goal"] == goal
+            assert result["goal_context"]["original_goal"] == goal
 
             # Verify session was updated
             updated_session = manager.get_session("sess-123")
@@ -181,7 +181,7 @@ class TestSessionManagerResumeFromCheckpoint:
                 "session_id": "sess-123",
                 "task_id": "task-456",
                 "goal_context": {
-                    "goal": "Modified goal",
+                    "original_goal": "Modified goal",
                     "goal_hash": goal_ctx.goal_hash,  # Hash of original goal
                     "created_at": goal_ctx.created_at,
                 },
@@ -358,6 +358,6 @@ class TestSessionManagerEndToEnd:
             )
 
             # Verify goal unchanged
-            assert resume_result["goal_context"]["goal"] == goal
+            assert resume_result["goal_context"]["original_goal"] == goal
             assert resume_result["goal_context"]["goal_hash"] == initial_goal_hash
             assert resume_result["integrity_verified"] is True

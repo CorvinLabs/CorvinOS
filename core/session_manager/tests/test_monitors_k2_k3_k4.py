@@ -366,10 +366,11 @@ class TestExplorationScheduler:
         for _ in range(15):
             self.scheduler.update_success_rate("sess-001", "task-001", "default", 0.7)
 
-        # Need to evaluate multiple times to accumulate plateau
+        # 15 in-zone samples are already a full plateau window; the alert
+        # cooldown suppresses a repeat on the following evaluations.
         alert = None
         for _ in range(3):
-            alert = self.scheduler.evaluate_session(state)
+            alert = alert or self.scheduler.evaluate_session(state)
 
         assert alert is not None
         assert alert.alert_type == AlertType.LOCAL_OPTIMUM_SUSPECTED

@@ -26,6 +26,7 @@ class TestRecoveryEngineStateRestoration:
         """Create a minimal test checkpoint."""
         return CheckpointState(
             checkpoint_id="ckpt_test",
+            tenant_id="_default",
             task_id=task_id,
             session_id="session_test",
             phase="execution",
@@ -127,6 +128,7 @@ class TestRecoveryEngineIdempotency:
         """Create a checkpoint with deterministic state."""
         return CheckpointState(
             checkpoint_id="ckpt_deterministic",
+            tenant_id="_default",
             task_id="task_deterministic",
             session_id="session_deterministic",
             phase="analysis",
@@ -208,6 +210,7 @@ class TestRecoveryEngineContextReconstruction:
         """Reconstructed context includes task goal."""
         checkpoint = CheckpointState(
             checkpoint_id="ctx_test", task_id="task", session_id="sess",
+            tenant_id="_default",
             phase="exec", trigger="test", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=5,
             task_state={"task_id": "task", "goal": "Test goal", "progress": 0.3},
@@ -222,6 +225,7 @@ class TestRecoveryEngineContextReconstruction:
         """Reconstructed context includes all constraints."""
         checkpoint = CheckpointState(
             checkpoint_id="ctx_test", task_id="task", session_id="sess",
+            tenant_id="_default",
             phase="exec", trigger="test", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=5,
             task_state={"task_id": "task", "goal": "Test"},
@@ -239,6 +243,7 @@ class TestRecoveryEngineContextReconstruction:
         """Reconstructed context preserves decisions made."""
         checkpoint = CheckpointState(
             checkpoint_id="ctx_test", task_id="task", session_id="sess",
+            tenant_id="_default",
             phase="exec", trigger="test", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=5,
             task_state={"task_id": "task", "goal": "Test"},
@@ -260,6 +265,7 @@ class TestRecoveryEngineContextReconstruction:
         """Reconstructed context preserves all errors encountered."""
         checkpoint = CheckpointState(
             checkpoint_id="ctx_test", task_id="task", session_id="sess",
+            tenant_id="_default",
             phase="exec", trigger="test", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=10,
             task_state={"task_id": "task", "goal": "Test"},
@@ -288,6 +294,7 @@ class TestRecoveryEngineRecoveryCostEstimation:
         """Create checkpoint with specified trigger."""
         return CheckpointState(
             checkpoint_id="cost_test", task_id="task", session_id="sess",
+            tenant_id="_default",
             phase="exec", trigger=trigger, timestamp_iso="2026-08-24T15:00:00",
             iteration_num=30,
             task_state={"task_id": "task", "goal": "Test"},
@@ -320,6 +327,7 @@ class TestRecoveryEngineRecoveryCostEstimation:
         """Recovery cost includes prerequisites (e.g., network check)."""
         checkpoint = CheckpointState(
             checkpoint_id="cost_test", task_id="task", session_id="sess",
+            tenant_id="_default",
             phase="exec", trigger="stall_detected", timestamp_iso="2026-08-24T15:00:00",
             iteration_num=30,
             task_state={"task_id": "task", "goal": "Test"},

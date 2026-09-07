@@ -31,7 +31,7 @@ class TestGoalPersistenceInCheckpoint:
         )
 
         assert checkpoint.goal_context == goal_ctx
-        assert checkpoint.goal_context.goal == goal
+        assert checkpoint.goal_context.original_goal == goal
 
     def test_checkpoint_serialization_with_goal_context(self):
         """Test checkpoint serialization includes goal_context."""
@@ -49,7 +49,7 @@ class TestGoalPersistenceInCheckpoint:
         data = checkpoint.to_dict()
 
         assert data["goal_context"] is not None
-        assert data["goal_context"]["goal"] == goal
+        assert data["goal_context"]["original_goal"] == goal
         assert data["goal_context"]["goal_hash"] == goal_ctx.goal_hash
 
     def test_checkpoint_deserialization_with_goal_context(self):
@@ -69,7 +69,7 @@ class TestGoalPersistenceInCheckpoint:
         restored_checkpoint = SessionCheckpoint.from_dict(data)
 
         assert restored_checkpoint.goal_context is not None
-        assert restored_checkpoint.goal_context.goal == goal
+        assert restored_checkpoint.goal_context.original_goal == goal
         assert restored_checkpoint.goal_context.goal_hash == goal_ctx.goal_hash
 
     def test_checkpoint_without_goal_context_backward_compat(self):
@@ -129,7 +129,7 @@ class TestGoalIntegrityVerificationOnRestore:
 
         data = checkpoint.to_dict()
         # Corrupt the goal in the serialized data
-        data["goal_context"]["goal"] = "Different goal text"
+        data["goal_context"]["original_goal"] = "Different goal text"
 
         # Should raise AssertionError on deserialization
         with pytest.raises(AssertionError, match="Goal integrity check failed"):
@@ -190,7 +190,7 @@ class TestMultipleSplitsGoalPersistence:
         )
 
         # Verify goal unchanged across splits
-        assert cp1.goal_context.goal == cp2.goal_context.goal
+        assert cp1.goal_context.original_goal == cp2.goal_context.original_goal
         assert cp1.goal_context.goal_hash == cp2.goal_context.goal_hash
 
         # Serialize and restore second checkpoint
@@ -198,7 +198,7 @@ class TestMultipleSplitsGoalPersistence:
         cp2_restored = SessionCheckpoint.from_dict(data2)
 
         # Goal should still match
-        assert cp1.goal_context.goal == cp2_restored.goal_context.goal
+        assert cp1.goal_context.original_goal == cp2_restored.goal_context.original_goal
         assert cp1.goal_context.goal_hash == cp2_restored.goal_context.goal_hash
 
     def test_goal_persists_across_three_splits(self):
@@ -228,7 +228,7 @@ class TestMultipleSplitsGoalPersistence:
             previous_goal_ctx = cp_restored.goal_context
 
         # Final verification: goal unchanged after 3 splits
-        assert previous_goal_ctx.goal == goal
+        assert previous_goal_ctx.original_goal == goal
 
 
 class TestGoalContextInAuditTrail:
@@ -294,7 +294,7 @@ class TestGoalContextEdgeCases:
         data = checkpoint.to_dict()
         restored = SessionCheckpoint.from_dict(data)
 
-        assert restored.goal_context.goal == goal
+        assert restored.goal_context.original_goal == goal
         assert restored.goal_context.verify_integrity() is True
 
     def test_goal_with_special_characters(self):
@@ -313,7 +313,7 @@ class TestGoalContextEdgeCases:
         data = checkpoint.to_dict()
         restored = SessionCheckpoint.from_dict(data)
 
-        assert restored.goal_context.goal == goal
+        assert restored.goal_context.original_goal == goal
         assert restored.goal_context.verify_integrity() is True
 
     def test_goal_with_newlines(self):
@@ -332,5 +332,5 @@ class TestGoalContextEdgeCases:
         data = checkpoint.to_dict()
         restored = SessionCheckpoint.from_dict(data)
 
-        assert restored.goal_context.goal == goal
+        assert restored.goal_context.original_goal == goal
         assert restored.goal_context.verify_integrity() is True

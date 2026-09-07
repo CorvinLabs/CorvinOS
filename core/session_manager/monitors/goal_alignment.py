@@ -146,7 +146,8 @@ class GoalAlignmentMonitor(MonitorBase):
         Returns:
             Similarity score [0.0-1.0]
         """
-        # Simple word-based Jaccard similarity
+        # Cosine similarity over binary bag-of-words (the metric this module
+        # documents; Jaccard penalises a superset of the goal too harshly).
         words1 = set(text1.lower().split())
         words2 = set(text2.lower().split())
 
@@ -154,12 +155,7 @@ class GoalAlignmentMonitor(MonitorBase):
             return 0.0
 
         intersection = len(words1 & words2)
-        union = len(words1 | words2)
-
-        if union == 0:
-            return 0.0
-
-        return intersection / union
+        return intersection / ((len(words1) * len(words2)) ** 0.5)
 
     def create_or_get_state(
         self, session_id: str, task_id: str, tenant_id: str
