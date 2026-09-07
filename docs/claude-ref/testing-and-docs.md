@@ -78,6 +78,30 @@ Two structural guards exist; keep both intact:
    cannot break legitimate tests. Do not remove or weaken it; extend its
    protected-paths list when new live state locations appear.
 
+3. **Process-global stdlib attributes**
+   (`core/console/tests/conftest.py::_isolate_stdlib_spawners`). Eight console
+   test modules fake out `self.cr.asyncio.create_subprocess_exec` so a chat turn
+   never really spawns `claude`. `self.cr.asyncio` **is** the stdlib `asyncio`
+   module object, so that rebinds the spawner process-wide for the whole run.
+   On 2026-09-07 one module forgot to restore it and the console suite stopped
+   completing: Playwright launches its node driver via
+   `asyncio.create_subprocess_exec`, so `test_browser_automation.py` got a
+   MagicMock instead of a driver and awaited a pipe forever — green in
+   isolation, wedged at ~15% of a full run, and not interruptible by the usual
+   `--timeout` styles. The autouse fixture snapshots and restores
+   `asyncio.create_subprocess_exec` / `create_subprocess_shell` and
+   `subprocess.Popen` / `run` around every test;
+   `core/console/tests/test_stdlib_spawn_isolation.py` pins the contract.
+   Individual tests should still restore what they patch
+   (`self.addCleanup(setattr, ...)`) — the fixture is the backstop, not the
+   licence to leak.
+
+**Corollary — no test may `await` without a deadline.** The hang above stayed
+invisible for as long as it did because the E2E awaited `s.click(...)` with no
+`asyncio.wait_for`. A test that can block forever hides the bug it was written
+to catch and takes CI with it; give every E2E step an explicit timeout so a
+regression fails loudly and names the step.
+
 ## Docs + Diagram Sync (load-bearing)
 
 **Every feature change** — code, config, behavior, API, protocol, CLI, error message —

@@ -129,6 +129,13 @@ class HouseRulesGateE2E(unittest.TestCase):
                 "claude subprocess was spawned despite a DENY house-rules verdict"
             )
 
+        # Save + restore: create_subprocess_exec is an attribute of the stdlib
+        # asyncio module object, so this rebinds the spawner PROCESS-WIDE. Without
+        # cleanup it stays _fake_spawn for every later test in the run — which is
+        # what wedged the console suite (Playwright launches its node driver via
+        # asyncio.create_subprocess_exec and then awaits a pipe forever).
+        self.addCleanup(setattr, self.cr.asyncio, "create_subprocess_exec",
+                        self.cr.asyncio.create_subprocess_exec)
         self.cr.asyncio.create_subprocess_exec = _fake_spawn  # type: ignore[attr-defined]
         return called
 
@@ -177,6 +184,13 @@ class HouseRulesGateE2E(unittest.TestCase):
             # transcript; the test only needs to prove the gate passed.
             raise FileNotFoundError("stubbed: gate passed, spawn reached")
 
+        # Save + restore: create_subprocess_exec is an attribute of the stdlib
+        # asyncio module object, so this rebinds the spawner PROCESS-WIDE. Without
+        # cleanup it stays _fake_spawn for every later test in the run — which is
+        # what wedged the console suite (Playwright launches its node driver via
+        # asyncio.create_subprocess_exec and then awaits a pipe forever).
+        self.addCleanup(setattr, self.cr.asyncio, "create_subprocess_exec",
+                        self.cr.asyncio.create_subprocess_exec)
         self.cr.asyncio.create_subprocess_exec = _fake_spawn  # type: ignore[attr-defined]
 
         prompt = "What is the capital of France?"
@@ -215,6 +229,13 @@ class HouseRulesGateE2E(unittest.TestCase):
             spawned["hit"] = True
             raise FileNotFoundError("stubbed: gate passed via floor, spawn reached")
 
+        # Save + restore: create_subprocess_exec is an attribute of the stdlib
+        # asyncio module object, so this rebinds the spawner PROCESS-WIDE. Without
+        # cleanup it stays _fake_spawn for every later test in the run — which is
+        # what wedged the console suite (Playwright launches its node driver via
+        # asyncio.create_subprocess_exec and then awaits a pipe forever).
+        self.addCleanup(setattr, self.cr.asyncio, "create_subprocess_exec",
+                        self.cr.asyncio.create_subprocess_exec)
         self.cr.asyncio.create_subprocess_exec = _fake_spawn  # type: ignore[attr-defined]
 
         events = _drain(self.cr.stream_turn(self.sess, "Tell me a joke."))
