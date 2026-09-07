@@ -250,6 +250,56 @@ def section_expiry_downgrade() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section 4b — Bundled manifests must not rot in the repo
+# ---------------------------------------------------------------------------
+
+
+BUNDLED_FRESHNESS_MARGIN_DAYS = 30
+
+
+def section_bundled_manifest_freshness() -> None:
+    """Every bundled trust manifest (agents/trust/*.yaml) is re-evaluated by a
+    human on a fixed cadence and carries a hard ``valid_until``. When that date
+    passes silently, EVERY spawn of the engine is downgraded to ``low`` with
+    reason ``manifest-expired`` — which is exactly what happened to
+    ``opencode.yaml`` on 2026-08-15 (found 2026-09-07: three suites failed with
+    ``manifest-expired`` instead of a tier verdict, and production had been
+    downgrading opencode for three weeks). This section fails BEFORE the rot:
+    a bundled manifest within ``BUNDLED_FRESHNESS_MARGIN_DAYS`` of its
+    ``valid_until`` is a red test, so the re-evaluation lands while the
+    manifest is still valid."""
+    print("\n[4b/7] Bundled manifests: re-evaluation due before expiry")
+    from datetime import datetime, timedelta, timezone
+    import yaml as _y
+    et = _fresh_module()
+    bundle_dir = et._BUNDLE_TRUST_DIR
+    files = sorted(bundle_dir.glob("*.yaml"))
+    t("bundled trust manifests present", bool(files), detail=str(bundle_dir))
+    now = datetime.now(timezone.utc)
+    for f in files:
+        engine_id = f.stem
+        # Bypass any operator override: read the BUNDLED file directly.
+        with f.open("r", encoding="utf-8") as fh:
+            raw = _y.safe_load(fh)
+        m = et._parse_manifest(raw, f)
+        valid_until = et._parse_iso8601(m.metadata.valid_until, where="metadata.valid_until")
+        evaluated_at = et._parse_iso8601(m.metadata.evaluated_at, where="metadata.evaluated_at")
+        remaining = valid_until - now
+        t(f"{engine_id}: bundled manifest not expired",
+          remaining.total_seconds() > 0,
+          detail=f"valid_until={m.metadata.valid_until}")
+        t(f"{engine_id}: re-evaluation due in more than {BUNDLED_FRESHNESS_MARGIN_DAYS}d "
+          f"(re-evaluate + bump evaluated_at/valid_until BEFORE it expires)",
+          remaining > timedelta(days=BUNDLED_FRESHNESS_MARGIN_DAYS),
+          detail=f"{remaining.days}d left")
+        t(f"{engine_id}: valid_until after evaluated_at",
+          valid_until > evaluated_at)
+        t(f"{engine_id}: validity window <= 6 months (re-evaluation cadence)",
+          (valid_until - evaluated_at) <= timedelta(days=186),
+          detail=f"{(valid_until - evaluated_at).days}d")
+
+
+# ---------------------------------------------------------------------------
 # Section 5 — Binary hash check
 # ---------------------------------------------------------------------------
 
@@ -419,6 +469,7 @@ def main() -> int:
     section_override_resolution()
     section_tier_gate()
     section_expiry_downgrade()
+    section_bundled_manifest_freshness()
     section_binary_hash()
     section_audit_emission()
     section_event_registry()

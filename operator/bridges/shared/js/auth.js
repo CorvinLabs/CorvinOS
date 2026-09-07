@@ -139,13 +139,14 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
     const firstDrop = !_roSeen.has(seenKey);
     if (firstDrop) _roSeen.add(seenKey);
     if (logger) logger(`auth: read_only drop ${u} chat=${chatKey || ''} first=${firstDrop}`);
-    const snippet = (text || '').toString().slice(0, 200);
+    // F-B10 (2026-09-07): the audit record carries the message LENGTH only —
+    // never a snippet. A read-only sender's text is user content (GDPR Art. 5
+    // data minimisation) and the hash chain is permanent.
     _audit('bridge.read_only_drop', {
       channel: ch, user: u, chatKey: chatKey || '',
       details: {
         first_drop: firstDrop,
-        snippet,
-        truncated: (text || '').toString().length > 200,
+        text_len: (text || '').toString().length,
       },
     });
     return { isReadOnly: true, firstDrop };
@@ -183,7 +184,7 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
         const cur = loadSettings();
         cur.whitelist = (cur.whitelist || []).concat([u0]);
         const tmp = settingsFile + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(cur, null, 2));
+        fs.writeFileSync(tmp, JSON.stringify(cur, null, 2), { mode: 0o600 });  // F-B7: credentials file
         fs.renameSync(tmp, settingsFile);
         if (logger) logger(`auth: empty whitelist, locking to first sender ${u0}`);
         _audit('bridge.login', {
@@ -217,7 +218,7 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
         // Direct write — kein saveSettings() weil der Caller eventuell
         // ein anderes Settings-Objekt mutated. Atomic-Pattern hier inline.
         const tmp = settingsFile + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(cur, null, 2));
+        fs.writeFileSync(tmp, JSON.stringify(cur, null, 2), { mode: 0o600 });  // F-B7: credentials file
         fs.renameSync(tmp, settingsFile);
         if (logger) logger(`auth: PIN ok, added ${u}`);
         _audit('bridge.login', {

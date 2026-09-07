@@ -254,12 +254,15 @@ class BuildArgsTests(unittest.TestCase):
     """
 
     def test_minimal_unrestricted_legacy_shape(self) -> None:
-        # Default: no profile fields → --dangerously-skip-permissions
-        # and the prompt as positional arg right after `-p`.
+        # Default: no profile fields → --dangerously-skip-permissions.
+        # The positional prompt is LAST, behind the `--` end-of-options
+        # sentinel (2026-09-07 flag-injection fix): a prompt starting with
+        # "-" can never be parsed as a CLI flag, and options placed after
+        # `--` would be ignored by the CLI — so all options come first.
         args = ClaudeCodeEngine._build_args("hello")
         self.assertEqual(
             args,
-            ["claude", "-p", "hello", "--dangerously-skip-permissions"],
+            ["claude", "-p", "--dangerously-skip-permissions", "--", "hello"],
         )
 
     def test_with_system_prompt(self) -> None:
@@ -267,10 +270,30 @@ class BuildArgsTests(unittest.TestCase):
             "hello", system="be terse",
         )
         self.assertEqual(args, [
-            "claude", "-p", "hello",
+            "claude", "-p",
             "--append-system-prompt", "be terse",
             "--dangerously-skip-permissions",
+            "--", "hello",
         ])
+
+    def test_prompt_starting_with_dash_is_never_a_flag(self) -> None:
+        # F-E1 regression: `/task --add-dir / ...` used to land as argv
+        # ["claude", "-p", "--add-dir / ...", ...] → parsed as --add-dir.
+        prompt = "--add-dir / then --mcp-config /tmp/x.json please"
+        args = ClaudeCodeEngine._build_args(prompt, model="claude-haiku-4-5")
+        self.assertEqual(args[-2:], ["--", prompt])
+        # every option precedes the sentinel; nothing follows it but the prompt
+        sentinel = args.index("--")
+        self.assertTrue(all(a != "--" for a in args[:sentinel]))
+        self.assertLess(args.index("--model"), sentinel)
+        self.assertNotIn("--add-dir", args)
+        self.assertNotIn("--mcp-config", args)
+        # stdin mode: no positional at all, hence no sentinel either
+        args = ClaudeCodeEngine._build_args(
+            prompt, prompt_via_stdin=True, streaming=True,
+        )
+        self.assertNotIn("--", args)
+        self.assertNotIn(prompt, args)
 
     def test_permission_mode_plan_with_tools(self) -> None:
         args = ClaudeCodeEngine._build_args(

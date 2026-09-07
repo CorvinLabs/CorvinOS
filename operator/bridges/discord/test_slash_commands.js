@@ -107,9 +107,11 @@ eq(interactionToText(fakeInteraction('btw', '   ')), '/btw',
 eq(interactionToText(fakeInteraction('voice-user-set', 'learning=2')),
    '/voice-user-set learning=2',
    '/voice-user-set learning=2 round-trips');
-eq(interactionToText(fakeInteraction('persona', 'browser')),
-   '/persona browser',
-   '/persona browser round-trips');
+eq(interactionToText(fakeInteraction('lang', 'de')),
+   '/lang de',
+   '/lang de round-trips');
+isTrue(!byName.persona && !byName.personas,
+       'persona/personas are NOT registered (retired in e7e3560e — Skills replaced them)');
 
 // Multi-line / multiline body — /btw must preserve the body verbatim
 // (the [\s\S]+ regex in daemon.js picks up newlines too).

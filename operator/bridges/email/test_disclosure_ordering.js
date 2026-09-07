@@ -66,11 +66,14 @@ async function runBlock({ sendShouldThrow }) {
 
   // Wrap the extracted block in an async fn with the same free variables the
   // daemon provides at that point in handleParsed().
+  // addrFp: the daemon's log-line address fingerprint (F-B10) — a free
+  // variable of the block since 2026-09-07.
+  const addrFp = (a) => 'fp:' + String(a).length;
   const fn = new Function(
-    'inChatCmds', 'sendReply', 'log', 'CHANNEL', 'fromAddr', 'subject', 'card',
+    'inChatCmds', 'sendReply', 'log', 'CHANNEL', 'fromAddr', 'subject', 'card', 'addrFp',
     `return (async () => { ${block} })();`,
   );
-  await fn(inChatCmds, sendReply, log, CHANNEL, fromAddr, subject, card);
+  await fn(inChatCmds, sendReply, log, CHANNEL, fromAddr, subject, card, addrFp);
   return calls;
 }
 

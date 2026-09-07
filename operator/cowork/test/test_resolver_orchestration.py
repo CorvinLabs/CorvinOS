@@ -8,7 +8,7 @@ Verifies that ``_inject_orchestration_capability`` is reached from
   * wires the ``corvin_orchestration`` MCP server into ``mcp_servers``
   * appends the orchestration brief into ``append_system`` (idempotent)
   * is a no-op when ``orchestration_enabled`` is missing / false
-  * assistant/coder/orchestrator bundle personas opt in, homeassistant does
+  * assistant/coder/orchestrator fixture personas opt in, homeassistant does
     NOT (regression gate against a future persona edit widening blast
     radius silently)
 
@@ -26,6 +26,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "lib"))
+sys.path.insert(0, str(HERE))
+import _fixture_personas as fx  # noqa: E402
 
 failures: list[str] = []
 
@@ -40,12 +42,11 @@ def expect(cond: bool, label: str, detail: str = "") -> None:
 
 
 def main() -> int:
-    sandbox = Path(tempfile.mkdtemp(prefix="cowork-orchestration-test-"))
-    user_dir = sandbox / "user"
-    mcp_dir = sandbox / "mcp"
-    (user_dir / "personas").mkdir(parents=True)
-    os.environ["COWORK_USER_DIR"] = str(user_dir)
-    os.environ["COWORK_MCP_CACHE"] = str(mcp_dir)
+    # Fixture personas were removed in e7e3560e (Skills replaced them); the
+    # resolver still serves operator-shipped personas from $COWORK_USER_DIR,
+    # so the injection contract is pinned against fixture personas.
+    sandbox, user_dir = fx.sandbox()
+    fx.write_personas(user_dir, fx.DEFAULT_SET)
 
     for mod in [m for m in list(sys.modules) if m == "resolver"]:
         del sys.modules[mod]

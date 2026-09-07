@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Optional package skill loader (for ADR-0268 Phase 5 integration)
 try:
-    from operator.context_engineering.package_skill_loader import PackageSkillLoader
+    from .package_skill_loader import PackageSkillLoader
     HAS_PACKAGE_SKILLS = True
 except (ImportError, ModuleNotFoundError):
     HAS_PACKAGE_SKILLS = False

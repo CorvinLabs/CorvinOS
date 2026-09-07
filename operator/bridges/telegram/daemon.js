@@ -27,6 +27,7 @@ const { startHealthServer }     = require('../shared/js/health-server');
 const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
+const { writeInboxAtomic }      = require('../shared/js/inbox_write');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
@@ -108,8 +109,9 @@ const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
 function writeInbox(payload) {
   const id = newMsgId();
-  fs.writeFileSync(path.join(INBOX, `${id}.json`),
-    JSON.stringify({ id, channel: CHANNEL, ...payload }, null, 2));
+  // Atomic tmp+rename (F-B3) — the adapter's 1 Hz `*.json` poll must never see
+  // a half-written envelope; see shared/js/inbox_write.js.
+  writeInboxAtomic(INBOX, id, { id, channel: CHANNEL, ...payload });
   const kind = payload.audio_path ? 'voice'
              : payload.image_path ? 'image'
              : payload.document_path ? 'document'

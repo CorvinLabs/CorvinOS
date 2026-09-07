@@ -221,3 +221,54 @@ if __name__ == "__main__":
     import pytest
 
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def _run_escalate_capturing_audit(adapter, monkeypatch, reason: str, rule_id: str):
+    """Like _run_escalate_message but records every audit write the gate makes."""
+    import egress_gate  # type: ignore
+    import house_rules as hr  # type: ignore
+
+    dec = hr.HouseRulesDecision("escalate", rule_id, reason, 0.42)
+    writes: list[tuple] = []
+
+    class _Gate:
+        @classmethod
+        def from_repo(cls, **kw):  # noqa: ANN001
+            return cls()
+
+        def classify(self, *a, **kw):  # noqa: ANN001
+            return dec
+
+    monkeypatch.setattr(hr, "HouseRulesGate", _Gate)
+    monkeypatch.setattr(hr, "load_tenant_overlay", lambda *_a, **_k: None, raising=False)
+    monkeypatch.setattr(egress_gate, "make_forge_audit_writer",
+                        lambda *_a, **_k: (lambda *a, **k: writes.append((a, k))), raising=False)
+    msg = adapter._check_house_rules_or_fail(
+        prompt="please do a thing", persona="assistant",
+        channel="discord", chat_key="123", engine_id="claude_code",
+    )
+    return msg, writes
+
+
+def test_lowconf_allow_is_recorded_in_the_audit_chain(monkeypatch) -> None:
+    """F-B4 (2026-09-07): house_rules.py writes `house_rules.escalated` for a
+    clear_low_confidence verdict, and the adapter then ALLOWS the request. Without
+    a matching record the chain claimed "escalated/blocked" for a request that
+    actually ran. The override must be audited — metadata only, never the prompt."""
+    adapter = _fresh_adapter()
+    msg, writes = _run_escalate_capturing_audit(adapter, monkeypatch, "clear_low_confidence", "")
+    assert msg is None, "clear_low_confidence still passes through"
+    evts = [w for w in writes if w[0] and w[0][0] == "house_rules.allowed_after_lowconf"]
+    assert len(evts) == 1, f"expected exactly one allowed_after_lowconf write, got {writes!r}"
+    event_type, severity, details = evts[0][0]
+    assert severity == "WARNING"
+    assert details["reason_code"] == "clear_low_confidence"
+    assert details["confidence"] == 0.42
+    assert details["overrides"] == "house_rules.escalated"
+    assert "please do a thing" not in repr(details), "prompt text leaked into the audit record"
+    assert details["chat_key"] != "123", "raw chat key must be fingerprinted"
+
+    # A blocked classifier_error must NOT claim an allow.
+    msg2, writes2 = _run_escalate_capturing_audit(adapter, monkeypatch, "classifier_error", "")
+    assert msg2 is not None
+    assert not [w for w in writes2 if w[0] and w[0][0] == "house_rules.allowed_after_lowconf"]

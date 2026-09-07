@@ -76,23 +76,13 @@ class TestPackageSkillLoader:
         loader = PackageSkillLoader()
         skills = loader._extract_skills_from_manifest("com.example.test-pkg", sample_package_manifest)
 
-        # Convert to SkillInjection format (simulating get_skills_for_task)
-        skill_dicts = []
-        for pkg_skill in skills:
-            skill_dicts.append(
-                {
-                    "skill_id": pkg_skill.skill_id,
-                    "title": pkg_skill.title,
-                    "description": pkg_skill.description,
-                    "category": pkg_skill.category,
-                    "relevance_score": 0.5,
-                    "success_rate": 0.7,
-                    "source": f"package:{pkg_skill.package_id}",
-                }
-            )
+        # Real conversion path (get_skills_for_task) — SkillInjection contract key is "id"
+        loader.discover_package_skills = lambda: skills  # type: ignore[method-assign]
+        skill_dicts = loader.get_skills_for_task(None)
 
         assert len(skill_dicts) == 2
-        assert skill_dicts[0]["skill_id"] == "com.example.test-pkg:debug_skill"
+        assert skill_dicts[0]["id"] == "com.example.test-pkg:debug_skill"
+        assert "skill_id" not in skill_dicts[0]
         assert skill_dicts[0]["source"] == "package:com.example.test-pkg"
 
     def test_manifest_missing_skills_field(self):
@@ -172,13 +162,16 @@ class TestSkillInjectionWithPackages:
             # Should return list (may be empty if no packages installed)
             assert isinstance(skills, list)
 
-            # If we have skills, they should have the right fields
+            # Raw skill dicts share ONE id key ("id" — what _score_skills reads);
+            # relevance is computed later in _score_skills, not here.
             for skill in skills:
-                assert "skill_id" in skill
+                assert "id" in skill and skill["id"] != "unknown"
                 assert "title" in skill
                 assert "description" in skill
-                assert "relevance_score" in skill
                 assert "success_rate" in skill
+            for skill in skills:
+                if str(skill.get("source", "")).startswith("package:"):
+                    assert "relevance_score" in skill
 
         except ImportError:
             pytest.skip("PackageSkillLoader not available")

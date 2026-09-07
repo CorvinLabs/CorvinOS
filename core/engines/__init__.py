@@ -1,20 +1,18 @@
-"""Engine subsystem (Phase 0+).
+"""Engine subsystem — immutable execution context (Phase 0+).
 
-Unified interface for all compute engines:
-- Claude, Opus, Sonnet, Haiku
-- Hermes (local)
-- Fallback chains and load balancing
+Only ``ExecutionContext`` and friends live here; they back the console's
+Task Context Inspector and context-engineering replay.
+
+Removed 2026-09-07 (ADR-0538 Phase C measured deletion, evidence in the
+commit): ``engine_interface`` / ``engine_registry`` / ``claude_engine`` /
+``haiku_engine`` were SIMULATORS (canned responses, no real engine call)
+reachable from nothing but their own package — zero importers outside
+``core/engines`` and the equally caller-less ``core/orchestration/
+{fallback_cascade,routing_decision,cost_capability_matrix}``, and no tests.
+Real engine routing is ``operator/bridges/shared/engine_registry.py`` (the
+WorkerEngine registry) and the ACP ``os.delegation_router`` skill.
 """
 
-from core.engines.engine_interface import (
-    EngineType,
-    EngineStatus,
-    EngineCapability,
-    EngineRequest,
-    EngineResponse,
-    EngineInterface,
-    EnginePool,
-)
 from core.engines.execution_context import (
     ExecutionState,
     ExecutionContext,
@@ -23,13 +21,6 @@ from core.engines.execution_context import (
 )
 
 __all__ = [
-    "EngineType",
-    "EngineStatus",
-    "EngineCapability",
-    "EngineRequest",
-    "EngineResponse",
-    "EngineInterface",
-    "EnginePool",
     "ExecutionState",
     "ExecutionContext",
     "ExecutionContextUpdate",

@@ -100,9 +100,12 @@ def _make_skills(reg: MultiSkillRegistry) -> None:
         body_md=_BODY, description="non-LDD domain skill",
     )
     # Grade every skill so they become eligible for injection (default
-    # filter excludes ungraded skills).
+    # filter excludes ungraded skills). organic=True: the fixture models a
+    # grade EARNED by a real run — a non-organic seed is clamped to
+    # AUTO_GRADE_CAP_MAX (0.3) by the registry and the LDD-layer cases
+    # below need the seeded 0.7 to stand.
     for n in ("e2e_driven_iteration", "dialectical_reasoning", "frontend_design"):
-        reg.grade(n, run_id=f"setup-{n}", score=0.7)
+        reg.grade(n, run_id=f"setup-{n}", score=0.7, organic=True)
 
 
 def _block_names(block: str | None) -> set[str]:

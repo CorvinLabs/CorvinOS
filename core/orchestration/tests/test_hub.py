@@ -130,7 +130,14 @@ async def test_multiple_subscribers():
     """Test multiple subscribers to same event."""
     hub = SubsystemHub()
     subsys1 = MockSubsystem("test1")
-    subsys2 = MockSubsystem("test2")
+
+    class OtherEventSubsystem(MockSubsystem):
+        def startup(self, hub) -> None:
+            self.hub = hub
+            self.startup_called = True
+            hub.subscribe("other_event", self.on_event)
+
+    subsys2 = OtherEventSubsystem("test2")
 
     hub.register_subsystem(subsys1)
     hub.register_subsystem(subsys2)

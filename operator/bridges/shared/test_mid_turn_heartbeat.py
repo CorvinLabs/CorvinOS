@@ -253,7 +253,31 @@ def test_adapter_wires_heartbeat_on_live_paths():
     assert ".mark_active(" in src and ".update_status(" in src, (
         "reply hook must register tasks and update their status")
     assert ".strip_markers(" in src, "reply hook must strip the markers"
-    assert ".deliver_due(ROOT, OUTBOX)" in src, "main loop must deliver due heartbeats"
+    assert ".deliver_due(_mth2.default_state_dir(), OUTBOX)" in src, (
+        "main loop must deliver due heartbeats from the CORVIN_HOME state dir")
+    # F-B8: the repo source dir (ROOT) must never be the heartbeat state dir.
+    assert ".deliver_due(ROOT," not in src and ".mark_active(ROOT," not in src, (
+        "heartbeat markers must not be written into the repo tree")
+
+
+def test_default_state_dir_is_under_corvin_home_and_markers_are_private(tmp_path, monkeypatch):
+    """F-B8: markers live under <CORVIN_HOME>/bridges/mid_turn_heartbeats,
+    are 0600, and the filename carries a fingerprint — never the raw
+    chat/sender id."""
+    import os as _os
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    state = mth.default_state_dir()
+    assert state == tmp_path / "home" / "bridges"
+    sk = "discord:123456789012345678"
+    rec = mth.mark_active(state, sk, channel="discord", chat_id="123456789012345678",
+                          sender="u-42", label="Job")
+    assert rec is not None
+    files = list(mth._dir(state).glob("*.json"))
+    assert len(files) == 1
+    assert "123456789012345678" not in files[0].name
+    assert _os.stat(files[0]).st_mode & 0o777 == 0o600
+    assert _os.stat(files[0].parent).st_mode & 0o777 == 0o700
+    assert mth.clear_session(state, sk) == 1
 
 
 def test_streaming_path_live_scans_bgstep():

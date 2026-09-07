@@ -2,7 +2,7 @@
 //
 // Wed von jedem daemon (whatsapp/telegram/discord/slack) called, BEVOR
 // die Message an den Adapter weitergereicht wed. Wenn der Text einer der
-// Commands ist (/help, /personas, /persona <name>, /whoami, /skills),
+// Commands ist (/help, /whoami, /skills; /persona(s) answer a retirement notice),
 // liefern we einen Reply-Text back und der daemon antwortet sofort —
 // without Claude zu involvieren.
 //
@@ -231,11 +231,9 @@ Session Participation Gate (ADR-0166 — owner controls who may interact):
   /uninvite <uid>, /kick <uid>  owner: remove a guest
   /who                  list who's currently admitted
 
-Personas (cowork roles, per chat):
-  /personas            list all available cowork personas
-  /persona <name>      pin a persona to this chat (e.g. coder, browser, research)
-  /persona reset       back to default (coder)
-  /whoami, /wer        current persona + tools + LDD config of this chat
+Role of this chat:
+  /whoami, /wer        current role + tools + LDD config of this chat
+                       (personas were retired — capabilities are Skills now)
 
 Roles & teamwork (Layer 18 — capability bundles):
   /role                your own role + capabilities
@@ -386,19 +384,18 @@ Plugin Builder (ADR-0253 — interview-driven plugin design):
   /plugin-builder cancel  stop the interview, write nothing
 
 Diagnostics:
-  /skills              what can I do (in this persona)?
+  /skills              what can I do in this chat?
   /welcome, /willkommen, /start, /hi
                        Corvin intro card (text + voice-note on WhatsApp)
   /help, /hilfe        this overview
 
 Currently in ${channel}/${currentPersona || 'coder (default)'}.
 
-Two role systems coexist:
-  • cowork persona (/persona, /whoami)  — what KIND of agent runs (coder, browser…)
+Who may do what:
   • capability bundle (/role, /grant)    — WHO may trigger it (owner/admin/member/observer)
 
 Tip: anything that isn't a slash command goes straight to Claude. You can
-write "find me the cheapest train to Munich" — and the right persona handles it.
+write "find me the cheapest train to Munich" — the right Skill handles it.
 
 Full multi-user reference: docs/rights-and-teamwork.md`;
 
@@ -407,58 +404,22 @@ function helpReply(ctx) {
   return HELP_TEXT(cur, ctx.channel);
 }
 
+// Personas were RETIRED in e7e3560e (100 % of traffic runs on Skills; the
+// bundle under operator/cowork/personas/ no longer exists). `/persona` and
+// `/personas` stay recognised so a user who still types them gets a truthful
+// answer instead of the Claude-CLI's "command isn't available" — but they
+// never mutate settings.json any more (no chat_profiles[].persona binding).
+const PERSONAS_RETIRED_REPLY =
+  'ℹ️ Personas were retired — capabilities are Skills now and are picked ' +
+  'automatically per request. Nothing to switch: just describe the task. ' +
+  'See /skills for what this chat can do and /whoami for its current role.';
+
 function personasReply(_ctx) {
-  if (!coworkInstalled()) {
-    return '⚠️ cowork-Plugin nicht installiert. Nur Default-Coder available.\n' +
-           'Install: claude plugin install cowork@corvin-voice-local';
-  }
-  const all = listPersonas();
-  if (all.length === 0) return 'Keine Personas gefunden.';
-  const lines = ['🎭 Available Personas:\n'];
-  for (const p of all) {
-    const ready = p.zero_config ? '✓' : '⚙️';
-    const desc = (p.description || '').split('\n')[0];
-    lines.push(`${ready} ${p.name} — ${desc}`);
-  }
-  lines.push('');
-  lines.push('✓ = sofort nutzbar    ⚙️ = braucht User-Setup (siehe README)');
-  lines.push('Wechseln: /persona <name>');
-  return lines.join('\n');
+  return PERSONAS_RETIRED_REPLY;
 }
 
-function personaReply(ctx, args) {
-  if (!coworkInstalled()) {
-    return '⚠️ cowork-Plugin nicht installiert.';
-  }
-  if (!ctx.isOwner) {
-    return '🔒 Nur der Owner darf Personas wechseln.';
-  }
-  const arg = (args || '').trim();
-  if (!arg) {
-    const cur = currentPersonaForChat(ctx.settingsFile, ctx.chatKey);
-    return `Aktuelle Rolle: ${cur || 'coder (default)'}\nWechseln: /persona <name>\nListe: /personas`;
-  }
-  if (arg === 'reset' || arg === 'off' || arg === 'default') {
-    const removed = unbindPersona(ctx.settingsFile, ctx.chatKey);
-    return removed
-      ? '✓ Persona-Bindung removed. Default-Coder ist wieder aktiv.'
-      : 'Dieser Chat hatte keine Persona-Bindung — Default-Coder bleibt aktiv.';
-  }
-  const persona = getPersona(arg);
-  if (!persona) {
-    const known = listPersonas().map(p => p.name).join(', ');
-    return `❓ Persona "${arg}" nicht gefunden.\nVerfügbar: ${known}`;
-  }
-  bindPersona(ctx.settingsFile, ctx.chatKey, arg);
-  let reply = `✓ Dieser Chat ist jetzt: ${arg}\n${persona.description || ''}`;
-  if (!persona.zero_config) {
-    const oa = (persona.needs_oauth || []).join(', ');
-    const keys = (persona.needs_keys || []).join(', ');
-    reply += `\n\n⚙️ Setup-Note: braucht ${oa ? 'OAuth=' + oa : ''}${oa && keys ? ' / ' : ''}${keys ? 'keys=' + keys : ''}.`;
-    if (persona.setup_hint) reply += `\n${persona.setup_hint}`;
-  }
-  reply += '\n\nNächste message in diesem Chat geht over die neue Rolle.';
-  return reply;
+function personaReply(_ctx, _args) {
+  return PERSONAS_RETIRED_REPLY;
 }
 
 function whoamiReply(ctx) {
@@ -512,7 +473,7 @@ function skillsReply(ctx) {
   const persona = getPersona(cur);
   const lines = ['🛠 Was du jetzt machen kannst:\n'];
   lines.push('In-Chat-Commands:');
-  lines.push('  /help · /personas · /persona <name> · /whoami · /skills');
+  lines.push('  /help · /whoami · /skills');
   lines.push('  /on · /off · /status · /stop · /btw · /reset · /debug');
   lines.push('');
   lines.push(`Aktuelle Rolle: ${cur}`);
@@ -3372,8 +3333,8 @@ function dispatch(ctx) {
       return { reply: welcomeReply({ ...ctx, lang: welcomeLang }), kind: 'welcome', tts: true, lang: welcomeLang };
     }
     if (HELP_TRIGGERS.has(head)) return { reply: helpReply(ctx), kind: 'help' };
-    if (PERSONAS_TRIGGERS.has(head)) return { reply: personasReply(ctx), kind: 'personas' };
-    if (head === '/persona') return { reply: personaReply(ctx, tail), kind: 'persona' };
+    if (PERSONAS_TRIGGERS.has(head)) return { reply: personasReply(ctx), kind: 'personas_retired' };
+    if (head === '/persona') return { reply: personaReply(ctx, tail), kind: 'persona_retired' };
     if (WHOAMI_TRIGGERS.has(head)) return { reply: whoamiReply(ctx), kind: 'whoami' };
     if (SKILLS_TRIGGERS.has(head)) return { reply: skillsReply(ctx), kind: 'skills' };
     // `/settings` — one-shot dump of paths + session + system state.

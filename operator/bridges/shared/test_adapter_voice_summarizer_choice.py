@@ -58,7 +58,9 @@ class SummarizerChoiceTest(unittest.TestCase):
                       "install that ships without summarize.py")
 
     def test_task_flag_is_scoped_to_the_llm_summarizer(self):
-        """`--task` must live in the `else:` (non-smart) branch of `use_smart`.
+        """The task envelope (`--stdin-json`) must live in the `else:` (non-smart)
+        branch of `use_smart`. (2026-09-07: `--task <text>` argv was replaced by
+        the stdin JSON envelope — F-B5 — the scoping invariant is unchanged.)
 
         Asserted over the AST, not over indentation counts: the first version
         of this test compared indent >= 12 and the reintroduced bug lands on
@@ -74,14 +76,14 @@ class SummarizerChoiceTest(unittest.TestCase):
 
         def _appends_task(node) -> bool:
             return any(
-                isinstance(c, ast.Constant) and c.value == "--task"
+                isinstance(c, ast.Constant) and c.value == "--stdin-json"
                 for c in ast.walk(node)
             )
 
         # Every place that appends --task …
         holders = [n for n in ast.walk(fn)
                    if isinstance(n, (ast.AugAssign, ast.Expr)) and _appends_task(n)]
-        self.assertTrue(holders, "no --task append found at all")
+        self.assertTrue(holders, "no --stdin-json append found at all")
 
         # … must be reachable ONLY through the else-branch of `if use_smart:`.
         smart_ifs = [n for n in ast.walk(fn)
@@ -97,11 +99,22 @@ class SummarizerChoiceTest(unittest.TestCase):
         for h in holders:
             self.assertIn(
                 id(h), in_else,
-                "--task is appended outside the summarize.py branch — "
+                "--stdin-json is appended outside the summarize.py branch — "
                 "summarize_smart.py has no such argument and exits 2, which "
                 "degrades every voice note with a question to verbatim")
             self.assertNotIn(id(h), in_then,
-                             "--task must never reach the smart branch")
+                             "--stdin-json must never reach the smart branch")
+
+    def test_task_text_never_reaches_argv(self):
+        """F-B5: the user's question must not be an argv value anywhere in
+        build_voice_summary — no `--task` flag survives."""
+        import ast
+        tree = ast.parse((_HERE / "adapter.py").read_text(encoding="utf-8"))
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "build_voice_summary")
+        self.assertFalse(any(isinstance(c, ast.Constant) and c.value == "--task"
+                             for c in ast.walk(fn)),
+                         "--task argv reintroduced — user text leaks via /proc/<pid>/cmdline")
 
 
 class StderrScrubTest(unittest.TestCase):

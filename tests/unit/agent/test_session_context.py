@@ -102,7 +102,8 @@ def test_conflict_resolver_session_wins():
     resolved = ContextConflictResolver.resolve(session, memory, "production")
 
     assert resolved["source"] == "SESSION"
-    assert "authoritative" in resolved["reason"].lower()
+    assert resolved["reason"] == session.get_authority_reason("production")
+    assert "production" in resolved["reason"]
 
 
 def test_conflict_resolver_memory_augments():

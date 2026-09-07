@@ -13,6 +13,7 @@ so the pipeline never blocks the read-aloud step.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -1399,6 +1400,44 @@ def _claude_authenticated() -> bool:
         return True  # fail-open: don't reroute a possibly-authenticated user
 
 
+
+def _run_claude_print(payload: str, system_prompt: str, model: str, timeout_s: float) -> str | None:
+    """Spawn ``claude -p`` with the user payload on STDIN and the system prompt
+    in a 0600 temp file (``--append-system-prompt-file``).
+
+    F-B5 (adversarial hardening 2026-09-07): both used to travel in argv —
+    ``claude -p <payload> --append-system-prompt <prompt>`` — which is
+    world-readable for the process lifetime via ``/proc/<pid>/cmdline`` (and
+    ``ps``), so every voice summary exposed the user's text to any local user.
+    Also removes the ~128 KiB E2BIG ceiling on long transcripts. Returns the
+    stripped stdout or None; raises the same exception classes the callers
+    already handle (CalledProcessError / TimeoutExpired / OSError).
+    """
+    import tempfile as _tempfile
+    env = os.environ.copy()
+    env["VOICE_HOOK_RECURSION"] = "1"
+    fd, sys_path = _tempfile.mkstemp(prefix=".corvin-summarize-sys-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(system_prompt)
+        out = subprocess.run(
+            [
+                "claude", "-p",
+                "--append-system-prompt-file", sys_path,
+                "--model", model,
+                "--disallowedTools", "*",
+            ],
+            input=payload,
+            capture_output=True, text=True, env=env,
+            timeout=timeout_s, check=True,
+        )
+        return out.stdout.strip() or None
+    finally:
+        try:
+            os.unlink(sys_path)
+        except OSError:
+            pass
+
 def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "", speech_type: str = "") -> str | None:
     """Backend 1: the local `claude` CLI (uses OAuth from Claude Max — no key).
 
@@ -1410,20 +1449,8 @@ def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model
     has_task = bool(task.strip())
     system_prompt = _system_for(lang, target_chars, has_task, persona, audience, output_language, speech_type)
     payload = _build_input(text, task, lang) if has_task else text
-    env = os.environ.copy()
-    env["VOICE_HOOK_RECURSION"] = "1"
     try:
-        out = subprocess.run(
-            [
-                "claude", "-p", payload,
-                "--append-system-prompt", system_prompt,
-                "--model", model,
-                "--disallowedTools", "*",
-            ],
-            capture_output=True, text=True, env=env,
-            timeout=_SUMMARY_CLI_TIMEOUT_S, check=True,
-        )
-        return out.stdout.strip() or None
+        return _run_claude_print(payload, system_prompt, model, _SUMMARY_CLI_TIMEOUT_S)
     # OSError: the spawn itself can fail (E2BIG when the payload pushes argv
     # past the ~128KiB kernel limit, ENOENT on a broken shim, ...). Without it
     # the exception crashed main() with rc=1 and SKIPPED the Hermes fallback
@@ -1719,20 +1746,8 @@ def _appendix_via_cli(text: str, lang: str, model: str) -> str | None:
     if not shutil.which("claude") or not _claude_authenticated():
         return None
     sys_prompt = _APPENDIX_SYSTEM_EN if lang == "en" else _APPENDIX_SYSTEM_DE
-    env = os.environ.copy()
-    env["VOICE_HOOK_RECURSION"] = "1"
     try:
-        out = subprocess.run(
-            [
-                "claude", "-p", text,
-                "--append-system-prompt", sys_prompt,
-                "--model", model,
-                "--disallowedTools", "*",
-            ],
-            capture_output=True, text=True, env=env,
-            timeout=_ANNEX_CLI_TIMEOUT_S, check=True,
-        )
-        return out.stdout.strip() or None
+        return _run_claude_print(text, sys_prompt, model, _ANNEX_CLI_TIMEOUT_S)
     # OSError + content-free logging: see _summarize_via_cli (found 2026-07-17).
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         print(f"[summarize] appendix CLI call failed: "
@@ -1883,20 +1898,8 @@ def _metapher_via_cli(text: str, lang: str, model: str) -> str | None:
     if not shutil.which("claude") or not _claude_authenticated():
         return None
     sys_prompt = _METAPHER_SYSTEM_EN if lang == "en" else _METAPHER_SYSTEM_DE
-    env = os.environ.copy()
-    env["VOICE_HOOK_RECURSION"] = "1"
     try:
-        out = subprocess.run(
-            [
-                "claude", "-p", text,
-                "--append-system-prompt", sys_prompt,
-                "--model", model,
-                "--disallowedTools", "*",
-            ],
-            capture_output=True, text=True, env=env,
-            timeout=_ANNEX_CLI_TIMEOUT_S, check=True,
-        )
-        return out.stdout.strip() or None
+        return _run_claude_print(text, sys_prompt, model, _ANNEX_CLI_TIMEOUT_S)
     # OSError + content-free logging: see _summarize_via_cli (found 2026-07-17).
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         print(f"[summarize] metapher CLI call failed: "
@@ -2119,18 +2122,8 @@ def _session_recap_via_cli(transcript: str, lang: str, model: str,
     if directive:
         sys_prompt = directive + "\n\n" + sys_prompt + "\n\n" + directive
     payload = _fence_transcript(transcript, lang)
-    env = os.environ.copy()
-    env["VOICE_HOOK_RECURSION"] = "1"
     try:
-        out = subprocess.run(
-            ["claude", "-p", payload,
-             "--append-system-prompt", sys_prompt,
-             "--model", model,
-             "--disallowedTools", "*"],
-            capture_output=True, text=True, env=env,
-            timeout=_SESSION_RECAP_CLI_TIMEOUT_S, check=True,
-        )
-        return out.stdout.strip() or None
+        return _run_claude_print(payload, sys_prompt, model, _SESSION_RECAP_CLI_TIMEOUT_S)
     # OSError matters MOST here: a whole-session transcript is the payload
     # most likely to blow the ~128KiB argv limit (E2BIG) — without it main()
     # died with rc=1 and skipped the Hermes fallback. Content-free logging:
@@ -2352,8 +2345,11 @@ def main() -> int:
         _default_model = "claude-haiku-4-5-20251001"
     ap.add_argument("--model", default=_default_model)
     ap.add_argument(
-        "--task", default="",
-        help="Original user prompt; if set, output includes a task paraphrase.",
+        "--stdin-json", action="store_true",
+        help=("Read a JSON envelope {\"text\": ..., \"task\": ...} from stdin "
+              "instead of raw text. The original user prompt (task) used to be "
+              "an argv flag (--task <text>), which exposed it via "
+              "/proc/<pid>/cmdline; it now only ever travels on stdin (F-B5)."),
     )
     ap.add_argument(
         "--persona", default="",
@@ -2444,6 +2440,18 @@ def main() -> int:
         return 0
 
     text = sys.stdin.read()
+    task = ""
+    if args.stdin_json:
+        try:
+            envelope = json.loads(text) if text.strip() else {}
+        except json.JSONDecodeError:
+            print("[summarize] --stdin-json: stdin is not a JSON object", file=sys.stderr)
+            return 2
+        if not isinstance(envelope, dict):
+            print("[summarize] --stdin-json: stdin is not a JSON object", file=sys.stderr)
+            return 2
+        text = str(envelope.get("text") or "")
+        task = str(envelope.get("task") or "")
     if not text.strip():
         return 0
 
@@ -2461,7 +2469,7 @@ def main() -> int:
                                      output_language=args.output_language))
         return 0
 
-    print(summarize(text, args.lang, args.max_chars, args.model, args.task,
+    print(summarize(text, args.lang, args.max_chars, args.model, task,
                     args.persona, args.audience, args.output_language))
     return 0
 

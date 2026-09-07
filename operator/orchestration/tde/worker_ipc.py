@@ -160,8 +160,16 @@ class ProcHolder:
 def run_one_shot(
     cmd: list, timeout_s: int, cwd: Optional[str] = None,
     proc_holder: Optional[ProcHolder] = None,
+    *, stdin_text: Optional[str] = None,
 ):
     """Run a helper one-shot with PROCESS-GROUP kill on timeout.
+
+    ``stdin_text``, when given, is written to the child's stdin and the pipe
+    is closed (``communicate(input=...)``). The TDE worker uses this to hand
+    ``claude -p`` its prompt: a prompt placed as a positional argv element
+    is parsed as a FLAG when it starts with ``-`` (F-E1 argv injection,
+    2026-09-07), and ``claude -p`` reads the prompt from stdin when no
+    positional is given. ``None`` keeps the historical inherited stdin.
 
     subprocess.run's timeout only kills the direct child; the claude CLI is a
     Node process that spawns children, which survived as orphans (round-2
@@ -181,13 +189,14 @@ def run_one_shot(
     posix = _os.name == "posix"
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        stdin=subprocess.PIPE if stdin_text is not None else None,
         cwd=cwd or tempfile.gettempdir(),
         start_new_session=posix,
     )
     if proc_holder is not None:
         proc_holder._set(proc)
     try:
-        stdout, stderr = proc.communicate(timeout=timeout_s)
+        stdout, stderr = proc.communicate(input=stdin_text, timeout=timeout_s)
         return proc.returncode, stdout, stderr
     except subprocess.TimeoutExpired:
         try:
@@ -518,8 +527,11 @@ class SubprocessWorkerIPC:
             if a == "--model" and i + 1 < len(model_args):
                 model_tag = model_args[i + 1]
                 break
+        # The prompt is NOT an argv element (F-E1): it goes over stdin via
+        # run_one_shot(stdin_text=...), so a step whose text starts with "-"
+        # can never be parsed as a claude CLI flag.
         cmd = [
-            bin_path, "-p", prompt,
+            bin_path, "-p",
             "--max-turns", "1",
             # ADR-0218 Phase 0: json (was text) so the reply carries a usage
             # block. parse_cli_envelope unwraps result + usage, fail-soft to the
@@ -532,7 +544,9 @@ class SubprocessWorkerIPC:
             # Neutral cwd (never pick up the orchestrating repo's CLAUDE.md)
             # + process-group kill on timeout; proc_holder lets a cancelling
             # caller (parallel-batch disconnect) kill this one specifically.
-            rc, stdout, stderr = run_one_shot(cmd, self.timeout_s, proc_holder=proc_holder)
+            rc, stdout, stderr = run_one_shot(
+                cmd, self.timeout_s, proc_holder=proc_holder, stdin_text=prompt,
+            )
         except FileNotFoundError:
             return {"success": False, "output": None, "error": "claude CLI not found"}
         except subprocess.TimeoutExpired:

@@ -143,7 +143,9 @@ _AUDIT_ALLOWED_FIELDS: dict[str, set[str]] = {
         "previous_distill_count",
     },
     "memory.user_model_distill_failed": {
-        "channel", "chat_key", "reason", "error",
+        "channel", "chat_key", "reason",
+        "error_type",         # exception CLASS name — never str(exc) (may quote content)
+        "raw_chars",          # length of an unparseable judge reply — never the reply
     },
     "memory.user_model_forgotten": {
         "channel", "chat_key",
@@ -152,6 +154,18 @@ _AUDIT_ALLOWED_FIELDS: dict[str, set[str]] = {
         "channel", "chat_key", "reason",
     },
 }
+
+
+# The writer is DEFAULT-DENY for keys outside its universal vocabulary
+# (``distill_count`` & co. are module-specific) — register the same allow-list
+# there, plus the reserved ``audit_ref`` / ``tenant_id``.
+if _audit_writer is not None:
+    try:
+        from forge.security_events import register_event_allowlist as _register_allowlist  # type: ignore  # noqa: E402
+        for _evt, _keys in _AUDIT_ALLOWED_FIELDS.items():
+            _register_allowlist(_evt, set(_keys) | {"audit_ref", "tenant_id"})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _emit_audit(event_type: str, details: dict, tenant_id: str | None) -> None:
@@ -518,7 +532,7 @@ def distill(
             _emit_audit(
                 "memory.user_model_distill_failed",
                 {"channel": channel, "chat_key": chat_key,
-                 "reason": "recall-unavailable", "error": ""},
+                 "reason": "recall-unavailable"},
                 tenant_id,
             )
             return DistillResult(ok=False, reason="recall-unavailable")
@@ -538,7 +552,7 @@ def distill(
         _emit_audit(
             "memory.user_model_distill_failed",
             {"channel": channel, "chat_key": chat_key,
-             "reason": "recall-failed", "error": str(e)[:200]},
+             "reason": "recall-failed", "error_type": type(e).__name__},
             tenant_id,
         )
         return DistillResult(ok=False, reason="recall-failed")
@@ -546,7 +560,7 @@ def distill(
         _emit_audit(
             "memory.user_model_distill_failed",
             {"channel": channel, "chat_key": chat_key,
-             "reason": "recall-empty", "error": ""},
+             "reason": "recall-empty"},
             tenant_id,
         )
         return DistillResult(ok=False, reason="recall-empty")
@@ -570,7 +584,7 @@ def distill(
         _emit_audit(
             "memory.user_model_distill_failed",
             {"channel": channel, "chat_key": chat_key,
-             "reason": "judge-timeout", "error": ""},
+             "reason": "judge-timeout"},
             tenant_id,
         )
         return DistillResult(ok=False, reason="judge-timeout",
@@ -579,7 +593,7 @@ def distill(
         _emit_audit(
             "memory.user_model_distill_failed",
             {"channel": channel, "chat_key": chat_key,
-             "reason": "judge-error", "error": str(e)[:200]},
+             "reason": "judge-error", "error_type": type(e).__name__},
             tenant_id,
         )
         return DistillResult(ok=False, reason="judge-error",
@@ -589,7 +603,7 @@ def distill(
         _emit_audit(
             "memory.user_model_distill_failed",
             {"channel": channel, "chat_key": chat_key,
-             "reason": "judge-unavailable", "error": ""},
+             "reason": "judge-unavailable"},
             tenant_id,
         )
         return DistillResult(ok=False, reason="judge-unavailable",
@@ -599,7 +613,7 @@ def distill(
         _emit_audit(
             "memory.user_model_distill_failed",
             {"channel": channel, "chat_key": chat_key,
-             "reason": "judge-unparseable", "error": raw[:200]},
+             "reason": "judge-unparseable", "raw_chars": len(raw)},
             tenant_id,
         )
         return DistillResult(ok=False, reason="judge-unparseable",

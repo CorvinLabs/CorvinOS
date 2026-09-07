@@ -203,12 +203,16 @@ class SessionManager(Subsystem):
             List of session dicts
         """
         sessions = []
-        tenant_home = tenant_session_dir(self.tenant_id, "")
-        if not tenant_home.parent.exists():
+        # The sessions root, not a (validated) session dir: an empty session id
+        # trips validate_session_id (2026-09-07 review).
+        from core.paths.tenant import tenant_home as _tenant_home  # noqa: PLC0415
+
+        sessions_root = _tenant_home(self.tenant_id) / "sessions"
+        if not sessions_root.exists():
             return []
 
         try:
-            for session_dir in tenant_home.parent.iterdir():
+            for session_dir in sessions_root.iterdir():
                 if session_dir.is_dir():
                     session_file = session_dir / "session.json"
                     if session_file.exists():

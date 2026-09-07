@@ -54,7 +54,8 @@ def test_routing_lookup_import_error_logs_error(caplog):
         # Mock completion_notify to raise ImportError
         with patch.dict(sys.modules, {"completion_notify": None}):
             # Force re-import by manipulating sys.modules
-            original_import = __builtins__.__import__
+            import builtins
+            original_import = builtins.__import__
 
             def mock_import(name, *args, **kwargs):
                 if name == "completion_notify":

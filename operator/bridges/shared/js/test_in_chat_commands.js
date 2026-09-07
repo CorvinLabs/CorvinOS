@@ -4,9 +4,10 @@
 //
 // Was getestet wed:
 //   1. dispatch ignored Nicht-Commands (return null).
-//   2. /help, /personas, /whoami, /skills liefern Reply-Text.
-//   3. /persona <name> bindet → settings.json bekommt chat_profiles[<chat>].persona.
-//   4. /persona reset removed nur den persona-Key, lässt otherwiseige Profil-
+//   2. /help, /whoami, /skills liefern Reply-Text.
+//   3. /persona <name> / /personas → retirement notice, NO settings mutation
+//      (personas retired in e7e3560e — Skills replaced them).
+//   4. (removed with the personas)
 //      Felder stehen.
 //   5. /persona <unknown> → Fehler-Hint, keine Mutation.
 //   6. Nicht-Owner darf nicht binden (isOwner=false → Reply, keine Mutation).
@@ -20,6 +21,7 @@ const inChat = require('./in_chat_commands');
 let pass = 0, fail = 0;
 function ok(msg) { console.log(`PASS: ${msg}`); pass++; }
 function bad(msg) { console.log(`FAIL: ${msg}`); fail++; }
+function isTrue(cond, msg) { (cond ? ok : bad)(msg); }
 function eq(a, b, msg) {
   if (JSON.stringify(a) === JSON.stringify(b)) ok(msg);
   else bad(`${msg} — expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
@@ -61,23 +63,23 @@ console.log('\n=== dispatch: read-only commands ===');
   const ctx = { channel: 'telegram', chatKey: '123', isOwner: true, settingsFile: f };
 
   const help = inChat.dispatch({ ...ctx, text: '/help' });
-  contains(help && help.reply, '/personas', '/help mentioned /personas');
-  contains(help && help.reply, '/persona', '/help mentioned /persona');
+  contains(help && help.reply, '/whoami', '/help mentions /whoami');
+  contains(help && help.reply, '/skills', '/help mentions /skills');
+  isTrue(help && !/\/personas?\b/.test(help.reply),
+         '/help no longer advertises /persona or /personas (retired)');
 
   const hilfe = inChat.dispatch({ ...ctx, text: '/hilfe' });
   contains(hilfe && hilfe.reply, '/whoami', '/hilfe ist Alias und mentioned /whoami');
 
   const personas = inChat.dispatch({ ...ctx, text: '/personas' });
-  // browser + jarvis removed from bundle in f1e3246
-  contains(personas && personas.reply, 'coder', '/personas listet coder');
-  contains(personas && personas.reply, 'research', '/personas listet research');
-  contains(personas && personas.reply, 'assistant', '/personas listet assistant');
+  eq(personas && personas.kind, 'personas_retired', '/personas → retirement notice kind');
+  contains(personas && personas.reply, 'Skills', '/personas points at Skills');
 
   const whoami = inChat.dispatch({ ...ctx, text: '/whoami' });
   contains(whoami && whoami.reply, 'coder', '/whoami zeigt coder als Default');
 
   const skills = inChat.dispatch({ ...ctx, text: '/skills' });
-  contains(skills && skills.reply, '/persona', '/skills nennt /persona');
+  isTrue(skills && !/\/persona\b/.test(skills.reply), '/skills no longer lists /persona (retired)');
 }
 
 // ── 2b. /welcome trigger + tts opt-in ────────────────────────────────────
@@ -107,88 +109,35 @@ console.log('\n=== dispatch: /welcome ===');
   contains(en && en.reply, 'Voice to Action', '/welcome lang=en → English copy (contains tagline)');
 }
 
-// ── 3. /persona <name> bindet ────────────────────────────────────────────
-console.log('\n=== dispatch: /persona <name> bindet ===');
+// ── 3.-7. /persona is RETIRED (e7e3560e): truthful notice, never a mutation ─
+console.log('\n=== dispatch: /persona retired — notice, no settings mutation ===');
 {
   const f = tmpSettings();
   const ctx = { channel: 'telegram', chatKey: '999', isOwner: true, settingsFile: f };
 
-  // Use research instead of browser (browser removed in f1e3246)
-  const out = inChat.dispatch({ ...ctx, text: '/persona research' });
-  contains(out && out.reply, '✓', '/persona research → ack');
-  contains(out && out.reply, 'research', '/persona research nennt persona');
-  const s = readJson(f);
-  eq(s.chat_profiles && s.chat_profiles['999'] && s.chat_profiles['999'].persona, 'research',
-    'settings.json: chat_profiles[999].persona = research');
-}
+  for (const text of ['/persona research', '/persona reset', '/persona doesnotexist', '/persona']) {
+    const out = inChat.dispatch({ ...ctx, text });
+    eq(out && out.kind, 'persona_retired', `${text} → kind=persona_retired`);
+    contains(out && out.reply, 'Skills', `${text} → reply points at Skills`);
+    isTrue(out && !/✓/.test(out.reply), `${text} → no success ack (nothing was bound)`);
+  }
+  eq(readJson(f).chat_profiles, undefined, '/persona never writes chat_profiles');
 
-// ── 4. /persona reset removed persona-Key, lässt rest ──────────────────
-console.log('\n=== dispatch: /persona reset ===');
-{
-  const f = tmpSettings();
-  fs.writeFileSync(f, JSON.stringify({
-    chat_profiles: {
-      '777': { persona: 'browser', permission_mode: 'plan' },
-    },
+  // A pre-existing binding is left untouched — retirement must not silently
+  // rewrite operator settings either.
+  const g = tmpSettings();
+  fs.writeFileSync(g, JSON.stringify({
+    chat_profiles: { '777': { persona: 'browser', permission_mode: 'plan' } },
   }, null, 2));
-  const ctx = { channel: 'telegram', chatKey: '777', isOwner: true, settingsFile: f };
+  inChat.dispatch({ channel: 'telegram', chatKey: '777', isOwner: true, settingsFile: g, text: '/persona reset' });
+  eq(readJson(g).chat_profiles['777'], { persona: 'browser', permission_mode: 'plan' },
+     '/persona reset leaves existing chat_profiles untouched');
 
-  const out = inChat.dispatch({ ...ctx, text: '/persona reset' });
-  contains(out && out.reply, '✓', '/persona reset → ack');
-  const s = readJson(f);
-  eq(s.chat_profiles['777'].persona, undefined,
-    'persona-Key wurde removed');
-  eq(s.chat_profiles['777'].permission_mode, 'plan',
-    'permission_mode bleibt erhalten');
-}
-
-// /persona reset auf leerem Profil → Profil-Eintrag verschwindet complete
-{
-  const f = tmpSettings();
-  fs.writeFileSync(f, JSON.stringify({
-    chat_profiles: { '555': { persona: 'browser' } },
-  }, null, 2));
-  const ctx = { channel: 'telegram', chatKey: '555', isOwner: true, settingsFile: f };
-  inChat.dispatch({ ...ctx, text: '/persona reset' });
-  const s = readJson(f);
-  eq(s.chat_profiles['555'], undefined,
-    'leeres Profil complete removed');
-}
-
-// ── 5. /persona <unknown> → keine Mutation ──────────────────────────────
-console.log('\n=== dispatch: /persona unknown ===');
-{
-  const f = tmpSettings();
-  const ctx = { channel: 'telegram', chatKey: '111', isOwner: true, settingsFile: f };
-
-  const out = inChat.dispatch({ ...ctx, text: '/persona doesnotexist' });
-  contains(out && out.reply, 'nicht gefunden', '/persona unknown → Fehler-Reply');
-  const s = readJson(f);
-  eq(s.chat_profiles, undefined, 'unbekannte persona → keine Mutation');
-}
-
-// ── 6. Nicht-Owner darf nicht binden ────────────────────────────────────
-console.log('\n=== dispatch: non-owner cannot bind ===');
-{
-  const f = tmpSettings();
-  const ctx = { channel: 'telegram', chatKey: '222', isOwner: false, settingsFile: f };
-
-  const out = inChat.dispatch({ ...ctx, text: '/persona browser' });
-  contains(out && out.reply, 'Owner', 'non-owner → "nur Owner"-Reply');
-  const s = readJson(f);
-  eq(s.chat_profiles, undefined, 'non-owner → keine Mutation');
-}
-
-// ── 7. /persona without argument → zeigt aktuelle Rolle ────────────────────
-console.log('\n=== dispatch: /persona without argument ===');
-{
-  const f = tmpSettings();
-  fs.writeFileSync(f, JSON.stringify({
-    chat_profiles: { '888': { persona: 'research' } },
-  }, null, 2));
-  const ctx = { channel: 'telegram', chatKey: '888', isOwner: true, settingsFile: f };
-  const out = inChat.dispatch({ ...ctx, text: '/persona' });
-  contains(out && out.reply, 'research', '/persona zeigt aktuelle Rolle');
+  // Non-owner gets the same notice (nothing privileged left to protect).
+  const h = tmpSettings();
+  const out = inChat.dispatch({ channel: 'telegram', chatKey: '222', isOwner: false, settingsFile: h, text: '/persona browser' });
+  eq(out && out.kind, 'persona_retired', 'non-owner → same retirement notice');
+  eq(readJson(h).chat_profiles, undefined, 'non-owner → no mutation');
 }
 
 // ── 8. /all audience toggle ───────────────────────────────────────────────

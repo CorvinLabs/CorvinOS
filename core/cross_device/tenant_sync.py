@@ -190,6 +190,7 @@ def merge_tenant_dirs(local_dir: Path, remote_dir: Path) -> SyncReport:
 # So third-party PII (ADR-0369 C14) never lands on the remote in cleartext, and the
 # assert_no_raw_pii backstop runs on the OUTBOUND bytes: they are ciphertext, so it
 # passes — and would fire (drop the push) only if encryption silently produced plaintext.
+import os  # noqa: E402
 import subprocess  # noqa: E402
 import tarfile  # noqa: E402
 import io  # noqa: E402
@@ -268,11 +269,42 @@ def unbundle(blob: bytes, dest: Path) -> None:
                 tar.extract(m, dest)
 
 
-def _git(args: list[str], cwd: Path) -> str:
+_ASKPASS_SCRIPT = """#!/bin/sh
+# corvin tenant_sync credential helper — the PAT is read from the process
+# environment (owner-readable only), never from argv or the git config.
+case "$1" in
+  *sername*) printf '%s\\n' "${CORVIN_SYNC_GIT_USER:-x-access-token}" ;;
+  *) printf '%s\\n' "$CORVIN_SYNC_GIT_PAT" ;;
+esac
+"""
+
+
+def _askpass_helper(cache_dir: Path) -> Path:
+    """Write the 0700 askpass helper once per cache dir and return its path."""
+    helper = Path(cache_dir) / ".git-askpass.sh"
+    if not helper.is_file() or helper.read_text(encoding="utf-8") != _ASKPASS_SCRIPT:
+        fd = os.open(str(helper), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(_ASKPASS_SCRIPT)
+    os.chmod(helper, 0o700)
+    return helper
+
+
+def _git(args: list[str], cwd: Path, *, pat: "str | None" = None,
+         cache_dir: "Path | None" = None) -> str:
+    """Run one git command. A PAT — when given — reaches git ONLY through the
+    askpass helper + process environment (F-cross-device, 2026-09-07): it is
+    never part of argv (world-readable via /proc/<pid>/cmdline and ``ps``) and
+    never embedded in the remote URL (which git persists in
+    ``clone/.git/config`` for the lifetime of the cache — the previous
+    ``https://<PAT>@host`` injection did exactly that)."""
+    env = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "true",
+           "HOME": str(cwd), "PATH": "/usr/bin:/bin"}
+    if pat:
+        env["GIT_ASKPASS"] = str(_askpass_helper(cache_dir or Path(cwd)))
+        env["CORVIN_SYNC_GIT_PAT"] = pat
     proc = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
-                          text=True, timeout=180,
-                          env={"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "true",
-                               "HOME": str(cwd), "PATH": "/usr/bin:/bin"})
+                          text=True, timeout=180, env=env)
     if proc.returncode != 0:
         raise SyncError(f"git {args[0]} failed: {proc.stderr.strip()[:200]}")
     return proc.stdout
@@ -291,15 +323,17 @@ def run_git_sync(local_dir: Path, remote_url: str, cache_dir: Path, passphrase: 
     cache_dir.mkdir(parents=True, exist_ok=True)
     clone = cache_dir / "clone"
 
-    # PAT is injected into the URL for https remotes; never logged (SyncError truncates).
+    # The PAT never enters the URL or argv — it is handed to git via the
+    # askpass helper + environment (see _git). https remotes only.
     url = remote_url
-    if pat and remote_url.startswith("https://"):
-        url = remote_url.replace("https://", f"https://{pat}@", 1)
+    git_pat = pat if (pat and remote_url.startswith("https://")) else None
+    if git_pat and "@" in remote_url.split("//", 1)[1].split("/", 1)[0]:
+        raise SyncError("remote_url must not carry credentials — pass the PAT separately")
 
     if (clone / ".git").is_dir():
-        _git(["pull", "--ff-only", "origin", "HEAD"], clone)
+        _git(["pull", "--ff-only", "origin", "HEAD"], clone, pat=git_pat, cache_dir=cache_dir)
     else:
-        _git(["clone", "--depth", "1", url, str(clone)], cache_dir)
+        _git(["clone", "--depth", "1", url, str(clone)], cache_dir, pat=git_pat, cache_dir=cache_dir)
         _git(["config", "user.email", "corvin@localhost"], clone)
         _git(["config", "user.name", "Corvin"], clone)
 
@@ -325,7 +359,7 @@ def run_git_sync(local_dir: Path, remote_url: str, cache_dir: Path, passphrase: 
     status = _git(["status", "--porcelain"], clone)
     if status.strip():
         _git(["commit", "-m", "corvin: tenant learning sync", "--author", author], clone)
-        _git(["push", "origin", "HEAD"], clone)
+        _git(["push", "origin", "HEAD"], clone, pat=git_pat, cache_dir=cache_dir)
     else:
         report.collisions.append(Collision(_ENC_NAME, "no change to push", "local"))
     return report

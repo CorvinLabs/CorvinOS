@@ -10,7 +10,7 @@ Verifies that ``_inject_capability_awareness`` is reached from
   * only lists capabilities the resolved persona's own flags actually
     satisfy (forge_enabled / skill_forge_enabled / delegate_enabled) —
     never over-claims for a persona that doesn't have a given flag
-  * the ``assistant``/``coder``/``orchestrator`` bundle personas opt in
+  * the ``assistant``/``coder``/``orchestrator`` fixture personas opt in
     (regression gate against a future persona edit that drops the flag)
   * "planned" capabilities are always disclosed, even for a persona with
     every wired flag off
@@ -26,6 +26,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "lib"))
+sys.path.insert(0, str(HERE))
+import _fixture_personas as fx  # noqa: E402
 
 failures: list[str] = []
 
@@ -40,18 +42,17 @@ def expect(cond: bool, label: str, detail: str = "") -> None:
 
 
 def main() -> int:
-    sandbox = Path(tempfile.mkdtemp(prefix="cowork-capaware-test-"))
-    user_dir = sandbox / "user"
-    mcp_dir = sandbox / "mcp"
-    (user_dir / "personas").mkdir(parents=True)
-    os.environ["COWORK_USER_DIR"] = str(user_dir)
-    os.environ["COWORK_MCP_CACHE"] = str(mcp_dir)
+    # Fixture personas were removed in e7e3560e (Skills replaced them); the
+    # resolver still serves operator-shipped personas from $COWORK_USER_DIR,
+    # so the injection contract is pinned against fixture personas.
+    sandbox, user_dir = fx.sandbox()
+    fx.write_personas(user_dir, fx.DEFAULT_SET)
 
     for mod in [m for m in list(sys.modules) if m in ("resolver", "capability_map", "capability_registry")]:
         del sys.modules[mod]
     import resolver  # type: ignore
 
-    # ── 1. Bundle personas carry capability_aware=True ────────────────────
+    # ── 1. Fixture personas carry capability_aware=True ────────────────────
     for name in ("assistant", "coder", "orchestrator"):
         p = resolver.load(name)
         expect(p is not None and p.get("capability_aware") is True,

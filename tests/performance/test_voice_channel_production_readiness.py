@@ -12,7 +12,9 @@ from typing import List
 
 from core.voice.guidance import GuidanceClassifier, GuidanceEvent
 from core.voice.routing import MidstreamRouter
-from core.voice.channel import VoiceChannelCoordinator, QuestionQueue, UserQuestion, QuestionPriority
+from core.voice.channel import (
+    VoiceChannelCoordinator, QuestionQueue, UserQuestion, UserAnswer, QuestionPriority,
+)
 from core.voice.channel.tts_fallback import TTSFallbackStrategy, STTFallbackStrategy
 from core.voice.channel.bidirectional_coordinator import TTSService, STTService
 
@@ -183,14 +185,25 @@ class TestStressScenarios:
             for i in range(10)
         ]
 
-        enqueued_count = 0
+        # Overflow contract: every call is processed (returns a bool, never
+        # raises); an arrival that does not outrank the lowest queued question
+        # is dropped (False), a higher-priority one evicts it (True).
+        admitted = 0
+        dropped = 0
         for q in questions:
             if await queue.enqueue(q):
-                enqueued_count += 1
+                admitted += 1
+            else:
+                dropped += 1
 
         size = await queue.get_queue_size()
         assert size == 3, f"Queue has {size} items, expected 3"
-        assert enqueued_count == 10, "All 10 should be processed (dropped or queued)"
+        assert admitted + dropped == 10, "All 10 should be processed (dropped or queued)"
+        assert dropped > 0, "overflow must drop"
+        # the survivors are the highest-priority ones — never a LOW while a
+        # NORMAL was turned away
+        survivors = [q for q, _ in queue.queue]
+        assert all(q.priority == QuestionPriority.NORMAL for q in survivors), survivors
 
     @pytest.mark.asyncio
     async def test_tts_failure_recovery_stress(self):

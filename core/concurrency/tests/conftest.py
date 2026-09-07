@@ -209,3 +209,20 @@ def reader_writer_simulator():
                 return {"readers": self.active_readers, "writers": self.active_writers}
 
     return ReaderWriterSimulator
+
+@pytest.fixture(autouse=True)
+def _isolated_tenant_context():
+    """ADR-0424 tenant ContextVar isolation between tests.
+
+    Sync tests run in the pytest main thread's root context, so a
+    ``TenantContextVar.set(...)`` in one test used to stay visible to every
+    later test (``test_tenant_isolation_get_or_fail`` then saw a tenant and
+    did not raise). Clear before, restore the previous value after.
+    """
+    from core.concurrency.context_helpers import TenantContextVar
+
+    token = TenantContextVar.clear()
+    try:
+        yield
+    finally:
+        TenantContextVar.reset(token)

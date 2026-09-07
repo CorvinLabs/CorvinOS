@@ -166,6 +166,43 @@ class ChainIntegrityFailureGateUnavailable(RuntimeError):
     """
 
 
+def _import_clag():
+    """Import the CLAG module the SAME way everywhere in this file.
+
+    Package-qualified (``forge.clag``) first so clag's own relative imports
+    (``from .security_events import …``) bind to forge/forge/security_events.py
+    — a bare ``import clag`` falls back to a bare ``import security_events``,
+    which resolves to WHICHEVER same-named module the process imported first
+    (operator/forge/security_events.py, the CLI shim, has no
+    ``get_audit_chain_tail``) and made the gate raise on an INTACT chain.
+    The gate and the post-write shadow advance MUST share one module object:
+    the shadow hash lives in module state, so importing the gate from
+    ``forge.clag`` and advancing the shadow in a second, bare ``clag`` copy
+    leaves the gate's shadow stale and every second consent decision fails
+    with a false shadow_mismatch (adversarial hardening 2026-09-07).
+    Raises ImportError when neither form is importable.
+    """
+    import sys as _sys
+    _here = Path(__file__).resolve()
+    _forge_pkg_parent = None
+    _forge_inner = None
+    for _parent in _here.parents:
+        if (_parent / ".corvin_repo").exists() or (_parent / "plugins").is_dir():
+            _forge_pkg_parent = _parent / "operator" / "forge"
+            _forge_inner = _forge_pkg_parent / "forge"
+            break
+    try:
+        if _forge_pkg_parent is not None and str(_forge_pkg_parent) not in _sys.path:
+            _sys.path.insert(0, str(_forge_pkg_parent))
+        from forge import clag as _clag  # type: ignore  # noqa: PLC0415
+        return _clag
+    except ImportError:
+        if _forge_inner is not None and str(_forge_inner) not in _sys.path:
+            _sys.path.insert(0, str(_forge_inner))
+        import clag as _clag  # type: ignore  # noqa: PLC0415
+        return _clag
+
+
 def _clag_gate(layer_id: str) -> None:
     """ADR-0133 CLAG — verify chain integrity before a consent decision.
 
@@ -180,15 +217,12 @@ def _clag_gate(layer_id: str) -> None:
     """
     _forge_inner = None
     try:
-        import sys as _sys
         _here = Path(__file__).resolve()
         for _parent in _here.parents:
             if (_parent / ".corvin_repo").exists() or (_parent / "plugins").is_dir():
                 _forge_inner = _parent / "operator" / "forge" / "forge"
-                if str(_forge_inner) not in _sys.path:
-                    _sys.path.insert(0, str(_forge_inner))
                 break
-        from clag import gate as _gate  # type: ignore  # noqa: PLC0415
+        _gate = _import_clag().gate
     except ImportError as _imp_exc:
         import importlib.util as _ilu
         import logging as _logging
@@ -265,8 +299,7 @@ def _audit(event_type: str, *, channel: str, chat_key: str, uid: str,
         # write so subsequent gate() calls see the current chain tail, not the
         # stale tail from the last cit_issued event.
         try:
-            from clag import advance_layer_shadow as _clag_adv  # type: ignore  # noqa: PLC0415
-            _clag_adv("L16.consent_gate", _audit_path())
+            _import_clag().advance_layer_shadow("L16.consent_gate", _audit_path())
         except Exception as _adv_exc:  # noqa: BLE001
             # Non-fatal: a stale shadow errs toward a (safe) false
             # shadow_mismatch on the next gate(), never toward fail-open —

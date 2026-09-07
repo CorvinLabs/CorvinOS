@@ -14,7 +14,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from core.orchestration.context_coherence import ToolCoherence
 
@@ -177,7 +177,10 @@ class ContextCoherenceManager:
             created_at_str = data.get("created_at")
             if created_at_str:
                 created_at = datetime.fromisoformat(created_at_str)
-                age_hours = (datetime.utcnow() - created_at).total_seconds() / 3600
+                # Naive timestamps are UTC by contract; never mix naive/aware.
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - created_at).total_seconds() / 3600
                 if age_hours > 24:
                     logger.warning(
                         f"Coherence for task '{task_id}' is {age_hours:.1f}h old "

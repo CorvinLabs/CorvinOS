@@ -21,8 +21,21 @@ import sys
 from corvin_test_support import load_operator_module
 
 # Load operator modules through the test support layer (same as production code path)
-_limits = load_operator_module("license/limits.py")
-LicenseLimitError = _limits.LicenseLimitError
+# The gate imports the operator subtree BARE (``license.quota_counter`` on the
+# operator sys.path). Import the exception + limit from that same module
+# object: a path-loaded copy (load_operator_module) is a DIFFERENT class, and
+# ``pytest.raises`` on it never matches what the gate actually raises.
+from core.orchestration.quota_gate import _ensure_operator_on_path
+
+_ensure_operator_on_path()
+from license.limits import LicenseLimitError  # type: ignore[import-not-found]  # noqa: E402
+
+
+def _gate_limit(feature: str) -> int:
+    """The limit as the GATE sees it."""
+    from license.quota_counter import get_limit  # type: ignore[import-not-found]
+
+    return get_limit(feature)
 
 
 @pytest.mark.integration
@@ -40,66 +53,40 @@ class TestQuotaGateWiring:
         assert callable(get_today_count), "get_today_count must be callable"
 
     def test_brain_run_invokes_quota_gate_functional_proof(self, monkeypatch, tmp_path):
-        """Phase 2: Functional proof — Brain.run() actually calls quota_gate.
+        """Phase 2: Functional proof — TaskBrain.run_task() actually calls quota_gate.
 
-        This test mocks quota_gate.increment_and_check and verifies it is called
-        when a brain task is executed.
+        quota_gate.increment_and_check is imported INSIDE run_task, so patching
+        the module attribute is observed by the real call site.
         """
+        import asyncio
         from core.orchestration.brain import TaskBrain
-        from core.context import ExecutionContext
 
-        # Mock quota_gate.increment_and_check to track calls
         mock_increment = MagicMock(return_value=1)
         monkeypatch.setattr(
-            "core.orchestration.quota_gate.increment_and_check",
-            mock_increment,
-            raising=False,
+            "core.orchestration.quota_gate.increment_and_check", mock_increment
         )
 
-        # Create a minimal ExecutionContext
-        context = ExecutionContext(
-            tenant_id="test-tenant",
-            user_id="test-user",
-            session_id="test-session",
-        )
+        brain = TaskBrain(corvin_home=str(tmp_path))
 
-        # Create a TaskBrain instance
-        brain = TaskBrain(context_initializer=MagicMock(_corvin_home=str(tmp_path)))
-
-        # Simulate running a brain task (minimal task)
-        # Note: This may not fully run if downstream dependencies are missing,
-        # but the important part is that quota_gate.increment_and_check is called.
+        # Downstream (context init / subsystems) may fail in a sandbox — the
+        # quota gate is the FIRST thing run_task does, before any of that.
         try:
-            # Try to trigger the quota check by calling the method that uses it
-            brain._run_brain_task(
-                task_id="test-task",
-                task_type="analysis",
-                input_data={"query": "test"},
-                tenant_id="test-tenant",
+            asyncio.run(
+                brain.run_task(
+                    task_id="test-task", tenant_id="test-tenant", task_type="analysis"
+                )
             )
-        except Exception as e:
-            # We expect this to fail downstream (missing dependencies),
-            # but the quota check should have been attempted first.
+        except Exception:  # noqa: BLE001 — downstream, see above
             pass
 
-        # Verify quota_gate was called
         assert mock_increment.called, (
-            "quota_gate.increment_and_check must be called when brain task runs. "
+            "quota_gate.increment_and_check must be called when a brain task runs. "
             "This proves the wiring is live (not dead code)."
         )
-
-        # Verify it was called with correct arguments
-        call_args = mock_increment.call_args
-        if call_args:
-            # First positional arg should be corvin_home (Path), feature, tenant_id
-            args = call_args[0] if call_args[0] else ()
-            kwargs = call_args[1] if call_args[1] else {}
-
-            # Must include feature="brain_tasks_per_day"
-            if len(args) >= 2:
-                assert args[1] == "brain_tasks_per_day" or kwargs.get("feature") == "brain_tasks_per_day"
-            if "feature" in kwargs:
-                assert kwargs["feature"] == "brain_tasks_per_day"
+        args = mock_increment.call_args.args
+        assert args[0] == Path(str(tmp_path)), "configured corvin_home wins"
+        assert args[1] == "brain_tasks_per_day"
+        assert args[2] == "test-tenant"
 
     def test_quota_gate_resolves_corvin_home_correctly(self, monkeypatch, tmp_path):
         """Verify quota_gate resolves CORVIN_HOME with correct precedence:
@@ -117,15 +104,12 @@ class TestQuotaGateWiring:
         resolved = corvin_home()
         assert resolved == test_root, "corvin_home() must resolve CORVIN_HOME env var"
 
-        # Test 2: Absence of env var falls back to ~/.corvin
+        # Test 2: without the env var the gate delegates to the ONE canonical
+        # resolver (forge.paths.corvin_home: repo-local .corvin in a checkout,
+        # ~/.corvin when installed) — never its own hard-coded ~/.corvin.
         monkeypatch.delenv("CORVIN_HOME", raising=False)
-        # Mock Path.home() to avoid using real home directory
-        mock_home = tmp_path / "home"
-        mock_home.mkdir()
-        monkeypatch.setattr("pathlib.Path.home", lambda: mock_home)
-
-        resolved = corvin_home()
-        assert resolved == mock_home / ".corvin", "corvin_home() must fall back to ~/.corvin"
+        _paths = load_operator_module("forge/forge/paths.py")
+        assert corvin_home() == _paths.corvin_home(), "gate must follow forge.paths.corvin_home()"
 
     def test_quota_gate_integration_with_operator_imports(self, tmp_path):
         """Verify quota_gate correctly sets up sys.path for operator imports.
@@ -205,27 +189,23 @@ class TestQuotaGateWiring:
         )
         assert result.returncode == 0, "tool_forge_subsystem.py must import from core.orchestration.quota_gate"
 
-    def test_quota_gate_fail_closed_on_quota_exceeded(self, monkeypatch, tmp_path):
+    def test_quota_gate_fail_closed_on_quota_exceeded(self, tmp_path):
         """Quota gate must fail-closed: quota exceeded → LicenseLimitError raised.
 
-        The gate is fail-closed, meaning:
-        - A caller that swallows the exception turns a licensing boundary into a suggestion.
-        - This test verifies the exception is raised (not silently ignored).
+        Real counter, real free-tier limit, sandboxed corvin_home. The gate is a
+        thin wrapper — it must RE-RAISE, never swallow (a caller that swallows
+        the exception turns a licensing boundary into a suggestion).
         """
-        from core.orchestration.quota_gate import increment_and_check
+        from core.orchestration.quota_gate import increment_and_check, get_today_count
 
-        # Mock quota_counter.increment_and_check to raise LicenseLimitError
-        def mock_increment(*args, **kwargs):
-            raise LicenseLimitError("brain_tasks_per_day quota exceeded")
+        limit = _gate_limit("brain_tasks_per_day")
+        assert isinstance(limit, int) and limit > 0
 
-        monkeypatch.setattr(
-            "core.orchestration.quota_gate.increment_and_check",
-            mock_increment,
-            raising=False,
-        )
+        for _ in range(limit):
+            increment_and_check(tmp_path, "brain_tasks_per_day", "test-tenant")
+        assert get_today_count(tmp_path, "brain_tasks_per_day", "test-tenant") == limit
 
-        # This should re-raise the exception (fail-closed)
-        with pytest.raises(LicenseLimitError, match="quota exceeded"):
+        with pytest.raises(LicenseLimitError, match="brain_tasks_per_day"):
             increment_and_check(tmp_path, "brain_tasks_per_day", "test-tenant")
 
 
@@ -233,50 +213,21 @@ class TestQuotaGateWiring:
 class TestQuotaGateE2EScenario:
     """End-to-end scenario: Submit brain task → quota gate enforces limit → task rejected."""
 
-    def test_brain_task_submission_respects_quota(self, monkeypatch, tmp_path):
-        """E2E: Brain task submission is rejected when quota is exceeded.
-
-        This is the complete end-to-end proof:
-        1. User submits brain task via API
-        2. Brain.run() calls quota_gate.increment_and_check
-        3. Quota exceeded → LicenseLimitError is raised
-        4. API returns 429 or error response
-        5. Task is not executed
+    def test_brain_task_submission_respects_quota(self, tmp_path):
+        """E2E: the gate admits exactly `limit` tasks per tenant per day, then
+        rejects — through the real counter under a sandboxed corvin_home.
+        Tenants are counted independently (GDPR Art. 32 isolation).
         """
-        # Mock the quota_counter to simulate quota exceeded on 11th task
-        call_count = 0
-
-        def mock_increment(corvin_home, feature, tenant_id):
-            nonlocal call_count
-            call_count += 1
-            if call_count > 10:  # First 10 tasks pass, 11th fails
-                raise LicenseLimitError(f"{feature} quota exceeded for {tenant_id}")
-            return call_count
-
-        def mock_get_limit(feature):
-            if feature == "brain_tasks_per_day":
-                return 10
-            return None
-
-        _quota = load_operator_module("license/quota_counter.py")
-        monkeypatch.setattr(_quota, "get_limit", mock_get_limit, raising=False)
-
-        # The actual test would submit tasks through the API and verify rejection.
-        # For now, we verify the mocking setup works.
         from core.orchestration.quota_gate import increment_and_check as gate_increment
 
-        # Patch quota_gate to use our mock
-        monkeypatch.setattr(
-            "core.orchestration.quota_gate.increment_and_check",
-            mock_increment,
-            raising=False,
-        )
+        limit = _gate_limit("brain_tasks_per_day")
 
-        # First 10 tasks should succeed
-        for i in range(10):
+        for i in range(limit):
             result = gate_increment(tmp_path, "brain_tasks_per_day", "test-tenant")
             assert result == i + 1, f"Task {i+1} should be accepted"
 
-        # 11th task should fail
-        with pytest.raises(LicenseLimitError, match="quota exceeded"):
+        with pytest.raises(LicenseLimitError, match="brain_tasks_per_day"):
             gate_increment(tmp_path, "brain_tasks_per_day", "test-tenant")
+
+        # another tenant is unaffected
+        assert gate_increment(tmp_path, "brain_tasks_per_day", "other-tenant") == 1

@@ -37,6 +37,8 @@ sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
 sys.path.insert(0, str(REPO / "core" / "orchestration"))
 sys.path.insert(0, str(REPO / "core" / "workflows"))
 sys.path.insert(0, str(REPO / "operator" / "forge"))
+sys.path.insert(0, str(HERE))
+import _fixture_personas as fx  # noqa: E402
 
 failures: list[str] = []
 
@@ -242,6 +244,10 @@ orchestration:
 
 
 def main() -> int:
+    # Bundle personas were removed in e7e3560e (Skills replaced them); the
+    # resolver still serves operator-shipped personas from $COWORK_USER_DIR.
+    _, user_dir = fx.sandbox("corvin-e2e-fictional-personas-")
+    fx.write_personas(user_dir, fx.DEFAULT_SET)
     _routing_cases()
     _capability_gating_cases()
     _planned_capability_honesty_cases()

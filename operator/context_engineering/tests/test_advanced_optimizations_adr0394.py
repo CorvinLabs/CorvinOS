@@ -16,13 +16,22 @@ from dataclasses import dataclass
 from typing import Optional
 
 # Import the optimization modules
-from operator.context_engineering.selective_injection import SelectiveInjector
-from operator.context_engineering.memory_pruning import MemoryPruner
-from operator.context_engineering.adr_reranking import ADRRanker
-from operator.context_engineering.stages.base import ContextBundle, StageCtx, StageTelemetry
-from operator.context_engineering.stages.selective_injection_stage import SelectiveInjectionStage
-from operator.context_engineering.stages.memory_pruning_stage import MemoryPruningStage
-from operator.context_engineering.stages.adr_reranking_stage import ADRRerangkingStage
+import sys as _sys
+from pathlib import Path as _Path
+
+# `operator` shadows the stdlib module: import operator packages by bare name
+# with <repo>/operator on sys.path (2026-09-07: the dotted form never resolved).
+_OP = _Path(__file__).resolve().parents[2]
+if str(_OP) not in _sys.path:
+    _sys.path.insert(0, str(_OP))
+
+from context_engineering.selective_injection import SelectiveInjector
+from context_engineering.memory_pruning import MemoryPruner
+from context_engineering.adr_reranking import ADRRanker
+from context_engineering.stages.base import ContextBundle, StageCtx, StageTelemetry
+from context_engineering.stages.selective_injection_stage import SelectiveInjectionStage
+from context_engineering.stages.memory_pruning_stage import MemoryPruningStage
+from context_engineering.stages.adr_reranking_stage import ADRRerangkingStage
 
 
 # ── Test fixtures ───────────────────────────────────────────────────────────
@@ -356,16 +365,20 @@ class TestADRRanker:
     def test_filter_superseded(self):
         """Test that superseded ADRs are filtered out."""
         ranker = ADRRanker(keep_top_k=5)
+        # ADR-0264 semantics: `supersedes` on the NEWER record names the
+        # replaced (older) ADRs — the older one is hidden, the newer one stays.
+        # (The original fixture had the labels inverted and never ran: this
+        # file was uncollectable behind a dotted `operator.` import.)
         adrs = [
-            MockADR(id="ADR-0001", title="New", status="accepted"),
-            MockADR(id="ADR-0002", title="Old", status="superseded", supersedes=["ADR-0001"]),
+            MockADR(id="ADR-0001", title="Old", status="superseded"),
+            MockADR(id="ADR-0002", title="New", status="accepted", supersedes=["ADR-0001"]),
         ]
 
         ranked, tel = ranker.rerank(adrs)
 
         # Only the newer one should remain
         assert len(ranked) == 1
-        assert ranked[0].id == "ADR-0001"
+        assert ranked[0].id == "ADR-0002"
         assert tel["dropped_reasons"]["superseded"] == 1
 
     def test_keep_top_k_truncation(self):

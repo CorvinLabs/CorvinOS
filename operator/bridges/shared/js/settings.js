@@ -37,9 +37,15 @@ function makeSettingsAccessor(settingsFile, logger) {
   function saveSettings(obj) {
     // Atomic write: rename ist auf POSIX-FS atomar — kein halbgeschriebener
     // Zustand kann von einem parallelen Reader gesehen werden.
+    // F-B7 (2026-09-07): settings.json carries bot tokens / IMAP+SMTP app
+    // passwords / PINs — owner-only on disk. writeFileSync's mode applies to
+    // the freshly created tmp file and travels with the rename; an EXISTING
+    // world-readable settings.json is tightened explicitly as well, so a
+    // legacy 0664 copy converges to 0600 on the first daemon-side write.
     const tmp = settingsFile + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, settingsFile);
+    try { fs.chmodSync(settingsFile, 0o600); } catch { /* non-POSIX FS */ }
   }
 
   return { loadSettings, currentSettings, saveSettings };

@@ -10,7 +10,7 @@ The messenger-origin ``/task`` producer even passes ``on_status=None``
 explicitly ("no live progress spam"), so no intermediate signal existed.
 
 The other two notification abstractions in the tree
-(``core.vibe_engineering.notification_router`` and ``core.notifications.bus``)
+(``core.vibe_engineering.notification_router``; ``core.notifications.bus`` was deleted 2026-09-07 — it had no caller)
 could not fill the gap: the first posts to ``DISCORD_WEBHOOK_URL``, which
 nothing in this repo ever sets, and the second has no subscriber. Neither is
 connected to a daemon that can actually reach Discord.

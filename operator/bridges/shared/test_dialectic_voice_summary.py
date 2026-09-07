@@ -19,8 +19,10 @@ verdict.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -203,10 +205,17 @@ def case_judge_cli_corrected() -> None:
                   if e.get("event_type") == "decision.dialectical"
                   and e.get("details", {}).get("site") == "voice_summary"]
         assert d_evts, "audit event missing"
-        assert d_evts[0]["details"]["choice"].startswith("corrected"), d_evts
-        # synthesis carries the verdict line
-        assert "CORRECTED" in d_evts[0]["details"]["synthesis"], d_evts
-        print("  pass — CORRECTED replaces candidate + audit shows corrected")
+        det = d_evts[0]["details"]
+        assert det["choice"].startswith("corrected"), d_evts
+        # The judge's verdict line is model TEXT — it must never enter the
+        # chain. The record carries a content-free view instead.
+        assert "synthesis" not in det, det
+        assert det["corrected"] is True, det
+        assert det["synthesis_len"] == len(fake.stdout.strip()), det
+        assert det["synthesis_sha256"] == hashlib.sha256(
+            fake.stdout.strip().encode("utf-8")).hexdigest(), det
+        assert "CORRECTED" not in json.dumps(det), det
+        print("  pass — CORRECTED replaces candidate + audit shows corrected (content-free)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("CORVIN_HOME", None)
@@ -347,6 +356,60 @@ def case_summarize_judge_cli_corrects() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────
+# LIVE — real `claude -p` judge (gated: CLAUDE_LIVE_E2E=1)
+# ─────────────────────────────────────────────────────────────────
+
+def case_judge_cli_live_real_claude() -> None:
+    """Drive the REAL judge path (subprocess `claude -p`, no mock) and prove
+    the `decision.dialectical` record is content-free: the verdict line
+    (model text), the source and the candidate never enter the chain — only
+    `corrected` / `synthesis_len` / `synthesis_sha256`. Skips unless
+    CLAUDE_LIVE_E2E=1 (~10 s, needs a logged-in claude CLI)."""
+    _section("L18/live: cli + REAL claude -p judge → content-free audit record")
+    if os.environ.get("CLAUDE_LIVE_E2E") != "1":
+        print("  skipped — set CLAUDE_LIVE_E2E=1 to run against the real claude CLI")
+        return
+    tmp = Path(tempfile.mkdtemp(prefix="voice-judge-live-"))
+    # main() installs a stub ANTHROPIC_API_KEY so the mocked cases pass the
+    # auth pre-check; a REAL spawn must not see it (it would shadow the CLI's
+    # own OAuth session). Lift it for the duration of the live call only.
+    stub = os.environ.get("ANTHROPIC_API_KEY")
+    if stub == "stub-key-for-judge-spawn":
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+    try:
+        _set_sandbox(tmp)
+        dialectic = _fresh_dialectic()
+        _set_site_mode(dialectic, "voice_summary", "cli")
+        source = "Decision: we do NOT ship before May 10; the deadline is May 10."
+        candidate = "Decision is to ship on May 10."  # wrong stance
+        final, verdict, why = dialectic.judge_summary(
+            source=source, candidate=candidate, lang="en",
+        )
+        print(f"  live verdict={verdict!r} why={why[:80]!r} final={final[:80]!r}")
+        assert verdict in ("faithful", "corrected"), verdict
+        events = _read_audit_events(_audit_path(tmp))
+        d_evts = [e for e in events
+                  if e.get("event_type") == "decision.dialectical"
+                  and e.get("details", {}).get("site") == "voice_summary"]
+        assert d_evts, f"audit event missing, got {[e.get('event_type') for e in events]}"
+        det = d_evts[0]["details"]
+        assert det["choice"] == verdict, det
+        assert det["corrected"] is (verdict == "corrected"), det
+        assert "synthesis" not in det, det
+        assert isinstance(det["synthesis_len"], int) and det["synthesis_len"] > 0, det
+        assert re.fullmatch(r"[0-9a-f]{64}", det["synthesis_sha256"]), det
+        blob = json.dumps(d_evts[0])
+        for leak in ("May 10", "ship", "NOT ship"):
+            assert leak not in blob, f"content leaked into audit record: {leak!r}"
+        print("  pass — real claude judge ran; audit record is content-free")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        os.environ.pop("CORVIN_HOME", None)
+        if stub is not None:
+            os.environ["ANTHROPIC_API_KEY"] = stub
+
+
+# ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
     # The cli-judge cases mock ``dialectic.subprocess.run`` and assert it
@@ -367,6 +430,7 @@ def main() -> int:
         case_judge_cli_timeout,
         case_summarize_judge_off_no_spawn,
         case_summarize_judge_cli_corrects,
+        case_judge_cli_live_real_claude,   # gated: CLAUDE_LIVE_E2E=1
     ]
     failures = 0
     for fn in cases:

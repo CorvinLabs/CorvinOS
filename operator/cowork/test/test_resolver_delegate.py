@@ -9,7 +9,7 @@ Verifies that ``_inject_delegate_capability`` is reached from
   * wires the ``corvin_delegate`` MCP server into ``mcp_servers``
   * appends the routing brief into ``append_system`` (idempotent)
   * is a no-op when ``delegate_enabled`` is missing / false
-  * the ``orchestrator`` bundle persona opts in (regression gate
+  * the ``orchestrator`` fixture persona opts in (regression gate
     against a future persona edit that drops the flag)
 
 Run: python3 operator/cowork/test/test_resolver_delegate.py
@@ -26,6 +26,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "lib"))
+sys.path.insert(0, str(HERE))
+import _fixture_personas as fx  # noqa: E402
 
 failures: list[str] = []
 
@@ -40,19 +42,18 @@ def expect(cond: bool, label: str, detail: str = "") -> None:
 
 
 def main() -> int:
-    sandbox = Path(tempfile.mkdtemp(prefix="cowork-delegate-test-"))
-    user_dir = sandbox / "user"
-    mcp_dir = sandbox / "mcp"
-    (user_dir / "personas").mkdir(parents=True)
-    os.environ["COWORK_USER_DIR"] = str(user_dir)
-    os.environ["COWORK_MCP_CACHE"] = str(mcp_dir)
+    # Fixture personas were removed in e7e3560e (Skills replaced them); the
+    # resolver still serves operator-shipped personas from $COWORK_USER_DIR,
+    # so the injection contract is pinned against fixture personas.
+    sandbox, user_dir = fx.sandbox()
+    fx.write_personas(user_dir, fx.DEFAULT_SET)
 
     # Reset the resolver module so it picks up the env overrides.
     for mod in [m for m in list(sys.modules) if m == "resolver"]:
         del sys.modules[mod]
     import resolver  # type: ignore
 
-    # ── 1. orchestrator bundle persona: delegate_enabled must be true ─────
+    # ── 1. orchestrator fixture persona: delegate_enabled must be true ─────
     orch = resolver.load("orchestrator")
     expect(orch is not None and orch.get("delegate_enabled") is True,
            "orchestrator persona carries delegate_enabled=True",

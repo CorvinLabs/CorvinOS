@@ -11,6 +11,8 @@ import sys
 import os
 from pathlib import Path
 
+import pytest
+
 def test_strip_for_tts_fallback():
     """E2E: If strip_for_tts fails, adapter uses raw text for summarize.py."""
     proj_root = Path(__file__).parent.parent.parent
@@ -24,46 +26,37 @@ def test_strip_for_tts_fallback():
     assert "CalledProcessError" in adapter_code, "Fallback: process error handler missing"
     print("✅ Fallback logic present in adapter.py")
 
-def test_voice_summary_context_preservation():
-    """E2E: build_voice_summary preserves context across failed strip_for_tts."""
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.environ.get("CLAUDE_LIVE_E2E") != "1",
+    reason="real-LLM E2E: build_voice_summary drives summarize.py → `claude -p`; opt in with CLAUDE_LIVE_E2E=1",
+)
+def test_voice_summary_context_preservation(tmp_path):
+    """Live E2E: build_voice_summary (real `claude -p` summariser) preserves the context."""
     proj_root = Path(__file__).parent.parent.parent
+    shared = proj_root / "operator" / "bridges" / "shared"
 
-    # Create test script that calls build_voice_summary
-    test_script = proj_root / ".tmp_voice_test.py"
-    test_script.write_text("""
+    # Fresh interpreter: adapter.py must be importable as a bare module with
+    # <repo>/operator/bridges/shared on sys.path (no dotted operator.* import).
+    script = tmp_path / "voice_test.py"
+    script.write_text(f"""
 import sys
-sys.path.insert(0, '/home/shumway/projects/CorvinOS/operator/bridges/shared')
+sys.path.insert(0, {str(shared)!r})
 from adapter import build_voice_summary
 
 text = "Fixed a bug in the worker pool. Important: Restart workers after deploy."
 result = build_voice_summary(text, max_chars=100)
 assert result, "build_voice_summary returned empty"
-assert len(result) > 0, "Result is empty — context loss detected"
-assert "bug" in result.lower() or "fixed" in result.lower(), \
-    f"Original context lost in output: {result}"
-print(f"✅ Context preserved: {len(result)} chars")
-print(f"Output: {result[:80]}...")
+low = result.lower()
+assert any(k in low for k in ("bug", "fixed", "worker", "fehler", "behoben")), \
+    f"Original context lost in output: {{result}}"
+print(f"OK {{len(result)}} chars: {{result[:80]}}")
 """)
 
-    try:
-        result = subprocess.run(
-            [sys.executable, str(test_script)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(proj_root)
-        )
-        print(result.stdout)
-        if result.returncode != 0:
-            print("STDERR:", result.stderr)
-            # Don't fail on this test if summarize.py has issues
-            # The important thing is fallback logic exists
-            print("⚠️  summarize.py may not be available, but fallback logic is in place")
-        return True
-    finally:
-        test_script.unlink(missing_ok=True)
-
-if __name__ == "__main__":
-    test_strip_for_tts_fallback()
-    test_voice_summary_context_preservation()
-    print("\n✅ Phase A: Context Flow E2E test passed")
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True, text=True, timeout=180, cwd=str(proj_root),
+    )
+    print(result.stdout)
+    assert result.returncode == 0, f"voice summary E2E failed:\n{result.stderr[-2000:]}"
+    assert "OK " in result.stdout

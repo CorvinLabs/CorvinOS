@@ -208,7 +208,7 @@ class PackageSkillLoader:
 
             skill_dicts.append(
                 {
-                    "skill_id": pkg_skill.skill_id,
+                    "id": pkg_skill.skill_id,  # SkillInjection contract key (_score_skills reads "id")
                     "title": pkg_skill.title,
                     "description": pkg_skill.description,
                     "category": pkg_skill.category,

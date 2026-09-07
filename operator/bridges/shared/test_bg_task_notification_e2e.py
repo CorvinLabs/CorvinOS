@@ -14,6 +14,12 @@ Flow:
 Proves the fix: second message latency is <5s, not 60s.
 
 Run: python3 operator/bridges/shared/test_bg_task_notification_e2e.py
+     (or via pytest — ``test_bg_task_notification_delivers_within_seconds``)
+
+2026-09-07 (adversarial hardening): converted from a print-and-return-0 script
+into a real assertion-carrying test; the sibling
+``test_bg_task_notification_robust.py`` was deleted — it printed four "PASS"
+lines without executing anything.
 """
 from __future__ import annotations
 
@@ -29,8 +35,20 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
 
-def main() -> int:
-    """Test the complete notification pipeline."""
+def test_bg_task_notification_delivers_within_seconds() -> None:
+    """Test the complete notification pipeline (asserts, raises on failure)."""
+    saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "ADAPTER_OUTBOX")}
+    try:
+        _run_pipeline()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _run_pipeline() -> None:
     with tempfile.TemporaryDirectory() as td:
         home = Path(td) / "home"
         home.mkdir()
@@ -79,9 +97,7 @@ def main() -> int:
         # Stage 3: Spawn bg_task_worker
         print("\n[Stage 3] Spawn bg_task_worker...")
         worker_script = ROOT / "shared" / "bg_task_worker.py"
-        if not worker_script.exists():
-            print(f"  ✗ SKIP: worker script not found at {worker_script}")
-            return 0
+        assert worker_script.exists(), f"worker script not found at {worker_script}"
 
         start_time = time.time()
         proc = subprocess.Popen(
@@ -102,8 +118,7 @@ def main() -> int:
                 print(f"  Worker stderr: {stderr}")
         except subprocess.TimeoutExpired:
             proc.kill()
-            print("  ✗ FAIL: worker timeout")
-            return 1
+            raise AssertionError("worker did not finish within 30s")
 
         # Stage 5: Check completion record (should be in "delivered" state)
         print("\n[Stage 5] Verify completion record...")
@@ -122,11 +137,9 @@ def main() -> int:
         # Stage 6: Verify outbox envelope (critical test)
         print("\n[Stage 6] Verify outbox envelope...")
         outbox_files = list(outbox.glob("cn_*.json"))
-        if not outbox_files:
-            print("  ✗ FAIL: no envelope in outbox (deliver_ready() was not called)")
-            print(f"  Outbox path: {outbox}")
-            print(f"  Outbox contents: {list(outbox.iterdir())}")
-            return 1
+        assert outbox_files, (
+            f"no envelope in outbox (deliver_ready() was not called); "
+            f"outbox={outbox} contents={list(outbox.iterdir())}")
 
         envelope = json.loads(outbox_files[0].read_text())
         print(f"  ✓ Found envelope: {outbox_files[0].name}")
@@ -135,19 +148,29 @@ def main() -> int:
         print(f"    - text: {envelope.get('text')[:50]}...")
 
         # Verify correct routing
-        if envelope.get("channel") != "discord":
-            print(f"  ✗ FAIL: wrong channel '{envelope.get('channel')}'")
-            return 1
-        if envelope.get("chat_id") != "123456789":
-            print(f"  ✗ FAIL: wrong chat_id '{envelope.get('chat_id')}'")
-            return 1
+        assert envelope.get("channel") == "discord", f"wrong channel {envelope.get('channel')!r}"
+        assert envelope.get("chat_id") == "123456789", f"wrong chat_id {envelope.get('chat_id')!r}"
+        assert (envelope.get("text") or "").strip(), "completion envelope carries no text"
+        # The worker runs the instruction through the real spawn gates (L44
+        # classifier etc.), which costs ~15-20 s on this machine; the property
+        # under test is that delivery happens from the worker itself and NOT
+        # from bg_monitor's 60 s timer.
+        assert elapsed < 45.0, f"completion took {elapsed:.1f}s — bg_monitor's 60s timer path?"
 
         print("\n" + "=" * 70)
         print("✅ BG-NOTIFICATION-FIX E2E TEST PASSED")
         print("=" * 70)
-        print(f"\nTiming: Second message delivered in {elapsed:.2f}s (target: <5s)")
+        print(f"\nTiming: Second message delivered in {elapsed:.2f}s (must beat bg_monitor's 60s timer)")
         print("Discord daemon can now read outbox and send message immediately.")
-        return 0
+
+
+def main() -> int:
+    try:
+        test_bg_task_notification_delivers_within_seconds()
+    except AssertionError as e:
+        print(f"FAIL: {e}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
