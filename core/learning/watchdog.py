@@ -142,24 +142,32 @@ class DivergenceWatchdog:
         Raises:
             CheckpointSignatureError: If checkpoint signature invalid
         """
-        if self.last_checkpoint and self.last_checkpoint['id'] == checkpoint_id:
-            # Verify signature before restoration (fail-closed)
-            try:
-                self.signer.verify_checkpoint(
-                    self.last_checkpoint['state'],
-                    self.last_checkpoint['merkle_root'],
-                    self.last_checkpoint['signature'],
-                    self.tenant_id
-                )
-            except CheckpointSignatureError as e:
-                raise CheckpointSignatureError(
-                    f"Checkpoint {checkpoint_id} verification failed: {e}"
-                )
+        # Any signed checkpoint is restorable by id, not just the newest one.
+        # Until 2026-09-07 this compared against ``last_checkpoint`` only and
+        # returned None for every earlier id, although ``save_checkpoint``
+        # records them all in ``signed_checkpoints`` — a rollback target the
+        # caller had legitimately kept was silently unreachable.
+        checkpoint = self.signed_checkpoints.get(checkpoint_id)
+        if checkpoint is None and self.last_checkpoint and self.last_checkpoint['id'] == checkpoint_id:
+            checkpoint = self.last_checkpoint
+        if checkpoint is None:
+            return None  # unknown id — the caller checks (see test_watchdog_rejects_fake_checkpoint_id)
 
-            self.rollback_count += 1
-            return self.last_checkpoint['state'].copy()
+        # Verify signature before restoration (fail-closed)
+        try:
+            self.signer.verify_checkpoint(
+                checkpoint['state'],
+                checkpoint['merkle_root'],
+                checkpoint['signature'],
+                self.tenant_id
+            )
+        except CheckpointSignatureError as e:
+            raise CheckpointSignatureError(
+                f"Checkpoint {checkpoint_id} verification failed: {e}"
+            )
 
-        return None
+        self.rollback_count += 1
+        return checkpoint['state'].copy()
 
     def on_divergence(self, reason: str):
         """Handle divergence event."""
