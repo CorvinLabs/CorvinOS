@@ -27,6 +27,8 @@ import hashlib
 import json
 import logging
 import os
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -121,6 +123,53 @@ def _save_checksum_state(tenant_id: str, state: dict) -> None:
         logger.debug("[ACO] Cannot save checksum state: %s", exc)
 
 
+# ── Audit-chain verification: memoization (performance, NOT a weakening) ─────
+# The audit chain is UNIFIED / scope-independent (see
+# operator/bridges/shared/audit.py::_forge_workspace_root): EVERY tenant's scan
+# verifies the very same file. Without memoization verify_audit() ran once per
+# tenant AND once per call site — on this machine 36 full walks over a 315 MB
+# chain per heal cycle (~230 s of blocking work), breaking this module's own
+# documented contract ("NEVER blockiert > 10 s") and saturating the 300 s cycle.
+#
+# The cache key is the file IDENTITY (path, inode, size, mtime_ns): any change
+# (append, rewrite, truncate, replace) misses the cache and is fully verified
+# again. The TTL is shorter than the heal interval (300 s), so every cycle still
+# performs a real verification — detection latency does not grow. The check
+# itself is unchanged: the whole chain is still walked, just not 36 times over
+# the same unmodified file.
+_CHAIN_VERIFY_TTL_SECONDS = 60.0
+_chain_verify_lock = threading.Lock()
+_chain_verify_cache: dict[tuple, tuple[float, bool, list]] = {}
+
+
+def _verify_audit_chain_memoized(verify_audit, audit_file: Path) -> tuple[bool, list]:
+    """Run ``verify_audit`` at most once per unchanged file per TTL.
+
+    Fail-closed: if the file cannot be fingerprinted we never serve a cached
+    answer — we verify.
+    """
+    try:
+        st = audit_file.stat()
+        key = (str(audit_file), st.st_ino, st.st_size, st.st_mtime_ns)
+    except OSError:
+        return verify_audit(audit_file)
+
+    now = time.monotonic()
+    with _chain_verify_lock:
+        hit = _chain_verify_cache.get(key)
+        if hit is not None and hit[0] > now:
+            return hit[1], list(hit[2])
+
+    ok, problems = verify_audit(audit_file)
+
+    with _chain_verify_lock:
+        # Keep only the current fingerprint: the cache stays O(1) and cannot
+        # grow with every appended line.
+        _chain_verify_cache.clear()
+        _chain_verify_cache[key] = (now + _CHAIN_VERIFY_TTL_SECONDS, ok, list(problems))
+    return ok, problems
+
+
 # ── Check 1: Audit-Chain-Integrität ──────────────────────────────────────────
 
 def check_audit_chain_integrity(tenant_id: str) -> list[IntegrityFinding]:
@@ -152,7 +201,7 @@ def check_audit_chain_integrity(tenant_id: str) -> list[IntegrityFinding]:
         if not audit_file.exists():
             return findings  # frische Installation — kein Fehler
 
-        ok, problems = verify_audit(audit_file)
+        ok, problems = _verify_audit_chain_memoized(verify_audit, audit_file)
         if not ok:
             findings.append(IntegrityFinding(
                 severity="CRITICAL",

@@ -337,3 +337,131 @@ class TestAlertSecurityIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestNonceReplayCacheRegression:
+    """Regression: the replay guard must not reject the ORIGINAL verification.
+
+    The nonce used to be recorded inside ``_sign_alert``, so the first
+    ``verify_alert_signature`` call on a freshly signed alert was rejected as a
+    replay — signed alerts were unusable. The nonce is now recorded on the first
+    SUCCESSFUL verification, and the cache is bounded by TTL and by size.
+    """
+
+    @pytest.fixture
+    def manager(self):
+        return AlertPolicyManager(tenant_id="_default", signing_key="regression_key")
+
+    def _sign(self, manager, alert_id="regress_001"):
+        return manager._sign_alert(
+            alert_id=alert_id,
+            metric_name="loss_total",
+            metric_value=0.02,
+            threshold=0.01,
+        )
+
+    def test_sign_then_verify_then_verify_again(self, manager):
+        """sign -> verify (accepted) -> verify again (rejected as replay)."""
+        alert_sig = self._sign(manager)
+
+        # Signing alone must not consume the nonce.
+        assert alert_sig.nonce not in manager._nonce_cache
+
+        is_valid, reason = manager.verify_alert_signature(alert_sig)
+        assert is_valid is True, reason
+        assert reason == "OK"
+        assert alert_sig.nonce in manager._nonce_cache
+
+        is_valid_again, reason_again = manager.verify_alert_signature(alert_sig)
+        assert is_valid_again is False
+        assert "replay detected" in reason_again.lower()
+
+    def test_failed_verification_does_not_burn_the_nonce(self, manager):
+        """A tampered signature must not consume a nonce a real alert still needs."""
+        alert_sig = self._sign(manager, alert_id="regress_002")
+        good_signature = alert_sig.signature
+
+        alert_sig.signature = "0" * 64
+        is_valid, reason = manager.verify_alert_signature(alert_sig)
+        assert is_valid is False
+        assert "tampering detected" in reason.lower()
+        assert alert_sig.nonce not in manager._nonce_cache
+
+        # The genuine signature still verifies.
+        alert_sig.signature = good_signature
+        is_valid, reason = manager.verify_alert_signature(alert_sig)
+        assert is_valid is True, reason
+
+    def test_unbound_nonce_is_rejected(self, manager):
+        """Swapping in a fresh nonce that is not in signed_fields must fail."""
+        alert_sig = self._sign(manager, alert_id="regress_003")
+        alert_sig.nonce = "attacker_supplied_nonce"
+
+        is_valid, reason = manager.verify_alert_signature(alert_sig)
+        assert is_valid is False
+        assert "nonce not bound" in reason.lower()
+        assert alert_sig.nonce not in manager._nonce_cache
+
+    def test_nonce_cache_is_size_bounded(self, manager):
+        """The replay cache never grows past its hard cap (oldest evicted first)."""
+        manager._NONCE_CACHE_MAX = 5
+
+        signatures = [self._sign(manager, alert_id=f"bound_{i}") for i in range(12)]
+        for alert_sig in signatures:
+            is_valid, reason = manager.verify_alert_signature(alert_sig)
+            assert is_valid is True, reason
+
+        assert len(manager._nonce_cache) == 5
+        # The most recent 5 are retained, the oldest were evicted.
+        assert [s.nonce for s in signatures[-5:]] == list(manager._nonce_cache.keys())
+        assert signatures[0].nonce not in manager._nonce_cache
+
+    def test_nonce_cache_expires_with_the_freshness_window(self, manager):
+        """Entries older than the freshness window are pruned.
+
+        Safe because a signature that old is rejected as stale anyway.
+        """
+        alert_sig = self._sign(manager, alert_id="regress_ttl")
+        assert manager.verify_alert_signature(alert_sig)[0] is True
+        assert len(manager._nonce_cache) == 1
+
+        # Age the recorded entry past the TTL.
+        manager._nonce_cache[alert_sig.nonce] = (
+            time.monotonic() - manager._NONCE_TTL_SECONDS - 1
+        )
+        manager._prune_nonce_cache()
+        assert manager._nonce_cache == {}
+
+        # ...and the now-stale signature is still refused, by the staleness check.
+        alert_sig.timestamp = (datetime.utcnow() - timedelta(minutes=10)).isoformat()
+        is_valid, reason = manager.verify_alert_signature(alert_sig)
+        assert is_valid is False
+        assert "stale" in reason.lower()
+
+    def test_confirmation_ids_are_unique_per_request(self, manager):
+        """Two requests for the SAME alert must not share a confirmation id."""
+        alert = AlertEvent(
+            alert_id="dup_alert_001",
+            policy_id="loss_divergence_critical",
+            alert_type=AlertType.LOSS_DIVERGENCE,
+            level=AlertLevel.CRITICAL,
+            metric_name="loss_total",
+            metric_value=0.025,
+            threshold=0.01,
+            message="Duplicate confirmation request",
+            timestamp=datetime.utcnow().isoformat(),
+            tenant_id="_default",
+            muted=False,
+        )
+
+        conf_1 = manager.request_confirmation(alert, confidence_score=0.7)
+        conf_2 = manager.request_confirmation(alert, confidence_score=0.6)
+
+        assert conf_1.confirmation_id != conf_2.confirmation_id
+        assert len(manager.get_pending_confirmations()) == 2
+
+        # Approving one must leave the other untouched and still pending.
+        assert manager.confirm_alert(conf_1.confirmation_id, approved=True) is True
+        pending = manager.get_pending_confirmations()
+        assert [p.confirmation_id for p in pending] == [conf_2.confirmation_id]
+        assert manager._confirmation_queue[conf_1.confirmation_id].status == "approved"
