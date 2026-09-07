@@ -18,6 +18,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import { useAuth } from "@/lib/auth";
+import { safeNavTarget } from "@/lib/safe-url";
 import {
   deleteComputeRun, getComputeConfig, getComputeLicense, getComputeRunDetail,
   getComputeStatus, getPipelineDetail, getHacDetail,
@@ -2283,6 +2284,13 @@ function AwpkgExportModal({
         acceptance_criteria: maxLoss ? { max_best_loss: parseFloat(maxLoss), on_fail: "abort" } : null,
       };
       const result = await pipelineToWorkflow(pipelineId, body, csrf);
+      // R4-C7: the target comes from the server response body. The console does
+      // not trust its own backend to hand it an origin — a buggy or compromised
+      // one must not be able to redirect the operator off-site.
+      if (!safeNavTarget(result.redirect_url)) {
+        setError("Workflow created, but the server returned an unusable redirect target.");
+        return;
+      }
       onClose();
       navigate(result.redirect_url);
     } catch (e: unknown) {

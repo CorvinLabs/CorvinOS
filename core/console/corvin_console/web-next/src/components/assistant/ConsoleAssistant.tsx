@@ -18,6 +18,7 @@ import {
   ttsBlob,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { safeNavTarget } from "@/lib/safe-url";
 import { cn } from "@/lib/utils";
 
 // ── Language helpers ──────────────────────────────────────────────────────
@@ -446,7 +447,11 @@ export function ConsoleAssistant({ open, onClose }: ConsoleAssistantProps) {
               }[];
             };
             for (const action of parsed._actions) {
-              if (action.type === "navigate" && action.path) {
+              // R4-C7: `action.path` is parsed out of the ASSISTANT'S OWN ANSWER,
+              // so a prompt-injected reply could otherwise steer the operator's
+              // console to an attacker origin. Fail closed — an unsafe target is
+              // dropped, not navigated to.
+              if (action.type === "navigate" && safeNavTarget(action.path)) {
                 navigate(action.path);
               } else if (action.type === "patch_setting" && action.route) {
                 setPendingAction({
