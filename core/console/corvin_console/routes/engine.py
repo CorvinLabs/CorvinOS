@@ -55,10 +55,24 @@ _ENGINE_METADATA = {
     }
 }
 
-# Anthropic Claude API models (official releases)
+# Anthropic Claude API models (official releases).
+#
+# This list is a static snapshot, curated by hand — the auto-refresh machinery
+# that used to keep it current was removed in 243690e8 ("rewrite engine.py for
+# Claude Code only") and was NOT rebuilt here (that is a scope expansion; see
+# ADR discussion). The canonical, already-current source for this same catalog
+# is `operator/bundle/config-templates/engine_model_registry.yaml`
+# (`engines.claude_code.os_models`), read via `engine_models.registry_as_dict()`
+# and served live at GET /models/registry — this list is kept in sync with it
+# by hand until a follow-up wires this route to that source directly.
+#
+# Default: Sonnet 5 — the general-purpose balanced model (matches the
+# "balanced" tier in engine_model_registry.yaml); Opus 5 is reserved for
+# max-capability tasks, Haiku 4.5 for fast/economical ones, so neither is a
+# good blanket default for a picker with no other context.
 _CLAUDE_MODELS = [
-    {"id": "claude-opus-4-1", "label": "Claude Opus 4.1", "default": False},
-    {"id": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4", "default": True},
+    {"id": "claude-opus-5", "label": "Claude Opus 5", "default": False},
+    {"id": "claude-sonnet-5", "label": "Claude Sonnet 5", "default": True},
     {"id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "default": False},
 ]
 
