@@ -324,3 +324,53 @@ def test_all_routes_require_session(home):
         assert c.get(path).status_code == 401, path
     assert c.post("/api/infinite-session/task/t/revert",
                   json={"task_id": "t", "target_checkpoint_id": "x", "reason": "r"}).status_code == 401
+
+
+# ── rollback log lock never hangs the HTTP revert (R3-B5, second holder) ───
+#
+# ``RollbackManager._lock`` took an unbounded ``fcntl.flock(LOCK_EX)`` and is
+# taken twice on this route (WAL recovery in ``__init__``, then
+# ``commit_transaction``). A wedged holder therefore hung an OPERATOR REQUEST
+# with no possible ``try/except`` recovery. The lock is now bounded; the route
+# must answer 503 ``transaction_lock_busy`` within the deadline.
+# Manager-level coverage: tests/skills/test_infinite_session_lock_nonblocking.py
+
+
+def test_revert_refuses_503_when_rollback_log_lock_is_wedged(home, console_audit, monkeypatch):
+    import fcntl
+    import time
+
+    from core.infinite_session import rollback_manager as rollback_mod
+    from core.infinite_session.rollback_manager import RollbackManager
+
+    monkeypatch.setattr(rollback_mod, "LOCK_TIMEOUT_SECONDS", 0.2)
+    a, b = _seed("task_lockbusy", [{"v": 1}, {"v": 2}])
+
+    lock_path = RollbackManager(TENANT).log_dir / ".lock"
+    holder = open(lock_path, "a+")  # an independent file description
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+    try:
+        started = time.monotonic()
+        res = _revert(_client(_record()), "task_lockbusy", a.snapshot_id)
+        elapsed = time.monotonic() - started
+    finally:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        holder.close()
+
+    assert res.status_code == 503, res.text
+    assert res.json()["detail"] == "transaction_lock_busy"
+    assert elapsed < 5.0, f"revert request blocked for {elapsed:.1f}s"
+    assert console_audit.action_failed.call_args.kwargs["reason"] == "transaction_lock_busy"
+    console_audit.action_performed.assert_not_called()
+
+
+def test_revert_succeeds_once_the_rollback_lock_is_free(home, console_audit):
+    """The bounded lock must stay a real mutex — the same revert works when free."""
+    a, b = _seed("task_lockfree", [{"v": 1}, {"v": 2}])
+    res = _revert(_client(_record()), "task_lockfree", a.snapshot_id)
+    assert res.status_code == 200, res.text
+
+    from core.infinite_session import RollbackManager
+    rm = RollbackManager(TENANT)
+    assert rm.verify_chain_integrity(TENANT) == (True, None)
+    assert rm.get_transaction_history(TENANT)[0]["status"] == "committed"

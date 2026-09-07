@@ -21,7 +21,7 @@ per finished `/task` turn (completed, failed and cancelled alike).
 | `event_store.py` | **The only persistence layer.** `EventStore(tenant_id)` is tenant-bound; layout `snapshots/<task_id>/{index.json,<snapshot_id>.json}`; `write_snapshot` is audit-FIRST (`infinite_session.snapshot_created` on the core chain; no commit → nothing on disk), atomic (tmp → fsync → rename), locked (bounded, non-blocking — see § Producer), append-only, and refuses a wrong tenant, a duplicate id, or a `prev_snapshot_hash` ≠ chain head. `verify_snapshot_chain` re-hashes every snapshot. `snapshot_task_state()` is the producer helper. |
 | `crypto_binding.py` | HMAC-SHA256 over canonical JSON, one key per tenant at `<tenant_root>/keys/signing.key` (0600). `sign_payload/verify_payload` (dict), `hmac_bytes/verify_bytes` (raw). Verification never creates a key. |
 | `session_bridger.py` | `SessionBridgeEvent` signed over ALL fields minus `signature`; `resume_from_bridge` verifies signature, tenant/task binding, and that the referenced snapshot exists with the same hash — then returns the recovered `state_dict`. Bridges must point at persisted snapshots. |
-| `rollback_manager.py` | Tenant-bound WAL + JSONL log; every entry (COMMITTED, ROLLED_BACK **and** FAILED) carries `prev_mac`/`mac` = HMAC(tenant key). `recover_pending()` (at construction, grace window 60 s; `max_age_s=0` forces) closes abandoned WAL entries as ROLLED_BACK. Audit callbacks carry state HASHES only. |
+| `rollback_manager.py` | Tenant-bound WAL + JSONL log; every entry (COMMITTED, ROLLED_BACK **and** FAILED) carries `prev_mac`/`mac` = HMAC(tenant key). `recover_pending()` (at construction, grace window 60 s; `max_age_s=0` forces) closes abandoned WAL entries as ROLLED_BACK. The log lock is bounded, non-blocking — see § Producer. Audit callbacks carry state HASHES only. |
 | `drift_detector.py` | `assess_series` / `assess_states` (pure, used by the API on every read), `check_drift` gate (persists `DriftAlert`), `create_revert_button` (rolls back the latest transaction of the alert's config path). |
 | `audit_verification.py` | Per-task verification: snapshot chain + tenant isolation + every bridge signature + bridge→snapshot hash; results under `<tenant_root>/verification/`. |
 | `ema_smoother.py`, `task_def_parser.py` | Unchanged helpers (EMA maths; JSON-LD task definition → topologically sorted `ExecutionPlan`). |
@@ -36,7 +36,7 @@ Every root honours `CORVIN_HOME` (tests set it to a temp dir); nothing uses
 | `GET /api/infinite-session/tasks` | `require_session` | `EventStore.list_tasks/list_snapshots`, drift via `assess_states` |
 | `GET /api/infinite-session/task/{task_id}/history` | `require_session` | full chain + `chain_valid` + per-snapshot drift |
 | `GET /api/infinite-session/task/{task_id}/context-diff?from_checkpoint&to_checkpoint` | `require_session` | two snapshots → additions/removals/modifications |
-| `POST /api/infinite-session/task/{task_id}/revert` | **`require_csrf`** | appends a `rollback_recovery` snapshot with the target's state chained onto the head; `RollbackManager` begin/commit; `console.action_performed` (`sid_fingerprint`, never user id). 404 unknown target, 409 already-at-head / broken chain, 400 body/path mismatch, 422 bad id. The free-text `reason` is never persisted. |
+| `POST /api/infinite-session/task/{task_id}/revert` | **`require_csrf`** | appends a `rollback_recovery` snapshot with the target's state chained onto the head; `RollbackManager` begin/commit; `console.action_performed` (`sid_fingerprint`, never user id). 404 unknown target, 409 already-at-head / broken chain, 400 body/path mismatch, 422 bad id, **503 `transaction_lock_busy`** when the rollback log lock is wedged. The free-text `reason` is never persisted. |
 | `GET /api/infinite-session/health` | `require_session` | chain verification per task + rollback-log MAC chain |
 
 A "checkpoint id" in this API **is** a snapshot id. Ids are validated at the
@@ -74,6 +74,20 @@ R3-B5). Regression: `tests/skills/test_infinite_session_lock_nonblocking.py`. Pr
 drives the real pool against a fake `claude` binary and reads the chain back
 through `EventStore` and the console route.
 
+`RollbackManager._lock` had the SAME defect and is fixed the same way
+(`LOCK_EX | LOCK_NB`, `LOCK_TIMEOUT_SECONDS` = 2 s, `RollbackLockBusy`). It is
+taken by `recover_pending()` — which runs in `__init__` — and by
+`commit_transaction`, both on the **console HTTP revert path**, so a wedged
+holder hung an *operator request*, not a background task. Conversions:
+`__init__` logs and skips recovery (best-effort housekeeping, never a
+precondition); `commit_transaction` / `rollback_transaction` return
+`(False, "rollback log lock busy …")`; the route maps that prefix
+(`LOCK_BUSY_REASON_PREFIX`) to **503 `transaction_lock_busy`** and audits
+`action_failed`, so the request always answers. Regressions:
+`tests/skills/test_infinite_session_lock_nonblocking.py::TestRollbackManagerNeverBlocks`
+and, through the real router,
+`tests/skills/test_infinite_session_phase_d.py::test_revert_refuses_503_when_rollback_log_lock_is_wedged`.
+
 `TaskManager.record_event` (`task_manager.py`) remains the per-turn event log;
 snapshots are per process, not per streamed `result` event.
 
@@ -82,7 +96,7 @@ snapshots are per process, not per streamed `result` event.
 - `tests/skills/test_infinite_session_phase_a.py` — schema, parser, EventStore, adversarial (traversal, tenant, tamper, concurrency), plan→snapshots→restart→recover.
 - `tests/skills/test_infinite_session_phase_b.py` — crypto (0600 keys, canonical signing, rotation), bridger (whole-event tamper matrix, snapshot swap), verifier.
 - `tests/skills/test_infinite_session_phase_c.py` — rollback (keyed chain, FAILED entries chained, forged-key rejection, WAL replay, concurrency), EMA, drift, revert button.
-- `tests/skills/test_infinite_session_phase_d.py` — all five routes over the real router via TestClient (auth deps overridden only): traversal, cross-tenant, CSRF, audit content-freeness, tampered chain → 500/degraded.
+- `tests/skills/test_infinite_session_phase_d.py` — all five routes over the real router via TestClient (auth deps overridden only): traversal, cross-tenant, CSRF, audit content-freeness, tampered chain → 500/degraded, wedged rollback lock → 503.
 - `tests/skills/test_infinite_session_live_llm.py` — `@pytest.mark.live`, `CLAUDE_LIVE_E2E=1`: two real `claude -p --model haiku` turns → chained snapshots on the core chain → new store instance recovers the head.
 
 Run: `.venv/bin/python -m pytest -q -o addopts="" -p no:cacheprovider tests/skills/test_infinite_session_phase_*.py`

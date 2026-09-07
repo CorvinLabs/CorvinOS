@@ -20,7 +20,16 @@ Chain design:
   whose process died — it is closed as ROLLED_BACK in the log and the WAL
   file removed. ``recover_pending(max_age_s=0)`` forces a full sweep. The
   log never has a "silent" transaction.
-- Durability: log appends are fsynced under an exclusive file lock.
+- Durability: log appends are fsynced under an exclusive file lock. That
+  lock is NON-BLOCKING BY CONSTRUCTION (``LOCK_EX|LOCK_NB`` with a bounded
+  retry until ``LOCK_TIMEOUT_SECONDS``), for the same reason as
+  ``event_store`` (R3-B5): the lock sits on the console HTTP revert path
+  (``routes/infinite_session_api.py``), and a wedged holder — a crashed
+  writer whose fd the kernel has not reaped, an NFS mount, a
+  debugger-stopped process — would hang an operator request forever. No
+  ``try/except`` can catch a hang. Every lock-taking method converts
+  :class:`RollbackLockBusy` into its documented ``(False, reason)`` /
+  ``[]`` result, and the route answers 503 instead of never answering.
 - Audit callbacks carry ids, config_path and STATE HASHES only — never
   ``old_state`` / ``new_state`` (those live in the transaction log, which is
   the mechanism's own data, not the audit chain).
@@ -31,6 +40,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import time
 from contextlib import contextmanager
@@ -46,6 +56,9 @@ from core.infinite_session.paths import safe_child, tenant_root, validate_id
 from core.tenants import validate_tenant_id
 
 
+logger = logging.getLogger(__name__)
+
+
 class TransactionStatus(str, Enum):
     PREPARED = "prepared"
     COMMITTED = "committed"
@@ -54,6 +67,23 @@ class TransactionStatus(str, Enum):
 
 
 WAL_GRACE_SECONDS = 60.0
+
+# Same contract and constant style as ``event_store.LOCK_TIMEOUT_SECONDS``.
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_INTERVAL_SECONDS = 0.01
+
+# Stable prefix of the ``(False, reason)`` a lock-busy refusal carries, so the
+# console route can map it to 503 (temporarily unavailable) rather than 500.
+LOCK_BUSY_REASON_PREFIX = "rollback log lock busy"
+
+
+class RollbackLockBusy(TimeoutError):
+    """The rollback log lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
+
+    A ``TimeoutError`` (hence an ``OSError``), mirroring
+    :class:`core.infinite_session.event_store.SnapshotLockBusy`, so callers that
+    already degrade on I/O failure keep degrading instead of raising.
+    """
 
 
 def _now() -> str:
@@ -112,7 +142,13 @@ class RollbackManager:
         self.wal_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = root / "log.jsonl"
         self.crypto = crypto or CryptoBinding(corvin_home)
-        self.recover_pending()
+        try:
+            self.recover_pending()
+        except RollbackLockBusy as exc:
+            # Constructing the manager must never block: the console builds one
+            # per request. A busy lock means another live manager holds it, and
+            # WAL recovery is best-effort housekeeping, not a precondition.
+            logger.warning("rollback WAL recovery skipped at construction: %s", exc)
 
     # ── binding / locking ────────────────────────────────────────────────
 
@@ -128,9 +164,28 @@ class RollbackManager:
         return None
 
     @contextmanager
-    def _lock(self) -> Iterator[None]:
+    def _lock(self, *, timeout: Optional[float] = None) -> Iterator[None]:
+        """Exclusive log lock with a hard deadline (never blocks forever).
+
+        Raises :class:`RollbackLockBusy` at the deadline. Every caller turns
+        that into its documented ``(False, reason)`` / ``[]`` result — this
+        lock is on the console revert path, where blocking means an operator
+        request that never answers.
+        """
+        limit = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
         with open(self.log_dir / ".lock", "a+") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            deadline = time.monotonic() + limit
+            while True:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise RollbackLockBusy(
+                            f"{LOCK_BUSY_REASON_PREFIX}: still held after "
+                            f"{limit:g}s — refusing to block the caller"
+                        ) from None
+                    time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
             try:
                 yield
             finally:
@@ -185,6 +240,11 @@ class RollbackManager:
         A WAL entry is abandoned when no log record exists for it and it is
         older than ``max_age_s`` (younger entries may belong to a transaction
         another live manager is about to commit). Returns the recovered ids.
+
+        Raises:
+          RollbackLockBusy: the log lock was still held at the deadline. The
+            constructor swallows this (recovery is best-effort); a direct
+            caller decides for itself.
         """
         recovered: List[str] = []
         now = time.time()
@@ -257,28 +317,20 @@ class RollbackManager:
             return "", f"begin_transaction failed: {exc}"
         return transaction_id, None
 
-    def commit_transaction(
+    def _commit_locked(
         self,
+        wal_file: Path,
         transaction_id: str,
         tenant_id: str,
         config_path: str,
         old_state: Dict[str, Any],
         new_state: Dict[str, Any],
-        operation: str = "update",
-        audit_callback=None,
+        operation: str,
     ) -> Tuple[bool, Optional[str]]:
-        """Commit: chained log append, WAL removed. A failure is logged as FAILED
-        with the SAME chain/MAC treatment, so the chain stays verifiable."""
-        error = self._bind(tenant_id)
-        if error:
-            return False, error
-        if not transaction_id:
-            return False, "transaction_id is required"
-        try:
-            wal_file = self._wal_file(transaction_id)
-        except ValueError as exc:
-            return False, str(exc)
+        """Everything ``commit_transaction`` does while holding the log lock.
 
+        Raises :class:`RollbackLockBusy` (never blocks); the caller converts it.
+        """
         with self._lock():
             if not wal_file.exists():
                 return False, f"WAL entry not found for {transaction_id}"
@@ -301,7 +353,7 @@ class RollbackManager:
                 or wal.get("old_state") != old_state
                 or wal.get("new_state") != new_state
             ):
-                ok, err = self._append_locked({
+                self._append_locked({
                     **base, "status": TransactionStatus.FAILED.value,
                     "error": "commit payload does not match WAL entry",
                 })
@@ -313,6 +365,41 @@ class RollbackManager:
             if not ok:
                 return False, f"commit_transaction failed: {err}"
             wal_file.unlink(missing_ok=True)
+        return True, None
+
+    def commit_transaction(
+        self,
+        transaction_id: str,
+        tenant_id: str,
+        config_path: str,
+        old_state: Dict[str, Any],
+        new_state: Dict[str, Any],
+        operation: str = "update",
+        audit_callback=None,
+    ) -> Tuple[bool, Optional[str]]:
+        """Commit: chained log append, WAL removed. A failure is logged as FAILED
+        with the SAME chain/MAC treatment, so the chain stays verifiable."""
+        error = self._bind(tenant_id)
+        if error:
+            return False, error
+        if not transaction_id:
+            return False, "transaction_id is required"
+        try:
+            wal_file = self._wal_file(transaction_id)
+        except ValueError as exc:
+            return False, str(exc)
+
+        try:
+            ok, err = self._commit_locked(
+                wal_file, transaction_id, tenant_id, config_path,
+                old_state, new_state, operation,
+            )
+        except RollbackLockBusy as exc:
+            # Availability over completeness: the caller is an operator HTTP
+            # request (dashboard revert); a wedged holder must not hang it.
+            return False, str(exc)
+        if not ok:
+            return False, err
 
         if audit_callback:
             audit_callback(
@@ -333,7 +420,11 @@ class RollbackManager:
         transaction_id_to_undo: str,
         audit_callback=None,
     ) -> Tuple[bool, Optional[str]]:
-        """Append a REVERT transaction restoring ``old_state`` of a committed one."""
+        """Append a REVERT transaction restoring ``old_state`` of a committed one.
+
+        A busy log lock surfaces as ``(False, "rollback log lock busy: ...")``
+        from the inner ``commit_transaction`` — never as a hang.
+        """
         error = self._bind(tenant_id)
         if error:
             return False, error

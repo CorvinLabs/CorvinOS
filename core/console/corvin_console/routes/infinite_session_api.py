@@ -18,6 +18,9 @@ Security:
   again — with ``resolve().is_relative_to`` — inside the tenant-bound store;
 - the tenant is ``rec.tenant_id`` from the authenticated session, never a
   query parameter; the store refuses any other tenant;
+- the rollback log lock is bounded (``LOCK_TIMEOUT_SECONDS``): a wedged
+  holder yields 503 ``transaction_lock_busy`` within the deadline, never a
+  request that hangs forever;
 - ``revert`` sits behind ``require_csrf`` and is audited through the core
   console audit helper (``console.action_performed`` / ``action_failed``,
   content-free: action, target, ``sid_fingerprint``, tenant). The snapshot
@@ -38,7 +41,11 @@ from pydantic import BaseModel, Field
 from core.infinite_session.drift_detector import DriftDetector
 from core.infinite_session.event_store import EventStore
 from core.infinite_session.paths import ID_PATTERN
-from core.infinite_session.rollback_manager import RollbackManager, state_hash
+from core.infinite_session.rollback_manager import (
+    LOCK_BUSY_REASON_PREFIX,
+    RollbackManager,
+    state_hash,
+)
 from core.infinite_session.snapshot_schema import Snapshot, SnapshotType
 
 from .. import audit as console_audit
@@ -363,6 +370,11 @@ async def revert_to_checkpoint(
     if not committed:
         # The snapshot is on the chain (audited); the transaction log records the failure.
         logger.error("infinite-session revert commit failed for %s: %s", task_id, error)
+        if error and error.startswith(LOCK_BUSY_REASON_PREFIX):
+            # Another writer holds the rollback log. The manager REFUSED within
+            # its deadline instead of blocking this request forever — answer
+            # 503 so the operator (or the UI) can retry.
+            _denied("transaction_lock_busy", 503)
         _denied("transaction_commit_failed", 500)
 
     console_audit.action_performed(
