@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from enum import Enum
@@ -390,9 +391,20 @@ class FeedbackTTLValidator:
             # Convert any timezone to UTC for consistent comparison
             feedback_time = feedback_time.astimezone(timezone.utc)
 
-        # 4. Calculate age
+        # 4. Calculate age (security fix: use ceil to prevent truncation bypass)
+        # BUG FIX #6 ROUND 3: int() truncates 5.5 → 5, allowing stale feedback to pass.
+        # Solution: Use math.ceil(abs()) with sign preservation to round UP consistently.
+        # For positive ages: ceil rounds up (stricter, more conservative on old feedback)
+        # For negative ages (future): ceil(abs()) then negate (stricter on future feedback)
         age_delta = now - feedback_time
-        age_seconds = int(age_delta.total_seconds())
+        total_seconds = age_delta.total_seconds()
+        if total_seconds >= 0:
+            # Positive age (past feedback): round UP to be stricter
+            age_seconds = math.ceil(total_seconds)
+        else:
+            # Negative age (future feedback): round DOWN (toward -infinity) to be stricter
+            # Using ceil(abs()) + negate: ceil(abs(-5.5)) = ceil(5.5) = 6, negate to -6
+            age_seconds = -math.ceil(abs(total_seconds))
 
         # 5. Check for future-dated feedback (clock skew tolerance)
         if age_seconds < -self.allow_future_seconds:

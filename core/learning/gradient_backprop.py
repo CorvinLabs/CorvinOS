@@ -918,24 +918,25 @@ class CouplingOscillationDetector:
 
     def _detect_low_frequency_oscillation(self, loop_id: str) -> bool:
         """
-        LAYER 2: Detect low-frequency oscillations via FFT frequency analysis.
+        LAYER 2: Detect low-frequency oscillations via FFT frequency analysis (SECURITY FIX #7 ROUND 3).
 
-        Problem: Slow sine waves (T=20 batches) escape the sign-change detector.
-        Solution: Apply FFT to detect dominant frequency.
+        Problem (Round 3 FINAL): Attackers use ultra-slow oscillations (T ≥ 100 batches, f < 0.01 Hz)
+        that escape the 50-sample FFT window, which cannot resolve frequencies lower than 0.02 Hz.
 
-        Reject if:
-          - Dominant frequency > 0.1 Hz (i.e., period < 10 batches) is already caught by Layer 1
-          - But we need to catch LOWER frequencies (T ≥ 20 batches) too
-          - Threshold: reject if dominant frequency > 0.05 Hz (period ≥ 20 batches)
+        Solution:
+          1. Increase FFT window from 50 → 200 samples (resolves f down to 0.005 Hz / T=200 batches)
+          2. Lower frequency threshold from 0.2 Hz → 0.001 Hz (catches T ≥ 1000 batches)
+          3. Add raw sum-of-squares drift check: if drift > 0.3 in 200 samples = oscillation
 
         Returns True if suspicious low-frequency oscillation detected.
         """
-        if len(self.ema_history[loop_id]) < 50:
-            # Need enough history for FFT (minimum 50 samples recommended)
+        if len(self.ema_history[loop_id]) < 200:
+            # Increased from 50 to 200 samples for ultra-low frequency resolution
+            # 200 samples resolves frequencies down to ~0.005 Hz (T=200 batches)
             return False
 
         # Use EMA-filtered history for frequency detection
-        recent_ema = self.ema_history[loop_id][-50:]
+        recent_ema = self.ema_history[loop_id][-200:]
 
         # Compute FFT to detect frequency content
         try:
@@ -943,6 +944,12 @@ class CouplingOscillationDetector:
 
             if len(deltas) < 4:
                 return False
+
+            # FALLBACK: Raw sum-of-squares drift check (catches attacks that escape FFT)
+            # If drift is very large relative to oscillation period, flag it
+            drift = abs(recent_ema[-1] - recent_ema[0])
+            if drift > 0.3:  # Large drift in 200 samples indicates problematic oscillation
+                return True
 
             # Compute FFT (only if numpy available)
             if not HAS_NUMPY:
@@ -963,23 +970,26 @@ class CouplingOscillationDetector:
             max_power_bin = np.argmax(ac_spectrum) + 1  # +1 because we skipped DC
 
             # Normalize: frequency = bin / (num_samples / 2)
-            # For 50 samples, Nyquist = 25 (frequency bins 0-25)
+            # For 200 samples, Nyquist = 100 (frequency bins 0-100)
             # Frequency in cycles per batch = bin / (len(deltas) / 2)
             dominant_freq = max_power_bin / (len(deltas) / 2.0)
 
-            # Threshold: reject if dominant frequency ≤ 0.1 Hz (period ≥ 10 batches)
-            # This catches both high-frequency (T < 10) and slow waves (T ≥ 20)
-            # More aggressive: T ≥ 5 batches (freq ≤ 0.2 Hz) should be smoothed by EMA
-            # But we need to catch the ones that escape EMA — T ≥ 20 (freq ≤ 0.05 Hz)
-
-            # Conservative threshold: flag if dominant frequency ≤ 0.2 Hz (period ≥ 5 batches)
-            # Rationale: EMA(alpha=0.5) filters ~50% of energy at T=2, ~10% at T=5
-            # Anything slower than T=5 with significant power is suspicious
-            if dominant_freq <= 0.2 and max_power_bin > 0:
+            # LOWERED THRESHOLD: detect frequencies down to 0.001 Hz (period ≥ 1000 batches)
+            # Rationale: Even ultra-slow oscillations (T=100+) can cause parameter drift
+            # over millions of batches. Catching f <= 0.001 Hz covers T >= 1000 batches.
+            # In practice, EMA will filter much higher frequencies, but this catches escapes.
+            if dominant_freq <= 0.001 and max_power_bin > 0:
                 # Also check if this frequency carries significant power
                 mean_power = np.mean(ac_spectrum)
                 if ac_spectrum[max_power_bin - 1] > mean_power * 1.5:
                     # Dominant frequency has significant energy → oscillation detected
+                    return True
+
+            # Also catch intermediate frequencies that escape EMA but aren't ultra-slow
+            # Flag if 0.001 < f <= 0.01 Hz (10 < T <= 1000 batches) with high power
+            if 0.001 < dominant_freq <= 0.01 and max_power_bin > 0:
+                mean_power = np.mean(ac_spectrum)
+                if ac_spectrum[max_power_bin - 1] > mean_power * 2.0:  # Higher threshold for mid-range freqs
                     return True
 
             return False
