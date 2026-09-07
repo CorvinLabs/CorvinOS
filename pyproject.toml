@@ -56,6 +56,11 @@ dependencies = [
     # with genuine Windows/macOS/Linux coverage (piper-tts's cp39-abi3 wheel is
     # forward-compatible with 3.9-3.14; it is NOT limited to Python 3.9 despite
     # older comments in this file — verified via PyPI wheel metadata 2026-07-07).
+    # Compliance report generation (EU AI Act Art. 50 evidence, GDPR Art. 30
+    # RoPA, audit-chain attestation). corvin_compliance_reports imports it
+    # unconditionally, so an undeclared reportlab meant all three
+    # regulator-facing reports crashed on every install (2026-09-07 review).
+    "reportlab >= 4.0",
     "edge-tts >= 6.1.8",
     "piper-tts >= 1.4.1",
     # Bundled static ffmpeg binary (pure-Python wheel, prebuilt for
