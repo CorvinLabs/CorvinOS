@@ -752,10 +752,21 @@ class TestMandatoryMechanismTripwires(unittest.TestCase):
 
         self.tripwire = tripwire
         self._tmp = tempfile.TemporaryDirectory()
-        os.environ["VOICE_AUDIT_PATH"] = str(Path(self._tmp.name) / "audit.jsonl")
+        # R2-A3: a chain redirect must resolve to the path the resolver would
+        # pick under this test's own CORVIN_HOME — the boot tripwire no longer
+        # tolerates a redirect just because the process is a pytest run.
+        self._prev_home = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = self._tmp.name
+        os.environ["VOICE_AUDIT_PATH"] = str(
+            Path(self._tmp.name) / "global" / "forge" / "audit.jsonl"
+        )
 
     def tearDown(self):
         os.environ.pop("VOICE_AUDIT_PATH", None)
+        if self._prev_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._prev_home
         self._tmp.cleanup()
 
     def test_all_five_mechanisms_have_a_tripwire(self):
@@ -1021,12 +1032,20 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
         import os
 
         os.environ.pop("VOICE_AUDIT_PATH", None)
+        if getattr(self, "_prev_home", None) is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._prev_home
         self.tripwire._verify_cache.clear()
 
     def _chain(self, tmp, count):
         import os
 
-        path = Path(tmp) / "audit.jsonl"
+        # R2-A3: chain at the resolver's own path under a matching CORVIN_HOME.
+        self._prev_home = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = str(tmp)
+        path = Path(tmp) / "global" / "forge" / "audit.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
         os.environ["VOICE_AUDIT_PATH"] = str(path)
         import audit as _audit  # type: ignore[import-not-found]
 

@@ -62,7 +62,9 @@ def _boot(host: str, tmp_path: Path, *, strip: bool, tamper: bool = False) -> st
     env.update({
         "HOME_DIR": str(home), "REPO": str(_REPO), "HOST": host,
         "CORVIN_HOME": str(home), "CORVIN_TENANT_ID": "_default",
-        "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
+        # R2-A3: the resolver's own path under this CORVIN_HOME — a redirect
+        # to any OTHER in-root path is now a tripwire failure in its own right.
+        "VOICE_AUDIT_PATH": str(home / "global" / "forge" / "audit.jsonl"),
         "CORVIN_AUDIT_ANCHOR_KEY": str(home / "anchor.key"),
         "STRIP_PLUGINS": "1" if strip else "0",
     })
@@ -74,7 +76,9 @@ def _boot(host: str, tmp_path: Path, *, strip: bool, tamper: bool = False) -> st
         # SEALED by a seam record, F-A13 — that is not a boot failure.)
         rec = {"ts": 1.0, "event_type": "test.event", "severity": "INFO", "run_id": "",
                "tool": "", "details": {}, "prev_hash": "", "hash": "deadbeefdeadbeef"}
-        (home / "audit.jsonl").write_text(json.dumps(rec) + "\n")
+        chain = home / "global" / "forge" / "audit.jsonl"
+        chain.parent.mkdir(parents=True, exist_ok=True)
+        chain.write_text(json.dumps(rec) + "\n")
         (home / "anchor.key").write_bytes(b"A" * 32)
         os.chmod(home / "anchor.key", 0o644)
     proc = subprocess.run([sys.executable, "-c", _BOOT], env=env, cwd=str(_REPO),

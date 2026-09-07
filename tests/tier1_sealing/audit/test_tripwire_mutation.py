@@ -158,17 +158,36 @@ class TestBootTripwire:
             tripwire.assert_all()
 
     def test_redirect_outside_root_blocks_boot(self, chain, tmp_path, monkeypatch):
-        """F-A3: an env-only redirect of the chain outside CORVIN_HOME is refused
-        (outside pytest; inside pytest the conftest redirect must keep working)."""
+        """F-A3 + R2-A3: an env-only redirect is refused unless it is a no-op.
+
+        The ``PYTEST_CURRENT_TEST`` tolerance this test used to assert is GONE:
+        it was a real env-var override of a fail-closed compliance tripwire, so
+        any process exporting that name switched the check off. Tests point
+        ``CORVIN_HOME`` at their sandbox instead (this module's ``chain``
+        fixture does), which makes their redirect an ordinary in-root one.
+        """
         outside = tmp_path / "elsewhere" / "audit.jsonl"
         outside.parent.mkdir()
         monkeypatch.setenv("VOICE_AUDIT_PATH", str(outside))
-        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         r = tripwire.audit_path_not_redirected()
         assert not r.ok and "OUTSIDE" in r.detail
+
+        # Setting the variable no longer buys tolerance — the check has no switch.
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "x")
-        assert tripwire.audit_path_not_redirected().ok
-        # inside the root it is fine without pytest
+        assert not tripwire.audit_path_not_redirected().ok
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+        # R2-A3: INSIDE the root is not sufficient either. A redirect to some
+        # other in-root file — e.g. an empty one, which reads as a fresh
+        # install — leaves the real chain unverified, and is refused.
         monkeypatch.setenv("VOICE_AUDIT_PATH", str(Path(chain).parent / "other.jsonl"))
+        r = tripwire.audit_path_not_redirected()
+        assert not r.ok and "INSIDE" in r.detail, r
+
+        # A redirect that names the resolver's own path changes nothing: allowed.
+        monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
+        assert tripwire.audit_path_not_redirected().ok
+
+        # And with no redirect at all.
+        monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
         assert tripwire.audit_path_not_redirected().ok

@@ -1084,10 +1084,68 @@ def _load_json(path: Path) -> Any:
 
 #: Keys under which a stored record names its data subject. A file/record is
 #: attributed to ``subject_id`` when any of these equals it (exact match).
+#:
+#: R2-A7: this list IS the attribution rule, so a key missing from it is a
+#: record that survives an Art. 17 erasure while the orchestrator reports
+#: COMPLETED — the worst possible combination, because the operator has a
+#: signed record saying the data is gone. The review found the subject sitting
+#: under ``speaker`` in transcript-shaped stores and surviving. Widened to every
+#: spelling the repo's writers actually use for "the person this is about";
+#: adding a key here is cheap and the failure mode of omitting one is silent.
 _SUBJECT_KEYS: tuple[str, ...] = (
     "user_id", "uid", "subject_id", "chat_key", "chat_id", "session_id",
     "source_session_id", "dest_session_id", "requester", "approver", "owner",
+    # R2-A7 additions — transcript / authorship / actor spellings.
+    "speaker", "author", "actor", "actor_id", "sender", "from_user",
+    "created_by", "requested_by", "participant", "user", "username",
+    "account_id", "owner_id", "session_key", "subject",
 )
+
+
+#: Filename of the infinite-session snapshot index (mirrors
+#: ``core.infinite_session.event_store.INDEX_FILE`` without importing across the
+#: repo-root boundary, the same way ``_tenant_global`` mirrors the resolver).
+INDEX_FILE = "index.json"
+
+#: Audit event marking a LAWFUL discontinuity in a snapshot chain: an Art. 17
+#: erasure removed entries, so the ``seq`` sequence has a gap on purpose.
+CHAIN_SEAM_EVENT = "erasure.chain_seam"
+
+
+def _record_chain_seam(*, tenant_id: str, request_id: str, task_id: str,
+                       dropped: list) -> None:
+    """Record that an erasure created a seq gap in a snapshot chain (R2-A7).
+
+    Without this the gap is reported by ``verify_snapshot_chain`` as
+    "Chain gap at seq N" — the same message a tamper produces. Content-free:
+    counts and sequence numbers only, never the subject id (that is exactly the
+    identifier the erasure removed, so writing it into an append-only chain
+    would undo the erasure).
+    """
+    try:
+        from audit import audit_event  # type: ignore[import-not-found]
+    except ImportError:
+        return
+    try:
+        seqs = sorted(int(s) for s in dropped)
+    except (TypeError, ValueError):
+        seqs = []
+    try:
+        audit_event(
+            CHAIN_SEAM_EVENT,
+            details={
+                "request_id": request_id,
+                "task_id": str(task_id)[:128],
+                "removed_count": len(dropped),
+                "first_seq": seqs[0] if seqs else 0,
+                "last_seq": seqs[-1] if seqs else 0,
+                "reason": "gdpr_art17_erasure",
+                "tenant_id": tenant_id,
+            },
+            tenant_id=tenant_id,
+        )
+    except Exception:  # noqa: BLE001 — the erasure must not fail on its own record
+        pass
 
 
 def _mentions_subject(obj: Any, subject_id: str, depth: int = 0) -> bool:
@@ -1241,6 +1299,13 @@ class InfiniteSessionHandler:
                 for f in sorted(isr.rglob("*")):
                     if not f.is_file() or f.suffix not in (".json", ".jsonl"):
                         continue
+                    # The snapshot index names every snapshot of the task, so it
+                    # mentions the subject and this sweep would DELETE it —
+                    # taking the surviving subjects' entries with it. It has its
+                    # own pass below, which rewrites it entry-wise and records
+                    # the resulting seq seam.
+                    if f.name == INDEX_FILE:
+                        continue
                     if f.suffix == ".json":
                         if _mentions_subject(_load_json(f), subject_id):
                             f.unlink()
@@ -1264,15 +1329,49 @@ class InfiniteSessionHandler:
                         tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
                         os.replace(tmp, f)
                         removed += hit
-                # index.json entries pointing at deleted snapshots
-                for idx in isr.rglob("index.json"):
+                # R2-A7: index.json is the snapshot CHAIN's index — an ordered
+                # list of SnapshotMetadata with a contiguous ``seq`` that
+                # ``EventStore.verify_snapshot_chain`` checks. Two defects here:
+                #
+                #  * it filtered on ``m["path"]``, but the metadata key is
+                #    ``file_path`` — so nothing was ever dropped and the index
+                #    kept naming snapshots that had just been deleted. Every
+                #    later read of that task failed on a missing file, and the
+                #    subject's task/phase ids stayed on disk IN the index, which
+                #    is itself personal data the erasure was meant to remove.
+                #  * even done correctly, removing entries leaves a ``seq`` gap,
+                #    which verify reports as "Chain gap" — indistinguishable
+                #    from tampering. An erasure is a LAWFUL discontinuity, so it
+                #    is recorded as a seam rather than left to look like damage.
+                for idx in isr.rglob(INDEX_FILE):
                     data = _load_json(idx)
-                    if isinstance(data, list):
-                        live = [m for m in data if not (isinstance(m, dict)
-                                                        and isinstance(m.get("path"), str)
-                                                        and not Path(m["path"]).exists())]
-                        if len(live) != len(data):
-                            idx.write_text(json.dumps(live), encoding="utf-8")
+                    if not isinstance(data, list):
+                        continue
+                    live = []
+                    dropped_seqs: list[int] = []
+                    for m in data:
+                        if not isinstance(m, dict):
+                            live.append(m)
+                            continue
+                        fp = m.get("file_path") or m.get("path")
+                        gone = isinstance(fp, str) and fp and not Path(fp).exists()
+                        if gone or _mentions_subject(m, subject_id):
+                            try:
+                                dropped_seqs.append(int(m.get("seq", 0)))
+                            except (TypeError, ValueError):
+                                dropped_seqs.append(0)
+                            continue
+                        live.append(m)
+                    if not dropped_seqs:
+                        continue
+                    tmp = idx.with_suffix(".json.erasing")
+                    tmp.write_text(json.dumps(live), encoding="utf-8")
+                    os.replace(tmp, idx)
+                    removed += len(dropped_seqs)
+                    _record_chain_seam(
+                        tenant_id=self.tenant_id, request_id=request_id,
+                        task_id=idx.parent.name, dropped=dropped_seqs,
+                    )
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
@@ -1294,6 +1393,256 @@ class InfiniteSessionHandler:
         )
 
 
+# ── R2-A7: stores that had NO Art. 17 path at all ────────────────────────────
+#
+# Each of these is a live, writer-created directory under the tenant home that
+# no handler claimed. The orchestrator therefore ran to COMPLETED — a signed
+# statement that the subject's data is gone — with the data still on disk. That
+# is worse than an outright failure, which at least tells the operator to act.
+
+
+def _purge_json_tree(root: Path, subject_id: str, *,
+                     match_dir_name: bool = True) -> int:
+    """Delete files/dirs under ``root`` attributed to ``subject_id``.
+
+    Two attribution routes, the same pair the infinite-session handler uses:
+    a directory NAMED after the subject, and a JSON/JSONL payload naming it
+    under a known identity key (:data:`_SUBJECT_KEYS`). JSONL files are rewritten
+    line-wise so one subject's lines go without destroying another's.
+    """
+    import shutil
+
+    removed = 0
+    if not root.is_dir():
+        return 0
+    if match_dir_name:
+        for d in list(root.rglob(subject_id)):
+            if d.is_dir() and d.name == subject_id:
+                shutil.rmtree(d, ignore_errors=False)
+                removed += 1
+    for f in sorted(root.rglob("*")):
+        if not f.is_file() or f.suffix not in (".json", ".jsonl"):
+            continue
+        if f.suffix == ".json":
+            if _mentions_subject(_load_json(f), subject_id):
+                f.unlink()
+                removed += 1
+            continue
+        kept: list[str] = []
+        hit = 0
+        try:
+            lines = f.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            rec = None
+            if line.strip():
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    rec = None
+            if rec is not None and _mentions_subject(rec, subject_id):
+                hit += 1
+                continue
+            kept.append(line)
+        if hit:
+            tmp = f.with_suffix(f.suffix + ".erasing")
+            tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+            os.replace(tmp, f)
+            removed += hit
+    return removed
+
+
+def _result(layer_id: str, t0: float, removed: int, *, absent: bool,
+            absent_reason: str, empty_reason: str, applied_reason: str
+            ) -> ErasureLayerResult:
+    """The three-way SKIPPED/SKIPPED/APPLIED shape every handler here returns."""
+    ms = int((time.time() - t0) * 1000)
+    if absent:
+        return ErasureLayerResult(
+            layer_id=layer_id, status=LayerStatus.SKIPPED, count=0,
+            reason=absent_reason, code=ReasonCode.STORE_ABSENT.value, duration_ms=ms,
+        )
+    if removed == 0:
+        return ErasureLayerResult(
+            layer_id=layer_id, status=LayerStatus.SKIPPED, count=0,
+            reason=empty_reason, code=ReasonCode.STORE_EMPTY.value, duration_ms=ms,
+        )
+    return ErasureLayerResult(
+        layer_id=layer_id, status=LayerStatus.APPLIED, count=removed,
+        reason=applied_reason.format(n=removed), code=ReasonCode.DELETED.value,
+        duration_ms=ms,
+    )
+
+
+@dataclass
+class WorkflowChatHandler:
+    """GDPR Art. 17 erasure for workflow authoring transcripts (R2-A7).
+
+    ``core/console/corvin_console/routes/workflows.py`` appends every turn of
+    the workflow-authoring conversation to
+    ``<tenant>/workflows/<wid>.chat.jsonl`` verbatim — ``{role, content, ts}``,
+    user-authored free text, no TTL, no erasure path. The run logs beside them
+    (``<wid>/runs/<rid>.jsonl``) carry step output the same way.
+
+    Attribution is line-wise via :data:`_SUBJECT_KEYS` (which is why ``speaker``
+    was added to it), plus whole-file removal when the workflow's own metadata
+    names the subject as its author/owner. A transcript line carrying no
+    identity key is NOT guessed at — the honest answer is to leave it and let
+    the count say what was removed, rather than deleting another operator's
+    workflow on a substring hunch.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-workflows"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "workflows"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="workflows store absent",
+                           empty_reason="", applied_reason="")
+        removed = 0
+        try:
+            # A workflow whose metadata names the subject goes whole: its
+            # transcript, its runs and its YAML are that person's content.
+            for meta in sorted(root.glob("*.meta.json")):
+                if not _mentions_subject(_load_json(meta), subject_id):
+                    continue
+                wid = meta.name[: -len(".meta.json")]
+                for extra in (root / f"{wid}.chat.jsonl", root / f"{wid}.awp.yaml",
+                              meta):
+                    if extra.exists():
+                        extra.unlink()
+                        removed += 1
+                run_dir = root / wid
+                if run_dir.is_dir():
+                    import shutil
+                    shutil.rmtree(run_dir, ignore_errors=True)
+                    removed += 1
+            removed += _purge_json_tree(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"workflow purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no workflow content matched subject",
+                       applied_reason="removed {n} workflow item(s) for subject")
+
+
+@dataclass
+class BrowserSessionHandler:
+    """GDPR Art. 17 erasure for browser-automation profiles (R2-A7).
+
+    ``BrowserSession`` gives each live session its own Chromium user-data dir at
+    ``<tenant>/browser/sessions/<session_id>/`` — cookies, local storage, cached
+    pages, saved credentials: among the most sensitive personal data the product
+    ever writes, and it outlives the session (a console restart drops the live
+    session, not the directory on disk).
+
+    ``subject_id`` is the session id, so the directory NAME is the attribution —
+    the same shape ``InfiniteSessionHandler`` uses.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-browser"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "browser"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="browser store absent",
+                           empty_reason="", applied_reason="")
+        removed = 0
+        try:
+            import shutil
+            for d in list(root.rglob(subject_id)):
+                if d.is_dir() and d.name == subject_id:
+                    shutil.rmtree(d, ignore_errors=False)
+                    removed += 1
+            removed += _purge_json_tree(root, subject_id, match_dir_name=False)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"browser purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no browser session matched subject",
+                       applied_reason="removed {n} browser session profile(s)")
+
+
+@dataclass
+class VibeCheckpointHandler:
+    """GDPR Art. 17 erasure for Vibe task-graph checkpoints (R2-A7).
+
+    ``core/vibe_engineering/checkpoint_manager.py`` writes
+    ``<tenant>/vibe/checkpoints/<checkpoint_id>.json``, each carrying the
+    ``session_id`` and ``task_id`` it was taken for plus the captured task
+    state. Tenant-scoped since 2026-09-07, but with no erasure path: the
+    checkpoints simply accumulated.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-vibe-checkpoints"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "vibe"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="vibe store absent",
+                           empty_reason="", applied_reason="")
+        try:
+            removed = _purge_json_tree(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=0,
+                reason=f"vibe purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no vibe checkpoint matched subject",
+                       applied_reason="removed {n} vibe checkpoint(s) for subject")
+
+
+@dataclass
+class DatasourceConnectionHandler:
+    """GDPR Art. 17 erasure for DSI connection manifests (R2-A7).
+
+    ``<tenant>/datasource_connections/<name>.json`` (mode 0600) holds the
+    manifest an operator registered: adapter, source config, region, and the
+    vault key naming the credential. A manifest created for one person's data
+    source names that person; it had no erasure path.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-datasource-connections"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "datasource_connections"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="datasource connection store absent",
+                           empty_reason="", applied_reason="")
+        try:
+            removed = _purge_json_tree(root, subject_id, match_dir_name=False)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=0,
+                reason=f"datasource purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no datasource connection matched subject",
+                       applied_reason="removed {n} datasource connection(s)")
+
+
 #: Coverage map (F-A9 guard): which directory under ``<tenant_home>`` (or
 #: ``<tenant_home>/global``) each real handler claims. ``tests/security/
 #: test_erasure_coverage_guard.py`` boots the writers it can reach into a temp
@@ -1313,6 +1662,11 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     "L163-ulo":              frozenset({"global/ulo"}),
     "L-learning":            frozenset({"learning", "experiments"}),
     "L-infinite-session":    frozenset({"infinite_session", "sessions"}),
+    # R2-A7 — stores that had no Art. 17 path at all until 2026-09-07.
+    "L-workflows":               frozenset({"workflows"}),
+    "L-browser":                 frozenset({"browser"}),
+    "L-vibe-checkpoints":        frozenset({"vibe"}),
+    "L-datasource-connections":  frozenset({"datasource_connections"}),
     "L7-skill-forge":        frozenset({"skill-forge", "skills"}),
     "L24-data-snapshot":     frozenset({"global/data"}),
 }
@@ -1369,6 +1723,11 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         WorkflowCheckpointHandler(tenant_id=tenant_id),
         LearningEventHandler(tenant_id=tenant_id),      # F-A9: ADR-0314 learning store
         InfiniteSessionHandler(tenant_id=tenant_id),    # F-A9: session state + checkpoints
+        # R2-A7: live stores that reported COMPLETED with survivors.
+        WorkflowChatHandler(tenant_id=tenant_id),           # workflows/*.chat.jsonl
+        BrowserSessionHandler(tenant_id=tenant_id),         # browser/sessions/<id>/
+        VibeCheckpointHandler(tenant_id=tenant_id),         # vibe/checkpoints/*.json
+        DatasourceConnectionHandler(tenant_id=tenant_id),   # datasource_connections/
         L7SkillForgeHandler(tenant_id=tenant_id),
         L24DataSnapshotHandler(tenant_id=tenant_id),
         IdentityMappingHandlerBase(),

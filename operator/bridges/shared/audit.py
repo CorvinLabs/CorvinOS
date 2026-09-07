@@ -95,15 +95,44 @@ def corvin_root() -> Path:
     return _load_corvin_home()()
 
 
+def default_audit_path() -> Path:
+    """Where the chain lives with NO redirect in effect — ``corvin_root()`` is
+    resolved independently of ``FORGE_ROOT``/``VOICE_AUDIT_PATH``, so this is
+    the path the tripwire's own resolver would pick."""
+    return corvin_root() / "global" / "forge" / "audit.jsonl"
+
+
 def audit_redirect() -> tuple[list[str], bool]:
-    """``(redirecting_env_vars, under_pytest)`` for the boot tripwire (F-A3).
+    """``(redirecting_env_vars, differs_from_default)`` for the boot tripwire.
 
     The tripwire module itself must not read ``os.environ`` (a structural
     guard forbids any env-based switch there); the redirect facts it needs
     are computed here, next to the resolver that honours those variables.
+
+    R2-A3 (2026-09-07) — TWO changes, both closing the same hole:
+
+    * ``PYTEST_CURRENT_TEST`` is gone. It was a genuine env-var override of a
+      fail-closed compliance tripwire, in a module whose contract is "there is
+      no override, no env var, no flag": any process that exports that name
+      disabled the redirect guard outright. Tests point ``CORVIN_HOME`` at
+      their sandbox instead — then the redirect is legitimately in-root and
+      needs no tolerance.
+    * ``differs_from_default`` replaces "is it under the root?" as the real
+      question. Staying under ``CORVIN_HOME`` was never sufficient: a redirect
+      to an EMPTY file *inside* the root passed as a fresh install while the
+      actual chain went unverified. A redirect that resolves to exactly the
+      path the resolver would have chosen is a no-op and stays fine; anything
+      else is reported.
     """
     redirected = [k for k in ("VOICE_AUDIT_PATH", "FORGE_ROOT") if os.environ.get(k, "").strip()]
-    return redirected, bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    if not redirected:
+        return redirected, False
+    try:
+        differs = (Path(audit_path()).expanduser().resolve()
+                   != default_audit_path().expanduser().resolve())
+    except Exception:  # noqa: BLE001 — cannot tell → say it differs (fail-closed)
+        differs = True
+    return redirected, differs
 
 
 def _forge_workspace_root() -> Path:

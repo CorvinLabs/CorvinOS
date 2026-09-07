@@ -450,6 +450,38 @@ class DataFlowGuard:
                     raise ValueError(
                         f"data_classification.matrix[{key}] has unknown locality(ies): {sorted(bad)}"
                     )
+                # R2-A5: "unknown" is not a place. It is the label for an engine
+                # the operator has NOT classified yet (``opencode`` ships with
+                # it), so admitting it in a matrix row says "send this grade of
+                # data anywhere, including wherever we have not looked" — the
+                # opposite of what a residency matrix is for, and a permanent
+                # hole that widens by itself every time a new unclassified
+                # engine appears. Classify the engine instead
+                # (``engine_compliance``), then name its real locality here.
+                if "unknown" in allowed_localities:
+                    raise ValueError(
+                        f"data_classification.matrix[{key}]: 'unknown' is not an "
+                        "admissible locality — it means the engine has not been "
+                        "classified. Give the engine a real locality under "
+                        "spec.data_classification.engine_compliance instead."
+                    )
+                # R2-A5: SECRET is the residual floor — the one grade whose
+                # promise is "never leaves this machine". A tenant config could
+                # widen it to us_cloud, which makes the strictest classification
+                # in the system weaker than a config line, with nothing in the
+                # chain marking the moment it happened. The egress rule in
+                # ``validate`` (SECRET requires network_egress == "none") is not
+                # a substitute: it is an AND, so a cloud locality that also
+                # claimed zero egress would pass both.
+                if cls_key is DataClassification.SECRET:
+                    forbidden = allowed_localities - {"local"}
+                    if forbidden:
+                        raise ValueError(
+                            "data_classification.matrix[SECRET] may only allow "
+                            f"'local' — refusing {sorted(forbidden)}. SECRET is the "
+                            "residual floor; route the data to a local engine "
+                            "(hermes, opencode_ollama) or classify it CONFIDENTIAL."
+                        )
                 matrix[cls_key] = frozenset(allowed_localities)  # type: ignore[arg-type]
 
         # Engine compliance override / extension
@@ -487,6 +519,19 @@ class DataFlowGuard:
                         "ADR-0072: claude_code locality cannot be overridden to 'local' — "
                         "it always egresses to api.anthropic.com (us_cloud). "
                         "Use hermes or opencode_ollama for local-only requirements."
+                    )
+                # R2-A5: the pin above covered ONE of the two fields the SECRET
+                # rule reads. ``validate`` admits SECRET only when
+                # ``network_egress == "none"``, so an operator who could not say
+                # ``locality: local`` could still say ``network_egress: none``
+                # and route SECRET data to api.anthropic.com by the other half of
+                # the same false claim. Both fields are facts about the engine,
+                # not preferences: claude_code makes an external network call.
+                if eid == "claude_code" and egress != "external":
+                    raise ValueError(
+                        f"ADR-0072: claude_code network_egress cannot be overridden to "
+                        f"{egress!r} — it always egresses to api.anthropic.com. "
+                        "Use hermes or opencode_ollama for zero-egress requirements."
                     )
                 engine_compliance[eid] = EngineCompliance(
                     engine_id=eid,

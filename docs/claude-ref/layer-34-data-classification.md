@@ -156,6 +156,26 @@ return `INTERNAL`, which every default row allows on a cloud engine — a typo i
 caller's label silently downgraded the guard to "allow");
 `DataFlowGuard.validate` denies `None` with `matched_rule="unknown_classification"`.
 
+**Three overrides a tenant config may NOT make (R2-A5, 2026-09-07).** The
+matrix is the residency policy, so a config line that widens it past these is
+refused at load with a `ValueError` naming the offence — loudly, rather than
+producing a guard that quietly allows what its own table forbids:
+
+* `matrix.SECRET` may only list `local`. It is the residual floor; widening it
+  made the strictest classification in the system weaker than a config line.
+  The `network_egress == "none"` rule is an AND, not a substitute — a cloud
+  locality that also claimed zero egress passed both.
+* `unknown` is not an admissible locality in ANY row. It is the label for an
+  engine nobody has classified yet (`opencode` ships with it), so allowing it
+  says "send this grade of data wherever we have not looked", and the hole
+  widens by itself with every new unclassified engine. Classify the engine
+  under `engine_compliance` and name its real locality instead.
+* `engine_compliance` for `claude_code` may override neither `locality`
+  (already pinned, ADR-0072 V-020) nor `network_egress`. Both are facts about
+  the engine: it calls api.anthropic.com. The egress half was unpinned, and
+  since the SECRET rule reads exactly that field, `network_egress: none` routed
+  SECRET data to a US cloud by the other half of the same false claim.
+
 `SECRET` is the only row kept local-only by default. It fires solely on literal
 credentials (API keys, private keys, `password = …`) detected by regex, occurs
 rarely in normal use, and stops those credentials from egressing — a security

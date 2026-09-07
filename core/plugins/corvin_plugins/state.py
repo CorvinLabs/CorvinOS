@@ -226,6 +226,74 @@ def instance_dir(
 _TENANT_RECORD_BOOT_LAYERS = frozenset({BootLayer.BUNDLED, BootLayer.INSTALLED})
 
 
+def _downgrade_claimed_origin(
+    record: PluginRecord, *, path: Path, tenant_id: str
+) -> PluginRecord:
+    """Force a tenant-written record's ``origin`` down to ``community``.
+
+    Exactly parallel to :func:`_downgrade_privileged_boot_layer`, for exactly
+    the same reason: ``registry.yaml`` is per-tenant, operator-writable state,
+    so what it says about provenance is a claim, not a fact. ``origin: builtin``
+    is the most valuable claim in the file — the ADR-0249 trust gate treats it
+    as "ships with CorvinOS, no signature required" and ADR-0250 exempts it from
+    the multi-tenant provider-slot refusal — and it was believed verbatim.
+
+    The load path independently DERIVES the origin from where the class file
+    lives (``bootstrap._origin_for_class_path``); this keeps the stored record
+    from carrying the claim around afterwards, where
+    ``PluginRecord.consent_required()`` and every console listing read it.
+
+    Downgrading rather than raising, again for the same reason: an over-reaching
+    line costs that entry its privilege, not the whole registry its readability.
+
+    NARROW ON PURPOSE — only a CONTRADICTED ``builtin`` is downgraded:
+
+    * ``builtin`` is the claim worth making. It means "ships in the wheel", and
+      it is the value the ADR-0249 trust gate short-circuits on and the value
+      ADR-0250 exempts from the provider-slot refusal. It is checkable: the
+      class either lives under the in-wheel root or it does not.
+    * ``vetted`` is NOT downgraded here. The install path derives it from
+      location too (ADR-0643 ``record_from_manifest``), so the stored value is
+      normally a fact, not a claim — and a false ``vetted`` is already caught
+      where it matters, by the trust gate, which demands a valid signature from
+      a pinned anchor and returns ``FORGED`` without one. Blanket-downgrading
+      it instead turns every legitimately installed plugin into one that needs
+      fresh operator consent, which breaks enable/disable for the whole install.
+    * A class that cannot be LOCATED leaves the record alone: absence of proof
+      that it is in the wheel is not proof that the operator's own installer
+      lied, and the runtime load path derives the origin independently anyway.
+    """
+    if record.origin is not PluginOrigin.BUILTIN:
+        return record
+    if not record.class_path:
+        return record
+    try:
+        from .bootstrap import _origin_for_class_path  # noqa: PLC0415 — cycle
+    except Exception:  # noqa: BLE001
+        return record
+    derived, _source = _origin_for_class_path(record.class_path)
+    if derived is None or derived == PluginOrigin.BUILTIN.value:
+        return record
+    log.error(
+        "registry record %r in %s claims origin=builtin but its class file "
+        "resolves to %s — downgrading to community (provenance is derived from "
+        "where the code lives, not from tenant state)",
+        record.plugin_id, path.name, derived,
+    )
+    _audit(
+        "plugin.origin_downgraded",
+        {
+            "plugin_id": record.plugin_id,
+            "claimed_origin": record.origin.value,
+            "origin": PluginOrigin.COMMUNITY.value,
+            "reason": "origin_claim_from_tenant_registry",
+            "tenant_id": tenant_id,
+        },
+        tenant_id=tenant_id,
+    )
+    return replace(record, origin=PluginOrigin.COMMUNITY)
+
+
 def _downgrade_privileged_boot_layer(
     record: PluginRecord, *, path: Path, tenant_id: str
 ) -> PluginRecord:
@@ -322,8 +390,11 @@ class TenantRegistry:
         for pid, data in plugins_raw.items():
             if not isinstance(data, dict):
                 raise RegistryCorrupt(f"{path}: record {pid!r} is not a mapping")
-            records[pid] = _downgrade_privileged_boot_layer(
-                PluginRecord.from_dict(data), path=path, tenant_id=audit_tenant
+            records[pid] = _downgrade_claimed_origin(
+                _downgrade_privileged_boot_layer(
+                    PluginRecord.from_dict(data), path=path, tenant_id=audit_tenant
+                ),
+                path=path, tenant_id=audit_tenant,
             )
         return cls(path, records)
 

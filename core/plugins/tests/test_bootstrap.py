@@ -105,14 +105,22 @@ class TestBuildContext(unittest.TestCase):
 class TestAssertCompliance(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self._prev = os.environ.get("VOICE_AUDIT_PATH")
-        os.environ["VOICE_AUDIT_PATH"] = str(Path(self._tmp.name) / "audit.jsonl")
+        # R2-A3: the chain redirect must name the path the resolver picks under
+        # this test's own CORVIN_HOME. The boot tripwire no longer tolerates a
+        # redirect merely because the process is a pytest run, so a chain parked
+        # outside the root now reads as the redirect attack it is.
+        self._prev = {k: os.environ.get(k) for k in ("VOICE_AUDIT_PATH", "CORVIN_HOME")}
+        os.environ["CORVIN_HOME"] = self._tmp.name
+        os.environ["VOICE_AUDIT_PATH"] = str(
+            Path(self._tmp.name) / "global" / "forge" / "audit.jsonl"
+        )
 
     def tearDown(self):
-        if self._prev is None:
-            os.environ.pop("VOICE_AUDIT_PATH", None)
-        else:
-            os.environ["VOICE_AUDIT_PATH"] = self._prev
+        for k, v in self._prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         self._tmp.cleanup()
 
     def test_passes_on_a_clean_install(self):

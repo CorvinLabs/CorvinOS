@@ -52,7 +52,8 @@ class _Env(unittest.TestCase):
         self.home = Path(self._tmp.name) / "home"
         (self.home / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
         self._prev = {k: os.environ.get(k) for k in ("VOICE_AUDIT_PATH", "CORVIN_HOME", "CORVIN_TENANT_ID")}
-        os.environ["VOICE_AUDIT_PATH"] = str(Path(self._tmp.name) / "audit.jsonl")
+        # R2-A3: inside the CORVIN_HOME set below, at the resolver's own path.
+        os.environ["VOICE_AUDIT_PATH"] = str(self.home / "global" / "forge" / "audit.jsonl")
         os.environ["CORVIN_HOME"] = str(self.home)
         os.environ.pop("CORVIN_TENANT_ID", None)
         if _audit._se is None:

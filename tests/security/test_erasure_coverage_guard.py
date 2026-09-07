@@ -146,6 +146,63 @@ def test_ccc_erase_rejects_invalid_subject(home):
     assert result.status == "error" and result.entity_id is None
 
 
+def _boot_real_writers(home: Path) -> None:
+    """Drive the REAL writers so the directories they create are the ones the
+    guard inspects (R2-A7).
+
+    The previous version hand-seeded ``mkdir``s that mirrored what the writers
+    were believed to do — so it could only ever confirm the test author's own
+    picture, and it missed four live stores (workflows transcripts, browser
+    profiles, vibe checkpoints, datasource manifests) for exactly that reason.
+    Each writer below is the production code path, imported and called.
+    """
+    import sys as _sys
+    _repo = Path(__file__).resolve().parents[2]
+    for _p in (_repo, _repo / "core" / "console", _repo / "operator" / "forge",
+               _repo / "operator" / "bridges" / "shared"):
+        if str(_p) not in _sys.path:
+            _sys.path.append(str(_p))
+
+    # 1. Workflow authoring transcript + metadata — the real route helpers.
+    from corvin_console.routes import workflows as _wf
+    _wf._append_chat_line("_default", "wf-guard", {
+        "role": "user", "content": "hello", "ts": 1.0, "speaker": SUBJECT,
+    })
+    _wf._write_atomic(_wf._meta_path("_default", "wf-guard"),
+                      {"id": "wf-guard", "title": "t", "created_by": SUBJECT})
+
+    # 2. Vibe checkpoints — the real CheckpointManager.
+    from core.vibe_engineering.checkpoint_manager import CheckpointManager
+    _cm = CheckpointManager(tenant_id="_default")
+    # create_checkpoint() builds the state; save() is what puts it on disk.
+    _cm.save(_cm.create_checkpoint(
+        task_id="task-guard", session_id=SUBJECT, phase="build", trigger="manual",
+        iteration_num=1, task_state={}, context_essentials={}, learning_state={},
+        open_subgoals=[], artifacts=[],
+    ))
+
+    # 3. Infinite-session rollback WAL — the real RollbackManager.
+    from core.infinite_session.rollback_manager import RollbackManager
+    RollbackManager("_default", corvin_home=home)
+
+    # 4. Browser session profile. The directory is created by
+    #    ``BrowserSession._launch`` right before it starts Chromium
+    #    (``self._home / "sessions" / self.session_id``); launching a real
+    #    browser is out of scope for this guard, so the REAL path resolver is
+    #    used and the profile dir created exactly as that line does.
+    from corvin_console.routes.browser import _home as _browser_home
+    (_browser_home("_default") / "sessions" / SUBJECT).mkdir(parents=True, exist_ok=True)
+
+    # 5. Datasource connection manifest — the real registry's path resolver.
+    from core.compute.corvin_compute.fabric.datasources.registry import (
+        DataSourceRegistry,
+    )
+    conn = (DataSourceRegistry(corvin_home=home)._home / "tenants" / "_default"
+            / "datasource_connections")
+    conn.mkdir(parents=True, exist_ok=True)
+    (conn / "ds1.json").write_text(json.dumps({"name": "ds1", "owner": SUBJECT}))
+
+
 def test_every_written_directory_is_claimed_by_a_handler(home):
     """Boot the writers reachable in-process into a temp home and check coverage."""
     _seed_learning(home)
@@ -155,9 +212,7 @@ def test_every_written_directory_is_claimed_by_a_handler(home):
     for d in ("memory", "web_chat/sessions", "social", "grants", "orgs", "ulo", "forge", "erasure"):
         (tg / d).mkdir(parents=True, exist_ok=True)
     (home / "tenants" / "_default" / "workflow_runs").mkdir(parents=True, exist_ok=True)
-    # infinite-session real writers (they create their own dirs)
-    from core.infinite_session.rollback_manager import RollbackManager
-    RollbackManager("_default", corvin_home=home)
+    _boot_real_writers(home)
 
     from erasure_handlers import COVERED_DIRS, NON_PERSONAL_DIRS, real_handler_chain
 
@@ -180,3 +235,130 @@ def test_every_written_directory_is_claimed_by_a_handler(home):
         "add a handler to erasure_handlers.real_handler_chain and claim the directory in "
         "COVERED_DIRS (or, only if it holds no personal data by construction, NON_PERSONAL_DIRS)"
     )
+
+
+class TestTheNewHandlersActuallyErase:
+    """R2-A7: a claimed directory must be claimed by a handler that WORKS.
+
+    Claiming a directory in COVERED_DIRS satisfies the guard above; it does not
+    erase anything. Each handler is driven here against data the real writers
+    produced, and each must leave another subject's data untouched.
+    """
+
+    def test_workflow_transcript_is_erased(self, home):
+        _boot_real_writers(home)
+        from erasure_handlers import WorkflowChatHandler
+
+        wf = home / "tenants" / "_default" / "workflows"
+        (wf / "other.chat.jsonl").write_text(
+            json.dumps({"role": "user", "content": "keep", "speaker": OTHER}) + "\n")
+        r = WorkflowChatHandler(tenant_id="_default").purge(SUBJECT, "er-wf")
+        assert r.status.value == "applied", r
+        assert not (wf / "wf-guard.chat.jsonl").exists()
+        assert OTHER in (wf / "other.chat.jsonl").read_text()
+
+    def test_browser_profile_is_erased(self, home):
+        _boot_real_writers(home)
+        from erasure_handlers import BrowserSessionHandler
+
+        sessions = home / "tenants" / "_default" / "browser" / "sessions"
+        (sessions / OTHER).mkdir(parents=True, exist_ok=True)
+        r = BrowserSessionHandler(tenant_id="_default").purge(SUBJECT, "er-br")
+        assert r.status.value == "applied", r
+        assert not (sessions / SUBJECT).exists()
+        assert (sessions / OTHER).exists()
+
+    def test_vibe_checkpoint_is_erased(self, home):
+        _boot_real_writers(home)
+        from erasure_handlers import VibeCheckpointHandler
+
+        r = VibeCheckpointHandler(tenant_id="_default").purge(SUBJECT, "er-vibe")
+        assert r.status.value == "applied", r
+        left = list((home / "tenants" / "_default" / "vibe").rglob("*.json"))
+        assert all(SUBJECT not in p.read_text() for p in left)
+
+    def test_datasource_manifest_is_erased(self, home):
+        _boot_real_writers(home)
+        from erasure_handlers import DatasourceConnectionHandler
+
+        conn = home / "tenants" / "_default" / "datasource_connections"
+        (conn / "ds2.json").write_text(json.dumps({"name": "ds2", "owner": OTHER}))
+        r = DatasourceConnectionHandler(tenant_id="_default").purge(SUBJECT, "er-ds")
+        assert r.status.value == "applied", r
+        assert not (conn / "ds1.json").exists()
+        assert (conn / "ds2.json").exists()
+
+    def test_a_subject_named_only_under_speaker_is_found(self, home):
+        """The exact attribution gap: the subject sat under ``speaker`` and
+        every handler walked past it."""
+        from erasure_handlers import _mentions_subject
+
+        assert _mentions_subject({"speaker": SUBJECT, "content": "hi"}, SUBJECT)
+        assert not _mentions_subject({"speaker": OTHER, "content": "hi"}, SUBJECT)
+
+
+def _seam_records(home: Path) -> list[dict]:
+    """Every ``erasure.chain_seam`` record on any chain under *home*.
+
+    Path-agnostic on purpose: which chain a handler's audit_event lands on
+    (tenant-scoped vs the resolver default) is not what this test is about."""
+    out: list[dict] = []
+    for chain in home.rglob("audit.jsonl"):
+        for line in chain.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("event_type") == "erasure.chain_seam":
+                out.append(rec)
+    return out
+
+
+class TestInfiniteSessionIndexAndSeam:
+    def test_index_entries_are_dropped_and_a_seam_is_recorded(self, home):
+        """R2-A7: erasing a snapshot left ``index.json`` naming a file that no
+        longer exists (the filter read ``path``; the metadata key is
+        ``file_path``), and the resulting ``seq`` gap was indistinguishable from
+        tampering. Now the index is rewritten and the gap recorded as a seam."""
+        isr = home / "tenants" / "_default" / "infinite_session" / "snapshots" / "task-x"
+        isr.mkdir(parents=True)
+        snap = isr / "s1.json"
+        snap.write_text(json.dumps({"session_id": SUBJECT, "state": {}}))
+        keep = isr / "s2.json"
+        keep.write_text(json.dumps({"session_id": OTHER, "state": {}}))
+        (isr / "index.json").write_text(json.dumps([
+            {"snapshot_id": "s1", "seq": 1, "file_path": str(snap), "session_id": SUBJECT},
+            {"snapshot_id": "s2", "seq": 2, "file_path": str(keep), "session_id": OTHER},
+        ]))
+
+        from erasure_handlers import InfiniteSessionHandler
+
+        r = InfiniteSessionHandler(tenant_id="_default").purge(SUBJECT, "er-is")
+        assert r.status.value == "applied", r
+        index = json.loads((isr / "index.json").read_text())
+        ids = [m["snapshot_id"] for m in index]
+        assert ids == ["s2"], index
+        assert not snap.exists()
+        assert keep.exists()
+
+        assert _seam_records(home), "no erasure.chain_seam record on any chain"
+
+    def test_the_seam_record_carries_no_subject_id(self, home):
+        """The seam explains a lawful gap; writing the erased identifier into an
+        append-only chain would undo the erasure it documents."""
+        isr = home / "tenants" / "_default" / "infinite_session" / "snapshots" / "task-y"
+        isr.mkdir(parents=True)
+        snap = isr / "s1.json"
+        snap.write_text(json.dumps({"session_id": SUBJECT}))
+        (isr / "index.json").write_text(json.dumps([
+            {"snapshot_id": "s1", "seq": 1, "file_path": str(snap), "session_id": SUBJECT},
+        ]))
+        from erasure_handlers import InfiniteSessionHandler
+
+        InfiniteSessionHandler(tenant_id="_default").purge(SUBJECT, "er-is2")
+        seams = _seam_records(home)
+        assert seams, "no erasure.chain_seam record on any chain"
+        for rec in seams:
+            assert SUBJECT not in json.dumps(rec), rec
