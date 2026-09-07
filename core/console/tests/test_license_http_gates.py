@@ -127,6 +127,14 @@ class TestCustomProviderCsrfGate(unittest.TestCase):
 
 # ── B: rag_providers_max via HTTP ─────────────────────────────────────────────
 
+#: ``POST /custom-provider/create`` runs the SSRF endpoint guard
+#: (``_assert_provider_endpoint_allowed``, added 2026-09-07) BEFORE the licence
+#: gate, so a request with no ``endpoint`` now answers 400 "scheme not allowed"
+#: and never reaches the 402 this section is about. A loopback literal is the
+#: hermetic way through: the guard short-circuits on it with no DNS lookup.
+_SAFE_ENDPOINT = "http://127.0.0.1:9/search"
+
+
 class TestCustomProviderRagLimit(unittest.TestCase):
     """POST /custom-provider/create → 402 when rag_providers_max exceeded."""
 
@@ -154,7 +162,8 @@ class TestCustomProviderRagLimit(unittest.TestCase):
             ):
                 resp = client.post(
                     "/v1/console/custom-provider/create",
-                    json={"provider_id": "new-provider", "name": "New Provider"},
+                    json={"provider_id": "new-provider", "name": "New Provider",
+                          "endpoint": _SAFE_ENDPOINT},
                 )
 
             self.assertEqual(resp.status_code, 402,
@@ -180,7 +189,8 @@ class TestCustomProviderRagLimit(unittest.TestCase):
             ):
                 resp = client.post(
                     "/v1/console/custom-provider/create",
-                    json={"provider_id": "new-provider", "name": "New Provider"},
+                    json={"provider_id": "new-provider", "name": "New Provider",
+                          "endpoint": _SAFE_ENDPOINT},
                 )
 
             # Gate passed — response is NOT 402 (may be 500 from missing manifest deps, that's fine).
@@ -205,7 +215,8 @@ class TestCustomProviderRagLimit(unittest.TestCase):
             ):
                 resp = client.post(
                     "/v1/console/custom-provider/create",
-                    json={"provider_id": "new-provider", "name": "New Provider"},
+                    json={"provider_id": "new-provider", "name": "New Provider",
+                          "endpoint": _SAFE_ENDPOINT},
                 )
 
             self.assertNotEqual(resp.status_code, 402,

@@ -89,16 +89,19 @@ def _sandbox(tmp_path: Path):
         sys.modules.update(preloaded)
 
 
-#: The registry record. plugin_type/origin are ordinary — the compliance status
-#: comes from the RUNTIME registration below, never from anything a tenant may
-#: write into its own registry.yaml (a self-assigned compliance layer is
-#: downgraded on read, see test_admin_route.py).
+#: The registry record. ``origin`` is ``community`` because that is the ONLY
+#: value the install door accepts (ADR-0643 finding F-P1: builtin/vetted
+#: provenance is derived by the server from the install LOCATION, never claimed
+#: in a request body). The compliance status comes from the RUNTIME
+#: registration below, never from anything a tenant may write into its own
+#: registry.yaml (a self-assigned compliance layer is downgraded on read, see
+#: test_admin_route.py).
 _RECORD = {
     "plugin_id": "audit-writer",
     "version": "1.0.0",
     "display_name": "Audit Writer",
     "plugin_type": "audit_backend",
-    "origin": "vetted",
+    "origin": "community",
     "pii_risk": "low",
     "locality": "local",
     "network_egress": "none",
@@ -210,7 +213,10 @@ class TestConsoleDisableRefusal(unittest.TestCase):
             assert resp.status_code == 200, resp.text
             resp = client.post(
                 "/v1/console/plugins/audit-writer/enable",
-                json={},
+                # A community-origin plugin needs the operator's explicit
+                # consent to enable (ADR-0233 consent gate) — the install door
+                # only ever accepts ``community``, see _RECORD.
+                json={"consent_granted": True},
                 headers=self._hdr(csrf),
             )
             assert resp.status_code == 200, resp.text

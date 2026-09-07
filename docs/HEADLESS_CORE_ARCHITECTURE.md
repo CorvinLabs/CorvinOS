@@ -397,6 +397,18 @@ this process serves a **browser surface**. Exactly three things change when it i
 3. `GET /` returns `{"status": "ok", "version": …, "ui": "headless"}` instead of
    redirecting to `/console/`.
 
+> **The flag was DEAD from 2026-09-07 until it was repaired the same day.**
+> `headless_enabled()` (`core/console/corvin_console/app.py`) resolves the flag by
+> executing the `os.headless_mode` Skill, and ADR-0537/ADR-0642 made `lom=` mandatory
+> on `SkillsRegistry.execute` — a call without one is *refused*, never runs the Skill,
+> and returns an error result. `headless_enabled()` maps anything but `status ==
+> "success"` to `False`, so every configuration resolved to "serve the UI": an operator
+> who turned API-only mode on still got the browser SPA, `/local-stats` and the `/`
+> redirect. The call now passes
+> `lom="core/console/corvin_console/app.py:headless_enabled"`. Any new Skill call site
+> must pass a LoM that resolves to a real `<repo-relative file>:<function>`; a
+> fail-closed refusal that a caller maps to a default is a silent feature kill.
+
 That is the entire behavioural surface of the flag. It does **not** reorder the boot
 sequence and it does **not** introduce deployment presets — see below.
 

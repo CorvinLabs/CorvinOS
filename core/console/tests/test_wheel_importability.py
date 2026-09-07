@@ -45,6 +45,22 @@ def _pyproject_wheel_sources() -> dict[str, str]:
     )
 
 
+#: Paths that live INSIDE the repo tree but are not repo source. The scans
+#: below walk the working tree with grep, and a developer machine keeps whole
+#: third-party worlds under it — ``core/console/.venv`` alone is 960 MB of
+#: site-packages here. On 2026-09-07 that made this test claim ``core/quality/
+#: models`` was imported top-level "by 2 file(s)": the two hits were
+#: ``onnxruntime/transformers/models/llama/*.py``. A wheel-packaging assertion
+#: that reads another project's vendored code answers about the wrong repo.
+_VENDORED_MARKERS = ("/.venv/", "/venv/", "/site-packages/", "/node_modules/",
+                     "/.git/", "/.claude/worktrees/", "/dist/", "/build/")
+
+
+def _is_vendored(path: str) -> bool:
+    p = "/" + path.lstrip("./")
+    return any(m in p for m in _VENDORED_MARKERS)
+
+
 class TestCorePackagesAreImportableTopLevel(unittest.TestCase):
     """A core/<area>/<pkg> imported as a top-level module needs a sources mapping.
 
@@ -62,6 +78,7 @@ class TestCorePackagesAreImportableTopLevel(unittest.TestCase):
         return [
             line for line in result.stdout.splitlines()
             if "/tests/" not in line and "/test_" not in line
+            and not _is_vendored(line)
         ]
 
     def test_every_top_level_imported_core_package_is_remapped(self):
@@ -156,6 +173,7 @@ class TestBareImportsResolveFromTheVendorBootstrap(unittest.TestCase):
         sites = [
             f for f in result.stdout.splitlines()
             if "_vendor" not in f and "/test_" not in f
+            and not _is_vendored(f)
         ]
         self.assertTrue(sites, "grep found no clag import sites — check the pattern")
         # The point: they stay bare. One sys.path entry serves all of them, so a

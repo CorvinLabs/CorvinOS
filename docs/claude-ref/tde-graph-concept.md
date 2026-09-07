@@ -344,3 +344,29 @@ Two things this trigger must respect, both discovered in this investigation:
    stays unlimited"); the badge must treat `None` as "omit the quota line," not as "0" or
    "unlimited" literal text requiring a special-cased string — straightforward, flagging only
    so the implementer doesn't skip the `None` check.
+
+---
+
+## Addendum 2026-09-07 — the tde.* vocabulary must be REGISTERED with the audit floor
+
+ADR-0640 made the core writer's details floor (`forge.security_events.
+filter_audit_details`) **default-deny**: an event type with no registered
+positive allowlist keeps only the universal `_AUDIT_KNOWN_KEYS` vocabulary and
+every other key is dropped into `_dropped_fields`. `tde_run_id`, `step_num`,
+`step_action`, `delegate`, `loss_pct`, `step_count`, `success`, `ipc`,
+`override`, `trivial`, `complexity` are not in that universal set — so **every**
+`tde.*` record reached the chain stripped of exactly the correlation ids this
+graph is built from, and `GET /v1/console/compute/tde/{run_id}/graph` answered
+404 for real turns that were sitting in the chain.
+
+`operator/orchestration/tde/tde_audit.py` — which already owns the closed
+CONTENT-FREE vocabulary (`_scrub` drops everything else and pins the identifier
+shape) — now declares it in `_EVENT_FIELDS` and folds it into the writer's
+registry with `security_events.register_event_allowlist()` at import
+(`register_allowlists()`, idempotent). Registering the owner's closed set is the
+structural answer; widening the universal floor for one subsystem is not.
+
+**Anything that writes a namespaced audit event must register its allowlist the
+same way** (cf. `core/infinite_session/paths.py::_register_allowlists`), and the
+registration has to happen before the first record of that type is written —
+the floor is consulted inside `write_event`.
