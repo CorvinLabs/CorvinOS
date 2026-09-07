@@ -186,3 +186,76 @@ def test_unlocatable_module_derives_no_origin(class_path, expected):
     from corvin_plugins.bootstrap import _origin_for_class_path
 
     assert _origin_for_class_path(class_path)[0] is expected
+
+
+class TestProvenanceProbeExecutesNothing:
+    """R3-A2: ``_origin_for_class_path`` documented "Resolved WITHOUT importing
+    the module … so this can run BEFORE the trust gate". It used
+    ``importlib.util.find_spec``, which IMPORTS THE PARENT PACKAGE of a dotted
+    name — it has to, to read that package's ``__path__``. A tenant-writable
+    ``registry.yaml`` naming ``class_path: evilpkg.plugin:Cls`` therefore ran
+    ``evilpkg/__init__.py`` before ADR-0249 decided whether that code may run at
+    all: arbitrary code execution from two lines of YAML, in the very function
+    whose placement exists to prevent it.
+
+    Resolution now walks the dotted name with ``importlib.machinery.PathFinder``
+    segment by segment, threading each spec's ``submodule_search_locations``, and
+    falls back to the restrictive ``(None, None)`` the caller already models.
+    """
+
+    _PROBE = textwrap.dedent('''
+        import json, os, sys
+        sys.path.insert(0, os.path.join(os.environ["REPO"], "core", "plugins"))
+        sys.path.insert(0, os.environ["EVIL_DIR"])
+        from corvin_plugins.bootstrap import _origin_for_class_path
+        origin, source = _origin_for_class_path(os.environ["CLASS_PATH"])
+        print("RESULT " + json.dumps({
+            "origin": origin,
+            "marker": os.path.exists(os.environ["MARKER"]),
+            "imported": "evilpkg" in sys.modules,
+        }))
+    ''')
+
+    def _probe(self, tmp_path: Path, class_path: str) -> dict:
+        pkg = tmp_path / "evil" / "evilpkg"
+        pkg.mkdir(parents=True)
+        marker = tmp_path / "PWNED"
+        (pkg / "__init__.py").write_text(
+            "import os, pathlib\n"
+            "pathlib.Path(os.environ['MARKER']).write_text('EXECUTED')\n",
+            encoding="utf-8")
+        (pkg / "plugin.py").write_text("class Cls:\n    pass\n", encoding="utf-8")
+        env = dict(os.environ)
+        env.update({"REPO": str(_REPO), "EVIL_DIR": str(tmp_path / "evil"),
+                    "MARKER": str(marker), "CLASS_PATH": class_path})
+        env.pop("PYTEST_CURRENT_TEST", None)
+        proc = subprocess.run([sys.executable, "-c", self._PROBE], env=env,
+                              cwd=str(_REPO), capture_output=True, text=True, timeout=300)
+        out = proc.stdout + "\n" + proc.stderr
+        line = next((l for l in out.splitlines() if l.startswith("RESULT ")), None)
+        assert line, out[-4000:]
+        result = json.loads(line[len("RESULT "):])
+        # Belt and braces: the parent asserts on the filesystem too, so a child
+        # that lied about `marker` cannot hide the write.
+        result["marker_on_disk"] = marker.exists()
+        return result
+
+    def test_resolving_a_dotted_class_path_does_not_run_the_package(self, tmp_path):
+        result = self._probe(tmp_path, "evilpkg.plugin:Cls")
+        assert result["marker"] is False, result
+        assert result["marker_on_disk"] is False, result
+        assert result["imported"] is False, result
+
+    def test_it_still_resolves_the_right_file(self, tmp_path):
+        """The probe must stay USEFUL — a resolver that answers None for
+        everything is indistinguishable from a broken one, and ``None`` means
+        "not builtin" for every plugin on the install."""
+        result = self._probe(tmp_path, "evilpkg.plugin:Cls")
+        assert result["origin"] is not None, result
+
+    def test_a_non_package_parent_resolves_to_nothing(self, tmp_path):
+        """``evilpkg.plugin`` where ``plugin`` is a module, not a package: the
+        walk must stop, not fall through to ``sys.path``."""
+        result = self._probe(tmp_path, "evilpkg.plugin.deeper:Cls")
+        assert result["origin"] is None, result
+        assert result["marker_on_disk"] is False, result

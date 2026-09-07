@@ -101,7 +101,11 @@ No side effects. Missing file → `should=False`.
 Core function. Steps:
 1. Rename live → rotated segment.
 2. Extract tail hash of rotated segment.
-3. Write fresh `audit.jsonl` with `audit.rotation_link` entry.
+3. Write fresh `audit.jsonl` with `audit.rotation_link` entry. The link is
+   **MAC'd under the audit anchor key** and, still under the rotation flock,
+   `security_events.note_chain_rotation()` re-anchors the out-of-tree chain
+   identity record to the new genesis (`rotation_genesis`). See
+   [Rotation must be an out-of-tree fact](#rotation-must-be-an-out-of-tree-fact).
 4. If `encryption.enabled`: seal → emit `audit.segment_sealed`.
 5. If `encryption.tsa_enabled`: POST TSA request → write `.tsr`
    (chmod 444) → emit `audit.segment_timestamped`. On failure:
@@ -196,11 +200,50 @@ with mock.patch.object(_mod, "_request_timestamp_token", return_value=b"..."):
 
 ---
 
+## Rotation must be an out-of-tree fact (R3-A1, 2026-09-07)
+
+A rotation is the ONE legitimate way a live chain's genesis changes. Everything
+else that changes it is a whole-file replacement, which `verify_chain` reports as
+`chain_replaced` and the boot tripwire refuses.
+
+Telling the two apart used to be done by SHAPE: record 1 of `audit.jsonl` is an
+`audit.rotation_link` whose `prev_hash` equals the tail in the out-of-tree path
+record. That argument ("a rewriter cannot read the path record") was **false** —
+the recorded tail is set to the hash of the last chained record on every write, so
+it is byte-identical to the last `hash` in the file the attacker is rewriting. A
+forged rotation_link that borrows the file's own tail therefore suppressed
+`chain_replaced`, `tail_truncated` and `mac_stripped_chain` in one move, leaving
+only a line-1 `broken_chain` that `audit_chain_intact` classifies as historical
+once the file exceeds `TAIL_RECORDS` (200) — a length the attacker chooses.
+
+Two facts an in-tree rewriter cannot mint now gate the recognition
+(`security_events._rotation_link_authenticated`), and **either** suffices:
+
+| Fact | Written by | Lives |
+|---|---|---|
+| `rotation_genesis` in the chain-identity record | `note_chain_rotation()`, called by `rotate_and_seal()` under the rotation flock | `<key dir>/chain_ids/<sha256(resolved path)>` |
+| the link's `mac` (HMAC under the anchor key) | `rotate_and_seal()` | inside the link record, verifiable only with the key |
+
+Neither present → not a rotation. Fail-closed: no key and no record means "no",
+never "probably".
+
+Independently, a genesis whose `prev_hash` is neither `initial_prev` nor an
+authenticated rotation link is reported as **`unanchored_genesis`** — a LINE-LESS
+(current-state) problem, so `audit_chain_intact` blocks the boot regardless of
+how long the attacker made the file.
+
+Regression: `tests/security/test_chain_replacement_regression.py`
+(`TestLegitimateRotationStaysClean`, `TestForgedRotationLink`) — every verify runs
+in a FRESH SUBPROCESS, because `_GENESIS_CACHE` masks an in-place rewrite in the
+process that seeded it.
+
+---
+
 ## Audit events (complete table)
 
 | Event | Severity | Details keys | When |
 |---|---|---|---|
-| `audit.rotation_link` | INFO | `rotated_segment` | First entry of each fresh live segment |
+| `audit.rotation_link` | INFO | `rotated_segment` | First entry of each fresh live segment; carries `mac` (anchor key) — R3-A1 |
 | `audit.rotation_started` | INFO | — | Reserved (not emitted currently) |
 | `audit.rotation_failed` | CRITICAL | `rotated_segment`, `reason` | Sealer failure; also raises |
 | `audit.segment_sealed` | INFO | `sealed_segment`, `sealer_cmd`, `rotated_size_bytes` | Successful seal |
@@ -342,6 +385,7 @@ plaintext.unlink()  # caller cleanup — never leave plaintext on disk
 | TSA request returns HTTP 400 | Malformed DER request | Do not modify `_build_tsa_request`; file a bug |
 | Sealed segment not chmod 444 | Manual chmod or bug | Re-run rotation; chmod 444 is enforced post-seal |
 | Chain verification fails after rotation | `prev_hash` mismatch | Check no external tool wrote to `audit.jsonl` between rotation rename and `rotation_link` write |
+| `unanchored_genesis` on a live chain rotated BEFORE 2026-09-07 | its `rotation_link` predates the MAC + `rotation_genesis` (R3-A1), so nothing out of tree vouches for it | One-off: `python -c "from forge.security_events import note_chain_rotation; note_chain_rotation(PATH, link_hash=<hash of record 1>)"` run by the operator (the key dir is only writable by them). Sealed segments are unaffected — `voice-audit --include-sealed` passes each segment's real `initial_prev`. |
 | `.tsr` verify fails with `openssl ts -verify` | TSA CA cert missing | Provide correct `tsa-ca.pem` for the TSA used |
 
 ---

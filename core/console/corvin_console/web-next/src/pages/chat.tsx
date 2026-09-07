@@ -1121,12 +1121,15 @@ function ChatPane({
     // user is actually looking at this chat).
     const unsubEvents = subscribeEvents(sid, (evt: StreamEvent) => {
       if (evt.type === "result" && evt.text) {
-        // Auto-detect language from the response text so TTS speaks the
-        // language Claude actually answered in (not a static profile setting).
-        // Pinned profile language wins; detection only for an unseeded profile.
+        // Language Priority (ADR-0643 — Language Priority Resolver):
+        //   1. Profile Setting (display_language) — CANONICAL when pinned
+        //   2. Input/Response Detection — auto-detect when profile not set
+        // If profile.display_language is set in Settings → Profile, TTS ALWAYS
+        // speaks that language, regardless of Claude's response language.
+        // (Maintainer decision 2026-07-20: profile is source of truth for TTS.)
         const lang = ttsLangPinnedRef.current
-          ? ttsLangRef.current
-          : detectTtsLang(evt.text, ttsLangRef.current);
+          ? ttsLangRef.current  // ← Profile is CANONICAL
+          : detectTtsLang(evt.text, ttsLangRef.current);  // ← Fallback: auto-detect
         // An annotated turn emits TWO result events (the plain reply, then the
         // one carrying the LERN-ZUGABE/metaphor annex). Speaking both cost two
         // FULL server-side syntheses per turn: superseding the playback does

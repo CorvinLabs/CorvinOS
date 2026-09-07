@@ -57,6 +57,26 @@ import dialectic as _dialectic_module  # noqa: E402
 import logging
 _log = logging.getLogger(__name__)
 
+# ── Bounded channel-settings lock ─────────────────────────────────────────
+#
+# ``_save_channel`` sits on ``PATCH /v1/console/chat-settings/{channel}/{chat}``
+# — an operator request path. The lock is NON-BLOCKING BY CONSTRUCTION for the
+# same reason as ``core.infinite_session.event_store`` /
+# ``rollback_manager``: a wedged holder must cost one refused request (503),
+# never a request that never answers.
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_INTERVAL_SECONDS = 0.01
+
+
+class ChatSettingsLockBusy(TimeoutError):
+    """The channel settings lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
+
+    A ``TimeoutError`` (hence an ``OSError``), matching
+    :class:`core.infinite_session.event_store.SnapshotLockBusy`. The PATCH
+    route catches it BEFORE its generic ``OSError`` handler so a busy lock
+    answers 503 (retry) rather than 500 (write failed) — nothing was written.
+    """
+
 
 router = APIRouter()
 
@@ -156,17 +176,35 @@ def _load_channel(channel: str) -> dict[str, Any]:
 
 
 def _save_channel(channel: str, data: dict[str, Any]) -> None:
-    """Atomic write + mode preservation with file-level locking to prevent
-    concurrent read-modify-write races. Tier 2 fix: fcntl locking prevents TOCTOU."""
-    import fcntl
+    """Atomic write + mode preservation under a BOUNDED exclusive file lock.
+
+    The lock closes the read-modify-write TOCTOU between concurrent PATCHes.
+    It is ``LOCK_EX | LOCK_NB`` with a bounded retry (same contract and
+    constant style as ``core.infinite_session.event_store``): a wedged holder
+    raises :class:`ChatSettingsLockBusy` at the deadline, which the PATCH route
+    turns into a 503. It used to be a plain ``flock(LOCK_EX)`` with no timeout
+    on the operator's request path, where a stuck holder hung the request
+    forever — and no ``try/except`` can catch a hang.
+    """
+    import fcntl  # noqa: PLC0415 - lazy: Windows seeds a stub via forge/_wincompat
 
     p = _channel_settings_path(channel)
     lock_path = p.with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Acquire exclusive lock to prevent concurrent writes
-    with open(lock_path, 'w') as lock_fh:
-        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+    with open(lock_path, "a") as lock_fh:
+        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ChatSettingsLockBusy(
+                        f"channel settings lock busy: still held after "
+                        f"{LOCK_TIMEOUT_SECONDS:g}s — refusing to block the caller"
+                    ) from None
+                time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_suffix(".json.tmp")
@@ -432,6 +470,21 @@ def chat_settings_patch(
 
     try:
         _save_channel(channel, ch)
+    except ChatSettingsLockBusy as e:
+        # Nothing was written and the state is untouched — 503 (retry), not
+        # 500. Content-free record: action + target id only.
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="chat_settings.write",
+            target_kind="chat_profile",
+            target_id=target_id,
+            reason="lock_busy",
+        )
+        raise HTTPException(
+            http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            "lock_busy",
+        ) from e
     except OSError as e:
         console_audit.action_failed(
             tenant_id=rec.tenant_id,

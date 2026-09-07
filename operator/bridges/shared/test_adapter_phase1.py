@@ -107,8 +107,8 @@ def test_process_one_non_dict_top_level_json() -> None:
     reason="not-an-object" lands in the sandbox audit chain (metadata only —
     file name, size, reason code; never the content), and no exception
     escapes. This test pins that contract through the real inbox path.
-    (See test_submit_inbox_item_non_dict_json_is_not_quarantined below for
-    the caller-side gap that is still open.)"""
+    (See test_submit_inbox_item_non_dict_json_is_quarantined below for
+    the same contract through the real caller.)"""
     _section("process_one-non-dict-top-level-json")
     tmp = Path(tempfile.mkdtemp(prefix="adapter-nondict-"))
     try:
@@ -169,28 +169,29 @@ def test_process_one_non_dict_top_level_json() -> None:
             os.environ.pop(k, None)
 
 
-def test_submit_inbox_item_non_dict_json_is_not_quarantined() -> None:
-    """Blind spot, worse than the plain AttributeError above: the real
-    production entry point, submit_inbox_item(), calls _route_key() and
-    _peek_side_channel() on the raw inbox file BEFORE _runner()'s
-    try/except is even constructed. Both helpers only catch
-    (OSError, json.JSONDecodeError) around their own json.loads() — the
-    following msg.get(...) call raises AttributeError for a non-dict
-    top-level JSON payload, and that exception propagates all the way out
-    of submit_inbox_item() itself, never touching process_one()'s poison-
-    quarantine machinery at all. Only main()'s generic per-tick
-    `except Exception as e: log(f"loop error: {e}")` — two frames further
-    out — would catch it, and that handler neither quarantines nor deletes
-    the file. Worse, submit_inbox_item() had already written a pre-submit
-    `_in_flight[msg_id] = (time.time(), None)` bookkeeping entry just
-    before the crash; that entry is only ever popped in _runner()'s
-    `finally`, which never runs here. So the poison file survives on disk,
-    is never quarantined, and every subsequent poll tick silently no-ops
-    it (`if msg_id in _in_flight: return`) until IN_FLIGHT_TTL (default 1h)
-    reaps the stale entry — at which point the identical crash recurs.
-    Net effect: a single malformed inbox message becomes a permanently
-    stuck, periodically recrashing poison pill that is never quarantined."""
-    _section("submit_inbox_item-non-dict-json-poison-pill")
+def test_submit_inbox_item_non_dict_json_is_quarantined() -> None:
+    """FIXED (R2-B4, re-verified 2026-09-07): the production entry point
+    ``submit_inbox_item()`` used to call ``_route_key()`` / ``_peek_side_channel()``
+    on the raw inbox file and then ``msg.get(...)`` it, so a non-dict top-level
+    JSON payload raised an unguarded ``AttributeError`` out of
+    ``submit_inbox_item()`` itself — leaving the file in ``inbox/`` forever and a
+    stale ``_in_flight`` entry that silently no-opped every following poll tick
+    until ``IN_FLIGHT_TTL`` reaped it, at which point the crash recurred.
+
+    ``process_one()`` now carries the ``isinstance(msg, dict)`` guard and routes
+    the envelope through ``_quarantine_poison()``. This test pins the FIXED
+    contract through the real caller: no exception escapes, the envelope lands
+    in ``processed/poison/`` with its bytes intact, an audit event is written,
+    and the ``_in_flight`` bookkeeping entry is released.
+
+    NOTE — the work happens on the executor thread, so the assertions must wait
+    for ``_in_flight`` to drain first. Asserting immediately after
+    ``submit_inbox_item()`` returns raced the runner and (in the sandbox's
+    ``finally: rmtree``) produced a spurious
+    ``poison quarantine failed ... FileNotFoundError`` log line that looked like
+    a missing ``processed/poison/`` mkdir but was purely the test tearing the
+    sandbox down underneath the still-running thread."""
+    _section("submit_inbox_item-non-dict-json-quarantined")
     tmp = Path(tempfile.mkdtemp(prefix="adapter-poisonpill-"))
     try:
         _set_sandbox(tmp)
@@ -204,64 +205,58 @@ def test_submit_inbox_item_non_dict_json_is_not_quarantined() -> None:
         adapter._executor = ThreadPoolExecutor(max_workers=2)
         adapter._sidechannel_executor = ThreadPoolExecutor(max_workers=2)
 
+        payload = json.dumps([1, 2, 3])
         inbox_path = Path(adapter.INBOX) / "poisonpill_01.json"
-        inbox_path.write_text(json.dumps([1, 2, 3]))
+        inbox_path.write_text(payload)
 
-        raised = None
-        try:
-            adapter.submit_inbox_item(inbox_path, {})
-        except AttributeError as e:
-            raised = e
-        else:
-            raise AssertionError(
-                "submit_inbox_item() did NOT raise for a non-dict "
-                "top-level JSON payload — has _route_key()/"
-                "_peek_side_channel() grown an isinstance(msg, dict) "
-                "guard? If so, update this test to assert the file is "
-                "quarantined instead of documenting the crash."
-            )
-        print(f"PASS(documents bug): submit_inbox_item raised unguarded "
-              f"{type(raised).__name__}: {raised}")
+        # Must not raise — the non-dict shape is handled inside process_one().
+        adapter.submit_inbox_item(inbox_path, {})
 
-        # Worse than a caught-and-quarantined poison file: the file is
-        # still sitting in inbox/, unmoved and undeleted.
-        assert inbox_path.exists(), (
-            "inbox file vanished — was it (silently) quarantined after "
-            "all? If a fix landed, this documents SAFE behavior now; "
-            "update this test to assert that positively."
+        # Wait for the executor thread to finish before asserting on disk.
+        deadline = time.time() + 20
+        while time.time() < deadline and "poisonpill_01" in adapter._in_flight:
+            time.sleep(0.05)
+        assert "poisonpill_01" not in adapter._in_flight, (
+            "_in_flight entry for poisonpill_01 never released — the runner's "
+            "`finally` did not run, i.e. the crash path is back"
         )
+        print("PASS: submit_inbox_item did not raise; _in_flight entry released")
+
         poison_dir = Path(adapter.PROCESSED) / "poison"
-        assert not (poison_dir / inbox_path.name).exists(), (
-            "poison file unexpectedly present in processed/poison/ — the "
-            "crash path must have grown a quarantine step; good news, but "
-            "update this test to assert that positively instead of "
-            "documenting its absence."
+        assert not inbox_path.exists(), (
+            "inbox file still present — the poison envelope was NOT quarantined "
+            "and will be re-submitted on every poll tick"
         )
-        print("PASS(documents bug): poison file left in place in inbox/, "
-              "never quarantined")
+        quarantined = poison_dir / inbox_path.name
+        assert quarantined.exists(), (
+            f"envelope not moved to {poison_dir} — quarantine must create the "
+            f"directory itself (parents=True) and keep the bytes"
+        )
+        assert quarantined.read_text() == payload, (
+            "quarantined bytes must be kept verbatim for the operator"
+        )
+        print(f"PASS: envelope quarantined → poison/{quarantined.name}, bytes intact")
 
-        # And the pre-submit _in_flight bookkeeping entry is never popped
-        # (that only happens in _runner's finally, which never ran) — so
-        # it silently no-ops every following poll tick.
-        assert "poisonpill_01" in adapter._in_flight, (
-            "the pre-submit _in_flight entry was already cleared — either "
-            "the crash path changed, or unrelated cleanup ran; verify "
-            "before trusting this assertion"
+        audit_jsonl = Path(os.environ["VOICE_AUDIT_PATH"])
+        events = []
+        for line in audit_jsonl.read_text().splitlines():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        hits = [e for e in events
+                if e.get("event_type") == "bridge.inbox_poison_quarantined"
+                and e.get("details", {}).get("file") == "poisonpill_01.json"]
+        assert len(hits) == 1, (
+            f"expected exactly 1 bridge.inbox_poison_quarantined event for the "
+            f"pill, got {len(hits)}"
         )
-        _ts, fut = adapter._in_flight["poisonpill_01"]
-        assert fut is None, (
-            "a Future got attached despite the crash happening before "
-            "pool.submit() ran — investigate before trusting this test"
-        )
-        print("PASS(documents bug): stale _in_flight entry left dangling "
-              "with fut=None — every future poll tick will silently "
-              "no-op this msg_id until IN_FLIGHT_TTL reaps it, at which "
-              "point the identical crash recurs")
-
-        # Cleanup so this doesn't leak into later tests in the same
-        # process (fresh adapter import gives a fresh _in_flight dict, but
-        # be defensive anyway).
-        adapter._in_flight.pop("poisonpill_01", None)
+        det = hits[0].get("details", {})
+        assert det.get("reason") == "not-an-object", det
+        assert isinstance(det.get("bytes"), int) and det["bytes"] > 0, det
+        # Metadata only — the envelope bytes never enter the chain.
+        assert payload not in json.dumps(hits[0]), hits[0]
+        print("PASS: bridge.inbox_poison_quarantined(not-an-object) audited, content-free")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         for k in ("ADAPTER_INBOX", "ADAPTER_OUTBOX", "ADAPTER_PROCESSED",
@@ -504,7 +499,7 @@ def test_streaming_recursion_counter() -> None:
 def main() -> int:
     test_poison_quarantine()
     test_process_one_non_dict_top_level_json()
-    test_submit_inbox_item_non_dict_json_is_not_quarantined()
+    test_submit_inbox_item_non_dict_json_is_quarantined()
     test_env_parser()
     test_system_prompt_per_channel()
     test_system_prompt_language_pin()

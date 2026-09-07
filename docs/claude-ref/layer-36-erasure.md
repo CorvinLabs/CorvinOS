@@ -321,6 +321,27 @@ sequence numbers. The seam record is content-free and deliberately does NOT
 carry the subject id — writing the erased identifier into an append-only chain
 would undo the erasure it documents.
 
+**A FILENAME is attribution too (R3, 2026-09-07).** Attribution used to have two
+routes: a DIRECTORY named exactly after the subject, or a JSON/JSONL PAYLOAD
+naming it under a `_SUBJECT_KEYS` key. A file whose only mention of the subject is
+its own name — `<subject>.json`, `snapshot_<subject>.jsonl`,
+`<subject>-profile.json` — matched neither and survived a run the orchestrator
+then reported `COMPLETED`. `_name_names_subject()` is the third route and is
+**token-bounded, never a bare substring**: the id must be the whole name, the
+whole stem, or a run delimited by `._-:@ ` — because over-matching deletes ANOTHER
+subject's data, which is its own Art. 5 breach (`u1` must not take `u12.json`).
+
+**Every entry-wise rewrite is crash-atomic.** JSONL line filters and the
+infinite-session `index.json` rewrite went through `tmp.write_text()` +
+`os.replace()`. The rename is atomic; the DATA was never flushed, so a crash
+between write and writeback left the new name pointing at a truncated file — and a
+half-rewritten snapshot index is indistinguishable from tampering
+(`verify_snapshot_chain` reports a chain gap either way). The staging name was
+also FIXED (`index.json.erasing`), so two concurrent erasures clobbered each
+other. `_atomic_replace_text()` is now the single writer: pid-unique tmp → write →
+`fsync` the file → `os.replace` → `fsync` the directory, with the tmp removed on
+any failure so the original always stands.
+
 **The coverage guard boots the real writers.** `tests/security/
 test_erasure_coverage_guard.py` used to hand-seed `mkdir`s mirroring what the
 writers were believed to do, so it could only confirm its author's own picture —

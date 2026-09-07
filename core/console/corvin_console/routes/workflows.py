@@ -105,6 +105,62 @@ if str(_FORGE_PATH) not in sys.path:
 
 from forge import paths as _forge_paths  # noqa: E402
 
+# ── Bounded file locking (never block an operator request forever) ────────
+#
+# Both flock() call sites in this module used to be a plain
+# ``fcntl.flock(LOCK_EX)`` with NO timeout, on console request paths: the
+# per-tenant workflow-create lock (POST /workflows, POST /workflows/import)
+# and the per-workflow chat-append lock (WS /workflows/{wid}/chat). A wedged
+# holder — a crashed writer whose fd the kernel had not reaped, an NFS mount,
+# a debugger-stopped process — hung the request FOREVER, and no ``try/except``
+# can catch a hang. The chat one was worse: it ran inside an ``async def``
+# handler, so it stalled the whole event loop, not just one socket.
+#
+# Same contract and constant style as
+# ``core.infinite_session.event_store.LOCK_TIMEOUT_SECONDS`` and
+# ``core.infinite_session.rollback_manager``: ``LOCK_EX | LOCK_NB`` with a
+# bounded retry, a ``TimeoutError`` subclass at the deadline, and every caller
+# turning it into a clean refusal (503) or a degraded result.
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_INTERVAL_SECONDS = 0.01
+
+
+class WorkflowLockBusy(TimeoutError):
+    """A workflow file lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
+
+    A ``TimeoutError`` (hence an ``OSError``), matching
+    :class:`core.infinite_session.event_store.SnapshotLockBusy`, so callers
+    that already degrade on I/O failure keep degrading instead of raising.
+    """
+
+
+@contextmanager
+def _bounded_flock(lock_path: Path, what: str, *, timeout: float | None = None):
+    """Exclusive advisory lock with a hard deadline (never blocks forever).
+
+    Raises :class:`WorkflowLockBusy` at the deadline instead of waiting.
+    """
+    limit = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
+    _ensure_dir(lock_path.parent)
+    with open(lock_path, "a") as lock_fh:
+        deadline = time.monotonic() + limit
+        while True:
+            try:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise WorkflowLockBusy(
+                        f"{what} lock busy: still held after {limit:g}s — "
+                        f"refusing to block the caller"
+                    ) from None
+                time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
 # ── License gate (soft dep) ───────────────────────────────────────────────
 _OPERATOR = _REPO / "operator"
 if str(_OPERATOR) not in sys.path:
@@ -281,21 +337,37 @@ def _write_atomic(path: Path, data: dict[str, Any] | str) -> None:
 
 def _append_chat_line(tenant_id: str, wid: str, line: dict[str, Any]) -> None:
     """Append a JSON line atomically with file-level locking to prevent
-    concurrent appends from interleaving mid-line. Tier 1 fix: fcntl locking prevents JSONL corruption."""
-    import fcntl
+    concurrent appends from interleaving mid-line (prevents JSONL corruption).
 
+    The lock is BOUNDED (:func:`_bounded_flock`): a wedged holder raises
+    :class:`WorkflowLockBusy` at ``LOCK_TIMEOUT_SECONDS`` instead of hanging
+    the WebSocket handler — and, because that handler is ``async``, the whole
+    console event loop with it. Every caller converts the refusal.
+    """
     path = _chat_path(tenant_id, wid)
     lock_path = path.with_suffix(".append.lock")
     _ensure_dir(path.parent)
 
-    # Acquire exclusive lock to ensure atomic append
-    with open(lock_path, 'w') as lock_fh:
-        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+    with _bounded_flock(lock_path, f"workflow chat append {wid!r}"):
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+async def _append_chat_line_async(tenant_id: str, wid: str, line: dict[str, Any]) -> bool:
+    """Persist a chat line from the async WS handler without stalling the loop.
+
+    Returns ``True`` when the line was persisted, ``False`` when the append
+    lock was busy at the deadline. The blocking file work runs in a worker
+    thread, so even the bounded wait never occupies the event loop.
+    """
+    def _write() -> bool:
         try:
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(line, ensure_ascii=False) + "\n")
-        finally:
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            _append_chat_line(tenant_id, wid, line)
+            return True
+        except WorkflowLockBusy:
+            return False
+
+    return await anyio.to_thread.run_sync(_write)
 
 def _read_chat(tenant_id: str, wid: str) -> list[dict[str, Any]]:
     path = _chat_path(tenant_id, wid)
@@ -880,15 +952,15 @@ def _wf_create_lock(tenant_id: str):
     from the workflows_max count read through the file write to prevent the
     TOCTOU race where two concurrent requests both observe count=0 and both
     pass _lic_assert before either commits its meta file.
+
+    BOUNDED: raises :class:`WorkflowLockBusy` after ``LOCK_TIMEOUT_SECONDS``
+    rather than waiting forever. Both call sites (POST /workflows and
+    POST /workflows/import) convert that into a 503 + ``action_failed`` audit
+    record, so a wedged holder costs one refused request, not a hung one.
     """
     lock_path = _forge_paths.tenant_home(tenant_id) / ".wf_create.lock"
-    _ensure_dir(lock_path.parent)
-    with open(lock_path, "a") as lf:
-        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+    with _bounded_flock(lock_path, "workflow create"):
+        yield
 
 def _enforce_workflows_max(tenant_id: str, rec: session_auth.SessionRecord) -> None:
     """Enforce the workflows_max limit. Must be called inside _wf_create_lock.
@@ -944,6 +1016,27 @@ def _enforce_workflows_max(tenant_id: str, rec: session_auth.SessionRecord) -> N
             },
         ) from exc
 
+def _refuse_lock_busy(rec: session_auth.SessionRecord, action: str, target_id: str) -> HTTPException:
+    """Turn a :class:`WorkflowLockBusy` into a clean, audited 503.
+
+    Content-free record: action + target id only, never workflow content.
+    503 (not 500) because the state is untouched and a retry is the correct
+    client behaviour — same mapping as ``infinite_session_api`` uses for
+    ``transaction_lock_busy``.
+    """
+    console_audit.action_failed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=action,
+        target_kind="workflow",
+        target_id=target_id,
+        reason="lock_busy",
+    )
+    return HTTPException(
+        status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="lock_busy",
+    )
+
 @router.post("/workflows")
 def create_workflow(
     body: CreateWorkflowRequest,
@@ -968,7 +1061,14 @@ def create_workflow(
     # a per-tenant fcntl lock so count-read and file-write are atomic.
     # YAML validation is inside the lock so duplicate-ID takes priority over
     # a validation error (409 before 400/422).
-    with _wf_create_lock(rec.tenant_id):
+    # Acquire under its own try so ONLY the acquisition maps to 503 — a
+    # WorkflowLockBusy can never come from the body below.
+    lock = contextlib.ExitStack()
+    try:
+        lock.enter_context(_wf_create_lock(rec.tenant_id))
+    except WorkflowLockBusy:
+        raise _refuse_lock_busy(rec, "workflow.create", wid) from None
+    with lock:
         if _meta_path(rec.tenant_id, wid).exists():
             raise HTTPException(http_status.HTTP_409_CONFLICT, "workflow already exists")
 
@@ -1572,11 +1672,20 @@ def _import_write_locked(
 ) -> tuple[str, dict[str, Any]]:
     """Sync helper: collision resolve + workflows_max check + file write, all under
     the per-tenant fcntl lock.  Called via anyio.to_thread.run_sync from the async
-    import_workflow handler so the blocking flock never stalls the event loop.
+    import_workflow handler so the file work never stalls the event loop.
+
+    The lock is bounded (``LOCK_TIMEOUT_SECONDS``); a wedged holder raises an
+    HTTPException(503, "lock_busy") here, which propagates out of the worker
+    thread to the client as a clean refusal instead of a hung request.
 
     Returns the resolved (wid, meta) tuple.
     """
-    with _wf_create_lock(tenant_id):
+    lock = contextlib.ExitStack()
+    try:
+        lock.enter_context(_wf_create_lock(tenant_id))
+    except WorkflowLockBusy:
+        raise _refuse_lock_busy(rec, "workflow.import", wid) from None
+    with lock:
         # Resolve wid collision inside the lock to avoid TOCTOU on the counter.
         base_wid = wid
         counter = 0
@@ -4203,6 +4312,35 @@ def _scripted_response(phase: str, user_msg: str) -> str:
         return "Which model should this step use — Haiku (fast) or Sonnet (thorough)?"
     return "The workflow looks complete. Would you like to run a dry-run to verify the structure?"
 
+async def _refuse_chat_lock_busy(
+    websocket: WebSocket,
+    rec: session_auth.SessionRecord,
+    wid: str,
+    action: str,
+) -> None:
+    """In-band 503 for a busy chat-append lock, plus a content-free audit record.
+
+    A WebSocket has no status line, so the HTTP-level 503 the sibling routes
+    answer becomes an ``{"type": "error", "code": 503}`` frame on the same
+    socket. The socket stays open (same shape as the 402 chat-turn refusal
+    above) so the operator can retry once the holder releases.
+    """
+    console_audit.action_failed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=action,
+        target_kind="workflow",
+        target_id=wid,
+        reason="lock_busy",
+    )
+    with contextlib.suppress(Exception):
+        await websocket.send_json({
+            "type": "error",
+            "code": 503,
+            "message": "chat history is busy — message not saved, please retry",
+        })
+
+
 @router.websocket("/workflows/{wid}/chat")
 async def workflow_chat_ws(
     wid: str,
@@ -4244,7 +4382,11 @@ async def workflow_chat_ws(
             "I will ask follow-up questions to fill in the details."
         )
         assistant_msg: dict[str, Any] = {"role": "assistant", "content": opening, "ts": time.time()}
-        _append_chat_line(rec.tenant_id, wid, assistant_msg)
+        # Housekeeping write: the opening line is regenerated on the next
+        # connect if it was not persisted, so a busy lock DEGRADES here — it
+        # must never keep the operator from seeing the prompt.
+        if not await _append_chat_line_async(rec.tenant_id, wid, assistant_msg):
+            _log.warning("workflow chat: opening line not persisted (append lock busy) wid=%s", wid)
         await websocket.send_json({"type": "message", **assistant_msg})
 
     # Phase 7: Voice mode flag — client sends {"type": "set_voice", "enabled": true, "lang": "en"}
@@ -4279,7 +4421,9 @@ async def workflow_chat_ws(
                         "phase_update": "detailing",
                         "graph": graph,
                     }
-                    _append_chat_line(rec.tenant_id, wid, reply_msg)
+                    if not await _append_chat_line_async(rec.tenant_id, wid, reply_msg):
+                        await _refuse_chat_lock_busy(websocket, rec, wid, "workflow.template_accepted")
+                        continue
                     await websocket.send_json({"type": "message", **reply_msg})
                     if voice_enabled:
                         loop = asyncio.get_running_loop()
@@ -4313,7 +4457,12 @@ async def workflow_chat_ws(
                 continue
 
             user_msg_obj: dict[str, Any] = {"role": "user", "content": user_text, "ts": time.time()}
-            _append_chat_line(rec.tenant_id, wid, user_msg_obj)
+            # Refuse the turn BEFORE spending the design LLM call: a turn whose
+            # user message is missing from the transcript would desynchronise
+            # the history the next design turn is built from.
+            if not await _append_chat_line_async(rec.tenant_id, wid, user_msg_obj):
+                await _refuse_chat_lock_busy(websocket, rec, wid, "workflow.design_turn")
+                continue
             await websocket.send_json({"type": "message", **user_msg_obj})
             await websocket.send_json({"type": "typing"})
 
@@ -4334,7 +4483,11 @@ async def workflow_chat_ws(
             if result.get("template_offer"):
                 assistant_payload["template_offer"] = result["template_offer"]
 
-            _append_chat_line(rec.tenant_id, wid, assistant_payload)
+            # The turn already ran — deliver the reply either way, but tell the
+            # client it is not in the persisted transcript.
+            if not await _append_chat_line_async(rec.tenant_id, wid, assistant_payload):
+                assistant_payload["persisted"] = False
+                await _refuse_chat_lock_busy(websocket, rec, wid, "workflow.design_turn")
             await websocket.send_json({"type": "message", **assistant_payload})
 
             # Phase 7: TTS for assistant reply

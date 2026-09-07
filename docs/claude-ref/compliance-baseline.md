@@ -13,7 +13,7 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
 | Boot tripwire seals a broken tail with a chained `compliance.chain_discontinuity` seam record — NEVER truncates; whole-chain failure and current-state anchor problems (`tail_truncated`, `anchor_key_insecure_mode`) refuse the boot (`tripwire.py::audit_chain_intact`, 2026-09-07 F-A13) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
 | Every audit record chains: a hash-less record is admissible ONLY as `audit.chain_gap_detected` bound to the tail it was written after (`prev_hash` + keyed `mac`); anything else is `unchained_record` and `write_event(hash_chain=False)` is refused for every other event (`security_events.py`, 2026-09-07 F-A1) | L16 | GDPR Art. 30, 32 | ✅ Locked |
 | Out-of-tree tail anchor (`<key dir>/chain_tails/<genesis>`) — deleting the last records is reported as `tail_truncated` by the verifier AND stamped into the next record by the writer; anchor key with group/other bits is refused (`anchor_key_insecure_mode`); markers are genesis-keyed and never written for tmp chains (F-A12/F-A14) | L16 / ADR-0137 | GDPR Art. 32 | ✅ Locked |
-| PATH-keyed chain identity (`<key dir>/chain_ids/<sha256(path)>` → genesis + tail + legacy-prefix length + mac flag) — a whole-file rewrite that mints a NEW genesis has no genesis-keyed marker to contradict it, so the file self-verified; a differing genesis is now `chain_replaced` (verify fails, tripwire refuses, writer stamps `_chain_replaced_from`), a grown hash-less prefix is `records_prepended`, and the mac-strip detector also consults this record plus the `audit_mac_active` host sentinel for `<root>/global/forge/audit.jsonl`. A Layer 37 rotation is exempt: its `audit.rotation_link` binds to the out-of-tree recorded tail (R2-A1/R2-A2) | L16 / ADR-0137 | GDPR Art. 32 | ✅ Locked |
+| PATH-keyed chain identity (`<key dir>/chain_ids/<sha256(path)>` → genesis + tail + legacy-prefix length + mac flag) — a whole-file rewrite that mints a NEW genesis has no genesis-keyed marker to contradict it, so the file self-verified; a differing genesis is now `chain_replaced` (verify fails, tripwire refuses, writer stamps `_chain_replaced_from`), a grown hash-less prefix is `records_prepended`, and the mac-strip detector also consults this record plus the `audit_mac_active` host sentinel for `<root>/global/forge/audit.jsonl`. A Layer 37 rotation is exempt ONLY on an out-of-tree fact (R3-A1): `rotation_genesis`, written by `note_chain_rotation()` which `rotate_and_seal()` calls under the rotation flock, or the link's own anchor-key `mac`. Recognising the rotation by the SHAPE of record 1 was forgeable — the recorded tail is byte-identical to the file's own last hash. A genesis whose `prev_hash` is neither `initial_prev` nor an authenticated rotation link is `unanchored_genesis`, reported LINE-LESS so the tripwire blocks regardless of the file length the attacker chose (R2-A1/R2-A2/R3-A1) | L16 / ADR-0137 | GDPR Art. 32 | ✅ Locked |
 | Audit-detail floor is DEFAULT-DENY for keys: a per-event allowlist (`register_event_allowlist`) or the universal metadata vocabulary `_AUDIT_KNOWN_KEYS`; unknown keys are dropped and named in `_dropped_fields`; free-text keys (`reason`/`detail`/`summary`/`message`/…) are scanned for email/phone shapes on EVERY event type — a registered allowlist no longer skips the value scan — and `register_event_allowlist` REFUSES a denylisted field name (`AuditAllowlistRefused`), since a registered key is exempt from the M1 denylist (R2-A6); tenant mismatch is refused at the chokepoint (`write_event`) for every caller; every `lom` gets a `lom_hash` (F-A4/F-A6/F-A17) | L16 / ADR-0129, ADR-0537 | GDPR Art. 5, 30 | ✅ Locked |
 | Both shipped hosts run `assert_all()` UNCONDITIONALLY from `corvin_compliance_reports` before the plugin import; an absent `corvin_plugins` is a boot failure; an env-only chain redirect (`VOICE_AUDIT_PATH`/`FORGE_ROOT`) is refused unless it resolves to the resolver's OWN chain path — outside the `CORVIN_HOME` root and a different file inside it are both refused, and the `PYTEST_CURRENT_TEST` tolerance is GONE (it was a real env-var override of a fail-closed tripwire; tests pin `CORVIN_HOME` instead) (F-A2/F-A3, R2-A3) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
 | The boot tripwire set runs ONCE per boot: the host lifespan call is authoritative and `boot_platform` stands down when the same chain already PASSED in this process (`tripwire.already_asserted()`, keyed by chain path; a FAILED assertion is never recorded). Two runs meant two `compliance.chain_discontinuity` seam records appended for one break (R2-A11) | L16 / ADR-0232 | GDPR Art. 30 | ✅ Locked |
@@ -68,7 +68,22 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
      recorded one is `records_prepended`. NOT a rule: "the genesis carries a mac, so
      there can be no legacy prefix" — a migrated legacy install really does have one and
      its first chained record is written today (see
-     `operator/forge/tests/test_tenant_migration_roundtrip.py` R5).
+     `operator/forge/tests/test_tenant_migration_roundtrip.py` R5). The chain-identity
+     record is keyed on the RESOLVED path (R3-A3), matching `tripwire._current_chain_key`
+     — with `abspath` the same physical chain reached through the compat symlink
+     `<corvin_home>/global` hashed to a different key and the aliasing reader saw no
+     record at all; the old location stays readable, never written.
+   - **A rotation is recognised out of tree, never by record shape** (R3-A1): the ONE
+     legitimate genesis change is a Layer 37 rotation, and it counts only when
+     `chain_ids/…` carries `rotation_genesis` (written by `note_chain_rotation()`, called
+     by `rotate_and_seal()` under the rotation flock) or the `audit.rotation_link` carries
+     a valid anchor-key `mac`. The round-2 shape test — "record 1 is a rotation_link whose
+     `prev_hash` equals the recorded tail" — was forgeable: the recorded tail is set to the
+     last chained record's hash on every write, so it is byte-identical to the last `hash`
+     in the file the attacker is rewriting. A genesis whose `prev_hash` is neither
+     `initial_prev` nor an authenticated rotation link is `unanchored_genesis`, reported
+     WITHOUT a line number so `audit_chain_intact` blocks it as a current-state problem
+     regardless of how long the attacker padded the file.
    - **Tail anchor + key hygiene** (F-A12/F-A14): every chained write updates
      `<anchor key dir>/chain_tails/<genesis-hash>`; a verify whose recorded tail is gone
      reports `tail_truncated`, and the next writer stamps `_tail_truncated_since` into its
@@ -86,6 +101,17 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
      `_dropped_fields`; string values on unregistered events are also scanned for email
      and phone shapes. A writer whose keys vanish registers an allowlist — the vocabulary
      is never widened back to allow-all.
+   - **The reserved spine is scanned, not exempt** (R3, 2026-09-07):
+     `user` / `chat_key` / `channel` / `persona` / `tenant_id` are exempt from the KEY
+     filters (they are what makes a record attributable, GDPR Art. 30) but no longer from
+     the VALUE scan. Measured on the live chains, 2 962 `user` and 2 580 `chat_key` values
+     out of 596 039 records carried an email or phone shape — the email/messenger bridges
+     pass the sender through and `adapter._pii_fp` only covers the adapter's own emitter.
+     A reserved value with a PII shape is now replaced by its `sha256[:8]` fingerprint —
+     the SAME transform `adapter._pii_fp` applies, so both paths land in one pseudonym
+     namespace — and the KEY NAMES (never values) are listed under `_pii_fingerprinted`.
+     Fingerprinted rather than dropped on purpose: a chain with the actor removed is not a
+     safer trail, it is an unusable one.
    - **Tenant isolation at the chokepoint** (F-A6): `write_event` itself refuses a
      `details.tenant_id` that is not the process tenant (`AuditTenantMismatch`, a
      `ValueError`), after recording `audit.tenant_mismatch` (type/count only) under the

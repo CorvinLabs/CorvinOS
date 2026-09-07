@@ -76,6 +76,64 @@ def _rate_limit_exceeded(tid: str, channel_id: str, limit: int) -> bool:
     return False
 
 
+# ── R3 follow-up (2026-09-07): replay protection ─────────────────────────────
+# The HMAC proves the body was signed by the shared secret; it proves NOTHING
+# about WHEN, and the signature is a deterministic function of the body. A
+# captured request (from a proxy log, a mirrored TLS session, a compromised
+# relay) could therefore be re-POSTed verbatim as many times as the hourly rate
+# limit allowed, each replay writing a fresh `webhook.message_received` event
+# into the tenant's audit chain and — once Phase 2 wires the payload into the
+# chat/inbox system — re-delivering the message.
+#
+# Two layers, both fail-closed:
+#
+#   (a) NONCE CACHE (always on, no sender change needed). The signature is
+#       remembered per (tenant, channel) for `_REPLAY_WINDOW_S` and an exact
+#       repeat is refused with 409. Bounded: a channel can never hold more
+#       entries than its own hourly rate limit, and `_REPLAY_MAX_PER_CHANNEL`
+#       caps it regardless.
+#
+#   (b) SIGNED TIMESTAMP (opt-in per channel via `require_signed_timestamp`).
+#       A bare `X-Corvin-Timestamp` header would be worthless — it is not
+#       covered by the body HMAC, so an attacker rewrites it freely. When the
+#       channel opts in, the header becomes MANDATORY and the signature is
+#       computed over `<ts>.<body>` (Stripe's `v1` construction), which binds
+#       the timestamp to the secret; the request is then refused outside
+#       `_TIMESTAMP_SKEW_S`. This is what closes a replay that arrives AFTER
+#       the nonce window has expired. It is opt-in because turning it on
+#       unilaterally would break every already-registered sender — but a
+#       channel that enables it can never fall back to the body-only form.
+_REPLAY_WINDOW_S = 3600.0
+_REPLAY_MAX_PER_CHANNEL = 10_000
+_TIMESTAMP_SKEW_S = 300.0
+
+#: (tenant_id, channel_id) -> {signature: first_seen_unix}
+_seen_signatures: dict[tuple[str, str], dict[str, float]] = {}
+
+
+def _replay_seen(tid: str, channel_id: str, signature: str) -> bool:
+    """True when this exact signature was already accepted inside the window.
+
+    Records the signature only when it is NEW, so a refused replay cannot keep
+    its own entry alive (same discipline as `_rate_limit_exceeded`).
+    """
+    now = time.time()
+    key = (tid, channel_id)
+    seen = {sig: t for sig, t in _seen_signatures.get(key, {}).items()
+            if now - t < _REPLAY_WINDOW_S}
+    if signature in seen:
+        _seen_signatures[key] = seen
+        return True
+    if len(seen) >= _REPLAY_MAX_PER_CHANNEL:
+        # Drop the oldest half rather than growing without bound. The rate
+        # limiter makes this unreachable at default settings.
+        for sig, _t in sorted(seen.items(), key=lambda kv: kv[1])[: len(seen) // 2]:
+            seen.pop(sig, None)
+    seen[signature] = now
+    _seen_signatures[key] = seen
+    return False
+
+
 async def _read_capped_body(request: Request) -> bytes:
     """Read the request body, refusing anything past the cap.
 
@@ -172,6 +230,15 @@ class WebhookChannelRequest(BaseModel):
     )
     persona: str = Field("assistant", min_length=1, max_length=64)
     rate_limit_per_hour: int = Field(60, ge=1, le=10_000)
+    require_signed_timestamp: bool = Field(
+        False,
+        description=(
+            "When true, inbound requests MUST carry an X-Corvin-Timestamp "
+            "header, the HMAC must be computed over '<timestamp>.<body>', and "
+            "the timestamp must be within 300s of server time. Closes replay "
+            "beyond the nonce window; requires sender support, hence opt-in."
+        ),
+    )
     description: str = Field("", max_length=500)
     model_config = {"extra": "forbid"}
 
@@ -227,6 +294,7 @@ def register_webhook_channel(
         "hmac_secret_env": env_name,
         "persona": body.persona,
         "rate_limit_per_hour": body.rate_limit_per_hour,
+        "require_signed_timestamp": bool(body.require_signed_timestamp),
         "description": body.description,
         "tenant_id": rec.tenant_id,
         "inbound_url": f"/v1/console/webhook/{rec.tenant_id}/{channel_id}",
@@ -288,6 +356,7 @@ async def receive_webhook(
     channel_id: str,
     request: Request,
     x_hub_signature_256: str | None = Header(None),
+    x_corvin_timestamp: str | None = Header(None),
 ) -> dict[str, Any]:
     """Receive an inbound webhook. No session required; HMAC-authenticated.
 
@@ -348,13 +417,55 @@ async def receive_webhook(
             http_status.HTTP_401_UNAUTHORIZED,
             "X-Hub-Signature-256 header required",
         )
+
+    # Signed-timestamp mode (opt-in per channel). The timestamp is part of the
+    # signed material, so it cannot be rewritten by whoever captured the body.
+    signed_material = body_bytes
+    if channel.get("require_signed_timestamp"):
+        if not x_corvin_timestamp:
+            raise HTTPException(
+                http_status.HTTP_401_UNAUTHORIZED,
+                "X-Corvin-Timestamp header required for this channel",
+            )
+        try:
+            sent_at = float(x_corvin_timestamp)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                http_status.HTTP_401_UNAUTHORIZED,
+                "X-Corvin-Timestamp must be a unix timestamp",
+            ) from None
+        if abs(time.time() - sent_at) > _TIMESTAMP_SKEW_S:
+            raise HTTPException(
+                http_status.HTTP_401_UNAUTHORIZED,
+                f"X-Corvin-Timestamp outside the {int(_TIMESTAMP_SKEW_S)}s window",
+            )
+        signed_material = x_corvin_timestamp.encode() + b"." + body_bytes
+
     expected_sig = "sha256=" + hmac.new(
-        secret.encode(), body_bytes, hashlib.sha256
+        secret.encode(), signed_material, hashlib.sha256
     ).hexdigest()
     if not hmac.compare_digest(expected_sig, x_hub_signature_256):
         raise HTTPException(
             http_status.HTTP_401_UNAUTHORIZED,
             "HMAC signature mismatch",
+        )
+
+    # Replay guard — AFTER the signature check, so an unauthenticated caller
+    # can neither probe nor populate the nonce cache.
+    if _replay_seen(tid, channel_id, expected_sig):
+        try:
+            _security_events.write_event(
+                _audit_chain_path(tid),
+                "webhook.replay_rejected",
+                details={"channel_id": channel_id, "tenant_id": tid,
+                         "payload_size": len(body_bytes)},
+                severity="WARNING",
+            )
+        except Exception:  # noqa: BLE001 — audit is best-effort for inbound
+            pass
+        raise HTTPException(
+            http_status.HTTP_409_CONFLICT,
+            "duplicate signed request (replay window)",
         )
 
     # Parse body (best-effort JSON)

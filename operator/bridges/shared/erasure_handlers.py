@@ -1148,6 +1148,85 @@ def _record_chain_seam(*, tenant_id: str, request_id: str, task_id: str,
         pass
 
 
+def _atomic_replace_text(target: Path, text: str) -> None:
+    """Crash-atomic rewrite of ``target`` (R3 follow-up).
+
+    Every entry-wise rewrite in this module (JSONL line filters, the
+    infinite-session ``index.json``) was ``tmp.write_text(...)`` + ``os.replace``.
+    ``os.replace`` makes the NAME swap atomic, but nothing had flushed the tmp
+    file's bytes: a crash between the write and the writeback leaves the new name
+    pointing at a truncated or zero-length file, and an erasure that half-rewrote
+    a snapshot index is indistinguishable from tampering (``verify_snapshot_chain``
+    reports a chain gap either way). The tmp name was also FIXED
+    (``index.json.erasing``), so two erasures running at once clobbered each
+    other's staging file.
+
+    Sequence: unique tmp → write → ``fsync`` the file → ``os.replace`` → ``fsync``
+    the DIRECTORY (so the rename itself is durable). The directory fsync is
+    best-effort: it fails on filesystems that refuse an O_RDONLY fsync of a
+    directory, and there the rename durability is the filesystem's own guarantee.
+    """
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.erasing")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(str(target.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:  # pragma: no cover - platform dependent
+        pass
+
+
+#: Characters that separate an identifier from the rest of a filename. A subject
+#: id may itself contain ``.``, ``:``, ``_`` and ``-`` (``_SUBJECT_ID_RE``), so a
+#: bare substring test would let ``u1`` match ``u12``. The id must sit between
+#: these separators — or be the whole stem — to count.
+_NAME_SEPARATORS = "._-:@ "
+
+
+def _name_names_subject(name: str, subject_id: str) -> bool:
+    """True when a FILE OR DIRECTORY NAME attributes it to ``subject_id``.
+
+    The follow-up this closes: erasure attributed a path either by a DIRECTORY
+    named exactly after the subject or by a JSON/JSONL PAYLOAD naming it under a
+    known identity key. A file whose only mention of the subject is its own NAME
+    — ``<subject>.json``, ``snapshot_<subject>.jsonl``, ``<subject>-profile.json``
+    — matched neither, so it survived an erasure the orchestrator then reported
+    as COMPLETED. A filename is personal data exactly like a payload field.
+
+    Token-bounded, never a bare substring: the id must be the whole name, the
+    whole stem, or a run delimited by :data:`_NAME_SEPARATORS`. Over-matching
+    here deletes ANOTHER subject's data, which is its own Art. 5 breach.
+    """
+    if not subject_id or not name:
+        return False
+    if name == subject_id:
+        return True
+    idx = 0
+    while True:
+        idx = name.find(subject_id, idx)
+        if idx < 0:
+            return False
+        before_ok = idx == 0 or name[idx - 1] in _NAME_SEPARATORS
+        after = idx + len(subject_id)
+        after_ok = after == len(name) or name[after] in _NAME_SEPARATORS
+        if before_ok and after_ok:
+            return True
+        idx += 1
+
+
 def _mentions_subject(obj: Any, subject_id: str, depth: int = 0) -> bool:
     if depth > 8:
         return False
@@ -1229,9 +1308,7 @@ class LearningEventHandler:
                         continue
                     kept.append(line)
                 if removed:
-                    tmp = f.with_suffix(f.suffix + ".erasing")
-                    tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
-                    os.replace(tmp, f)
+                    _atomic_replace_text(f, "\n".join(kept) + ("\n" if kept else ""))
                     erased += removed
         except Exception as exc:  # noqa: BLE001 — genuine infra failure → FAILED
             return ErasureLayerResult(
@@ -1262,8 +1339,12 @@ class InfiniteSessionHandler:
     drift history, session bridges, verification logs) and ``<tenant>/sessions/
     <subject>/checkpoints``. State is keyed by ``task_id``, not by person, so a
     file is attributed to the subject when (a) its task/session directory is
-    named after the subject, or (b) its JSON payload names the subject under a
-    known identity key (``session_id``, ``user_id``, ``chat_key`` …).
+    named after the subject, (b) its own FILENAME names the subject
+    (:func:`_name_names_subject` — a file called ``<subject>.json`` or
+    ``snapshot_<subject>.jsonl`` is that person's data even when its payload
+    never repeats the id, and it used to survive a COMPLETED erasure), or (c) its
+    JSON payload names the subject under a known identity key (``session_id``,
+    ``user_id``, ``chat_key`` …).
     """
     tenant_id: str = "_default"
     layer_id: str = "L-infinite-session"
@@ -1289,9 +1370,16 @@ class InfiniteSessionHandler:
             for r in roots:
                 if not r.is_dir():
                     continue
-                for d in list(r.rglob(subject_id)):
-                    if d.is_dir() and d.name == subject_id:
+                for d in list(r.rglob("*")):
+                    if not _name_names_subject(d.name, subject_id):
+                        continue
+                    if d.is_dir():
                         shutil.rmtree(d, ignore_errors=False)
+                        removed += 1
+                    elif d.is_file() and d.name != INDEX_FILE:
+                        # A file whose NAME names the subject is that subject's
+                        # data even when its payload does not repeat the id.
+                        d.unlink()
                         removed += 1
             # (b) JSON/JSONL files under infinite_session/ whose payload names the subject
             isr = home / "infinite_session"
@@ -1325,9 +1413,7 @@ class InfiniteSessionHandler:
                             continue
                         kept.append(line)
                     if hit:
-                        tmp = f.with_suffix(f.suffix + ".erasing")
-                        tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
-                        os.replace(tmp, f)
+                        _atomic_replace_text(f, "\n".join(kept) + ("\n" if kept else ""))
                         removed += hit
                 # R2-A7: index.json is the snapshot CHAIN's index — an ordered
                 # list of SnapshotMetadata with a contiguous ``seq`` that
@@ -1364,9 +1450,7 @@ class InfiniteSessionHandler:
                         live.append(m)
                     if not dropped_seqs:
                         continue
-                    tmp = idx.with_suffix(".json.erasing")
-                    tmp.write_text(json.dumps(live), encoding="utf-8")
-                    os.replace(tmp, idx)
+                    _atomic_replace_text(idx, json.dumps(live))
                     removed += len(dropped_seqs)
                     _record_chain_seam(
                         tenant_id=self.tenant_id, request_id=request_id,
@@ -1405,10 +1489,14 @@ def _purge_json_tree(root: Path, subject_id: str, *,
                      match_dir_name: bool = True) -> int:
     """Delete files/dirs under ``root`` attributed to ``subject_id``.
 
-    Two attribution routes, the same pair the infinite-session handler uses:
-    a directory NAMED after the subject, and a JSON/JSONL payload naming it
-    under a known identity key (:data:`_SUBJECT_KEYS`). JSONL files are rewritten
-    line-wise so one subject's lines go without destroying another's.
+    Three attribution routes, the same set the infinite-session handler uses:
+    a directory NAMED after the subject, a FILE named after the subject
+    (:func:`_name_names_subject` — token-bounded, never a bare substring), and a
+    JSON/JSONL payload naming it under a known identity key
+    (:data:`_SUBJECT_KEYS`). JSONL files are rewritten line-wise so one subject's
+    lines go without destroying another's, and every rewrite goes through
+    :func:`_atomic_replace_text` so a crash mid-erasure cannot leave a truncated
+    store behind.
     """
     import shutil
 
@@ -1416,12 +1504,18 @@ def _purge_json_tree(root: Path, subject_id: str, *,
     if not root.is_dir():
         return 0
     if match_dir_name:
-        for d in list(root.rglob(subject_id)):
-            if d.is_dir() and d.name == subject_id:
+        for d in list(root.rglob("*")):
+            if d.is_dir() and _name_names_subject(d.name, subject_id):
                 shutil.rmtree(d, ignore_errors=False)
                 removed += 1
     for f in sorted(root.rglob("*")):
         if not f.is_file() or f.suffix not in (".json", ".jsonl"):
+            continue
+        # A FILENAME naming the subject attributes the file just as a payload
+        # field does — otherwise ``<subject>.json`` survived a COMPLETED erasure.
+        if _name_names_subject(f.name, subject_id):
+            f.unlink()
+            removed += 1
             continue
         if f.suffix == ".json":
             if _mentions_subject(_load_json(f), subject_id):
@@ -1446,9 +1540,7 @@ def _purge_json_tree(root: Path, subject_id: str, *,
                 continue
             kept.append(line)
         if hit:
-            tmp = f.with_suffix(f.suffix + ".erasing")
-            tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
-            os.replace(tmp, f)
+            _atomic_replace_text(f, "\n".join(kept) + ("\n" if kept else ""))
             removed += hit
     return removed
 

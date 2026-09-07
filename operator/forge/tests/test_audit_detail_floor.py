@@ -463,5 +463,89 @@ def test_webhook_secret_ref_name_preserved():
     assert "secret_ref" not in dropped
 
 
+# ── R3 follow-up: the reserved structural spine is scanned, not exempt ──────
+#
+# ``user`` / ``chat_key`` / ``channel`` / ``persona`` / ``tenant_id`` are exempt
+# from the KEY filters (they are what makes a record attributable, GDPR Art. 30).
+# They used to be exempt from the VALUE scan too, justified as "these carry
+# identifiers, not free text". Measured against the live chains that was false:
+# of 596 039 records, 2 962 ``user`` and 2 580 ``chat_key`` values carried an
+# email or phone shape — the email/messenger bridges pass the sender through and
+# ``adapter._pii_fp`` only covers the adapter's own emitter. A raw email in a
+# hash-chained, append-only, never-redactable file is exactly what the floor
+# exists to stop.
+
+import hashlib  # noqa: E402
+
+
+def _fp(v: str) -> str:
+    return hashlib.sha256(v.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+
+
+@pytest.mark.parametrize("key", ["user", "chat_key"])
+@pytest.mark.parametrize("value", [
+    "notifications@github.com", "alice@company.com", "+491234567890",
+    "failed-payments+acct_1rhzepjkh2g7hnv5@stripe.com",
+])
+def test_reserved_key_with_a_pii_shape_is_fingerprinted(key, value):
+    out, dropped = filter_audit_details({key: value}, event_type="bridge.login")
+    assert out[key] == _fp(value), out
+    assert value not in json.dumps(out)
+    assert key in out["_pii_fingerprinted"]
+    # FINGERPRINTED, never dropped: an audit record with the actor removed is
+    # not a safer trail, it is an unusable one (Art. 30 attribution).
+    assert key not in dropped
+
+
+def test_the_fingerprint_matches_the_adapter_s_own():
+    """One pseudonym namespace: a value the adapter already redacted and one the
+    floor redacts must collide, or the same person reads as two."""
+    sys.path.insert(0, str(ROOT.parents[1] / "operator" / "bridges" / "shared"))
+    from adapter import _pii_fp  # type: ignore[import]
+
+    out, _ = filter_audit_details({"user": "alice@company.com"},
+                                  event_type="bridge.login")
+    assert out["user"] == _pii_fp("alice@company.com")
+
+
+@pytest.mark.parametrize("key,value", [
+    ("user", "97811003"), ("user", "user-1"), ("chat_key", "b27996da"),
+    ("channel", "discord"), ("persona", "assistant"), ("tenant_id", "_default"),
+    ("user", ""), ("channel", ""),
+])
+def test_identifier_shapes_actually_in_use_are_untouched(key, value):
+    """Bounds the rule with the values the live chains really carry — a scan
+    that mangles ordinary ids would break every correlation the trail exists
+    for."""
+    out, dropped = filter_audit_details({key: value}, event_type="bridge.login")
+    assert out[key] == value, out
+    assert "_pii_fingerprinted" not in out
+    assert not dropped
+
+
+def test_the_marker_cannot_be_forged_by_a_caller():
+    """``_pii_fingerprinted`` is a WRITER-only marker, like ``_dropped_fields``:
+    a caller that supplies it must not be able to claim a redaction that never
+    happened. Denied on input, re-injected by the writer."""
+    out, dropped = filter_audit_details(
+        {"user": "alice@company.com", "_pii_fingerprinted": ["forged"]},
+        event_type="bridge.login")
+    assert "_pii_fingerprinted" in dropped
+    assert out["_pii_fingerprinted"] == ["user"]
+
+
+def test_a_pii_reserved_value_never_reaches_the_chain_file():
+    """Through the real writer, not the filter: the record on disk must not
+    contain the address anywhere."""
+    tmp = Path(tempfile.mkdtemp(prefix="reserved-pii-")) / "audit.jsonl"
+    rec = write_event(tmp, "bridge.login",
+                      details={"user": "alice@company.com", "channel": "email"})
+    assert rec["details"]["user"] == _fp("alice@company.com")
+    raw = tmp.read_text(encoding="utf-8")
+    assert "alice@company.com" not in raw
+    ok, problems = verify_chain(tmp)
+    assert ok, problems
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

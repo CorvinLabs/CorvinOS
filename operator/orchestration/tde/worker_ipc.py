@@ -31,6 +31,25 @@ _logger = logging.getLogger(__name__)
 
 _WORKER_TIMEOUT_S = 120
 
+# ── shared prompt neutraliser (R3-C2, adversarial review 2026-09-07) ─────────
+# The step prompt handed to `claude -p` here still originates, transitively,
+# from operator/chat text. The CLI expands `@<path>` into that file's CONTENT
+# client-side, anywhere in the message, before the model runs — no tool policy
+# (`--disallowedTools "*"` included) restricts it. Route the prompt through the
+# ONE shared helper. Fail-closed: no helper ⇒ no spawn (see `_run_worker`).
+try:  # pragma: no cover - import shape
+    import os as _os_boot  # noqa: PLC0415
+    import sys as _sys_boot  # noqa: PLC0415
+    _shared_dir = _os_boot.path.abspath(_os_boot.path.join(
+        _os_boot.path.dirname(_os_boot.path.abspath(__file__)),
+        "..", "..", "bridges", "shared",
+    ))
+    if _shared_dir not in _sys_boot.path:
+        _sys_boot.path.insert(0, _shared_dir)
+    from agents.claude_code import guard_prompt_head as _guard_prompt_head  # type: ignore  # noqa: E402
+except ImportError:  # pragma: no cover
+    _guard_prompt_head = None  # type: ignore[assignment]
+
 # ── ADR-0219 R3: transient-failure retry policy ───────────────────────────────
 import os as _os  # noqa: E402
 import random as _random  # noqa: E402
@@ -517,6 +536,13 @@ class SubprocessWorkerIPC:
     def _run_worker(
         self, prompt: str, proc_holder: "Optional[ProcHolder]" = None,
     ) -> dict[str, Any]:
+        if _guard_prompt_head is None:
+            return {
+                "success": False, "output": None,
+                "error": ("prompt guard unavailable (agents.claude_code not "
+                          "importable) — refusing an unguarded worker spawn"),
+            }
+        prompt = _guard_prompt_head(prompt)
         bin_path = self._hm.resolve_claude_bin()
         model_args = self._hm.claude_args(self._hm.SITE_TDE_WORKER)
         # Best-effort model tag for the usage record (ADR-0218 Phase 0): read the

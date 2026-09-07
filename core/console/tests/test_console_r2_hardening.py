@@ -153,6 +153,42 @@ class SsrfSharedAddressSpaceTests(unittest.TestCase):
         with self.assertRaises(ds._UnsafeUrl):
             ds._assert_scheme_and_static_host("http://100.64.0.1/x")
 
+    def test_nat64_wrapped_ipv4_is_unwrapped_and_blocked(self):
+        """R3 follow-up: `64:ff9b::/96` (RFC 6052 NAT64 Well-Known Prefix) is
+        reported `is_global=True` / `is_private=False` by `ipaddress`, so the
+        `not is_global` guard let it through — and on a host behind a NAT64
+        gateway `64:ff9b::7f00:1` IS 127.0.0.1. The embedded IPv4 must be
+        unwrapped and re-checked."""
+        ds, _cp = self._mods()
+        # Pin the stdlib blind spot this test exists for.
+        self.assertTrue(ipaddress.ip_address("64:ff9b::7f00:1").is_global)
+        self.assertFalse(ipaddress.ip_address("64:ff9b::7f00:1").is_private)
+        for wrapped, inner in (
+            ("64:ff9b::7f00:1", "127.0.0.1"),
+            ("64:ff9b::a00:1", "10.0.0.1"),
+            ("64:ff9b::c0a8:101", "192.168.1.1"),
+            ("64:ff9b::a9fe:a9fe", "169.254.169.254"),   # cloud metadata
+            ("64:ff9b::6440:1", "100.64.0.1"),           # CGNAT
+        ):
+            self.assertEqual(str(ds._embedded_ipv4(ipaddress.ip_address(wrapped))), inner)
+            self.assertTrue(ds._ip_is_blocked(ipaddress.ip_address(wrapped)), wrapped)
+        with self.assertRaises(ds._UnsafeUrl):
+            ds._assert_scheme_and_static_host("http://[64:ff9b::7f00:1]/x")
+        with self.assertRaises(ds._UnsafeUrl):
+            _cp._assert_provider_endpoint_allowed("http://[64:ff9b::a9fe:a9fe]/")
+
+    def test_other_ipv6_ipv4_wrappers_unwrap_too(self):
+        """6to4 and Teredo are already `is_global=False`, but the unwrapper must
+        still name the inner IPv4 so a future stdlib reclassification cannot
+        silently re-open the hole."""
+        ds, _cp = self._mods()
+        self.assertEqual(str(ds._embedded_ipv4(ipaddress.ip_address("::ffff:127.0.0.1"))),
+                         "127.0.0.1")
+        self.assertEqual(str(ds._embedded_ipv4(ipaddress.ip_address("2002:7f00:1::"))),
+                         "127.0.0.1")
+        self.assertIsNone(ds._embedded_ipv4(ipaddress.ip_address("2606:4700:4700::1111")))
+        self.assertIsNone(ds._embedded_ipv4(ipaddress.ip_address("8.8.8.8")))
+
 
 # ── follow-up: test-api pins the validated IP (DNS rebinding) ────────────────
 

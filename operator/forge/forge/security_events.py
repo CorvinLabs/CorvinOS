@@ -1575,7 +1575,7 @@ _AUDIT_FORBIDDEN_EXACT: frozenset[str] = frozenset({
     # Writer-only markers — deny on INPUT so a caller can't forge them; the
     # writer re-injects the genuine ones after filtering (review HIGH #2/#3).
     "_dropped_fields", "_unfiltered", "_tail_truncated_since",
-    "_chain_replaced_from",
+    "_chain_replaced_from", "_pii_fingerprinted",
 })
 _AUDIT_FORBIDDEN_SUBSTR: tuple[str, ...] = (
     "password", "passphrase", "secret", "credential", "private_key",
@@ -1616,6 +1616,13 @@ _AUDIT_SECRET_VALUE_RE = re.compile(
 # which event registers (review MEDIUM #5: prevents silently dropping the
 # cross-event context when a bridge event that goes through audit_event —
 # which injects channel/chat_key/user/persona — is later allowlisted).
+#: Structural spine. These keys survive both the M2 positive allowlist and the
+#: F-A4 vocabulary floor for EVERY event type, because they are what makes a
+#: record attributable (GDPR Art. 30). The exemption is from the KEY filters
+#: only — since 2026-09-07 their VALUES are PII-scanned like any other, and a
+#: value with an email/phone shape is replaced by its sha256[:8] fingerprint
+#: rather than dropped (see :func:`filter_audit_details`). Adding a key here
+#: means "this names WHO/WHERE, never WHAT" — never a message, reason or title.
 _AUDIT_RESERVED_KEYS: frozenset[str] = frozenset({
     "tenant_id", "channel", "chat_key", "user", "persona",
 })
@@ -2228,6 +2235,7 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
     default_deny = allow is None  # F-A4: no per-event allowlist → vocabulary floor
     cleaned: dict[str, Any] = {}
     dropped: list[str] = []
+    fingerprinted: list[str] = []
     for k, v in details.items():
         ks = str(k).lower()
         on_allowlist = allow is not None and ks in allow
@@ -2256,15 +2264,43 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
         # R2-A6: the PII value scan is not a property of the EVENT (registered
         # or not) — it is a property of the KEY. A free-text key is scanned
         # always; every other key keeps the vocabulary-floor behaviour.
+        #
+        # R3 follow-up (2026-09-07): the reserved structural spine
+        # (``user`` / ``chat_key`` / ``channel`` / ``persona`` / ``tenant_id``)
+        # used to skip the value scan entirely, on the reasoning that these keys
+        # carry IDENTIFIERS, not free text. Measured against the live chains that
+        # is false: 596 039 records held 2 962 ``user`` and 2 580 ``chat_key``
+        # values with an email or phone shape — ``notifications@github.com``,
+        # ``alice@company.com``, ``+491234567890``. The email/messenger bridges
+        # pass the sender straight through, and ``adapter._pii_fp`` only covers
+        # the adapter's OWN emitter, not ``core/learning/event_persistence.py``
+        # or any other direct ``audit_event`` caller. Raw personal identifiers
+        # were landing in a hash-chained, append-only, never-redactable file.
+        #
+        # They are now scanned like every other key — and FINGERPRINTED rather
+        # than dropped. Dropping is the floor's usual answer, and it is the wrong
+        # one here: ``user`` is what makes a record attributable (GDPR Art. 30)
+        # and what an operator correlates on; a chain of records with the actor
+        # removed is not a safer audit trail, it is a useless one. The
+        # replacement is the SAME transform ``adapter._pii_fp`` applies
+        # (sha256[:8] of the utf-8 bytes), so a value redacted here and one the
+        # adapter already redacted collide into one pseudonym namespace. The
+        # affected key names — never the values — are listed under
+        # ``_pii_fingerprinted``.
         sv, drop = _audit_scrub(
             v, pii_scan=(default_deny and not reserved) or ks in _AUDIT_FREETEXT_KEYS
         )
         if drop:
             dropped.append(str(k))
             continue
+        if reserved and isinstance(sv, str) and sv and _audit_value_pii(sv):
+            sv = hashlib.sha256(sv.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+            fingerprinted.append(str(k))
         cleaned[k if isinstance(k, str) else str(k)] = sv
     if dropped:
         cleaned["_dropped_fields"] = sorted(set(dropped))
+    if fingerprinted:
+        cleaned["_pii_fingerprinted"] = sorted(set(fingerprinted))
     return cleaned, dropped
 
 

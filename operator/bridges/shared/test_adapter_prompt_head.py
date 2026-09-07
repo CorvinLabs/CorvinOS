@@ -29,7 +29,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from agents.claude_code import PROMPT_HEAD_SENTINEL, guard_prompt_head  # noqa: E402
+from agents.claude_code import (  # noqa: E402
+    AT_NEUTRALISER,
+    PROMPT_HEAD_SENTINEL,
+    guard_prompt_head,
+    neutralise_at_references,
+)
 
 SLASH = "/pwn"
 HEAD = PROMPT_HEAD_SENTINEL + "\n"
@@ -86,9 +91,60 @@ def test_guard_prompt_head_contract() -> None:
     for text in (SLASH, " /init", "/cost", "", "hello", "User input: /x"):
         g = guard_prompt_head(text)
         assert g.startswith(HEAD) and not g.startswith("/")
-        assert g == HEAD + text
+        assert g == HEAD + text  # no `@` in these → text is byte-identical
         assert guard_prompt_head(g) == g, "idempotent"
     assert guard_prompt_head(None) == HEAD
+    # R2-E1 also covers `!` (client-side shell) and `#` (memory-add) at byte 0:
+    # the sentinel's own first byte is a letter, so nothing user-supplied can
+    # ever sit at position 0.
+    for text in ("!cat /etc/passwd", "#remember this", "/pwn"):
+        assert guard_prompt_head(text)[0].isalpha(), text
+
+
+def test_neutralise_at_references_contract() -> None:
+    """R3-C2: `@<path>` is expanded client-side ANYWHERE in the message, so the
+    byte-0 sentinel does not touch it. The neutraliser inserts one zero-width
+    joiner after each `@` that is not inside an e-mail local part.
+
+    Measured trigger (real CLI, 2026-09-07): only a token-start `@` expands —
+    `x@canary.txt` and `(`/`<`/`"`/`,`/`:`/`=`/`[`/`/`/`-` before it do not. The
+    neutraliser is deliberately WIDER than that (anything but an e-mail
+    local-part char), so a CLI that widens its own rule stays covered.
+
+    The joiner goes BEFORE the `@`, which keeps the user's `@token` contiguous.
+    U+200B in that position was measured NOT to stop the expansion; U+2060
+    does. See the module comment in `agents/claude_code.py` for the full matrix.
+    """
+    assert AT_NEUTRALISER == "\u2060" and len(AT_NEUTRALISER) == 1
+
+    # the exfiltration vector, in every shape that reached production
+    for vector in ("@/etc/hostname", "read @~/.corvin/audit.jsonl please",
+                   "hi\n@.env\nbye", "@secret.txt", "\t@Makefile"):
+        out = neutralise_at_references(vector)
+        assert AT_NEUTRALISER + "@" in out, vector
+        # nothing deleted: dropping the joiners restores the input byte-for-byte
+        assert out.replace(AT_NEUTRALISER, "") == vector, vector
+        # no `@` is left at a token start (the joiner precedes each one)
+        for i, ch in enumerate(out):
+            if ch == "@":
+                assert out[i - 1: i] == AT_NEUTRALISER, (vector, i)
+
+    # e-mail addresses survive untouched — the stated trade-off boundary
+    for keep in ("silvio.jurk@googlemail.com", "a@b.co", "x_1+tag%q-z@host.example"):
+        assert neutralise_at_references(keep) == keep, keep
+    assert neutralise_at_references("write to ops@example.com now") == \
+        "write to ops@example.com now"
+
+    # idempotent, and a no-@ payload is returned unchanged (identity fast path)
+    for text in ("", "no at sign", "@a", "user@host", "a @b c@d"):
+        once = neutralise_at_references(text)
+        assert neutralise_at_references(once) == once, text
+    assert neutralise_at_references("plain") == "plain"
+
+    # and the full guard composes both halves, idempotently
+    g = guard_prompt_head("/pwn then @/etc/hostname")
+    assert g == HEAD + "/pwn then " + AT_NEUTRALISER + "@/etc/hostname"
+    assert guard_prompt_head(g) == g
 
 
 def test_build_claude_args_positional_prompt_is_sentinel_guarded() -> None:
@@ -132,6 +188,7 @@ def test_call_claude_legacy_feeds_prompt_on_stdin_behind_sentinel() -> None:
 def main() -> int:
     fails = 0
     tests = (test_guard_prompt_head_contract,
+             test_neutralise_at_references_contract,
              test_build_claude_args_positional_prompt_is_sentinel_guarded,
              test_call_claude_legacy_feeds_prompt_on_stdin_behind_sentinel)
     for fn in tests:

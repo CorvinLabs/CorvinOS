@@ -445,8 +445,21 @@ class TestAuditChainSurvivesRotation(unittest.TestCase):
             rotate_and_seal(audit, policy)
 
             link = json.loads(audit.read_text().splitlines()[0])
-            # Recompute the hash and verify it matches
-            link_for_hash = {k: v for k, v in link.items() if k != "hash"}
+            # R3-A1: the sealer MACs the rotation link under the anchor key, so a
+            # forged "rotation" cannot be minted by anyone who can only edit
+            # audit.jsonl. `mac` is NOT part of the chain hash — recompute over
+            # exactly CHAIN_HASH_EXCLUDED_FIELDS, the verifier's own set, or this
+            # test drifts from verify_chain the moment another additive field
+            # lands (which is how it broke).
+            try:
+                from forge.security_events import CHAIN_HASH_EXCLUDED_FIELDS
+            except ImportError:  # dual-context import (forge/forge on sys.path)
+                from security_events import CHAIN_HASH_EXCLUDED_FIELDS
+            from audit_sealer import _manifest_anchor_key
+            if _manifest_anchor_key() is not None:
+                self.assertIn("mac", link, "the rotation link must be MAC'd")
+            link_for_hash = {k: v for k, v in link.items()
+                             if k not in CHAIN_HASH_EXCLUDED_FIELDS}
             canonical = json.dumps(link_for_hash, sort_keys=True,
                                    separators=(",", ":"))
             h = hashlib.sha256()
