@@ -17,6 +17,7 @@ import { MarketplacePanel } from "./marketplace";
 import { SkillsOverviewPanel } from "@/components/SkillsOverviewPanel";
 import { VibeDashboard } from "@/pages/vibe-engineering";
 import { LearningDashboard } from "./LearningDashboard";
+import { WorldMapPanel } from "./WorldMap";
 import {
   DashboardPage, SettingsPage, EnginesPage, BrowserPage,
   ComputePage, BridgesPage, VoicePage, ForgePage, SkillsPage, PackagesPage,
@@ -40,6 +41,7 @@ import { SkillInspector } from "@/components/SkillInspector";
 const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   DashboardPage,
   LearningDashboard: LearningDashboard as unknown as ComponentType,
+  WorldMapPanel: WorldMapPanel as unknown as ComponentType,
   SettingsPage,
   EnginesPage,
   BrowserPage,
@@ -94,6 +96,7 @@ export const PANELS: ConsolePanel[] = [
   // silently loaded the old page and the Dashboard was unreachable.
   rc("vibe-engineering", "Vibe Dashboard", VibeDashboard as unknown as typeof DashboardPage, { nav: { label: "Vibe Dashboard", icon: "TrendingUp", group: "vibe" } }),
   rc("learning-dashboard", "Learning Dashboard", LearningDashboard as unknown as typeof DashboardPage, { nav: { label: "Learning Dashboard", icon: "Brain", group: "observability" } }),
+  rc("world-map", "World Map", WorldMapPanel as unknown as typeof DashboardPage, { nav: { label: "World Map", icon: "Globe", group: "observability" } }),
   rc("dashboard", "Dashboard", DashboardPage),
   rc("settings", "Settings", SettingsPage),
   rc("engines", "AI Engines", EnginesPage),
