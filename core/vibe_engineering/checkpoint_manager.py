@@ -8,9 +8,34 @@ Security: Checkpoint Integrity Binding (Merkle Root + Tenant Key) — ADR-0XXX
 - Every checkpoint includes merkle_root (hash tree of all weights + audit log)
 - tenant_signature (HMAC-SHA256 of merkle_root with tenant key)
 - restore_checkpoint() verifies both; fail-closed on mismatch
+
+Key material (adversarial hardening, 2026-09-07 — the whole point of this module)
+----------------------------------------------------------------------------------
+The key is 256 bits of ``secrets.token_hex(32)`` stored at
+``<corvin_home>/tenants/<tenant_id>/keys/vibe_checkpoint_signing.key`` with
+mode 0600, created on first use, written ATOMICALLY (mkstemp + fsync +
+os.link so a concurrent reader never observes a zero-byte key) — the SAME
+scheme as :mod:`core.learning.checkpoint_signer`,
+:mod:`core.learning.feedback_signature` and
+:mod:`core.infinite_session.crypto_binding`. Reading it fails closed
+(:class:`CheckpointKeyUnavailable`); there is no in-code fallback.
+
+Until 2026-09-07 ``_get_tenant_key()`` returned
+``sha256(f"tenant.checkpoint.key:{tenant_id}")`` — a pure function of a
+string every caller already knows (the tenant_id is IN the checkpoint file
+itself), so anyone could recompute it, tamper with a checkpoint's state, and
+recompute a "signature" that ``_verify_tenant_signature`` accepted. See
+``tests/adversarial/test_watchdog_circumvention_vector2.py``.
+
+**Migration is deliberately breaking**, matching ``checkpoint_signer.py``'s
+call: a checkpoint signed with the old public derivation, or one carrying no
+merkle_root/tenant_signature at all, does NOT verify under the real key — it
+raises :class:`CheckpointIntegrityError` (reported as unverifiable) rather
+than crashing or silently passing. Anything else would launder a forgery
+under a new name.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from typing import Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
@@ -21,12 +46,23 @@ import hashlib
 import tempfile
 import os
 import hmac
+import secrets
 
 from core.paths.tenant import tenant_home
 from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+
+
+#: Filename of the per-tenant checkpoint-signing key (distinct from
+#: ``core.learning.checkpoint_signer``'s ``checkpoint_signing.key`` — a
+#: different signing domain, deliberately not key-shared across subsystems).
+_KEY_FILENAME = "vibe_checkpoint_signing.key"
+
+
+class CheckpointKeyUnavailable(Exception):
+    """The tenant's checkpoint-signing key could not be created or read — fail closed."""
 
 
 class CheckpointIntegrityError(Exception):
@@ -119,7 +155,11 @@ def _compute_merkle_root(checkpoint_state: Dict[str, Any]) -> str:
     tampering with individual weights/fields is detectable.
 
     Args:
-        checkpoint_state: Dict of checkpoint fields (from asdict())
+        checkpoint_state: Dict of checkpoint fields — build it with
+            :func:`_checkpoint_signing_dict` so every identifying/linkage
+            field (checkpoint_id, tenant_id, task_id, session_id, graph, …)
+            is covered and none can be rewritten without invalidating the
+            signature.
 
     Returns:
         SHA256 hex digest of the Merkle root
@@ -134,23 +174,101 @@ def _compute_merkle_root(checkpoint_state: Dict[str, Any]) -> str:
     return merkle_root
 
 
+def _checkpoint_signing_dict(checkpoint: "CheckpointState") -> Dict[str, Any]:
+    """
+    The fields covered by the Merkle root / tenant signature.
+
+    Single source of truth, used by ``create_checkpoint()``, ``save()`` and
+    ``_verify_checkpoint_integrity()`` alike so the three never drift apart.
+    Includes every identifying/linkage field (checkpoint_id, tenant_id,
+    task_id, session_id) — not just the payload — so a checkpoint cannot be
+    re-attributed to a different id/tenant/task without invalidating the
+    hash (the adjacent-chain shape found elsewhere: a hash that covers only
+    the payload and leaves prev_hash/seq/ids rewritable). ``graph`` (ADR-0400
+    TaskGraph JSON) was missing from this set until 2026-09-07 — an attacker
+    with file-write access could rewrite a checkpoint's TaskGraph without
+    touching merkle_root or tenant_signature; it is now included.
+    """
+    return {
+        "checkpoint_id": checkpoint.checkpoint_id,
+        "tenant_id": checkpoint.tenant_id,
+        "task_id": checkpoint.task_id,
+        "session_id": checkpoint.session_id,
+        "phase": checkpoint.phase,
+        "trigger": checkpoint.trigger,
+        "timestamp_iso": checkpoint.timestamp_iso,
+        "iteration_num": checkpoint.iteration_num,
+        "task_state": checkpoint.task_state,
+        "context_essentials": checkpoint.context_essentials,
+        "learning_state": checkpoint.learning_state,
+        "open_subgoals": checkpoint.open_subgoals,
+        "artifacts": checkpoint.artifacts,
+        "recovery_reason": checkpoint.recovery_reason,
+        "graph": checkpoint.graph,
+    }
+
+
+def _key_path(tenant_id: str) -> Path:
+    return tenant_home(tenant_id) / "keys" / _KEY_FILENAME
+
+
 def _get_tenant_key(tenant_id: str) -> bytes:
     """
-    Get HMAC key for tenant.
+    Read (creating on first use) this tenant's SECRET checkpoint-signing key.
 
-    Derives a unique key per tenant from tenant_id.
-    In production, this would be stored securely (HSM, vault, etc.).
+    256 bits of ``secrets.token_hex(32)``, stored 0600 under
+    ``<corvin_home>/tenants/<tenant_id>/keys/vibe_checkpoint_signing.key``.
+    Never derived from tenant_id or any other public value — see the module
+    docstring for why the previous derivation was a live forgery vector.
 
     Args:
         tenant_id: Tenant identifier
 
     Returns:
         HMAC key as bytes
+
+    Raises:
+        CheckpointKeyUnavailable: the key cannot be created or read.
     """
-    # Use tenant_id as seed for HMAC key derivation
-    # In production: read from secure key store
-    key_material = f"tenant.checkpoint.key:{tenant_id}".encode()
-    return hashlib.sha256(key_material).digest()
+    key_path = _key_path(tenant_id)
+    if not (key_path.exists() and key_path.stat().st_size > 0):
+        try:
+            key_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # mkstemp: unique name per call, mode 0600 from birth. Written to
+            # a temp file, fsynced, then os.link'd into place so a concurrent
+            # reader observes either no key or a complete one — never a
+            # zero-byte file (the race fixed in
+            # crypto_binding._ensure_key_exists).
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=".vibe-checkpoint-key.", dir=str(key_path.parent)
+            )
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(secrets.token_hex(32))
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                try:
+                    os.link(str(tmp), str(key_path))
+                except FileExistsError:
+                    pass  # concurrent creator won the race — read theirs
+            finally:
+                tmp.unlink(missing_ok=True)
+        except OSError as exc:
+            raise CheckpointKeyUnavailable(
+                f"cannot create checkpoint signing key for {tenant_id!r}: {exc}"
+            ) from exc
+    try:
+        material = key_path.read_text().strip()
+    except OSError as exc:
+        raise CheckpointKeyUnavailable(
+            f"cannot read checkpoint signing key for {tenant_id!r}: {exc}"
+        ) from exc
+    if not material:
+        raise CheckpointKeyUnavailable(
+            f"checkpoint signing key for {tenant_id!r} is empty (fail-closed)"
+        )
+    return material.encode()
 
 
 def _compute_tenant_signature(merkle_root: str, tenant_id: str) -> str:
@@ -283,28 +401,6 @@ class CheckpointManager:
 
         checkpoint_id = hashlib.sha256(content_str.encode()).hexdigest()[:12]
 
-        # Prepare checkpoint state dict for Merkle root computation
-        checkpoint_dict = {
-            "checkpoint_id": checkpoint_id,
-            "tenant_id": tenant_id,
-            "task_id": task_id,
-            "session_id": session_id,
-            "phase": phase,
-            "trigger": trigger,
-            "timestamp_iso": timestamp_iso,
-            "iteration_num": iteration_num,
-            "task_state": task_state,
-            "context_essentials": context_essentials,
-            "learning_state": learning_state,
-            "open_subgoals": open_subgoals,
-            "artifacts": artifacts,
-            "recovery_reason": recovery_reason,
-        }
-
-        # Compute Merkle root and tenant signature (integrity binding)
-        merkle_root = _compute_merkle_root(checkpoint_dict)
-        tenant_signature = _compute_tenant_signature(merkle_root, tenant_id)
-
         checkpoint = CheckpointState(
             checkpoint_id=checkpoint_id,
             tenant_id=tenant_id,
@@ -320,9 +416,16 @@ class CheckpointManager:
             open_subgoals=open_subgoals,
             artifacts=artifacts,
             recovery_reason=recovery_reason,
-            merkle_root=merkle_root,
-            tenant_signature=tenant_signature
         )
+
+        # Compute Merkle root and tenant signature (integrity binding).
+        # This is advisory at this stage — save() is the authority and
+        # recomputes unconditionally, so a checkpoint that was never passed
+        # through create_checkpoint() (or was hand-edited afterwards) cannot
+        # reach disk with a stale/placeholder/absent binding.
+        merkle_root = _compute_merkle_root(_checkpoint_signing_dict(checkpoint))
+        tenant_signature = _compute_tenant_signature(merkle_root, tenant_id)
+        checkpoint = replace(checkpoint, merkle_root=merkle_root, tenant_signature=tenant_signature)
 
         logger.info(f"Checkpoint created: {checkpoint_id} (task={task_id}, iter={iteration_num}, trigger={trigger}, merkle_root={merkle_root[:8]}...)")
         return checkpoint
@@ -404,6 +507,21 @@ class CheckpointManager:
         # A checkpoint of another tenant must never land in this tenant's dir.
         self._bind(checkpoint.tenant_id)
         _validate_task_id(checkpoint.task_id)
+
+        # Recompute the integrity binding from the checkpoint's OWN content,
+        # unconditionally — never trust a caller-supplied merkle_root /
+        # tenant_signature. `create_checkpoint()` already stamps the correct
+        # values, but a checkpoint built by hand (bypassing it — as any
+        # caller legally can, `CheckpointState` has no private constructor)
+        # could otherwise carry a stale, placeholder, or simply absent
+        # binding straight to disk, where `_verify_checkpoint_integrity`
+        # would (before this fix) treat "absent" as "legacy, skip
+        # verification" — silently disarming the whole mechanism. save() is
+        # the one place with access to the real tenant key, so it is the
+        # only place this can be made authoritative.
+        merkle_root = _compute_merkle_root(_checkpoint_signing_dict(checkpoint))
+        tenant_signature = _compute_tenant_signature(merkle_root, checkpoint.tenant_id)
+        checkpoint = replace(checkpoint, merkle_root=merkle_root, tenant_signature=tenant_signature)
 
         filename = f"{checkpoint.task_id}_{checkpoint.checkpoint_id}_{checkpoint.iteration_num:03d}.json"
         filepath = self.checkpoint_dir / filename
@@ -503,14 +621,21 @@ class CheckpointManager:
         Raises:
             CheckpointIntegrityError: If verification fails
         """
-        # Legacy checkpoints (pre-2026-09-07) have no merkle_root/tenant_signature
-        # Accept them for backward compatibility; no need to verify
+        # Fail-closed on a missing binding. Until 2026-09-07 this branch
+        # treated a checkpoint with no merkle_root/tenant_signature as
+        # "legacy, skip verification" — but by 2026-09-07 EVERY checkpoint
+        # this manager writes carries one (save() stamps it unconditionally,
+        # see save()'s docstring), so "missing" now means either a genuinely
+        # pre-hardening file or a hand-built/tampered one with the binding
+        # stripped — and those are exactly as trustworthy as an
+        # attacker-written file. Reported as unverifiable (not a crash, not
+        # a silent pass), matching core.learning.checkpoint_signer's call on
+        # the identical migration question.
         if checkpoint.merkle_root is None or checkpoint.tenant_signature is None:
-            logger.warning(
-                f"Checkpoint {checkpoint.checkpoint_id} has no integrity binding; "
-                f"this is only valid for legacy checkpoints (pre-2026-09-07)"
+            raise CheckpointIntegrityError(
+                f"Checkpoint {checkpoint.checkpoint_id} carries no integrity binding "
+                f"(merkle_root/tenant_signature missing) — unverifiable, fail-closed"
             )
-            return
 
         # Verify tenant signature (HMAC)
         if not _verify_tenant_signature(checkpoint.merkle_root, checkpoint.tenant_signature, checkpoint.tenant_id):
@@ -519,24 +644,7 @@ class CheckpointManager:
             )
 
         # Recompute Merkle root from checkpoint state and verify it matches
-        checkpoint_dict = {
-            "checkpoint_id": checkpoint.checkpoint_id,
-            "tenant_id": checkpoint.tenant_id,
-            "task_id": checkpoint.task_id,
-            "session_id": checkpoint.session_id,
-            "phase": checkpoint.phase,
-            "trigger": checkpoint.trigger,
-            "timestamp_iso": checkpoint.timestamp_iso,
-            "iteration_num": checkpoint.iteration_num,
-            "task_state": checkpoint.task_state,
-            "context_essentials": checkpoint.context_essentials,
-            "learning_state": checkpoint.learning_state,
-            "open_subgoals": checkpoint.open_subgoals,
-            "artifacts": checkpoint.artifacts,
-            "recovery_reason": checkpoint.recovery_reason,
-        }
-
-        computed_merkle_root = _compute_merkle_root(checkpoint_dict)
+        computed_merkle_root = _compute_merkle_root(_checkpoint_signing_dict(checkpoint))
         if computed_merkle_root != checkpoint.merkle_root:
             raise CheckpointIntegrityError(
                 f"Merkle root mismatch for checkpoint {checkpoint.checkpoint_id}: "

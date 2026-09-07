@@ -296,16 +296,21 @@ class TestCheckpointIntegrityRestore:
         result = checkpoint_manager.get_latest("task_test_001")
         assert result is None  # No valid checkpoints
 
-    def test_checkpoint_restore_backward_compatible(self, checkpoint_manager, sample_checkpoint_data, temp_checkpoint_dir):
+    def test_checkpoint_restore_rejects_missing_integrity_binding(
+        self, checkpoint_manager, sample_checkpoint_data, temp_checkpoint_dir
+    ):
         """
-        Test: Legacy checkpoints (pre-2026-09-07, no merkle_root/signature) are accepted.
-
-        Scenario:
-        1. Create a legacy checkpoint (no merkle_root/tenant_signature)
-        2. Save to disk
-        3. Load checkpoint; should succeed (backward compatibility)
+        Rewritten 2026-09-07 (adversarial hardening): a checkpoint with no
+        merkle_root/tenant_signature is NOT accepted as "legacy, skip
+        verification" anymore. Until this fix, ANY checkpoint missing the
+        binding — a genuinely pre-hardening file, or simply one hand-built
+        without going through create_checkpoint()/save() — was silently
+        treated as trustworthy, which is precisely the watchdog-
+        circumvention hole this module exists to close (see
+        tests/adversarial/test_watchdog_circumvention_vector2.py). Deserialize
+        still tolerates the missing fields (round-trip fidelity of whatever
+        is on disk); load() is the fail-closed gate and must now reject it.
         """
-        # Create checkpoint via deserialization (simulating legacy format)
         legacy_data = {
             "checkpoint_id": "legacy_123",
             "tenant_id": "_default",
@@ -320,22 +325,21 @@ class TestCheckpointIntegrityRestore:
             "learning_state": {},
             "open_subgoals": [],
             "artifacts": [],
-            # NOTE: no merkle_root or tenant_signature (legacy format)
+            # NOTE: no merkle_root or tenant_signature.
         }
 
-        # Serialize as JSON
         json_str = json.dumps(legacy_data)
 
-        # Deserialize (should work)
+        # Deserialize still round-trips whatever the file contains...
         checkpoint = checkpoint_manager.deserialize(json_str)
         assert checkpoint.merkle_root is None
         assert checkpoint.tenant_signature is None
 
-        # Load should also work (backward compatibility warning logged)
+        # ...but load() fails closed: unverifiable, not silently accepted.
         filepath = temp_checkpoint_dir / "legacy_checkpoint.json"
         filepath.write_text(json_str)
-        loaded = checkpoint_manager.load(filepath)
-        assert loaded.checkpoint_id == "legacy_123"
+        with pytest.raises(CheckpointIntegrityError, match="no integrity binding"):
+            checkpoint_manager.load(filepath)
 
 
 class TestCheckpointAuditTrail:

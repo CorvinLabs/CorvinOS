@@ -380,44 +380,62 @@ class TestWatchdogCircumventionVector2:
     # ===== ATTACK 8: Brute-Force Tenant Key =====
 
     def test_attack_8_tenant_key_derivation_is_deterministic(self):
-        """Tenant key is derived from tenant_id via SHA256.
+        """Tenant key is a persisted server-side secret, read repeatedly.
 
-        Attacker can see tenant_id from checkpoint, can derive the same key
-        locally, and forge a valid signature for their tampered checkpoint.
-
-        Defense: Tenant key is SECRET, not derived from public data. In
-        production, it would be stored in HSM/vault. For now, we ensure it's
-        at least a keyed hash that an attacker cannot reverse.
+        Rewritten 2026-09-07 (adversarial hardening): until then this test's
+        name and docstring described the VULNERABILITY as the defense — the
+        key really was ``sha256(f"tenant.checkpoint.key:{tenant_id}")``, a
+        pure function of a value every caller already knows, so it was
+        trivially "deterministic" in the sense of forgeable. That hole is
+        closed by ``_get_tenant_key()`` now reading (creating on first use)
+        ``secrets.token_hex(32)`` persisted 0600 under
+        ``<corvin_home>/tenants/<tenant_id>/keys/vibe_checkpoint_signing.key``
+        — repeated reads of the SAME tenant still return the SAME bytes
+        (it's the same file), but that byte string is no longer computable
+        from ``tenant_id`` alone.
         """
-        # The key for tenant_a is deterministic (same input, same output)
+        # Reading the same tenant's key twice returns the same secret (it is
+        # the same file on disk, not recomputed from tenant_id).
         key_a_1 = _get_tenant_key("tenant_a")
         key_a_2 = _get_tenant_key("tenant_a")
-        assert key_a_1 == key_a_2, "Key derivation is deterministic"
+        assert key_a_1 == key_a_2, "Re-reading a tenant's key returns the same persisted secret"
 
-        # But an attacker cannot work backwards from the key to forge a
-        # different tenant's key, because the derivation is a one-way hash
+        # Different tenants get independently-random keys, not merely
+        # different hash outputs of their id.
         key_b = _get_tenant_key("tenant_b")
         assert key_a_1 != key_b, "Different tenants have different keys"
 
-        # To forge a signature for tenant_b, attacker needs tenant_b's key.
-        # If they only have the file (with tenant_id="tenant_b"), they COULD
-        # derive the key locally. This is a gap if keys are deterministic.
-        #
-        # HOWEVER: In production, keys should be stored in a secure location
-        # (HSM, Vault, env var) and NOT derived at runtime. The current
-        # implementation is a placeholder and acknowledges this in the code.
-
     def test_attack_8_mitigation_use_server_side_keys(self):
-        """Mitigation: Tenant keys should be server-side secrets, not derived.
+        """Mitigation: tenant keys are server-side secrets, not derived.
 
-        This test verifies that the current implementation is marked as
-        needing upgrade: _get_tenant_key() should read from secure storage.
+        Rewritten 2026-09-07: the old version of this test asserted that
+        ``_get_tenant_key()``'s docstring merely ACKNOWLEDGED being an
+        insecure placeholder ("production"/"secure"/"HSM" in the source) —
+        i.e. it passed as long as the vulnerability was documented, not
+        fixed. That is no longer the right bar. This version proves the
+        actual mitigation: the function's real output for a tenant is NOT
+        reproducible from the old public derivation, and the key material
+        is not embedded in the checkpoint file at all.
         """
-        # Verify that the docstring acknowledges this is a placeholder
+        real_key = _get_tenant_key("tenant_zk")
+
+        # The pre-2026-09-07 derivation an attacker (or anyone reading the
+        # old source) could reproduce from the public tenant_id alone.
+        old_public_derivation = hashlib.sha256(
+            b"tenant.checkpoint.key:tenant_zk"
+        ).digest()
+        assert real_key != old_public_derivation, (
+            "the real key must not match the old public/forgeable derivation"
+        )
+
+        # And the source no longer computes a key from tenant_id at all —
+        # it reads (creating on first use) a random secret from disk.
         import inspect
         source = inspect.getsource(_get_tenant_key)
-        assert "production" in source.lower() or "secure" in source.lower() or "HSM" in source, \
-            "_get_tenant_key() should have a comment about production use"
+        assert "secrets.token_hex" in source, \
+            "_get_tenant_key() must generate key material with secrets.token_hex, not derive it"
+        assert 'tenant.checkpoint.key:' not in source, \
+            "_get_tenant_key() must not reintroduce the old public derivation string"
 
     # ===== ATTACK 9: Zero-Knowledge Forgery (No Key, No State) =====
 
@@ -576,6 +594,98 @@ class TestCheckpointSigningIntegration:
             mgr_b.load(path_a)
 
         assert "Tenant mismatch" in str(exc_info.value)
+
+
+class TestOldKeyDerivationMigrationIsBreaking:
+    """Regression (2026-09-07 hardening): a checkpoint signed under the OLD
+    public key derivation must NOT verify under the new (real, secret) key.
+
+    Before this hardening, ``_get_tenant_key()`` returned
+    ``sha256(f"tenant.checkpoint.key:{tenant_id}")`` — a pure function of a
+    public string. A checkpoint "signed" that way is exactly as trustworthy
+    as an attacker-forged one and must be rejected the same way: reported as
+    unverifiable (``CheckpointIntegrityError``), never silently accepted and
+    never a crash. This mirrors the deliberately-breaking migration chosen
+    in ``core.learning.checkpoint_signer`` for the identical defect.
+    """
+
+    def setup_method(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.tenant_id = "_default"
+        self.checkpoint_mgr = CheckpointManager(self.tmpdir / "checkpoints", tenant_id=self.tenant_id)
+
+    def test_checkpoint_signed_with_old_public_derivation_is_rejected(self):
+        checkpoint = CheckpointState(
+            checkpoint_id="ckpt_old_derivation",
+            tenant_id=self.tenant_id,
+            task_id="task_001",
+            session_id="session_001",
+            phase="meta_tuning",
+            trigger="manual",
+            timestamp_iso=datetime.now().isoformat(),
+            iteration_num=1,
+            task_state={'α_core': 0.1},
+            context_essentials={},
+            learning_state={},
+            open_subgoals=[],
+            artifacts=[],
+        )
+
+        # save() always (re)computes the REAL binding, so to reproduce a
+        # forged file we bypass it and write JSON directly — exactly what an
+        # attacker with file-write access (or a pre-hardening writer) would
+        # produce: merkle_root computed honestly, but signed with the OLD,
+        # publicly-derivable key.
+        from core.vibe_engineering.checkpoint_manager import _checkpoint_signing_dict
+        merkle_root = _compute_merkle_root(_checkpoint_signing_dict(checkpoint))
+        old_key = hashlib.sha256(
+            f"tenant.checkpoint.key:{self.tenant_id}".encode()
+        ).digest()
+        old_signature = hmac.new(old_key, merkle_root.encode(), hashlib.sha256).hexdigest()
+
+        forged = asdict(checkpoint)
+        forged["merkle_root"] = merkle_root
+        forged["tenant_signature"] = old_signature
+
+        filepath = self.tmpdir / "checkpoints" / "forged_old_derivation.json"
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        filepath.write_text(json.dumps(forged, indent=2))
+
+        # Fails closed: reported as unverifiable, not silently accepted.
+        with pytest.raises(CheckpointIntegrityError) as exc_info:
+            self.checkpoint_mgr.load(filepath)
+        assert "signature" in str(exc_info.value).lower()
+
+    def test_checkpoint_with_no_integrity_binding_is_rejected(self):
+        """A checkpoint with merkle_root/tenant_signature entirely absent
+        (the old "legacy, skip verification" bypass) must also fail closed,
+        not be silently accepted as a pre-hardening file."""
+        checkpoint = CheckpointState(
+            checkpoint_id="ckpt_no_binding",
+            tenant_id=self.tenant_id,
+            task_id="task_001",
+            session_id="session_001",
+            phase="meta_tuning",
+            trigger="manual",
+            timestamp_iso=datetime.now().isoformat(),
+            iteration_num=1,
+            task_state={'α_core': 0.1},
+            context_essentials={},
+            learning_state={},
+            open_subgoals=[],
+            artifacts=[],
+        )
+        data = asdict(checkpoint)
+        data["merkle_root"] = None
+        data["tenant_signature"] = None
+
+        filepath = self.tmpdir / "checkpoints" / "no_binding.json"
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        filepath.write_text(json.dumps(data, indent=2))
+
+        with pytest.raises(CheckpointIntegrityError) as exc_info:
+            self.checkpoint_mgr.load(filepath)
+        assert "unverifiable" in str(exc_info.value).lower() or "no integrity binding" in str(exc_info.value).lower()
 
 
 if __name__ == "__main__":
