@@ -212,28 +212,45 @@ def test_sensitive_v2_checkout_e2e():
     _t.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
         async def run():
+            import sys as _sys, time as _time
+            _t0 = _time.monotonic()
+            def _log(m):
+                print(f"[DBG {_time.monotonic()-_t0:7.2f}] {m}", file=_sys.stderr, flush=True)
+            _log("enter run()")
             from corvin_console.browser import BrowserSessionManager, BrowserActionError
             home = Path(tempfile.mkdtemp())
             mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
                                         allowlist_resolver=lambda t: (None, None))
+            _log("mgr built")
             sid = await mgr.create("_default", headless=True)
+            _log("created %s" % sid)
             s = mgr.session("_default", sid)
+            _log("start()...")
+            await s._ensure_started()
+            _log("started")
             obs = await s.navigate(f"http://127.0.0.1:{port}/checkout")
+            _log("navigate done")
             continue_btn = next(m.index for m in obs.marks if m.name == "Continue")
+            _log("navigated, marks=%r" % ([ (m.index,m.role,m.name) for m in obs.marks ],))
 
             async def decline():
-                for _ in range(60):
+                for i in range(60):
                     p = mgr.pending("_default", sid)
                     if p:
+                        _log("pending found after %d polls: %r" % (i, p))
                         mgr.resolve_confirm("_default", sid, p[0]["id"], False)
                         return
                     await asyncio.sleep(0.05)
+                _log("decline GAVE UP, no pending")
 
             task = asyncio.ensure_future(s.click(continue_btn))
             await decline()
+            _log("awaiting task")
             with pytest.raises(BrowserActionError):
                 await task   # blocked: /checkout path made the ambiguous button sensitive
+            _log("task raised OK")
             await mgr.close("_default", sid)
+            _log("closed")
 
         asyncio.run(run())
     finally:
