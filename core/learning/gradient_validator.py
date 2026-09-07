@@ -19,6 +19,7 @@ recorded with tenant_id, timestamp, and recovery action.
 from typing import Dict, Tuple, Optional, List
 from dataclasses import dataclass
 import numpy as np
+import math
 from datetime import datetime
 
 
@@ -149,8 +150,9 @@ class GradientValidator:
             # Clip to hard bounds
             clipped_value = float(np.clip(grad_value, -self.max_gradient, self.max_gradient))
 
-            # Track clipping
-            was_clipped = clipped_value != grad_value
+            # Track clipping using epsilon-based tolerance to prevent precision bypass
+            # Use math.isclose() instead of direct comparison to handle floating-point precision
+            was_clipped = not math.isclose(clipped_value, grad_value, rel_tol=1e-9, abs_tol=1e-12)
             if was_clipped:
                 clipped_count += 1
 

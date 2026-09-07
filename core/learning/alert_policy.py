@@ -48,6 +48,7 @@ import hmac
 import logging
 import secrets
 import time
+import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from enum import Enum
@@ -529,9 +530,19 @@ class AlertPolicyManager:
         metric_value: float,
         threshold: float,
     ) -> AlertSignature:
-        """Create a cryptographic signature for an alert (Fix #11).
+        """Create a cryptographic signature for an alert (Fix #11, Round 2).
 
         Prevents tampering and spoofing by signing alert content.
+
+        **Fix #11 Round 2 (Nonce Uniqueness):**
+        Each alert MUST receive a fresh, unique nonce generated per alert (not cached
+        or reused from a batch). The nonce combines:
+        - uuid4() for cryptographic uniqueness
+        - timestamp for monotonic ordering
+        - microsecond precision to prevent collisions in tight loops
+
+        This ensures that even 100 consecutive alerts all receive different nonces
+        and enables detection of replay attacks.
 
         Args:
             alert_id: Unique alert identifier
@@ -542,8 +553,11 @@ class AlertPolicyManager:
         Returns:
             AlertSignature with HMAC-SHA256 signature
         """
-        # Generate nonce to prevent replay attacks
-        nonce = secrets.token_hex(16)
+        # Generate fresh nonce per alert (not per batch)
+        # Combines uuid4() + timestamp for guaranteed uniqueness
+        # Fix #11 Round 2: ensure nonce is unique per invocation
+        timestamp_us = int(datetime.utcnow().timestamp() * 1_000_000)
+        nonce = f"{uuid.uuid4().hex}_{timestamp_us}"
 
         # Fields to sign (immutable alert properties)
         fields_to_sign = [alert_id, metric_name, str(metric_value), str(threshold), nonce]

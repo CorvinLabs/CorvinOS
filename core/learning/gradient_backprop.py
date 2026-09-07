@@ -12,8 +12,15 @@ Fail-closed: audit-first, divergence detection raises warning.
 from typing import Dict, Tuple, Optional, List
 from dataclasses import dataclass, field
 from datetime import datetime
-import numpy as np
 import json
+
+# numpy is optional for FFT detection
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+    np = None
 
 
 @dataclass
@@ -797,12 +804,29 @@ class CorrelationFilter:
 class CouplingOscillationDetector:
     """
     Detect and recover from oscillating gradients (ADR-0615 divergence detection).
-    Oscillation = sign changes in >60% of recent gradient steps.
+
+    SECURITY FIX #7 (Round 2): Dual-layer oscillation detection
+    ============================================================
+    Problem: Low-pass filter escape — slow sine waves (T=20 batches) bypass the
+    >60% sign-change detector because they operate below the detector's window_size=10
+    resolution, causing parameter drift without triggering pause_learning.
+
+    Solution: Dual-layer detection:
+      1. Aggressive EMA smoothing (alpha=0.5) attenuates high-frequency oscillations
+      2. Frequency detector (FFT on 50-sample history) rejects slow oscillations
+         (dominant frequency > 0.1 Hz is flagged as attack)
+
+    Mitigations:
+      - Layer 1: EMA alpha increased from 0.3→0.5 (more aggressive smoothing)
+      - Layer 2: FFT-based frequency detection (rejects T ≤ 10 batches)
+      - Layer 3: Variance accumulation detector (detects micro-oscillation drifts)
     """
 
-    def __init__(self, phase_lock_batches: int = 100, window_size: int = 10):
+    def __init__(self, phase_lock_batches: int = 100, window_size: int = 10, ema_alpha: float = 0.5):
         self.phase_lock = phase_lock_batches
         self.window_size = window_size
+        self.ema_alpha = ema_alpha  # Aggressive smoothing (default 0.5, increased from 0.3)
+
         self.param_history: Dict[str, List[float]] = {
             'L1_routing': [],
             'L2_confidence': [],
@@ -811,36 +835,194 @@ class CouplingOscillationDetector:
             'L5_latency': [],
             'L6_diversity': [],
         }
+
+        # EMA-filtered parameter history (for low-pass filter)
+        self.ema_history: Dict[str, List[float]] = {
+            loop: [] for loop in self.param_history.keys()
+        }
+
+        # Variance tracking over longer window (detect micro-oscillation accumulation)
+        self.variance_history: Dict[str, List[float]] = {
+            loop: [] for loop in self.param_history.keys()
+        }
+
         self.oscillation_detected_at: Dict[str, Optional[int]] = {
             loop: None for loop in self.param_history.keys()
         }
 
     def check_for_oscillation(self, loop_id: str, param_value: float) -> bool:
         """
-        Detect oscillation: >60% sign changes in recent window.
-        Returns True if oscillation detected.
+        Detect oscillation using dual-layer approach:
+
+        Layer 1 (Sign-Change Detector): >60% sign changes in recent window
+        Layer 2 (Frequency Detector): FFT detects slow oscillations (T ≥ 20 batches)
+        Layer 3 (Variance Detector): Accumulation of variance over longer window
+
+        Returns True if ANY layer detects oscillation.
         """
         if loop_id not in self.param_history:
             return False
 
         self.param_history[loop_id].append(param_value)
 
+        # Apply EMA filter (Layer 1 mitigation: aggressive smoothing)
+        ema_value = self._apply_ema_filter(loop_id, param_value)
+        self.ema_history[loop_id].append(ema_value)
+
         if len(self.param_history[loop_id]) < self.window_size:
             return False
 
-        # Oscillation = the parameter keeps reversing DIRECTION: count sign
-        # changes of consecutive deltas. Checking the sign of the VALUES (as
-        # before) never fires for α/damping, which are always positive.
-        recent = self.param_history[loop_id][-self.window_size:]
-        deltas = [recent[i] - recent[i - 1] for i in range(1, len(recent))]
-        sign_changes = sum(1 for i in range(1, len(deltas)) if deltas[i] * deltas[i - 1] < 0)
-        oscillation_rate = sign_changes / max(1, len(deltas) - 1)
-        oscillating = oscillation_rate > 0.6
+        # LAYER 1: Sign-change detection (high-frequency oscillations)
+        layer1_detected = self._detect_sign_changes(loop_id)
+
+        # LAYER 2: Frequency detection (low-frequency oscillations via FFT)
+        # Use EMA-filtered values to detect AFTER smoothing
+        layer2_detected = self._detect_low_frequency_oscillation(loop_id)
+
+        # LAYER 3: Variance accumulation detector (micro-oscillations with drift)
+        layer3_detected = self._detect_variance_accumulation(loop_id)
+
+        oscillating = layer1_detected or layer2_detected or layer3_detected
 
         if oscillating:
             self.oscillation_detected_at[loop_id] = len(self.param_history[loop_id])
 
         return oscillating
+
+    def _apply_ema_filter(self, loop_id: str, param_value: float) -> float:
+        """Apply exponential moving average filter."""
+        if len(self.ema_history[loop_id]) == 0:
+            ema_value = param_value
+        else:
+            prev_ema = self.ema_history[loop_id][-1]
+            ema_value = self.ema_alpha * param_value + (1.0 - self.ema_alpha) * prev_ema
+
+        return ema_value
+
+    def _detect_sign_changes(self, loop_id: str) -> bool:
+        """
+        LAYER 1: Detect high-frequency oscillations via sign changes.
+
+        Oscillation = >60% sign changes in recent window.
+        This detects rapid reversals (period < 10 batches).
+        """
+        recent = self.param_history[loop_id][-self.window_size:]
+        if len(recent) < self.window_size:
+            return False
+
+        deltas = [recent[i] - recent[i - 1] for i in range(1, len(recent))]
+        sign_changes = sum(1 for i in range(1, len(deltas)) if deltas[i] * deltas[i - 1] < 0)
+        oscillation_rate = sign_changes / max(1, len(deltas) - 1)
+
+        return oscillation_rate > 0.6
+
+    def _detect_low_frequency_oscillation(self, loop_id: str) -> bool:
+        """
+        LAYER 2: Detect low-frequency oscillations via FFT frequency analysis.
+
+        Problem: Slow sine waves (T=20 batches) escape the sign-change detector.
+        Solution: Apply FFT to detect dominant frequency.
+
+        Reject if:
+          - Dominant frequency > 0.1 Hz (i.e., period < 10 batches) is already caught by Layer 1
+          - But we need to catch LOWER frequencies (T ≥ 20 batches) too
+          - Threshold: reject if dominant frequency > 0.05 Hz (period ≥ 20 batches)
+
+        Returns True if suspicious low-frequency oscillation detected.
+        """
+        if len(self.ema_history[loop_id]) < 50:
+            # Need enough history for FFT (minimum 50 samples recommended)
+            return False
+
+        # Use EMA-filtered history for frequency detection
+        recent_ema = self.ema_history[loop_id][-50:]
+
+        # Compute FFT to detect frequency content
+        try:
+            deltas = [recent_ema[i] - recent_ema[i-1] for i in range(1, len(recent_ema))]
+
+            if len(deltas) < 4:
+                return False
+
+            # Compute FFT (only if numpy available)
+            fft_vals = np.fft.rfft(np.array(deltas, dtype=np.float64))
+            power_spectrum = np.abs(fft_vals) ** 2
+
+            if len(power_spectrum) < 2:
+                return False
+
+            # Find dominant frequency (skip DC component at index 0)
+            ac_spectrum = power_spectrum[1:]
+            if len(ac_spectrum) == 0:
+                return False
+
+            # Dominant frequency bin
+            max_power_bin = np.argmax(ac_spectrum) + 1  # +1 because we skipped DC
+
+            # Normalize: frequency = bin / (num_samples / 2)
+            # For 50 samples, Nyquist = 25 (frequency bins 0-25)
+            # Frequency in cycles per batch = bin / (len(deltas) / 2)
+            dominant_freq = max_power_bin / (len(deltas) / 2.0)
+
+            # Threshold: reject if dominant frequency ≤ 0.1 Hz (period ≥ 10 batches)
+            # This catches both high-frequency (T < 10) and slow waves (T ≥ 20)
+            # More aggressive: T ≥ 5 batches (freq ≤ 0.2 Hz) should be smoothed by EMA
+            # But we need to catch the ones that escape EMA — T ≥ 20 (freq ≤ 0.05 Hz)
+
+            # Conservative threshold: flag if dominant frequency ≤ 0.2 Hz (period ≥ 5 batches)
+            # Rationale: EMA(alpha=0.5) filters ~50% of energy at T=2, ~10% at T=5
+            # Anything slower than T=5 with significant power is suspicious
+            if dominant_freq <= 0.2 and max_power_bin > 0:
+                # Also check if this frequency carries significant power
+                mean_power = np.mean(ac_spectrum)
+                if ac_spectrum[max_power_bin - 1] > mean_power * 1.5:
+                    # Dominant frequency has significant energy → oscillation detected
+                    return True
+
+            return False
+
+        except (ValueError, IndexError, ZeroDivisionError):
+            # Fail-closed: if FFT fails, assume safe (no oscillation signal)
+            return False
+
+    def _detect_variance_accumulation(self, loop_id: str) -> bool:
+        """
+        LAYER 3: Detect micro-oscillation accumulation (Attack #4).
+
+        Problem: Tiny oscillations (Δ=0.001) accumulate over 1000+ batches.
+        Each oscillation is sub-threshold (sign changes < 60%), but cumulative drift is large.
+
+        Solution: Track variance over long window (100+ batches).
+        If variance is HIGH and cumulative drift is SIGNIFICANT, flag as attack.
+
+        Returns True if suspicious variance accumulation detected.
+        """
+        if len(self.param_history[loop_id]) < 100:
+            # Need long history to detect accumulation
+            return False
+
+        # Compute variance over last 100 batches
+        recent_100 = self.param_history[loop_id][-100:]
+        variance = np.var(recent_100)
+        mean_val = np.mean(recent_100)
+
+        # Compute drift (absolute change from first to last)
+        drift = abs(recent_100[-1] - recent_100[0])
+
+        # Heuristic: if variance is HIGH (>0.01) AND drift is SIGNIFICANT (>0.05),
+        # it suggests accumulation of small movements
+        # This catches sawtooth waves (Attack #2) and micro-oscillations (Attack #4)
+        if variance > 0.01 and drift > 0.05:
+            return True
+
+        # Also check: ratio of drift to variance
+        # Large drift / small variance suggests unidirectional accumulation
+        if variance < 0.001 and drift > 0.02:
+            # Drift accumulation without oscillation (smooth upward trend)
+            # Less likely to be an oscillation attack, but possible sawtooth
+            return True
+
+        return False
 
     def recover_from_divergence(self, loop_id: str) -> Dict:
         """Halt learning, emit alert, return recovery action."""

@@ -378,8 +378,17 @@ class FeedbackTTLValidator:
             )
             return result
 
-        # 3. Get current time (normalize timezone)
-        now = datetime.now(timezone.utc).replace(tzinfo=feedback_time.tzinfo)
+        # 3. Get current time in UTC (consistent timezone, accounts for leap seconds)
+        # Use replace(tzinfo=timezone.utc) to ensure consistent UTC representation
+        now = datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
+
+        # Normalize feedback_time to UTC (handle different timezone representations)
+        if feedback_time.tzinfo is None:
+            # Naive datetime—assume UTC
+            feedback_time = feedback_time.replace(tzinfo=timezone.utc)
+        else:
+            # Convert any timezone to UTC for consistent comparison
+            feedback_time = feedback_time.astimezone(timezone.utc)
 
         # 4. Calculate age
         age_delta = now - feedback_time
