@@ -1,0 +1,31 @@
+[Unit]
+Description=GitHub Pages Daily Metrics Export Service (ADR-0637)
+Documentation=https://github.com/CorvinLabs/Corvin-ADR/decisions/ADR-0637-github-pages-daily-export.md
+After=network.target
+
+[Service]
+Type=oneshot
+User=%u
+WorkingDirectory=%h/.corvin
+
+# Run export script
+ExecStart=%h/projects/CorvinOS/operator/scripts/export_metrics.sh
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corvin-export-metrics
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=%h/.corvin/learning/export_logs
+ReadWritePaths=%h/projects/corvin-stats
+
+# Timeout (allow up to 10 minutes for export + plot generation + push)
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
