@@ -37,6 +37,11 @@ def sandbox(tenants=("_default",)):
     with tempfile.TemporaryDirectory(prefix="metrics-e2e-") as td:
         home = Path(td)
         os.environ["CORVIN_HOME"] = str(home)
+        # The root conftest points VOICE_AUDIT_PATH at ITS sandbox home; moving
+        # CORVIN_HOME here without moving the redirect leaves the chain outside
+        # the root, which the hardened tripwire refuses (ADR-0641 round-2).
+        _prev_audit = os.environ.get("VOICE_AUDIT_PATH")
+        os.environ["VOICE_AUDIT_PATH"] = str(home / "global" / "forge" / "audit.jsonl")
         os.environ["ADAPTER_FAKE_CLAUDE"] = "1"
         os.environ["ADAPTER_FAKE_DELAY"] = "0.01"
         os.environ["CORVIN_METRICS_COLLECTOR_INTERVAL"] = "1"  # 1s for tests
@@ -51,6 +56,10 @@ def sandbox(tenants=("_default",)):
         try:
             yield home
         finally:
+            if _prev_audit is None:
+                os.environ.pop("VOICE_AUDIT_PATH", None)
+            else:
+                os.environ["VOICE_AUDIT_PATH"] = _prev_audit
             os.environ.pop("CORVIN_HOME", None)
             os.environ.pop("ADAPTER_FAKE_CLAUDE", None)
             os.environ.pop("ADAPTER_FAKE_DELAY", None)
