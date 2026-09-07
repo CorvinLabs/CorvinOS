@@ -21,6 +21,10 @@ Security:
 - the rollback log lock is bounded (``LOCK_TIMEOUT_SECONDS``): a wedged
   holder yields 503 ``transaction_lock_busy`` within the deadline, never a
   request that hangs forever;
+- ``revert`` is all-or-nothing: the snapshot append runs INSIDE the
+  rollback transaction (``commit_transaction(apply_change=...)``), so an
+  error response always means the chain is unchanged and a retry cannot
+  double-apply (R4-F1);
 - ``revert`` sits behind ``require_csrf`` and is audited through the core
   console audit helper (``console.action_performed`` / ``action_failed``,
   content-free: action, target, ``sid_fingerprint``, tenant). The snapshot
@@ -309,7 +313,14 @@ async def revert_to_checkpoint(
 ) -> RevertResult:
     """Revert = append a ``rollback_recovery`` snapshot carrying the target's
     state, chained onto the current head. Nothing is rewritten or deleted.
-    The transaction is WAL-logged in :class:`RollbackManager` and audited."""
+    The transaction is WAL-logged in :class:`RollbackManager` and audited.
+
+    All-or-nothing: the snapshot append is handed to
+    ``RollbackManager.commit_transaction(apply_change=...)`` and therefore runs
+    inside the transaction, after the log lock and the WAL check. Any error
+    response from this endpoint means the chain is unchanged and a retry is
+    safe (R4-F1).
+    """
     tenant_id = rec.tenant_id
     if revert_req.task_id != task_id:
         raise HTTPException(status_code=400, detail="task_id in body does not match path")
@@ -358,24 +369,52 @@ async def revert_to_checkpoint(
     except ValueError as exc:
         _denied(f"snapshot_invalid:{type(exc).__name__}", 400)
 
-    ok, error = store.write_snapshot(recovery)
-    if not ok:
-        logger.warning("infinite-session revert write refused for %s: %s", task_id, error)
-        _denied("snapshot_write_refused", 500)
+    # R4-F1 — ORDERING IS LOAD-BEARING. The snapshot append is irreversible (the
+    # chain is append-only); the transaction is not. So the append runs INSIDE
+    # ``commit_transaction``, after the log lock is held and the WAL is
+    # validated, and only its own failure can still abort the revert. Doing it
+    # the other way round (append, then commit) meant a busy log lock answered
+    # 503 while the chain head was ALREADY the reverted state, the WAL sweep
+    # later logged that permanent change as "rolled_back — transaction never
+    # committed", and the operator's retry appended a second recovery snapshot.
+    write_outcome: Dict[str, Any] = {}
 
-    committed, error = rollback.commit_transaction(
+    def _apply_snapshot() -> tuple[bool, str]:
+        ok, err = store.write_snapshot(recovery)
+        write_outcome["ok"] = ok
+        write_outcome["error"] = err
+        if not ok:
+            logger.warning("infinite-session revert write refused for %s: %s", task_id, err)
+        return ok, err
+
+    applied, error = rollback.commit_transaction(
         transaction_id=tx_id, tenant_id=tenant_id, config_path=config_path,
         old_state=head.state_dict, new_state=target.state_dict, operation="revert",
+        apply_change=_apply_snapshot,
     )
-    if not committed:
-        # The snapshot is on the chain (audited); the transaction log records the failure.
-        logger.error("infinite-session revert commit failed for %s: %s", task_id, error)
+    if not applied:
+        # NOTHING was written: ``_apply_snapshot`` either never ran (lock busy /
+        # stale WAL) or refused. The chain is byte-for-byte what it was, so the
+        # error is honest and a retry cannot double-apply.
+        logger.error("infinite-session revert failed for %s (nothing applied): %s", task_id, error)
         if error and error.startswith(LOCK_BUSY_REASON_PREFIX):
             # Another writer holds the rollback log. The manager REFUSED within
             # its deadline instead of blocking this request forever — answer
             # 503 so the operator (or the UI) can retry.
             _denied("transaction_lock_busy", 503)
+        if write_outcome.get("ok") is False:
+            _denied("snapshot_write_refused", 500)
         _denied("transaction_commit_failed", 500)
+
+    # ``applied`` with a non-empty ``error``: the state change stands and only
+    # the transaction-log append failed. Reporting that as a failure would be
+    # the very lie this fix removes — answer 200 and surface the log defect.
+    log_error = error or None
+    if log_error:
+        logger.error(
+            "infinite-session revert %s APPLIED but the transaction log append failed: %s",
+            task_id, log_error,
+        )
 
     console_audit.action_performed(
         tenant_id=tenant_id, sid_fingerprint=rec.sid_fingerprint,
@@ -393,6 +432,7 @@ async def revert_to_checkpoint(
         new_checkpoint_id=recovery.snapshot_id,
         transaction_id=tx_id,
         timestamp=recovery.timestamp,
+        error="transaction_log_append_failed" if log_error else None,
     )
 
 

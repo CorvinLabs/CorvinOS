@@ -10,6 +10,13 @@
  * The revert POST carries the session CSRF token (`X-CSRF-Token`) because the
  * backend sits behind `require_csrf`. The `reason` field is an operator
  * confirmation only; the backend never persists it.
+ *
+ * Drift (R4-F5): the backend scores ONLY values a snapshot nests under
+ * `config` (`drift_detector.DRIFT_SERIES_ROOT`), each series scaled by its own
+ * magnitude. The production producer writes turn telemetry (`duration_ms`,
+ * `event_count`), which is not configuration and is not scored — so a task
+ * whose snapshots carry no `config` reads NORMAL here instead of permanently
+ * CRITICAL, which is what made this banner uninformative.
  */
 
 import { useState } from "react";
@@ -416,9 +423,13 @@ export function InfiniteSessionDashboard() {
         <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
           <AlertCircle className="mt-0.5 h-4 w-4 text-destructive" />
           <div>
-            <div className="font-semibold">Critical drift on {critical.length} task(s)</div>
+            <div className="font-semibold">
+              Critical config drift on {critical.length} task(s)
+            </div>
             <div className="text-muted-foreground">
-              {critical.map((t: TaskSummary) => t.task_id).join(", ")} — review the chain and consider a revert.
+              {critical.map((t: TaskSummary) => t.task_id).join(", ")} — a tracked{" "}
+              <code>config</code> value has drifted persistently. Review the chain and
+              consider a revert.
             </div>
           </div>
         </div>

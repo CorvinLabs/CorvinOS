@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
@@ -150,6 +150,19 @@ class Snapshot:
     base_commit: Optional[str] = None  # Git commit hash at snapshot time
     worktree_path: Optional[str] = None  # Worktree location (for recovery)
 
+    # Keyed chain MAC over EVERY other field (R4-F2). ``content_hash`` covers
+    # only ``state_dict``, so until 2026-09-07 the LINK fields —
+    # ``prev_snapshot_hash``, ``snapshot_id``, ``task_id``, ``tenant_id``,
+    # ``timestamp`` — were freely rewritable: a middle snapshot could be
+    # deleted and its successor re-pointed at its predecessor, and
+    # ``verify_snapshot_chain`` still returned ``(True, "")`` with ``/health``
+    # reporting healthy. This is the same defence ``rollback_manager`` already
+    # applies to its transaction log: HMAC-SHA256 under the per-tenant
+    # ``CryptoBinding`` key, so an attacker who can edit the file cannot
+    # re-sign it. Assigned by :meth:`EventStore.write_snapshot`; ``None`` means
+    # UNSIGNED (a chain written before this scheme) and never verifies.
+    chain_mac: Optional[str] = None
+
     # Size limit constants
     MAX_SNAPSHOT_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
 
@@ -271,6 +284,22 @@ class Snapshot:
         data = asdict(self)
         data['snapshot_type'] = self.snapshot_type.value
         return data
+
+    def mac_payload(self) -> dict[str, Any]:
+        """The bytes the :attr:`chain_mac` commits to: every field but itself.
+
+        Deliberately the whole record — identity (``snapshot_id``,
+        ``tenant_id``, ``task_id``), position (``prev_snapshot_hash``,
+        ``timestamp``) and content (``state_dict``, ``content_hash``) — so no
+        part of a stored snapshot can be edited without invalidating the MAC.
+        """
+        data = self.to_dict()
+        data.pop("chain_mac", None)
+        return data
+
+    def signed(self, chain_mac: str) -> "Snapshot":
+        """Return a copy carrying ``chain_mac`` (the record is frozen)."""
+        return replace(self, chain_mac=chain_mac)
 
     def verify_hash(self, state_dict: dict[str, Any]) -> bool:
         """Verify that state_dict matches content_hash.

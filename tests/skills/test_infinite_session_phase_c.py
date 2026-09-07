@@ -212,10 +212,44 @@ class TestDriftDetector:
         assert list(d.alerts_dir.glob("*.json")) == []  # no side effects
 
     def test_assess_states_uses_numeric_leaves(self, home):
+        """R4-F5: only ``state["config"]`` is a drift series."""
         d = DriftDetector(TENANT)
-        states = [(str(i), {"cfg": {"threshold": 0.1 * i, "name": "x", "flag": True}}) for i in range(12)]
+        states = [(str(i), {"config": {"threshold": 0.1 * i, "name": "x", "flag": True}})
+                  for i in range(12)]
         a = d.assess_states(states)
-        assert a.level == DriftLevel.CRITICAL and a.message.startswith("cfg.threshold")
+        assert a.level == DriftLevel.CRITICAL and a.message.startswith("config.threshold")
+
+    def test_turn_telemetry_is_not_a_drift_series(self, home):
+        """R4-F5: the payload the PRODUCTION producer writes must score NORMAL.
+
+        ``duration_ms`` is in the thousands and legitimately varies 2–5x
+        between turns; scoring it against the absolute 0.15 threshold marked
+        every ordinary task CRITICAL (magnitude 2082 after five successful
+        turns) and left the dashboard's revert banner permanently on.
+        """
+        d = DriftDetector(TENANT)
+        durations = [1200, 4300, 900, 2600, 5100]
+        states = [
+            (f"2026-09-07T00:00:0{i}Z", {
+                "status": "completed", "exit_code": 0, "duration_ms": ms,
+                "event_count": 3 + i, "chat_key_prefix": "abcd1234",
+                "result_sha256": "0" * 64, "reason_code": "",
+            })
+            for i, ms in enumerate(durations)
+        ]
+        for n in range(2, len(states) + 1):
+            a = d.assess_states(states[:n])
+            assert a.level == DriftLevel.NORMAL, (n, a)
+        assert "no drift-tracked metrics" in d.assess_states(states).message
+
+    def test_large_scale_config_series_is_normalised(self, home):
+        """A config value in absolute units must not false-alarm on noise, but
+        must still flag a real sustained shift."""
+        d = DriftDetector(TENANT)
+        steady = [(str(i), {"config": {"max_tokens": 8000 + (i % 2) * 20}}) for i in range(12)]
+        assert d.assess_states(steady).level == DriftLevel.NORMAL, d.assess_states(steady)
+        ramp = [(str(i), {"config": {"max_tokens": 1000 * (i + 1)}}) for i in range(12)]
+        assert d.assess_states(ramp).level == DriftLevel.CRITICAL, d.assess_states(ramp)
         assert d.assess_states([("0", {"name": "only-strings"})]).level == DriftLevel.NORMAL
 
     def test_check_drift_gate_types_and_alerts(self, home):

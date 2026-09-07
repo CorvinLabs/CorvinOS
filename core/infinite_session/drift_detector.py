@@ -6,6 +6,11 @@ the operator revert button (undo via :class:`RollbackManager`).
 Tenant-bound: alerts live at ``<tenant_root>/drift/alerts/<alert_id>.json``;
 ``alert_id`` is validated and the path resolve-checked before any open.
 
+Scope of the signal (R4-F5): only values nested under a snapshot's ``config``
+key are drift series (:data:`DRIFT_SERIES_ROOT`), and each series is scaled by
+its own magnitude before the absolute EMA thresholds apply. Turn telemetry
+(``duration_ms``, ``event_count``) is NOT configuration and is not scored.
+
 Two entry points:
 - :meth:`assess_series` — PURE (no disk side effects): classify a numeric
   series into a :class:`DriftLevel`; used by the dashboard API on every read.
@@ -94,6 +99,27 @@ class DriftAssessment:
     message: str
 
 
+# The state key whose numeric leaves ARE drift series (R4-F5).
+#
+# ``assess_states`` used to treat EVERY numeric leaf of a snapshot as a series
+# and compare it against ``EMASmoother``'s absolute 0.15 / 0.10 thresholds —
+# which are calibrated for normalised 0–1 configuration values. The production
+# producer (``task_worker_pool._snapshot_task_turn``) emits ``duration_ms``
+# (thousands, legitimately varying 2–5x between turns) and ``event_count``, so
+# TWO ordinary successful turns showed CRITICAL with magnitude 2082 and the
+# dashboard's "consider a revert" banner was permanently on — a signal
+# carrying no information.
+#
+# Turn telemetry is not configuration. A snapshot opts INTO drift detection by
+# nesting the values under this key; anything else is data the dashboard shows
+# but does not score.
+DRIFT_SERIES_ROOT = "config"
+
+NO_TRACKED_METRICS = (
+    f"no drift-tracked metrics (nothing under {DRIFT_SERIES_ROOT!r})"
+)
+
+
 def numeric_leaves(state: Dict[str, Any], prefix: str = "", max_depth: int = 6) -> Dict[str, float]:
     """Flatten the numeric (non-bool) leaves of a state dict: ``{"a.b": 1.0}``."""
     out: Dict[str, float] = {}
@@ -108,6 +134,34 @@ def numeric_leaves(state: Dict[str, Any], prefix: str = "", max_depth: int = 6) 
         elif isinstance(value, dict):
             out.update(numeric_leaves(value, path, max_depth - 1))
     return out
+
+
+def drift_series_leaves(state: Dict[str, Any]) -> Dict[str, float]:
+    """The numeric leaves this detector is DESIGNED for: ``state["config"]``.
+
+    Returns ``{}`` for a state that declares no configuration — the honest
+    answer for turn telemetry (see :data:`DRIFT_SERIES_ROOT`).
+    """
+    tracked = state.get(DRIFT_SERIES_ROOT) if isinstance(state, dict) else None
+    if not isinstance(tracked, dict):
+        return {}
+    return numeric_leaves(tracked, DRIFT_SERIES_ROOT)
+
+
+def scale_series(samples: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """Map a series into 0–1 by its own observed magnitude (R4-F5).
+
+    ``EMASmoother``'s thresholds are absolute and calibrated for normalised
+    values, so a configuration value expressed in e.g. milliseconds or tokens
+    would false-alarm on any ordinary change. Dividing by the series' own
+    maximum magnitude makes the threshold mean "a fraction of this metric's own
+    range" for every metric. A series already inside 0–1 is returned untouched,
+    so existing normalised config series behave exactly as before.
+    """
+    scale = max((abs(value) for _, value in samples), default=0.0)
+    if scale <= 1.0:
+        return samples
+    return [(ts, value / scale) for ts, value in samples]
 
 
 class DriftDetector:
@@ -154,15 +208,21 @@ class DriftDetector:
         return DriftAssessment(level, latest.drift, latest.ema, sustained, message)
 
     def assess_states(self, states: List[Tuple[str, Dict[str, Any]]]) -> DriftAssessment:
-        """Worst drift across every numeric key of an ordered ``[(ts, state)]`` list."""
+        """Worst drift across the DRIFT-TRACKED numeric keys of ``[(ts, state)]``.
+
+        Only ``state["config"]`` is scored, and each series is scaled by its own
+        magnitude first — see :data:`DRIFT_SERIES_ROOT` and :func:`scale_series`
+        for why scoring every numeric leaf against an absolute 0.15 threshold
+        marked every ordinary task CRITICAL (R4-F5).
+        """
         series: Dict[str, List[Tuple[str, float]]] = {}
         for ts, state in states:
-            for key, value in numeric_leaves(state).items():
+            for key, value in drift_series_leaves(state).items():
                 series.setdefault(key, []).append((ts, value))
-        worst = DriftAssessment(DriftLevel.NORMAL, 0.0, 0.0, False, "no numeric state")
+        worst = DriftAssessment(DriftLevel.NORMAL, 0.0, 0.0, False, NO_TRACKED_METRICS)
         rank = {DriftLevel.NORMAL: 0, DriftLevel.WARNING: 1, DriftLevel.CRITICAL: 2}
         for key, samples in series.items():
-            a = self.assess_series(samples)
+            a = self.assess_series(scale_series(samples))
             if (rank[a.level], a.magnitude) > (rank[worst.level], worst.magnitude):
                 worst = DriftAssessment(a.level, a.magnitude, a.ema, a.sustained, f"{key}: {a.message}")
         return worst

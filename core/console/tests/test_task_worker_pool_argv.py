@@ -139,11 +139,18 @@ def test_worker_stdin_payload_refuses_to_build_without_guard(monkeypatch):
 def test_engine_build_args_positional_prompt_sits_behind_sentinel():
     from agents.claude_code import ClaudeCodeEngine  # bridges/shared on sys.path via twp
 
+    from agents.claude_code import guard_prompt_head as _g
+
     args = ClaudeCodeEngine._build_args(
         HOSTILE, binary="claude", permission_mode="bypassPermissions",
         streaming=True,
     )
-    assert args[-2:] == ["--", HOSTILE]
+    # R4 (2026-09-07): `_build_args` applies the shared neutraliser itself, so
+    # the positional element is the GUARDED payload — the flag-injection
+    # property this test pins (the prompt can never be read as an option) is
+    # unchanged, and byte 0 is now a sentinel on top of it.
+    assert args[-2:] == ["--", _g(HOSTILE)]
+    assert HOSTILE in args[-1]
     sentinel = args.index("--")
     assert "--add-dir" not in args and "--mcp-config" not in args
     # every real option precedes the sentinel (the CLI ignores options after it)

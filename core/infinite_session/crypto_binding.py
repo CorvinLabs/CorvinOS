@@ -19,6 +19,7 @@ import hmac
 import json
 import os
 import secrets
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -75,17 +76,40 @@ class CryptoBinding:
         return self._key_dir(tenant_id) / "signing.key"
 
     def _ensure_key_exists(self, tenant_id: str) -> Tuple[bool, str]:
+        """Create the tenant signing key if absent — ATOMICALLY.
+
+        The key is written to a private temp file, fsynced and then
+        ``os.link``-ed into place, so a concurrent reader observes either no
+        key or a complete one. Creating the final path with ``O_EXCL`` and
+        writing into it afterwards left a window in which a second process saw
+        ``key_path.exists()`` and read ZERO BYTES — surfacing as
+        "Signing key is empty for tenant … (fail-closed)". Harmless while the
+        key was only used by the rollback log; a hot path once every snapshot
+        write signs (R4-F2).
+        """
         try:
             key_path = self._get_key_path(tenant_id)
-            if key_path.exists():
+            if key_path.exists() and key_path.stat().st_size > 0:
                 return True, ""
             key_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                fh.write(secrets.token_hex(32))  # 256-bit key
-            return True, ""
-        except FileExistsError:
-            return True, ""
+            # mkstemp: a name unique per CALL (threads of one process raced on a
+            # pid-derived name) and mode 0600 from birth.
+            fd, tmp_name = tempfile.mkstemp(prefix=".signing.key.", dir=str(key_path.parent))
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(secrets.token_hex(32))  # 256-bit key
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                try:
+                    os.link(str(tmp), str(key_path))
+                except FileExistsError:
+                    pass  # another writer won the race; its key is complete
+            finally:
+                tmp.unlink(missing_ok=True)
+            if key_path.exists() and key_path.stat().st_size > 0:
+                return True, ""
+            return False, f"Signing key could not be created for tenant {tenant_id} (fail-closed)"
         except (OSError, ValueError) as exc:
             return False, f"Failed to ensure key exists: {exc}"
 

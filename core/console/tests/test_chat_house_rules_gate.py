@@ -77,7 +77,25 @@ class HouseRulesGateE2E(unittest.TestCase):
         self.cr = chat_runtime
         self.sess = self.cr.create_session("_default")
 
+        # Track module-attribute monkeypatches so tearDown restores them — an
+        # un-restored `house_rules._house_rules_classifier` leaks into every
+        # later test in the SAME pytest process (the module object is global),
+        # which is exactly what made the infinite-session producer proof in
+        # core/console/tests/test_task_worker_pool_argv.py fail depending on
+        # file ordering: this suite's last method pins the classifier to
+        # ("no-military", 0.97) = deny-everything. Worse, it patches a
+        # FAIL-CLOSED security gate, so a later suite asserting a deny would
+        # pass vacuously. Mirrors test_console_spawn_gates.py's helper.
+        # Test-hygiene is mandatory.
+        self._patches: list[tuple] = []
+
+    def _patch(self, obj, attr: str, value) -> None:
+        self._patches.append((obj, attr, getattr(obj, attr)))
+        setattr(obj, attr, value)
+
     def tearDown(self) -> None:
+        for obj, attr, original in reversed(self._patches):
+            setattr(obj, attr, original)
         self.tmp.cleanup()
         os.environ.pop("CORVIN_HOME", None)
         os.environ.pop("CORVIN_TENANT_ID", None)
@@ -104,8 +122,9 @@ class HouseRulesGateE2E(unittest.TestCase):
     def _force_classifier(self, rid: str, conf: float = 0.95):
         """Pin house_rules' Tier-1 classifier to a fixed verdict (no live LLM)."""
         import house_rules as _hr  # type: ignore
-        _hr._house_rules_classifier = (  # type: ignore[assignment]
-            lambda task, rules, auth, **kw: (rid, conf, "forced verdict for test")
+        self._patch(
+            _hr, "_house_rules_classifier",
+            lambda task, rules, auth, **kw: (rid, conf, "forced verdict for test"),
         )
 
     def _raise_classifier(self):
@@ -115,7 +134,7 @@ class HouseRulesGateE2E(unittest.TestCase):
         def _boom(task, rules, auth, **kw):
             raise RuntimeError("classifier exploded")
 
-        _hr._house_rules_classifier = _boom  # type: ignore[assignment]
+        self._patch(_hr, "_house_rules_classifier", _boom)
 
     def _no_spawn_guard(self):
         """Replace asyncio.create_subprocess_exec with a sentinel that records
