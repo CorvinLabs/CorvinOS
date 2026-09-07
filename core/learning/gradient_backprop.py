@@ -683,7 +683,7 @@ class LossBackpropagator:
         breach_ratio = p99 / sla if sla > 0 else 0.0
         return min(1.0, max(0.0, breach_ratio - 1.0))
 
-    def _compute_outcome_mismatch(self, task_batch: List[Dict], outcomes: List[Dict]) -> np.ndarray:
+    def _compute_outcome_mismatch(self, task_batch: List[Dict], outcomes: List[Dict]) -> "np.ndarray":
         """Outcome error × confidence (attribution)."""
         if not task_batch or not outcomes:
             return np.array([])
@@ -945,6 +945,9 @@ class CouplingOscillationDetector:
                 return False
 
             # Compute FFT (only if numpy available)
+            if not HAS_NUMPY:
+                return self._detect_low_frequency_oscillation_fallback(recent_ema)
+
             fft_vals = np.fft.rfft(np.array(deltas, dtype=np.float64))
             power_spectrum = np.abs(fft_vals) ** 2
 
@@ -985,6 +988,44 @@ class CouplingOscillationDetector:
             # Fail-closed: if FFT fails, assume safe (no oscillation signal)
             return False
 
+    def _detect_low_frequency_oscillation_fallback(self, recent_ema: List[float]) -> bool:
+        """
+        Fallback frequency detection when numpy is unavailable.
+
+        Uses sign-change counting at different window sizes to infer frequency:
+        - If many sign changes in small window: high frequency
+        - If few sign changes in small window but some in large window: low frequency
+
+        Returns True if low-frequency oscillation pattern detected.
+        """
+        if len(recent_ema) < 10:
+            return False
+
+        # Compute sign changes in different window sizes
+        deltas = [recent_ema[i] - recent_ema[i-1] for i in range(1, len(recent_ema))]
+
+        # Window 1: Last 10 deltas (detects high-frequency: T < 10)
+        window1_changes = sum(
+            1 for i in range(1, min(10, len(deltas)))
+            if deltas[i] * deltas[i-1] < 0
+        )
+        window1_rate = window1_changes / max(1, min(9, len(deltas) - 1))
+
+        # Window 2: Last 20 deltas (detects mid-frequency: T ≈ 10-20)
+        window2_changes = sum(
+            1 for i in range(1, min(20, len(deltas)))
+            if deltas[i] * deltas[i-1] < 0
+        )
+        window2_rate = window2_changes / max(1, min(19, len(deltas) - 1))
+
+        # Heuristic: if window1 has LOW sign changes but window2 has MEDIUM,
+        # it suggests a low-frequency oscillation (T > 10)
+        if window1_rate < 0.4 and window2_rate > 0.3:
+            # Low-frequency pattern detected
+            return True
+
+        return False
+
     def _detect_variance_accumulation(self, loop_id: str) -> bool:
         """
         LAYER 3: Detect micro-oscillation accumulation (Attack #4).
@@ -996,6 +1037,8 @@ class CouplingOscillationDetector:
         If variance is HIGH and cumulative drift is SIGNIFICANT, flag as attack.
 
         Returns True if suspicious variance accumulation detected.
+
+        Works with or without numpy (manual variance computation fallback).
         """
         if len(self.param_history[loop_id]) < 100:
             # Need long history to detect accumulation
@@ -1003,8 +1046,13 @@ class CouplingOscillationDetector:
 
         # Compute variance over last 100 batches
         recent_100 = self.param_history[loop_id][-100:]
-        variance = np.var(recent_100)
-        mean_val = np.mean(recent_100)
+
+        if HAS_NUMPY:
+            variance = float(np.var(recent_100))
+        else:
+            # Fallback: manual variance computation
+            mean_val = sum(recent_100) / len(recent_100)
+            variance = sum((x - mean_val) ** 2 for x in recent_100) / len(recent_100)
 
         # Compute drift (absolute change from first to last)
         drift = abs(recent_100[-1] - recent_100[0])
