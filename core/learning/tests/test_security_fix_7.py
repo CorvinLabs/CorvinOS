@@ -213,8 +213,10 @@ class TestFrequencyDetectionOscillation:
         current_time = time.time()
         updater.weights['boundary_weight'] = OscillationState(weight_id='boundary_weight')
 
-        # Add exactly 5 updates
-        for i in range(5):
+        # Seed 4 prior updates. `update_weight()` records its OWN update in the
+        # window (documented side effect of _detect_frequency_oscillation), so the
+        # call below is the 5th entry — landing exactly ON the threshold.
+        for i in range(4):
             updater.weights['boundary_weight'].update_times_window.append(
                 current_time + (i * 0.1)
             )
@@ -230,8 +232,7 @@ class TestFrequencyDetectionOscillation:
             "Exactly at threshold (5 updates) should not trigger detection"
         )
 
-        # Now add one more update to exceed threshold
-        updater.weights['boundary_weight'].update_times_window.append(current_time + 0.5)
+        # The next update makes 6 updates in the window — above the threshold.
         record2 = updater.update_weight(
             weight_id='boundary_weight',
             delta=0.1,

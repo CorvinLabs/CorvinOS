@@ -4,7 +4,9 @@ Routes StructuredSummary + CompletionEvent to notification channels.
 Phase 1: Discord only (where task was spawned).
 Phase 2: Add Console, Email.
 
-Idempotent: O_EXCL file write prevents duplicate notifications.
+Idempotent: the envelope id is derived from the completion identity and the
+outbox file is written with O_EXCL, so re-routing the same completion is a
+no-op instead of a second delivery.
 Audit: emits NotificationSentEvent for every route attempt.
 """
 
@@ -13,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from uuid import uuid4
 import time
 
 from core.learning.completion_detectors.completion_event import (
@@ -68,8 +69,15 @@ class NotificationRouter:
             _log.error(f"Missing discord_chat_id for {event.task_id}")
             return False
 
-        # Build envelope (reuse existing outbox schema)
-        envelope_id = str(uuid4())
+        # Build envelope (reuse existing outbox schema).
+        #
+        # The envelope id is DERIVED from the completion identity, never random:
+        # the O_EXCL write below is the exactly-once guarantee, and a uuid4() id
+        # can never collide, so a random id silently turned the guarantee into a
+        # no-op (routing the same completion twice wrote two outbox files and
+        # delivered two Discord messages). Identity fields only — no free-text
+        # user content ever feeds the hash.
+        envelope_id = self._dedup_id(event, channel="discord", chat_id=chat_id)
         envelope = {
             "id": envelope_id,
             "channel": "discord",
@@ -93,8 +101,8 @@ class NotificationRouter:
 
             outbox_file = outbox_dir / f"{envelope_id}.json"
 
-            # O_EXCL: fail if file exists (exactly-once delivery guarantee)
-            # In Python 3.10+, can use mode="x"
+            # O_EXCL ("x"): fail if the file exists. Combined with the derived
+            # envelope_id above, this is the exactly-once delivery guarantee.
             with open(outbox_file, "x") as f:
                 json.dump(envelope, f, indent=2)
 
@@ -123,6 +131,28 @@ class NotificationRouter:
             # Non-blocking: notification already in outbox, audit failure is not critical
 
         return True
+
+    @staticmethod
+    def _dedup_id(event: CompletionEvent, channel: str, chat_id) -> str:
+        """Deterministic envelope id = the exactly-once key for this completion.
+
+        Same completion routed to the same channel/chat → same id → the O_EXCL
+        open() below raises FileExistsError on the second attempt instead of
+        writing a second outbox envelope.
+
+        Content-free by construction: only identifiers and enum values are
+        hashed, never `output_summary`, `key_result` or any other free text.
+        """
+        return CompletionEvent.compute_hash(
+            {
+                "task_id": event.task_id,
+                "task_type": event.task_type.value,
+                "status": event.status.value,
+                "tenant_id": event.tenant_id,
+                "channel": channel,
+                "chat_id": str(chat_id),
+            }
+        )
 
     @staticmethod
     def _build_message(summary: StructuredSummary) -> str:
