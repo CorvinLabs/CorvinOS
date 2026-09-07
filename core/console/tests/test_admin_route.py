@@ -107,7 +107,9 @@ _RECORD = {
     "version": "1.0.0",
     "display_name": "Acme Notify",
     "plugin_type": "notification_backend",
-    "origin": "vetted",
+    # community: the ONLY origin an install body may state (F-P1, 2026-09-07) —
+    # builtin/vetted are server-derived, so the fixtures grant consent on enable.
+    "origin": "community",
     "pii_risk": "low",
     "network_egress": "none",
     "locality": "local",
@@ -187,7 +189,7 @@ class TestFlagOff(_Base):
                 ("get", f"{_ADMIN}/plugins/acme-notify", {}),
                 ("get", f"{_ADMIN}/health", {}),
                 ("post", f"{_ADMIN}/plugins/acme-notify/enable",
-                 {"json": {}, "headers": hdr}),
+                 {"json": {"consent_granted": True}, "headers": hdr}),
                 ("post", f"{_ADMIN}/plugins/acme-notify/disable",
                  {"json": {}, "headers": hdr}),
                 ("put", f"{_ADMIN}/plugins/acme-notify/config",
@@ -222,7 +224,7 @@ class TestFlagOff(_Base):
         with _sandbox(Path(self._tmp)) as (client, csrf, home, _all):
             self._flag(client, csrf, "plugin_runtime_lifecycle", True)
             client.post(
-                f"{_ADMIN}/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+                f"{_ADMIN}/plugins/acme-notify/enable", json={"consent_granted": True}, headers=self._hdr(csrf)
             )
             self.assertFalse(
                 (home / "tenants" / "_default" / "plugins" / "registry.yaml").exists()
@@ -254,7 +256,7 @@ class TestReadSurface(_Base):
                 self.assertIn(key, entry)
             self.assertEqual(entry["plugin_id"], "acme-notify")
             self.assertEqual(entry["boot_layer"], "installed")
-            self.assertEqual(entry["origin"], "vetted")
+            self.assertEqual(entry["origin"], "community")
             self.assertFalse(entry["enabled"], "install must not enable")
             self.assertTrue(entry["can_disable"])
             self.assertEqual(entry["source"], "registry")
@@ -286,7 +288,7 @@ class TestMutations(_Base):
             self._install(client, csrf)
 
             resp = client.post(
-                f"{_ADMIN}/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+                f"{_ADMIN}/plugins/acme-notify/enable", json={"consent_granted": True}, headers=self._hdr(csrf)
             )
             self.assertEqual(resp.status_code, 200, resp.text)
             self.assertTrue(resp.json()["enabled"])
@@ -361,7 +363,7 @@ class TestMutations(_Base):
             self.assertEqual(client.get(f"{_ADMIN}/plugins").status_code, 200)
 
             for method, path, payload in (
-                ("post", f"{_ADMIN}/plugins/acme-notify/enable", {}),
+                ("post", f"{_ADMIN}/plugins/acme-notify/enable", {"consent_granted": True}),
                 ("post", f"{_ADMIN}/plugins/acme-notify/disable", {}),
                 ("put", f"{_ADMIN}/plugins/acme-notify/config", {"settings": {}}),
             ):
@@ -832,7 +834,7 @@ class TestAuth(_Base):
                 ("get", f"{_ADMIN}/plugins/acme-notify", {}),
                 ("get", f"{_ADMIN}/health", {}),
                 ("post", f"{_ADMIN}/plugins/acme-notify/enable",
-                 {"json": {}, "headers": hdr}),
+                 {"json": {"consent_granted": True}, "headers": hdr}),
                 ("post", f"{_ADMIN}/plugins/acme-notify/disable",
                  {"json": {}, "headers": hdr}),
                 ("put", f"{_ADMIN}/plugins/acme-notify/config",
@@ -846,7 +848,7 @@ class TestAuth(_Base):
     def test_mutations_require_the_csrf_header(self):
         with self._live() as (client, _csrf, _home, _all):
             for method, path, payload in (
-                ("post", f"{_ADMIN}/plugins/acme-notify/enable", {}),
+                ("post", f"{_ADMIN}/plugins/acme-notify/enable", {"consent_granted": True}),
                 ("post", f"{_ADMIN}/plugins/acme-notify/disable", {}),
                 ("put", f"{_ADMIN}/plugins/acme-notify/config", {"settings": {}}),
             ):

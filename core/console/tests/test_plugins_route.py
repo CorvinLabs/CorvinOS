@@ -105,7 +105,10 @@ _RECORD = {
     "version": "1.0.0",
     "display_name": "Acme Notify",
     "plugin_type": "notification_backend",
-    "origin": "vetted",
+    # community: the ONLY origin an install body may state (F-P1) — builtin and
+    # vetted are server-derived facts, so the lifecycle fixtures run as community
+    # and grant consent explicitly where they enable.
+    "origin": "community",
     "pii_risk": "low",
     "settings_schema": {
         "type": "object",
@@ -115,6 +118,13 @@ _RECORD = {
     },
     "settings": {"channel": "ops"},
 }
+
+#: The same record with its egress declared, for tests that ENABLE it: a
+#: community plugin declaring external egress must name its hosts (L35), and
+#: enabling a community plugin needs the consent flag — both are the real
+#: gates, exercised here rather than sidestepped by claiming vetted.
+_ENABLEABLE = {**_RECORD, "network_egress": "none"}
+_CONSENT = {"consent_granted": True}
 
 
 class _Base(unittest.TestCase):
@@ -227,12 +237,14 @@ class TestFullLifecycle(_Base):
 
     def test_install_enable_configure_disable_uninstall(self):
         with self._live() as (client, csrf, _home):
-            resp = client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            resp = client.post("/v1/console/plugins", json=_ENABLEABLE, headers=self._hdr(csrf))
             self.assertEqual(resp.status_code, 200, resp.text)
             self.assertFalse(resp.json()["enabled"], "install must not enable")
 
             resp = client.post(
-                "/v1/console/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+                "/v1/console/plugins/acme-notify/enable",
+                json={"consent_granted": True},
+                headers=self._hdr(csrf),
             )
             self.assertEqual(resp.status_code, 200, resp.text)
             self.assertTrue(resp.json()["enabled"])
@@ -317,9 +329,9 @@ class TestFullLifecycle(_Base):
 
     def test_uninstall_of_an_enabled_plugin_is_409(self):
         with self._live() as (client, csrf, _home):
-            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            client.post("/v1/console/plugins", json=_ENABLEABLE, headers=self._hdr(csrf))
             client.post(
-                "/v1/console/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+                "/v1/console/plugins/acme-notify/enable", json=_CONSENT, headers=self._hdr(csrf)
             )
             resp = client.delete(
                 "/v1/console/plugins/acme-notify", headers=self._hdr(csrf)
@@ -552,9 +564,9 @@ class TestRuntimeStateIsVisible(_Base):
 
     def test_a_record_without_a_class_path_reports_not_running(self):
         with self._live() as (client, csrf, _home):
-            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            client.post("/v1/console/plugins", json=_ENABLEABLE, headers=self._hdr(csrf))
             client.post(
-                "/v1/console/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+                "/v1/console/plugins/acme-notify/enable", json=_CONSENT, headers=self._hdr(csrf)
             )
             body = client.get("/v1/console/plugins/acme-notify").json()
             self.assertTrue(body["enabled"])
@@ -574,7 +586,7 @@ class TestRuntimeStateIsVisible(_Base):
 
     def test_breaker_state_surfaces_as_containment(self):
         with self._live() as (client, csrf, _home):
-            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            client.post("/v1/console/plugins", json=_ENABLEABLE, headers=self._hdr(csrf))
             # Open a breaker for this id and register the plugin so it counts as
             # loaded — that is the "running but contained" case.
             from corvin_plugins import circuit_breaker as cb
@@ -611,7 +623,7 @@ class TestRuntimeStateIsVisible(_Base):
                 breaker.record_failure(RuntimeError())
                 client.post(
                     "/v1/console/plugins/acme-notify/enable",
-                    json={},
+                    json=_CONSENT,
                     headers=self._hdr(csrf),
                 )
                 body = client.get("/v1/console/plugins/acme-notify").json()
@@ -645,9 +657,9 @@ class TestContainmentReasonIsDerived(_Base):
 
     def test_a_never_loaded_plugin_is_not_blamed_on_healing(self):
         with self._live() as (client, csrf, _home):
-            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            client.post("/v1/console/plugins", json=_ENABLEABLE, headers=self._hdr(csrf))
             client.post(
-                "/v1/console/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+                "/v1/console/plugins/acme-notify/enable", json=_CONSENT, headers=self._hdr(csrf)
             )
             body = client.get("/v1/console/plugins/acme-notify").json()
             self.assertFalse(body["runtime_loaded"])
@@ -683,9 +695,9 @@ class TestContainmentReasonIsDerived(_Base):
 
                     return _S()
 
-            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            client.post("/v1/console/plugins", json=_ENABLEABLE, headers=self._hdr(csrf))
             client.post(
-                "/v1/console/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+                "/v1/console/plugins/acme-notify/enable", json=_CONSENT, headers=self._hdr(csrf)
             )
             route_mod.set_collector(_FakeCollector())
             try:
@@ -818,3 +830,46 @@ class TestTheSandboxDoesNotPoisonTheRun(unittest.TestCase):
             bridge_audit._audit_sink, live,
             "audit_event() would fan out into a registry nobody reads",
         )
+
+
+# ── Provenance is never a body claim (F-P1, 2026-09-07) ──────────────────────
+
+
+class TestOriginIsNeverSelfCertified(_Base):
+    """``origin`` buys privileges — the ADR-0249 trust gate short-circuits on
+    ``builtin`` and the ADR-0250 slot gate exempts it, after which the loader
+    imports ``class_path``. A request body that could say ``origin: builtin``
+    therefore imported arbitrary code past both gates. The route now answers
+    422 and persists nothing; ``community`` is the only accepted value."""
+
+    @contextmanager
+    def _live(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, home):
+            self._flag(client, csrf, "plugin_console_surface", True)
+            self._flag(client, csrf, "plugin_runtime_lifecycle", True)
+            yield client, csrf, home
+
+    def test_builtin_and_vetted_claims_are_422_and_not_persisted(self):
+        with self._live() as (client, csrf, _home):
+            for claimed in ("builtin", "vetted", "BUILTIN", "installed"):
+                payload = {
+                    **_RECORD,
+                    "origin": claimed,
+                    "class_path": "os:system",  # what a claim would have unlocked
+                }
+                resp = client.post(
+                    "/v1/console/plugins", json=payload, headers=self._hdr(csrf)
+                )
+                self.assertEqual(resp.status_code, 422, (claimed, resp.text))
+                self.assertIn("origin", resp.text)
+            self.assertEqual(client.get("/v1/console/plugins").json()["total"], 0)
+
+    def test_community_is_accepted_and_stored_as_community(self):
+        with self._live() as (client, csrf, _home):
+            resp = client.post(
+                "/v1/console/plugins",
+                json={**_RECORD, "origin": "community"},
+                headers=self._hdr(csrf),
+            )
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertEqual(resp.json()["origin"], "community")

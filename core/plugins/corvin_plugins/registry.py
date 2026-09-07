@@ -391,9 +391,21 @@ class PluginRegistry:
     # ── Registration ──────────────────────────────────────────────────────────
 
     def _resolve_boot_layer(
-        self, plugin: CorvinPlugin, boot_layer: BootLayer | str | None, plugin_id: str | None = None
+        self,
+        plugin: CorvinPlugin,
+        boot_layer: BootLayer | str | None,
+        plugin_id: str | None = None,
+        ctx: PluginContext | None = None,
     ) -> BootLayer:
         """Decide which boot layer a runtime plugin object belongs to.
+
+        Every downgrade below is AUDITED as ``plugin.boot_layer_rejected`` through
+        ``ctx.audit_emit`` (when a context is given) with a closed ``reason`` slug —
+        the same event the tenant-scope guard in ``bootstrap._declared_boot_layer``
+        emits. Before 2026-09-07 these branches were log-only: a plugin that tried
+        to promote itself from inside ``on_load`` or across a registration epoch
+        left no trace in the hash chain, so an operator could not tell "never
+        tried" from "tried and was stopped" (finding F-P3).
 
         Order: explicit argument (the caller holds the provenance chain — the
         bootstrap paths pass the value they already gated) → the plugin object's
@@ -415,6 +427,23 @@ class PluginRegistry:
         re-registration in the same epoch after unload (prevents same-epoch thread
         escapes where a spawned thread unregisters and re-registers with privilege).
         """
+        pid_for_audit = plugin_id or getattr(plugin, "plugin_id", "?")
+
+        def _rejected(declared: object, reason: str) -> BootLayer:
+            if ctx is not None:
+                try:
+                    ctx.audit_emit("plugin.boot_layer_rejected", {
+                        "plugin_id": str(pid_for_audit)[:128],
+                        "tenant_id": ctx.tenant_id,
+                        "declared_boot_layer": str(
+                            getattr(declared, "value", declared)
+                        )[:32],
+                        "reason": reason,
+                    })
+                except Exception:  # noqa: BLE001 - audit must not change the verdict
+                    log.debug("boot_layer_rejected audit could not be written")
+            return BootLayer.INSTALLED
+
         if boot_layer is not None:
             requested = BootLayer(boot_layer)
             if requested in _PRIVILEGED_BOOT_LAYERS:
@@ -437,7 +466,7 @@ class PluginRegistry:
                         who.plugin_id, getattr(plugin, "plugin_id", "?"),
                         requested.value,
                     )
-                    return BootLayer.INSTALLED
+                    return _rejected(requested, "privileged_from_on_load")
 
                 # ADR-0233 D5: Check if this plugin_id was already granted a
                 # privilege (in ANY epoch). If so, prevent re-escalation attempts:
@@ -457,7 +486,7 @@ class PluginRegistry:
                             "downgraded to installed",
                             pid, already_privileged_epoch, self._registration_epoch,
                         )
-                        return BootLayer.INSTALLED
+                        return _rejected(requested, "cross_epoch_reescalation")
                     else:
                         # Same-epoch re-escalation: thread from this boot trying to re-register
                         # after being unregistered (unregister + re-register attack).
@@ -471,7 +500,7 @@ class PluginRegistry:
                                 "a thread-escape attack; downgraded to installed",
                                 pid, requested.value, self._registration_epoch,
                             )
-                            return BootLayer.INSTALLED
+                            return _rejected(requested, "same_epoch_reescalation")
             return requested
         declared = getattr(plugin, "boot_layer", None)
         if declared is None:
@@ -483,7 +512,7 @@ class PluginRegistry:
                 "plugin %r declares unknown boot_layer %r — treating as installed",
                 getattr(plugin, "plugin_id", "?"), declared,
             )
-            return BootLayer.INSTALLED
+            return _rejected(declared, "unknown_boot_layer")
         if resolved in _PRIVILEGED_BOOT_LAYERS:
             log.warning(
                 "plugin %r claims privileged boot_layer %s on its own object — "
@@ -491,7 +520,7 @@ class PluginRegistry:
                 "the caller, never self-declared",
                 getattr(plugin, "plugin_id", "?"), resolved.value,
             )
-            return BootLayer.INSTALLED
+            return _rejected(resolved, "privileged_self_declared")
         return resolved
 
     def register(
@@ -500,19 +529,38 @@ class PluginRegistry:
         ctx: PluginContext,
         *,
         boot_layer: BootLayer | str | None = None,
+        origin: str | None = None,
+        source: str | None = None,
     ) -> None:
         """Call plugin.on_load(ctx) and store the plugin.
 
         Raises PluginAlreadyRegistered if plugin.plugin_id is already registered.
         ``boot_layer`` (ADR-0243) records which boot layer the plugin belongs to;
         it is keyword-only and defaults to the least privileged value.
+
+        ``origin`` (``builtin`` · ``vetted`` · ``community`` · ``tenant``) and
+        ``source`` (which load path found the code — a closed label plus a
+        root-RELATIVE directory, never an absolute filesystem path) go into the
+        ``plugin.loaded`` audit record. Without them the chain said WHAT loaded
+        but not from WHERE, so a marketplace-checkout plugin and a wheel-shipped
+        one were indistinguishable after the fact (finding F-P5).
         """
-        resolved = self._resolve_boot_layer(plugin, boot_layer, plugin_id=plugin.plugin_id)
+        resolved = self._resolve_boot_layer(
+            plugin, boot_layer, plugin_id=plugin.plugin_id, ctx=ctx
+        )
         with self._op_lock(plugin.plugin_id):
-            self._register_locked(plugin, ctx, resolved)
+            self._register_locked(
+                plugin, ctx, resolved, origin=origin, source=source
+            )
 
     def _register_locked(
-        self, plugin: CorvinPlugin, ctx: PluginContext, resolved: BootLayer
+        self,
+        plugin: CorvinPlugin,
+        ctx: PluginContext,
+        resolved: BootLayer,
+        *,
+        origin: str | None = None,
+        source: str | None = None,
     ) -> None:
         """The body of :meth:`register`, under this plugin's operation lock."""
         with self._lock:
@@ -595,6 +643,10 @@ class PluginRegistry:
             "boot_layer": resolved.value,
             "version": plugin.version,
             "tenant_id": ctx.tenant_id,
+            # Provenance: "unknown" is an honest answer for a caller that did not
+            # say — it is never upgraded to builtin by omission.
+            "origin": str(origin or "unknown")[:32],
+            "source": str(source or "unknown")[:160],
         })
 
     def unregister(self, plugin_id: str, *, operator_initiated: bool = False) -> None:
@@ -1001,8 +1053,12 @@ def register(
     ctx: PluginContext,
     *,
     boot_layer: BootLayer | str | None = None,
+    origin: str | None = None,
+    source: str | None = None,
 ) -> None:
-    _registry.register(plugin, ctx, boot_layer=boot_layer)
+    _registry.register(
+        plugin, ctx, boot_layer=boot_layer, origin=origin, source=source
+    )
 
 
 def unregister(plugin_id: str, *, operator_initiated: bool = False) -> None:

@@ -13,21 +13,49 @@ import sys
 import json
 import tempfile
 
-# Add Corvin-Marketplace to path for plugin imports
-sys.path.insert(0, "/home/shumway/projects/Corvin-Marketplace/plugins/buildin")
-
-# Import the plugins and providers
-from security_compliance.flow_guard.src.flow_guard import (
-    FlowGuard, DataClassification
+# The plugin SOURCE lives in the sibling Corvin-Marketplace checkout (operator
+# rule), resolved the same way the loader does (CORVIN_MARKETPLACE_ROOT, else
+# ../Corvin-Marketplace/plugins/buildin) — never a hard-coded home directory.
+# Each src module is loaded BY FILE PATH under a unique name: the category
+# directories are called ``memory`` / ``security_compliance``, and putting them
+# on sys.path as top-level packages collides with any other ``memory`` module
+# already imported in the session ("'memory' is not a package").
+# Absent checkout → the module skips instead of erroring at import.
+import importlib.util
+import os as _os
+_REPO = Path(__file__).resolve().parents[2]
+_MARKETPLACE = Path(
+    _os.environ.get("CORVIN_MARKETPLACE_ROOT")
+    or _REPO.parent / "Corvin-Marketplace" / "plugins" / "buildin"
 )
-from security_compliance.path_gate.src.path_gate import PathGate
-from security_compliance.consent_gate.src.consent_gate import ConsentGate
-from memory.learning_event_storage.src.learning_event_storage import (
-    LearningEventStorage, LearningEvent, LearningEventType, EventEmitter
+if not (_MARKETPLACE / "security_compliance" / "flow_guard" / "src").is_dir():
+    pytest.skip("Corvin-Marketplace checkout not present", allow_module_level=True)
+if str(_REPO / "core" / "plugins") not in sys.path:
+    sys.path.append(str(_REPO / "core" / "plugins"))
+
+
+def _load_plugin_src(category: str, name: str):
+    path = _MARKETPLACE / category / name / "src" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"corvin_marketplace_{category}_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_flow_guard = _load_plugin_src("security_compliance", "flow_guard")
+_path_gate = _load_plugin_src("security_compliance", "path_gate")
+_consent_gate = _load_plugin_src("security_compliance", "consent_gate")
+_les = _load_plugin_src("memory", "learning_event_storage")
+FlowGuard, DataClassification = _flow_guard.FlowGuard, _flow_guard.DataClassification
+PathGate = _path_gate.PathGate
+ConsentGate = _consent_gate.ConsentGate
+LearningEventStorage, LearningEvent, LearningEventType, EventEmitter = (
+    _les.LearningEventStorage, _les.LearningEvent, _les.LearningEventType, _les.EventEmitter,
 )
 
 # Import provider modules
-sys.path.insert(0, "/home/shumway/projects/CorvinOS/core/plugins")
 from corvin_plugins.providers import user_backend, audit_backend
 
 
@@ -52,9 +80,12 @@ class TestFlowGuard:
         result = await guard.classify_data("Contact: user@example.com")
         assert result == DataClassification.RESTRICTED
 
-        # Phone detection
-        result = await guard.classify_data("Call 555-1234")
+        # Phone detection — the guard's pattern is a full NANP number
+        # (3-3-4 digits); a bare 7-digit exchange is deliberately not one.
+        result = await guard.classify_data("Call 555-123-4567")
         assert result == DataClassification.RESTRICTED
+        result = await guard.classify_data("Call 555-1234")
+        assert result == DataClassification.PUBLIC
 
     async def test_classify_secret_keyword(self):
         """Test secret keyword detection."""
@@ -302,9 +333,11 @@ class TestEventEmitter:
             )
             results.append(emitter.emit(event))
 
-        # At least 2 succeeded, 1 dropped (backpressure)
-        assert sum(results) >= 2
-        assert not all(results)
+        # Exactly 2 queued, the 3rd dropped (backpressure reports honestly —
+        # a bounded deque used to evict the OLDEST and return True for all 3).
+        assert results == [True, True, False]
+        assert len(emitter._queue) == 2
+        assert emitter._queue[0].event_id == "test0"
 
     async def test_drain_events(self):
         """Test draining events from queue."""

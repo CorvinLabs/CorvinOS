@@ -419,6 +419,7 @@ def bootstrap_global(
             # this is the one place `builtin` is a fact rather than a claim, and
             # the one exemption the ADR-0250 slot gate grants.
             origin="builtin",
+            source="wheel_global",
             **registries,
         )
         if ok:
@@ -571,6 +572,7 @@ def bootstrap_declared(
             corvin_home=corvin_home,
             config=entry_config,
             boot_layer=boot_layer,
+            source="tenant_declared",
             **registries,
         ):
             loaded.append(plugin_id)
@@ -700,6 +702,48 @@ def _marketplace_root() -> Path:
     return Path(__file__).resolve().parents[3].parent / "Corvin-Marketplace" / "plugins" / "buildin"
 
 
+def origin_for_plugin_dir(plugin_dir: Path) -> tuple[str, str]:
+    """``(origin, source)`` for a discovered plugin directory — LOCATION-derived.
+
+    ``builtin`` is a fact only for code that ships IN THE WHEEL, i.e. under
+    ``_BUILTIN_ROOT``. A directory under the Corvin-Marketplace checkout
+    (``_marketplace_root()``, operator-configurable via ``CORVIN_MARKETPLACE_ROOT``)
+    is maintainer-reviewed source that does NOT ship with CorvinOS, so it is
+    ``vetted`` — which is exactly the origin the ADR-0250 provider-slot gate
+    refuses on a multi-tenant install and the ADR-0249 trust gate treats as a
+    claim rather than a fact. Until 2026-09-07 the marketplace root was loaded as
+    ``builtin`` (finding F-P5), granting wheel-level exemptions to a sibling
+    checkout. Any other root (an explicit ``root=`` argument) is ``vetted`` too:
+    the caller chose the directory, the wheel did not.
+
+    The manifest's own ``origin:`` line is deliberately NOT consulted — a
+    manifest is a claim, the directory it sits in is the fact.
+
+    ``source`` is a closed label plus the ROOT-RELATIVE directory (never an
+    absolute path — the audit chain must not record the host's filesystem
+    layout): ``builtin_root:<category>/<name>``, ``marketplace_root:<...>``, or
+    ``explicit_root:<name>``.
+    """
+    resolved = Path(plugin_dir).resolve(strict=False)
+
+    def _under(root: Path) -> str | None:
+        try:
+            r = root.resolve(strict=False)
+        except OSError:
+            return None
+        if r == resolved or r in resolved.parents:
+            return resolved.relative_to(r).as_posix()
+        return None
+
+    rel = _under(_BUILTIN_ROOT)
+    if rel is not None:
+        return "builtin", f"builtin_root:{rel}"
+    rel = _under(_marketplace_root())
+    if rel is not None:
+        return "vetted", f"marketplace_root:{rel}"
+    return "vetted", f"explicit_root:{resolved.name}"
+
+
 def _builtin_plugin_dirs(root: Path) -> list[Path]:
     """Every directory under ``root`` that holds a ``plugin.yaml`` (recursive).
 
@@ -785,11 +829,11 @@ def bootstrap_builtin(
 
     * VALIDATED through the ADR-0247 manifest gate — a manifest that fails the
       gate is skipped and audited, never loaded (the gate is not bypassed);
-    * loaded with ``origin="builtin"`` — a FACT here, not a claim: these dirs ship
-      in the wheel, so the ADR-0250 provider-slot gate's ``origin_builtin``
-      exemption applies (a ``context_retriever`` is a process-wide provider slot;
-      an ``origin=None`` declarative load of it is refused on a multi-tenant
-      install, which is why the builtin path must assert its real provenance);
+    * loaded with an origin DERIVED FROM ITS ROOT (:func:`origin_for_plugin_dir`):
+      ``builtin`` only for dirs under ``_BUILTIN_ROOT`` (they ship in the wheel,
+      so the ADR-0250 provider-slot gate's builtin exemption is honest there),
+      ``vetted`` for the Corvin-Marketplace checkout and any explicit ``root``.
+      The manifest's ``origin:`` line is never believed;
     * registered on ``boot_layer=installed`` through the SAME ``_register_instance``
       the other paths use, so ``register()`` runs ``on_load(ctx)`` under the
       loading context — which is what lets ``set_active`` record slot ownership.
@@ -895,15 +939,18 @@ def bootstrap_builtin(
             })
             continue
 
+        # Provenance comes from WHICH ROOT the directory was found under, never
+        # from the manifest: builtin only for the in-wheel root, vetted for the
+        # marketplace checkout (F-P5). See origin_for_plugin_dir().
+        origin, source = origin_for_plugin_dir(plugin_dir)
         if _register_instance(
             instance,
             plugin_id=plugin_id,
             tenant_id=tenant_id,
             corvin_home=corvin_home,
             boot_layer=BootLayer.INSTALLED,
-            # These dirs ship in the wheel, so builtin is a fact, not a claim —
-            # the one place the ADR-0250 slot gate's origin exemption is honest.
-            origin="builtin",
+            origin=origin,
+            source=source,
             **registries,
         ):
             loaded.append(plugin_id)
@@ -1207,6 +1254,7 @@ def _load_tenant_plugin(
             corvin_home=corvin_home,
             boot_layer=BootLayer.INSTALLED,
             origin="tenant",
+            source="tenant_plugins_registry",
             compute_registry=compute_registry,
             engine_factory=engine_factory,
             channel_registry=channel_registry,
@@ -1347,6 +1395,7 @@ def _register_instance(
     config: dict | None = None,
     boot_layer: BootLayer | str | None = None,
     origin: str | None = None,
+    source: str | None = None,
     **registries: Any,
 ) -> bool:
     """Build a context and register one already-instantiated plugin.
@@ -1381,7 +1430,7 @@ def _register_instance(
         **registries,
     )
     try:
-        register(instance, ctx, boot_layer=boot_layer)
+        register(instance, ctx, boot_layer=boot_layer, origin=origin, source=source)
     except Exception as exc:  # noqa: BLE001
         from .registry import PluginLoadTimeout
 
@@ -1419,8 +1468,9 @@ def bootstrap_all(
        failure here aborts the boot; a core failure degrades.
     2. **Declarative** — ``spec.plugins.installed`` from ``tenant.corvin.yaml``.
     3. **Builtin** — the plugins shipped under ``core/plugins/buildin/`` and
-       discovered by :func:`bootstrap_builtin`. Loaded with ``origin=builtin`` and
-       default-on locally (opt-out via ``spec.plugins.builtin_disabled`` /
+       discovered by :func:`bootstrap_builtin` (plus the Corvin-Marketplace
+       checkout). Origin is root-derived — ``builtin`` in-wheel, ``vetted`` for
+       the marketplace checkout — and they are default-on locally (opt-out via ``spec.plugins.builtin_disabled`` /
        ``load_builtin: false``). An id already declared in step 2 wins.
     4. **Runtime registry** — Console-installed plugins, gated on the
        ``plugin_runtime_lifecycle`` flag.
@@ -1611,6 +1661,7 @@ def _load_one(
         # answer the ADR-0250 provider-slot question honestly. The declarative
         # path cannot and deliberately does not (see _register_instance).
         origin=record.origin.value,
+        source="tenant_registry",
         **registries,
     )
 
@@ -1786,7 +1837,9 @@ def start_health_monitoring(plugin_ids: Iterable[str]) -> Any | None:
 
         tenant_id = _hc_tenant()
         result = _get_registry().execute(
-            "os.plugin_health_monitoring", {"tenant_id": tenant_id}
+            "os.plugin_health_monitoring",
+            {"tenant_id": tenant_id},
+            lom="core/plugins/corvin_plugins/bootstrap.py:start_health_monitoring",
         )
         enabled = result.status == "success" and bool(
             (result.output or {}).get("enabled")
@@ -1887,8 +1940,22 @@ def _boot_skills_registry() -> list[str]:
     """
     try:
         from core.skills.boot import boot_skills  # noqa: PLC0415
-    except ImportError:
-        log.debug("core.skills absent — ACP Skills registry not populated")
+    except ImportError as exc:
+        # Only a genuinely stripped install (the ``core.skills`` package itself
+        # is missing) is tolerated quietly. A *present* package whose import
+        # chain is broken (a deleted transitive module, a bad edit) used to be
+        # swallowed here at DEBUG, which left the ACP registry silently empty
+        # after a restart (2026-09-07 adversarial review, F-K1). Log that loudly.
+        missing = getattr(exc, "name", None) or ""
+        if isinstance(exc, ModuleNotFoundError) and missing.startswith("core.skills"):
+            log.debug("core.skills absent — ACP Skills registry not populated")
+            return []
+        log.error(
+            "ACP Skills registry boot FAILED — core.skills is present but not importable "
+            "(missing=%r); Skill consumers will fall back to off",
+            missing or str(exc),
+            exc_info=True,
+        )
         return []
     try:
         from forge.tenants import current_tenant as _current_tenant  # noqa: PLC0415

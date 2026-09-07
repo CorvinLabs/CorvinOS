@@ -14,7 +14,10 @@ ADR-0444: Storage & Registry
 import pytest
 import sys
 from pathlib import Path
-from load_tester import LoadTester
+try:
+    from load_tester import LoadTester  # default (prepend) import mode
+except ModuleNotFoundError:  # --import-mode=importlib: sibling not on sys.path
+    from core.plugins.tests.load_tester import LoadTester
 
 # NO `sys.path.insert(0, <repo>/core)` here (2026-09-03 finding A11): with
 # core/ first on sys.path, `import audit` resolved to core/audit instead of

@@ -14,8 +14,9 @@ id into a real ``PluginRecord`` and the mutation routes can turn it back into th
 registry key.
 
 **Security — origin is LOCATION-derived, never manifest-believed.** A record built
-here is stamped ``origin=builtin`` because the directory resolved UNDER a trusted
-``buildin/`` root (the marketplace checkout or the in-wheel ``core/plugins/buildin``),
+here is stamped ``origin=builtin`` only when the directory resolved under the
+in-wheel ``core/plugins/buildin`` root, and ``origin=vetted`` when it resolved
+under the Corvin-Marketplace checkout (``bootstrap.origin_for_plugin_dir``),
 NOT because a manifest said so. A community plugin cannot mint itself ``builtin`` by
 writing ``origin: builtin`` in its manifest: it never resolves under a buildin root,
 and the index tier is checked independently. A resolved candidate that escapes its
@@ -155,22 +156,27 @@ def validate_builtin_manifest(plugin_dir: Path):
     return validate_manifest_file(plugin_dir / "plugin.yaml")
 
 
-def record_from_manifest(manifest: dict) -> "PluginRecord":
+def record_from_manifest(manifest: dict, *, plugin_dir: Path) -> "PluginRecord":
     """Project a builtin plugin.yaml manifest onto a ``PluginRecord``.
 
-    ``origin`` is forced to ``builtin`` and ``boot_layer`` to ``installed``: this
-    function is only ever reached with a manifest resolved from under a trusted
-    ``buildin/`` root, so builtin is a LOCATION fact, and an operator-installed
-    builtin lands on the ``installed`` boot layer regardless of what the manifest
-    declares (a tenant registry may only express bundled/installed anyway).
+    ``origin`` is LOCATION-derived through ``bootstrap.origin_for_plugin_dir``:
+    ``builtin`` only when ``plugin_dir`` resolved under the in-wheel
+    ``core/plugins/buildin`` root, ``vetted`` for the Corvin-Marketplace checkout
+    (maintainer-reviewed source that does not ship with CorvinOS). The manifest's
+    own ``origin:`` line is never believed. ``boot_layer`` is forced to
+    ``installed``: an operator-installed plugin lands there regardless of what
+    the manifest declares (a tenant registry may only express bundled/installed).
     """
     plugin_id = str(manifest["plugin_id"])
+    origin, _source = _bootstrap.origin_for_plugin_dir(plugin_dir)
     return PluginRecord(
         plugin_id=plugin_id,
         version=str(manifest.get("version", "0.0.0")),
         display_name=str(manifest.get("display_name") or plugin_id),
-        plugin_type=str(manifest.get("plugin_type") or "generic"),
-        origin=PluginOrigin.BUILTIN,
+        # No silent "generic": a manifest without plugin_type fails the ADR-0247
+        # gate before this point, and PluginRecord rejects an unknown type.
+        plugin_type=str(manifest.get("plugin_type") or ""),
+        origin=PluginOrigin(origin),
         boot_layer=BootLayer.INSTALLED,
         pii_risk=PIIRisk(str(manifest.get("pii_risk", "low"))),
         requires_consent=bool(manifest.get("requires_consent", False)),

@@ -90,7 +90,7 @@ class Capability:
             errors.append(f"Capability {self.id}: returns must be dict (JSON Schema)")
 
         # Basic JSON Schema validation (check for required fields if type is object)
-        if self.parameters and self.parameters.get("type") == "object":
+        if isinstance(self.parameters, dict) and self.parameters.get("type") == "object":
             if "properties" in self.parameters and not isinstance(self.parameters["properties"], dict):
                 errors.append(f"Capability {self.id}: parameters.properties must be dict")
 
@@ -159,18 +159,26 @@ class PluginCapabilitiesManifest:
         errors = []
         cap_map = {cap.id: cap.fallback_capability_id for cap in self.capabilities}
 
+        reported: set[frozenset] = set()
         for cap_id, fallback_id in cap_map.items():
             if not fallback_id:
                 continue
-            visited = set()
+            # Walk the chain from cap_id; a cycle is ANY node repeating on the
+            # walk (the old check required the walk to close exactly on cap_id,
+            # which a 2-cycle never does — A→B→A closes on B; 2026-09-07 fix).
+            path = [cap_id]
+            seen = {cap_id}
             current = fallback_id
-            while current and current not in visited:
-                visited.add(current)
+            while current and current not in seen:
+                seen.add(current)
+                path.append(current)
                 current = cap_map.get(current)
-
-            if current in visited and current == cap_id:
-                cycle_path = " → ".join(list(visited) + [cap_id])
-                errors.append(f"Fallback cycle detected: {cycle_path}")
+            if current and current in seen:
+                cycle = path[path.index(current):] + [current]
+                key = frozenset(cycle)
+                if key not in reported:
+                    reported.add(key)
+                    errors.append("Fallback cycle detected: " + " → ".join(cycle))
 
         return errors
 

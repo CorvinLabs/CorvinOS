@@ -93,6 +93,12 @@ def validate_token_format(token: str) -> None:
         raise InvalidTokenFormatError(
             f"GitHub token must start with 'ghp_', got: {token[:20]}..."
         )
+    # A classic PAT is `ghp_` + 36 base62 characters; a bare/short prefix is
+    # not a token (never log the value itself).
+    if len(token) < 40 or not token[4:].isalnum():
+        raise InvalidTokenFormatError(
+            f"GitHub token has an invalid shape (length {len(token)})"
+        )
 
 
 def encrypt_token(token: str, key: Optional[bytes] = None) -> EncryptedToken:
