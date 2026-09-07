@@ -654,6 +654,17 @@ returns `""` — that is a success, not a degradation. Regression guard:
 - `GET  /v1/console/settings/engine` — reads `tenant.corvin.yaml::spec.default_engine`
 - `PUT  /v1/console/settings/engine` — writes `spec.default_engine` + `spec.hermes_model`
 - `GET  /v1/console/settings/engine/health` — probes Ollama; returns `base_url_hash` (16-hex prefix only)
+- `GET  /v1/console/settings/engine/catalog` — `{engines, models}`; `models` is the
+  static, hand-curated `_CLAUDE_MODELS` list (`claude-opus-5` / `claude-sonnet-5`
+  default / `claude-haiku-4-5-20251001`). Commit 243690e8 removed the auto-refresh
+  machinery that used to keep this current, without a replacement, so the list went
+  stale until 2026-09-07 (offered only the superseded opus-4.1/sonnet-4/haiku-4.5
+  trio). It is kept in sync by hand with the canonical
+  `operator/bundle/config-templates/engine_model_registry.yaml`
+  (`engines.claude_code.os_models`) — the live-refreshed source served at
+  `GET /models/registry` (`core/console/corvin_console/routes/models.py`) — pending
+  a follow-up that wires this route to that source directly instead of maintaining
+  two hand-synced copies.
 
 Adapter dispatch resolution order (new): `per-chat profile.default_engine`
 → `tenant.corvin.yaml::spec.default_engine` → `ClaudeCodeEngine` fallback.
