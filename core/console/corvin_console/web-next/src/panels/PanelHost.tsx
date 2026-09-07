@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { safeNavTarget } from "@/lib/safe-url";
 import {
   PANEL_PROTOCOL_VERSION,
   isPanelToHost,
@@ -38,17 +39,15 @@ export interface PanelHostProps {
   baseUrl?: string;
 }
 
-/** True iff `to` is a safe SPA-internal navigation target. Rejects protocol-relative
- *  ("//host") and backslash ("/\\host") forms the browser resolves to an external
- *  origin — a hostile panel must not be able to drive a top-level redirect. */
-export function isSafeInternalNavTarget(to: unknown): to is string {
-  return (
-    typeof to === "string" &&
-    to.startsWith("/") &&
-    !to.startsWith("//") &&
-    !to.startsWith("/\\")
-  );
-}
+/** True iff `to` is a safe SPA-internal navigation target — a hostile panel must
+ *  not be able to drive a top-level redirect.
+ *
+ *  R4-C7 (2026-09-07): the implementation moved to `@/lib/safe-url` because three
+ *  OTHER call sites navigate on a value they did not author and none of them found
+ *  this one, sitting in a component module. It also gained control-character and
+ *  percent-encoded-backslash handling there. Kept as a named re-export so the panel
+ *  protocol still reads in terms of its own perimeter. */
+export const isSafeInternalNavTarget = safeNavTarget;
 
 /** The Console's effective theme, read from the `data-theme` attribute the
  *  theme-toggle sets on <html> (theme-toggle.tsx:
