@@ -53,6 +53,10 @@ class LearningEvent:
     # Metadata
     lom: Optional[str] = None  # Line of Moral Responsibility (code location)
     prev_hash: Optional[str] = None  # Previous event hash (for chaining)
+    # Reference to the CONTENT-FREE core-chain record ``EventStore.write_event``
+    # committed before the disk write (audit-first). Set by the store on read;
+    # None on an event that has not been persisted yet.
+    audit_ref: Optional[str] = None
 
     def __post_init__(self):
         """Validate event on creation (frozen dataclass)."""
@@ -99,4 +103,5 @@ class LearningEvent:
             "skill_version": self.skill_version,
             "lom": self.lom,
             "prev_hash": self.prev_hash,
+            "audit_ref": self.audit_ref,
         }

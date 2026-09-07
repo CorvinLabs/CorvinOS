@@ -27,13 +27,21 @@ class MockEventStore:
         self.events = []
 
     def query_events(self, tenant_id: str, event_type=None, limit=None):
-        """Query events (filtered by tenant_id and event_type)."""
+        """Query events as ``LearningEvent`` objects (the real store's contract)."""
+        from core.learning.learning_events import EventType, LearningEvent
+
         results = [e for e in self.events if e.get("tenant_id") == tenant_id]
         if event_type:
             results = [e for e in results if e.get("event_type") == event_type.value]
         if limit:
             results = results[-limit:]
-        return results
+        return [
+            LearningEvent(
+                event_id=e["event_id"], event_type=EventType(e["event_type"]), skill_id=e["skill_id"],
+                tenant_id=e["tenant_id"], timestamp=e["timestamp"], signal=e.get("signal"), lom=e.get("lom"),
+            )
+            for e in results
+        ]
 
     def add_event(self, event: Dict[str, Any]):
         """Add event to store."""
@@ -180,7 +188,9 @@ class TestFeedbackOutcomeIntegration:
         )
         assert result is False
 
-    def test_integrate_feedback_no_emitter(self):
+    def test_integrate_feedback_no_emitter(self, monkeypatch):
+        import core.learning.outcome_sink as _sink
+        monkeypatch.setattr(_sink, 'learning_emitter', lambda: None)  # no booted registry
         """Gracefully handle missing emitter."""
         result = integrate_feedback_outcome(
             tenant_id="_default",
@@ -345,7 +355,7 @@ class TestConfidenceWeightedAveraging:
 
         weights = [s["confidence"] for s in feedback_samples]
         avg_weight = sum(weights) / len(weights)
-        assert avg_weight == 0.8  # All equal
+        assert avg_weight == pytest.approx(0.8)  # All equal
 
 
 class TestConservativeMode:
@@ -426,7 +436,9 @@ class TestRollbackOnBadFeedback:
 class TestFailSoftBehavior:
     """Test fail-soft behavior (no exceptions raised)."""
 
-    def test_missing_emitter_returns_false(self):
+    def test_missing_emitter_returns_false(self, monkeypatch):
+        import core.learning.outcome_sink as _sink
+        monkeypatch.setattr(_sink, 'learning_emitter', lambda: None)  # no booted registry
         """Missing emitter returns False, not exception."""
         result = emit_task_outcome(
             tenant_id="_default",

@@ -10,10 +10,9 @@ Fail-closed: if audit fails, RuntimeError is raised; loss is not returned.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Protocol
+import math
 import numpy as np
-import hashlib
-import json
 
 
 @dataclass(frozen=True)
@@ -60,47 +59,49 @@ class UnifiedLossComputedEvent:
     prev_hash: str
 
 
-class MockAuditBackend:
-    """Mock audit backend for Phase 1 testing."""
+class AuditBackend(Protocol):
+    """What the optimizer needs from an audit chain.
 
-    def __init__(self):
-        self.events: List[Dict[str, Any]] = []
-        self.last_hash_value = "genesis"
+    The in-memory ``MockAuditBackend`` that used to live HERE (and was therefore
+    importable — and instantiable — from production code, F-L10) now lives in
+    ``tests/learning/mock_audit_backend.py``. Production wiring must hand in a
+    backend whose ``write_event`` commits to the core hash chain.
+    """
 
-    def write_event(self, event: Dict[str, Any]) -> Optional[str]:
-        """Write event to audit chain; return hash."""
-        if event is None:
-            return None
+    def write_event(self, event: Dict[str, Any]) -> Optional[str]: ...
 
-        # Compute hash
-        event_str = json.dumps(event, sort_keys=True, default=str)
-        event_hash = hashlib.sha256(
-            f"{self.last_hash_value}{event_str}".encode()
-        ).hexdigest()
+    def last_hash(self) -> str: ...
 
-        # Store
-        event['hash'] = event_hash
-        event['prev_hash'] = self.last_hash_value
-        self.events.append(event)
-        self.last_hash_value = event_hash
 
-        return event_hash
+LOSS_COMPONENTS = ('routing', 'confidence', 'feedback', 'attention', 'latency', 'diversity')
 
-    def last_hash(self) -> str:
-        return self.last_hash_value
 
-    def verify_chain(self) -> bool:
-        """Verify hash chain is intact."""
-        current_hash = "genesis"
-        for event in self.events:
-            if event['prev_hash'] != current_hash:
-                return False
-            current_hash = event['hash']
-        return True
+def validate_weights(weights: Dict[str, float]) -> Dict[str, float]:
+    """Return a validated copy of ``weights`` or raise ``ValueError``.
 
-    def read_events(self, tenant_id: str) -> List[Dict]:
-        """Read all events for tenant."""
-        return [e for e in self.events if e.get('tenant_id') == tenant_id]
+    Exactly the six loss components, every weight a finite non-negative
+    number, and the weights sum to 1 (±1e-6). Before this check a caller could
+    hand in ``NaN``/negative/missing weights and the "unified" loss silently
+    became garbage (F-L10).
+    """
+    if not isinstance(weights, dict):
+        raise ValueError("weights must be a dict")
+    if set(weights) != set(LOSS_COMPONENTS):
+        raise ValueError(
+            f"weights must cover exactly {sorted(LOSS_COMPONENTS)}, got {sorted(weights)}"
+        )
+    clean: Dict[str, float] = {}
+    for name, value in weights.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"weight {name!r} is not a number: {value!r}")
+        value = float(value)
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"weight {name!r} must be finite and >= 0, got {value!r}")
+        clean[name] = value
+    total = sum(clean.values())
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(f"weights must sum to 1.0, got {total!r}")
+    return clean
 
 
 class UnifiedLossOptimizer:
@@ -111,7 +112,9 @@ class UnifiedLossOptimizer:
     If audit fails, RuntimeError is raised; loss is NOT returned.
     """
 
-    def __init__(self, tenant_id: str, audit_backend: MockAuditBackend):
+    def __init__(self, tenant_id: str, audit_backend: AuditBackend):
+        if audit_backend is None or not callable(getattr(audit_backend, "write_event", None)):
+            raise ValueError("audit_backend with write_event() is required (audit-first, fail-closed)")
         self.tenant_id = tenant_id
         self.audit = audit_backend
         self.weights = {
@@ -267,16 +270,20 @@ class UnifiedLossOptimizer:
             return 0.0
 
         budget_target = 1000.0  # tokens per task
-        costs = [task.get('tokens_used', 0) for task in task_batch]
-        budgets = [task.get('budget_allocated', budget_target) for task in task_batch]
+        costs = [float(task.get('tokens_used', 0) or 0) for task in task_batch]
+        # A task with no or a zero/negative budget contributes no utilization
+        # signal instead of dividing by zero (F-L10).
+        budgets = [float(task.get('budget_allocated', budget_target) or 0) for task in task_batch]
 
         cost_ratio = np.mean(costs) / budget_target if costs else 0.0
         overrun = max(0.0, cost_ratio - 1.0)
 
-        utilization = np.mean([
+        ratios = [
             min(costs[i], budgets[i]) / budgets[i]
             for i in range(len(costs))
-        ]) if budgets else 0.0
+            if budgets[i] > 0
+        ]
+        utilization = float(np.mean(ratios)) if ratios else 0.0
 
         return overrun + (1.0 - utilization)
 
@@ -330,20 +337,22 @@ class UnifiedLossOptimizer:
         return (1.0 - coverage) + (1.0 - entropy_normalized)
 
     def update_weights(self, new_weights: Dict[str, float]) -> Dict[str, float]:
-        """Update loss weights and record in audit."""
+        """Update loss weights: validate, audit FIRST, then apply (fail-closed)."""
+        clean = validate_weights(new_weights)
         old_weights = dict(self.weights)
-        self.weights = new_weights
+        delta = {k: clean[k] - old_weights[k] for k in clean}
 
-        delta = {k: new_weights[k] - old_weights[k] for k in self.weights}
-
-        self.audit.write_event({
+        event_hash = self.audit.write_event({
             'event_type': 'weights_updated',
             'tenant_id': self.tenant_id,
             'timestamp': datetime.now().isoformat(),
             'old_weights': old_weights,
-            'new_weights': new_weights,
+            'new_weights': dict(clean),
             'delta': delta,
             'reason': 'manual_update',
         })
+        if event_hash is None:
+            raise RuntimeError("Audit write failed; weights NOT updated")
 
-        return new_weights
+        self.weights = clean
+        return dict(clean)

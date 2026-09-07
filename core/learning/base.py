@@ -7,6 +7,7 @@ Every loop (core 6D + infrastructure + meta) implements this interface.
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any
 import json
+import math
 from datetime import datetime
 
 
@@ -149,8 +150,15 @@ class LearningLoop(ABC):
         Returns:
             scalar loss in [0, 1]
         """
-        assert all(0 <= v <= 1 for v in components.values()), f"Components not normalized: {components}"
-        assert abs(sum(weights.values()) - 1.0) < 0.01, f"Weights don't sum to 1.0: {weights}"
+        # Real checks, not ``assert`` — asserts vanish under ``python -O`` and an
+        # unnormalised component would then silently skew the loss (F-L11).
+        for name, value in components.items():
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
+                raise ValueError(f"Component {name!r} not normalized to [0, 1]: {value!r}")
+        if set(weights) != set(components):
+            raise ValueError(f"Weights {sorted(weights)} do not match components {sorted(components)}")
+        if abs(sum(weights.values()) - 1.0) >= 0.01:
+            raise ValueError(f"Weights don't sum to 1.0: {weights}")
 
         loss = sum(weights[name] * components[name] for name in components)
         return loss

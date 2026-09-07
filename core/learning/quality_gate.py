@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from enum import Enum
 import logging
 import math
+import statistics
 import threading
 from datetime import datetime
 
@@ -67,6 +68,11 @@ class QualityGate:
         "convergence_rate": 0.2,
         "stability_score": 0.1,
     }
+
+    # Noise detection: an isolated magnitude ≥3× (or ≤1/3×) the median of the
+    # other deltas is an outlier; magnitudes below the floor are treated as zero.
+    _NOISE_RATIO_FACTOR = 3.0
+    _NOISE_ABS_FLOOR = 1e-6
 
     def __init__(
         self,
@@ -259,15 +265,20 @@ class QualityGate:
         return max(0.0, min(1.0, overfitting_risk))
 
     def _compute_noise_ratio(self, recent_deltas: List[float]) -> float:
-        """Estimate what fraction of feedback is random noise.
+        """Estimate what fraction of the feedback signal is random noise.
 
-        Uses isolation-based detection: a delta is noise if it appears
-        infrequently (isolated spike). Consistent signals appear multiple times.
+        Isolation-based (NOT magnitude-based: a consistently large signal is
+        signal). A delta is an *isolated outlier* when its magnitude occurs
+        only once in the window AND is at least ``_NOISE_RATIO_FACTOR`` times
+        larger or smaller than the median magnitude of the OTHER deltas.
+        The ratio is the share of the window's total |delta| mass carried by
+        such outliers, so one big spike among small consistent deltas reads
+        as mostly noise.
 
-        Algorithm:
-        1. Count how many times each magnitude appears
-        2. Count isolated deltas (appear only once and are outliers by zscore)
-        3. Noise ratio = (isolated outliers) / total deltas
+        The former z-score test (``|d - mean| / std > 2`` over the population
+        std) was structurally blind: with n samples one point can reach at
+        most z = sqrt(n - 1), i.e. exactly 2.0 at n = 5 — a single spike in a
+        5-delta window could never be flagged (BUG 2, ``test_l5_fixes_comprehensive``).
 
         Returns:
             [0.0=clean, 1.0=pure noise]
@@ -278,30 +289,30 @@ class QualityGate:
         if len(recent_deltas) == 1:
             return 0.0  # Single delta cannot be isolated; assume clean
 
-        # Compute mean and std for zscore-based outlier detection
-        mean_delta, std_delta = compute_mean_std(recent_deltas)
+        magnitudes = [abs(d) for d in recent_deltas]
+        total_mass = sum(magnitudes)
+        if total_mass <= 1e-12:
+            return 0.0  # all-zero feedback: nothing to be noisy about
 
-        # Count how many times each delta magnitude appears
-        magnitude_counts = {}
-        for d in recent_deltas:
-            mag = round(abs(d), 6)  # Round to avoid floating-point precision issues
-            magnitude_counts[mag] = magnitude_counts.get(mag, 0) + 1
+        rounded = [round(m, 6) for m in magnitudes]
+        counts: Dict[float, int] = {}
+        for m in rounded:
+            counts[m] = counts.get(m, 0) + 1
 
-        # Count isolated outliers: appear once AND are >2σ from mean
-        isolated_outliers = 0
-        for d in recent_deltas:
-            mag = round(abs(d), 6)
-            # Isolated if appears only once
-            if magnitude_counts[mag] == 1:
-                # AND is an outlier by zscore (>2σ from mean)
-                if std_delta > 0.001:  # Avoid division by very small std
-                    zscore = abs(d - mean_delta) / (std_delta + 0.001)
-                    if zscore > 2.0:
-                        isolated_outliers += 1
+        outlier_mass = 0.0
+        for idx, mag in enumerate(magnitudes):
+            if counts[rounded[idx]] != 1:
+                continue  # repeated magnitude → consistent signal, not isolated
+            others = magnitudes[:idx] + magnitudes[idx + 1:]
+            reference = statistics.median(others)
+            floor = self._NOISE_ABS_FLOOR
+            if mag <= floor and reference <= floor:
+                continue
+            ratio = max(mag, floor) / max(reference, floor)
+            if ratio >= self._NOISE_RATIO_FACTOR or ratio <= 1.0 / self._NOISE_RATIO_FACTOR:
+                outlier_mass += mag
 
-        noise_ratio = min(1.0, isolated_outliers / max(1, len(recent_deltas)))
-
-        return max(0.0, min(1.0, noise_ratio))
+        return max(0.0, min(1.0, outlier_mass / total_mass))
 
     def _compute_convergence_rate(self, recent_deltas: List[float]) -> float:
         """Measure stability of convergence: recent deltas stabilizing?
@@ -340,13 +351,13 @@ class QualityGate:
         if len(config_history) < 2:
             return 0.5
 
-        # Compute mean and std in config values
-        mean_config, std = compute_mean_std(config_history)
-
-        # Stability = exp(-std), normalized
-        # Very small std → stability ≈ 1.0
-        # Large std → stability ≈ 0.0
-        stability = math.exp(-std / max(abs(mean_config), 0.1))
+        # Peak-to-peak swing of the config path relative to its operating
+        # point: a path that swung by 100% of its mean is fully unstable, one
+        # that moved by 0.1% is fully stable. (The former ``exp(-std/mean)``
+        # rated a config oscillating ±50% around its mean at 0.67 "stable".)
+        mean_config = sum(config_history) / len(config_history)
+        swing = (max(config_history) - min(config_history)) / max(abs(mean_config), 0.1)
+        stability = 1.0 - swing
 
         return max(0.0, min(1.0, stability))
 

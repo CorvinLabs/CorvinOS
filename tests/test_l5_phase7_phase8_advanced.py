@@ -326,10 +326,13 @@ class TestResourcePlanner:
         }
         allocations = planner.allocate_resources(skills, total_operator_capacity=100)
 
-        actual_queue = {"skill_a": 5}  # Manageable queue
-        compliance = planner.check_sla_compliance(allocations, actual_queue)
-
+        # 10/h with a 5-min SLA → ~0.83 arrivals per SLA window (x1.5 buffer = 1.25)
+        compliance = planner.check_sla_compliance(allocations, {"skill_a": 1})
         assert compliance["skill_a"] is True
+
+        # 5 queued at 10/h drain in 30 min — cannot meet a 5-min SLA
+        compliance = planner.check_sla_compliance(allocations, {"skill_a": 5})
+        assert compliance["skill_a"] is False
 
 
 class TestSkillRegistry:

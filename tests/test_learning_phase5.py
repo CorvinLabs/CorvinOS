@@ -1,12 +1,11 @@
 """Tests for Learning Phase 5: Dashboard + Alerts + Export (ADR-0635, ADR-0636, ADR-0637)
 
-Tests cover:
-- Real-time metrics endpoints
-- WebSocket streaming
-- Alert policies and triggering
-- Alert history
-- Metrics export
-- Tenant isolation
+Alert-policy unit tests, then the metrics REST/WebSocket/export routes driven
+through the REAL console router with a REAL session cookie
+(``tests/learning/console_client.py``). The former route tests asserted the
+synthetic placeholder numbers through a ``client`` fixture that did not exist
+and skipped the WebSocket entirely (``pass``); the WebSocket is now exercised
+for both the unauthenticated 1008 close and a real first frame.
 """
 
 import json
@@ -320,136 +319,110 @@ class TestAlertScenarios:
             assert event.tenant_id == "_default"
 
 
+# ============================================================================
+# Metrics routes — real boundary, real data
+# ============================================================================
+
+from pathlib import Path  # noqa: E402
+
+from starlette.websockets import WebSocketDisconnect  # noqa: E402
+
+from tests.learning.console_client import COOKIE_NAME, console_client, write_outcome  # noqa: E402
+
+
 class TestMetricsEndpoints:
-    """Tests for learning metrics REST endpoints"""
+    """``/v1/console/learning/metrics/*`` — single prefix, computed answers."""
 
-    @pytest.mark.asyncio
-    async def test_current_metrics_endpoint_schema(self, client):
-        """Test current metrics response schema."""
-        response = client.get(
-            "/v1/console/learning/metrics/current",
-            headers={"Authorization": "Bearer valid_token"},
-        )
+    def test_no_doubled_prefix(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            assert sb.client.get("/v1/console/learning/metrics/current").status_code == 200
+            assert sb.client.get("/v1/console/v1/console/learning/metrics/current").status_code == 404
 
-        assert response.status_code == 200
-        data = response.json()
+    def test_current_metrics_equal_status(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            write_outcome(sb, task_id="t1", success=False)
+            current = sb.client.get("/v1/console/learning/metrics/current").json()
+            status = sb.client.get("/v1/console/learning/status").json()
+            assert current["status"] == status["status"] == "collecting"
+            assert current["metrics"]["event_counts"] == status["event_counts"]
+            assert current["metrics"]["outcome_loss"] == 1.0
+            for key in ("loss_total", "alpha_core", "convergence_percent", "gradient_l2"):
+                assert key not in current["metrics"], f"synthetic field {key} is back"
 
-        # Verify response shape
-        assert "timestamp" in data
-        assert "metrics" in data
-        assert "status" in data
+    def test_history_windows(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            write_outcome(sb, task_id="t1", success=True)
+            r = sb.client.get("/v1/console/learning/metrics/history?window=6h")
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["window"] == "6h" and body["start"] < body["end"]
+            assert body["sample_count"] == 1 and sum(p["outcomes"] for p in body["points"]) == 1
+            assert sb.client.get("/v1/console/learning/metrics/history?window=invalid").status_code == 400
 
-        # Verify metrics sub-object
-        metrics = data["metrics"]
-        required_fields = [
-            "loss_total",
-            "loss_core",
-            "loss_infra",
-            "alpha_core",
-            "alpha_infra",
-            "damping_core",
-            "convergence_percent",
-            "gradient_l2",
-        ]
-        for field in required_fields:
-            assert field in metrics
+    def test_requires_session(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            sb.client.cookies.clear()
+            assert sb.client.get("/v1/console/learning/metrics/current").status_code == 401
+            assert sb.client.get("/v1/console/learning/metrics/history").status_code == 401
 
-    @pytest.mark.asyncio
-    async def test_history_endpoint_1h_window(self, client):
-        """Test history endpoint with 1h window."""
-        response = client.get(
-            "/v1/console/learning/metrics/history?window=1h",
-            headers={"Authorization": "Bearer valid_token"},
-        )
 
-        assert response.status_code == 200
-        data = response.json()
+class TestExport:
+    def test_export_json_is_the_data_not_a_link(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            eid = write_outcome(sb, task_id="t1", success=True)
+            r = sb.client.post(
+                "/v1/console/learning/metrics/export", json={"format": "json", "window": "1h"},
+                headers=sb.csrf_headers,
+            )
+            assert r.status_code == 200, r.text
+            assert r.headers["content-type"].startswith("application/x-ndjson")
+            assert r.headers["x-rows-exported"] == "1"
+            assert "attachment" in r.headers["content-disposition"]
+            row = json.loads(r.text.strip())
+            assert row["event_id"] == eid and row["event_type"] == "outcome" and row["audit_ref"]
+            assert "download_url" not in r.text
 
-        assert data["window"] == "1h"
-        assert "points" in data
-        assert "sample_count" in data
-        assert "start" in data
-        assert "end" in data
+    def test_export_csv(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            write_outcome(sb, task_id="t1", success=True)
+            r = sb.client.post(
+                "/v1/console/learning/metrics/export", json={"format": "csv", "window": "24h"},
+                headers=sb.csrf_headers,
+            )
+            assert r.status_code == 200, r.text
+            lines = r.text.strip().splitlines()
+            assert lines[0].split(",") == ["event_id", "event_type", "skill_id", "timestamp", "audit_ref", "lom"]
+            assert len(lines) == 2
 
-    @pytest.mark.asyncio
-    async def test_history_endpoint_invalid_window(self, client):
-        """Test history endpoint rejects invalid window."""
-        response = client.get(
-            "/v1/console/learning/metrics/history?window=invalid",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_export_endpoint_json(self, client):
-        """Test exporting metrics as JSON."""
-        response = client.post(
-            "/v1/console/learning/metrics/export",
-            json={
-                "format": "json",
-                "window": "1h",
-            },
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "download_url" in data
-        assert "expires_at" in data
-        assert data["format"] == "json"
-
-    @pytest.mark.asyncio
-    async def test_export_endpoint_csv(self, client):
-        """Test exporting metrics as CSV."""
-        response = client.post(
-            "/v1/console/learning/metrics/export",
-            json={
-                "format": "csv",
-                "window": "24h",
-            },
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        assert data["format"] == "csv"
-
-    @pytest.mark.asyncio
-    async def test_export_invalid_format(self, client):
-        """Test export rejects invalid format."""
-        response = client.post(
-            "/v1/console/learning/metrics/export",
-            json={
-                "format": "xml",
-                "window": "1h",
-            },
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 400
+    def test_export_rejects_bad_input(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            h = sb.csrf_headers
+            assert sb.client.post("/v1/console/learning/metrics/export", json={"format": "xml", "window": "1h"}, headers=h).status_code == 400
+            assert sb.client.post("/v1/console/learning/metrics/export", json={"format": "json", "window": "7d"}, headers=h).status_code == 400
+            assert sb.client.post("/v1/console/learning/metrics/export", json={"format": "json", "window": "custom"}, headers=h).status_code == 400
+            assert sb.client.post("/v1/console/learning/metrics/export", json={"format": "json", "window": "1h"}).status_code == 403  # no CSRF
 
 
 class TestWebSocketMetricsStream:
-    """Tests for WebSocket metrics streaming"""
+    def test_websocket_without_session_is_closed_1008(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            sb.client.cookies.clear()
+            with pytest.raises(WebSocketDisconnect) as exc:
+                with sb.client.websocket_connect("/v1/console/learning/metrics/stream"):
+                    pass
+            assert exc.value.code == 1008
 
-    @pytest.mark.asyncio
-    async def test_websocket_connect_requires_tenant(self, client):
-        """Test WebSocket connection requires tenant_id."""
-        # This would normally test WebSocket connection
-        # Actual implementation depends on test client capabilities
-        pass
-
-    @pytest.mark.asyncio
-    async def test_websocket_receives_metrics(self, client):
-        """Test WebSocket receives metrics updates."""
-        # Real implementation would use websocket client
-        pass
-
-    @pytest.mark.asyncio
-    async def test_websocket_fallback_to_polling(self, client):
-        """Test client can fallback to polling if WebSocket fails."""
-        # This is a behavior test, not an endpoint test
-        pass
+    def test_websocket_ignores_tenant_query_param_and_uses_session_tenant(self, tmp_path: Path):
+        with console_client(tmp_path) as sb:
+            write_outcome(sb, task_id="foreign", success=True, tenant_id="acme-corp")
+            write_outcome(sb, task_id="mine", success=True)
+            with sb.client.websocket_connect(
+                "/v1/console/learning/metrics/stream?tenant_id=acme-corp",
+                cookies={COOKIE_NAME: sb.sid},
+            ) as ws:
+                frame = ws.receive_json()
+                assert frame["type"] == "metrics"
+                assert frame["data"]["tenant_id"] == "_default"
+                assert frame["data"]["event_counts"]["outcome"] == 1
+                ws.send_text("ping")
+                assert ws.receive_text() == "pong"

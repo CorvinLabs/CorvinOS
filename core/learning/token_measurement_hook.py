@@ -205,7 +205,8 @@ def _autoinit_token_hook() -> Optional[TokenMeasurementHook]:
             from forge.paths import tenant_home  # noqa: PLC0415
             tenant_dir = tenant_home(tenant_id)
         except Exception:  # noqa: BLE001
-            tenant_dir = Path.home() / ".corvin" / "tenants" / tenant_id
+            from core.paths.tenant import tenant_home as _core_tenant_home  # noqa: PLC0415
+            tenant_dir = _core_tenant_home(tenant_id)
 
         emitter = EventEmitter(_LearningEventStore(Path(tenant_dir)))
         _hook = TokenMeasurementHook(TokenMetricsStore(emitter, db=TokenMetricsDB()), emitter)

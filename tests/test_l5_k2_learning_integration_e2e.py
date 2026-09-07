@@ -8,6 +8,7 @@ This test proves that:
 4. Learning loop respects operator approvals
 """
 
+import hashlib
 import sys
 import os
 from datetime import datetime
@@ -56,8 +57,13 @@ def test_e2e_learning_loop_with_operator_approval():
 
     # Setup
     stability_gate = FeedbackStabilityGate(ema_alpha=0.3, drift_threshold=0.15, drift_window=3)
-    approval_gate = OperatorApprovalGate(tenant_id="test_tenant", auto_approval_confidence_threshold=0.8)
     audit_backend = AuditBackendMock()
+    # Fail-closed (constraint C1): the gate refuses to exist without an audit backend
+    approval_gate = OperatorApprovalGate(
+        tenant_id="test_tenant",
+        auto_approval_confidence_threshold=0.8,
+        audit_backend=audit_backend,  # fail-closed: required
+    )
 
     # === PHASE 1: Learning Feedback Loop ===
     print("\n[PHASE 1] Learning Feedback Loop")
@@ -87,9 +93,8 @@ def test_e2e_learning_loop_with_operator_approval():
             record, auto_approved = approval_gate.request_approval(
                 drift_alert,
                 confidence=smoothed.confidence,
-                prev_config_hash="old_config",
-                next_config_hash="new_config",
-                audit_backend=audit_backend,
+                prev_config_hash=hashlib.sha256(b"old_config").hexdigest(),  # gate validates SHA-256 hex
+                next_config_hash=hashlib.sha256(b"new_config").hexdigest(),
             )
 
             approval_records.append((skill_id, metric_name, record, auto_approved))
@@ -117,9 +122,7 @@ def test_e2e_learning_loop_with_operator_approval():
         print(f"    Config: {record.prev_config_hash} → {record.next_config_hash}")
 
         # Operator approves
-        success = approval_gate.operator_approve(
-            record.approval_id, "operator:alice", audit_backend=audit_backend
-        )
+        success = approval_gate.operator_approve(record.approval_id, "operator:alice")
 
         if success:
             print(f"    ✅ Approved by operator:alice")
@@ -185,8 +188,11 @@ def test_e2e_operator_revoke_scenario():
     print("=" * 70)
 
     stability_gate = FeedbackStabilityGate(drift_threshold=0.15)
-    approval_gate = OperatorApprovalGate(auto_approval_confidence_threshold=0.95)  # High threshold for demo
     audit_backend = AuditBackendMock()
+    approval_gate = OperatorApprovalGate(
+        auto_approval_confidence_threshold=0.95,  # High threshold for demo
+        audit_backend=audit_backend,  # fail-closed: required
+    )
 
     # Skill generates drift
     drift = DriftAlert(
@@ -202,16 +208,15 @@ def test_e2e_operator_revoke_scenario():
     record, auto = approval_gate.request_approval(
         drift,
         confidence=0.6,  # Low confidence, queue for operator
-        prev_config_hash="config_v1",
-        next_config_hash="config_v2_candidate",
-        audit_backend=audit_backend,
+        prev_config_hash=hashlib.sha256(b"config_v1").hexdigest(),  # gate validates SHA-256 hex
+        next_config_hash=hashlib.sha256(b"config_v2_candidate").hexdigest(),
     )
 
     print(f"\n[Step 1] Drift detected: magnitude={drift.smoothed_delta:.2f}")
     print(f"  → Queued for operator (confidence={0.6})")
 
     # Operator approves
-    approval_gate.operator_approve(record.approval_id, "operator:alice", audit_backend=audit_backend)
+    approval_gate.operator_approve(record.approval_id, "operator:alice")
     print(f"\n[Step 2] Operator alice approves")
 
     status_after_approve = approval_gate.get_approval_status(record.approval_id)
@@ -223,7 +228,6 @@ def test_e2e_operator_revoke_scenario():
         record.approval_id,
         "operator:alice",
         reason="Caused latency regression: p99 went from 100ms → 350ms",
-        audit_backend=audit_backend,
     )
 
     print(f"\n[Step 3] Operator alice revokes (30 min later)")

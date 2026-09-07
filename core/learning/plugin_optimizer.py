@@ -33,7 +33,12 @@ class PluginOrchestrator(LearningLoop):
     def compute_gradients(self, loss: float, prev_loss: float) -> Dict[str, float]:
         """Gradient based on quality contribution"""
         delta = loss - prev_loss
-        return {'plugin_priority': delta * 0.01}
+        gradients = {'plugin_priority': delta * 0.01}
+        # Without this the loop's gradient history stayed empty forever, so
+        # ``check_convergence`` (avg gradient magnitude) read ``inf`` and the
+        # plugins loop could never converge (F-L11).
+        self.record_gradients(gradients)
+        return gradients
 
     def apply_gradients(self, gradients: Dict[str, float], learning_rate: float = None, damping: float = None):
         """Update plugin weights"""

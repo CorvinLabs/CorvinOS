@@ -14,6 +14,7 @@ import json
 import math
 from datetime import datetime, timedelta
 from pathlib import Path
+from core.paths.tenant import corvin_home
 from typing import List, Dict, Any
 
 
@@ -25,10 +26,10 @@ class LiveCollectionDashboard:
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
         self.live_measurements_dir = (
-            Path.home() / ".corvin" / "tenants" / tenant_id / "experiments" / "live_measurements"
+            corvin_home() / "tenants" / tenant_id / "experiments" / "live_measurements"
         )
         self.live_events_dir = (
-            Path.home() / ".corvin" / "tenants" / tenant_id / "experiments" / "live_events"
+            corvin_home() / "tenants" / tenant_id / "experiments" / "live_events"
         )
 
     def load_recent_measurements(self, hours: int = 1) -> List[Dict[str, Any]]:
@@ -199,7 +200,7 @@ class LiveCollectionDashboard:
 
         if output_file is None:
             output_file = (
-                Path.home() / ".corvin" / "tenants" / self.tenant_id / "experiments" /
+                corvin_home() / "tenants" / self.tenant_id / "experiments" /
                 f"all_measurements_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
             )
         else:

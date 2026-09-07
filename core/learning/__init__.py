@@ -26,7 +26,6 @@ from .metrics import (
 from .attention_budget import AttentionBudget, AttentionTracker, AttentionUsage, BudgetStatus, BudgetStats
 from .active_loop import ActiveLearningLoop
 from .integration import LearningIntegration
-from .audit import AuditTrail
 from .migration import MigrationPlanner
 from .anomaly_detector import AnomalyDetector, AnomalyAlert
 # Phase 4: Learned Classification for Context Engineering (ADR-0393)
@@ -61,7 +60,6 @@ __all__ = [
     "ExecutionMetricsRecorder",
     "ActiveLearningLoop",
     "LearningIntegration",
-    "AuditTrail",
     "MigrationPlanner",
     "AnomalyDetector",
     "AnomalyAlert",

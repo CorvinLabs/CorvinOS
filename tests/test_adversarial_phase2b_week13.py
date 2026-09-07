@@ -13,7 +13,8 @@ Week 13: Phase 2B Adversarial Review (ADR-0615)
 """
 
 from core.learning.gradient_backprop import LossBackpropagator, CorrelationFilter, CouplingOscillationDetector
-from core.learning.unified_loss import MockAuditBackend, UnifiedLossSnapshot
+from core.learning.unified_loss import UnifiedLossSnapshot
+from tests.learning.mock_audit_backend import MockAuditBackend
 from datetime import datetime
 import numpy as np
 

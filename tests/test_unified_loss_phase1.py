@@ -15,9 +15,8 @@ import numpy as np
 from core.learning.unified_loss import (
     UnifiedLossOptimizer,
     UnifiedLossSnapshot,
-    MockAuditBackend,
 )
-from core.learning.loss_backprop import LossBackpropagator
+from tests.learning.mock_audit_backend import MockAuditBackend
 
 
 @pytest.fixture
@@ -215,94 +214,6 @@ def test_unified_loss_nan_handling(optimizer, audit_backend):
 # Gradient Tests (5 tests)
 # ============================================================================
 
-def test_gradient_routing_sign_wrong_outcome(optimizer, audit_backend):
-    """If routing was wrong, grad_routing should be positive."""
-    batch = [{'confidence_score': 0.95} for _ in range(100)]
-    outcomes = [{'engine_correct': False, 'correct': False} for _ in range(100)]
-    feedback = [None for _ in range(100)]
-
-    snapshot = optimizer.compute_batch_loss(batch, outcomes, feedback)
-    backprop = LossBackpropagator(audit_backend)
-    gradients = backprop.compute_gradients(snapshot, batch, outcomes, feedback)
-
-    # Routing was wrong; should penalize
-    assert gradients['routing'] > 0
-
-
-def test_gradient_confidence_sign_calibration_error(optimizer, audit_backend):
-    """If confidence was overconfident, grad_confidence should be positive."""
-    batch = [{'confidence_score': 0.99} for _ in range(100)]
-    outcomes = [{'correct': False} for _ in range(100)]
-    feedback = [None for _ in range(100)]
-
-    snapshot = optimizer.compute_batch_loss(batch, outcomes, feedback)
-    backprop = LossBackpropagator(audit_backend)
-    gradients = backprop.compute_gradients(snapshot, batch, outcomes, feedback)
-
-    # Confidence was overconfident; should penalize
-    assert gradients['confidence'] > 0
-
-
-def test_gradient_feedback_sign_low_arrival(optimizer, audit_backend):
-    """If feedback arrival was low, grad_feedback should be negative."""
-    batch = [{'tokens_used': 500.0, 'budget_allocated': 1000.0, 'latency_seconds': 2.0} for _ in range(100)]
-    outcomes = [{'correct': True} for _ in range(100)]
-    feedback = [None for _ in range(100)]  # 0% arrival
-
-    snapshot = optimizer.compute_batch_loss(batch, outcomes, feedback)
-    backprop = LossBackpropagator(audit_backend)
-    gradients = backprop.compute_gradients(snapshot, batch, outcomes, feedback)
-
-    # No feedback; should improve
-    assert gradients['feedback'] < 0
-
-
-def test_gradient_clipping(optimizer, audit_backend):
-    """Gradients should be clipped to [-1, +1]."""
-    batch = []
-    for i in range(100):
-        batch.append({
-            'confidence_score': np.random.uniform(0, 1),
-            'tokens_used': np.random.uniform(500, 2000),
-            'budget_allocated': 1000.0,
-            'latency_seconds': np.random.exponential(scale=10.0),  # High variance
-            'task_type': 'type_1',
-            'routed_engine': 'opus',
-        })
-    outcomes = [{'correct': i % 2 == 0, 'engine_correct': i % 3 == 0} for i in range(100)]
-    feedback = [None for _ in range(100)]
-
-    snapshot = optimizer.compute_batch_loss(batch, outcomes, feedback)
-    backprop = LossBackpropagator(audit_backend)
-    gradients = backprop.compute_gradients(snapshot, batch, outcomes, feedback)
-
-    for key, grad in gradients.items():
-        assert -1.0 <= grad <= 1.0, f"{key} gradient {grad} exceeds clipping bounds"
-
-
-def test_gradient_dag_edges_recorded(optimizer, audit_backend):
-    """Audit event should record DAG edges."""
-    batch = [{'confidence_score': 0.5} for _ in range(10)]
-    outcomes = [{'correct': True, 'engine_correct': True} for _ in range(10)]
-    feedback = [{'timestamp': datetime.now().isoformat()} for _ in range(10)]
-
-    snapshot = optimizer.compute_batch_loss(batch, outcomes, feedback)
-    backprop = LossBackpropagator(audit_backend)
-    gradients = backprop.compute_gradients(snapshot, batch, outcomes, feedback)
-
-    # Check audit events
-    events = audit_backend.read_events(tenant_id='_default')
-    gradient_events = [e for e in events if e['event_type'] == 'loss_gradient_computed']
-
-    assert len(gradient_events) > 0
-    last_event = gradient_events[-1]
-    assert 'dag_edges' in last_event
-
-
-# ============================================================================
-# Audit Trail Tests (5 tests)
-# ============================================================================
-
 def test_audit_event_written_on_loss_compute(optimizer, audit_backend, synthetic_batch, synthetic_outcomes, synthetic_feedback):
     """Every loss computation should write audit event."""
     optimizer.compute_batch_loss(synthetic_batch, synthetic_outcomes, synthetic_feedback)
@@ -359,37 +270,6 @@ def test_audit_weight_update_recorded(optimizer, audit_backend):
     assert len(weight_events) == 1
     assert weight_events[0]['new_weights'] == new_weights
 
-
-def test_audit_divergence_detected_event(optimizer, audit_backend):
-    """If gradients diverge, alert should be emitted."""
-    backprop = LossBackpropagator(audit_backend)
-
-    # Create extreme batch to trigger divergence detection
-    batch = [
-        {
-            'confidence_score': np.random.uniform(0, 1),
-            'tokens_used': np.random.uniform(100, 5000),
-            'budget_allocated': 500.0,  # Very tight budget
-            'latency_seconds': np.random.exponential(scale=20.0),  # High variance
-            'task_type': 'type_1',
-            'routed_engine': 'opus',
-        }
-        for _ in range(100)
-    ]
-    outcomes = [{'correct': i % 2 == 0, 'engine_correct': i % 4 == 0} for i in range(100)]
-    feedback = [None for _ in range(100)]
-
-    snapshot = optimizer.compute_batch_loss(batch, outcomes, feedback)
-    backprop.compute_gradients(snapshot, batch, outcomes, feedback)
-
-    # Check for divergence alert (might not always trigger; just check it's possible)
-    events = audit_backend.read_events(tenant_id='_default')
-    # (Divergence detection is contingent on extreme values)
-
-
-# ============================================================================
-# Fail-Closed Tests (2 tests)
-# ============================================================================
 
 def test_fail_closed_audit_abort(optimizer, audit_backend, synthetic_batch, synthetic_outcomes, synthetic_feedback):
     """If audit fails, loss computation should abort."""
@@ -466,3 +346,7 @@ def test_weights_sum_to_one(optimizer):
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+# NOTE (2026-09-07): the five flat-dict gradient tests that lived here tested
+# core/learning/loss_backprop.py (plus one vacuous divergence test), a duplicate of gradient_backprop.py that was
+# deleted; the DAG backpropagator has its own suite (tests/test_gradient_backprop_week11.py).

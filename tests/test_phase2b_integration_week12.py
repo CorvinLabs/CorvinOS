@@ -10,7 +10,8 @@ Week 12: Phase 2B Integration Tests (ADR-0615/0616)
 6. End-to-end: outcome → loss → gradients → weights update
 """
 
-from core.learning.unified_loss import UnifiedLossOptimizer, MockAuditBackend, UnifiedLossSnapshot
+from core.learning.unified_loss import UnifiedLossOptimizer, UnifiedLossSnapshot
+from tests.learning.mock_audit_backend import MockAuditBackend
 from core.learning.gradient_backprop import LossBackpropagator, CorrelationFilter, CouplingOscillationDetector
 from datetime import datetime
 import numpy as np

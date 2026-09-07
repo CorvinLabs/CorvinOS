@@ -1,37 +1,53 @@
-"""E2E tests for Decision History (ADR-0316)."""
+"""E2E tests for Decision History (ADR-0316) through the persisted event store.
+
+A ``DecisionRecord`` is emitted as a ``decision.record`` learning event via the
+tenant-bound ``event_persistence.EventStore`` (audit-chain FIRST, then the
+date-partitioned disk record) and read back with ``read_decisions``. The
+previous version of this file drove an async ``EventEmitter(tenant_home,
+tenant_id)`` with ``emit_decision``/``flush``/``store`` that no module defines.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
-import asyncio
-from datetime import datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
-from core.learning.decision_history import DecisionRecorder
-from core.learning.event_emitter import EventEmitter
-from core.learning.event_schema import LearningEventType
+from core.learning.decision_history import DecisionRecord, DecisionRecorder
+from core.learning.event_persistence import EventStore
+from core.learning.event_schema import LearningEvent, LearningEventType
+
+TENANT = "_default"
+
+
+def _decision_event(decision: DecisionRecord) -> LearningEvent:
+    """The ONE ``decision.record`` learning event for a recorded decision."""
+    return LearningEvent(
+        event_type=LearningEventType.DECISION_RECORD,
+        tenant_id=decision.tenant_id,
+        instance_id="test-instance",
+        skill_name=None,
+        session_id=decision.session_id,
+        timestamp_utc=datetime.now(timezone.utc),
+        payload=decision.to_payload(),
+    )
 
 
 @pytest.fixture
-def temp_tenant_home():
-    """Create a temporary tenant home directory."""
-    with TemporaryDirectory() as tmpdir:
-        tenant_home = Path(tmpdir) / "tenants" / "_default"
-        tenant_home.mkdir(parents=True, exist_ok=True)
-        yield tenant_home
+def store() -> EventStore:
+    # CORVIN_HOME is a per-test temp root (tests/conftest.py), so this is an
+    # isolated tenant store with its own audit chain.
+    return EventStore(TENANT)
 
 
 class TestDecisionE2E:
     """End-to-end tests for decision history."""
 
     @pytest.mark.asyncio
-    async def test_record_and_emit_decision(self, temp_tenant_home):
-        """Record a decision and emit as event."""
-        recorder = DecisionRecorder("_default")
-        emitter = EventEmitter(temp_tenant_home, "_default")
+    async def test_record_and_emit_decision(self, store):
+        """Record a decision, persist it as an event, read it back."""
+        recorder = DecisionRecorder(TENANT)
 
-        await emitter.start()
-
-        # Record decision
         decision = recorder.create_decision(
             choice_type="skill_selection",
             candidates=["ranking", "summarizer", "code_review"],
@@ -41,75 +57,47 @@ class TestDecisionE2E:
             reasoning="High relevance + low variance",
         )
 
-        # Emit as event
-        await emitter.emit_decision(
-            decision_id=decision.decision_id,
-            choice_type=decision.choice_type,
-            candidates=decision.candidates,
-            chosen=decision.chosen,
-            session_id=decision.session_id,
-            confidence_score=decision.confidence_score,
-            reasoning=decision.reasoning,
-        )
+        audit_ref = await store.write_event(_decision_event(decision), TENANT)
+        assert audit_ref  # chain record committed BEFORE the disk record
 
-        await emitter.flush()
-        await emitter.stop()
-
-        # Read back
-        decisions = await emitter.store.read_decisions(tenant_id="_default", session_id="session-123")
+        decisions = await store.read_decisions(tenant_id=TENANT, session_id="session-123")
         assert len(decisions) == 1
+        assert decisions[0]["decision_id"] == decision.decision_id
         assert decisions[0]["chosen"] == "ranking"
         assert decisions[0]["confidence_score"] == 0.85
 
     @pytest.mark.asyncio
-    async def test_multiple_decisions_filtering(self, temp_tenant_home):
-        """Emit multiple decisions and filter by choice_type."""
-        recorder = DecisionRecorder("_default")
-        emitter = EventEmitter(temp_tenant_home, "_default")
+    async def test_multiple_decisions_filtering(self, store):
+        """Persist multiple decisions and filter by choice_type / session."""
+        recorder = DecisionRecorder(TENANT)
 
-        await emitter.start()
-
-        # Record multiple decisions
         d1 = recorder.create_decision(
-            choice_type="skill_selection",
-            candidates=["a", "b"],
-            chosen="a",
-            session_id="s1",
+            choice_type="skill_selection", candidates=["a", "b"], chosen="a", session_id="s1",
         )
-
         d2 = recorder.create_decision(
-            choice_type="model_choice",
-            candidates=["gpt-4", "claude"],
-            chosen="claude",
-            session_id="s1",
+            choice_type="model_choice", candidates=["gpt-4", "claude"], chosen="claude", session_id="s1",
         )
-
         d3 = recorder.create_decision(
-            choice_type="skill_selection",
-            candidates=["c", "d"],
-            chosen="c",
-            session_id="s2",
+            choice_type="skill_selection", candidates=["c", "d"], chosen="c", session_id="s2",
         )
 
-        # Emit all
-        for d in [d1, d2, d3]:
-            await emitter.emit_decision(
-                decision_id=d.decision_id,
-                choice_type=d.choice_type,
-                candidates=d.candidates,
-                chosen=d.chosen,
-                session_id=d.session_id,
-            )
+        for d in (d1, d2, d3):
+            await store.write_event(_decision_event(d), TENANT)
 
-        await emitter.flush()
-        await emitter.stop()
+        skill_decisions = await store.read_decisions(tenant_id=TENANT, choice_type="skill_selection")
+        assert {d["decision_id"] for d in skill_decisions} == {d1.decision_id, d3.decision_id}
 
-        # Filter by skill_selection
-        skill_decisions = await emitter.store.read_decisions(
-            tenant_id="_default", choice_type="skill_selection"
+        s1_decisions = await store.read_decisions(tenant_id=TENANT, session_id="s1")
+        assert {d["decision_id"] for d in s1_decisions} == {d1.decision_id, d2.decision_id}
+
+    @pytest.mark.asyncio
+    async def test_tenant_bound_store_rejects_foreign_tenant(self, store):
+        """A decision from another tenant never lands in this tenant's store (GDPR Art. 32)."""
+        foreign = DecisionRecorder("tenant-b").create_decision(
+            choice_type="skill_selection", candidates=["a"], chosen="a", session_id="s9",
         )
-        assert len(skill_decisions) == 2
-
-        # Filter by session
-        s1_decisions = await emitter.store.read_decisions(tenant_id="_default", session_id="s1")
-        assert len(s1_decisions) == 2
+        with pytest.raises(ValueError):
+            await store.write_event(_decision_event(foreign), "tenant-b")
+        with pytest.raises(ValueError):
+            await store.write_event(_decision_event(foreign), TENANT)
+        assert await store.read_decisions(tenant_id=TENANT, session_id="s9") == []

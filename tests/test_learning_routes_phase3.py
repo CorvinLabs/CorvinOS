@@ -1,525 +1,223 @@
-"""Tests for Learning Routes Phase 3: Operator Console Interface (ADR-0629)
+"""Learning console routes (ADR-0629 operator interface) — REAL boundary, REAL data.
 
-Tests cover:
-- REST endpoints (GET: status, metrics, checkpoint, audit; POST: override, rollback)
-- RBAC (viewer vs admin roles)
-- Tenant isolation
-- Audit trail logging
-- Request validation
-- Error handling
+Drives ``/v1/console/learning/{status,metrics,checkpoint,audit,override,rollback,
+grade}`` and the rating routes through the real console router with a real
+session cookie (``tests/learning/console_client.py``) and asserts against what
+the audit-first ``EventStore`` and the core chain actually contain.
+
+Replaces the former file, whose 36 tests asserted the hard-coded placeholder
+answers (``alpha_core == 0.1``, ``convergence_percent == 87.5``, ``override →
+"success"``) through a ``client`` fixture that did not exist (adversarial
+review F-L2 + stale-test list).
 """
+from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-from httpx import AsyncClient
 
-# Note: Actual imports depend on project structure
-# Adjust paths as needed based on your layout
+from tests.learning.console_client import boot_learning_registry, console_client, write_outcome
 
 
-class TestLearningStatusEndpoint:
-    """Tests for GET /v1/console/learning/status"""
+# ── status ───────────────────────────────────────────────────────────────────
 
-    @pytest.mark.asyncio
-    async def test_get_status_success(self, client: TestClient):
-        """Test successful status fetch."""
-        response = client.get(
-            "/v1/console/learning/status",
-            headers={"Authorization": "Bearer valid_token"},
+
+def test_status_requires_session(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        sb.client.cookies.clear()
+        assert sb.client.get("/v1/console/learning/status").status_code == 401
+
+
+def test_status_is_computed_from_the_event_store(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        r = sb.client.get("/v1/console/learning/status")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["status"] == "no_data"
+        assert body["source"] == "event_store"
+        assert body["recent_outcomes"] == {"window": 50, "total": 0, "successes": 0, "success_rate": None}
+        assert body["outcome_loss"] is None
+        for key in ("alpha_core", "convergence_percent", "loss_core"):
+            assert key not in body, f"placeholder field {key} is back"
+
+        write_outcome(sb, task_id="t1", success=True)
+        write_outcome(sb, task_id="t2", success=True)
+        write_outcome(sb, task_id="t3", success=False)
+
+        body = sb.client.get("/v1/console/learning/status").json()
+        assert body["status"] == "collecting"
+        assert body["event_counts"]["outcome"] == 3
+        assert body["recent_outcomes"]["total"] == 3
+        assert body["recent_outcomes"]["successes"] == 2
+        assert body["outcome_loss"] == pytest.approx(1 - 2 / 3)
+        assert body["last_outcome_at"] is not None
+
+
+def test_status_is_tenant_isolated(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        # an outcome of ANOTHER tenant, written under that tenant's home
+        write_outcome(sb, task_id="foreign", success=True, tenant_id="acme-corp")
+        body = sb.client.get("/v1/console/learning/status").json()
+        assert body["tenant_id"] == "_default"
+        assert body["event_counts"]["outcome"] == 0
+
+
+# ── metrics ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("window,seconds", [("1h", 300), ("6h", 1800), ("24h", 7200)])
+def test_metrics_series_is_bucketed_over_the_window(tmp_path: Path, window: str, seconds: int):
+    with console_client(tmp_path) as sb:
+        write_outcome(sb, task_id="t1", success=True)
+        r = sb.client.get(f"/v1/console/learning/metrics?window={window}")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["window"] == window
+        assert body["bucket_seconds"] == seconds
+        assert len(body["points"]) == 12
+        assert body["sample_count"] == 1
+        assert sum(p["outcomes"] for p in body["points"]) == 1
+        assert sum(p["successes"] for p in body["points"]) == 1
+        assert body["points"][-1]["success_rate"] == 1.0
+
+
+def test_metrics_invalid_window_is_400(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        assert sb.client.get("/v1/console/learning/metrics?window=7d").status_code == 400
+
+
+# ── checkpoint / audit ───────────────────────────────────────────────────────
+
+
+def test_checkpoints_are_the_real_skill_config_versions(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        r = sb.client.get("/v1/console/learning/checkpoint")
+        assert r.status_code == 200, r.text
+        assert r.json() == {"checkpoints": []}  # nothing learned yet → no versions, not a placeholder
+
+        from core.skills.os_skills.skill_adapter import SkillAdapter
+
+        adapter = SkillAdapter("os.delegation_router", sb.tenant_id)
+        adapter.state.epoch = 51
+        adapter.state.baseline_success_rate = 0.0
+        adapter._persist()
+        emitter = boot_learning_registry(sb)
+        from core.learning.outcome_sink import emit_task_outcome
+
+        for i in range(10):
+            assert emit_task_outcome(tenant_id=sb.tenant_id, task_id=f"t{i}", status="completed", exit_code=0,
+                                     duration_ms=10, engine="native", task_type="chat", emitter=emitter)
+        emitter.stop()  # flush the worker so the optimizer epoch sees all ten
+        r = sb.client.post(
+            "/v1/console/learning/feedback",
+            json={"task_id": "t9", "outcome_quality": "excellent", "would_repeat": True},
+            headers=sb.csrf_headers,
         )
+        assert r.status_code == 200, r.text
+        assert r.json()["current_version"] == "v1"
 
-        assert response.status_code == 200
-        data = response.json()
-
-        # Verify response schema
-        assert "timestamp" in data
-        assert "alpha_core" in data
-        assert "alpha_infra" in data
-        assert "damping_core" in data
-        assert "damping_infra" in data
-        assert "loss_total" in data
-        assert "loss_core" in data
-        assert "loss_infra" in data
-        assert "convergence_percent" in data
-        assert "status" in data
-
-        # Verify data types and ranges
-        assert isinstance(data["alpha_core"], (int, float))
-        assert 0 <= data["alpha_core"] <= 1
-        assert data["convergence_percent"] >= 0
-
-    @pytest.mark.asyncio
-    async def test_get_status_no_auth(self, client: TestClient):
-        """Test status endpoint requires authentication."""
-        response = client.get("/v1/console/learning/status")
-        assert response.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_get_status_tenant_isolation(self, client: TestClient):
-        """Test status is tenant-scoped (no cross-tenant leakage)."""
-        # Get status for tenant A
-        response_a = client.get(
-            "/v1/console/learning/status",
-            headers={"X-Tenant-ID": "tenant_a"},
-        )
-
-        # Get status for tenant B
-        response_b = client.get(
-            "/v1/console/learning/status",
-            headers={"X-Tenant-ID": "tenant_b"},
-        )
-
-        # Both should succeed but return different data
-        assert response_a.status_code == 200
-        assert response_b.status_code == 200
+        body = sb.client.get("/v1/console/learning/checkpoint").json()
+        assert [c["checkpoint_id"] for c in body["checkpoints"]] == ["v1"]
+        assert body["checkpoints"][0]["skill_id"] == "os.delegation_router"
+        assert "confidence_threshold" in body["checkpoints"][0]["config"]
 
 
-class TestLearningMetricsEndpoint:
-    """Tests for GET /v1/console/learning/metrics"""
+def test_audit_trail_reads_learning_records_from_the_core_chain(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        assert sb.client.get("/v1/console/learning/audit").json()["count"] == 0
+        event_id = write_outcome(sb, task_id="t1", success=True)
+        on_disk = [e for e in sb.events_on_disk() if e["event_id"] == event_id]
+        assert on_disk and on_disk[0]["audit_ref"]
 
-    @pytest.mark.asyncio
-    async def test_get_metrics_1h(self, client: TestClient):
-        """Test metrics with 1h window."""
-        response = client.get(
-            "/v1/console/learning/metrics?window=1h",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        assert data["window"] == "1h"
-        assert "points" in data
-        assert isinstance(data["points"], list)
-        assert "sample_count" in data
-
-    @pytest.mark.asyncio
-    async def test_get_metrics_6h(self, client: TestClient):
-        """Test metrics with 6h window."""
-        response = client.get(
-            "/v1/console/learning/metrics?window=6h",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        assert response.json()["window"] == "6h"
-
-    @pytest.mark.asyncio
-    async def test_get_metrics_24h(self, client: TestClient):
-        """Test metrics with 24h window."""
-        response = client.get(
-            "/v1/console/learning/metrics?window=24h",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        assert response.json()["window"] == "24h"
-
-    @pytest.mark.asyncio
-    async def test_get_metrics_invalid_window(self, client: TestClient):
-        """Test invalid window is rejected."""
-        response = client.get(
-            "/v1/console/learning/metrics?window=invalid",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_get_metrics_point_schema(self, client: TestClient):
-        """Test metrics points have correct schema."""
-        response = client.get(
-            "/v1/console/learning/metrics?window=1h",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        # If points exist, verify schema
-        if data["points"]:
-            point = data["points"][0]
-            required_fields = [
-                "timestamp",
-                "loss_total",
-                "loss_core",
-                "loss_infra",
-                "gradient_l2",
-                "alpha_core",
-                "damping_core",
-            ]
-            for field in required_fields:
-                assert field in point
+        r = sb.client.get("/v1/console/learning/audit?limit=10")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["count"] == 1
+        rec = body["events"][0]
+        assert rec["event_type"] == "learning.outcome"
+        assert rec["audit_ref"] == on_disk[0]["audit_ref"]
+        assert rec["skill_id"] == "os.delegation_router"
+        assert rec["hash"]
+        assert body["chain_path"] == str(sb.chain)
 
 
-class TestCheckpointEndpoint:
-    """Tests for GET /v1/console/learning/checkpoint"""
-
-    @pytest.mark.asyncio
-    async def test_get_checkpoints_success(self, client: TestClient):
-        """Test successful checkpoint fetch."""
-        response = client.get(
-            "/v1/console/learning/checkpoint",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "checkpoints" in data
-        assert isinstance(data["checkpoints"], list)
-
-    @pytest.mark.asyncio
-    async def test_get_checkpoints_schema(self, client: TestClient):
-        """Test checkpoint schema."""
-        response = client.get(
-            "/v1/console/learning/checkpoint",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        if data["checkpoints"]:
-            cp = data["checkpoints"][0]
-            assert "checkpoint_id" in cp
-            assert "timestamp" in cp
-            assert "loss_at_checkpoint" in cp
+# ── override / rollback: honest 501, CSRF-gated ──────────────────────────────
 
 
-class TestAuditTrailEndpoint:
-    """Tests for GET /v1/console/learning/audit"""
-
-    @pytest.mark.asyncio
-    async def test_get_audit_trail(self, client: TestClient):
-        """Test audit trail fetch."""
-        response = client.get(
-            "/v1/console/learning/audit",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "events" in data
-        assert "count" in data
-        assert isinstance(data["events"], list)
-
-    @pytest.mark.asyncio
-    async def test_get_audit_trail_limit(self, client: TestClient):
-        """Test audit trail respects limit parameter."""
-        response = client.get(
-            "/v1/console/learning/audit?limit=10",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        assert len(data["events"]) <= 10
-
-    @pytest.mark.asyncio
-    async def test_get_audit_trail_event_schema(self, client: TestClient):
-        """Test audit event schema."""
-        response = client.get(
-            "/v1/console/learning/audit?limit=1",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        if data["events"]:
-            event = data["events"][0]
-            required_fields = [
-                "event_id",
-                "event_type",
-                "loop_id",
-                "param",
-                "old_value",
-                "new_value",
-                "reason",
-                "operator_id",
-                "timestamp",
-            ]
-            for field in required_fields:
-                assert field in event
-
-
-class TestOverrideEndpoint:
-    """Tests for POST /v1/console/learning/override (admin only)"""
-
-    @pytest.mark.asyncio
-    async def test_override_requires_auth(self, client: TestClient):
-        """Test override endpoint requires authentication."""
-        response = client.post(
+def test_override_and_rollback_are_501_not_fake_success(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        r = sb.client.post(
             "/v1/console/learning/override",
-            json={"loop": "core", "param": "alpha", "new_value": 0.15, "reason": "test"},
+            json={"loop": "core", "param": "alpha", "new_value": 0.2, "reason": "x"},
+            headers=sb.csrf_headers,
         )
-
-        assert response.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_override_requires_admin_role(self, client: TestClient):
-        """Test override endpoint requires admin role."""
-        response = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "core", "param": "alpha", "new_value": 0.15, "reason": "test"},
-            headers={"Authorization": "Bearer viewer_token"},  # Non-admin token
-        )
-
-        assert response.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_override_success_admin(self, client: TestClient):
-        """Test successful override by admin."""
-        response = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "core", "param": "alpha", "new_value": 0.15, "reason": "sensitivity test"},
-            headers={"Authorization": "Bearer admin_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        assert data["status"] == "success"
-        assert data["loop"] == "core"
-        assert data["param"] == "alpha"
-        assert data["new_value"] == 0.15
-
-    @pytest.mark.asyncio
-    async def test_override_requires_reason(self, client: TestClient):
-        """Test override requires reason (for audit trail)."""
-        response = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "core", "param": "alpha", "new_value": 0.15, "reason": ""},
-            headers={"Authorization": "Bearer admin_token"},
-        )
-
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_override_validates_loop(self, client: TestClient):
-        """Test override validates loop parameter."""
-        response = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "invalid", "param": "alpha", "new_value": 0.15, "reason": "test"},
-            headers={"Authorization": "Bearer admin_token"},
-        )
-
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_override_validates_param(self, client: TestClient):
-        """Test override validates parameter name."""
-        response = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "core", "param": "invalid", "new_value": 0.15, "reason": "test"},
-            headers={"Authorization": "Bearer admin_token"},
-        )
-
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_override_validates_value_range(self, client: TestClient):
-        """Test override validates value is in [0, 1]."""
-        # Test value too high
-        response = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "core", "param": "alpha", "new_value": 1.5, "reason": "test"},
-            headers={"Authorization": "Bearer admin_token"},
-        )
-        assert response.status_code == 400
-
-        # Test value too low
-        response = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "core", "param": "alpha", "new_value": -0.5, "reason": "test"},
-            headers={"Authorization": "Bearer admin_token"},
-        )
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_override_audited(self, client: TestClient):
-        """Test override is logged to audit trail."""
-        # First override
-        response1 = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "core", "param": "alpha", "new_value": 0.2, "reason": "test 1"},
-            headers={"Authorization": "Bearer admin_token"},
-        )
-        assert response1.status_code == 200
-
-        # Second override
-        response2 = client.post(
-            "/v1/console/learning/override",
-            json={"loop": "infra", "param": "damping", "new_value": 0.8, "reason": "test 2"},
-            headers={"Authorization": "Bearer admin_token"},
-        )
-        assert response2.status_code == 200
-
-        # Check audit trail
-        audit_response = client.get(
-            "/v1/console/learning/audit",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-        assert audit_response.status_code == 200
-
-        audit_data = audit_response.json()
-        # Should have at least the 2 overrides
-        assert audit_data["count"] >= 2
+        assert r.status_code == 501
+        assert "config/rollback" in r.json()["detail"]
+        r = sb.client.post("/v1/console/learning/rollback/v1", headers=sb.csrf_headers)
+        assert r.status_code == 501
 
 
-class TestRollbackEndpoint:
-    """Tests for POST /v1/console/learning/rollback (admin only)"""
-
-    @pytest.mark.asyncio
-    async def test_rollback_requires_auth(self, client: TestClient):
-        """Test rollback requires authentication."""
-        response = client.post("/v1/console/learning/rollback/checkpoint_123")
-
-        assert response.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_rollback_requires_admin(self, client: TestClient):
-        """Test rollback requires admin role."""
-        response = client.post(
-            "/v1/console/learning/rollback/checkpoint_123",
-            headers={"Authorization": "Bearer viewer_token"},
-        )
-
-        assert response.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_rollback_success(self, client: TestClient):
-        """Test successful rollback."""
-        response = client.post(
-            "/v1/console/learning/rollback/checkpoint_123",
-            headers={"Authorization": "Bearer admin_token"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        assert data["status"] == "success"
-        assert data["checkpoint_id"] == "checkpoint_123"
-        assert "restored_at" in data
-        assert "loss_before" in data
-        assert "loss_after" in data
-
-    @pytest.mark.asyncio
-    async def test_rollback_audited(self, client: TestClient):
-        """Test rollback is logged to audit trail."""
-        response = client.post(
-            "/v1/console/learning/rollback/checkpoint_123",
-            headers={"Authorization": "Bearer admin_token"},
-        )
-
-        assert response.status_code == 200
-
-        # Verify in audit trail
-        audit_response = client.get(
-            "/v1/console/learning/audit",
-            headers={"Authorization": "Bearer valid_token"},
-        )
-        assert audit_response.status_code == 200
-
-        audit_data = audit_response.json()
-        # Should have rollback event
-        rollback_events = [e for e in audit_data["events"] if e["event_type"] == "rollback"]
-        assert len(rollback_events) > 0
-
-
-class TestTenantIsolation:
-    """Tests for tenant isolation across all endpoints"""
-
-    @pytest.mark.asyncio
-    async def test_all_endpoints_tenant_isolated(self, client: TestClient):
-        """Test all endpoints are tenant-scoped."""
-        endpoints = [
-            "/v1/console/learning/status",
-            "/v1/console/learning/metrics",
-            "/v1/console/learning/checkpoint",
-            "/v1/console/learning/audit",
+def test_every_learning_post_requires_csrf(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        posts = [
+            ("/v1/console/learning/override", {"loop": "core", "param": "alpha", "new_value": 0.2, "reason": "x"}),
+            ("/v1/console/learning/rollback/v1", None),
+            ("/v1/console/learning/grade", {"pattern_id": "p", "grade": 0.5}),
+            ("/v1/console/learning/note", {"pattern_id": "p", "text": "n"}),
+            ("/v1/console/tools/t1/rating", {"rating": 5}),
+            ("/v1/console/skills/s1/rating", {"rating": 5}),
+            ("/v1/console/learning/patterns/p1/confirm", None),
+            ("/v1/console/learning/metrics/export", {"format": "json", "window": "1h"}),
         ]
-
-        for endpoint in endpoints:
-            # Request for tenant A
-            response_a = client.get(
-                endpoint,
-                headers={"X-Tenant-ID": "tenant_a", "Authorization": "Bearer valid_token"},
-            )
-
-            # Request for tenant B
-            response_b = client.get(
-                endpoint,
-                headers={"X-Tenant-ID": "tenant_b", "Authorization": "Bearer valid_token"},
-            )
-
-            # Both should succeed but with different data
-            if response_a.status_code == 200 and response_b.status_code == 200:
-                # Data should not leak across tenants
-                assert True  # Actual cross-tenant verification would depend on test data
+        for path, body in posts:
+            r = sb.client.post(path, json=body)  # session cookie, NO csrf header
+            assert r.status_code == 403, (path, r.status_code, r.text)
 
 
-# ============================================================================
-# Integration Tests (E2E)
-# ============================================================================
+# ── grade / ratings: chained, free text never persisted ─────────────────────
 
 
-class TestPhase3E2E:
-    """End-to-end tests for Phase 3 operator workflow"""
-
-    @pytest.mark.asyncio
-    async def test_operator_workflow(self, client: TestClient):
-        """Test complete operator workflow: view → override → verify audit."""
-        # 1. Operator views current status
-        status_response = client.get(
-            "/v1/console/learning/status",
-            headers={"Authorization": "Bearer operator_token"},
+def test_grade_is_chained_and_reason_is_not_persisted(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        r = sb.client.post(
+            "/v1/console/learning/grade",
+            json={"pattern_id": "pattern_x", "grade": 0.7, "reason": "SECRET-REASON hunter2"},
+            headers=sb.csrf_headers,
         )
-        assert status_response.status_code == 200
-        initial_alpha = status_response.json()["alpha_core"]
+        assert r.status_code == 200, r.text
+        event_id = r.json()["event_id"]
+        on_disk = [e for e in sb.events_on_disk() if e["event_id"] == event_id]
+        assert len(on_disk) == 1
+        assert on_disk[0]["event_type"] == "feedback"
+        assert on_disk[0]["signal"]["grade"] == 0.7
+        assert on_disk[0]["signal"]["has_reason"] is True
+        assert on_disk[0]["signal"]["reason_length"] == len("SECRET-REASON hunter2")
+        assert on_disk[0]["audit_ref"]
+        assert "hunter2" not in json.dumps(on_disk)
+        assert "hunter2" not in sb.chain.read_text()
+        chain = [c for c in sb.chain_records() if c.get("event_type") == "learning.feedback"]
+        assert any(c["details"].get("audit_ref") == on_disk[0]["audit_ref"] for c in chain)
 
-        # 2. Operator views metrics (to understand trend)
-        metrics_response = client.get(
-            "/v1/console/learning/metrics?window=1h",
-            headers={"Authorization": "Bearer operator_token"},
+
+@pytest.mark.parametrize("kind", ["tools", "skills"])
+def test_rating_persists_has_text_only(tmp_path: Path, kind: str):
+    with console_client(tmp_path) as sb:
+        r = sb.client.post(
+            f"/v1/console/{kind}/entity_1/rating",
+            json={"rating": 4, "feedback_text": "the operator's private remark", "task_id": "t1"},
+            headers=sb.csrf_headers,
         )
-        assert metrics_response.status_code == 200
+        assert r.status_code == 200, r.text
+        assert r.json()["feedback_stats"]["sample_count"] == 1
+        events = [e for e in sb.events_on_disk() if e["event_type"] == "feedback"]
+        assert len(events) == 1
+        signal = events[0]["signal"]
+        assert "feedback_text" not in signal
+        assert signal["has_text"] is True
+        assert signal["text_length"] == len("the operator's private remark")
+        assert "private remark" not in json.dumps(events)
+        assert events[0]["audit_ref"]
 
-        # 3. Operator views audit history
-        audit_response = client.get(
-            "/v1/console/learning/audit",
-            headers={"Authorization": "Bearer operator_token"},
-        )
-        assert audit_response.status_code == 200
-        initial_audit_count = audit_response.json()["count"]
-
-        # 4. Operator decides to adjust learning rate (requires admin)
-        override_response = client.post(
-            "/v1/console/learning/override",
-            json={
-                "loop": "core",
-                "param": "alpha",
-                "new_value": 0.08,
-                "reason": "Testing lower learning rate for stability",
-            },
-            headers={"Authorization": "Bearer admin_token"},
-        )
-        assert override_response.status_code == 200
-
-        # 5. Operator verifies change in audit trail
-        audit_response2 = client.get(
-            "/v1/console/learning/audit",
-            headers={"Authorization": "Bearer operator_token"},
-        )
-        assert audit_response2.status_code == 200
-        new_audit_count = audit_response2.json()["count"]
-
-        # Audit trail should have grown
-        assert new_audit_count >= initial_audit_count
+        r = sb.client.post(f"/v1/console/{kind}/entity_1/rating", json={"rating": 9}, headers=sb.csrf_headers)
+        assert r.status_code == 400

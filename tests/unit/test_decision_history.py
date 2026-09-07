@@ -211,7 +211,7 @@ class TestDecisionHistoryStore:
         assert decision_id == decision.decision_id
 
         # Verify retrieval
-        retrieved = store.get_decision(decision_id)
+        retrieved = store.get_decision(decision_id, tenant_id="tenant-1")
         assert retrieved is not None
         assert retrieved.choice_type == "skill_selection"
         assert retrieved.chosen == "a"
@@ -285,7 +285,7 @@ class TestDecisionHistoryStore:
             )
             store.record_decision(decision)
 
-        decisions = store.get_decisions_by_session("session-123")
+        decisions = store.get_decisions_by_session("session-123", tenant_id="tenant-1")
         assert len(decisions) == 3
 
     def test_get_candidate_stats(self, store):

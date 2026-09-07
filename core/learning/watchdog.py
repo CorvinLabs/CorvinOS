@@ -9,12 +9,20 @@ Three-layer safeguard:
 
 import math
 import json
-from typing import Dict, Any
+from pathlib import Path
+from typing import Dict, Any, Optional
 from datetime import datetime
 
 
 class DivergenceWatchdog:
-    """Monitor Meta Loop state for divergence."""
+    """Monitor Meta Loop state for divergence.
+
+    This is the ONLY watchdog. A ``WatchdogIntegration`` wrapper once existed
+    (deleted in 4f9c5b5d) and ``nine_d_loss`` kept importing it, which made the
+    whole 9D optimizer unimportable (adversarial review F-L1). The optimizer now
+    drives this class directly: ``save_checkpoint`` → ``apply_gradients`` →
+    ``validate_state`` → ``restore_checkpoint`` on divergence.
+    """
 
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
@@ -58,8 +66,13 @@ class DivergenceWatchdog:
 
         return True
 
-    def save_checkpoint(self, state: Dict[str, Any]) -> str:
-        """Save state for rollback."""
+    def save_checkpoint(self, state: Dict[str, Any], directory: Optional[Path] = None) -> str:
+        """Save state for rollback (in memory; on disk too when ``directory`` is given).
+
+        The on-disk copy lives under the caller-supplied directory — the 9D
+        optimizer passes ``<CORVIN_HOME>/tenants/<tenant>/learning/meta_checkpoints``;
+        this class never derives a path from ``Path.home()``.
+        """
         checkpoint_id = f"ckpt_{self.checkpoint_count:04d}_{int(datetime.now().timestamp())}"
         self.last_checkpoint = {
             'id': checkpoint_id,
@@ -67,6 +80,13 @@ class DivergenceWatchdog:
             'timestamp': datetime.now().isoformat(),
         }
         self.checkpoint_count += 1
+        if directory is not None:
+            directory = Path(directory)
+            directory.mkdir(parents=True, exist_ok=True)
+            payload = dict(self.last_checkpoint, tenant_id=self.tenant_id)
+            (directory / f"{checkpoint_id}.json").write_text(
+                json.dumps(payload, sort_keys=True, default=str), encoding="utf-8"
+            )
         return checkpoint_id
 
     def restore_checkpoint(self, checkpoint_id: str) -> Dict[str, Any]:

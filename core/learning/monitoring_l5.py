@@ -206,6 +206,12 @@ class MetricsCollector:
                         after=cutoff_time,
                         timeout_seconds=5
                     ) or []
+                    if not isinstance(events, list):
+                        # Contract: a list of event dicts. Anything else is a
+                        # broken backend → keep the stale cache (logged below).
+                        raise TypeError(
+                            f"audit backend returned {type(events).__name__}, expected list"
+                        )
                     self._approval_events = events
                 except TimeoutError:
                     logger.warning(f"Audit backend timeout for tenant {self.tenant_id}; using stale cache")

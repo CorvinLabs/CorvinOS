@@ -42,31 +42,37 @@ class TestValidationMiddleware:
 
     def test_create_error_response_400(self):
         """Create error response with 400 status."""
-        response, status = ValidationMiddleware.create_error_response(
-            message="Invalid input",
-            code="invalid_input",
-            status_code=400,
-        )
-        assert status == 400
+        # ``jsonify`` requires an application context (real Flask contract)
+        with Flask(__name__).app_context():
+            response, status = ValidationMiddleware.create_error_response(
+                message="Invalid input",
+                code="invalid_input",
+                status_code=400,
+            )
+            assert status == 400
         # Response is Flask jsonify object
 
     def test_create_error_response_403(self):
         """Create error response with 403 status."""
-        response, status = ValidationMiddleware.create_error_response(
-            message="Forbidden",
-            code="forbidden",
-            status_code=403,
-        )
-        assert status == 403
+        # ``jsonify`` requires an application context (real Flask contract)
+        with Flask(__name__).app_context():
+            response, status = ValidationMiddleware.create_error_response(
+                message="Forbidden",
+                code="forbidden",
+                status_code=403,
+            )
+            assert status == 403
 
     def test_create_error_response_422(self):
         """Create error response with 422 status."""
-        response, status = ValidationMiddleware.create_error_response(
-            message="Unprocessable Entity",
-            code="unprocessable",
-            status_code=422,
-        )
-        assert status == 422
+        # ``jsonify`` requires an application context (real Flask contract)
+        with Flask(__name__).app_context():
+            response, status = ValidationMiddleware.create_error_response(
+                message="Unprocessable Entity",
+                code="unprocessable",
+                status_code=422,
+            )
+            assert status == 422
 
 
 class TestValidationErrorResponse:

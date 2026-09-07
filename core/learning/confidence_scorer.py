@@ -65,10 +65,13 @@ class ConfidenceScorer:
         lom: Optional[str] = None,
     ) -> ConfidenceEvent:
         """Compute full confidence event for a Skill decision."""
+        # ``user_feedback_positive or True`` collapsed an explicit ``False`` into
+        # ``True`` (negative feedback scored as positive, F-L7). Only an absent
+        # signal (None) falls back to the neutral default.
         relevance = ConfidenceScorer.compute_relevance(
             skill_id=skill_id,
             feedback_count=feedback_count,
-            user_feedback_positive=user_feedback_positive or True,
+            user_feedback_positive=True if user_feedback_positive is None else bool(user_feedback_positive),
         )
 
         reliability = ConfidenceScorer.compute_reliability(

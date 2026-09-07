@@ -23,10 +23,17 @@ class LearningIntegration:
 
     def __init__(self, store_path: Path = None, tenant_id: str = "_default"):
         if store_path is None:
-            from forge.tenants import tenant_home  # type: ignore[import-not-found]
-            store_path = Path(tenant_home(tenant_id)) / "learning"
+            from core.paths.tenant import tenant_home  # noqa: PLC0415
+            store_path = tenant_home(tenant_id) / "learning"
+        store_path = Path(store_path)
         self.tenant_id = tenant_id
         self.store = LearningEventStore(store_path)
+        # Operator grades are persisted through the audit-first, hash-chained
+        # ADR-0314 store (``<tenant_home>/learning/events/``) — never through the
+        # unchained TreeOfThoughts JSONL above (F-L6). ``store_path`` is
+        # ``<tenant_home>/learning``, so its parent is the tenant home.
+        from .event_store import EventStore as _ChainedEventStore  # noqa: PLC0415
+        self.event_store = _ChainedEventStore(store_path.parent, tenant_id=tenant_id)
         self.metrics = ExecutionMetricsRecorder(self.store)
         self.loop = ActiveLearningLoop(self.store)
         # Operator-feedback anomaly detector (window-based; takes window_size,
@@ -91,16 +98,20 @@ class LearningIntegration:
         # Pattern ID: "pattern_tts_{provider}"
         pattern_id = f"pattern_tts_{provider_id}"
         
+        # ``text``/``voice`` are the TTS call's arguments — forward them to
+        # ``tts_fn``; only ``text_length`` (never the text) enters the context.
         result = await self.execute_method_with_learning(
-            method_id=pattern_id,
-            method_fn=tts_fn,
-            context={
+            pattern_id,
+            tts_fn,
+            {
                 "provider": provider_id,
                 "voice": voice,
                 "text_length": len(text),
                 **(context or {})
             },
             *args,
+            text=text,
+            voice=voice,
             **kwargs
         )
         
@@ -124,22 +135,55 @@ class LearningIntegration:
         node = self.store.get_node(pattern_id)
         return node.confidence if node else 0.0
     
-    def grade_pattern(self, pattern_id: str, grade: float, reason: str = ""):
-        """Manual operator grading of a pattern."""
+    def grade_pattern(self, pattern_id: str, grade: float, reason: str = "") -> str:
+        """Manual operator grading of a pattern.
+
+        Audit-first: the grade is committed to the core hash chain and the
+        ADR-0314 event store BEFORE the in-memory confidence moves; if the chain
+        write does not commit, ``RuntimeError`` propagates and nothing changes.
+        The operator's free-text ``reason`` is NOT persisted — only whether one
+        was given and how long it was (F-L6).
+
+        Returns:
+            The persisted learning event's id.
+        """
+        from .confidence import update_confidence
+        from .learning_events import EventType, LearningEvent as _ChainedEvent
         from .models import LearningEvent
 
-        event = LearningEvent(
-            subject_id=pattern_id,
-            event_type="graded",
-            confidence_delta=grade,
-            reason=reason,
+        if not isinstance(grade, (int, float)) or grade != grade:
+            raise ValueError(f"grade must be a number, got {grade!r}")
+        grade = float(max(-1.0, min(1.0, grade)))
+        reason_text = reason.strip() if isinstance(reason, str) else ""
+
+        chained = _ChainedEvent.create(
+            event_type=EventType.FEEDBACK,
+            skill_id=pattern_id,
+            tenant_id=self.tenant_id,
+            signal={
+                "kind": "pattern_grade",
+                "pattern_id": pattern_id,
+                "grade": grade,
+                "has_reason": bool(reason_text),
+                "reason_length": len(reason_text),
+                "source": "operator",
+            },
+            lom="core/learning/integration.py:grade_pattern",
         )
-        self.store.append_event(pattern_id, event)
+        self.event_store.write_event(chained)
 
         node = self.store.get_node(pattern_id)
         if node:
-            from .confidence import update_confidence
-            update_confidence(node, event)
+            update_confidence(
+                node,
+                LearningEvent(
+                    subject_id=pattern_id,
+                    event_type="graded",
+                    confidence_delta=grade,
+                    reason="",  # in-memory only; free text is never stored
+                ),
+            )
+        return chained.event_id
 
     # Phase 8 note: the former check_anomaly/get_alerts/get_latest_alert/
     # clear_alerts_before wrappers delegated to a file-based detector that the

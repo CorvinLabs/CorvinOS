@@ -239,8 +239,14 @@ class SLOAlertDaemon:
             logger.error(f"Health status emission failed: {e}", exc_info=True)
 
     async def run_forever(self) -> None:
-        """Run monitoring daemon until stopped."""
-        self.running = True
+        """Run monitoring daemon until stopped.
+
+        ``running`` is set by :meth:`start` BEFORE the task is scheduled (and by
+        a direct caller here) so that a ``stop()`` issued before the first tick
+        is never overwritten by a late ``running = True`` (2026-09-07 race).
+        """
+        if not self.running and self.task is None:
+            self.running = True
         logger.info(f"SLO alert daemon started (interval: {self.check_interval}s)")
 
         try:
@@ -260,6 +266,7 @@ class SLOAlertDaemon:
             logger.warning("Daemon already running")
             return
 
+        self.running = True
         self.task = asyncio.create_task(self.run_forever())
         logger.info("SLO alert daemon background task created")
 

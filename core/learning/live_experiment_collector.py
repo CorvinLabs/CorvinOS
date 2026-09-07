@@ -2,319 +2,319 @@
 """
 LIVE EXPERIMENT COLLECTOR — Continuous Measurement System
 
-Runs in background (systemd or supervisor).
-Continuously tracks:
-  - Learning loop metrics (loss, accuracy, convergence)
-  - System performance (latency, throughput, resource usage)
-  - User actions (tasks run, routing decisions, training events)
-  - Anomalies detected
-  - Component health
+Runs in background (systemd or supervisor) and appends ONE measurement per
+minute to::
 
-Data is accumulated over days/weeks/months in:
-  ~/.corvin/tenants/_default/experiments/live_measurements/
+    <CORVIN_HOME>/tenants/<tenant>/experiments/live_measurements/measurements_YYYYMMDD.jsonl
 
-Later analysis can aggregate this into long-term trends, seasonality, etc.
+Every value in a measurement is READ from a real source:
+
+  * ``learning``      — the ADR-0314 ``EventStore`` (OUTCOME / FEEDBACK /
+                        SKILL_EXECUTED / CONFIG_UPDATED counts, success rate of
+                        the recent outcomes, the derived outcome loss)
+  * ``system``        — this process (``resource.getrusage``) and the host
+                        (``os.getloadavg``), plus the size of the core audit
+                        chain file
+  * ``user_actions``  — event counts in the last hour, again from the store
+  * ``component_health`` — which learning event types have been seen at all
+
+Until 2026-09-07 every one of these was ``random.gauss(...)`` — synthetic
+numbers written to disk labelled as measurements, under ``~/.corvin`` (F-L5).
+A collector that cannot read a real source records ``None`` for that field and
+says so in ``sources``; it never invents a value.
 """
 
+from __future__ import annotations
+
 import json
+import math
 import os
+import resource
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-import threading
-import random
-import math
+from typing import Any, Dict, List, Optional
+
+from core.paths.tenant import corvin_home, tenant_home
+
+#: Window over which "recent outcomes" are judged (matches the console status endpoint).
+RECENT_OUTCOME_WINDOW = 50
 
 
 class LiveExperimentCollector:
     """
-    Continuously collects metrics from running CorvinOS system.
+    Continuously collects metrics from the running CorvinOS system.
     Persists to disk every minute, archives daily.
     """
 
-    def __init__(self, tenant_id: str = "_default"):
+    def __init__(self, tenant_id: str = "_default", interval_s: int = 60):
         self.tenant_id = tenant_id
-        self.base_dir = Path.home() / ".corvin" / "tenants" / tenant_id / "experiments" / "live_measurements"
+        self.interval_s = int(interval_s)
+        self.base_dir = tenant_home(tenant_id) / "experiments" / "live_measurements"
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
         self.current_date = datetime.now().date()
-        self.measurements_buffer = []
+        self.measurements_buffer: List[Dict[str, Any]] = []
         self.running = False
+        self._thread: Optional[threading.Thread] = None
 
-    def get_today_file(self):
+    # ── storage ────────────────────────────────────────────────────────────
+
+    def get_today_file(self) -> Path:
         """Get the file path for today's measurements."""
         date_str = self.current_date.strftime("%Y%m%d")
         return self.base_dir / f"measurements_{date_str}.jsonl"
 
-    def rotate_if_needed(self):
+    def rotate_if_needed(self) -> None:
         """Archive yesterday's file if we've crossed into a new day."""
         today = datetime.now().date()
         if today != self.current_date:
             yesterday_date = self.current_date.strftime("%Y%m%d")
             yesterday_file = self.base_dir / f"measurements_{yesterday_date}.jsonl"
-
-            # Archive yesterday's file
             if yesterday_file.exists():
                 archive_dir = self.base_dir / "archive"
                 archive_dir.mkdir(exist_ok=True)
-                archive_file = archive_dir / f"measurements_{yesterday_date}.jsonl.gz"
-
-                # Gzip compression (simulated for simplicity)
-                with open(yesterday_file, "r") as f:
-                    content = f.read()
-
-                with open(archive_file, "w") as f:
-                    f.write(content)  # In real impl: gzip.compress(content)
-
-                print(f"[LiveCollector] Archived {yesterday_file} → {archive_file}")
-
+                yesterday_file.replace(archive_dir / yesterday_file.name)
             self.current_date = today
 
-    def collect_learning_metrics(self):
-        """Collect metrics from the learning loop."""
-        # Simulate realistic learning metrics
-        base_loss = 0.35 - 0.0001 * time.time()  # Gradually improving
-        loss = max(0.1, base_loss + random.gauss(0, 0.02))
+    # ── real sources ───────────────────────────────────────────────────────
 
-        accuracy = 0.5 + 0.0001 * time.time()  # Gradually improving
-        accuracy = min(0.95, accuracy + random.gauss(0, 0.03))
+    def _event_store(self):
+        from core.learning.event_store import EventStore  # noqa: PLC0415
 
+        return EventStore(tenant_home(self.tenant_id), tenant_id=self.tenant_id)
+
+    def collect_learning_metrics(self) -> Dict[str, Any]:
+        """Learning-loop metrics from the ADR-0314 event store (real events only)."""
+        from core.learning.learning_events import EventType  # noqa: PLC0415
+
+        store = self._event_store()
+        counts = {et.value: store.count_events(self.tenant_id, et) for et in EventType}
+        since = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+        outcomes = store.query_events(self.tenant_id, event_type=EventType.OUTCOME, since=since, limit=100000)
+        recent = outcomes[-RECENT_OUTCOME_WINDOW:]
+        successes = sum(1 for e in recent if (e.signal or {}).get("success") is True)
+        total = len(recent)
+        success_rate = (successes / total) if total else None
         return {
-            "loss_total": float(loss),
-            "loss_routing": float(loss * 0.4),
-            "loss_confidence": float(loss * 0.25),
-            "loss_feedback": float(loss * 0.15),
-            "accuracy_routing": float(accuracy),
-            "convergence_rate": float(random.uniform(0.8, 0.95)),  # Should be high
+            "event_counts": counts,
+            "recent_outcomes": {"window": RECENT_OUTCOME_WINDOW, "total": total, "successes": successes},
+            "success_rate": success_rate,
+            # the delegation router's real loss: share of recent tasks that did not succeed
+            "outcome_loss": (1.0 - success_rate) if success_rate is not None else None,
         }
 
-    def collect_system_metrics(self):
-        """Collect system performance metrics."""
+    def collect_system_metrics(self) -> Dict[str, Any]:
+        """Process + host resource metrics (measured, not simulated)."""
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        try:
+            load_1m, load_5m, _ = os.getloadavg()
+        except OSError:
+            load_1m = load_5m = None
+        chain = Path(os.environ.get("VOICE_AUDIT_PATH") or (corvin_home() / "audit.jsonl"))
+        try:
+            chain_bytes: Optional[int] = chain.stat().st_size
+        except OSError:
+            chain_bytes = None
         return {
-            "latency_p99_ms": float(random.gauss(50, 10)),
-            "throughput_tasks_per_sec": float(random.uniform(10, 50)),
-            "memory_usage_mb": float(random.uniform(100, 500)),
-            "cpu_usage_percent": float(random.uniform(20, 80)),
-            "audit_chain_length": int(random.randint(1000, 100000)),
+            "process_max_rss_mb": float(usage.ru_maxrss) / 1024.0,
+            "process_cpu_user_s": float(usage.ru_utime),
+            "process_cpu_system_s": float(usage.ru_stime),
+            "host_load_1m": load_1m,
+            "host_load_5m": load_5m,
+            "audit_chain_bytes": chain_bytes,
         }
 
-    def collect_user_actions(self):
-        """Track user actions (if any recent activity)."""
-        # In real impl: read from activity log
+    def collect_user_actions(self) -> Dict[str, Any]:
+        """Learning events recorded in the last hour, per type (from the store)."""
+        from core.learning.learning_events import EventType  # noqa: PLC0415
+
+        store = self._event_store()
+        cutoff = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        since = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+        counts: Dict[str, int] = {}
+        for et in EventType:
+            events = store.query_events(self.tenant_id, event_type=et, since=since, until=today, limit=100000)
+            counts[et.value] = sum(1 for e in events if e.timestamp >= cutoff)
         return {
-            "tasks_completed_this_hour": int(random.randint(0, 50)),
-            "routing_decisions": int(random.randint(0, 100)),
-            "training_batches": int(random.randint(0, 10)),
-            "anomalies_detected": int(random.randint(0, 5)),
+            "outcomes_last_hour": counts.get("outcome", 0),
+            "feedback_last_hour": counts.get("feedback", 0),
+            "skill_executions_last_hour": counts.get("skill_executed", 0),
+            "config_updates_last_hour": counts.get("config_updated", 0),
+            "events_last_hour": counts,
         }
 
-    def collect_component_health(self):
-        """Health status of each component."""
-        components = ["routing", "confidence", "feedback", "attention", "latency", "diversity"]
+    def collect_component_health(self, learning: Dict[str, Any]) -> Dict[str, Any]:
+        """Which learning signals are actually flowing (derived from real counts)."""
+        counts = learning.get("event_counts", {})
         return {
-            component: {
-                "active": random.random() > 0.1,
-                "contribution": float(random.uniform(0.01, 0.25)),
-                "drift": float(random.gauss(0, 0.02)),
-            }
-            for component in components
+            name: {"active": counts.get(name, 0) > 0, "events": counts.get(name, 0)}
+            for name in ("outcome", "feedback", "skill_executed", "config_updated", "preference", "confidence")
         }
 
-    def collect_all_metrics(self):
-        """Collect all available metrics."""
+    def collect_all_metrics(self) -> Dict[str, Any]:
+        """Collect all available metrics; a source that cannot be read records None."""
         timestamp = datetime.now().isoformat()
+        sources: Dict[str, str] = {}
+        learning: Dict[str, Any] = {}
+        try:
+            learning = self.collect_learning_metrics()
+            sources["learning"] = "event_store"
+        except Exception as exc:  # noqa: BLE001 — record the gap, never a made-up number
+            sources["learning"] = f"unavailable: {type(exc).__name__}"
+        try:
+            system = self.collect_system_metrics()
+            sources["system"] = "rusage+loadavg"
+        except Exception as exc:  # noqa: BLE001
+            system = {}
+            sources["system"] = f"unavailable: {type(exc).__name__}"
+        try:
+            user_actions = self.collect_user_actions()
+            sources["user_actions"] = "event_store"
+        except Exception as exc:  # noqa: BLE001
+            user_actions = {}
+            sources["user_actions"] = f"unavailable: {type(exc).__name__}"
 
-        measurement = {
+        return {
             "timestamp": timestamp,
             "unix_time": int(time.time()),
             "tenant_id": self.tenant_id,
-            "learning": self.collect_learning_metrics(),
-            "system": self.collect_system_metrics(),
-            "user_actions": self.collect_user_actions(),
-            "component_health": self.collect_component_health(),
+            "sources": sources,
+            "learning": learning,
+            "system": system,
+            "user_actions": user_actions,
+            "component_health": self.collect_component_health(learning),
         }
 
-        return measurement
-
-    def save_measurement(self, measurement):
+    def save_measurement(self, measurement: Dict[str, Any]) -> None:
         """Append measurement to today's file."""
         self.rotate_if_needed()
-
-        today_file = self.get_today_file()
-
-        with open(today_file, "a") as f:
+        with open(self.get_today_file(), "a", encoding="utf-8") as f:
             f.write(json.dumps(measurement) + "\n")
-
         self.measurements_buffer.append(measurement)
         if len(self.measurements_buffer) > 1440:  # Keep ~24h in memory
             self.measurements_buffer = self.measurements_buffer[-1440:]
 
-    def generate_hourly_summary(self):
-        """Generate hourly aggregation (max/min/mean)."""
-        if not self.measurements_buffer:
+    # ── aggregation ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _series(measurements: List[Dict[str, Any]], section: str, key: str) -> List[float]:
+        values = []
+        for m in measurements:
+            v = (m.get(section) or {}).get(key)
+            if isinstance(v, (int, float)) and math.isfinite(v):
+                values.append(float(v))
+        return values
+
+    @staticmethod
+    def _stats(values: List[float]) -> Optional[Dict[str, float]]:
+        if not values:
             return None
+        mean = sum(values) / len(values)
+        return {
+            "mean": mean,
+            "min": min(values),
+            "max": max(values),
+            "std": math.sqrt(sum((x - mean) ** 2 for x in values) / len(values)),
+            "n": len(values),
+        }
 
-        # Group by hour
+    def generate_hourly_summary(self) -> Optional[Dict[str, Any]]:
+        """Hourly aggregation (mean/min/max) of the measured series."""
         one_hour_ago = time.time() - 3600
-        recent = [m for m in self.measurements_buffer if m["unix_time"] > one_hour_ago]
-
+        recent = [m for m in self.measurements_buffer if m.get("unix_time", 0) > one_hour_ago]
         if not recent:
             return None
-
-        # Aggregate
-        losses = [m["learning"]["loss_total"] for m in recent]
-        accuracies = [m["learning"]["accuracy_routing"] for m in recent]
-        latencies = [m["system"]["latency_p99_ms"] for m in recent]
-
-        summary = {
+        return {
             "timestamp": datetime.now().isoformat(),
             "period": "1h",
             "num_samples": len(recent),
-            "loss": {
-                "mean": float(sum(losses) / len(losses)),
-                "min": float(min(losses)),
-                "max": float(max(losses)),
-            },
-            "accuracy": {
-                "mean": float(sum(accuracies) / len(accuracies)),
-                "min": float(min(accuracies)),
-                "max": float(max(accuracies)),
-            },
-            "latency": {
-                "mean": float(sum(latencies) / len(latencies)),
-                "p99": float(sorted(latencies)[-1]) if latencies else 0,
-            },
+            "outcome_loss": self._stats(self._series(recent, "learning", "outcome_loss")),
+            "success_rate": self._stats(self._series(recent, "learning", "success_rate")),
+            "host_load_1m": self._stats(self._series(recent, "system", "host_load_1m")),
         }
 
-        return summary
-
-    def save_summary(self, summary):
-        """Save hourly summary to a separate file."""
+    def save_summary(self, summary: Dict[str, Any]) -> None:
         summary_dir = self.base_dir / "summaries"
         summary_dir.mkdir(exist_ok=True)
-
-        summary_file = summary_dir / "hourly_summaries.jsonl"
-
-        with open(summary_file, "a") as f:
+        with open(summary_dir / "hourly_summaries.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(summary) + "\n")
 
-    def collection_loop(self):
-        """Main collection loop — runs every 60 seconds."""
-        print(f"[LiveCollector] Starting collection loop for tenant={self.tenant_id}")
-        print(f"[LiveCollector] Data directory: {self.base_dir}")
-
-        iteration = 0
-        while self.running:
-            try:
-                iteration += 1
-
-                # Collect all metrics
-                measurement = self.collect_all_metrics()
-                self.save_measurement(measurement)
-
-                # Every hour, generate summary
-                if iteration % 60 == 0:
-                    summary = self.generate_hourly_summary()
-                    if summary:
-                        self.save_summary(summary)
-                        print(f"[LiveCollector] Hourly summary saved (iteration {iteration})")
-
-                # Print status every 10 iterations
-                if iteration % 10 == 0:
-                    print(f"[LiveCollector] Collected {iteration} measurements | Loss: {measurement['learning']['loss_total']:.3f} | Accuracy: {measurement['learning']['accuracy_routing']:.1%}")
-
-                # Sleep until next collection (60 seconds)
-                time.sleep(60)
-
-            except Exception as e:
-                print(f"[LiveCollector] Error during collection: {e}")
-                time.sleep(60)  # Retry after 60 seconds
-
-    def start(self):
-        """Start the collection loop in background thread."""
-        if self.running:
-            print("[LiveCollector] Already running")
-            return
-
-        self.running = True
-        thread = threading.Thread(target=self.collection_loop, daemon=True)
-        thread.start()
-        print(f"[LiveCollector] Started background collection thread")
-
-    def stop(self):
-        """Stop the collection loop."""
-        self.running = False
-        print("[LiveCollector] Stopping collection")
-
-    def get_statistics(self, days: int = 7):
-        """Get rolling statistics over last N days."""
-        cutoff = datetime.now() - timedelta(days=days)
-
-        all_measurements = []
-
-        # Load from archive + today
+    def get_statistics(self, days: int = 7) -> Optional[Dict[str, Any]]:
+        """Rolling statistics over the last N days of persisted measurements."""
+        all_measurements: List[Dict[str, Any]] = []
         for date_offset in range(days):
             date = (datetime.now() - timedelta(days=date_offset)).date()
-            date_str = date.strftime("%Y%m%d")
-
-            # Check current file
-            current_file = self.base_dir / f"measurements_{date_str}.jsonl"
-            if current_file.exists():
-                with open(current_file, "r") as f:
-                    for line in f:
-                        try:
-                            m = json.loads(line)
-                            all_measurements.append(m)
-                        except json.JSONDecodeError:
-                            pass
-
+            for candidate in (
+                self.base_dir / f"measurements_{date.strftime('%Y%m%d')}.jsonl",
+                self.base_dir / "archive" / f"measurements_{date.strftime('%Y%m%d')}.jsonl",
+            ):
+                if candidate.exists():
+                    with open(candidate, "r", encoding="utf-8") as f:
+                        for line in f:
+                            try:
+                                all_measurements.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
         if not all_measurements:
             return None
-
-        # Aggregate statistics
-        losses = [m["learning"]["loss_total"] for m in all_measurements]
-        accuracies = [m["learning"]["accuracy_routing"] for m in all_measurements]
-        latencies = [m["system"]["latency_p99_ms"] for m in all_measurements]
-
-        stats = {
+        all_measurements.sort(key=lambda m: m.get("unix_time", 0))
+        losses = self._series(all_measurements, "learning", "outcome_loss")
+        trend = None
+        if len(losses) >= 20:
+            head = sum(losses[:10]) / 10
+            tail = sum(losses[-10:]) / 10
+            trend = "improving" if tail < head else ("degrading" if tail > head else "flat")
+        return {
             "period_days": days,
             "num_measurements": len(all_measurements),
-            "loss": {
-                "mean": float(sum(losses) / len(losses)),
-                "min": float(min(losses)),
-                "max": float(max(losses)),
-                "std": float(math.sqrt(sum((x - sum(losses)/len(losses))**2 for x in losses) / len(losses))),
-            },
-            "accuracy": {
-                "mean": float(sum(accuracies) / len(accuracies)),
-                "min": float(min(accuracies)),
-                "max": float(max(accuracies)),
-            },
-            "latency": {
-                "mean": float(sum(latencies) / len(latencies)),
-                "p99": float(sorted(latencies)[-1]) if latencies else 0,
-            },
-            "trend": "improving" if losses[-1] < sum(losses[:10])/10 else "degrading",
+            "outcome_loss": self._stats(losses),
+            "success_rate": self._stats(self._series(all_measurements, "learning", "success_rate")),
+            "host_load_1m": self._stats(self._series(all_measurements, "system", "host_load_1m")),
+            "trend": trend,
         }
 
-        return stats
+    # ── loop ───────────────────────────────────────────────────────────────
+
+    def collection_loop(self) -> None:
+        """Main collection loop — one measurement per ``interval_s``."""
+        iteration = 0
+        while self.running:
+            iteration += 1
+            measurement = self.collect_all_metrics()
+            self.save_measurement(measurement)
+            if iteration % 60 == 0:
+                summary = self.generate_hourly_summary()
+                if summary:
+                    self.save_summary(summary)
+            time.sleep(self.interval_s)
+
+    def start(self) -> None:
+        """Start the collection loop in a background thread."""
+        if self.running:
+            return
+        self.running = True
+        self._thread = threading.Thread(target=self.collection_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.running = False
 
 
 # ============================================================================
 # DAEMON ENTRY POINT
 # ============================================================================
 
-def run_collector_daemon():
+def run_collector_daemon(tenant_id: str = "_default") -> None:
     """Run as a daemon (systemd service)."""
-    collector = LiveExperimentCollector()
+    collector = LiveExperimentCollector(tenant_id)
     collector.start()
-
-    # Keep running
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
-        print("[LiveCollector] Shutting down...")
         collector.stop()
 
 
@@ -322,26 +322,10 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1 and sys.argv[1] == "start":
-        run_collector_daemon()
+        run_collector_daemon(os.environ.get("CORVIN_TENANT_ID", "_default"))
     else:
-        # Demo mode
-        print("Live Experiment Collector Demo")
         print("Usage: python live_experiment_collector.py start")
-        print("\nDemo run (10 iterations):")
-
-        collector = LiveExperimentCollector()
-        collector.running = True
-
-        for i in range(10):
-            measurement = collector.collect_all_metrics()
-            collector.save_measurement(measurement)
-            print(f"Collected measurement {i+1}: loss={measurement['learning']['loss_total']:.3f}")
-            time.sleep(1)
-
-        # Show stats
-        stats = collector.get_statistics(days=1)
-        print("\n=== Statistics (last 24h) ===")
-        print(json.dumps(stats, indent=2))
-
-        # Show file location
-        print(f"\nData saved to: {collector.base_dir}")
+        collector = LiveExperimentCollector(os.environ.get("CORVIN_TENANT_ID", "_default"))
+        measurement = collector.collect_all_metrics()
+        print(json.dumps(measurement, indent=2))
+        print(f"\nData directory: {collector.base_dir}")

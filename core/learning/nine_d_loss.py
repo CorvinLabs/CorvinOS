@@ -5,24 +5,26 @@ NineD_LossOptimizer (ADR-0614/0615/0616) — Unified 9D Learning Vector
 Orchestrates all learning loops:
   - 6 core loops (Tier 1): Routing, Confidence, Feedback, Attention, Latency, Diversity
   - 3 infrastructure loops (Tier 2): Memory, Skills, Plugins
-  - 1 meta loop (Tier 3): Reserved for Phase 2B
+  - 1 meta loop (Tier 3): self-tuning hyperparameters (α, damping) for Tier 1/2
 
 Computes unified loss:
   L_total = 0.6 * L_core + 0.3 * L_infra + 0.1 * L_meta
   where:
     L_core = mean(L_routing, L_confidence, L_feedback, L_attention, L_latency, L_diversity)
-    L_infra = 0.1*L_memory + 0.1*L_skills + 0.1*L_plugins
-    L_meta = 0.0 (placeholder for Phase 2B)
+    L_infra = 1/3*L_memory + 1/3*L_skills + 1/3*L_plugins
+    L_meta = the meta optimizer's loss (0.0 until its first phase-locked update)
 
-Tier-specific damping prevents coupling oscillation:
-  - Tier 1 (core): damping = 0.9 (responsive)
-  - Tier 2 (infra): damping = 0.95 (stable)
-  - Tier 3 (meta): damping = 0.99 (conservative)
+Tier-specific damping prevents coupling oscillation. The Tier 2 learning rate
+and damping are NOT hardcoded here: they are the meta optimizer's ``α_infra`` /
+``damping_infra`` (that is the whole point of Tier 3, F-L9).
+
+Divergence safety (ADR-0625): every meta update is bracketed by the
+``DivergenceWatchdog`` — checkpoint → apply → validate → restore on divergence.
+Checkpoints are persisted under ``<CORVIN_HOME>/tenants/<tenant>/learning/
+meta_checkpoints/`` (never ``~/.corvin``, F-L12).
 """
 
-import json
 from typing import Dict, List, Any, Optional
-from datetime import datetime
 from pathlib import Path
 
 from core.learning.base import LearningLoop
@@ -31,7 +33,8 @@ from core.learning.composition_optimizer import CompositionOptimizer
 from core.learning.plugin_optimizer import PluginOrchestrator
 from core.learning.live_collector_integration import LiveCollectorIntegration
 from core.learning.meta_optimizer import MetaOptimizer
-from core.learning.watchdog import WatchdogIntegration
+from core.learning.watchdog import DivergenceWatchdog
+from core.paths.tenant import tenant_home
 
 
 class NineD_LossOptimizer:
@@ -46,6 +49,7 @@ class NineD_LossOptimizer:
         self,
         tenant_id: str = "_default",
         collector_integration: Optional[LiveCollectorIntegration] = None,
+        meta_optimizer: Optional[MetaOptimizer] = None,
     ):
         """
         Initialize the 9D optimizer with all sub-loops.
@@ -53,12 +57,14 @@ class NineD_LossOptimizer:
         Args:
             tenant_id: for audit trail and data isolation
             collector_integration: if provided, emit events to Live-Collector
+            meta_optimizer: injectable Tier 3 optimizer (tests hand in one with
+                a recording audit sink; production uses the core chain)
         """
         self.tenant_id = tenant_id
         self.collector = collector_integration or LiveCollectorIntegration(tenant_id)
 
         # ===== CORE LOOPS (Tier 1) =====
-        # These are tracked as moving averages (simulated if not fed externally)
+        # Moving averages fed by ``update_core_loop_loss`` from the core loop processes.
         self.core_loop_losses = {
             "routing": 0.3,
             "confidence": 0.25,
@@ -74,11 +80,15 @@ class NineD_LossOptimizer:
         self.plugins_loop = PluginOrchestrator()
 
         # ===== META LOOP (Tier 3) =====
-        self.meta_optimizer = MetaOptimizer(tenant_id=tenant_id)
-        self.watchdog = WatchdogIntegration(self.meta_optimizer)
+        self.meta_optimizer = meta_optimizer or MetaOptimizer(tenant_id=tenant_id)
+        self.watchdog = DivergenceWatchdog(tenant_id)
+        self.checkpoint_dir: Path = tenant_home(tenant_id) / "learning" / "meta_checkpoints"
+        self._last_meta_losses: Optional[Dict[str, float]] = None
+        self._last_infra_loss = 0.0
+        self.meta_rollbacks = 0
 
         # ===== UNIFIED LOSS TRACKING =====
-        self.loss_history = []
+        self.loss_history: List[float] = []
         self.step_count = 0
 
         # Weights
@@ -96,6 +106,22 @@ class NineD_LossOptimizer:
         # Thresholds
         self.convergence_gradient_threshold = 0.001
         self.convergence_variance_threshold = 0.05
+
+    # ── hyperparameters (owned by the meta loop) ───────────────────────────
+
+    @property
+    def infra_learning_rate(self) -> float:
+        return float(self.meta_optimizer.α_infra)
+
+    @property
+    def infra_damping(self) -> float:
+        return float(self.meta_optimizer.damping_infra)
+
+    @property
+    def core_smoothing(self) -> float:
+        return float(self.meta_optimizer.damping_core)
+
+    # ── losses ─────────────────────────────────────────────────────────────
 
     def compute_L_core(self) -> float:
         """
@@ -125,16 +151,10 @@ class NineD_LossOptimizer:
         Returns:
             scalar loss in [0, 1]
         """
-        # Memory loop
         L_memory = self.memory_loop.compute_loss(feedback.get("memory", {}))
-
-        # Skills loop
         L_skills = self.skills_loop.compute_loss(feedback.get("skills", {}))
-
-        # Plugins loop
         L_plugins = self.plugins_loop.compute_loss(feedback.get("plugins", {}))
 
-        # Weighted combination
         L_infra = (
             self.infra_sub_weights["memory"] * L_memory
             + self.infra_sub_weights["skills"] * L_skills
@@ -144,13 +164,9 @@ class NineD_LossOptimizer:
         return float(max(0.0, min(1.0, L_infra)))
 
     def compute_L_meta(self) -> float:
-        """
-        Compute meta loop loss (Phase 2B: reserved).
-
-        Returns:
-            scalar loss (currently 0.0)
-        """
-        return 0.0
+        """Meta loop loss: the meta optimizer's last recorded loss (0.0 before its first update)."""
+        history = self.meta_optimizer.loss_history
+        return float(history[-1]) if history else 0.0
 
     def compute_L_total(self, feedback: Dict[str, Dict[str, float]]) -> float:
         """
@@ -179,10 +195,21 @@ class NineD_LossOptimizer:
             + self.meta_weight * L_meta
         )
 
-        # Clip to valid range
-        L_total = float(max(0.0, min(1.0, L_total)))
+        return float(max(0.0, min(1.0, L_total)))
 
-        return L_total
+    # ── one optimisation step ──────────────────────────────────────────────
+
+    def _step_loop(self, loop: LearningLoop, loop_feedback: Dict[str, float]) -> Dict[str, float]:
+        """Gradient step for one Tier 2 loop with the meta loop's α/damping."""
+        current = loop.compute_loss(loop_feedback)
+        previous = loop.loss_history[-2] if len(loop.loss_history) > 1 else current
+        gradients = loop.compute_gradients(current, previous)
+        loop.apply_gradients(
+            gradients,
+            learning_rate=self.infra_learning_rate,
+            damping=self.infra_damping,
+        )
+        return gradients
 
     def step(self, feedback: Dict[str, Dict[str, float]]) -> float:
         """
@@ -191,8 +218,9 @@ class NineD_LossOptimizer:
         Process:
           1. Compute unified L_total
           2. Compute gradients per loop
-          3. Apply gradient updates with damping
+          3. Apply gradient updates with the meta loop's α / damping
           4. Emit Live-Collector events
+          5. Every ``phase_lock_interval`` steps: meta update under watchdog
 
         Args:
             feedback: {
@@ -206,59 +234,33 @@ class NineD_LossOptimizer:
         """
         self.step_count += 1
 
-        # Compute unified loss
-        L_total = self.compute_L_total(feedback)
+        # ===== UPDATE TIER 2 (INFRASTRUCTURE) LOOPS =====
+        # Each loop's loss is computed (and recorded) EXACTLY once per step, so
+        # ``loss_history[-2]`` is the previous step's value and the gradient is a
+        # real delta. Calling ``compute_loss`` again for L_infra recorded the same
+        # step twice and every Tier 2 gradient was identically 0.
+        memory_gradients = self._step_loop(self.memory_loop, feedback.get("memory", {}))
+        skills_gradients = self._step_loop(self.skills_loop, feedback.get("skills", {}))
+        plugins_gradients = self._step_loop(self.plugins_loop, feedback.get("plugins", {}))
+        L_memory = self.memory_loop.loss_history[-1]
+        L_skills = self.skills_loop.loss_history[-1]
+        L_plugins = self.plugins_loop.loss_history[-1]
+        L_infra = float(max(0.0, min(1.0,
+            self.infra_sub_weights["memory"] * L_memory
+            + self.infra_sub_weights["skills"] * L_skills
+            + self.infra_sub_weights["plugins"] * L_plugins
+        )))
+        self._last_infra_loss = L_infra
+
+        L_total = float(max(0.0, min(1.0,
+            self.core_weight * self.compute_L_core()
+            + self.infra_weight * L_infra
+            + self.meta_weight * self.compute_L_meta()
+        )))
         self.loss_history.append(L_total)
 
-        # Get previous loss for gradient computation
-        prev_L_total = self.loss_history[-2] if len(self.loss_history) > 1 else L_total
-
-        # ===== UPDATE TIER 2 (INFRASTRUCTURE) LOOPS =====
-
-        # Memory loop: compute gradients and apply
-        memory_gradients = self.memory_loop.compute_gradients(
-            self.memory_loop.compute_loss(feedback.get("memory", {})),
-            self.memory_loop.loss_history[-2]
-            if len(self.memory_loop.loss_history) > 1
-            else self.memory_loop.compute_loss(feedback.get("memory", {})),
-        )
-        self.memory_loop.apply_gradients(
-            memory_gradients, learning_rate=0.01, damping=0.95
-        )
-
-        # Skills loop: compute gradients and apply
-        skills_gradients = self.skills_loop.compute_gradients(
-            self.skills_loop.compute_loss(feedback.get("skills", {})),
-            self.skills_loop.loss_history[-2]
-            if len(self.skills_loop.loss_history) > 1
-            else self.skills_loop.compute_loss(feedback.get("skills", {})),
-        )
-        self.skills_loop.apply_gradients(
-            skills_gradients, learning_rate=0.01, damping=0.95
-        )
-
-        # Plugins loop: compute gradients and apply
-        plugins_gradients = self.plugins_loop.compute_gradients(
-            self.plugins_loop.compute_loss(feedback.get("plugins", {})),
-            self.plugins_loop.loss_history[-2]
-            if len(self.plugins_loop.loss_history) > 1
-            else self.plugins_loop.compute_loss(feedback.get("plugins", {})),
-        )
-        self.plugins_loop.apply_gradients(
-            plugins_gradients, learning_rate=0.01, damping=0.95
-        )
-
         # ===== EMIT LIVE-COLLECTOR EVENTS =====
-
-        # Core loss components
-        components = {
-            k: float(v) for k, v in self.core_loop_losses.items()
-        }
-
-        # Infra loss components
-        L_memory = self.memory_loop.compute_loss(feedback.get("memory", {}))
-        L_skills = self.skills_loop.compute_loss(feedback.get("skills", {}))
-        L_plugins = self.plugins_loop.compute_loss(feedback.get("plugins", {}))
+        components = {k: float(v) for k, v in self.core_loop_losses.items()}
 
         self.collector.on_loss_computed(
             loss_total=L_total,
@@ -268,75 +270,81 @@ class NineD_LossOptimizer:
                 "skills": float(L_skills),
                 "plugins": float(L_plugins),
             },
-            gradients={
-                **memory_gradients,
-                **skills_gradients,
-                **plugins_gradients,
-            },
+            gradients={**memory_gradients, **skills_gradients, **plugins_gradients},
             weights={
                 "core": self.core_weight,
                 "infra": self.infra_weight,
                 "meta": self.meta_weight,
             },
-            learning_rate=0.01,
+            learning_rate=self.infra_learning_rate,
         )
 
-        # Emit per-loop events
         self.memory_loop.emit_event(self.collector, feedback=feedback.get("memory", {}))
         self.skills_loop.emit_event(
             self.collector, feedback=feedback.get("skills", {}), execution_time_ms=0
         )
-
-        # For plugins, wrap feedback in per-plugin structure
         plugins_feedback = feedback.get("plugins", {})
-        plugin_feedback_per_plugin = {
-            "plugin_a": plugins_feedback,
-            "plugin_b": plugins_feedback,
-            "plugin_c": plugins_feedback,
-        }
         self.plugins_loop.emit_event(
-            self.collector, feedback=plugin_feedback_per_plugin, task_type="generic"
+            self.collector,
+            feedback={pid: plugins_feedback for pid in self.plugins_loop.plugin_priority_weights} or {"plugins": plugins_feedback},
+            task_type="generic",
         )
 
         # ===== UPDATE TIER 3 (META) LOOP =====
-        # Every 100 steps, meta optimizer tunes hyperparameters for Tier 1 & 2
-
-        if self.step_count % 100 == 0:
-            L_core = self.compute_L_core()
-            L_infra = self.compute_L_infra(feedback)
-
-            meta_feedback = {
-                'core_loss': L_core,
-                'prev_core_loss': self.loss_history[-2] if len(self.loss_history) > 1 else L_core,
-                'infra_loss': L_infra,
-                'prev_infra_loss': self.loss_history[-2] if len(self.loss_history) > 1 else L_infra,
-                'core_loss_variance': self.memory_loop.get_loss_variance(100),
-                'infra_loss_variance': self.skills_loop.get_loss_variance(100),
-                'avg_gradient_magnitude': self.meta_optimizer.get_avg_gradient_magnitude(100),
-                'meta_loss': L_total,
-            }
-
-            # Compute meta loss and gradients
-            meta_loss = self.meta_optimizer.compute_loss(meta_feedback)
-            prev_meta_loss = self.meta_optimizer.loss_history[-2] if len(self.meta_optimizer.loss_history) > 1 else meta_loss
-            meta_gradients = self.meta_optimizer.compute_gradients(meta_loss, prev_meta_loss)
-
-            # Apply gradients with watchdog oversight
-            self.watchdog.validate_and_apply_gradients(
-                gradients=meta_gradients,
-                learning_rate=self.meta_optimizer.learning_rate,
-                damping=self.meta_optimizer.damping_factor,
-                feedback_signals=meta_feedback,
-            )
-
-            # Emit meta tuning event
-            self.meta_optimizer.emit_event(self.collector)
-
-            # Checkpoint every 100 steps
-            checkpoint_path = Path.home() / ".corvin" / f"meta_optimizer_checkpoint_{self.step_count}.json"
-            self.watchdog.checkpoint(str(checkpoint_path))
+        if self.step_count % self.meta_optimizer.phase_lock_interval == 0:
+            self._meta_update(feedback, L_total)
 
         return L_total
+
+    def _meta_update(self, feedback: Dict[str, Dict[str, float]], L_total: float) -> None:
+        """One phase-locked meta update, bracketed by the divergence watchdog."""
+        L_core = self.compute_L_core()
+        L_infra = self._last_infra_loss  # recorded by this step; no second compute_loss
+        previous = self._last_meta_losses or {"core": L_core, "infra": L_infra}
+
+        meta_feedback = {
+            'core_loss': L_core,
+            'prev_core_loss': previous["core"],
+            'infra_loss': L_infra,
+            'prev_infra_loss': previous["infra"],
+            'core_loss_variance': self.memory_loop.get_loss_variance(self.meta_optimizer.phase_lock_interval),
+            'infra_loss_variance': self.skills_loop.get_loss_variance(self.meta_optimizer.phase_lock_interval),
+            'avg_gradient_magnitude': self.meta_optimizer.get_avg_gradient_magnitude(self.meta_optimizer.phase_lock_interval),
+            'meta_loss': L_total,
+        }
+        self._last_meta_losses = {"core": L_core, "infra": L_infra}
+
+        meta_loss = self.meta_optimizer.compute_loss(meta_feedback)
+        history = self.meta_optimizer.loss_history
+        prev_meta_loss = history[-2] if len(history) > 1 else meta_loss
+        meta_gradients = self.meta_optimizer.compute_gradients(meta_loss, prev_meta_loss)
+
+        # checkpoint → apply → validate → restore on divergence
+        before = self.meta_optimizer.get_state()
+        checkpoint_id = self.watchdog.save_checkpoint(before, directory=self.checkpoint_dir)
+        self.meta_optimizer.apply_gradients(meta_gradients)
+
+        after = self.meta_optimizer.get_state()
+        after['loss'] = meta_loss
+        if not self.watchdog.validate_state(after):
+            reason = self.watchdog.get_divergence_reason(after)
+            self.watchdog.on_divergence(reason)
+            restored = self.watchdog.restore_checkpoint(checkpoint_id)
+            if restored is not None:
+                self.meta_optimizer.rollback_to_state(restored)
+                self.meta_rollbacks += 1
+                for name in ('α_core', 'α_infra', 'damping_core', 'damping_infra'):
+                    if after.get(name) != restored.get(name):
+                        self.collector.on_meta_rollback(
+                            parameter=name,
+                            old_value=float(restored[name]),
+                            new_value=float(after[name]),
+                            reason=reason,
+                        )
+
+        self.meta_optimizer.emit_event(self.collector, step_count=self.step_count)
+
+    # ── convergence / state ────────────────────────────────────────────────
 
     def get_convergence_metrics(self) -> Dict[str, float]:
         """
@@ -353,7 +361,6 @@ class NineD_LossOptimizer:
         """
         all_gradients = []
 
-        # Collect all gradients
         for loop in [self.memory_loop, self.skills_loop, self.plugins_loop]:
             for param_gradients in loop.gradient_history.values():
                 all_gradients.extend([abs(g) for g in param_gradients[-100:]])
@@ -364,15 +371,12 @@ class NineD_LossOptimizer:
             else float("inf")
         )
 
-        # Loss variance
         recent_losses = self.loss_history[-100:]
         if len(recent_losses) < 2:
             loss_var = float("inf")
         else:
             mean_loss = sum(recent_losses) / len(recent_losses)
-            loss_var = sum((x - mean_loss) ** 2 for x in recent_losses) / len(
-                recent_losses
-            )
+            loss_var = sum((x - mean_loss) ** 2 for x in recent_losses) / len(recent_losses)
 
         return {
             "avg_gradient_magnitude": float(avg_grad_mag),
@@ -397,7 +401,6 @@ class NineD_LossOptimizer:
         if len(self.loss_history) < 100:
             return False
 
-        # Check individual loops
         memory_converged = self.memory_loop.check_convergence()
         skills_converged = self.skills_loop.check_convergence()
         plugins_converged = self.plugins_loop.check_convergence()
@@ -405,7 +408,6 @@ class NineD_LossOptimizer:
         if not (memory_converged and skills_converged and plugins_converged):
             return False
 
-        # Check unified metrics
         metrics = self.get_convergence_metrics()
 
         if metrics["avg_gradient_magnitude"] > self.convergence_gradient_threshold:
@@ -445,6 +447,11 @@ class NineD_LossOptimizer:
                 "plugin_priority_weights": self.plugins_loop.plugin_priority_weights,
                 "loss_history": self.plugins_loop.loss_history[-50:],
             },
+            "meta_loop": {
+                **self.meta_optimizer.get_state(),
+                "rollbacks": self.meta_rollbacks,
+                "checkpoints": self.watchdog.checkpoint_count,
+            },
             "convergence_metrics": self.get_convergence_metrics(),
             "is_converged": self.check_convergence(),
         }
@@ -459,8 +466,8 @@ class NineD_LossOptimizer:
         """
         if loop_id in self.core_loop_losses:
             loss = float(max(0.0, min(1.0, loss)))
-            # Exponential smoothing to reduce noise
-            alpha = 0.9
+            # Exponential smoothing with the meta loop's Tier 1 damping
+            alpha = self.core_smoothing
             self.core_loop_losses[loop_id] = (
                 alpha * self.core_loop_losses[loop_id] + (1 - alpha) * loss
             )
