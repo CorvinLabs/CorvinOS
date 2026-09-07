@@ -1,4 +1,4 @@
-"""Phase 1 E2E Tests — 15 tests covering full completion flow.
+"""Phase 1 E2E Tests — detector / summary / PII coverage.
 
 Tests:
 1. Workflow transition RUNNING → COMPLETE
@@ -11,11 +11,8 @@ Tests:
 8. SUCCESS summary generation
 9. FAILED summary generation
 10. PII scrubbing in summary
-11. Discord notification envelope format
-12. Discord outbox message content
-13. Latency P95 under load
-14. Latency P99 under load
-15. Tenant isolation (no cross-tenant leakage)
+11. Latency P95 under load
+12. Tenant isolation (no cross-tenant leakage)
 """
 
 import asyncio
@@ -39,7 +36,6 @@ from core.notification.summary_generator import (
     SummaryGenerator,
     SummaryType,
 )
-from core.notification.notification_router import NotificationRouter
 from core.notification.pii_scrubber import scrub_text, PIIScrubber
 
 
@@ -47,10 +43,9 @@ from core.notification.pii_scrubber import scrub_text, PIIScrubber
 def temp_corvin_home():
     """Temporary CORVIN_HOME root.
 
-    WorkflowDetector polls ``<corvin_home>/workflows`` and NotificationRouter
-    writes ``<corvin_home>/bridges/discord/outbox``; both derive those paths
-    themselves, so the fixture yields the ROOT (never a subdirectory, and never
-    the shared system temp dir via ``.parent``).
+    WorkflowDetector polls ``<corvin_home>/workflows`` and derives that path
+    itself, so the fixture yields the ROOT (never a subdirectory, and never the
+    shared system temp dir via ``.parent``).
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
@@ -70,12 +65,6 @@ def mock_audit_backend():
     backend = AsyncMock()
     backend.emit = AsyncMock(return_value="event_hash_123")
     return backend
-
-
-@pytest.fixture
-def temp_outbox_dir(temp_corvin_home):
-    """The Discord outbox directory NotificationRouter actually writes."""
-    return temp_corvin_home / "bridges" / "discord" / "outbox"
 
 
 class TestWorkflowDetectorPhase1:
@@ -307,95 +296,15 @@ class TestPIIScrubber:
         assert result.text == text
 
 
-class TestNotificationRouter:
-    """NotificationRouter tests."""
-
-    @pytest.mark.asyncio
-    async def test_discord_notification_envelope_format(self, temp_corvin_home, temp_outbox_dir, mock_audit_backend):
-        """Test: Discord envelope format correct."""
-        router = NotificationRouter(mock_audit_backend, corvin_home=str(temp_corvin_home))
-
-        event = CompletionEvent(
-            task_id="wf_123",
-            task_type=CompletionTaskType.WORKFLOW,
-            status=CompletionStatus.COMPLETE,
-            duration_sec=100.0,
-            output_summary="Completed",
-            metadata={"discord_chat_id": 12345},
-            tenant_id="_default",
-            origin={"channel": "discord"},
-        )
-
-        summary = StructuredSummary(
-            summary_type=SummaryType.REPORT,
-            title="Task Done",
-            outcome="SUCCESS",
-            key_result="All good",
-            duration="1m 40s",
-            voice_lines=[],
-        )
-
-        success = await router.route(event, summary)
-        assert success is True
-        # Verify outbox file created
-        outbox_files = list(temp_outbox_dir.glob("*.json"))
-        assert len(outbox_files) >= 1
-
-    @pytest.mark.asyncio
-    async def test_idempotency_o_excl_prevents_duplicate(self, temp_corvin_home, temp_outbox_dir, mock_audit_backend):
-        """Test: O_EXCL lock prevents duplicate notifications."""
-        router = NotificationRouter(mock_audit_backend, corvin_home=str(temp_corvin_home))
-
-        event = CompletionEvent(
-            task_id="wf_456",
-            task_type=CompletionTaskType.WORKFLOW,
-            status=CompletionStatus.COMPLETE,
-            duration_sec=50.0,
-            output_summary="Done",
-            metadata={"discord_chat_id": 67890},
-            tenant_id="_default",
-            origin={"channel": "discord"},
-        )
-
-        summary = StructuredSummary(
-            summary_type=SummaryType.REPORT,
-            title="Task",
-            outcome="SUCCESS",
-            key_result="Good",
-            duration="50s",
-            voice_lines=[],
-        )
-
-        # First route: success
-        success1 = await router.route(event, summary)
-        assert success1 is True
-        assert len(list(temp_outbox_dir.glob("*.json"))) == 1
-        assert mock_audit_backend.emit.call_count == 1
-
-        # Second route of the SAME completion: the derived envelope id collides,
-        # the O_EXCL open fails, and nothing is delivered a second time.
-        success2 = await router.route(event, summary)
-        assert success2 is True, "a duplicate route is a no-op, not an error"
-        assert len(list(temp_outbox_dir.glob("*.json"))) == 1, (
-            "exactly-once delivery: a second envelope must not be written"
-        )
-        assert mock_audit_backend.emit.call_count == 1, (
-            "a suppressed duplicate must not emit a second NotificationSentEvent"
-        )
-
-        # A genuinely different completion still gets through.
-        other = CompletionEvent(
-            task_id="wf_457",
-            task_type=CompletionTaskType.WORKFLOW,
-            status=CompletionStatus.COMPLETE,
-            duration_sec=50.0,
-            output_summary="Done",
-            metadata={"discord_chat_id": 67890},
-            tenant_id="_default",
-            origin={"channel": "discord"},
-        )
-        assert await router.route(other, summary) is True
-        assert len(list(temp_outbox_dir.glob("*.json"))) == 2
+# ``TestNotificationRouter`` was deleted on 2026-09-07 (round-3 review, R3-B6)
+# together with ``core/notification/notification_router.py``: that module had
+# ZERO production callers (every production import resolves to
+# ``core.vibe_engineering.notification_router``), hard-wired ``~/.corvin``
+# instead of honouring ``CORVIN_HOME``, and its "exactly-once via O_EXCL" claim
+# was false — the Discord daemon UNLINKS the outbox file once it has sent it
+# (``operator/bridges/discord/daemon.js``), so a later re-route of the same
+# completion collides with nothing and delivers twice. The tests asserted the
+# guarantee the module could not provide.
 
 
 @pytest.mark.asyncio

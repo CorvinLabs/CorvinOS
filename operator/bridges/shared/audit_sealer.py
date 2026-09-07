@@ -435,6 +435,37 @@ def _manifest_anchor_key() -> bytes | None:
         return None
 
 
+def _note_chain_rotation(chain_path: Path, link_hash: str) -> None:
+    """R3-A1: tell the out-of-tree chain-identity record that THIS genesis is a
+    Layer 37 rotation link.
+
+    Called from :func:`rotate_and_seal` while the rotation flock is still held,
+    right after the fresh live file was written. Without it, the verifier had to
+    infer "this was a rotation" from the SHAPE of the first record inside
+    ``audit.jsonl`` — a record an attacker who can rewrite that file controls,
+    including the tail it binds to (the recorded tail is byte-identical to the
+    file's own last hash). The rotation fact now lives beside the anchor key,
+    where an in-tree rewriter cannot reach it.
+
+    Best-effort by design: a rotation must not fail because a marker directory is
+    unwritable. The link's anchor-key MAC (written below) is the second,
+    independent proof, so losing this one does not make the rotation
+    unrecognisable — losing BOTH does, and then the verifier fails closed."""
+    if not link_hash:
+        return
+    try:
+        from forge.security_events import note_chain_rotation  # type: ignore[import]
+    except Exception:  # noqa: BLE001
+        try:
+            from security_events import note_chain_rotation  # type: ignore[import]
+        except Exception:  # noqa: BLE001
+            return
+    try:
+        note_chain_rotation(chain_path, link_hash=link_hash)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _manifest_canonical(rec: dict[str, Any]) -> str:
     return json.dumps(rec, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -793,6 +824,20 @@ def rotate_and_seal(
         h.update(b"\n")
         h.update(canonical.encode("utf-8"))
         link_rec["hash"] = h.hexdigest()[:16]
+        # R3-A1: MAC the rotation_link under the anchor key. `hash` alone is
+        # recomputable by anyone holding the file, so a forged "rotation" was
+        # indistinguishable from a real one. The MAC is not: the sealer has the
+        # key, an attacker who can only edit audit.jsonl does not. Computed over
+        # exactly what security_events.verify_chain recomputes — prev_hash, a
+        # newline, and the canonical record minus CHAIN_HASH_EXCLUDED_FIELDS
+        # (`canonical` above is that record, since hash/mac are not in it yet).
+        _ak = _manifest_anchor_key()
+        if _ak is not None:
+            import hmac as _hmac
+            link_rec["mac"] = _hmac.new(
+                _ak, tail.encode("utf-8") + b"\n" + canonical.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()[:16]
         try:
             audit_path.parent.mkdir(parents=True, exist_ok=True)
             with audit_path.open("w") as fh:
@@ -808,6 +853,11 @@ def rotate_and_seal(
             raise RuntimeError(
                 f"audit chain broken at rotation — rotation_link write failed: {exc}"
             ) from exc
+
+        # R3-A1: re-anchor the out-of-tree chain identity to the new genesis
+        # while the rotation lock is still held, so no concurrent verify can see
+        # the fresh file without the fact that explains it.
+        _note_chain_rotation(audit_path, str(link_rec["hash"]))
 
         # 5. Seal if configured.
         sealed_path: Path | None = None

@@ -134,30 +134,59 @@ class EventStore:
         until: Optional[str] = None,
         limit: int = 10000,  # FIX #21: Prevent OOM on unbounded queries
         offset: int = 0,
+        newest_first: bool = False,
     ) -> list[LearningEvent]:
-        """Query events with optional filters."""
+        """Query events with optional filters.
+
+        Order and selection (round-3 review, R3-B2):
+
+        * ``newest_first=False`` (default) — date files ascending, events in
+          write order, and ``offset``/``limit`` select from the OLDEST end.
+        * ``newest_first=True`` — date files descending and each file's lines
+          reversed, so ``limit`` selects the NEWEST N and the result is ordered
+          newest → oldest. Consumers that want "the last N samples" (e.g.
+          :class:`core.learning.consistency_checker.FeedbackConsistencyValidator`)
+          MUST pass this: the default returned the oldest N, so a "recent"
+          window computed from it never advanced.
+        """
         # FIX #6: Validate tenant_id upfront (prevent cross-tenant leakage, GDPR Art. 32)
         _validate_tenant_id(tenant_id)
 
         with self._lock:
-            results = []
+            results: list[LearningEvent] = []
+            wanted = offset + limit
 
             start_date = since or "2026-01-01"
             end_date = until or datetime.utcnow().strftime("%Y-%m-%d")
 
-            for event_file in sorted(self.events_dir.glob("*.jsonl")):
+            for event_file in sorted(self.events_dir.glob("*.jsonl"), reverse=newest_first):
                 file_date = event_file.stem
 
                 if file_date < start_date or file_date > end_date:
                     continue
 
+                file_results: list[LearningEvent] = []
                 try:
                     with open(event_file, "r") as f:
                         for line in f:
                             if not line.strip():
                                 continue
 
-                            data = json.loads(line)
+                            # One bad line must never discard the rest of the
+                            # file: a malformed JSON line used to abort the
+                            # whole file, and an unknown ``event_type`` enum
+                            # value raised ValueError straight OUT of
+                            # query_events, so a single newer-schema record made
+                            # every consumer see an empty history (round-3
+                            # review, R3-B3).
+                            try:
+                                data = json.loads(line)
+                            except json.JSONDecodeError as e:
+                                logger.warning(
+                                    f"Corrupted JSON line in {event_file}: {e} — event LOST "
+                                    f"at {datetime.utcnow().isoformat()}Z"
+                                )
+                                continue
 
                             # FIX #13: Validate required fields before reconstruction (prevent KeyError)
                             required_fields = {"event_id", "event_type", "skill_id", "tenant_id", "timestamp"}
@@ -173,10 +202,19 @@ class EventStore:
                             if skill_id and data.get("skill_id") != skill_id:
                                 continue
 
+                            try:
+                                parsed_type = EventType(data["event_type"])
+                            except ValueError:
+                                logger.warning(
+                                    f"Skipping event with unknown event_type "
+                                    f"{data.get('event_type')!r} in {event_file}"
+                                )
+                                continue
+
                             # FIX #14, #25: Include version in reconstruction (prevent schema drift)
                             event = LearningEvent(
                                 event_id=data["event_id"],
-                                event_type=EventType(data["event_type"]),
+                                event_type=parsed_type,
                                 skill_id=data["skill_id"],
                                 tenant_id=data["tenant_id"],
                                 timestamp=data["timestamp"],
@@ -188,22 +226,28 @@ class EventStore:
                                 prev_hash=data.get("prev_hash"),
                                 audit_ref=data.get("audit_ref"),
                             )
-                            results.append(event)
+                            file_results.append(event)
 
-                            # FIX #21 optimization: early exit when limit+offset reached
-                            if len(results) >= (offset + limit):
-                                return results[offset:offset + limit]
+                            # FIX #21 optimization: early exit when limit+offset
+                            # reached. Only valid oldest-first — the newest N of
+                            # a file live at its END, so a newest-first query
+                            # must read the whole file before slicing.
+                            if not newest_first and len(results) + len(file_results) >= wanted:
+                                break
 
-                except json.JSONDecodeError as e:
-                    # FIX #4, #27: Log corrupted JSON + audit timestamp (not silent)
-                    logger.warning(f"Corrupted JSON in {event_file}: {e} — event(s) LOST at {datetime.utcnow().isoformat()}Z")
-                    continue
                 except IOError as e:
                     logger.error(f"IO error reading {event_file}: {e}")
                     continue
 
+                if newest_first:
+                    file_results.reverse()
+                results.extend(file_results)
+
+                if len(results) >= wanted:
+                    return results[offset:wanted]
+
             # FIX #21: Apply limit + offset to prevent OOM
-            return results[offset : offset + limit]
+            return results[offset:wanted]
 
     def count_events(self, tenant_id: str, event_type: Optional[EventType] = None) -> int:
         """Count events for a tenant (stream-based, O(n) time, O(1) space).

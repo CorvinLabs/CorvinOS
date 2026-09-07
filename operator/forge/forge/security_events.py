@@ -1225,19 +1225,46 @@ def _read_chain_tail(chain_path: Path) -> str | None:
 
 
 def _chain_path_record_path(chain_path: Path) -> Path:
+    """R3-A3: keyed on the RESOLVED path, matching ``tripwire._current_chain_key``.
+
+    ``os.path.abspath`` does not follow symlinks, so ONE physical chain reached
+    through the documented compat symlink (``<corvin_home>/global`` →
+    ``tenants/_default/global``) hashed to a DIFFERENT key than the same chain
+    reached through the real path — and the aliasing reader silently saw no
+    identity record at all: no ``chain_replaced``, no ``records_prepended``, no
+    path-keyed tail. Resolving makes the two readers agree.
+
+    Records written before this change still live at the abspath location;
+    :func:`_read_chain_path_record` falls back to it READ-ONLY (never written to
+    again, so the two locations cannot diverge)."""
+    try:
+        real = str(Path(chain_path).resolve())
+    except OSError:  # pragma: no cover - resolve() is non-strict on 3.6+
+        real = os.path.abspath(str(chain_path))
+    digest = hashlib.sha256(real.encode("utf-8")).hexdigest()[:32]
+    return _mac_sentinel_path().parent / "chain_ids" / digest
+
+
+def _legacy_chain_path_record_path(chain_path: Path) -> Path:
+    """Pre-R3-A3 (abspath-keyed) location — read-only compatibility."""
     digest = hashlib.sha256(os.path.abspath(str(chain_path)).encode("utf-8")).hexdigest()[:32]
     return _mac_sentinel_path().parent / "chain_ids" / digest
 
 
 def _read_chain_path_record(chain_path: Path) -> dict | None:
     try:
-        rp = _chain_path_record_path(chain_path)
-        if not rp.exists():
-            return None
-        d = json.loads(rp.read_text())
-        if not isinstance(d, dict) or not isinstance(d.get("genesis"), str) or not d["genesis"]:
-            return None
-        return d
+        candidates = [_chain_path_record_path(chain_path)]
+        legacy = _legacy_chain_path_record_path(chain_path)
+        if legacy != candidates[0]:
+            candidates.append(legacy)
+        for rp in candidates:
+            if not rp.exists():
+                continue
+            d = json.loads(rp.read_text())
+            if not isinstance(d, dict) or not isinstance(d.get("genesis"), str) or not d["genesis"]:
+                continue
+            return d
+        return None
     except Exception:  # noqa: BLE001
         return None
 
@@ -1297,24 +1324,91 @@ def note_chain_rotation(chain_path: Path, *, link_hash: str) -> None:
         "genesis": link_hash, "tail": link_hash, "legacy_prefix": 0,
         "mac": bool(existing.get("mac")), "ts": time.time(),
         "rotated_from": history[-32:],
+        # R3-A1: the OUT-OF-TREE fact that this genesis is a rotation link the
+        # sealer minted. Nothing inside audit.jsonl can produce it, so it — not
+        # the shape of a record in the file — is what later verifies consult.
+        "rotation_genesis": str(link_hash),
     })
+
+
+def _first_chained_record(chain_path: Path) -> dict | None:
+    """The first hash-bearing record of a chain file, or ``None``."""
+    try:
+        with Path(chain_path).open("rb") as fh:
+            for raw in fh:
+                st = raw.strip()
+                if not st:
+                    continue
+                try:
+                    rec = json.loads(st)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if isinstance(rec, dict) and rec.get("hash"):
+                    return rec
+    except OSError:
+        return None
+    return None
+
+
+def _rotation_link_authenticated(chain_path: Path, pathrec: dict | None,
+                                 genesis: str | None) -> bool:
+    """True only when an OUT-OF-TREE fact says this genesis is a Layer 37 link.
+
+    R3-A1 (2026-09-07). Round 2 recognised a rotation by the SHAPE of the first
+    record in ``audit.jsonl``: event_type ``audit.rotation_link`` whose
+    ``prev_hash`` equalled the tail in the path record. The in-code argument
+    ("a rewriter cannot read the path record") was false — ``_record_chain_path_state``
+    sets that tail to the hash of the last chained record on every write, so the
+    recorded tail is byte-identical to the last ``hash`` IN THE FILE the attacker
+    is rewriting. Forging a rotation_link genesis that borrows the file's own tail
+    therefore suppressed ``chain_replaced`` + ``tail_truncated`` + ``mac_stripped_chain``
+    in one move, and the only residue was a LINE-NUMBERED ``broken_chain`` at line 1
+    which ``audit_chain_intact`` treats as historical once the file exceeds
+    ``TAIL_RECORDS`` — a length the attacker chooses.
+
+    Rotation is now recognised by facts an in-tree rewriter cannot mint:
+
+    * ``pathrec["rotation_genesis"]`` — written by :func:`note_chain_rotation`,
+      which ``audit_sealer.rotate_and_seal()`` calls under the rotation lock right
+      after it wrote the link. It lives beside the anchor key.
+    * the link's own ``mac``, an HMAC under the anchor key. The sealer has the key;
+      an attacker who can only edit ``audit.jsonl`` does not.
+
+    Neither present → not a rotation. Fail-closed: no key and no record means the
+    answer is "no", never "probably"."""
+    if not genesis:
+        return False
+    if isinstance(pathrec, dict):
+        recorded = pathrec.get("rotation_genesis")
+        if isinstance(recorded, str) and recorded and hmac.compare_digest(recorded, genesis):
+            return True
+    ak = _anchor_key()
+    if ak is None:
+        return False
+    rec = _first_chained_record(chain_path)
+    if not isinstance(rec, dict):
+        return False
+    if str(rec.get("event_type", "")) != "audit.rotation_link":
+        return False
+    mac = rec.get("mac")
+    if not isinstance(mac, str) or not mac:
+        return False
+    canon = _canonical({k: v for k, v in rec.items()
+                        if k not in CHAIN_HASH_EXCLUDED_FIELDS}).encode("utf-8")
+    expected = hmac.new(ak, str(rec.get("prev_hash", "")).encode("utf-8") + b"\n" + canon,
+                        hashlib.sha256).hexdigest()[:16]
+    return hmac.compare_digest(mac, expected)
 
 
 def _is_legitimate_rotation(chain_path: Path, pathrec: dict,
                             genesis: str | None, genesis_prev: str) -> bool:
     """True when a changed genesis is a Layer 37 rotation, not a replacement.
 
-    ``audit_sealer.rotate()`` renames the live file away and writes a fresh one
-    holding exactly one ``audit.rotation_link`` whose ``prev_hash`` is the
-    ROTATED segment's tail. That tail is what the path record already holds, and
-    the path record lives beside the anchor key — a rewriter who can edit
-    ``audit.jsonl`` cannot read it, so it cannot mint a link that binds to it.
-    Recognising the shape here means the rotation path needs no cooperation from
-    the sealer (``note_chain_rotation`` remains available for an explicit call).
-
-    Deliberately narrow: the genesis record must BE a rotation_link, its
-    ``prev_hash`` must equal the recorded tail exactly, and the recorded tail
-    must be non-empty. Anything else is a replacement."""
+    Three conditions, ALL required: the link binds to the tail this path record
+    remembers, the genesis really is that link, and the rotation is
+    AUTHENTICATED out of tree (:func:`_rotation_link_authenticated`). The last
+    one is the load-bearing half — the first two are shape, and shape is exactly
+    what an attacker rewriting the file controls (R3-A1)."""
     if not genesis or not genesis_prev:
         return False
     recorded_tail = pathrec.get("tail")
@@ -1322,21 +1416,7 @@ def _is_legitimate_rotation(chain_path: Path, pathrec: dict,
         return False
     if genesis_prev != recorded_tail:
         return False
-    try:
-        with Path(chain_path).open("rb") as fh:
-            for raw in fh:
-                s = raw.strip()
-                if not s:
-                    continue
-                try:
-                    rec = json.loads(s)
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-                if isinstance(rec, dict) and rec.get("hash"):
-                    return str(rec.get("event_type", "")) == "audit.rotation_link"
-    except OSError:
-        return False
-    return False
+    return _rotation_link_authenticated(chain_path, pathrec, genesis)
 
 
 def _is_primary_live_layout(chain_path: Path) -> bool:
@@ -3106,6 +3186,32 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
                 "actual_prefix": _legacy_prefix,
                 "detail": "hash-less records were inserted before the chain genesis",
             })
+
+    # R3-A1: an UNANCHORED genesis is a LINE-LESS (current-state) problem.
+    #
+    # A chain's first chained record binds to ``initial_prev`` — "" for a live
+    # chain, the previous segment's tail when a rotated segment is verified
+    # cross-segment (ADR-0044). A genesis whose ``prev_hash`` is anything else
+    # claims to continue a chain nobody vouched for. The ONE legitimate shape is
+    # a Layer 37 rotation link, and that is now recognised by an out-of-tree fact
+    # (``rotation_genesis`` written by note_chain_rotation under the rotation
+    # lock, or the link's own anchor-key MAC), never by the record's shape.
+    #
+    # Reported WITHOUT a ``line`` on purpose. As a line-1 ``broken_chain`` this
+    # was classified "historical" by ``tripwire.audit_chain_intact`` as soon as
+    # the file grew past TAIL_RECORDS — a length the attacker chooses by padding
+    # the forged file. Line-less problems describe the chain's CURRENT state and
+    # block the boot regardless of file length.
+    if (chain_started and _genesis and _gen_prev != initial_prev
+            and not _skip_out_of_tree_markers(path)
+            and not _rotation_link_authenticated(path, _pathrec, _genesis)):
+        problems.append({
+            "issue": "unanchored_genesis",
+            "genesis": str(_genesis)[:16],
+            "genesis_prev": str(_gen_prev)[:16],
+            "detail": "the chain's first record continues a tail nothing vouches "
+                      "for (no authenticated Layer 37 rotation link)",
+        })
     # NOT a rule here: "the genesis carries a mac, therefore the chain can have
     # no legacy prefix". It reads well and is false — a legacy install really
     # does carry a hash-less prefix, and its FIRST chained record is written

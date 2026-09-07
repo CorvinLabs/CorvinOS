@@ -228,11 +228,24 @@ class FeedbackConsistencyValidator:
         # Order is now taken from the event timestamps, never from the values.
         if self.event_store:
             try:
-                events = self.event_store.query_events(
-                    tenant_id=tenant_id,
-                    skill_id=skill_id,
-                    limit=self.LOSS_WINDOW_SAMPLES,
-                )
+                # ``newest_first=True`` is load-bearing: the store's default
+                # selects the OLDEST ``limit`` events, so a "recent" window
+                # taken from it is ancient history that never advances
+                # (round-3 review, R3-B2). Stores that predate the flag still
+                # work — the fallback below re-queries without it.
+                try:
+                    events = self.event_store.query_events(
+                        tenant_id=tenant_id,
+                        skill_id=skill_id,
+                        limit=self.LOSS_WINDOW_SAMPLES,
+                        newest_first=True,
+                    )
+                except TypeError:
+                    events = self.event_store.query_events(
+                        tenant_id=tenant_id,
+                        skill_id=skill_id,
+                        limit=self.LOSS_WINDOW_SAMPLES,
+                    )
                 samples: list[tuple[str, float]] = []
                 for event in events:
                     payload = getattr(event, "signal", None)
@@ -429,200 +442,9 @@ def apply_consistency_downweighting(
     return downweighted
 
 
-# ============================================================================
-# Tests (inline, Red→Green)
-# ============================================================================
-
-
-def test_feedback_consistent_with_loss_trend():
-    """Test: Negative feedback + loss increase = consistent."""
-    validator = FeedbackConsistencyValidator()
-
-    # Simulate increasing loss trend
-    recent_losses = [0.5, 0.52, 0.54, 0.56, 0.58]  # Increasing
-
-    # Mock event store
-    class MockEventStore:
-        def get_events(self, **kwargs):
-            return [
-                {"payload": {"total_loss": loss}}
-                for loss in recent_losses
-            ]
-
-    validator.event_store = MockEventStore()
-
-    result = validator.validate_consistency(
-        feedback_id="fb_001",
-        skill_id="os.router",
-        task_id="task_001",
-        feedback_signal=FeedbackSignal.BAD,
-        tenant_id="_default",
-    )
-
-    assert result.is_consistent, "BAD feedback should be consistent with increasing loss"
-    assert result.consistency_score > 0.5, "Consistency score should be > 0.5"
-    print("✅ Test 1: Negative feedback + loss increase = consistent")
-
-
-def test_feedback_contradicts_loss_trend():
-    """Test: Positive feedback + loss increase = inconsistent."""
-    validator = FeedbackConsistencyValidator()
-
-    # Simulate increasing loss trend
-    recent_losses = [0.5, 0.52, 0.54, 0.56, 0.58]  # Increasing
-
-    # Mock event store
-    class MockEventStore:
-        def get_events(self, **kwargs):
-            return [
-                {"payload": {"total_loss": loss}}
-                for loss in recent_losses
-            ]
-
-    validator.event_store = MockEventStore()
-
-    result = validator.validate_consistency(
-        feedback_id="fb_002",
-        skill_id="os.router",
-        task_id="task_002",
-        feedback_signal=FeedbackSignal.GOOD,
-        tenant_id="_default",
-    )
-
-    assert not result.is_consistent, "GOOD feedback should be inconsistent with increasing loss"
-    assert result.consistency_score < 0.5, "Consistency score should be < 0.5"
-    print("✅ Test 2: Positive feedback + loss increase = inconsistent")
-
-
-def test_consistency_score_computed():
-    """Test: Consistency score in [0, 1] computed correctly."""
-    validator = FeedbackConsistencyValidator()
-
-    # Test multiple combinations
-    test_cases = [
-        (FeedbackSignal.GOOD, FeedbackSignal.GOOD, 1.0),  # Match → 1.0
-        (FeedbackSignal.BAD, FeedbackSignal.BAD, 1.0),    # Match → 1.0
-        (FeedbackSignal.OTHER, FeedbackSignal.GOOD, 0.5),  # OTHER → 0.5
-        (FeedbackSignal.GOOD, FeedbackSignal.BAD, 0.0),   # Contradiction → ~0.0
-    ]
-
-    for feedback, expected, expected_score in test_cases:
-        score = validator._compute_consistency_score(
-            feedback_signal=feedback,
-            expected_signal=expected,
-            loss_delta=0.15,  # Strong trend
-            recent_losses=[0.5, 0.6, 0.7],
-        )
-        assert 0.0 <= score <= 1.0, f"Score out of range: {score}"
-        if expected == FeedbackSignal.OTHER:
-            assert abs(score - expected_score) < 0.1, f"Expected ~{expected_score}, got {score}"
-        else:
-            assert abs(score - expected_score) < 0.01, f"Expected {expected_score}, got {score}"
-
-    print("✅ Test 3: Consistency score in [0, 1] computed correctly")
-
-
-def test_inconsistent_feedback_downweighted():
-    """Test: Low-consistency feedback contributes less to backprop."""
-    consistency_score = 0.3  # Low consistency
-    original_weight = 1.0
-
-    downweighted = apply_consistency_downweighting(
-        feedback_weight=original_weight,
-        consistency_score=consistency_score,
-    )
-
-    expected = original_weight * consistency_score
-    assert abs(downweighted - expected) < 0.01, f"Expected {expected}, got {downweighted}"
-    assert downweighted < original_weight, "Downweighted should be < original"
-    print("✅ Test 4: Inconsistent feedback downweighted in backprop")
-
-
-def test_feedback_contradiction_audit_logged():
-    """Test: Feedback contradiction events logged."""
-    validator = FeedbackConsistencyValidator()
-
-    # Mock audit backend
-    class MockAuditBackend:
-        def __init__(self):
-            self.events = []
-
-        def write_event(self, event):
-            self.events.append(event)
-
-    audit_backend = MockAuditBackend()
-    validator.audit_backend = audit_backend
-
-    # Mock event store with increasing loss
-    class MockEventStore:
-        def get_events(self, **kwargs):
-            return [
-                {"payload": {"total_loss": loss}}
-                for loss in [0.5, 0.52, 0.54, 0.56, 0.58]
-            ]
-
-    validator.event_store = MockEventStore()
-
-    result = validator.validate_consistency(
-        feedback_id="fb_003",
-        skill_id="os.router",
-        task_id="task_003",
-        feedback_signal=FeedbackSignal.GOOD,  # Contradictory
-        tenant_id="_default",
-    )
-
-    # Should log both consistency check and contradiction events
-    assert len(audit_backend.events) >= 2, "Should log consistency + contradiction events"
-
-    # Find contradiction event
-    contradiction_events = [e for e in audit_backend.events if e.get("event_type") == "feedback_contradiction"]
-    assert len(contradiction_events) > 0, "Should log contradiction event"
-
-    contradiction = contradiction_events[0]
-    assert contradiction["feedback_id"] == "fb_003"
-    assert contradiction["downweight_factor"] > 0.0
-    assert contradiction["downweight_factor"] < 1.0
-
-    print("✅ Test 5: Feedback contradiction events logged to audit")
-
-
-def test_contradiction_does_not_block():
-    """Test: Contradictory feedback still processed (downweighted, not rejected)."""
-    validator = FeedbackConsistencyValidator()
-
-    # Mock event store with increasing loss
-    class MockEventStore:
-        def get_events(self, **kwargs):
-            return [
-                {"payload": {"total_loss": loss}}
-                for loss in [0.5, 0.52, 0.54, 0.56, 0.58]
-            ]
-
-    validator.event_store = MockEventStore()
-
-    result = validator.validate_consistency(
-        feedback_id="fb_004",
-        skill_id="os.router",
-        task_id="task_004",
-        feedback_signal=FeedbackSignal.GOOD,  # Contradictory to increasing loss
-        tenant_id="_default",
-    )
-
-    # The feedback should still be processed (not blocked)
-    # It just has a low consistency score
-    assert result is not None, "Contradictory feedback should still be processed"
-    assert result.consistency_score < 0.5, "Should have low consistency score"
-    # But the result should exist and be usable for downweighting
-
-    print("✅ Test 6: Contradictory feedback still processed (downweighted, not rejected)")
-
-
-if __name__ == "__main__":
-    print("Running Feedback Consistency Checker Tests...\n")
-    test_feedback_consistent_with_loss_trend()
-    test_feedback_contradicts_loss_trend()
-    test_consistency_score_computed()
-    test_inconsistent_feedback_downweighted()
-    test_feedback_contradiction_audit_logged()
-    test_contradiction_does_not_block()
-    print("\n🎉 All consistency checker tests passed!")
+# The inline ``test_*`` demo block that used to live here was deleted on
+# 2026-09-07 (round-3 review): every one of its mock stores defined
+# ``get_events``, an API this module stopped calling in round 2, so the block
+# exercised nothing but its own mocks and drifted further on every change. The
+# real coverage is ``core/learning/tests/test_consistency_checker.py``, which
+# drives the validator through the real ``EventStore`` on disk.

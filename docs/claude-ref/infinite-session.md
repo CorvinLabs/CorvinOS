@@ -18,7 +18,7 @@ per finished `/task` turn (completed, failed and cancelled alike).
 |---|---|
 | `paths.py` | ONE place for id validation (`ID_PATTERN = ^[A-Za-z0-9_.-]{1,128}$`, no `..`), tenant roots (`tenant_root(tenant_id)` = `<corvin_home>/tenants/<tenant>/infinite_session/`, via `core.paths.tenant.corvin_home()`), `safe_child()` (resolve + `is_relative_to` before any open) and `core_audit()` (core hash-chained writer, fail-closed, allowlists registered via `security_events.register_event_allowlist`). |
 | `snapshot_schema.py` | Frozen `Snapshot` (content hash, prev-hash link, PII gate, 50 MB cap, strict ids), `SnapshotMetadata` (+ `seq`). |
-| `event_store.py` | **The only persistence layer.** `EventStore(tenant_id)` is tenant-bound; layout `snapshots/<task_id>/{index.json,<snapshot_id>.json}`; `write_snapshot` is audit-FIRST (`infinite_session.snapshot_created` on the core chain; no commit → nothing on disk), atomic (tmp → fsync → rename), locked, append-only, and refuses a wrong tenant, a duplicate id, or a `prev_snapshot_hash` ≠ chain head. `verify_snapshot_chain` re-hashes every snapshot. `snapshot_task_state()` is the producer helper. |
+| `event_store.py` | **The only persistence layer.** `EventStore(tenant_id)` is tenant-bound; layout `snapshots/<task_id>/{index.json,<snapshot_id>.json}`; `write_snapshot` is audit-FIRST (`infinite_session.snapshot_created` on the core chain; no commit → nothing on disk), atomic (tmp → fsync → rename), locked (bounded, non-blocking — see § Producer), append-only, and refuses a wrong tenant, a duplicate id, or a `prev_snapshot_hash` ≠ chain head. `verify_snapshot_chain` re-hashes every snapshot. `snapshot_task_state()` is the producer helper. |
 | `crypto_binding.py` | HMAC-SHA256 over canonical JSON, one key per tenant at `<tenant_root>/keys/signing.key` (0600). `sign_payload/verify_payload` (dict), `hmac_bytes/verify_bytes` (raw). Verification never creates a key. |
 | `session_bridger.py` | `SessionBridgeEvent` signed over ALL fields minus `signature`; `resume_from_bridge` verifies signature, tenant/task binding, and that the referenced snapshot exists with the same hash — then returns the recovered `state_dict`. Bridges must point at persisted snapshots. |
 | `rollback_manager.py` | Tenant-bound WAL + JSONL log; every entry (COMMITTED, ROLLED_BACK **and** FAILED) carries `prev_mac`/`mac` = HMAC(tenant key). `recover_pending()` (at construction, grace window 60 s; `max_age_s=0` forces) closes abandoned WAL entries as ROLLED_BACK. Audit callbacks carry state HASHES only. |
@@ -59,7 +59,17 @@ The payload is content-free by construction — `status`, `exit_code`,
 `duration_ms`, `event_count`, an 8-char `chat_key_prefix` and the
 `result_sha256` of the model output; the output text itself is never
 snapshotted. A snapshot failure never fails the task, but it is logged at
-ERROR with the task id (never silent). Proof through the real boundary:
+ERROR with the task id (never silent).
+
+That guarantee is availability, not just error handling, so the store's per-task
+index lock is **non-blocking by construction**: `EventStore._task_lock` takes
+`flock(LOCK_EX | LOCK_NB)` and retries until `LOCK_TIMEOUT_SECONDS` (2 s), then
+raises `SnapshotLockBusy`, which every caller turns into a returned
+`(False, "snapshot lock busy …")` / `([], …)` / `(0, …)`. It was a plain
+`flock(LOCK_EX)` with no timeout, taken twice per producer call, on the
+completion path BEFORE `_notify_task_done` — a wedged holder stranded a finished
+task with no notification, and no `try/except` can catch a hang (2026-09-07,
+R3-B5). Regression: `tests/skills/test_infinite_session_lock_nonblocking.py`. Proof through the real boundary:
 `core/console/tests/test_task_worker_pool_argv.py::test_pool_writes_infinite_session_snapshot_for_finished_turn`
 drives the real pool against a fake `claude` binary and reads the chain back
 through `EventStore` and the console route.

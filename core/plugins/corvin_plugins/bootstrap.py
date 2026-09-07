@@ -1648,6 +1648,60 @@ def _trust_permits(
     return False
 
 
+def _module_file_without_import(module_path: str) -> str | None:
+    """The file a dotted module name resolves to, executing NO code (R3-A2).
+
+    ``importlib.util.find_spec("evilpkg.plugin")`` IMPORTS ``evilpkg`` — it has
+    to, because it asks the parent package for its ``__path__``. So the
+    provenance probe that exists precisely to run BEFORE the ADR-0249 trust gate
+    was executing ``evilpkg/__init__.py`` at tenant-controlled request: two lines
+    of ``registry.yaml`` (``class_path: evilpkg.plugin:Cls``) were arbitrary code
+    execution before anything decided whether that code may run.
+
+    ``importlib.machinery.PathFinder`` answers the same question from the
+    filesystem alone. Walk the dotted name segment by segment, threading each
+    spec's ``submodule_search_locations`` (the package ``__path__`` read off disk)
+    into the next lookup as the search path. The top segment searches ``sys.path``.
+
+    Deliberately narrower than ``find_spec``: no ``sys.meta_path`` hooks, no
+    builtin/frozen modules, no namespace packages with no single file. Every one
+    of those returns ``None``, which the caller already models as the RESTRICTIVE
+    answer ("origin cannot be established" → not builtin). A module that is
+    already in ``sys.modules`` is consulted through its recorded spec only —
+    reading an attribute of a module someone else imported executes nothing.
+    """
+    from importlib.machinery import PathFinder  # noqa: PLC0415
+
+    parts = [p for p in module_path.split(".")]
+    if not parts or any(not p for p in parts):
+        return None
+    search_path: list[str] | None = None
+    origin: str | None = None
+    for i, part in enumerate(parts):
+        spec = None
+        try:
+            spec = PathFinder().find_spec(part, search_path)
+        except Exception:  # noqa: BLE001 — a hostile path entry must not crash boot
+            spec = None
+        if spec is None:
+            # Fall back to a module ALREADY in sys.modules (imported by someone
+            # else, for their own reasons). Reading its recorded spec runs no
+            # code; it covers meta-path finders (editable installs) that
+            # PathFinder deliberately does not consult.
+            import sys as _sys  # noqa: PLC0415
+            mod = _sys.modules.get(".".join(parts[: i + 1]))
+            spec = getattr(mod, "__spec__", None) if mod is not None else None
+            if spec is None:
+                return None
+        origin = getattr(spec, "origin", None)
+        if i < len(parts) - 1:
+            locs = getattr(spec, "submodule_search_locations", None)
+            if not locs:
+                return None  # not a package → the rest of the name cannot exist
+            search_path = list(locs)
+    return origin
+
+
 def _origin_for_class_path(class_path: str) -> tuple[str | None, str | None]:
     """``(origin, source)`` derived from where a ``class_path``'s module FILE
     lives, or ``(None, None)`` when that cannot be established (R2-A4).
@@ -1661,19 +1715,13 @@ def _origin_for_class_path(class_path: str) -> tuple[str | None, str | None]:
     process-wide provider slot on a multi-tenant install.
 
     The location is the fact, exactly as it already is for the discovery path
-    (:func:`origin_for_plugin_dir`). Resolved WITHOUT importing the module —
-    ``find_spec`` reads the loader's file path — so this can run BEFORE the
-    trust gate decides whether the code may be imported at all, which is the
-    whole point of that gate's placement.
+    (:func:`origin_for_plugin_dir`). Resolved WITHOUT importing ANYTHING — see
+    :func:`_module_file_without_import` — so this can run BEFORE the trust gate
+    decides whether the code may be imported at all, which is the whole point of
+    that gate's placement.
     """
-    import importlib.util  # noqa: PLC0415
-
     module_path = class_path.rsplit(":", 1)[0] if ":" in class_path else class_path.rsplit(".", 1)[0]
-    try:
-        spec = importlib.util.find_spec(module_path)
-    except Exception:  # noqa: BLE001 — unimportable/absent → cannot establish a fact
-        return None, None
-    origin_file = getattr(spec, "origin", None) if spec is not None else None
+    origin_file = _module_file_without_import(module_path)
     if not origin_file or origin_file in ("built-in", "frozen", "namespace"):
         return None, None
     try:
