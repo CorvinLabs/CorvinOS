@@ -41,10 +41,17 @@ from typing import Dict, Optional, List, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import time
-import numpy as np
 from collections import deque
 import logging
 import math
+
+# numpy is optional - only needed for FFT harmonic energy detection
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+    np = None
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +225,12 @@ class WeightSmoother:
 
         Returns:
           Harmonic energy score [0, 1]
+          Note: Returns 0.0 if numpy is not available (fallback to no FFT analysis)
         """
+        if not HAS_NUMPY:
+            # Fallback if numpy unavailable - use simple sign-change detection
+            return self._compute_harmonic_energy_simple(state)
+
         if len(state.recent_deltas) < 4:
             # Need at least 4 samples for meaningful FFT
             return 0.0
@@ -249,6 +261,34 @@ class WeightSmoother:
             return 0.0
 
         harmonic_energy = high_freq_power / total_power
+        return float(harmonic_energy)
+
+    def _compute_harmonic_energy_simple(self, state: SmootherState) -> float:
+        """
+        Simple harmonic energy detection using sign changes (fallback when numpy unavailable).
+
+        Counts sign changes in recent deltas:
+          - Many sign changes = high oscillation = high harmonic energy
+          - Few sign changes = smooth trend = low harmonic energy
+
+        Returns value in [0, 1].
+        """
+        if len(state.recent_deltas) < 2:
+            return 0.0
+
+        deltas = list(state.recent_deltas)
+        sign_changes = 0
+
+        for i in range(1, len(deltas)):
+            if (deltas[i] > 0 and deltas[i-1] < 0) or (deltas[i] < 0 and deltas[i-1] > 0):
+                sign_changes += 1
+
+        # Normalize: max sign changes = len(deltas)-1
+        max_possible_changes = len(deltas) - 1
+        if max_possible_changes == 0:
+            return 0.0
+
+        harmonic_energy = sign_changes / max_possible_changes
         return float(harmonic_energy)
 
     def _compute_confidence(

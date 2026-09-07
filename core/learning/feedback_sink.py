@@ -243,7 +243,12 @@ class FeedbackValidator:
         # 0. Signature verification (fail-closed: reject if signature invalid)
         if feedback.signature is not None:
             # Verify signature if present
+            # IMPORTANT: exclude signature and signature_verified fields from the dict
+            # being verified (they are metadata, not part of the signed payload)
             feedback_dict = feedback.to_dict()
+            feedback_dict.pop("signature", None)
+            feedback_dict.pop("signature_verified", None)
+
             is_valid, error = self.signature_validator.validate_feedback_signature(
                 feedback.tenant_id,
                 feedback_dict,
