@@ -105,6 +105,20 @@ class AlertEvent(BaseModel):
     muted: bool = False
 
 
+#: Log levels a ``log`` handler's ``target`` may name.
+_LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+
+
+class UnsupportedHandlerType(ValueError):
+    """A notification handler type with no implemented transport was registered."""
+
+
 class AlertNotificationHandler(BaseModel):
     """Callback for alert handling."""
     handler_id: str
@@ -210,6 +224,12 @@ class AlertPolicyManager:
     # Hard cap on the replay cache so it can never grow without bound even under
     # a flood of verifications inside a single freshness window.
     _NONCE_CACHE_MAX = 10_000
+    # A confirmation nobody ever answers must not be retained forever. Round-4
+    # review: ``_confirmation_queue`` / ``_held_alerts`` were never pruned,
+    # unlike ``_nonce_cache``, so a flood of unconfirmed CRITICAL alerts grew
+    # the process for its whole lifetime.
+    _CONFIRMATION_TTL_SECONDS = 3600
+    _CONFIRMATION_QUEUE_MAX = 1_000
 
     def __init__(self, tenant_id: str, signing_key: Optional[str] = None):
         """Initialize alert manager for a tenant.
@@ -227,8 +247,10 @@ class AlertPolicyManager:
         # Security: Alert signatures and rate-limiting (Fix #11)
         self._signing_key = signing_key or secrets.token_hex(32)
         self._rate_limiters: Dict[str, AlertRateLimiter] = {}
-        self._confirmation_queue: Dict[str, AlertConfirmationRequest] = {}
+        self._confirmation_queue: "OrderedDict[str, AlertConfirmationRequest]" = OrderedDict()
         self._held_alerts: Dict[str, AlertEvent] = {}
+        #: monotonic clock per confirmation id, for TTL pruning
+        self._confirmation_seen: Dict[str, float] = {}
         # Replay guard: nonces are recorded at VERIFY time (first successful
         # verify wins), never at sign time — recording at sign time made the
         # original verification of every freshly signed alert fail as a replay.
@@ -455,8 +477,11 @@ class AlertPolicyManager:
 
             # Fire alert if triggered
             if should_alert:
+                # Unique per ALERT, not per history length: a held alert never
+                # enters ``_history``, so two pending alerts of the same policy
+                # used to get the SAME alert_id (round-4 review, F9).
                 alert = AlertEvent(
-                    alert_id=f"{policy_id}_{len(self._history)}",
+                    alert_id=f"{policy_id}_{len(self._history)}_{secrets.token_hex(4)}",
                     policy_id=policy_id,
                     alert_type=policy.alert_type,
                     level=policy.level,
@@ -502,25 +527,46 @@ class AlertPolicyManager:
 
         return alerts
 
-    def _notify_handlers(self, alert: AlertEvent) -> None:
-        """Send alert to configured notification handlers.
+    #: Handler types this class can actually deliver to. ``register_handler``
+    #: REFUSES anything else rather than storing a target it will never
+    #: contact: round-4 review found ``_notify_handlers`` was a ``TODO`` stub
+    #: while ``register_handler`` happily accepted webhook/email/slack targets
+    #: and the round-3 fix comment claimed approving an alert "reached the
+    #: notification handlers". Adding an outbound HTTP/SMTP transport here is a
+    #: Layer-35 egress decision, not a bug fix, so the honest state is: one
+    #: implemented transport, and a refusal for the rest.
+    SUPPORTED_HANDLER_TYPES = ("log",)
 
-        Handlers are called asynchronously (fire-and-forget) to avoid blocking.
+    def _notify_handlers(self, alert: AlertEvent) -> int:
+        """Deliver ``alert`` to every enabled, level-matching handler.
 
-        **Compliance:** Handlers must not leak PII or raw user data (GDPR Art. 32).
+        Returns the number of handlers actually notified.
+
+        **Compliance:** the payload is the alert's own content-free fields
+        (ids, metric name, numbers) — never user data (GDPR Art. 32).
         """
+        delivered = 0
         for handler_id, handler in self._handlers.items():
-            # Skip if not enabled or alert level not matched
             if not handler.enabled or alert.level not in handler.alert_levels:
                 continue
 
-            # TODO: Implement notification dispatch
-            # - If webhook: POST to handler.target with alert payload
-            # - If email: send email to handler.target
-            # - If Slack: send message to handler.target channel
-            # - If log: log at appropriate level
-
-            logger.info(f"Notifying {handler.handler_type} handler {handler_id}: {alert.alert_id}")
+            if handler.handler_type == "log":
+                level = _LOG_LEVELS.get(str(handler.target).lower(), logging.WARNING)
+                logger.log(
+                    level,
+                    "ALERT %s [%s] policy=%s metric=%s value=%s threshold=%s tenant=%s: %s",
+                    alert.alert_id, alert.level.value, alert.policy_id,
+                    alert.metric_name, alert.metric_value, alert.threshold,
+                    alert.tenant_id, alert.message,
+                )
+                delivered += 1
+            else:  # pragma: no cover — register_handler refuses these
+                logger.error(
+                    "alert handler %s has unsupported type %r — NOT delivered "
+                    "(this should be unreachable; register_handler refuses it)",
+                    handler_id, handler.handler_type,
+                )
+        return delivered
 
     # ====== Security Methods (Fix #11: Alert Spoofing) ======
 
@@ -753,7 +799,9 @@ class AlertPolicyManager:
             status="pending",
         )
 
+        self._prune_confirmations()
         self._confirmation_queue[confirmation_id] = conf_req
+        self._confirmation_seen[confirmation_id] = time.monotonic()
         # Hold the alert itself: approving must be able to FIRE it. Until
         # 2026-09-07 confirm_alert only stamped a status, so the two most
         # critical policies could never fire at all — approving did nothing
@@ -786,23 +834,62 @@ class AlertPolicyManager:
         if approved:
             conf_req.status = "approved"
             logger.info(f"Alert approved: {conf_req.alert_id} by {confirmed_by} (tenant={self.tenant_id})")
-            # Approving FIRES the alert: rate-limit bookkeeping, history and the
-            # notification handlers, exactly as the direct path in evaluate().
+            # Approving FIRES the alert: rate-limit CHECK + bookkeeping, history
+            # and the notification handlers, exactly as the direct path in
+            # evaluate(). Round-4 review: this recorded the alert against the
+            # rate limiter but never CHECKED it, so N queued confirmations all
+            # fired regardless of the per-minute/hour limit evaluate() enforces.
             held = self._held_alerts.pop(conf_req.confirmation_id, None)
             if held is not None:
+                rate_ok, rate_msg = self.check_rate_limit(conf_req.policy_id)
+                if not rate_ok:
+                    conf_req.status = "rate_limited"
+                    conf_req.rejection_reason = rate_msg
+                    logger.warning(
+                        f"Approved alert suppressed by rate limit: {held.alert_id} "
+                        f"({rate_msg}, tenant={self.tenant_id})"
+                    )
+                    self._confirmation_seen.pop(conf_req.confirmation_id, None)
+                    return True
                 self.record_alert_for_rate_limit(conf_req.policy_id, held.alert_id)
                 self._history.append(held)
                 logger.warning(
                     f"Alert fired after confirmation: {held.alert_id} (tenant={self.tenant_id})"
                 )
                 self._notify_handlers(held)
+            self._confirmation_seen.pop(conf_req.confirmation_id, None)
         else:
             conf_req.status = "rejected"
             conf_req.rejection_reason = "Operator rejected"
             self._held_alerts.pop(conf_req.confirmation_id, None)
+            self._confirmation_seen.pop(conf_req.confirmation_id, None)
             logger.info(f"Alert rejected: {conf_req.alert_id} by {confirmed_by} (tenant={self.tenant_id})")
 
         return True
+
+    def _prune_confirmations(self) -> int:
+        """Drop confirmations older than the TTL, then enforce the hard cap.
+
+        Mirrors ``_prune_nonce_cache``. A pruned request and its held alert are
+        dropped together — a held alert whose request is gone can never fire.
+        """
+        dropped = 0
+        cutoff = time.monotonic() - self._CONFIRMATION_TTL_SECONDS
+        for cid in [c for c, seen in self._confirmation_seen.items() if seen < cutoff]:
+            self._confirmation_queue.pop(cid, None)
+            self._held_alerts.pop(cid, None)
+            self._confirmation_seen.pop(cid, None)
+            dropped += 1
+        while len(self._confirmation_queue) > self._CONFIRMATION_QUEUE_MAX:
+            cid, _ = self._confirmation_queue.popitem(last=False)
+            self._held_alerts.pop(cid, None)
+            self._confirmation_seen.pop(cid, None)
+            dropped += 1
+        if dropped:
+            logger.info(
+                "pruned %d expired alert confirmation(s) (tenant=%s)", dropped, self.tenant_id
+            )
+        return dropped
 
     def get_pending_confirmations(self) -> List[AlertConfirmationRequest]:
         """Get all pending confirmation requests (Fix #11)."""
@@ -817,8 +904,11 @@ class AlertPolicyManager:
         """Register an alert notification handler.
 
         Args:
-            handler_type: "webhook" | "email" | "slack" | "log"
-            target: Handler-specific target (URL, email, channel)
+            handler_type: must be one of :attr:`SUPPORTED_HANDLER_TYPES`
+                (today: ``"log"``). Anything else raises
+                :class:`UnsupportedHandlerType`.
+            target: Handler-specific target (for ``log``: the level name —
+                ``debug`` / ``info`` / ``warning`` / ``error`` / ``critical``)
             alert_levels: Which severities to notify (default [CRITICAL])
 
         Returns:
@@ -826,6 +916,14 @@ class AlertPolicyManager:
 
         **Audit:** Logged (handler registration is part of policy)
         """
+        if handler_type not in self.SUPPORTED_HANDLER_TYPES:
+            raise UnsupportedHandlerType(
+                f"handler_type {handler_type!r} has no implemented transport "
+                f"(supported: {', '.join(self.SUPPORTED_HANDLER_TYPES)}). Registering "
+                "it would store a target that is never contacted, which is how "
+                "'the alert reached the notification handlers' became false."
+            )
+
         if alert_levels is None:
             alert_levels = [AlertLevel.CRITICAL]
 

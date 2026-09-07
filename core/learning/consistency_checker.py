@@ -8,7 +8,7 @@ Mitigation for: Finding #9 "Feedback Contradiction: Conflicting signals → dive
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Tuple
 from enum import Enum
 import logging
@@ -88,8 +88,47 @@ class FeedbackContradictionEvent:
         }
 
 
+def _parse_event_timestamp(raw: Any) -> Optional[datetime]:
+    """Parse an ISO-8601 learning-event timestamp to an aware UTC datetime.
+
+    Accepts the ``…Z`` form ``LearningEvent.create`` writes, an explicit offset
+    (``+02:00``) and a naive stamp (assumed UTC). Returns ``None`` when the
+    value is missing or unparseable — the caller must then NOT claim to have
+    ordered anything chronologically.
+    """
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 class FeedbackConsistencyValidator:
-    """Validates feedback consistency against loss trends (fail-closed, GDPR Art. 32)."""
+    """Validates feedback consistency against recent loss trends (GDPR Art. 32).
+
+    **Failure direction, stated once (round-4 review, F8).** This class'
+    docstring used to say "fail-closed" while
+    :meth:`validate_consistency`'s exception handler returned
+    ``is_consistent=True`` under the comment "Fail-open: assume consistent if
+    check fails". Both cannot be true. The deliberate behaviour is:
+
+    * a CHECKER error (store unreachable, malformed history) yields a NEUTRAL
+      result (score 0.5, ``is_consistent=True``) — i.e. fail-OPEN, because a
+      crashing checker must never downweight legitimate user feedback. The
+      reason string names the error and the audit event still fires, so the
+      degradation is visible rather than silent;
+    * a detected CONTRADICTION is acted on (contradiction event emitted,
+      feedback downweighted) — that is the only decision this class makes;
+    * the fail-CLOSED guarantees around it belong to the audit-first
+      ``EventStore`` and the tenant binding, not to this validator.
+    """
 
     # Configuration
     LOSS_WINDOW_SAMPLES = 20  # Recent samples to evaluate for trend
@@ -191,15 +230,16 @@ class FeedbackConsistencyValidator:
 
         except Exception as e:
             logger.error(f"Consistency check failed for feedback {feedback_id}: {e}")
-            # Fail-closed: return neutral result (score=0.5, is_consistent=True)
-            # This prevents the system from accidentally downweighting valid feedback
+            # Fail-OPEN by design (see the class docstring): a checker error
+            # must not downweight legitimate feedback. Neutral score, reason
+            # names the error, audit event already emitted above.
             return ConsistencyCheckResult(
                 feedback_id=feedback_id,
                 skill_id=skill_id,
                 task_id=task_id,
                 feedback_signal=feedback_signal,
                 consistency_score=0.5,
-                is_consistent=True,  # Fail-open: assume consistent if check fails
+                is_consistent=True,  # neutral, not a verdict — see class docstring
                 loss_trend="unknown",
                 recent_loss_delta=0.0,
                 contradiction_reason=f"Consistency check error: {e}",
@@ -246,23 +286,44 @@ class FeedbackConsistencyValidator:
                         skill_id=skill_id,
                         limit=self.LOSS_WINDOW_SAMPLES,
                     )
-                samples: list[tuple[str, float]] = []
-                for event in events:
+                # ``events`` arrives NEWEST FIRST (see the query above), so its
+                # reverse is already chronological. That is the fallback, and it
+                # is why a missing/unparseable timestamp can no longer invert a
+                # trend (round-4 review, F8: the previous code did a plain
+                # LEXICAL sort, and Python's sort is stable, so equal or empty
+                # keys preserved the reverse-chronological input order and a
+                # falling loss was reported as rising).
+                samples: list[tuple[Optional[datetime], int, float]] = []
+                for index, event in enumerate(events):
                     payload = getattr(event, "signal", None)
                     if payload is None and isinstance(event, dict):
                         payload = event.get("signal") or event.get("payload")
                     if not isinstance(payload, dict):
                         continue
                     value = payload.get("total_loss")
-                    if not isinstance(value, (int, float)):
+                    if not isinstance(value, (int, float)) or isinstance(value, bool):
                         continue
-                    ts = getattr(event, "timestamp", None)
-                    if ts is None and isinstance(event, dict):
-                        ts = event.get("timestamp")
-                    samples.append((str(ts or ""), float(value)))
+                    raw_ts = getattr(event, "timestamp", None)
+                    if raw_ts is None and isinstance(event, dict):
+                        raw_ts = event.get("timestamp")
+                    samples.append((_parse_event_timestamp(raw_ts), index, float(value)))
+
                 if samples:
-                    samples.sort(key=lambda pair: pair[0])  # chronological, oldest first
-                    return [value for _, value in samples][-self.LOSS_WINDOW_SAMPLES:]
+                    if all(ts is not None for ts, _, _ in samples):
+                        # Sort by real instants. Tie-break on the store's own
+                        # order: ``index`` counts newest→oldest, so ``-index``
+                        # ascending puts the OLDER of two equal stamps first.
+                        samples.sort(key=lambda item: (item[0], -item[1]))
+                    else:
+                        missing = sum(1 for ts, _, _ in samples if ts is None)
+                        logger.warning(
+                            "%d/%d loss samples for %s carry no parseable timestamp — "
+                            "falling back to store order (newest-first reversed); the "
+                            "trend is NOT timestamp-ordered",
+                            missing, len(samples), skill_id,
+                        )
+                        samples.sort(key=lambda item: -item[1])
+                    return [value for _, _, value in samples][-self.LOSS_WINDOW_SAMPLES:]
             except Exception as e:
                 logger.warning(f"Failed to fetch loss history: {e}")
 

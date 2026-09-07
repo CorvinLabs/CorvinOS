@@ -222,31 +222,34 @@ class TestEMAFilterMitigation:
     """Test that EMA smoothing (alpha=0.5) attenuates oscillations."""
 
     def test_ema_filter_attenuates_high_frequency(self):
-        """EMA filter should attenuate high-frequency oscillations."""
+        """The DETECTOR's EMA filter attenuates a Nyquist-rate oscillation >50 %.
+
+        Round-4 review: this test used to reimplement the EMA inline and assert
+        on its own arithmetic, so it said nothing about
+        ``CouplingOscillationDetector`` at all — and it was red, because the
+        first sample seeds the filter with the raw value and that start-up
+        transient dominated ``max - min``. It now drives the real
+        ``_apply_ema_filter`` through the real history and measures the STEADY
+        STATE, which is what "attenuation" means for an IIR filter.
+        """
         detector = CouplingOscillationDetector(ema_alpha=0.5)
+        loop = 'L1_routing'
 
-        # High-frequency alternating signal
         values = [0.5 + 0.1 * (-1) ** i for i in range(50)]
+        for val in values:
+            detector.ema_history[loop].append(detector._apply_ema_filter(loop, val))
 
-        ema_outputs = []
-        for i, val in enumerate(values):
-            # Apply EMA filter
-            if len(ema_outputs) == 0:
-                ema_out = val
-            else:
-                ema_out = 0.5 * val + 0.5 * ema_outputs[-1]
-            ema_outputs.append(ema_out)
-
-        # Measure attenuation: amplitude reduction
-        raw_amplitude = max(values) - min(values)
-        ema_amplitude = max(ema_outputs) - min(ema_outputs)
+        warmup = 10  # the filter's transient decays as (1-alpha)^n
+        raw_amplitude = max(values[warmup:]) - min(values[warmup:])
+        steady = detector.ema_history[loop][warmup:]
+        ema_amplitude = max(steady) - min(steady)
         attenuation_ratio = ema_amplitude / raw_amplitude if raw_amplitude > 0 else 1.0
 
         print(f"Raw amplitude: {raw_amplitude:.4f}")
         print(f"EMA amplitude: {ema_amplitude:.4f}")
         print(f"Attenuation: {(1 - attenuation_ratio) * 100:.1f}%")
 
-        # EMA should attenuate to <50% of original amplitude
+        # Analytic steady-state ratio for alternating input is a/(2-a) = 1/3.
         assert attenuation_ratio < 0.5, f"EMA should attenuate >50%, got {attenuation_ratio:.2f}"
 
 

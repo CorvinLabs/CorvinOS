@@ -557,5 +557,27 @@ class TestOscillationStatusAndHistory:
         assert history_b[0].weight_id == 'weight_b'
 
 
+class TestAuditFirstIsFailClosedWithoutABackend:
+    """The no-backend case must REFUSE, not apply silently (round-4 review, F1)."""
+
+    def test_missing_audit_backend_refuses_the_update(self):
+        from core.learning.weight_updater import WeightAuditFailedError
+
+        updater = WeightUpdater()
+        with pytest.raises(WeightAuditFailedError):
+            updater.update_weight('w1', 3.0)  # default audit_backend=None
+
+        assert updater.update_history == [], "a refused update must leave no record"
+        assert 'w1' not in updater.weights or not updater.weights['w1'].update_times_window
+
+    def test_explicit_none_is_also_refused(self):
+        from core.learning.weight_updater import WeightAuditFailedError
+
+        updater = WeightUpdater()
+        with pytest.raises(WeightAuditFailedError):
+            updater.update_weight('w2', 0.5, audit_backend=None)
+        assert updater.update_history == []
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

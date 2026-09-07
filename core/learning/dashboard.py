@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Optional, Callable
 from enum import Enum
 
+from core.learning.learning_events import EventType
+
 logger = logging.getLogger(__name__)
 
 
@@ -318,6 +320,22 @@ class DashboardCache:
             self._cache.clear()
 
 
+#: Hard cap on live WebSocket subscribers per tenant dashboard.
+#: ``POST /api/learning/subscribe`` allocated one permanent record per call and
+#: nothing ever removed it — 20 000 calls grew RSS by 6.7 MB that was never
+#: reclaimed, and ``prune_stale_subscribers`` had zero callers anywhere in the
+#: tree (round-4 console review, F5). Registration now prunes first and REFUSES
+#: at the cap; the route maps the refusal to 503.
+MAX_SUBSCRIBERS_PER_TENANT = 256
+
+#: Inactivity after which a subscriber is pruned on the next registration.
+SUBSCRIBER_STALE_SECONDS = 300
+
+
+class SubscriberLimitExceeded(RuntimeError):
+    """Refused: the tenant already holds ``MAX_SUBSCRIBERS_PER_TENANT`` live subscribers."""
+
+
 class WebSocketSubscriber:
     """Manages a WebSocket subscriber for real-time dashboard updates."""
 
@@ -414,17 +432,25 @@ class LearningDashboard:
         """
         cache_key = f"{self.tenant_id}:summary"
 
-        # Check cache
+        # Check cache. The cached value is the SERIALISED form (``to_dict``),
+        # so ``timestamp`` comes back as an ISO string and the nested summaries
+        # as dicts. Round-4 review: this used to splat it straight back into
+        # ``DashboardMetrics(**cached)``, which produced an object whose
+        # ``timestamp`` was a ``str``; the very next ``to_dict()`` then raised
+        # ``'str' object has no attribute 'isoformat'`` and the route answered
+        # HTTP 500 for every request inside the 5-second TTL. Nothing called
+        # /summary twice in a row in a test, so it was never seen.
         cached = self.cache.get(cache_key)
         if cached:
             logger.debug(f"Dashboard summary cache hit for {self.tenant_id}")
-            return DashboardMetrics(**cached)
+            return self._metrics_from_cache(cached)
 
         # Query metrics from event store
         self._audit_query("summary", filters={})
 
-        # For now, return empty metrics (metrics come from ADR-0320 MetricsCollector)
-        # In production, this would query aggregated metrics from event_store
+        # Metrics beyond the event count come from ADR-0320 MetricsCollector,
+        # which is not wired yet: those summaries are ``None`` (= not recorded),
+        # never a fabricated zero.
         metrics = DashboardMetrics(
             timestamp=datetime.utcnow(),
             total_events=self.event_store.count_events(self.tenant_id),
@@ -433,6 +459,58 @@ class LearningDashboard:
         # Cache result
         self.cache.set(cache_key, metrics.to_dict())
         return metrics
+
+    @staticmethod
+    def _metrics_from_cache(cached: dict) -> "DashboardMetrics":
+        """Rebuild a :class:`DashboardMetrics` from its serialised form."""
+        raw_ts = cached.get("timestamp")
+        if isinstance(raw_ts, datetime):
+            timestamp = raw_ts
+        else:
+            try:
+                timestamp = datetime.fromisoformat(str(raw_ts).rstrip("Z"))
+            except (TypeError, ValueError):
+                timestamp = datetime.utcnow()
+
+        def _summary(value):
+            if value is None or isinstance(value, MetricSummary):
+                return value
+            if isinstance(value, dict):
+                allowed = {f for f in MetricSummary.__dataclass_fields__}
+                return MetricSummary(**{k: v for k, v in value.items() if k in allowed})
+            return None
+
+        skills = {}
+        for name, perf in (cached.get("skills") or {}).items():
+            if isinstance(perf, SkillPerformance):
+                skills[name] = perf
+                continue
+            if not isinstance(perf, dict):
+                continue
+            last = perf.get("last_updated")
+            try:
+                parsed_last = datetime.fromisoformat(str(last).rstrip("Z")) if last else None
+            except (TypeError, ValueError):
+                parsed_last = None
+            skills[name] = SkillPerformance(
+                skill_name=perf.get("skill_name", name),
+                accuracy=perf.get("accuracy"),
+                latency_ms=perf.get("latency_ms"),
+                confidence=perf.get("confidence"),
+                user_satisfaction=perf.get("user_satisfaction"),
+                usage_count=perf.get("usage_count", 0),
+                last_updated=parsed_last,
+            )
+
+        return DashboardMetrics(
+            timestamp=timestamp,
+            accuracy_summary=_summary(cached.get("accuracy_summary")),
+            latency_summary=_summary(cached.get("latency_summary")),
+            confidence_summary=_summary(cached.get("confidence_summary")),
+            satisfaction_summary=_summary(cached.get("satisfaction_summary")),
+            skills=skills,
+            total_events=cached.get("total_events", 0),
+        )
 
     def get_skill_stats(self, skill_name: str) -> SkillPerformance:
         """Get performance metrics for a specific skill (cached).
@@ -465,21 +543,93 @@ class LearningDashboard:
         # Audit query
         self._audit_query("skill_stats", filters={"skill_name": skill_name})
 
-        # Query metrics (placeholder)
-        # In production: query event_store for this skill's metrics
-        perf = SkillPerformance(
-            skill_name=skill_name,
-            accuracy=None,
-            latency_ms=None,
-            confidence=None,
-            user_satisfaction=None,
-            usage_count=0,
-            last_updated=None,
-        )
+        perf = self._aggregate_skill_stats(skill_name)
 
         # Cache result
         self.cache.set(cache_key, perf.to_dict())
         return perf
+
+    #: How many of a skill's most recent events feed one stats query.
+    SKILL_STATS_WINDOW = 1000
+
+    @staticmethod
+    def _mean(values: list) -> Optional[float]:
+        return (sum(values) / len(values)) if values else None
+
+    def _aggregate_skill_stats(self, skill_name: str) -> SkillPerformance:
+        """Per-skill metrics computed from the tenant's REAL learning events.
+
+        Round-4 review, F11: this was ``# Query metrics (placeholder)`` returning
+        ``None``/0 for every field, while the route advertised "Accuracy (% of
+        successful executions) / Latency (avg response time, ms) / Confidence /
+        User satisfaction / Usage count". A dimension with no recorded events
+        still returns ``None`` — that is the honest answer and the caller must
+        render it as "not recorded", never as zero.
+        """
+        if self.event_store is None:
+            return SkillPerformance(skill_name=skill_name)
+
+        try:
+            events = self.event_store.query_events(
+                self.tenant_id, skill_id=skill_name, limit=self.SKILL_STATS_WINDOW
+            )
+        except Exception as exc:  # noqa: BLE001 — a read failure is not a zero
+            logger.warning("skill stats unreadable for %s: %s", skill_name, type(exc).__name__)
+            return SkillPerformance(skill_name=skill_name)
+
+        outcomes: list[bool] = []
+        latencies: list[float] = []
+        confidences: list[float] = []
+        ratings: list[float] = []
+        executions = 0
+        last_ts: Optional[str] = None
+
+        for event in events:
+            signal = getattr(event, "signal", None) or {}
+            etype = getattr(getattr(event, "event_type", None), "value", None)
+            ts = getattr(event, "timestamp", None)
+            if isinstance(ts, str) and (last_ts is None or ts > last_ts):
+                last_ts = ts
+
+            if etype == EventType.SKILL_EXECUTED.value:
+                executions += 1
+            if etype == EventType.OUTCOME.value and isinstance(signal.get("success"), bool):
+                outcomes.append(bool(signal["success"]))
+
+            for key in ("latency_ms", "duration_ms"):
+                value = signal.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    latencies.append(float(value))
+                    break
+
+            if etype == EventType.CONFIDENCE.value:
+                for key in ("confidence", "score", "value"):
+                    value = signal.get(key)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        confidences.append(float(value))
+                        break
+
+            if etype == EventType.FEEDBACK.value:
+                rating = signal.get("quality_rating")
+                if isinstance(rating, (int, float)) and not isinstance(rating, bool):
+                    ratings.append(float(rating))
+
+        parsed_ts: Optional[datetime] = None
+        if last_ts:
+            try:
+                parsed_ts = datetime.fromisoformat(last_ts.rstrip("Z"))
+            except ValueError:
+                parsed_ts = None
+
+        return SkillPerformance(
+            skill_name=skill_name,
+            accuracy=(sum(1 for ok in outcomes if ok) / len(outcomes)) if outcomes else None,
+            latency_ms=self._mean(latencies),
+            confidence=self._mean(confidences),
+            user_satisfaction=self._mean(ratings),
+            usage_count=executions or len(events),
+            last_updated=parsed_ts,
+        )
 
     def get_user_stats(self, user_id: str) -> dict:
         """Get user-scoped metrics (cached).
@@ -501,12 +651,23 @@ class LearningDashboard:
         # Audit query
         self._audit_query("user_stats", filters={"user_id": user_id})
 
-        # Query metrics (placeholder)
+        # Round-4 review, F11: there is NO per-user dimension in the ADR-0314
+        # event schema — ``LearningEvent`` is (tenant_id, skill_id, signal) and
+        # a user id is deliberately never persisted (GDPR Art. 5, content-free
+        # records). This method therefore cannot compute per-user satisfaction
+        # or engagement from anything, and returning all-``None`` under a
+        # docstring promising them is the defect. It now says so explicitly, so
+        # a caller cannot mistake "not recorded" for "zero".
         user_stats = {
             "user_id": user_id,
+            "available": False,
+            "reason": (
+                "learning events carry no user dimension (GDPR Art. 5: records are "
+                "content-free and tenant-scoped); per-user metrics are not recorded"
+            ),
             "satisfaction_avg": None,
             "engagement_score": None,
-            "query_count": 0,
+            "query_count": None,
             "last_query": None,
         }
 
@@ -523,6 +684,11 @@ class LearningDashboard:
         Returns:
             Subscriber ID for future updates/unsubscribe
         """
+        # Wire the pruner to the only path that grows the store. A background
+        # sweeper would be a second lifecycle to own; registration is where the
+        # cost is incurred, so it is where the cleanup belongs.
+        self.prune_stale_subscribers(timeout_seconds=SUBSCRIBER_STALE_SECONDS)
+
         subscriber_id = str(uuid.uuid4())
         subscriber = WebSocketSubscriber(
             subscriber_id=subscriber_id,
@@ -531,6 +697,11 @@ class LearningDashboard:
         )
 
         with self._subscribers_lock:
+            if len(self._subscribers) >= MAX_SUBSCRIBERS_PER_TENANT:
+                raise SubscriberLimitExceeded(
+                    f"subscriber limit reached ({MAX_SUBSCRIBERS_PER_TENANT}) for "
+                    f"tenant {self.tenant_id!r} — unsubscribe before registering again"
+                )
             self._subscribers[subscriber_id] = subscriber
 
         logger.debug(f"Registered WebSocket subscriber {subscriber_id} (user_id={user_id})")
@@ -569,8 +740,12 @@ class LearningDashboard:
                 return True
         return False
 
-    def prune_stale_subscribers(self, timeout_seconds: int = 300) -> int:
-        """Remove inactive subscribers (runs every 30s in background).
+    def prune_stale_subscribers(self, timeout_seconds: int = SUBSCRIBER_STALE_SECONDS) -> int:
+        """Remove inactive subscribers.
+
+        Called from :meth:`subscribe_for_updates` (every registration) and by
+        the WebSocket handler through :meth:`touch_subscriber`. It used to have
+        NO caller at all, which is what made the subscriber store unbounded.
 
         Args:
             timeout_seconds: Inactivity threshold (default 300s = 5min)

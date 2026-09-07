@@ -1,4 +1,4 @@
-"""CompletionEvent schema — immutable, audit-safe, ADR-0647 compliant.
+"""CompletionEvent schema — immutable, audit-safe, ADR-0655 compliant.
 
 Every event is frozen after creation, hash-chained to audit trail, and tagged
 with tenant_id for isolation (GDPR Art. 5, 6).

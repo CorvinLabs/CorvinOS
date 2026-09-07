@@ -10,7 +10,8 @@ Design:
   1. Exponential Moving Average (EMA) filter smooths weight deltas
   2. Frequency detection triggers when >5 changes/minute occur
   3. Learning rate clamping (0.1x) during oscillation window
-  4. All updates audit-logged BEFORE applying (fail-closed)
+  4. All updates audit-logged BEFORE applying (fail-closed); a missing
+     audit backend is itself a refusal, not a bypass
   5. Silent config changes BLOCKED (audit must succeed)
 
 Compliance: Audit-first (event logged before weight applied), fail-closed on divergence.
@@ -115,12 +116,25 @@ class WeightUpdater:
           weight_id: identifier for the weight
           delta: requested change in weight
           base_learning_rate: learning rate to potentially clamp
-          audit_backend: audit system (optional, for logging)
+          audit_backend: audit system. REQUIRED — ``None`` raises
+            :class:`WeightAuditFailedError` (audit-first, fail-closed).
           tenant_id: tenant identifier
 
         Returns:
           WeightUpdateRecord with full update details
         """
+        # Audit-first, fail-closed — checked BEFORE any state is touched.
+        # Round-4 review: the gate was ``if audit_backend:`` with the parameter
+        # defaulting to ``None``, so the DEFAULT call applied the update with no
+        # audit record at all. An unaudited weight change is precisely the
+        # "silent config change" this module's docstring says is BLOCKED.
+        if audit_backend is None:
+            raise WeightAuditFailedError(
+                f"weight update for {weight_id!r} refused: no audit backend supplied "
+                "(audit-first is mandatory; an unaudited weight change is a silent "
+                "config change)"
+            )
+
         current_time = time.time()
 
         # Initialize tracking if first time seeing this weight
@@ -149,26 +163,33 @@ class WeightUpdater:
         # Compute new weight value (delta * LR)
         new_value_delta = ema_filtered_delta * effective_lr
 
-        # 4. Audit-log the update BEFORE applying (fail-closed)
-        if audit_backend:
-            try:
-                self._audit_weight_update(
-                    audit_backend=audit_backend,
-                    weight_id=weight_id,
-                    delta=delta,
-                    ema_filtered_delta=ema_filtered_delta,
-                    oscillation_detected=osc_detected,
-                    effective_learning_rate=effective_lr,
-                    base_learning_rate=base_learning_rate,
-                    tenant_id=tenant_id,
-                    timestamp=current_time,
-                )
-            except Exception as e:
-                # Fail-closed: if audit fails, don't apply weight
-                raise RuntimeError(
-                    f"Audit write failed for weight {weight_id}: {e}. "
-                    "Weight update rejected (fail-closed)."
-                )
+        # 4. Audit-log the update BEFORE applying (fail-closed). A refused
+        # update must also leave NO trace in the oscillation state, otherwise
+        # a wedged audit backend still moves the EMA on every retry.
+        _ema_before = state.weight_delta_ema_prev
+        try:
+            self._audit_weight_update(
+                audit_backend=audit_backend,
+                weight_id=weight_id,
+                delta=delta,
+                ema_filtered_delta=ema_filtered_delta,
+                oscillation_detected=osc_detected,
+                effective_learning_rate=effective_lr,
+                base_learning_rate=base_learning_rate,
+                tenant_id=tenant_id,
+                timestamp=current_time,
+            )
+        except Exception as e:
+            # Fail-closed: if audit fails, don't apply weight — and roll the
+            # filter state back so the refused attempt is a true no-op.
+            state.weight_delta_ema = _ema_before
+            state.weight_delta_ema_prev = _ema_before
+            if state.update_times_window:
+                state.update_times_window.pop()  # drop this attempt's timestamp
+            raise RuntimeError(
+                f"Audit write failed for weight {weight_id}: {e}. "
+                "Weight update rejected (fail-closed)."
+            )
 
         # 5. Create and return update record
         record = WeightUpdateRecord(

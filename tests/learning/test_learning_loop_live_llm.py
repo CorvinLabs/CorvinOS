@@ -87,4 +87,24 @@ def test_real_haiku_turn_lands_a_chained_outcome_and_shows_in_status(tmp_path: P
         assert body["outcome_loss"] == 0.0
         audit = sb.client.get("/v1/console/learning/audit").json()
         assert any(e["audit_ref"] == outcome["audit_ref"] for e in audit["events"])
+
+        # 5. the OPTIMIZER's ground truth sees this turn (round-4 review, F3).
+        # ``recent_outcomes`` is what ``SkillAdapter.run_optimizer_epoch`` is fed
+        # with; it used to read the OLDEST outcomes and freeze once a tenant
+        # passed 5000 of them, so a live turn could stop reaching the optimizer.
+        from core.learning.outcome_sink import recent_outcomes
+
+        successes, total = recent_outcomes(sb.tenant_id, limit=10)
+        assert (successes, total) == (1, 1), (successes, total)
+
+        feedback = sb.client.post(
+            "/v1/console/learning/feedback",
+            json={"task_id": task_id, "outcome_quality": "good", "would_repeat": True},
+            headers=sb.csrf_headers,
+        )
+        assert feedback.status_code == 200, feedback.text
+        assert feedback.json()["recent_outcomes"] == {"successes": 1, "total": 1}, (
+            "the real LLM turn must be the evidence the optimizer sees"
+        )
+
         emitter.stop()

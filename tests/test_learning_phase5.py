@@ -206,19 +206,67 @@ class TestAlertPolicyManager:
         assert len(history) >= len(alerts1) + len(alerts2)
 
     def test_register_handler(self):
-        """Test registering notification handler."""
+        """Only handler types with a real transport may be registered.
+
+        Round-4 review: this used to register a ``webhook`` handler and assert
+        the stored fields, while ``_notify_handlers`` was a ``TODO`` stub that
+        contacted nothing — so the object looked registered and no alert ever
+        left the process. Registering an undeliverable target is now refused.
+        """
+        from core.learning.alert_policy import UnsupportedHandlerType
+
         manager = AlertPolicyManager(tenant_id="_default")
 
         handler = manager.register_handler(
-            handler_type="webhook",
-            target="https://example.com/alerts",
+            handler_type="log",
+            target="warning",
             alert_levels=[AlertLevel.CRITICAL],
         )
-
         assert handler.handler_id is not None
-        assert handler.handler_type == "webhook"
-        assert handler.target == "https://example.com/alerts"
+        assert handler.handler_type == "log"
         assert handler.enabled is True
+
+        for unsupported in ("webhook", "email", "slack"):
+            with pytest.raises(UnsupportedHandlerType):
+                manager.register_handler(
+                    handler_type=unsupported, target="https://example.com/alerts"
+                )
+
+    def test_notify_handlers_actually_delivers(self):
+        """``_notify_handlers`` reports what it delivered — it is not a stub."""
+        manager = AlertPolicyManager(tenant_id="_default")
+        manager.register_handler(handler_type="log", target="warning",
+                                 alert_levels=[AlertLevel.CRITICAL])
+
+        alerts = manager.evaluate({"gradient_l2": 1e9, "loss_total": 1e9})
+        # Both CRITICAL policies require confirmation, so evaluate() holds them.
+        pending = manager.get_pending_confirmations()
+        assert pending, "critical policies must be held for confirmation"
+
+        assert manager.confirm_alert(pending[0].confirmation_id, approved=True) is True
+        fired = [a for a in manager.get_alert_history() if a.alert_id == pending[0].alert_id]
+        assert fired, "approving must put the alert in history"
+        assert manager._notify_handlers(fired[0]) == 1
+
+    def test_held_alerts_of_one_policy_get_distinct_ids(self):
+        """Two pending alerts of the same policy must not share an alert_id."""
+        manager = AlertPolicyManager(tenant_id="_default")
+        manager.evaluate({"loss_total": 1e9})
+        manager.evaluate({"loss_total": 1e9})
+        pending = manager.get_pending_confirmations()
+        assert len({p.alert_id for p in pending}) == len(pending)
+
+    def test_expired_confirmations_are_pruned(self):
+        """The confirmation queue is bounded, like the nonce cache."""
+        manager = AlertPolicyManager(tenant_id="_default")
+        manager.evaluate({"loss_total": 1e9})
+        assert manager.get_pending_confirmations()
+
+        for cid in list(manager._confirmation_seen):
+            manager._confirmation_seen[cid] -= manager._CONFIRMATION_TTL_SECONDS + 1
+        assert manager._prune_confirmations() >= 1
+        assert manager._confirmation_queue == {}
+        assert manager._held_alerts == {}
 
     def test_tenant_isolation(self):
         """Test different tenants have separate policies."""
@@ -436,10 +484,21 @@ class TestWebSocketMetricsStream:
     def test_websocket_without_session_is_closed_1008(self, tmp_path: Path):
         with console_client(tmp_path) as sb:
             sb.client.cookies.clear()
-            with pytest.raises(WebSocketDisconnect) as exc:
+            # starlette >= 0.36 surfaces a pre-accept rejection as
+            # WebSocketDenialResponse (an HTTP response) rather than a close
+            # frame, so both shapes mean "refused before the handshake".
+            try:
+                from starlette.testclient import WebSocketDenialResponse
+            except ImportError:  # pragma: no cover - older starlette
+                WebSocketDenialResponse = ()  # type: ignore[assignment]
+
+            with pytest.raises((WebSocketDisconnect,) + ((WebSocketDenialResponse,) if WebSocketDenialResponse else ())) as exc:
                 with sb.client.websocket_connect("/v1/console/learning/metrics/stream"):
                     pass
-            assert exc.value.code == 1008
+            refusal = exc.value
+            code = getattr(refusal, "code", None)
+            status = getattr(refusal, "status_code", None)
+            assert code == 1008 or status in (401, 403), (code, status)
 
     def test_websocket_ignores_tenant_query_param_and_uses_session_tenant(self, tmp_path: Path):
         with console_client(tmp_path) as sb:

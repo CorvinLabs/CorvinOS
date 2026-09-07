@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 # Import backend components (stripped install → endpoints answer 503, never mock)
 try:
     from core.skills.os_skills.feedback_loop import FeedbackInterpreter, UserFeedback
-    from core.skills.os_skills.skill_adapter import SkillAdapter
+    from core.skills.os_skills.skill_adapter import SkillAdapter, SkillConfigLockBusy
     from core.skills.os_skills.workstyle_model import PreferenceInferencer
     from core.learning.outcome_sink import learning_emitter, recent_outcomes
 
@@ -64,6 +64,7 @@ except ImportError:  # pragma: no cover - stripped install without core.skills
     FeedbackInterpreter = None  # type: ignore[assignment]
     UserFeedback = None  # type: ignore[assignment]
     SkillAdapter = None  # type: ignore[assignment]
+    SkillConfigLockBusy = TimeoutError  # type: ignore[assignment,misc]
     PreferenceInferencer = None  # type: ignore[assignment]
     learning_emitter = None  # type: ignore[assignment]
     recent_outcomes = None  # type: ignore[assignment]
@@ -144,6 +145,25 @@ def _skill_id(skill_id: str) -> str:
     if skill_id not in TUNABLE_SKILLS:
         raise HTTPException(status_code=400, detail=f"unknown tunable skill: {skill_id}")
     return skill_id
+
+
+def _refuse_lock_busy(rec: session_auth.SessionRecord, action: str, skill_id: str) -> HTTPException:
+    """503 ``lock_busy`` — the skill-config lock was still held at its deadline.
+
+    A refusal, never a hang: :meth:`SkillAdapter._locked` is bounded precisely
+    so an ``async`` handler cannot park the console event loop on a wedged
+    holder (round-4 console review, F1). The refusal is audited, because "the
+    operator's mutation did not happen" is itself an operator-visible fact.
+    """
+    console_audit.action_denied(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=action,
+        target_kind="skill_config",
+        target_id=skill_id,
+        reason="lock_busy",
+    )
+    return HTTPException(status_code=503, detail="lock_busy")
 
 
 def _adapter(rec: session_auth.SessionRecord, skill_id: str) -> "SkillAdapter":
@@ -291,7 +311,10 @@ async def submit_feedback(
         adapter = adapters.get(hyp.skill_id)
         if adapter is None:
             adapter = adapters[hyp.skill_id] = _adapter(rec, _skill_id(hyp.skill_id))
-        accepted, why = adapter.run_optimizer_epoch(hyp, successes, total)
+        try:
+            accepted, why = adapter.run_optimizer_epoch(hyp, successes, total)
+        except SkillConfigLockBusy:
+            raise _refuse_lock_busy(rec, "learning.feedback_optimizer", hyp.skill_id) from None
         out.append(
             HypothesisDTO(
                 hypothesis_id=hyp.hypothesis_id,
@@ -330,6 +353,8 @@ async def rollback_config(
     adapter = _adapter(rec, _skill_id(skill_id))
     try:
         config = adapter.rollback(to_version)
+    except SkillConfigLockBusy:
+        raise _refuse_lock_busy(rec, "learning.config_rollback", skill_id) from None
     except ValueError:
         raise HTTPException(status_code=404, detail=f"version {to_version!r} not found for {skill_id}")
     console_audit.action_performed(
@@ -356,6 +381,8 @@ def _outcome_observations(tenant_id: str) -> dict[str, list[dict[str, Any]]]:
     from core.learning.learning_events import EventType  # noqa: PLC0415
 
     grouped: dict[str, list[dict[str, Any]]] = {}
+    # The newest 5000 outcomes (``limit`` windows from the newest end — round-4
+    # review, F3; this used to silently read the OLDEST 5000 and freeze).
     for ev in store.query_events(tenant_id, event_type=EventType.OUTCOME, limit=5000):
         sig = ev.signal or {}
         task_type = str(sig.get("task_type") or "general")

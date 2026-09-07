@@ -29,7 +29,12 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, WebSocket,
 
 try:
     # Try direct import first (when PYTHONPATH includes project root)
-    from core.learning.dashboard import LearningDashboard, DashboardMetrics, SkillPerformance
+    from core.learning.dashboard import (
+        LearningDashboard,
+        DashboardMetrics,
+        SkillPerformance,
+        SubscriberLimitExceeded,
+    )
     from core.learning.event_store import EventStore
 except ImportError:
     # Fallback: use relative import from parent structure
@@ -38,11 +43,16 @@ except ImportError:
     project_root = Path(__file__).resolve().parents[3]  # Navigate up to project root
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
-    from core.learning.dashboard import LearningDashboard, DashboardMetrics, SkillPerformance
+    from core.learning.dashboard import (
+        LearningDashboard,
+        DashboardMetrics,
+        SkillPerformance,
+        SubscriberLimitExceeded,
+    )
     from core.learning.event_store import EventStore
 
 from .. import auth as session_auth
-from ..deps import require_session
+from ..deps import require_csrf, require_session
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +108,15 @@ async def get_learning_summary(
     dashboard = get_dashboard(tenant_id)
 
     try:
+        cache_key = f"{tenant_id}:summary"
+        was_cached = dashboard.cache.get(cache_key) is not None
         metrics = dashboard.get_summary_stats()
         return {
             "status": "ok",
             "data": metrics.to_dict(),
-            "cached": True,  # Cache hit indicator
+            # Real cache-hit indicator. This was hard-coded ``True`` regardless
+            # of whether the cache was consulted (round-4 review, F11).
+            "cached": was_cached,
         }
     except Exception as e:
         logger.error(f"Error fetching dashboard summary: {e}")
@@ -114,15 +128,19 @@ async def get_skill_metrics(
     skill_name: str,
     rec: session_auth.SessionRecord = Depends(require_session),
 ) -> Dict[str, Any]:
-    """Get performance metrics for a specific skill.
+    """Per-skill metrics aggregated from the tenant's REAL learning events.
 
-    Returns:
-      - Accuracy (% of successful executions)
-      - Latency (avg response time, ms)
-      - Confidence (model confidence)
-      - User satisfaction (4.5-star scale)
-      - Usage count
-      - Last updated timestamp
+    Returns, over the skill's most recent events:
+      - ``accuracy`` — successes / total across recorded OUTCOME events
+      - ``latency_ms`` — mean of ``latency_ms``/``duration_ms`` in the signals
+      - ``confidence`` — mean of recorded CONFIDENCE events
+      - ``user_satisfaction`` — mean ``quality_rating`` of FEEDBACK events
+      - ``usage_count`` — recorded SKILL_EXECUTED events
+      - ``last_updated`` — timestamp of the newest event
+
+    A dimension with NO recorded events is ``null`` — "not recorded", not zero.
+    Until 2026-09-07 every field here was a hard-coded ``None``/0 behind this
+    docstring's promises (round-4 review, F11).
 
     Tenant isolation enforced.
     """
@@ -145,13 +163,15 @@ async def get_user_metrics(
     user_id: str,
     rec: session_auth.SessionRecord = Depends(require_session),
 ) -> Dict[str, Any]:
-    """Get user-specific metrics (satisfaction, engagement, query complexity).
+    """Per-user metrics — NOT RECORDED by this system.
 
-    Returns:
-      - Satisfaction (avg score across interactions)
-      - Engagement score (activity level)
-      - Query count (total queries from this user)
-      - Last query timestamp
+    Returns ``available: false`` plus a ``reason``. ADR-0314 learning events
+    are content-free and tenant-scoped: they carry no user dimension at all
+    (GDPR Art. 5), so satisfaction / engagement / query-count per user cannot
+    be computed from them. The endpoint is kept so a client gets an explicit,
+    machine-readable "not recorded" instead of a 404 — and, since 2026-09-07,
+    instead of a docstring promising metrics that were hard-coded ``None``
+    (round-4 review, F11).
 
     Per-tenant isolation enforced: the authenticated session's tenant only.
     The console session is the tenant OPERATOR (there is no per-user console
@@ -177,7 +197,7 @@ async def get_user_metrics(
 async def subscribe_for_updates(
     user_scoped: bool = Query(False, description="Subscribe to user-scoped metrics only"),
     user_scoped_user_id: Optional[str] = Query(None, description="User id for a user-scoped subscription"),
-    rec: session_auth.SessionRecord = Depends(require_session),
+    rec: session_auth.SessionRecord = Depends(require_csrf),
 ) -> Dict[str, Any]:
     """Register for real-time dashboard updates via WebSocket.
 
@@ -187,6 +207,14 @@ async def subscribe_for_updates(
 
     If user_scoped=True, only user-specific metrics are pushed.
     If user_scoped=False (admin only), system-wide metrics.
+
+    **CSRF (round-4 console review, F5).** ``require_session`` alone was not
+    enough: the handler reads only query params, so with
+    ``content-type: text/plain`` this POST stays a CORS *simple* request — a
+    browser sends it cross-site with the console cookie and no preflight, and
+    every such call allocated a permanent server-side subscriber. It now takes
+    ``require_csrf``, and the store is capped (503 at the cap) instead of
+    growing without bound.
     """
     tenant_id = rec.tenant_id
     # A console session has no user identity of its own (operator session);
@@ -197,21 +225,24 @@ async def subscribe_for_updates(
 
     try:
         subscriber_id = dashboard.subscribe_for_updates(user_id=user_id)
-        return {
-            "status": "ok",
-            "subscriber_id": subscriber_id,
-            "ws_url": f"/api/learning/stream?subscriber_id={subscriber_id}",
-            "tenant_id": tenant_id,
-        }
+    except SubscriberLimitExceeded as e:
+        logger.warning("learning dashboard subscriber cap reached (tenant=%s)", tenant_id)
+        raise HTTPException(status_code=503, detail=str(e)) from None
     except Exception as e:
         logger.error(f"Error subscribing to updates: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "status": "ok",
+        "subscriber_id": subscriber_id,
+        "ws_url": f"/api/learning/stream?subscriber_id={subscriber_id}",
+        "tenant_id": tenant_id,
+    }
 
 
 @router.post("/unsubscribe", summary="Unregister WebSocket subscriber")
 async def unsubscribe(
     subscriber_id: str,
-    rec: session_auth.SessionRecord = Depends(require_session),
+    rec: session_auth.SessionRecord = Depends(require_csrf),
 ) -> Dict[str, Any]:
     """Unregister from WebSocket updates."""
     tenant_id = rec.tenant_id

@@ -1,24 +1,63 @@
 """
-Checkpoint Signer (ADR-0XXX: Watchdog Circumvention Mitigation)
+Checkpoint Signer (ADR-0625: Watchdog Circumvention Mitigation)
 
 High-level interface for signing and verifying checkpoints used by the
 Divergence Watchdog. Provides fail-closed checkpoint integrity validation
 to prevent watchdog circumvention attacks.
 
 Security Guarantees:
-1. Every checkpoint is signed with tenant-specific HMAC key
+1. Every checkpoint is signed with a tenant-specific HMAC key that is SECRET
 2. Merkle root hash detects any tampering with checkpoint state
 3. Signature verification uses constant-time comparison (no timing attacks)
 4. Fail-closed: any verification failure raises exception, never silently accepts
 5. Tenant-scoped: checkpoints from one tenant cannot be used by another
+
+Key material (round-4 review, F2 — the whole point of this module)
+------------------------------------------------------------------
+The key is 256 bits of ``secrets.token_hex(32)`` stored at
+``<corvin_home>/tenants/<tenant_id>/keys/checkpoint_signing.key`` with mode
+0600, created on first use — the SAME scheme as
+:mod:`core.learning.feedback_signature` and
+:mod:`core.infinite_session.crypto_binding`. Reading it fails closed
+(:class:`CheckpointKeyUnavailable`); there is no in-code fallback, because a
+fallback is exactly what the defect was.
+
+Until 2026-09-07 ``get_tenant_key()`` returned
+``sha256(b"checkpoint.signer:" + tenant_id)`` — a pure function of a public
+string. Anybody could recompute it, sign an arbitrary state (e.g. α pinned at
+the top of the watchdog's bound and damping at the bottom: the maximum
+learning-rate / minimum-damping corner) and have ``restore_checkpoint`` accept
+it as authentic. Reproduced in the round-4 review.
+
+**Migration is deliberately breaking.** A checkpoint signed with the old public
+derivation does NOT verify under the real key — it raises
+:class:`CheckpointSignatureError` like any other bad signature, and the caller
+(the divergence watchdog) treats it as unusable. That is correct: those
+checkpoints are exactly as trustworthy as an attacker-written file, so silently
+honouring them would preserve the vulnerability under a new name. Nothing in
+the repo reads a checkpoint back across a process boundary today (see
+``DivergenceWatchdog.restore_checkpoint``, which consults only its in-memory
+``signed_checkpoints``), so the practical cost of the break is zero.
 """
 
 import json
 import hashlib
 import hmac
+import os
+import secrets
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
+
+from core.paths.tenant import corvin_home
+from core.tenants import validate_tenant_id
+
+#: Filename of the per-tenant checkpoint signing key.
+KEY_FILENAME = "checkpoint_signing.key"
+
+
+class CheckpointKeyUnavailable(Exception):
+    """The tenant signing key could not be created or read — fail closed."""
 
 
 class CheckpointSignatureError(Exception):
@@ -35,35 +74,72 @@ class CheckpointSigner:
 
     Threat Model Mitigations:
     1. Merkle Root Binding — any state change → different hash
-    2. HMAC Signature — attacker cannot forge without tenant key
+    2. HMAC Signature — attacker cannot forge without the tenant's SECRET
+       key file (``<tenant>/keys/checkpoint_signing.key``, 0600)
     3. Tenant Isolation — checkpoints bound to creating tenant
     4. Constant-Time Verification — no timing side-channels
     5. Fail-Closed — verification failure halts restoration
     """
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, corvin_home_override: Optional[str | Path] = None):
         """
         Initialize signer for a tenant.
 
         Args:
-            tenant_id: Owning tenant (used to derive signing key)
+            tenant_id: Owning tenant (scopes the signing key)
+            corvin_home_override: Optional CORVIN_HOME override (tests)
         """
         if not isinstance(tenant_id, str) or not tenant_id.strip():
             raise ValueError("tenant_id must be a non-empty string")
+        validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
+        self._home = Path(corvin_home_override) if corvin_home_override else None
+
+    # ── key management (same scheme as feedback_signature.py) ────────────
+
+    @property
+    def key_path(self) -> Path:
+        home = self._home if self._home is not None else corvin_home()
+        return Path(home) / "tenants" / self.tenant_id / "keys" / KEY_FILENAME
 
     def get_tenant_key(self) -> bytes:
         """
-        Derive HMAC key for this tenant.
+        Read (creating on first use) this tenant's SECRET HMAC key.
 
-        In production, this would be read from secure key storage.
-        Current implementation uses deterministic derivation from tenant_id.
+        256 bits from :func:`secrets.token_hex`, stored 0600 under
+        ``<corvin_home>/tenants/<tenant>/keys/``. Never derived from the
+        tenant id or any other public value.
 
         Returns:
             HMAC key as bytes
+
+        Raises:
+            CheckpointKeyUnavailable: the key cannot be created or read.
         """
-        key_material = f"checkpoint.signer:{self.tenant_id}".encode()
-        return hashlib.sha256(key_material).digest()
+        path = self.key_path
+        if not path.exists():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(secrets.token_hex(32))
+            except FileExistsError:
+                pass  # concurrent creator won the race — read theirs
+            except OSError as exc:
+                raise CheckpointKeyUnavailable(
+                    f"cannot create checkpoint signing key for {self.tenant_id!r}: {exc}"
+                ) from exc
+        try:
+            material = path.read_text().strip()
+        except OSError as exc:
+            raise CheckpointKeyUnavailable(
+                f"cannot read checkpoint signing key for {self.tenant_id!r}: {exc}"
+            ) from exc
+        if not material:
+            raise CheckpointKeyUnavailable(
+                f"checkpoint signing key for {self.tenant_id!r} is empty (fail-closed)"
+            )
+        return material.encode()
 
     def compute_merkle_root(self, state: Dict[str, Any]) -> str:
         """
@@ -171,10 +247,10 @@ class CheckpointSigningContext:
     Tracks all signed checkpoints and validates before restoration.
     """
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, corvin_home_override: Optional[str | Path] = None):
         """Initialize signing context."""
         self.tenant_id = tenant_id
-        self.signer = CheckpointSigner(tenant_id)
+        self.signer = CheckpointSigner(tenant_id, corvin_home_override=corvin_home_override)
         self.signed_checkpoints = {}  # id -> (state, merkle, sig)
 
     def sign_and_store(
