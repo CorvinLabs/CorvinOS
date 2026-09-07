@@ -379,7 +379,7 @@ class FeedbackTTLValidator:
             return result
 
         # 3. Get current time (normalize timezone)
-        now = datetime.utcnow().replace(tzinfo=feedback_time.tzinfo)
+        now = datetime.now(timezone.utc).replace(tzinfo=feedback_time.tzinfo)
 
         # 4. Calculate age
         age_delta = now - feedback_time

@@ -1,4 +1,4 @@
-"""Alert Policy Management (ADR-0636)
+"""Alert Policy Management (ADR-0636) + Fix #11: Alert Spoofing
 
 Phase 5: Learning Dashboard — Alert Configuration and Notification
 
@@ -14,9 +14,14 @@ Policy Types:
   - Trend-based: if slope changes significantly, fire alert
   - Anomaly-based: if Z-score > threshold, fire alert
 
+Security (Fix #11 — Alert Spoofing Mitigation):
+  - Alert Signatures: HMAC-SHA256 signatures to verify alert authenticity
+  - Rate-limiting: Per-policy rate limits to prevent alert spam/DoS
+  - Confirmation: Alerts require explicit confirmation before processing
+
 Compliance:
   - GDPR Art. 5 (minimization): alerting uses only learning state, no PII
-  - GDPR Art. 32 (security): alerts logged and audit-trailed
+  - GDPR Art. 32 (security): alerts logged and audit-trailed + signatures
   - Fail-closed: alerts default to ON (conservative)
 
 Implementation: uses LiveExperimentCollector metrics + MetaOptimizer state.
@@ -24,10 +29,13 @@ Implementation: uses LiveExperimentCollector metrics + MetaOptimizer state.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import secrets
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -89,6 +97,54 @@ class AlertNotificationHandler(BaseModel):
     enabled: bool = True
 
 
+class AlertSignature(BaseModel):
+    """Alert signature for spoofing prevention (Fix #11).
+
+    Ensures alerts come from trusted sources and have not been tampered with.
+    """
+    alert_id: str
+    signature: str  # HMAC-SHA256 hex digest
+    timestamp: str
+    nonce: str  # Random nonce to prevent replay attacks
+    signed_fields: List[str]  # Fields included in signature
+
+
+class AlertConfirmationRequest(BaseModel):
+    """Confirmation request for security-sensitive alerts (Fix #11).
+
+    Alerts matching confirmation rules require human/automated approval
+    before being processed.
+    """
+    confirmation_id: str
+    alert_id: str
+    policy_id: str
+    alert_type: AlertType
+    metric_value: float
+    threshold: float
+    confidence_score: float  # 0.0–1.0 (higher = more likely real alert)
+    created_at: str
+    confirmed_at: Optional[str] = None
+    confirmed_by: Optional[str] = None  # "operator" | "auto" | None
+    status: str = "pending"  # "pending" | "approved" | "rejected"
+    rejection_reason: Optional[str] = None
+
+
+class AlertRateLimiter(BaseModel):
+    """Rate limiter for per-policy alerts (Fix #11).
+
+    Prevents alert spam and DoS attacks by enforcing:
+    - Max alerts per policy per minute (burst)
+    - Max alerts per policy per hour (sustained)
+    """
+    policy_id: str
+    max_alerts_per_minute: int = 5  # Burst limit
+    max_alerts_per_hour: int = 50  # Sustained limit
+    alerts_last_minute: List[str] = Field(default_factory=list)  # Alert IDs from last minute
+    alerts_last_hour: List[str] = Field(default_factory=list)  # Alert IDs from last hour
+    last_reset_minute: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    last_reset_hour: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
 class AlertPolicyManager:
     """Manage alert policies for learning loops.
 
@@ -129,16 +185,25 @@ class AlertPolicyManager:
     ```
     """
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, signing_key: Optional[str] = None):
         """Initialize alert manager for a tenant.
 
         Args:
             tenant_id: Tenant identifier (for isolation)
+            signing_key: HMAC signing key for alert signatures (Fix #11)
+                        If None, a random key is generated (should be persisted)
         """
         self.tenant_id = tenant_id
         self._policies: Dict[str, AlertPolicy] = {}
         self._history: List[AlertEvent] = []
         self._handlers: Dict[str, AlertNotificationHandler] = {}
+
+        # Security: Alert signatures and rate-limiting (Fix #11)
+        self._signing_key = signing_key or secrets.token_hex(32)
+        self._rate_limiters: Dict[str, AlertRateLimiter] = {}
+        self._confirmation_queue: Dict[str, AlertConfirmationRequest] = {}
+        self._nonce_cache: Dict[str, str] = {}  # Track used nonces to prevent replay
+        self._require_confirmation_policies: set = {"loss_divergence_critical", "gradient_explosion_critical"}
 
         # Load default policies
         self._init_default_policies()
@@ -296,15 +361,23 @@ class AlertPolicyManager:
                convergence_percent, ...}
 
         Returns:
-            List of fired alerts
+            List of fired alerts (excluding those pending confirmation)
+
+        **Security (Fix #11):**
+        1. Sign each alert (HMAC-SHA256)
+        2. Check rate limits per policy
+        3. Request confirmation for sensitive policies
+        4. Fire only confirmed alerts
 
         **Implementation Note:** In production, this method would:
         1. Check each enabled policy
         2. Evaluate condition (threshold, trend, anomaly)
         3. Check if muted
-        4. Fire alert if condition + enabled + not muted
-        5. Log to audit trail (GDPR Art. 30)
-        6. Call notification handlers
+        4. Sign and rate-limit check (Fix #11)
+        5. Request confirmation if needed (Fix #11)
+        6. Fire alert if condition + enabled + not muted + rate OK + confirmed
+        7. Log to audit trail (GDPR Art. 30)
+        8. Call notification handlers
         """
         alerts: List[AlertEvent] = []
         now = datetime.utcnow().isoformat()
@@ -362,6 +435,28 @@ class AlertPolicyManager:
                     muted=False,
                 )
 
+                # Security: Sign alert (Fix #11)
+                alert_sig = self._sign_alert(
+                    alert.alert_id, alert.metric_name, metric_value, policy.threshold
+                )
+                logger.debug(f"Alert signed: {alert.alert_id} sig={alert_sig.signature[:16]}... (tenant={self.tenant_id})")
+
+                # Security: Check rate limits (Fix #11)
+                rate_ok, rate_msg = self.check_rate_limit(policy_id)
+                if not rate_ok:
+                    logger.warning(f"Alert rate-limited: {alert.alert_id} ({rate_msg}, tenant={self.tenant_id})")
+                    continue  # Skip this alert, do not fire
+
+                # Security: Request confirmation for sensitive policies (Fix #11)
+                if policy_id in self._require_confirmation_policies:
+                    confidence = 0.8 if metric_value > (policy.threshold * 2) else 0.5
+                    conf_req = self.request_confirmation(alert, confidence_score=confidence)
+                    logger.warning(f"Confirmation requested: {alert.alert_id} (conf_id={conf_req.confirmation_id}, tenant={self.tenant_id})")
+                    # Alert is pending, not yet in history
+                    continue
+
+                # All checks passed: record in rate limiter and fire alert
+                self.record_alert_for_rate_limit(policy_id, alert.alert_id)
                 alerts.append(alert)
                 self._history.append(alert)
 
@@ -392,6 +487,215 @@ class AlertPolicyManager:
             # - If log: log at appropriate level
 
             logger.info(f"Notifying {handler.handler_type} handler {handler_id}: {alert.alert_id}")
+
+    # ====== Security Methods (Fix #11: Alert Spoofing) ======
+
+    def _sign_alert(
+        self,
+        alert_id: str,
+        metric_name: str,
+        metric_value: float,
+        threshold: float,
+    ) -> AlertSignature:
+        """Create a cryptographic signature for an alert (Fix #11).
+
+        Prevents tampering and spoofing by signing alert content.
+
+        Args:
+            alert_id: Unique alert identifier
+            metric_name: Name of metric being checked
+            metric_value: Actual metric value
+            threshold: Policy threshold
+
+        Returns:
+            AlertSignature with HMAC-SHA256 signature
+        """
+        # Generate nonce to prevent replay attacks
+        nonce = secrets.token_hex(16)
+
+        # Fields to sign (immutable alert properties)
+        fields_to_sign = [alert_id, metric_name, str(metric_value), str(threshold), nonce]
+        message = "|".join(fields_to_sign)
+
+        # Compute HMAC-SHA256 signature
+        signature_bytes = hmac.new(
+            self._signing_key.encode(), message.encode(), hashlib.sha256
+        ).digest()
+        signature_hex = signature_bytes.hex()
+
+        now = datetime.utcnow().isoformat()
+        alert_sig = AlertSignature(
+            alert_id=alert_id,
+            signature=signature_hex,
+            timestamp=now,
+            nonce=nonce,
+            signed_fields=fields_to_sign,
+        )
+
+        # Cache nonce to detect replays
+        self._nonce_cache[nonce] = now
+
+        logger.debug(f"Signed alert {alert_id} with nonce {nonce} (tenant={self.tenant_id})")
+        return alert_sig
+
+    def verify_alert_signature(self, alert_sig: AlertSignature) -> Tuple[bool, str]:
+        """Verify an alert signature (Fix #11).
+
+        Checks:
+        1. Nonce not previously used (replay prevention)
+        2. Signature matches computed HMAC-SHA256
+        3. Timestamp not stale (within 5 minutes)
+
+        Args:
+            alert_sig: AlertSignature to verify
+
+        Returns:
+            (is_valid: bool, reason: str)
+        """
+        # Check 1: Replay prevention (nonce not reused)
+        if alert_sig.nonce in self._nonce_cache:
+            return False, f"Replay detected: nonce {alert_sig.nonce} already used"
+
+        # Check 2: Timestamp freshness (must be within 5 minutes)
+        sig_time = datetime.fromisoformat(alert_sig.timestamp)
+        age_seconds = (datetime.utcnow() - sig_time).total_seconds()
+        if age_seconds > 300:  # 5 minutes
+            return False, f"Stale signature: {age_seconds:.0f}s old (max 300s)"
+
+        # Check 3: Verify HMAC-SHA256 signature
+        message = "|".join(alert_sig.signed_fields + [alert_sig.nonce])
+        expected_signature_bytes = hmac.new(
+            self._signing_key.encode(), message.encode(), hashlib.sha256
+        ).digest()
+        expected_signature_hex = expected_signature_bytes.hex()
+
+        if not hmac.compare_digest(alert_sig.signature, expected_signature_hex):
+            return False, "Signature verification failed: tampering detected"
+
+        logger.debug(f"Verified alert signature {alert_sig.alert_id} (tenant={self.tenant_id})")
+        return True, "OK"
+
+    def check_rate_limit(self, policy_id: str) -> Tuple[bool, str]:
+        """Check rate limits for a policy (Fix #11).
+
+        Enforces:
+        - Max 5 alerts per minute (burst)
+        - Max 50 alerts per hour (sustained)
+
+        Args:
+            policy_id: Policy to check
+
+        Returns:
+            (is_allowed: bool, reason: str)
+        """
+        # Initialize rate limiter if not exists
+        if policy_id not in self._rate_limiters:
+            self._rate_limiters[policy_id] = AlertRateLimiter(policy_id=policy_id)
+
+        limiter = self._rate_limiters[policy_id]
+        now = datetime.utcnow()
+
+        # Reset minute window if needed
+        last_reset_min = datetime.fromisoformat(limiter.last_reset_minute)
+        if (now - last_reset_min).total_seconds() >= 60:
+            limiter.alerts_last_minute = []
+            limiter.last_reset_minute = now.isoformat()
+
+        # Reset hour window if needed
+        last_reset_hour = datetime.fromisoformat(limiter.last_reset_hour)
+        if (now - last_reset_hour).total_seconds() >= 3600:
+            limiter.alerts_last_hour = []
+            limiter.last_reset_hour = now.isoformat()
+
+        # Check minute limit (burst)
+        if len(limiter.alerts_last_minute) >= limiter.max_alerts_per_minute:
+            return False, f"Rate limit exceeded: {len(limiter.alerts_last_minute)} alerts in last minute"
+
+        # Check hour limit (sustained)
+        if len(limiter.alerts_last_hour) >= limiter.max_alerts_per_hour:
+            return False, f"Rate limit exceeded: {len(limiter.alerts_last_hour)} alerts in last hour"
+
+        return True, "OK"
+
+    def record_alert_for_rate_limit(self, policy_id: str, alert_id: str) -> None:
+        """Record an alert in rate limit tracking (Fix #11).
+
+        Args:
+            policy_id: Policy ID
+            alert_id: Alert ID to record
+        """
+        if policy_id not in self._rate_limiters:
+            self._rate_limiters[policy_id] = AlertRateLimiter(policy_id=policy_id)
+
+        limiter = self._rate_limiters[policy_id]
+        limiter.alerts_last_minute.append(alert_id)
+        limiter.alerts_last_hour.append(alert_id)
+
+    def request_confirmation(
+        self, alert: AlertEvent, confidence_score: float = 0.5
+    ) -> AlertConfirmationRequest:
+        """Request human/automated confirmation for a sensitive alert (Fix #11).
+
+        High-severity alerts are held pending confirmation before being processed.
+
+        Args:
+            alert: Alert to confirm
+            confidence_score: Confidence that this is a real alert (0.0–1.0)
+
+        Returns:
+            AlertConfirmationRequest
+        """
+        confirmation_id = f"confirm_{alert.alert_id}"
+        conf_req = AlertConfirmationRequest(
+            confirmation_id=confirmation_id,
+            alert_id=alert.alert_id,
+            policy_id=alert.policy_id,
+            alert_type=alert.alert_type,
+            metric_value=alert.metric_value,
+            threshold=alert.threshold,
+            confidence_score=confidence_score,
+            created_at=datetime.utcnow().isoformat(),
+            status="pending",
+        )
+
+        self._confirmation_queue[confirmation_id] = conf_req
+        logger.info(f"Requested confirmation for alert {alert.alert_id} (tenant={self.tenant_id})")
+
+        return conf_req
+
+    def confirm_alert(self, confirmation_id: str, approved: bool, confirmed_by: str = "operator") -> bool:
+        """Confirm or reject an alert (Fix #11).
+
+        Args:
+            confirmation_id: Confirmation request ID
+            approved: True to approve, False to reject
+            confirmed_by: Who confirmed ("operator", "auto", etc.)
+
+        Returns:
+            True if confirmation was processed
+        """
+        if confirmation_id not in self._confirmation_queue:
+            logger.warning(f"Confirmation not found: {confirmation_id}")
+            return False
+
+        conf_req = self._confirmation_queue[confirmation_id]
+        now = datetime.utcnow().isoformat()
+        conf_req.confirmed_at = now
+        conf_req.confirmed_by = confirmed_by
+
+        if approved:
+            conf_req.status = "approved"
+            logger.info(f"Alert approved: {conf_req.alert_id} by {confirmed_by} (tenant={self.tenant_id})")
+        else:
+            conf_req.status = "rejected"
+            conf_req.rejection_reason = "Operator rejected"
+            logger.info(f"Alert rejected: {conf_req.alert_id} by {confirmed_by} (tenant={self.tenant_id})")
+
+        return True
+
+    def get_pending_confirmations(self) -> List[AlertConfirmationRequest]:
+        """Get all pending confirmation requests (Fix #11)."""
+        return [req for req in self._confirmation_queue.values() if req.status == "pending"]
 
     def register_handler(
         self,

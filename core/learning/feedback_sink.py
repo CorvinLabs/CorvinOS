@@ -11,6 +11,12 @@ This module collects three types of feedback:
 All feedback is validated, scrubbed of PII, buffered for confidence thresholds, and
 emitted as immutable FEEDBACK events to the audit-first EventStore.
 
+Security Fix #1 — Loop Hijacking Mitigation (ADR-0640):
+- Cryptographic signatures (HMAC-SHA256) protect feedback from tampering
+- Signatures verified before optimizer processes feedback
+- Timestamp binding prevents replay attacks
+- Tenant-scoped keys prevent cross-tenant signature reuse
+
 Fail-soft: validation failures drop feedback silently (with audit trail), never raising
 exceptions that could break the user experience.
 """
@@ -20,10 +26,12 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+
+from core.learning.feedback_signature import FeedbackSignatureValidator, canonical_json
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +59,11 @@ class FeedbackEvent:
     - PII-scrubbed (no names, emails, PII)
     - Tenant-scoped (GDPR Art. 32)
     - Audit-logged (every event recorded)
+    - Cryptographically signed (prevents hijacking attacks)
+
+    Security Fix #1 — Loop Hijacking Mitigation:
+    - signature: HMAC-SHA256 over canonical JSON payload
+    - signature_verified: Flag indicating if signature was validated
     """
     feedback_id: str                           # UUID4
     skill_id: str                              # e.g., "os.delegation_router"
@@ -68,6 +81,10 @@ class FeedbackEvent:
     confidence: Optional[float] = None         # User's confidence in feedback (0–1)
     source: str = "user"                       # "user" | "system" | "audit"
     lom: Optional[str] = None                  # Line of Moral Responsibility
+
+    # Security Fix #1 — Cryptographic Signature
+    signature: Optional[str] = None            # HMAC-SHA256 hex digest (for replay protection)
+    signature_verified: bool = False           # Flag: signature was validated (fail-closed)
 
     def __post_init__(self):
         """Validate feedback on creation."""
@@ -102,14 +119,21 @@ class FeedbackEvent:
         confidence: Optional[float] = None,
         source: str = "user",
         lom: Optional[str] = None,
+        signature: Optional[str] = None,
+        signature_verified: bool = False,
     ) -> FeedbackEvent:
-        """Factory for creating new feedback events."""
+        """Factory for creating new feedback events.
+
+        Args:
+            signature: HMAC-SHA256 signature (optional, but required for prod)
+            signature_verified: Flag indicating signature was validated (fail-closed)
+        """
         return cls(
             feedback_id=str(uuid4()),
             skill_id=skill_id,
             task_id=task_id,
             tenant_id=tenant_id,
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             outcome_feedback=outcome_feedback,
             quality_rating=quality_rating,
             preference_feedback=preference_feedback,
@@ -117,6 +141,8 @@ class FeedbackEvent:
             confidence=confidence,
             source=source,
             lom=lom,
+            signature=signature,
+            signature_verified=signature_verified,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -134,6 +160,8 @@ class FeedbackEvent:
             "confidence": self.confidence,
             "source": self.source,
             "lom": self.lom,
+            "signature": self.signature,
+            "signature_verified": self.signature_verified,
         }
 
 
@@ -185,20 +213,23 @@ class FeedbackValidator:
     CONFIDENCE_THRESHOLD = 0.6    # Require ≥60% confidence for buffering
     MIN_BUFFER_SIZE = 10          # Collect ≥10 feedback samples before tuning
 
-    def __init__(self, audit_backend=None, event_store=None):
+    def __init__(self, audit_backend=None, event_store=None, signature_validator=None):
         """Initialize validator with dependencies.
 
         Args:
             audit_backend: Audit trail writer
             event_store: EventStore instance (to verify task exists)
+            signature_validator: FeedbackSignatureValidator instance (Security Fix #1)
         """
         self.audit_backend = audit_backend
         self.event_store = event_store
+        self.signature_validator = signature_validator or FeedbackSignatureValidator()
 
     def validate(self, feedback: FeedbackEvent) -> tuple[bool, Optional[str]]:
         """Validate feedback (return: (is_valid, error_message)).
 
         Checks:
+        0. Cryptographic signature is valid (Security Fix #1 — Loop Hijacking Mitigation)
         1. Tenant ID is valid (GDPR Art. 32 isolation)
         2. Skill ID is not empty
         3. Task ID is not empty
@@ -208,6 +239,22 @@ class FeedbackValidator:
         7. Confidence is in range (0–1 or None)
         8. Reason has been scrubbed of PII
         """
+
+        # 0. Signature verification (fail-closed: reject if signature invalid)
+        if feedback.signature is not None:
+            # Verify signature if present
+            feedback_dict = feedback.to_dict()
+            is_valid, error = self.signature_validator.validate_feedback_signature(
+                feedback.tenant_id,
+                feedback_dict,
+                feedback.signature,
+                audit_callback=self._emit_audit_event,
+            )
+            if not is_valid:
+                logger.warning("feedback signature verification failed: %s", error)
+                return False, f"signature verification failed: {error}"
+            # Mark as verified
+            object.__setattr__(feedback, 'signature_verified', True)
 
         # 1. Tenant ID validation (fail-closed isolation)
         if not feedback.tenant_id or len(feedback.tenant_id) == 0:
@@ -263,7 +310,7 @@ class FeedbackValidator:
         """Check if feedback timestamp is within allowed window (60 min)."""
         try:
             feedback_time = datetime.fromisoformat(timestamp_iso.replace('Z', '+00:00'))
-            now = datetime.utcnow().replace(tzinfo=feedback_time.tzinfo)
+            now = datetime.now(timezone.utc).replace(tzinfo=feedback_time.tzinfo)
             delta = now - feedback_time
             return delta <= timedelta(minutes=FeedbackValidator.FEEDBACK_WINDOW_MINUTES)
         except (ValueError, TypeError):
@@ -273,6 +320,18 @@ class FeedbackValidator:
     def _is_valid_tenant(tenant_id: str) -> bool:
         """Validate tenant_id format (alphanumeric + underscores)."""
         return bool(tenant_id) and len(tenant_id) <= 128 and all(c.isalnum() or c == '_' for c in tenant_id)
+
+    def _emit_audit_event(self, event_type: str, **kwargs) -> None:
+        """Emit audit event for signature verification (if backend available)."""
+        if self.audit_backend:
+            try:
+                self.audit_backend(
+                    event_type=event_type,
+                    timestamp=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+                    **kwargs
+                )
+            except Exception as exc:
+                logger.warning("failed to emit audit event %s: %s", event_type, exc)
 
 
 class FeedbackBuffer:

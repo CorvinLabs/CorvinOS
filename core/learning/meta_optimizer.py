@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Optional
 
 from core.learning.base import LearningLoop
 from core.learning.watchdog import DivergenceWatchdog
+from core.learning.audit_integration import AuditIntegration, TuningOperation, TuningOperationType
 
 #: ``(event_type, *, tenant_id, details) -> audit_ref`` — the core chain writer.
 AuditFn = Callable[..., str]
@@ -44,6 +45,13 @@ class MetaOptimizer(LearningLoop):
         self.tenant_id = tenant_id
         self._audit: AuditFn = audit or _core_chain_audit
         self._bounds = DivergenceWatchdog(tenant_id).bounds
+
+        # Audit-first integration (Fix #8 — Audit Bypass)
+        self._audit_integration = AuditIntegration(
+            tenant_id=tenant_id,
+            loop_id="meta",
+            audit_fn=self._audit,
+        )
 
         # Tunable parameters (Tier 1/2 hyperparameters)
         self.α_core = 0.1
@@ -118,37 +126,58 @@ class MetaOptimizer(LearningLoop):
 
     # ── audited parameter mutation ──────────────────────────────────────────
 
-    def _commit(self, new_values: Dict[str, float], *, reason: str) -> bool:
-        """Audit-first assignment of hyperparameters; returns True if anything changed."""
+    def _commit(self, new_values: Dict[str, float], *, reason: str, operation_type: Optional[TuningOperationType] = None) -> bool:
+        """Audit-first assignment of hyperparameters; returns True if anything changed.
+
+        Uses AuditIntegration to ensure fail-closed behavior: if audit commit fails,
+        the change is NOT applied and a RuntimeError is raised.
+        """
         def _changed(old: float, new: float) -> bool:
             # a non-finite live value is ALWAYS a change (``abs(x - nan) > eps`` is
             # False, which would have left a NaN in place during a restore)
             return (not math.isfinite(old)) or abs(new - old) > 1e-12
 
-        changes = {
-            name: {"old": float(getattr(self, name)), "new": float(new_values[name])}
-            for name in HYPERPARAMETERS
-            if _changed(float(getattr(self, name)), float(new_values[name]))
-        }
-        if not changes:
+        old_values = {name: float(getattr(self, name)) for name in HYPERPARAMETERS}
+
+        # Check if anything actually changed
+        if not any(_changed(old_values[name], float(new_values[name])) for name in HYPERPARAMETERS):
             return False
-        # Chain write FIRST — raises when it does not commit; nothing is applied then.
-        self._audit(
-            "learning.hyperparameter_changed",
-            tenant_id=self.tenant_id,
+
+        # Determine operation type if not provided
+        if operation_type is None:
+            if reason == "rollback":
+                operation_type = TuningOperationType.ROLLBACK
+            elif reason == "feedback":
+                operation_type = TuningOperationType.FEEDBACK_SIGNAL
+            else:
+                operation_type = TuningOperationType.GRADIENT_STEP
+
+        # Create tuning operation
+        operation = TuningOperation(
+            operation_type=operation_type,
+            reason=reason,
+            old_values=old_values,
+            new_values={name: float(new_values[name]) for name in HYPERPARAMETERS},
             details={
-                "loop_id": self.loop_id,
-                "reason": reason,
                 "update_count": self.update_count,
                 "conservative_mode": self.conservative_mode,
-                "changes": changes,
             },
         )
-        for name, change in changes.items():
-            setattr(self, name, change["new"])
-        return True
 
-    def apply_gradients(self, gradients: Dict[str, float], learning_rate: float = None, damping: float = None):
+        # Audit-first apply via AuditIntegration (fail-closed)
+        def apply_new_values(values: Dict[str, float]) -> None:
+            for name in HYPERPARAMETERS:
+                if name in values:
+                    setattr(self, name, values[name])
+
+        try:
+            self._audit_integration.audit_and_apply(operation, apply_new_values)
+            return True
+        except RuntimeError as e:
+            # Fail-closed: if audit fails, raise and do not apply
+            raise RuntimeError(f"Cannot apply tuning: {e}") from e
+
+    def apply_gradients(self, gradients: Dict[str, float], learning_rate: float = None, damping: float = None, feedback_confidence: float = None):
         if learning_rate is None:
             learning_rate = self.learning_rate_meta
         if damping is None:
@@ -173,7 +202,36 @@ class MetaOptimizer(LearningLoop):
             'damping_core': _step(self.damping_core, gradients['damping_core'], +1.0, *self._bounds['damping_core']),
             'damping_infra': _step(self.damping_infra, gradients['damping_infra'], +1.0, *self._bounds['damping_infra']),
         }
-        self._commit(new_values, reason="gradient_step")
+
+        # Determine reason based on whether we're applying feedback or gradients
+        reason = "feedback" if feedback_confidence is not None else "gradient_step"
+
+        # Commit with audit integration (fail-closed on audit failure)
+        try:
+            if feedback_confidence is not None:
+                # For feedback-driven changes, include confidence in audit details
+                operation_type = TuningOperationType.FEEDBACK_SIGNAL
+                operation = TuningOperation(
+                    operation_type=operation_type,
+                    reason=reason,
+                    old_values={name: float(getattr(self, name)) for name in HYPERPARAMETERS},
+                    new_values=new_values,
+                    details={
+                        "update_count": self.update_count,
+                        "conservative_mode": self.conservative_mode,
+                        "feedback_confidence": float(feedback_confidence),
+                    },
+                )
+                def apply_fn(values: Dict[str, float]) -> None:
+                    for name in HYPERPARAMETERS:
+                        if name in values:
+                            setattr(self, name, values[name])
+                self._audit_integration.audit_and_apply(operation, apply_fn)
+            else:
+                self._commit(new_values, reason=reason, operation_type=TuningOperationType.GRADIENT_STEP)
+        except RuntimeError:
+            # Re-raise audit failures (fail-closed)
+            raise
 
         # Detect worsening (conservative mode)
         if len(self.loss_history) > 10:
@@ -231,9 +289,9 @@ class MetaOptimizer(LearningLoop):
             clean[name] = value
         return clean
 
-    def set_state(self, state: Dict, *, reason: str = "set_state"):
+    def set_state(self, state: Dict, *, reason: str = "set_state", operation_type: Optional[TuningOperationType] = None):
         clean = self.validate_state(state)
-        self._commit(clean, reason=reason)
+        self._commit(clean, reason=reason, operation_type=operation_type)
         self.update_count = int(state.get('update_count', 0))
 
     def process_feedback_signal(self, feedback_outcomes: list[Dict[str, float]]) -> bool:
@@ -247,7 +305,11 @@ class MetaOptimizer(LearningLoop):
                 - preference_feedback: "llm"|"deterministic"|"either"
 
         Returns:
-            True if feedback was processed and parameters updated
+            True if feedback was processed and parameters updated (audit successful)
+            False if insufficient samples or no high-confidence feedback
+
+        Raises:
+            RuntimeError: If audit of feedback-driven changes fails (fail-closed)
         """
         if not feedback_outcomes or len(feedback_outcomes) < 10:
             return False  # Buffer until we have >= 10 samples
@@ -277,7 +339,7 @@ class MetaOptimizer(LearningLoop):
         if has_contradiction:
             self.conservative_mode = True
 
-        # Apply signal as loss delta
+        # Apply signal as loss delta (audit-first for any changes)
         if avg_confidence >= 0.6:  # Only apply if confident
             feedback_loss_delta = -consensus_signal * 0.01  # Normalize signal
             feedback_gradients = {
@@ -286,8 +348,20 @@ class MetaOptimizer(LearningLoop):
                 'damping_core': 0.0,
                 'damping_infra': 0.0,
             }
-            self.apply_gradients(feedback_gradients, learning_rate=self.learning_rate_meta * 0.5)
-            return True
+            try:
+                # apply_gradients now uses audit-first internally
+                self.apply_gradients(
+                    feedback_gradients,
+                    learning_rate=self.learning_rate_meta * 0.5,
+                    feedback_confidence=avg_confidence,
+                )
+                return True
+            except RuntimeError as e:
+                # Audit failed — fail-closed, don't apply feedback
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to apply feedback-driven tuning: {e}")
+                return False
 
         return False
 
@@ -315,8 +389,12 @@ class MetaOptimizer(LearningLoop):
         """Rollback parameters to a previously saved (validated, audited) state.
 
         Used when feedback-guided optimization diverges.
+        Audit is emitted for the rollback operation (fail-closed).
+
+        Raises:
+            RuntimeError: If audit of rollback fails
         """
-        self.set_state(saved_state, reason="rollback")
+        self.set_state(saved_state, reason="rollback", operation_type=TuningOperationType.ROLLBACK)
         self.conservative_mode = True
 
     def emit_event(self, collector_integration, **event_data):
