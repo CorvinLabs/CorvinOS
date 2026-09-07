@@ -257,6 +257,17 @@ the policy) are denied (fail closed) and audit-logged.
 * **M2.6 (done):** `bridge.sh doctor` (via `self_test.py`) adds the
   `egress.preset_loaded` / `egress.preset_consistency` check group via
   `validate_preset_consistency()`.
+* **Console model-catalog route (done, 2026-09-07):**
+  `core/console/corvin_console/routes/models.py`'s
+  `_egress_denied()` gates BOTH callers of `engine_providers.fetch_models()`
+  — the manual `POST /models/live/refresh` endpoint and the 5-minute
+  background timer (`_refresh_once_impl`) — before any outbound request to
+  `api.anthropic.com`. Same fail-open-on-error / honour-explicit-denial
+  semantics as the pattern this mirrors (the old `engine.py`'s
+  `_egress_denied()`, removed in 243690e8 when that route was rewritten
+  Claude-Code-only). A denial returns 403 on the manual endpoint and is
+  audited (`console.action_denied` / `model_catalog_refresh_blocked`),
+  in addition to the gate's own `egress.blocked` L16 event.
 
 The standalone shape mirrors L34 deliberately — both ship in
 isolation, both wire into the same adapter compliance-gate point.
@@ -283,6 +294,7 @@ isolation, both wire into the same adapter compliance-gate point.
 
 ```bash
 python3 operator/bridges/shared/test_egress_gate.py
+core/console/tests/test_model_catalog_egress_gate.py   # console model-catalog route gating
 ```
 
 33 tests covering:

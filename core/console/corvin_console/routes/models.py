@@ -19,6 +19,12 @@ Security invariants:
   - Each request checks the feature flag; off = falls back to static registry
   - Background refresh is tenant-blind (global cache for all tenants)
   - Audit event logged on every successful fetch
+  - L35 egress gate is checked (``_egress_denied()``) before EVERY outbound
+    fetch to the provider — both the manual ``/models/live/refresh`` endpoint
+    and the 5-minute background timer. An explicit policy denial is honoured
+    (refresh refused, no outbound request made, ``egress.blocked`` + a
+    console audit event recorded); an unconfigured/disabled policy or a gate
+    load error fails OPEN, matching the adapter's egress semantics.
 
 MUST NOT import anthropic (CI AST lint enforces).
 """
@@ -64,6 +70,40 @@ _CACHE_LOCK = threading.Lock()
 _REFRESH_THREAD: threading.Timer | None = None
 _REFRESH_INTERVAL = 300  # 5 minutes
 
+# The one provider base_url this module ever fetches. Kept as a constant so
+# the egress check and the fetch call can never drift apart.
+_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+
+
+def _egress_denied(base_url: str, tenant_id: str) -> str | None:
+    """L35: return a block message if the active egress policy denies this
+    host, else None (allow). Mirrors the ``_egress_denied()`` helper that
+    lived in the old multi-provider ``engine.py`` (removed in 243690e8) —
+    same semantics: fail-OPEN on operational error / disabled policy (matches
+    the adapter's egress semantics), but honour an EXPLICIT policy denial.
+    ``EgressGate.validate()`` itself emits the ``egress.approved`` /
+    ``egress.blocked`` / ``egress.policy_disabled`` audit events onto the L16
+    hash chain — this helper does not need to audit separately."""
+    try:
+        from urllib.parse import urlparse
+
+        from egress_gate import load_egress_gate_for_tenant  # type: ignore[import]
+
+        host = urlparse(base_url).hostname or ""
+        gate = load_egress_gate_for_tenant(tenant_id or "_default")
+        if gate is None or not host:
+            return None
+        try:
+            gate.validate_or_raise(host, engine_id="model_catalog_live_fetch")
+            return None
+        except Exception as e:  # noqa: BLE001 — explicit denial
+            return (
+                f"Egress to '{host}' is blocked by the L35 policy — add it to "
+                f"allowed_hosts to fetch the live model catalog. ({str(e)[:120]})"
+            )
+    except Exception:  # noqa: BLE001 — gate unavailable → don't break the model list
+        return None
+
 
 def _cache_path(tenant_id: str = "_default") -> Path:
     """Per-tenant model catalog cache file."""
@@ -108,10 +148,27 @@ def _refresh_once_impl(tenant_id: str) -> None:
             _log.debug(f"[models] live_model_discovery disabled for {tenant_id}")
             return
 
+        # L35 applies to the background refresh too — it is still outbound
+        # network egress to a cloud provider, just on a timer instead of a
+        # button press.
+        denied = _egress_denied(_ANTHROPIC_BASE_URL, tenant_id)
+        if denied:
+            _log.warning(f"[models] background refresh blocked by L35: {denied}")
+            console_audit.system_event(
+                tenant_id=tenant_id,
+                event="model_catalog_refresh_blocked",
+                details={
+                    "provider": "anthropic",
+                    "reason": "egress_denied",
+                    "reachable": False,
+                },
+            )
+            return
+
         # Fetch from Anthropic
         result = engine_providers.fetch_models(
             provider="anthropic",
-            base_url="https://api.anthropic.com",
+            base_url=_ANTHROPIC_BASE_URL,
             model_source="anthropic",
             credential_env="ANTHROPIC_API_KEY",
             timeout=8.0,
@@ -290,10 +347,28 @@ async def trigger_live_refresh(
             detail="live_model_discovery feature is not enabled",
         )
 
+    # L35: the active egress policy may explicitly deny this host — refuse
+    # the fetch before any outbound request is made, same as the manual
+    # provider-model fetch that used to live in engine.py.
+    denied = _egress_denied(_ANTHROPIC_BASE_URL, tenant_id)
+    if denied:
+        console_audit.action_denied(
+            tenant_id=tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="console.model_catalog_manual_refresh",
+            target_kind="model_catalog",
+            target_id="anthropic",
+            reason="egress_denied",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=denied,
+        )
+
     # Fetch from Anthropic (synchronous)
     result = engine_providers.fetch_models(
         provider="anthropic",
-        base_url="https://api.anthropic.com",
+        base_url=_ANTHROPIC_BASE_URL,
         model_source="anthropic",
         credential_env="ANTHROPIC_API_KEY",
         timeout=8.0,
