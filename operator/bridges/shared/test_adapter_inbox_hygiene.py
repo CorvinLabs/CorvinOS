@@ -12,6 +12,10 @@ the JSON parser:
      opt-out (``0``)
   3. ``_sweep_sysprompt_tmp`` removes only STALE ``.corvin-sysprompt-*.txt``
      leftovers under the sessions root
+  4. R2-B4 (round 2): the dispatcher's pre-submit peeks (``_route_key`` /
+     ``_peek_side_channel``) never raise on a non-object or non-UTF-8
+     envelope — ``submit_inbox_item`` still routes it, the runner quarantines
+     it, and the msg_id is NOT pinned in ``_in_flight`` for 3600 s
 
 Run: python3 operator/bridges/shared/test_adapter_inbox_hygiene.py
      (or pytest)
@@ -138,17 +142,87 @@ def test_sysprompt_sweep_removes_only_stale_leftovers() -> None:
 
 def main() -> int:
     fails = 0
-    for fn in (test_poison_envelope_is_quarantined_not_unlinked,
-               test_processed_sweep_is_age_bounded_and_keeps_poison,
-               test_sysprompt_sweep_removes_only_stale_leftovers):
+    tests = (test_poison_envelope_is_quarantined_not_unlinked,
+             test_processed_sweep_is_age_bounded_and_keeps_poison,
+             test_sysprompt_sweep_removes_only_stale_leftovers,
+             test_non_object_and_non_utf8_envelopes_do_not_abort_dispatch,
+             test_good_envelope_after_poison_still_routes)
+    for fn in tests:
         try:
             fn()
             print(f"PASS: {fn.__name__}")
         except AssertionError as e:
             fails += 1
             print(f"FAIL: {fn.__name__}: {e}")
-    print(f"\n{3 - fails} passed, {fails} failed")
+    print(f"\n{len(tests) - fails} passed, {fails} failed")
     return 1 if fails else 0
+
+
+def _wait_in_flight_drained(adapter, msg_id: str, timeout: float = 10.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with adapter._in_flight_guard:
+            if msg_id not in adapter._in_flight:
+                return
+        time.sleep(0.05)
+    raise AssertionError(f"{msg_id} still pinned in _in_flight after {timeout}s")
+
+
+def test_non_object_and_non_utf8_envelopes_do_not_abort_dispatch() -> None:
+    """R2-B4: drive the REAL dispatcher (`submit_inbox_item` → `_route_key` /
+    `_peek_side_channel` → pool runner → `process_one`) with the two envelope
+    shapes the old peeks did not catch. Before the fix `AttributeError` /
+    `UnicodeDecodeError` escaped `submit_inbox_item` before the future was
+    attached: the poll tick died and the msg_id stayed in `_in_flight` for
+    IN_FLIGHT_TTL (3600 s)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    base, inbox, processed, audit_path, adapter = _sandbox()
+    adapter._executor = ThreadPoolExecutor(max_workers=2)
+    adapter._sidechannel_executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        cases = {
+            "list-envelope": b'["not", "an", "object"]',
+            "string-envelope": b'"just a string"',
+            "number-envelope": b'42',
+            "non-utf8-envelope": b'{"id": "x", "text": "\xff\xfe\xfa bad bytes"}',
+        }
+        for name, raw in cases.items():
+            f = inbox / f"{name}.json"
+            f.write_bytes(raw)
+            # the peeks themselves must be total functions
+            assert adapter._route_key(f) == f"unknown:{name}", name
+            assert adapter._peek_side_channel(f) is False, name
+            assert adapter._peek_envelope(f) is None, name
+            adapter.submit_inbox_item(f, settings={})  # must not raise
+            _wait_in_flight_drained(adapter, name)
+            assert not f.exists(), f"{name} left in inbox"
+            assert (processed / "poison" / f"{name}.json").exists(), f"{name} not quarantined"
+        events = _audit_lines(audit_path)
+        reasons = sorted(e["details"].get("reason") for e in events
+                         if e.get("event_type") == "bridge.inbox_poison_quarantined")
+        assert reasons == sorted(["not-an-object"] * 3 + ["unicode-decode-error"]), reasons
+        assert "bad bytes" not in audit_path.read_text(encoding="utf-8", errors="replace")
+    finally:
+        adapter._executor.shutdown(wait=True)
+        adapter._sidechannel_executor.shutdown(wait=True)
+        adapter._executor = None
+        adapter._sidechannel_executor = None
+
+
+def test_good_envelope_after_poison_still_routes() -> None:
+    """A valid envelope in the same tick is unaffected by a poison neighbour
+    (the old failure aborted the WHOLE tick)."""
+    base, inbox, processed, audit_path, adapter = _sandbox()
+    good = inbox / "good-1.json"
+    good.write_text(json.dumps({"id": "good-1", "from": "u1", "chat_id": "c1",
+                                "channel": "discord", "text": "hi"}), encoding="utf-8")
+    assert adapter._route_key(good) == "discord:c1"
+    assert adapter._peek_side_channel(good) is False
+    side = inbox / "btw-1.json"
+    side.write_text(json.dumps({"id": "btw-1", "from": "u1", "chat_id": "c1",
+                                "channel": "discord", "_btw": True, "text": "note"}), encoding="utf-8")
+    assert adapter._peek_side_channel(side) is True
 
 
 if __name__ == "__main__":

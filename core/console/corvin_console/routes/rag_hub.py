@@ -16,7 +16,7 @@ import logging
 from typing import Annotated, Any
 
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import auth as session_auth
 from .. import audit as console_audit
@@ -24,6 +24,42 @@ from ..deps import require_csrf, require_session
 
 from .. import _bootstrap
 _forge_paths = _bootstrap.forge_paths
+
+from .custom_provider import _assert_provider_endpoint_allowed  # noqa: E402
+from .datasources_http import _UnsafeUrl  # noqa: E402
+
+
+def _iter_manifest_endpoints(manifest_yaml: str) -> list[str]:
+    """Every URL-ish string an imported provider manifest would make the server
+    fetch. Keys are matched by NAME (``endpoint``/``url``/``base_url``) at any
+    depth, so a schema change cannot quietly reintroduce an unguarded field."""
+    import yaml  # noqa: PLC0415
+
+    try:
+        data = yaml.safe_load(manifest_yaml or "")
+    except Exception:  # noqa: BLE001 — an unparsable manifest is rejected downstream
+        return []
+    found: list[str] = []
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if (isinstance(value, str)
+                        and str(key).lower() in ("endpoint", "url", "base_url", "host")):
+                    found.append(value)
+                else:
+                    stack.append(value)
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
+
+
+def _assert_manifest_endpoints_allowed(manifest_yaml: str) -> None:
+    """Fail-closed SSRF/egress guard for every endpoint in an imported
+    manifest — the same check ``custom_provider.create`` applies."""
+    for url in _iter_manifest_endpoints(manifest_yaml):
+        _assert_provider_endpoint_allowed(url.strip())
 
 logger = logging.getLogger(__name__)
 
@@ -376,10 +412,31 @@ async def import_provider(
         requested_id=str(_req_pid or "pending"),
         audit_action="hub.import",
     )
+    # Unverified follow-up (round 2, 2026-09-07): `/import` writes a provider
+    # manifest into the SAME registry dir as custom_provider.create, and that
+    # manifest's `spec.retrieval.endpoint` is what the RAG layer will later
+    # fetch server-side. custom_provider.create runs the SSRF/egress guard on
+    # its endpoint; this path did not, so importing a manifest was a way to
+    # register exactly the endpoint the other route refuses (cloud metadata,
+    # LAN hosts). Same guard, same fail-closed behaviour, applied BEFORE the
+    # manifest is written.
+    manifest_yaml = req.get("manifest_yaml", "")
+    try:
+        _assert_manifest_endpoints_allowed(manifest_yaml)
+    except _UnsafeUrl as exc:
+        console_audit.action_failed(
+            tenant_id=tenant_id,
+            sid_fingerprint=_session.sid_fingerprint,
+            action="hub.import",
+            target_kind="rag_provider",
+            target_id=str(provider_id or ""),
+            reason="endpoint_blocked",
+        )
+        raise HTTPException(status_code=400, detail=f"endpoint blocked: {exc}")
+
     try:
         from shared.rag_import_export import RAGProviderImportExport  # noqa: PLC0415
 
-        manifest_yaml = req.get("manifest_yaml", "")
 
         registry_dir = _forge_paths.tenant_global_dir(tenant_id) / "rag"
 

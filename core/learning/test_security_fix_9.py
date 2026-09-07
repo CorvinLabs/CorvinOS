@@ -12,6 +12,7 @@ Attack vectors tested:
 5. Audit Trail Verification (logging completeness)
 """
 
+from types import SimpleNamespace
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import Mock, MagicMock, patch
@@ -36,11 +37,23 @@ class TestFeedbackConsistentWithLossTrend:
         validator = FeedbackConsistencyValidator()
 
         # Simulate increasing loss trend
-        recent_losses = [0.5, 0.51, 0.52, 0.53, 0.54]
+        recent_losses = [0.50, 0.53, 0.56, 0.59, 0.62]  # +>5 % (LOSS_TREND_THRESHOLD)
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in recent_losses]
+            """Mirrors the REAL ``EventStore.query_events`` contract: named
+            ``query_events``, returning event objects with ``signal`` and an
+            ISO ``timestamp``. The old mock defined ``get_events``, a method no
+            store has — which is why the module's own call could never work
+            against a real store (2026-09-07 round-2 review, vector 9)."""
+
+            def query_events(self, **kwargs):
+                return [
+                    SimpleNamespace(
+                        signal={"total_loss": loss},
+                        timestamp=f"2026-09-07T10:00:{i:02d}Z",
+                    )
+                    for i, loss in enumerate(recent_losses)
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -62,11 +75,23 @@ class TestFeedbackConsistentWithLossTrend:
         validator = FeedbackConsistencyValidator()
 
         # Simulate decreasing loss trend
-        recent_losses = [0.6, 0.59, 0.58, 0.57, 0.56]
+        recent_losses = [0.62, 0.59, 0.56, 0.53, 0.50]  # ->5 % (LOSS_TREND_THRESHOLD)
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in recent_losses]
+            """Mirrors the REAL ``EventStore.query_events`` contract: named
+            ``query_events``, returning event objects with ``signal`` and an
+            ISO ``timestamp``. The old mock defined ``get_events``, a method no
+            store has — which is why the module's own call could never work
+            against a real store (2026-09-07 round-2 review, vector 9)."""
+
+            def query_events(self, **kwargs):
+                return [
+                    SimpleNamespace(
+                        signal={"total_loss": loss},
+                        timestamp=f"2026-09-07T10:00:{i:02d}Z",
+                    )
+                    for i, loss in enumerate(recent_losses)
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -87,11 +112,23 @@ class TestFeedbackConsistentWithLossTrend:
         """Case 3: NEUTRAL/OTHER feedback always consistent regardless of trend."""
         validator = FeedbackConsistencyValidator()
 
-        recent_losses = [0.5, 0.51, 0.52, 0.53, 0.54]  # Increasing
+        recent_losses = [0.50, 0.53, 0.56, 0.59, 0.62]  # +>5 % (LOSS_TREND_THRESHOLD)  # Increasing
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in recent_losses]
+            """Mirrors the REAL ``EventStore.query_events`` contract: named
+            ``query_events``, returning event objects with ``signal`` and an
+            ISO ``timestamp``. The old mock defined ``get_events``, a method no
+            store has — which is why the module's own call could never work
+            against a real store (2026-09-07 round-2 review, vector 9)."""
+
+            def query_events(self, **kwargs):
+                return [
+                    SimpleNamespace(
+                        signal={"total_loss": loss},
+                        timestamp=f"2026-09-07T10:00:{i:02d}Z",
+                    )
+                    for i, loss in enumerate(recent_losses)
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -115,8 +152,20 @@ class TestFeedbackConsistentWithLossTrend:
         recent_losses = [0.50, 0.501, 0.500, 0.502, 0.501]
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in recent_losses]
+            """Mirrors the REAL ``EventStore.query_events`` contract: named
+            ``query_events``, returning event objects with ``signal`` and an
+            ISO ``timestamp``. The old mock defined ``get_events``, a method no
+            store has — which is why the module's own call could never work
+            against a real store (2026-09-07 round-2 review, vector 9)."""
+
+            def query_events(self, **kwargs):
+                return [
+                    SimpleNamespace(
+                        signal={"total_loss": loss},
+                        timestamp=f"2026-09-07T10:00:{i:02d}Z",
+                    )
+                    for i, loss in enumerate(recent_losses)
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -145,8 +194,20 @@ class TestFeedbackContradicts:
         recent_losses = [0.5, 0.52, 0.54, 0.56, 0.58]
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in recent_losses]
+            """Mirrors the REAL ``EventStore.query_events`` contract: named
+            ``query_events``, returning event objects with ``signal`` and an
+            ISO ``timestamp``. The old mock defined ``get_events``, a method no
+            store has — which is why the module's own call could never work
+            against a real store (2026-09-07 round-2 review, vector 9)."""
+
+            def query_events(self, **kwargs):
+                return [
+                    SimpleNamespace(
+                        signal={"total_loss": loss},
+                        timestamp=f"2026-09-07T10:00:{i:02d}Z",
+                    )
+                    for i, loss in enumerate(recent_losses)
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -171,8 +232,20 @@ class TestFeedbackContradicts:
         recent_losses = [0.6, 0.58, 0.56, 0.54, 0.52]
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in recent_losses]
+            """Mirrors the REAL ``EventStore.query_events`` contract: named
+            ``query_events``, returning event objects with ``signal`` and an
+            ISO ``timestamp``. The old mock defined ``get_events``, a method no
+            store has — which is why the module's own call could never work
+            against a real store (2026-09-07 round-2 review, vector 9)."""
+
+            def query_events(self, **kwargs):
+                return [
+                    SimpleNamespace(
+                        signal={"total_loss": loss},
+                        timestamp=f"2026-09-07T10:00:{i:02d}Z",
+                    )
+                    for i, loss in enumerate(recent_losses)
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -196,8 +269,12 @@ class TestFeedbackContradicts:
         weak_losses = [0.500, 0.501, 0.502, 0.503, 0.504]
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in weak_losses]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate(weak_losses)
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -213,8 +290,12 @@ class TestFeedbackContradicts:
         strong_losses = [0.5, 0.55, 0.60, 0.65, 0.70]
 
         class MockEventStore2:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in strong_losses]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate(strong_losses)
+                ]
 
         validator.event_store = MockEventStore2()
 
@@ -382,8 +463,12 @@ class TestFeedbackContradictionAuditLogged:
         validator.audit_backend = audit_backend
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in [0.5, 0.52, 0.54, 0.56, 0.58]]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate([0.5, 0.52, 0.54, 0.56, 0.58])
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -416,8 +501,12 @@ class TestFeedbackContradictionAuditLogged:
         validator.audit_backend = audit_backend
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in [0.5, 0.52, 0.54, 0.56, 0.58]]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate([0.5, 0.52, 0.54, 0.56, 0.58])
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -451,8 +540,12 @@ class TestFeedbackContradictionAuditLogged:
         validator.audit_backend = audit_backend
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in [0.6, 0.59, 0.58, 0.57, 0.56]]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate([0.6, 0.59, 0.58, 0.57, 0.56])
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -482,8 +575,12 @@ class TestFeedbackContradictionAuditLogged:
         validator.audit_backend = audit_backend
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in [0.5, 0.52, 0.54, 0.56, 0.58]]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate([0.5, 0.52, 0.54, 0.56, 0.58])
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -508,8 +605,12 @@ class TestContradictionDoesNotBlock:
         validator = FeedbackConsistencyValidator()
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in [0.5, 0.52, 0.54, 0.56, 0.58]]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate([0.5, 0.52, 0.54, 0.56, 0.58])
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -529,8 +630,12 @@ class TestContradictionDoesNotBlock:
         validator = FeedbackConsistencyValidator()
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in [0.5, 0.52, 0.54, 0.56, 0.58]]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate([0.5, 0.52, 0.54, 0.56, 0.58])
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -551,8 +656,12 @@ class TestContradictionDoesNotBlock:
         validator = FeedbackConsistencyValidator()
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in [0.5, 0.52, 0.54, 0.56, 0.58]]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate([0.5, 0.52, 0.54, 0.56, 0.58])
+                ]
 
         validator.event_store = MockEventStore()
 
@@ -575,8 +684,12 @@ class TestContradictionDoesNotBlock:
         validator = FeedbackConsistencyValidator()
 
         class MockEventStore:
-            def get_events(self, **kwargs):
-                return [{"payload": {"total_loss": loss}} for loss in [0.5, 0.52, 0.54, 0.56, 0.58]]
+            def query_events(self, **kwargs):  # real EventStore contract
+                return [
+                    SimpleNamespace(signal={"total_loss": loss},
+                                    timestamp=f"2026-09-07T10:00:{i:02d}Z")
+                    for i, loss in enumerate([0.5, 0.52, 0.54, 0.56, 0.58])
+                ]
 
         validator.event_store = MockEventStore()
 

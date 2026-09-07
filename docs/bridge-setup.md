@@ -186,11 +186,17 @@ DKIM) pass**. Consequences:
 - An **empty whitelist denies every sender** — claim ownership with the PIN
   `/auth <pin>` flow (set `pin` in the email settings) instead of listing
   addresses up front.
-- On **Gmail / iCloud / Outlook / Yahoo** and other well-known providers this
-  works out of the box (their authserv-id is recognised).
-- On a **self-hosted / non-stamping IMAP** provider you must set
-  `auth_results_authserv_id` to your receiver's authserv-id, otherwise inbound
-  messages fail closed and senders fall back to the PIN flow.
+- On **Gmail / iCloud / Outlook / Yahoo** this works out of the box: the expected
+  authserv-id is **derived from your `imap_host`** (hardened 2026-09-07, R2-B2).
+  Reading `imap.gmail.com` trusts only Google's ids, `outlook.office365.com` only
+  Microsoft's, and so on. Before this change ANY well-known authserv-id was accepted
+  whatever mailbox you were reading, so on a non-stamping provider an attacker could
+  simply inject `Authentication-Results: mx.google.com; dmarc=pass` and be trusted.
+- On a **self-hosted / non-stamping IMAP** provider — or behind a gateway such as
+  Mimecast / Proofpoint — there is no derivable receiver, so you MUST set
+  `auth_results_authserv_id` to your receiver's authserv-id; otherwise inbound
+  messages fail closed and senders fall back to the PIN flow. An explicit pin always
+  wins over the derived family.
 - `dev_mode: true` restores the legacy open behaviour **for local testing only**.
 
 How the `Authentication-Results` line is read (hardened 2026-09-07, F-B1): the line is
@@ -198,12 +204,26 @@ split into its `;`-separated method clauses (RFC 8601). A `dmarc=` verdict other
 `pass` closes the gate regardless of any DKIM clause; without a DMARC verdict the
 fallback accepts only a `dkim=pass` clause whose OWN `header.d=` / `header.i=…@domain`
 is aligned with the From domain — a `header.d=` that belongs to a *failed* signature on
-the same line no longer counts (regression cases in `email/test_inbound_auth.js`).
+the same line no longer counts. RFC 5322 **comments and quoted strings are stripped
+before any token is read** (R2-B1, 2026-09-07) and every property name is anchored at a
+token boundary, so `dkim=pass header.d=evil.com (comment dkim=pass header.d=example.com)`,
+`header.i="header.d=example.com"@evil.com` and a `;` hidden inside a comment can no
+longer forge an aligned pass (regression cases in `email/test_inbound_auth.js`).
 
 ### 4. What the daemon does with each mail (2026-09-07)
 - **Processed-UID memory:** `<corvin_home>/bridges/email/imap_state.json` (0600) records
   every UID a decision was reached for (accepted, rejected, or failed), keyed by the
   mailbox `UIDVALIDITY`. A mail is never re-parsed, so a throwing attachment cannot loop.
+  The set is bounded by a **low-water mark** plus a **per-poll download cap**
+  (R2-B3, 2026-09-07): it used to evict by count alone, so with more than
+  `IMAP_STATE_MAX_UIDS` (5000) unread rejected mails the oldest UIDs fell out and were
+  re-downloaded on **every** poll, forever — a DoS an unauthenticated sender could
+  sustain. Now every UID below `min_uid` counts as processed (IMAP UIDs are monotonic
+  and the poll drains the smallest first), and one poll downloads at most
+  `IMAP_POLL_MAX_DOWNLOADS` (200) messages, so a flood is drained in bounded slices.
+  The state file is validated on load: only finite non-negative integer UIDs survive,
+  and a stringly `uidvalidity` no longer triggers a spurious reset
+  (`email/test_imap_state.js`).
 - **`\Seen` only for accepted mail:** the read flag is set only when the bridge actually
   took the mail (inbox envelope written or an in-chat command answered). Spoofed /
   unauthorised / rate-limited mail stays **unread** in your mailbox for you to look at.

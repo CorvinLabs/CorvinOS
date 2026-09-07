@@ -20,6 +20,17 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as _StarletteHTTPException
 
 
+def _is_asset_path(path: str) -> bool:
+    """True for anything under the build's hashed ``assets/`` directory.
+
+    Matches the bare directory (``assets``) as well as files below it: the
+    first form is what a request for ``/console/assets/`` normalises to, and a
+    plain ``startswith("assets/")`` let it through to the SPA fallback (R2-C4).
+    """
+    head = path.lstrip("/").split("/", 1)[0]
+    return head == "assets"
+
+
 class _SPAStaticFiles(StaticFiles):
     """StaticFiles that falls back to index.html for unknown paths.
 
@@ -33,7 +44,14 @@ class _SPAStaticFiles(StaticFiles):
         try:
             response = await super().get_response(path, scope)
         except _StarletteHTTPException as exc:
-            if exc.status_code == 404 and path != "index.html":
+            # R2-C4 (2026-09-07): a missing hashed bundle under assets/ is a
+            # real 404, never the SPA shell. Answering 200 text/html for
+            # `assets/index-<stale>.js` made a browser holding an old shell
+            # execute HTML as a script (blank page) and hid the deploy
+            # mismatch `console-deploy.sh` exists to surface. Only
+            # client-side ROUTES fall back to index.html.
+            if (exc.status_code == 404 and path != "index.html"
+                    and not _is_asset_path(path)):
                 # Let the SPA handle the route
                 response = await super().get_response("index.html", scope)
                 response.headers["Cache-Control"] = "no-cache"
@@ -51,7 +69,7 @@ class _SPAStaticFiles(StaticFiles):
         # or ".") — the most common entry point — which is NOT named
         # index.html and therefore slipped through the old path-based check.
         ctype = response.headers.get("content-type", "")
-        if path.startswith("assets/"):
+        if _is_asset_path(path):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         elif ctype.startswith("text/html") or response.status_code == 304:
             # 304 Not-Modified responses carry no Content-Type so the text/html

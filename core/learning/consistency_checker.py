@@ -216,21 +216,40 @@ class FeedbackConsistencyValidator:
         Returns:
             List of recent loss values (newest last)
         """
-        # If event_store available, fetch from real data
+        # If event_store available, fetch from real data.
+        #
+        # Two defects fixed on 2026-09-07 (round-2 adversarial review, vector 9):
+        #   * the call named ``get_events``, which no store defines — every call
+        #     raised AttributeError into the bare ``except`` below, so the
+        #     validator always saw an empty history and inferred "neutral";
+        #   * the result was ``sorted(losses)`` (a NUMERIC sort) behind a comment
+        #     claiming chronological order, which INVERTS a decreasing trend and
+        #     would rate contradictory feedback as consistent.
+        # Order is now taken from the event timestamps, never from the values.
         if self.event_store:
             try:
-                events = self.event_store.get_events(
-                    event_type="unified_loss_computed",
-                    skill_id=skill_id,
+                events = self.event_store.query_events(
                     tenant_id=tenant_id,
+                    skill_id=skill_id,
                     limit=self.LOSS_WINDOW_SAMPLES,
                 )
-                losses = []
+                samples: list[tuple[str, float]] = []
                 for event in events:
-                    if "total_loss" in event.get("payload", {}):
-                        losses.append(event["payload"]["total_loss"])
-                if losses:
-                    return sorted(losses)  # Chronological order (oldest first)
+                    payload = getattr(event, "signal", None)
+                    if payload is None and isinstance(event, dict):
+                        payload = event.get("signal") or event.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    value = payload.get("total_loss")
+                    if not isinstance(value, (int, float)):
+                        continue
+                    ts = getattr(event, "timestamp", None)
+                    if ts is None and isinstance(event, dict):
+                        ts = event.get("timestamp")
+                    samples.append((str(ts or ""), float(value)))
+                if samples:
+                    samples.sort(key=lambda pair: pair[0])  # chronological, oldest first
+                    return [value for _, value in samples][-self.LOSS_WINDOW_SAMPLES:]
             except Exception as e:
                 logger.warning(f"Failed to fetch loss history: {e}")
 

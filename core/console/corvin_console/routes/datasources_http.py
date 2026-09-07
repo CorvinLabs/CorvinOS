@@ -183,9 +183,18 @@ def _as_ip(text: str) -> "ipaddress._BaseAddress | None":
 
 
 def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
-    """True for any address that is not a public, routable destination."""
+    """True for any address that is not a public, routable destination.
+
+    R2-C2 (2026-09-07): ``is_private`` alone misses the shared-address space
+    100.64.0.0/10 (RFC 6598 — carrier-grade NAT, Tailscale, cloud-internal
+    fabrics) on Python 3.11, where ``is_private`` is False but ``is_global``
+    is also False. The guard is therefore ``not is_global`` PLUS the explicit
+    flags — anything the stdlib does not classify as globally routable is
+    blocked, fail-closed.
+    """
     if (ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+            or not ip.is_global):
         return True
     mapped = getattr(ip, "ipv4_mapped", None)
     if mapped is not None and _ip_is_blocked(mapped):

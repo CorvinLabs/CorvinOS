@@ -111,6 +111,36 @@ async def _get_orchestrator(tenant_id: str) -> Any | None:
 router = APIRouter(prefix="/rag", tags=["console-rag"])
 
 
+def _safe_source_url(value: Any) -> str | None:
+    """http(s)-only allowlist for provider-supplied result links (R2-C1).
+
+    Delegates to the query engine's shared implementation when importable so
+    the two layers cannot drift; falls back to an equivalent local check.
+    """
+    try:
+        from shared.rag_query_engine import safe_http_url  # noqa: PLC0415
+
+        return safe_http_url(value)
+    except ImportError:
+        pass
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 2048 or any(ch in text for ch in "\r\n\t\x00"):
+        return None
+    from urllib.parse import urlsplit  # noqa: PLC0415
+
+    try:
+        parts = urlsplit(text)
+        host = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return None
+    return text
+
+
+
 # ── Data Models ──────────────────────────────────────────────
 
 class RAGProvider:
@@ -392,7 +422,13 @@ async def execute_rag_query(
                         "content": item.content,
                         "score": item.score,
                         "metadata": item.metadata,
-                        "source_url": item.source_url,
+                        # R2-C1 (2026-09-07): `source_url` originates from a
+                        # REMOTE RAG provider and is rendered as an <a href> in
+                        # the console. Allowlist http(s) at the API boundary as
+                        # well as in the query engine — a provider that bypasses
+                        # the engine's mapper still cannot ship a `javascript:`
+                        # href to the browser.
+                        "source_url": _safe_source_url(item.source_url),
                     }
                     for item in results
                 ],

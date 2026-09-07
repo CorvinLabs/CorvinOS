@@ -232,39 +232,89 @@ def test_live_instruction_version_is_a_chat_answer_not_cli_version(tmp_path):
     assert len(answer) > 10, answer
 
 
-@pytest.mark.live
-@pytest.mark.skipif(
-    os.environ.get("CLAUDE_LIVE_E2E") != "1",
-    reason="real claude call — set CLAUDE_LIVE_E2E=1",
-)
-def test_live_slash_instruction_is_literal_text_not_a_command(corvin_home, monkeypatch):
-    """R2-E1 regression through the REAL pool path and the REAL CLI.
-
-    The worker cwd (``<CORVIN_HOME>/sessions/<chat_key>``) carries a scratch
-    ``.claude/commands/pwn.md`` whose only possible output is the single word
-    "Apfel". Instruction ``/pwn`` must reach the model as literal text, so the
-    reply must talk about the text and must NOT be that one-word translation.
-    """
+def _live_pool_run(corvin_home, monkeypatch, instruction: str):
+    """Drive the REAL pool path (`TaskWorkerPool._execute_task` → audit-first →
+    gates → `create_subprocess_exec`) against the REAL `claude` binary and
+    return (final result event, all events)."""
     monkeypatch.delenv("CORVIN_CLAUDE_BIN", raising=False)
     monkeypatch.delenv("CLAUDE_BIN", raising=False)
-    workdir = corvin_home / "sessions" / "test-chat-key"
-    (workdir / ".claude" / "commands").mkdir(parents=True)
-    (workdir / ".claude" / "commands" / "pwn.md").write_text(PWN_COMMAND_MD, encoding="utf-8")
-
     capture = _CapturePubSub()
-    task_id = _run_pool_once(corvin_home, SLASH, pubsub=capture)
-
+    task_id = _run_pool_once(corvin_home, instruction, pubsub=capture)
     queue = TaskQueue(corvin_home / "tenants" / "_default" / "global")
     entry = queue.get_task(task_id, "_default")
     assert entry is not None and entry.status == TaskStatus.COMPLETED, entry
     results = [e for e in capture.events if e.get("type") == "result"]
     assert results, capture.events[-3:]
-    answer = (results[-1].get("result") or "").strip()
-    # A slash-command expansion answers exactly one word ("Apfel"); a chat
-    # answer about the literal text "/pwn" is a sentence.
-    assert answer.lower().strip(".!") != "apfel", answer
+    return results[-1], capture.events
+
+
+def _tool_uses(events: list[dict]) -> list[dict]:
+    out = []
+    for e in events:
+        if e.get("type") != "assistant":
+            continue
+        for c in (e.get("message") or {}).get("content") or []:
+            if isinstance(c, dict) and c.get("type") == "tool_use":
+                out.append(c)
+    return out
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.environ.get("CLAUDE_LIVE_E2E") != "1",
+    reason="real claude call — set CLAUDE_LIVE_E2E=1",
+)
+def test_live_builtin_slash_instruction_reaches_the_model_as_text(corvin_home, monkeypatch):
+    """R2-E1 regression, REAL pool path + REAL CLI, instruction ``/cost``.
+
+    Without the sentinel the CLI expanded ``/cost`` itself: the result event
+    carried the operator's subscription-usage report and ``num_turns == 0``
+    (no model turn ever happened — the reviewer's leak). With the sentinel
+    the CLI cannot expand anything, so the model gets a turn and answers
+    about the literal text.
+    """
+    result, _events = _live_pool_run(corvin_home, monkeypatch, "/cost")
+    answer = (result.get("result") or "").strip()
+    assert result.get("num_turns", 0) >= 1, result  # a model turn happened
+    low = answer.lower()
+    assert "% used" not in low and "subscription" not in low and "resets" not in low, answer
+    assert "cost" in low, answer
     assert len(answer.split()) > 1, answer
-    assert "pwn" in answer.lower(), answer
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.environ.get("CLAUDE_LIVE_E2E") != "1",
+    reason="real claude call — set CLAUDE_LIVE_E2E=1",
+)
+def test_live_scratch_command_is_not_expanded_by_the_cli(corvin_home, monkeypatch):
+    """R2-E1 regression with the reviewer's repro: a scratch
+    ``.claude/commands/pwn.md`` in the worker cwd and instruction ``/pwn``.
+
+    CLI-level expansion (the finding) substitutes the command body for the
+    user message BEFORE any model turn: the stream then carries the one-word
+    translation with NO tool_use and ``num_turns == 0``. With the sentinel
+    the literal text reaches the model; whether the model then *chooses* to
+    call the ``pwn`` skill through the Skill tool is ordinary agentic
+    behaviour on the user's own instruction (it shows as an explicit
+    ``tool_use`` in the audited stream) — what must never happen again is the
+    silent substitution, so the marker answer WITHOUT a tool_use is the
+    failure condition.
+    """
+    workdir = corvin_home / "sessions" / "test-chat-key"
+    (workdir / ".claude" / "commands").mkdir(parents=True)
+    (workdir / ".claude" / "commands" / "pwn.md").write_text(PWN_COMMAND_MD, encoding="utf-8")
+
+    result, events = _live_pool_run(corvin_home, monkeypatch, SLASH)
+    answer = (result.get("result") or "").strip()
+    assert result.get("num_turns", 0) >= 1, result
+    skill_calls = [t for t in _tool_uses(events)
+                   if t.get("name") == "Skill" and "pwn" in json.dumps(t.get("input"))]
+    if answer.lower().strip(".!") == "apfel":
+        assert skill_calls, ("command body substituted for the user message "
+                             "with no model tool_use — CLI-level expansion", events[-5:])
+    else:
+        assert "pwn" in answer.lower(), answer
 
 
 # ---------------------------------------------------------------------------

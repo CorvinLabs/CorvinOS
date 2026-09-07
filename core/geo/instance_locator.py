@@ -37,8 +37,34 @@ class GeoCoordinate:
     timestamp: str     # ISO 8601
     tier: int = 3      # Tier 3: country/region/city + 10km grid
 
+    # Tier-3 grid resolution: 0.1 degree (~11 km). Coordinates are snapped to
+    # this grid at CONSTRUCTION time (adversarial review round 2, 2026-09-07):
+    # `to_dict()` used to serialise the raw telemetry lat/lon while only
+    # `grid_cell_id` was quantised, so the world-map API and the on-disk cache
+    # carried a precise fix although the record advertised itself as
+    # "10km quantized". Snapping in `__post_init__` means every consumer
+    # (API, cache file, aggregation) sees the same coarse value, and a cached
+    # record from before the fix is re-quantised on reload.
+    GRID_DEGREES = 0.1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "latitude", self.quantize(self.latitude))
+        object.__setattr__(self, "longitude", self.quantize(self.longitude))
+
+    @classmethod
+    def quantize(cls, value: float) -> float:
+        """Snap a coordinate to the grid (truncation toward zero, matching
+        ``InstanceLocator._quantize_to_10km_grid``'s ``int(x * 10)``)."""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if v != v or v in (float("inf"), float("-inf")):  # NaN / inf
+            return 0.0
+        return round(int(v * 10) / 10.0, 1)
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to serializable dict."""
+        """Convert to serializable dict (grid-quantised coordinates only)."""
         return asdict(self)
 
 

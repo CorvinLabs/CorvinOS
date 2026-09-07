@@ -39,8 +39,15 @@ function extractFn(src, name) {
   throw new Error(`unbalanced braces in ${name}`);
 }
 
-const fnSrc = ['domainOf', 'domainsAligned', 'topAuthResultsLine', 'parseAuthResultsClauses', 'inboundAuthPasses']
-  .map((n) => extractFn(SRC, n)).join('\n\n');
+// RECEIVER_FAMILIES is a module-level const the helpers close over (R2-B2);
+// slice it out verbatim so the extracted functions see the shipped table.
+const famStart = SRC.indexOf('const RECEIVER_FAMILIES');
+const famEnd = SRC.indexOf('function expectedAuthservIds');
+if (famStart === -1 || famEnd === -1) throw new Error('RECEIVER_FAMILIES table not found');
+const fnSrc = SRC.slice(famStart, famEnd) + '\n' + [
+  'domainOf', 'domainsAligned', 'topAuthResultsLine', 'stripAuthResultsCfws',
+  'expectedAuthservIds', 'parseAuthResultsClauses', 'inboundAuthPasses',
+].map((n) => extractFn(SRC, n)).join('\n\n');
 
 t('helper functions present in daemon.js', /function inboundAuthPasses/.test(fnSrc));
 
@@ -48,7 +55,7 @@ t('helper functions present in daemon.js', /function inboundAuthPasses/.test(fnS
 function makeHelpers(settings) {
   const factory = new Function(
     'currentSettings',
-    `${fnSrc}\n; return { domainOf, domainsAligned, topAuthResultsLine, parseAuthResultsClauses, inboundAuthPasses };`,
+    `${fnSrc}\n; return { domainOf, domainsAligned, topAuthResultsLine, stripAuthResultsCfws, expectedAuthservIds, parseAuthResultsClauses, inboundAuthPasses };`,
   );
   return factory(() => settings);
 }
@@ -58,8 +65,12 @@ function rawMail(headerLines, from = 'Owner <owner@example.com>') {
     .join('\r\n');
 }
 
+// R2-B2: the receiver identity is derived from the mailbox being read
+// (imap_host), so every "well-known receiver" case below states its host.
+const GMAIL = { imap_host: 'imap.gmail.com' };
+
 (async () => {
-  const H = makeHelpers({});
+  const H = makeHelpers(GMAIL);
 
   // 1. dmarc=pass → authorized
   console.log('\n[dmarc=pass → authorized]');
@@ -137,7 +148,7 @@ function rawMail(headerLines, from = 'Owner <owner@example.com>') {
   // 8. optional authserv-id pin mismatch → drop even on dmarc=pass
   console.log('\n[auth_results_authserv_id pin mismatch → drop]');
   {
-    const Hp = makeHelpers({ auth_results_authserv_id: 'mx.mycorp.com' });
+    const Hp = makeHelpers({ ...GMAIL, auth_results_authserv_id: 'mx.mycorp.com' });
     const p = await simpleParser(rawMail([
       'Authentication-Results: mx.google.com; dmarc=pass header.from=example.com',
     ]));
@@ -233,6 +244,126 @@ function rawMail(headerLines, from = 'Owner <owner@example.com>') {
     ]));
     const r = H.inboundAuthPasses(p, 'owner@example.com');
     t('ok=true', r.ok === true, r.reason);
+  }
+
+  // ── R2-B1 (2026-09-07): RFC 5322 comments / quoted strings ─────────────────
+  // 16. a CFWS comment carrying `header.d=<aligned>` on an UNALIGNED pass
+  console.log('\n[R2-B1: comment carries header.d=aligned → drop]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; dkim=pass header.d=evil.com (comment dkim=pass header.d=example.com)',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=false (comment content is not a property)', r.ok === false, r.reason);
+  }
+
+  // 17. quoted-string local-part of header.i that spells `header.d=example.com`
+  console.log('\n[R2-B1: header.i="header.d=example.com"@evil.com → drop]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; dkim=pass header.i="header.d=example.com"@evil.com header.s=sel',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=false (quoted local-part is not a property)', r.ok === false, r.reason);
+    const clauses = H.parseAuthResultsClauses(H.topAuthResultsLine(p).toLowerCase());
+    t('parsed domain is the real one (evil.com)',
+      clauses.length === 1 && clauses[0].domains.join(',') === 'evil.com', JSON.stringify(clauses));
+  }
+
+  // 18. a comment containing `;` must not open a new (forged) clause
+  console.log('\n[R2-B1: comment with ";" does not split a clause → drop]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; dkim=fail header.d=example.com (x; dkim=pass header.d=example.com)',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=false', r.ok === false, r.reason);
+  }
+
+  // 19. dkim=pass that exists ONLY inside a comment of another clause
+  console.log('\n[R2-B1: dkim=pass only inside a comment → drop]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.google.com; spf=fail ( dkim=pass header.d=example.com )',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=false', r.ok === false, r.reason);
+  }
+
+  // 20. a leading comment must not become the authserv-id; a real, aligned
+  //     pass with harmless comments elsewhere is still accepted (no false
+  //     negatives from the stripper).
+  console.log('\n[R2-B1: comments stripped, legitimate stamp still accepted]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: (receiver) mx.google.com (v1); dkim=pass (2048-bit key; unprotected) header.d=example.com header.s=s1; dmarc=pass (p=reject) header.from=example.com',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=true', r.ok === true, r.reason);
+    const stripped = H.stripAuthResultsCfws('a (b (c) "d") "q;x" e').replace(/\s+/g, ' ');
+    t('stripper removes nested comments and quotes', stripped === 'a e', JSON.stringify(stripped));
+  }
+
+  // 21. property names are token-anchored: `xheader.d=` is not `header.d=`
+  console.log('\n[R2-B1: xheader.d= is not header.d=]');
+  {
+    const clauses = H.parseAuthResultsClauses('authentication-results: mx.google.com; dkim=pass xheader.d=example.com header.d=evil.com');
+    t('only the anchored property is a candidate',
+      clauses.length === 1 && clauses[0].domains.join(',') === 'evil.com', JSON.stringify(clauses));
+  }
+
+  // ── R2-B2 (2026-09-07): receiver identity derived from imap_host ───────────
+  // 22. no pin AND no known imap_host → fail-closed even for a "google" id
+  console.log('\n[R2-B2: no pin, unknown/unset imap_host → drop despite mx.google.com]');
+  {
+    for (const settings of [{}, { imap_host: 'mail.selfhosted.example' }]) {
+      const Hx = makeHelpers(settings);
+      const p = await simpleParser(rawMail([
+        'Authentication-Results: mx.google.com; dmarc=pass header.from=example.com',
+      ]));
+      const r = Hx.inboundAuthPasses(p, 'owner@example.com');
+      t(`ok=false for settings=${JSON.stringify(settings)}`, r.ok === false, r.reason);
+      t('reason tells the operator to pin', /auth_results_authserv_id/.test(r.reason), r.reason);
+    }
+  }
+
+  // 23. cross-family forgery: reading Gmail, stamped "by" Outlook → drop
+  console.log('\n[R2-B2: imap_host=gmail, authserv-id=outlook → drop]');
+  {
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: protection.outlook.com; dmarc=pass header.from=example.com',
+    ]));
+    const r = H.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=false (wrong receiver family)', r.ok === false, r.reason);
+  }
+
+  // 24. same family, different mailbox host → accepted (iCloud, Outlook)
+  console.log('\n[R2-B2: family match → accepted]');
+  {
+    const cases = [
+      ['imap.mail.me.com', 'Authentication-Results: icloud.com; dmarc=pass header.from=example.com'],
+      ['outlook.office365.com', 'Authentication-Results: mx.protection.outlook.com; dmarc=pass header.from=example.com'],
+    ];
+    for (const [host, ar] of cases) {
+      const Hx = makeHelpers({ imap_host: host });
+      const p = await simpleParser(rawMail([ar]));
+      const r = Hx.inboundAuthPasses(p, 'owner@example.com');
+      t(`ok=true for imap_host=${host}`, r.ok === true, r.reason);
+    }
+    t('expectedAuthservIds(imap.gmail.com) is the Google family',
+      (H.expectedAuthservIds('imap.gmail.com') || []).includes('google.com'));
+    t('expectedAuthservIds(unknown) is null', H.expectedAuthservIds('mail.selfhosted.example') === null);
+  }
+
+  // 25. an explicit pin overrides the family (self-hosted behind a gateway)
+  console.log('\n[R2-B2: pin wins over the family table]');
+  {
+    const Hp = makeHelpers({ imap_host: 'mail.selfhosted.example', auth_results_authserv_id: 'mx.mimecast.com' });
+    const p = await simpleParser(rawMail([
+      'Authentication-Results: mx.mimecast.com; dmarc=pass header.from=example.com',
+    ]));
+    const r = Hp.inboundAuthPasses(p, 'owner@example.com');
+    t('ok=true when the top authserv-id matches the pin', r.ok === true, r.reason);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -384,11 +384,27 @@ All of it is structural — no flag, no env kill-switch.
 | **L34 gate on a nameless engine** | `adapter.py::_check_compliance_or_fail` | An engine without `name` cannot be matched against the locality matrix → **refused** (`[compliance] Spawn rejected … fail-closed`). It used to fail-open. |
 | **L44 low-confidence allow is audited** | `adapter.py::_check_house_rules_or_fail` | `house_rules.py` writes `house_rules.escalated` for a `clear_low_confidence` verdict and the adapter then allows the turn; the override is now recorded as `house_rules.allowed_after_lowconf` (WARNING; rule id, reason code, confidence, fingerprinted chat key) so the chain never claims "blocked" for a request that ran. |
 
+### Round 2 (2026-09-07) — prompt head, legacy fallback, dispatcher peeks
+
+| Finding | Mechanism | Where | Contract |
+|---|---|---|---|
+| **R2-E1** | **Prompt-head sentinel** | `agents/claude_code.py::guard_prompt_head` (single shared helper) — called at EVERY `claude -p` spawn site: `adapter.py` `_build_claude_args` + `_call_claude_streaming_via_engine`, `corvin_console/task_worker_pool.py::_worker_stdin_payload`, `corvin_console/chat_runtime.py` (turn stdin + ADR-0213 context-sync note), `../voice/scripts/summarize.py::_run_claude_print` | The CLI expands a user message whose **first byte is `/`** into a slash command / skill on EVERY transport — positional-after-`--` and the stdin `stream-json` user message alike. Proven: a chat instruction `/pwn` executed `.claude/commands/pwn.md` from the persona workdir under `bypassPermissions`; `/cost` returned the operator's subscription usage with `num_turns == 0` (the CLI answered, the model never ran). Every site now prepends ONE fixed, non-slash sentinel line (`User input:\n`), **unconditionally** — independent of whether a CEL brief / observer block / volatile prefix happens to be present, because those are conditional and this must not be. The user's text follows verbatim, so `/pwn` reaches the model as literal text. Fail-closed: `_worker_stdin_payload` raises rather than build an unguarded payload, and `summarize.py` raises `OSError` (degrading to the Hermes / no-LLM ladder) if the helper is not importable. The guard is idempotent. |
+| **R2-E2** | **Legacy `call_claude()` prompt off argv** | `adapter.py::call_claude` → `_build_claude_args(..., prompt_via_stdin=True, spawn_prompt_out=…)` | The legacy image/document fallback (reached from the engine-streaming `except` branch) still built argv WITH the prompt — world-readable via `/proc/<pid>/cmdline` for the process lifetime, plus the ~128 KiB E2BIG ceiling. The prompt now travels on **stdin** (`communicate(input=…)`, plain text — no `--input-format`, so the whole of stdin is the user message). `spawn_prompt_out` hands the caller the exact sentinel-guarded text the builder produced, so the two can never drift. |
+| **R2-B4** | **Total dispatcher peeks** | `adapter.py::_peek_envelope` (used by `_route_key` + `_peek_side_channel`) | The peeks caught only `(OSError, JSONDecodeError)`. A non-object envelope (`AttributeError` on `.get`) or non-UTF-8 bytes (`UnicodeDecodeError`) raised out of `submit_inbox_item` **before the future was attached**: the whole poll tick died and the msg_id stayed pinned in `_in_flight` for `IN_FLIGHT_TTL` (3600 s), so the message could never be retried. `_peek_envelope` returns `None` for anything that is not a JSON object in valid UTF-8; the runner then quarantines it through the normal poison path. |
+
 Regression tests: `shared/test_adapter_inbox_hygiene.py`, `shared/test_mid_turn_heartbeat.py`,
 `shared/test_adapter_compliance_gate.py`, `shared/test_adapter_house_rules_binary.py`,
 `shared/test_adapter_voice_summarizer_choice.py`, `../voice/scripts/test_summarize.py`;
+`shared/test_adapter_prompt_head.py` (R2-E1/E2 — argv builder + a recording `claude`
+stand-in that `call_claude()` really execs), `email/test_imap_state.js` (R2-B3);
+`run-all-tests.sh` now registers the email suites (`test_inbound_auth.js`,
+`test_imap_state.js`, `test_disclosure_ordering.js`) plus the two adapter suites above —
+they existed but were never wired into a full pass, so the DMARC/DKIM gate that decides
+whether a `From` address may act as the owner had **no** coverage in CI;
 live: `shared/test_adapter_live_llm_e2e.py` (`CLAUDE_LIVE_E2E=1`, real `claude -p` haiku turn
-through `process_one`, asserts outbox reply + processed move + hash-chained turn events).
+through `process_one`, asserts outbox reply + processed move + hash-chained turn events) and
+`core/console/tests/test_task_worker_pool_argv.py` (`CLAUDE_LIVE_E2E=1`, the REAL `/task`
+worker pool driving the REAL CLI with `/cost` and with a scratch `.claude/commands/pwn.md`).
 
 ## Per-chat profiles (layer 1)
 

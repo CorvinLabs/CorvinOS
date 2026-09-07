@@ -35,11 +35,77 @@ from ..deps import require_csrf, require_session
 
 from .. import _bootstrap
 _forge_paths = _bootstrap.forge_paths
+from forge import tenants as _forge_tenants  # noqa: E402
 from forge import security_events as _security_events  # noqa: E402
 
 router = APIRouter()
 
 _CHANNEL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+# R2-C3 (adversarial review round 2, 2026-09-07). Three gaps closed here:
+#
+#   1. ``hmac_secret_env`` was OPTIONAL, so a channel could be registered with
+#      no signature check at all — an unauthenticated POST target that writes
+#      into the tenant's audit chain (an anonymous chain writer). It is now
+#      REQUIRED at registration; the field keeps its Optional type only so the
+#      400 comes from this explicit check with a usable message.
+#   2. ``rate_limit_per_hour`` was persisted and never read — decorative. It is
+#      now ENFORCED per (tenant, channel) with an in-process sliding window.
+#   3. ``await request.body()`` had no size cap, so an unauthenticated caller
+#      could make the process buffer arbitrary bytes. Capped BEFORE reading via
+#      Content-Length and again while streaming (a chunked body has no length).
+_MAX_WEBHOOK_BODY_BYTES = 256 * 1024  # same order as routes/memory.py's cap
+
+#: (tenant_id, channel_id) -> list of unix timestamps within the last hour.
+_RATE_WINDOW_S = 3600.0
+_rate_hits: dict[tuple[str, str], list[float]] = {}
+
+
+def _rate_limit_exceeded(tid: str, channel_id: str, limit: int) -> bool:
+    """Sliding-window counter for one channel. Returns True when this request
+    must be refused (the hit is recorded only when it is allowed, so a
+    throttled caller cannot push the window forward)."""
+    now = time.time()
+    key = (tid, channel_id)
+    hits = [t for t in _rate_hits.get(key, ()) if now - t < _RATE_WINDOW_S]
+    if len(hits) >= max(1, int(limit)):
+        _rate_hits[key] = hits
+        return True
+    hits.append(now)
+    _rate_hits[key] = hits
+    return False
+
+
+async def _read_capped_body(request: Request) -> bytes:
+    """Read the request body, refusing anything past the cap.
+
+    Checks Content-Length first (cheap reject), then accumulates chunks and
+    aborts as soon as the cap is passed — so a chunked/streamed body cannot
+    buffer past the limit either.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > _MAX_WEBHOOK_BODY_BYTES:
+                raise HTTPException(
+                    http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    f"body exceeds {_MAX_WEBHOOK_BODY_BYTES} bytes",
+                )
+        except ValueError:
+            raise HTTPException(
+                http_status.HTTP_400_BAD_REQUEST, "invalid Content-Length",
+            ) from None
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > _MAX_WEBHOOK_BODY_BYTES:
+            raise HTTPException(
+                http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"body exceeds {_MAX_WEBHOOK_BODY_BYTES} bytes",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # ── Storage ───────────────────────────────────────────────────────────────────
@@ -98,7 +164,11 @@ class WebhookChannelRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
     hmac_secret_env: str | None = Field(
         None,
-        description="Vault env-var name for HMAC secret (omit for no signature check)",
+        description=(
+            "Vault env-var name for the HMAC secret. REQUIRED (R2-C3): an "
+            "inbound webhook without a signature check is an anonymous writer "
+            "to the tenant's audit chain."
+        ),
     )
     persona: str = Field("assistant", min_length=1, max_length=64)
     rate_limit_per_hour: int = Field(60, ge=1, le=10_000)
@@ -128,13 +198,33 @@ def register_webhook_channel(
             "channel_id must be lowercase alphanumeric with _ or -",
         )
 
+    # R2-C3: fail-closed — no secret, no channel. Registering a signature-less
+    # channel would publish an unauthenticated POST endpoint that writes to the
+    # audit chain. The env var must also look like an env var (the value itself
+    # is never accepted over the wire, only its vault NAME).
+    env_name = (body.hmac_secret_env or "").strip()
+    if not env_name or not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", env_name):
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="webhook.channel_registered",
+            target_kind="webhook_channel",
+            target_id=channel_id,
+            reason="hmac_secret_env-required",
+        )
+        raise HTTPException(
+            http_status.HTTP_400_BAD_REQUEST,
+            "hmac_secret_env is required (vault env-var NAME holding the HMAC "
+            "secret); an inbound webhook without a signature check is not allowed",
+        )
+
     existing = _load_channel(rec.tenant_id, channel_id)
     is_update = existing is not None
 
     manifest: dict[str, Any] = {
         "channel_id": channel_id,
         "display_name": body.display_name,
-        "hmac_secret_env": body.hmac_secret_env,
+        "hmac_secret_env": env_name,
         "persona": body.persona,
         "rate_limit_per_hour": body.rate_limit_per_hour,
         "description": body.description,
@@ -204,35 +294,68 @@ async def receive_webhook(
     The tenant_id in the URL scopes the channel lookup, eliminating cross-tenant
     channel_id collision. External systems must POST to /webhook/<tenant_id>/<channel_id>.
     """
-    channel = _find_channel(tenant_id, channel_id)
+    # R2-C5: a malformed tenant_id (e.g. "__evil") made `_find_channel` raise
+    # InvalidTenantID out of the route → HTTP 500 with a stack trace for an
+    # unauthenticated caller. An unknown/invalid tenant is simply not a channel.
+    try:
+        _forge_tenants.validate_tenant_id(tenant_id)
+    except Exception:  # noqa: BLE001 — InvalidTenantID (ValueError) and anything else
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "unknown channel") from None
+    if not _CHANNEL_ID_RE.match(channel_id):
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "unknown channel")
+
+    try:
+        channel = _find_channel(tenant_id, channel_id)
+    except Exception:  # noqa: BLE001 — a path/tenant resolution failure is a 404, never a 500
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "unknown channel") from None
     if channel is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "unknown channel")
 
     tid = tenant_id
-    body_bytes = await request.body()
 
-    # HMAC verification
+    # R2-C3: enforce the channel's own rate limit BEFORE reading any body, so a
+    # throttled caller costs neither memory nor an audit-chain write.
+    try:
+        limit = int(channel.get("rate_limit_per_hour") or 60)
+    except (TypeError, ValueError):
+        limit = 60
+    if _rate_limit_exceeded(tid, channel_id, limit):
+        raise HTTPException(
+            http_status.HTTP_429_TOO_MANY_REQUESTS,
+            f"rate limit of {limit}/hour exceeded for channel {channel_id!r}",
+        )
+
+    # R2-C3: capped read (413 past the cap) instead of an unbounded buffer.
+    body_bytes = await _read_capped_body(request)
+
+    # HMAC verification. `hmac_secret_env` is mandatory at registration
+    # (R2-C3); a legacy manifest written before that is refused rather than
+    # silently accepted unauthenticated.
     hmac_env = channel.get("hmac_secret_env")
-    if hmac_env:
-        secret = os.environ.get(hmac_env, "")
-        if not secret:
-            raise HTTPException(
-                http_status.HTTP_503_SERVICE_UNAVAILABLE,
-                "HMAC secret not configured in vault",
-            )
-        if not x_hub_signature_256:
-            raise HTTPException(
-                http_status.HTTP_401_UNAUTHORIZED,
-                "X-Hub-Signature-256 header required",
-            )
-        expected_sig = "sha256=" + hmac.new(
-            secret.encode(), body_bytes, hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(expected_sig, x_hub_signature_256):
-            raise HTTPException(
-                http_status.HTTP_401_UNAUTHORIZED,
-                "HMAC signature mismatch",
-            )
+    if not hmac_env:
+        raise HTTPException(
+            http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            "channel has no hmac_secret_env — re-register it with one",
+        )
+    secret = os.environ.get(hmac_env, "")
+    if not secret:
+        raise HTTPException(
+            http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            "HMAC secret not configured in vault",
+        )
+    if not x_hub_signature_256:
+        raise HTTPException(
+            http_status.HTTP_401_UNAUTHORIZED,
+            "X-Hub-Signature-256 header required",
+        )
+    expected_sig = "sha256=" + hmac.new(
+        secret.encode(), body_bytes, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected_sig, x_hub_signature_256):
+        raise HTTPException(
+            http_status.HTTP_401_UNAUTHORIZED,
+            "HMAC signature mismatch",
+        )
 
     # Parse body (best-effort JSON)
     try:
