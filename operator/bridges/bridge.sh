@@ -298,6 +298,7 @@ install_units() {
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_TIMEOUT_TIMER" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_AUDIT_VERIFY_SVC" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_AUDIT_VERIFY_TIMER" \
+              "$PLUGIN_ROOT/scripts/systemd/corvin-audit-verify-failure@.service" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_USER_STYLE_SVC" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_USER_STYLE_TIMER" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_ENGINE_CANARY_SVC" \

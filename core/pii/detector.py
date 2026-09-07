@@ -43,7 +43,7 @@ class PIIDetector:
         """Initialize detector."""
         pass
 
-    def detect(self, text: str, *, tenant_id: str = "_default") -> Optional[PIIFinding]:
+    def detect(self, text: str, *, tenant_id: str) -> Optional[PIIFinding]:
         """Detect PII in text and return first finding.
 
         Args:
@@ -71,7 +71,7 @@ class PIIDetector:
 
         return None
 
-    def detect_all(self, text: str, *, tenant_id: str = "_default") -> list[PIIFinding]:
+    def detect_all(self, text: str, *, tenant_id: str) -> list[PIIFinding]:
         """Detect all PII in text.
 
         Args:
@@ -107,7 +107,7 @@ class PIIDetector:
         findings.sort(key=lambda f: f.confidence, reverse=True)
         return findings
 
-    def has_pii(self, text: str, *, tenant_id: str = "_default") -> bool:
+    def has_pii(self, text: str, *, tenant_id: str) -> bool:
         """Check if text contains any PII.
 
         Args:
@@ -120,7 +120,7 @@ class PIIDetector:
         return self.detect(text, tenant_id=tenant_id) is not None
 
     def is_suspicious(
-        self, text: str, *, tenant_id: str = "_default", min_confidence: float = 0.75
+        self, text: str, *, tenant_id: str, min_confidence: float = 0.75
     ) -> bool:
         """Check if text is suspicious (matches high-confidence PII).
 
@@ -138,7 +138,7 @@ class PIIDetector:
         return finding.confidence >= min_confidence
 
     def detect_multiple(
-        self, values: list[str], *, tenant_id: str = "_default"
+        self, values: list[str], *, tenant_id: str
     ) -> list[PIIFinding]:
         """Detect all PII in a list of values.
 
@@ -160,7 +160,7 @@ class PIIDetector:
         self,
         data: dict[str, Any],
         *,
-        tenant_id: str = "_default",
+        tenant_id: str,
         exclude_keys: Optional[set[str]] = None,
     ) -> dict[str, list[PIIFinding]]:
         """Detect PII in all string values of a dictionary.
@@ -241,7 +241,7 @@ class PIIScrubber:
         self.detector = PIIDetector()
 
     def scrub(
-        self, text: str, *, tenant_id: str = "_default", log_detection: bool = True
+        self, text: str, *, tenant_id: str, log_detection: bool = True
     ) -> str:
         """Scrub PII from text.
 
@@ -279,7 +279,7 @@ class PIIScrubber:
         return scrubbed
 
     def scrub_dict(
-        self, data: dict[str, Any], *, tenant_id: str = "_default", log_detection: bool = True
+        self, data: dict[str, Any], *, tenant_id: str, log_detection: bool = True
     ) -> dict[str, Any]:
         """Scrub PII from all string values in a dict.
 
@@ -314,7 +314,7 @@ class PIIScrubber:
 
         return result
 
-    def should_log_raw(self, text: str, *, tenant_id: str = "_default") -> bool:
+    def should_log_raw(self, text: str, *, tenant_id: str) -> bool:
         """Check if text is safe to log as-is (contains no PII).
 
         Args:

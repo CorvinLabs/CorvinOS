@@ -8,6 +8,10 @@ import pytest
 
 from core.pii import PIIDetector, PIIScrubber, PII_PATTERNS
 
+# tenant_id is keyword-only and REQUIRED on every detector/scrubber call
+# (2026-09-07 hardening: PII detection is tenant-scoped, no default tenant).
+TENANT = "test_tenant"
+
 
 class TestPIIDetector:
     """Test PII detection."""
@@ -15,70 +19,70 @@ class TestPIIDetector:
     def test_detect_email(self):
         """Email detection."""
         text = "Contact me at user@example.com"
-        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        detected = {f.pii_class for f in PIIDetector().detect_all(text, tenant_id=TENANT)}
         assert "email" in detected
 
     def test_detect_phone(self):
         """Phone number detection."""
         text = "Call me at 555-123-4567"
-        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        detected = {f.pii_class for f in PIIDetector().detect_all(text, tenant_id=TENANT)}
         assert "phone" in detected
 
     def test_detect_credit_card(self):
         """Credit card detection."""
         text = "Card: 1234-5678-9012-3456"
-        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        detected = {f.pii_class for f in PIIDetector().detect_all(text, tenant_id=TENANT)}
         assert "credit_card" in detected
 
     def test_detect_ssn(self):
         """SSN detection."""
         text = "SSN is 123-45-6789"
-        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        detected = {f.pii_class for f in PIIDetector().detect_all(text, tenant_id=TENANT)}
         assert "us_ssn" in detected  # class id is jurisdiction-qualified
 
     def test_detect_ipv4(self):
         """IPv4 address detection."""
         text = "Server at 192.168.1.1"
-        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        detected = {f.pii_class for f in PIIDetector().detect_all(text, tenant_id=TENANT)}
         assert "ipv4" in detected
 
     def test_detect_ipv6(self):
         """IPv6 address detection."""
         text = "IPv6: 2001:db8::1"
-        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        detected = {f.pii_class for f in PIIDetector().detect_all(text, tenant_id=TENANT)}
         assert "ipv6" in detected
 
     def test_detect_multiple_types(self):
         """Multiple PII types detected."""
         text = "Email: user@example.com, Phone: 555-123-4567"
-        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        detected = {f.pii_class for f in PIIDetector().detect_all(text, tenant_id=TENANT)}
         assert "email" in detected
         assert "phone" in detected
 
     def test_detect_no_pii(self):
         """Text with no PII returns empty list."""
         text = "This is safe text"
-        detected = {f.pii_class for f in PIIDetector().detect_all(text)}
+        detected = {f.pii_class for f in PIIDetector().detect_all(text, tenant_id=TENANT)}
         assert len(detected) == 0
 
     def test_detect_non_string(self):
         """Non-string input returns empty list."""
-        detected = PIIDetector().detect_all(123)
+        detected = PIIDetector().detect_all(123, tenant_id=TENANT)
         assert not detected
 
     def test_has_pii_true(self):
         """has_pii returns True when PII present."""
         text = "Email: user@example.com"
-        assert PIIDetector().has_pii(text) is True
+        assert PIIDetector().has_pii(text, tenant_id=TENANT) is True
 
     def test_has_pii_false(self):
         """has_pii returns False when no PII."""
         text = "Safe text"
-        assert PIIDetector().has_pii(text) is False
+        assert PIIDetector().has_pii(text, tenant_id=TENANT) is False
 
     def test_has_pii_non_string(self):
         """has_pii returns False for non-string."""
-        assert PIIDetector().has_pii(123) is False
+        assert PIIDetector().has_pii(123, tenant_id=TENANT) is False
 
 
 class TestPIIScrubber:
@@ -88,7 +92,7 @@ class TestPIIScrubber:
         """Email scrubbed."""
         scrubber = PIIScrubber()
         text = "Contact user@example.com"
-        scrubbed = scrubber.scrub(text, log_detection=False)
+        scrubbed = scrubber.scrub(text, log_detection=False, tenant_id=TENANT)
         assert "user@example.com" not in scrubbed
         assert "[EMAIL]" in scrubbed
 
@@ -96,7 +100,7 @@ class TestPIIScrubber:
         """Phone number scrubbed."""
         scrubber = PIIScrubber()
         text = "Call 555-123-4567"
-        scrubbed = scrubber.scrub(text, log_detection=False)
+        scrubbed = scrubber.scrub(text, log_detection=False, tenant_id=TENANT)
         assert "555-123-4567" not in scrubbed
         assert "[PHONE]" in scrubbed
 
@@ -104,7 +108,7 @@ class TestPIIScrubber:
         """Credit card scrubbed."""
         scrubber = PIIScrubber()
         text = "Card 1234-5678-9012-3456"
-        scrubbed = scrubber.scrub(text, log_detection=False)
+        scrubbed = scrubber.scrub(text, log_detection=False, tenant_id=TENANT)
         assert "1234-5678-9012-3456" not in scrubbed
         assert "[CREDIT_CARD]" in scrubbed
 
@@ -112,7 +116,7 @@ class TestPIIScrubber:
         """SSN scrubbed."""
         scrubber = PIIScrubber()
         text = "SSN 123-45-6789"
-        scrubbed = scrubber.scrub(text, log_detection=False)
+        scrubbed = scrubber.scrub(text, log_detection=False, tenant_id=TENANT)
         assert "123-45-6789" not in scrubbed
         assert "[SSN]" in scrubbed
 
@@ -120,7 +124,7 @@ class TestPIIScrubber:
         """IPv4 scrubbed."""
         scrubber = PIIScrubber()
         text = "IP 192.168.1.1"
-        scrubbed = scrubber.scrub(text, log_detection=False)
+        scrubbed = scrubber.scrub(text, log_detection=False, tenant_id=TENANT)
         assert "192.168.1.1" not in scrubbed
         assert "[IP]" in scrubbed
 
@@ -128,7 +132,7 @@ class TestPIIScrubber:
         """Multiple PII types scrubbed."""
         scrubber = PIIScrubber()
         text = "Email: user@example.com, Phone: 555-123-4567"
-        scrubbed = scrubber.scrub(text, log_detection=False)
+        scrubbed = scrubber.scrub(text, log_detection=False, tenant_id=TENANT)
         assert "user@example.com" not in scrubbed
         assert "555-123-4567" not in scrubbed
         assert "[EMAIL]" in scrubbed
@@ -137,7 +141,7 @@ class TestPIIScrubber:
     def test_scrub_non_string(self):
         """Non-string returns unchanged."""
         scrubber = PIIScrubber()
-        result = scrubber.scrub(123, log_detection=False)
+        result = scrubber.scrub(123, log_detection=False, tenant_id=TENANT)
         assert result == 123
 
     def test_scrub_audit_log_called(self):
@@ -149,7 +153,7 @@ class TestPIIScrubber:
 
         scrubber = PIIScrubber(audit_log_fn=mock_audit)
         text = "Email: user@example.com"
-        scrubber.scrub(text, log_detection=True)
+        scrubber.scrub(text, log_detection=True, tenant_id=TENANT)
 
         assert len(audit_log_calls) == 1
         assert audit_log_calls[0]["event"] == "pii_detected_and_scrubbed"
@@ -164,7 +168,7 @@ class TestPIIScrubber:
 
         scrubber = PIIScrubber(audit_log_fn=mock_audit)
         text = "Email: user@example.com"
-        scrubber.scrub(text, log_detection=False)
+        scrubber.scrub(text, log_detection=False, tenant_id=TENANT)
 
         assert len(audit_log_calls) == 0
 
@@ -172,7 +176,7 @@ class TestPIIScrubber:
         """Dict email scrubbed."""
         scrubber = PIIScrubber()
         data = {"user_email": "user@example.com", "name": "John"}
-        scrubbed = scrubber.scrub_dict(data, log_detection=False)
+        scrubbed = scrubber.scrub_dict(data, log_detection=False, tenant_id=TENANT)
         assert "[EMAIL]" in scrubbed["user_email"]
         assert scrubbed["name"] == "John"
 
@@ -185,7 +189,7 @@ class TestPIIScrubber:
                 "phone": "555-123-4567",
             }
         }
-        scrubbed = scrubber.scrub_dict(data, log_detection=False)
+        scrubbed = scrubber.scrub_dict(data, log_detection=False, tenant_id=TENANT)
         assert "[EMAIL]" in scrubbed["user"]["email"]
         assert "[PHONE]" in scrubbed["user"]["phone"]
 
@@ -193,7 +197,7 @@ class TestPIIScrubber:
         """Dict with list scrubbed."""
         scrubber = PIIScrubber()
         data = {"emails": ["user1@example.com", "user2@example.com"]}
-        scrubbed = scrubber.scrub_dict(data, log_detection=False)
+        scrubbed = scrubber.scrub_dict(data, log_detection=False, tenant_id=TENANT)
         assert "[EMAIL]" in scrubbed["emails"][0]
         assert "[EMAIL]" in scrubbed["emails"][1]
 
@@ -201,22 +205,48 @@ class TestPIIScrubber:
         """should_log_raw returns True for safe text."""
         scrubber = PIIScrubber()
         text = "Safe text with no PII"
-        assert scrubber.should_log_raw(text) is True
+        assert scrubber.should_log_raw(text, tenant_id=TENANT) is True
 
     def test_should_log_raw_unsafe(self):
         """should_log_raw returns False for text with PII."""
         scrubber = PIIScrubber()
         text = "Email: user@example.com"
-        assert scrubber.should_log_raw(text) is False
+        assert scrubber.should_log_raw(text, tenant_id=TENANT) is False
 
     def test_scrub_preserves_context(self):
         """Scrubbing preserves surrounding text."""
         scrubber = PIIScrubber()
         text = "Contact user@example.com for support"
-        scrubbed = scrubber.scrub(text, log_detection=False)
+        scrubbed = scrubber.scrub(text, log_detection=False, tenant_id=TENANT)
         assert "Contact" in scrubbed
         assert "for support" in scrubbed
         assert "[EMAIL]" in scrubbed
+
+
+class TestTenantRequired:
+    """tenant_id is a required keyword-only argument everywhere (fail-closed)."""
+
+    @pytest.mark.parametrize("call", [
+        lambda: PIIDetector().detect("user@example.com"),
+        lambda: PIIDetector().detect_all("user@example.com"),
+        lambda: PIIDetector().has_pii("user@example.com"),
+        lambda: PIIScrubber().scrub("user@example.com"),
+        lambda: PIIScrubber().scrub_dict({"e": "user@example.com"}),
+        lambda: PIIScrubber().should_log_raw("user@example.com"),
+    ])
+    def test_missing_tenant_raises(self, call):
+        with pytest.raises(TypeError, match="tenant_id"):
+            call()
+
+    def test_tenant_is_keyword_only(self):
+        with pytest.raises(TypeError):
+            PIIDetector().detect("user@example.com", TENANT)  # positional → refused
+
+    def test_scrub_audit_event_carries_tenant(self):
+        calls = []
+        scrubber = PIIScrubber(audit_log_fn=calls.append)
+        scrubber.scrub("Email: user@example.com", tenant_id=TENANT)
+        assert calls[0]["tenant_id"] == TENANT
 
 
 class TestPIIPatterns:

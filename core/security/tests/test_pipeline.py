@@ -2,7 +2,7 @@
 
 import pytest
 from ..context import GateName, SecurityContext
-from ..exceptions import CapabilityGateError, AuditGateError
+from ..exceptions import CapabilityGateError, AuditGateError, PipelineExecutionError
 
 
 @pytest.mark.asyncio
@@ -178,3 +178,46 @@ async def test_system_service_bypass(pipeline):
     first_gate = context.gate_results[0]
     assert first_gate.passed is True
     assert first_gate.reason_code == "system_service"
+
+
+# ── Process tenant (2026-09-07 hardening) ────────────────────────────────────
+# ``from operator.context import get_current_tenant`` could never resolve, so
+# every SecurityContext carried tenant_id="unknown". The pipeline now resolves
+# the same process tenant the audit chain enforces (CORVIN_TENANT_ID →
+# _default, validated) and refuses to run when it cannot.
+
+
+async def _noop_handler():
+    return {"ok": True}
+
+
+async def _run(pipeline):
+    return await pipeline.execute_with_security(
+        actor="user_123", action="list_sessions", resource="chat_session",
+        capability_required="read_chat_sessions", transport="flask_route",
+        input_data={}, handler_fn=_noop_handler,
+    )
+
+
+@pytest.mark.asyncio
+async def test_context_carries_process_tenant_from_env(pipeline, monkeypatch):
+    monkeypatch.setenv("CORVIN_TENANT_ID", "acme_eu")
+    success, _, context = await _run(pipeline)
+    assert success is True
+    assert context.tenant_id == "acme_eu"
+
+
+@pytest.mark.asyncio
+async def test_context_defaults_to_default_tenant(pipeline, monkeypatch):
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    _, _, context = await _run(pipeline)
+    assert context.tenant_id == "_default"
+    assert context.tenant_id != "unknown"
+
+
+@pytest.mark.asyncio
+async def test_invalid_process_tenant_refuses_request(pipeline, monkeypatch):
+    """Fail-closed: an invalid CORVIN_TENANT_ID never degrades to a fake tenant."""
+    monkeypatch.setenv("CORVIN_TENANT_ID", "../etc")
+    with pytest.raises(PipelineExecutionError, match="tenant unresolvable"):
+        await _run(pipeline)

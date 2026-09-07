@@ -127,7 +127,8 @@ async def transcribe_audio_chunk_real(audio_bytes: bytes, language: str = "en") 
             text = transcript.text
             confidence = 0.95  # TODO: compute from word_timings if available
 
-            logger.info(f"Real STT transcribed: {text} (confidence={confidence:.2f})")
+            # L23: transcript TEXT never reaches a log line — length only (GDPR Art. 5).
+            logger.info(f"Real STT transcribed: {len(text)} chars (confidence={confidence:.2f})")
 
             return {"text": text, "confidence": confidence}
 

@@ -1,9 +1,13 @@
 [Unit]
 Description=Corvin-OS daily audit-chain integrity verification (Roadmap L)
+# F-A5 (2026-09-07): a failed verify MUST escalate — the OnFailure unit logs
+# daemon.crit via logger; --all covers every chain under CORVIN_HOME (the
+# tenant chains too), --notify-bridge posts the result into the bridge inbox.
+OnFailure=corvin-audit-verify-failure@%n.service
 
 [Service]
 Type=oneshot
-ExecStart=__PYTHON_BIN__ __PLUGIN_ROOT__/scripts/voice_audit.py verify --notify-bridge
+ExecStart=__PYTHON_BIN__ __PLUGIN_ROOT__/scripts/voice_audit.py verify --all --notify-bridge
 StandardOutput=journal
 StandardError=journal
 EnvironmentFile=-%h/.config/corvin-voice/service.env

@@ -63,7 +63,7 @@ def _flag_on(monkeypatch):
 def _gates_pass(monkeypatch):
     """Force consent / house-rules / disclosure to PASS (isolate one gate)."""
     monkeypatch.setattr(P, "_consent_ok", lambda t, c, u: True)
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     monkeypatch.setattr(P, "_disclosure_shown", lambda c, ck, u: True)
 
 
@@ -104,7 +104,7 @@ def test_bad_kind_denied_failclosed(outbox, _flag_on, _gates_pass, _audit_spy):
 def test_consent_deny_by_default(outbox, _flag_on, monkeypatch, _audit_spy):
     # Non-owner, no grant → deny-by-default. Other gates would pass.
     monkeypatch.setattr(pc, "_is_owner", lambda channel, uid: False)
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     monkeypatch.setattr(P, "_disclosure_shown", lambda c, ck, u: True)
     res = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
                            uid=UID, text=TEXT, kind="completion", outbox_dir=outbox)
@@ -115,7 +115,7 @@ def test_consent_deny_by_default(outbox, _flag_on, monkeypatch, _audit_spy):
 
 def test_house_rules_deny(outbox, _flag_on, monkeypatch, _audit_spy):
     monkeypatch.setattr(P, "_consent_ok", lambda t, c, u: True)
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: False)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: False)
     monkeypatch.setattr(P, "_disclosure_shown", lambda c, ck, u: True)
     res = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
                            uid=UID, text=TEXT, kind="completion", outbox_dir=outbox)
@@ -126,7 +126,7 @@ def test_house_rules_deny(outbox, _flag_on, monkeypatch, _audit_spy):
 
 def test_disclosure_missing_denied(outbox, _flag_on, monkeypatch, _audit_spy):
     monkeypatch.setattr(P, "_consent_ok", lambda t, c, u: True)
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     monkeypatch.setattr(P, "_disclosure_shown", lambda c, ck, u: False)
     res = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
                            uid=UID, text=TEXT, kind="completion", outbox_dir=outbox)
@@ -141,7 +141,7 @@ def test_all_gates_pass_emits_one_envelope(outbox, _flag_on, monkeypatch, _audit
     # Real consent grant (non-owner) + disclosure/house-rules forced pass.
     monkeypatch.setattr(pc, "_is_owner", lambda channel, uid: False)
     pc.grant(TENANT, CHANNEL, UID)
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     monkeypatch.setattr(P, "_disclosure_shown", lambda c, ck, u: True)
 
     res = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
@@ -295,7 +295,7 @@ def test_solicited_skips_flag_consent_disclosure_and_delivers(outbox, monkeypatc
     are all SKIPPED. House-rules still runs (forced pass here)."""
     monkeypatch.setattr(P, "_consent_ok", lambda t, c, u: False)      # would deny
     monkeypatch.setattr(P, "_disclosure_shown", lambda c, ck, u: False)  # would deny
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     # NO _flag_on override → default resolves OFF.
     res = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
                            uid=UID, text=TEXT, kind="completion",
@@ -311,7 +311,7 @@ def test_solicited_skips_flag_consent_disclosure_and_delivers(outbox, monkeypatc
 def test_solicited_still_enforces_house_rules(outbox, monkeypatch, _audit_spy):
     """solicited keeps the fail-closed house-rules gate — a violating completion
     is held, not emitted."""
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: False)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: False)
     res = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
                            uid=UID, text=TEXT, kind="completion",
                            solicited=True, outbox_dir=outbox)
@@ -323,7 +323,7 @@ def test_solicited_still_enforces_house_rules(outbox, monkeypatch, _audit_spy):
 
 def test_solicited_still_rate_limited(outbox, monkeypatch, _audit_spy):
     """solicited keeps the rate/flood bound."""
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     monkeypatch.setattr(P, "MAX_PER_WINDOW", 2)
     for _ in range(2):
         assert P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
@@ -347,7 +347,7 @@ def test_unsolicited_default_needs_flag(outbox, _audit_spy):
 
 def test_unsolicited_with_flag_on_still_needs_consent(outbox, _flag_on, monkeypatch, _audit_spy):
     monkeypatch.setattr(P, "_consent_ok", lambda t, c, u: False)
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     res = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
                            uid=UID, text=TEXT, kind="completion", outbox_dir=outbox)
     assert res is P.EmitResult.DENIED
@@ -358,7 +358,7 @@ def test_envelope_passthrough_preserves_shape_and_attaches_voice(outbox, monkeyp
     """A migrated delivery path's pre-built envelope is written verbatim (its
     markers/_final preserved, NOT rewritten with kind/_proactive_contact) with
     the caller's filename, and voice_path is attached by the primitive."""
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     pre = {"msg_id": "cn_xyz", "channel": CHANNEL, "chat_id": CHAT_ID,
            "text": TEXT, "_completion_notify": True, "_final": True}
     res = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id=TENANT,
@@ -456,7 +456,7 @@ def test_flag_on_is_tenant_scoped_not_env(outbox, monkeypatch, _audit_spy):
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")   # ambient env is _default
     # Gates after the flag pass (isolate the flag gate):
     monkeypatch.setattr(P, "_consent_ok", lambda t, c, u: True)
-    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key: True)
+    monkeypatch.setattr(P, "_house_rules_allows", lambda text, *, channel, chat_key, **kw: True)
     monkeypatch.setattr(P, "_disclosure_shown", lambda c, ck, u: True)
 
     res_t = P.emit_proactive(channel=CHANNEL, chat_id=CHAT_ID, tenant_id="acme",
@@ -533,7 +533,7 @@ def test_mb1_flag_on_house_deny_falls_back_direct(outbox, monkeypatch):
     ff._write_overlay(tenant, {"flags": {P.FLAG_ID: True}})
     assert ff.is_enabled(P.FLAG_ID, tenant) is True
     monkeypatch.setattr(P, "_house_rules_allows",
-                        lambda text, *, channel, chat_key: False)  # gate DENIES
+                        lambda text, *, channel, chat_key, **kw: False)  # gate DENIES
     tid = cn.register(channel="discord", chat_id=CHAT_ID, sender="u1",
                       tenant_id=tenant, label="job")
     assert cn.mark_done(tid, text="the result the user is waiting for", ok=True)

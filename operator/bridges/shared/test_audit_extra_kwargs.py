@@ -44,8 +44,8 @@ def test_reserved_keys_in_extra_do_not_override_positional(tmp_path, monkeypatch
     ap = tmp_path / "audit.jsonl"
     monkeypatch.setenv("VOICE_AUDIT_PATH", str(ap))
     # 'channel' as an explicit param must win; a stray reserved key is stripped.
-    audit.audit_event("x.test", channel="real", details={"channel": "spoof"}, foo="bar")
+    audit.audit_event("x.test", channel="real", details={"channel": "spoof"}, reason="bar")
     evs = _events(ap)
     e = next(e for e in evs if e["event_type"] == "x.test")
     assert e["details"]["channel"] == "real"
-    assert e["details"].get("foo") == "bar"
+    assert e["details"].get("reason") == "bar"

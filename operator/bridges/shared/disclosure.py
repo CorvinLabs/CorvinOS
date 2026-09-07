@@ -351,7 +351,12 @@ def _is_intrinsic_owner(channel: str, uid: str) -> bool:
         return False
     wl = _read_channel_whitelist(channel)
     if not wl:
-        return True   # DEV-mode parity (auth.js fail-open)
+        # F-A19 (2026-09-07): an EMPTY whitelist means NOBODY is an intrinsic
+        # owner — never "everyone". Owner status waives the disclosure card
+        # and consent flow (EU AI Act Art. 50), so fail-open here silently
+        # skipped the bot-disclosure for every stranger on an unconfigured
+        # channel. (The old "DEV-mode parity with auth.js" fail-open is gone.)
+        return False
     return uid in wl
 
 

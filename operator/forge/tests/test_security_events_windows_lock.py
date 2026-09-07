@@ -128,9 +128,9 @@ def test_write_event_on_a_short_chain_does_not_self_deadlock_on_windows():
     it read as an intermittent permissions problem rather than a lock bug."""
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
-        se.write_event(p, "test.first", details={"k": "v"})   # empty chain
+        se.write_event(p, "test.first", details={"name": "v"})   # empty chain
         assert p.stat().st_size < se._TAIL_BLOCK
-        se.write_event(p, "test.second", details={"k": "v2"})  # short chain
+        se.write_event(p, "test.second", details={"name": "v2"})  # short chain
         ok, problems = se.verify_chain(p)
     assert ok, problems
 
@@ -144,7 +144,7 @@ def test_verify_under_a_held_read_lock_can_still_read_the_chain_on_windows():
     bridge logged `verify_errored / PermissionError` on every boot."""
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
-        se.write_event(p, "test.first", details={"k": "v"})
+        se.write_event(p, "test.first", details={"name": "v"})
         with p.open("r") as lf:
             se._lock_chain(lf, shared=True)
             try:
@@ -232,8 +232,8 @@ def test_write_event_end_to_end_with_fake_msvcrt_lock_path():
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"
         with mock.patch.object(se, "msvcrt", fake):
-            se.write_event(p, "test.event_one", details={"k": "v"})
-            se.write_event(p, "test.event_two", details={"k": "v2"})
+            se.write_event(p, "test.event_one", details={"name": "v"})
+            se.write_event(p, "test.event_two", details={"name": "v2"})
         ok, problems = se.verify_chain(p)
     assert ok, problems
     assert len(fake.calls) == 4  # lock+unlock per write, two writes
@@ -255,7 +255,7 @@ def test_write_event_self_heals_from_a_stale_permission_denied():
         p.write_text("")
         os.chmod(p, 0o400)
         with mock.patch.object(se, "msvcrt", fake):
-            rec = se.write_event(p, "test.event", details={"k": "v"})
+            rec = se.write_event(p, "test.event", details={"name": "v"})
         assert rec["event_type"] == "test.event"
         ok, problems = se.verify_chain(p)
     assert ok, problems
@@ -273,7 +273,7 @@ def test_write_event_does_not_retry_permission_denied_on_posix():
         try:
             with mock.patch.object(se, "msvcrt", None):
                 with pytest.raises(PermissionError):
-                    se.write_event(p, "test.event", details={"k": "v"})
+                    se.write_event(p, "test.event", details={"name": "v"})
         finally:
             os.chmod(p, 0o600)  # so tempdir cleanup can remove it
 
@@ -290,7 +290,7 @@ def test_write_event_reraises_when_the_file_was_never_created():
         with mock.patch.object(se, "msvcrt", fake), \
              mock.patch.object(se.os, "open", side_effect=PermissionError(13, "Permission denied")):
             with pytest.raises(PermissionError):
-                se.write_event(p, "test.event", details={"k": "v"})
+                se.write_event(p, "test.event", details={"name": "v"})
 
 
 if __name__ == "__main__":

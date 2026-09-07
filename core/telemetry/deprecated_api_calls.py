@@ -20,12 +20,28 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-# Try to import audit writer (may not be available in all contexts)
-try:
-    from core.compliance.audit_chain_writer import get_audit_writer
-    AUDIT_WRITER_AVAILABLE = True
-except ImportError:
-    AUDIT_WRITER_AVAILABLE = False
+# Audit goes through the core hash-chained writer (verified commit). Until
+# 2026-09-07 this imported a `get_audit_writer` that never existed, so the
+# ImportError branch always won and no deprecated-API call ever reached the
+# chain — the ADR-0538 measured-deletion gate had no data.
+_DEPRECATED_API_AUDIT_KEYS = frozenset({
+    "api_name", "module", "caller_file", "caller_line", "caller_func", "task_id", "failed", "audit_ref",
+})
+_audit_allowlist_registered = False
+
+
+def _register_audit_allowlist() -> None:
+    global _audit_allowlist_registered
+    if _audit_allowlist_registered:
+        return
+    # Resolving the core writer first puts the forge package on sys.path.
+    from core.learning.event_persistence import _resolve_core_audit
+
+    _resolve_core_audit()
+    from forge import security_events as _se  # type: ignore[import-not-found]
+
+    _se.register_event_allowlist("deprecated_api_call", set(_DEPRECATED_API_AUDIT_KEYS))
+    _audit_allowlist_registered = True
 
 
 @contextmanager
@@ -130,20 +146,23 @@ class DeprecatedAPICallLogger:
             error_message=kwargs.get("error_message"),
         )
 
-        # CRITICAL-2 FIX: Write to immutable audit trail
-        if AUDIT_WRITER_AVAILABLE:
-            try:
-                audit_writer = get_audit_writer()
-                audit_writer.write_event_dict(
-                    event_type="deprecated_api_call",
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    details={**event.to_dict(), "task_id": task_id}
-                )
-            except Exception as audit_error:
-                logger.error(f"Audit trail write failed: {audit_error}", exc_info=True)
-                # Fail-closed: re-raise so caller knows audit failed
-                raise
+        # Write to the immutable core chain (content-free: no stack trace, no user id)
+        from core.learning.event_persistence import core_audit_event
+
+        _register_audit_allowlist()
+        core_audit_event(
+            "deprecated_api_call",
+            tenant_id=tenant_id,
+            details={
+                "api_name": event.api_name,
+                "module": event.module,
+                "caller_file": event.caller_file,
+                "caller_line": event.caller_line,
+                "caller_func": event.caller_func,
+                "task_id": task_id,
+                "failed": bool(event.error_message),
+            },
+        )
 
         # Log to structured logger (telemetry)
         logger.warning(

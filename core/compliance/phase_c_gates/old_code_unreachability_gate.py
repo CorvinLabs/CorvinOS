@@ -5,6 +5,8 @@ Pass Criteria: 0 direct_old_module_calls_detected
 """
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -28,7 +30,7 @@ class OldCodeUnreachabilityGate:
     ]
 
     def __init__(self, audit_jsonl_path: str = "~/.corvin/audit.jsonl"):
-        self.audit_path = audit_jsonl_path.replace("~", "/home/shumway")
+        self.audit_path = str(Path(os.path.expandvars(audit_jsonl_path)).expanduser())
 
     def execute(self) -> OldCodeUnreachabilityResult:
         """
@@ -72,7 +74,7 @@ class OldCodeUnreachabilityGate:
         try:
             # Query audit.jsonl for deprecated_api_call events
             # Check caller_module: if NOT in {core.legacy_compat, core.skills}, it's a violation
-            cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path.replace("~", "/home/shumway")} 2>/dev/null | \
+            cmd = f"""grep '"event_type".*"deprecated_api_call"' {self.audit_path} 2>/dev/null | \
               jq -r 'select(.caller_module | (startswith("core.legacy_compat") | not) and (startswith("core.skills") | not)) | \
               "\\(.timestamp) \\(.api_name) \\(.caller_module)"' 2>/dev/null"""
 

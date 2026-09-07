@@ -13,10 +13,12 @@ Design invariants (ADR-0168):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -180,19 +182,74 @@ async def _route_erasure(
             status="error",
             message="Erasure request requires uid=<subject_id> in the prompt (GDPR Art. 17).",
         )
-    erasure_id = "erase_" + uuid.uuid4().hex[:8]
+    # F-A9 (2026-09-07): wired to the REAL L36 ErasureOrchestrator with the
+    # real per-layer handler chain — no more "queued" placeholder that erased
+    # nothing. The orchestrator is synchronous (disk + SQL), so it runs in a
+    # worker thread; the trail lands at <tenant>/global/erasure/<request_id>.json
+    # and every layer outcome is audited on the hash chain (codes only).
+    subject_id = str(slots.get("subject_id"))
+    try:
+        result = await asyncio.to_thread(_execute_erasure, tenant_id, subject_id)
+    except ValueError as exc:  # invalid subject id / tenant scope
+        return ActionResult(
+            action_id=action_id, entity_type="erasure_request", entity_id=None,
+            status="error", message=f"Erasure refused: {type(exc).__name__}",
+        )
+    except Exception as exc:  # noqa: BLE001 — infra failure: report, never fake success
+        logger.error("erasure orchestrator failed (%s)", type(exc).__name__)
+        return ActionResult(
+            action_id=action_id, entity_type="erasure_request", entity_id=None,
+            status="error", message=f"Erasure failed: {type(exc).__name__}",
+        )
+    overall = result.overall_status.value
     return ActionResult(
         action_id=action_id,
         entity_type="erasure_request",
-        entity_id=erasure_id,
-        status="queued",
-        message="Erasure queued. Wiring to L36 ErasureOrchestrator is ADR-0168 M2.4.",
+        entity_id=result.request.request_id,
+        status="created" if overall == "completed" else "error",
+        message=f"Erasure {overall}: {result.applied_count} layer(s) applied, "
+                f"{result.failed_count} failed, {len(result.per_layer)} total.",
         payload={
             # subject_id deliberately excluded from payload (L34 CONFIDENTIAL)
-            "status": "queued",
-            "erasure_id": erasure_id,
+            "status": overall,
+            "erasure_id": result.request.request_id,
+            "layers": [
+                {"layer_id": r.layer_id, "status": r.status.value, "count": r.count}
+                for r in result.per_layer
+            ],
         },
     )
+
+
+def _execute_erasure(tenant_id: str, subject_id: str):
+    """Build the L36 orchestrator for *tenant_id* (real handler chain + stub
+    backfill, exactly like ``corvin-erasure run``) and execute one request."""
+    import sys as _sys
+    _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    if _shared.is_dir() and str(_shared) not in _sys.path:
+        _sys.path.append(str(_shared))
+    from erasure_orchestrator import (  # type: ignore[import-not-found]
+        ErasureOrchestrator, ErasureRequest, builtin_stub_chain, make_forge_audit_writer,
+    )
+    from erasure_handlers import real_handler_chain  # type: ignore[import-not-found]
+    from core.paths.tenant import tenant_home
+
+    root = tenant_home(tenant_id)
+    orch = ErasureOrchestrator(
+        tenant_id=tenant_id,
+        trail_dir=root / "global" / "erasure",
+        audit_writer=make_forge_audit_writer(root / "global" / "forge" / "audit.jsonl"),
+    )
+    registered: set[str] = set()
+    for h in real_handler_chain(tenant_id=tenant_id):
+        orch.register_handler(h)
+        registered.add(h.layer_id)
+    for stub in builtin_stub_chain():
+        if stub.layer_id not in registered:
+            orch.register_handler(stub)
+    req = ErasureRequest(subject_id=subject_id, requester=f"ccc:{tenant_id}",
+                         tenant_id=tenant_id)
+    return orch.execute(req)
 
 
 async def _route_audit_query(action_id: str, slots: dict) -> ActionResult:

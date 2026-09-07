@@ -321,9 +321,10 @@ class TestIteration2Hardening:
         # tenant; the cap is per skill across ALL tenants, so lift the strike
         # threshold here to exercise it directly.
         reg.AUTO_DISABLE_THRESHOLD = 10_000
-        statuses = [reg.execute("test.hang", {}, timeout_ms=10).status for _ in range(SkillsRegistry.MAX_IN_FLIGHT_PER_SKILL)]
+        lom = "tests/adversarial/test_skills_adversarial.py:test_hanging_skill_cannot_leak_unbounded_threads"
+        statuses = [reg.execute("test.hang", {}, timeout_ms=10, lom=lom).status for _ in range(SkillsRegistry.MAX_IN_FLIGHT_PER_SKILL)]
         assert statuses == ["timeout"] * SkillsRegistry.MAX_IN_FLIGHT_PER_SKILL
-        saturated = reg.execute("test.hang", {}, timeout_ms=10)
+        saturated = reg.execute("test.hang", {}, timeout_ms=10, lom=lom)
         assert saturated.status == "error" and "saturated" in saturated.error_message
         release.set()
         # audited, not silent

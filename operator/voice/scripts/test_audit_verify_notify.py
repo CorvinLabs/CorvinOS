@@ -185,8 +185,10 @@ def case_systemd_units_exist():
     t("audit-verify.timer exists", timer.exists(), detail=str(timer))
     if svc.exists():
         body = svc.read_text()
-        t("service ExecStart references voice_audit.py verify --notify-bridge",
-          "voice_audit.py verify --notify-bridge" in body,
+        # ADR-0640: the daily unit verifies EVERY chain (`verify --all`) and
+        # notifies the bridge on failure.
+        t("service ExecStart references voice_audit.py verify --all --notify-bridge",
+          "voice_audit.py verify --all --notify-bridge" in body,
           detail=body[:200])
     if timer.exists():
         body = timer.read_text()

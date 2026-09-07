@@ -64,7 +64,7 @@ class TestADR0199Ping:
         sender = RemoteTriggerSender(instance_id="test-sender")
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(sender, "_http_ping_probe",
-                       Mock(return_value=(True, None, None)))
+                       Mock(return_value=(True, None, None, "direct")))
             result = sender.ping(endpoint_id="test-endpoint", timeout_s=5)
         assert result.reachable is True
         assert result.source == "network_probe"
@@ -75,7 +75,7 @@ class TestADR0199Ping:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(sender, "_http_ping_probe",
                        Mock(return_value=(False, ErrorCategory.UNREACHABLE,
-                                          "Unable to reach endpoint (DNS/connection refused)")))
+                                          "Unable to reach endpoint (DNS/connection refused)", "direct")))
             result = sender.ping(endpoint_id="test-endpoint", timeout_s=5)
         assert result.reachable is False
         assert result.error_category == ErrorCategory.UNREACHABLE
@@ -85,7 +85,7 @@ class TestADR0199Ping:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(sender, "_http_ping_probe",
                        Mock(return_value=(False, ErrorCategory.TIMEOUT_TRANSPORT,
-                                          "HTTP request timeout")))
+                                          "HTTP request timeout", "direct")))
             result = sender.ping(endpoint_id="test-endpoint", timeout_s=5)
         assert result.reachable is False
         assert result.error_category == ErrorCategory.TIMEOUT_TRANSPORT
@@ -95,14 +95,14 @@ class TestADR0199Ping:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(sender, "_http_ping_probe",
                        Mock(return_value=(False, ErrorCategory.AUTH_FAILED,
-                                          "Response signature verification failed")))
+                                          "Response signature verification failed", "direct")))
             result = sender.ping(endpoint_id="test-endpoint", timeout_s=5)
         assert result.reachable is False
         assert result.error_category == ErrorCategory.AUTH_FAILED
 
     def test_ping_timeout_clamped_2_10_seconds(self):
         sender = RemoteTriggerSender(instance_id="test-sender")
-        probe = Mock(return_value=(True, None, None))
+        probe = Mock(return_value=(True, None, None, "direct"))
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(sender, "_http_ping_probe", probe)
             sender.ping(endpoint_id="test-endpoint", timeout_s=0.5)
@@ -262,7 +262,7 @@ class TestADR0199Ping:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(sender, "_http_ping_probe",
                        Mock(return_value=(False, ErrorCategory.UNREACHABLE,
-                                          "Unable to reach endpoint (DNS/connection refused)")))
+                                          "Unable to reach endpoint (DNS/connection refused)", "direct")))
             sender.ping(endpoint_id="test-endpoint")
 
         ping_calls = [c for c in se.write_event.call_args_list

@@ -1,8 +1,11 @@
-"""ADR-0129 M1 — structural audit-detail allowlist (the floor).
+"""ADR-0129 M1/M2 + F-A4 (2026-09-07) — structural audit-detail floor.
 
 Verifies that the chain writer drops content / PII / secret / oversize
-fields from every event's `details`, while preserving legit metadata
-(false-positive avoidance is load-bearing).
+fields from every event's `details`, that the floor is DEFAULT-DENY for
+keys (an event type without a registered allowlist admits only the
+universal metadata vocabulary ``_AUDIT_KNOWN_KEYS``), and that string
+values on such events are scanned for email/phone shapes — while legit
+metadata is preserved (false-positive avoidance is load-bearing).
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from forge.security_events import (  # noqa: E402
-    filter_audit_details, write_event, verify_chain,
+    _AUDIT_KNOWN_KEYS, filter_audit_details, write_event, verify_chain,
 )
 
 import pytest  # noqa: E402
@@ -29,10 +32,10 @@ import pytest  # noqa: E402
     "api_key", "access_token", "rows", "stdout", "stderr",
 ])
 def test_forbidden_exact_key_dropped(key):
-    cleaned, dropped = filter_audit_details({key: "leaked-value", "ok_field": 1})
+    cleaned, dropped = filter_audit_details({key: "leaked-value", "count": 1})
     assert key not in cleaned
     assert key in dropped
-    assert cleaned.get("ok_field") == 1
+    assert cleaned.get("count") == 1
     # the value is NEVER retained anywhere
     assert "leaked-value" not in json.dumps(cleaned)
 
@@ -53,6 +56,7 @@ def test_forbidden_substring_key_dropped(key):
     "tokens_used", "input_tokens", "output_tokens", "error_message",
     "reason", "sid_fingerprint", "matched_rule", "query_latency_ms",
     "query_count", "tenant_id", "engine_id", "classification", "uid_hash",
+    "audit_ref", "task_id", "session_id", "skill_id", "plugin_id", "lom", "lom_hash",
 ])
 def test_legit_metadata_preserved(key):
     cleaned, dropped = filter_audit_details({key: 42})
@@ -60,22 +64,89 @@ def test_legit_metadata_preserved(key):
     assert dropped == []
 
 
+# ── F-A4: default-deny vocabulary for unregistered event types ────────────
+
+def test_unregistered_event_drops_unknown_key_and_names_it():
+    cleaned, dropped = filter_audit_details(
+        {"some_metric": 7, "count": 7, "prompt": "leak"}, event_type="random.event")
+    assert "some_metric" not in cleaned and "some_metric" in dropped
+    assert cleaned["count"] == 7
+    assert "prompt" in dropped
+    assert cleaned["_dropped_fields"] == ["prompt", "some_metric"]
+
+
+def test_vocabulary_has_no_content_or_pii_shaped_names():
+    for bad in ("prompt", "text", "message", "email", "password", "snippet",
+                "line_excerpt", "userName", "request", "subject_id"):
+        assert bad not in _AUDIT_KNOWN_KEYS, bad
+
+
+@pytest.mark.parametrize("value", [
+    "alice@example.com",
+    "contact: Alice.Bauer+news@sub.example.co.uk today",
+    "+49 170 1234567",
+    "call 0170-1234567 now",
+    "(030) 123 45 67",
+])
+def test_pii_value_under_benign_key_dropped_on_unregistered_event(value):
+    cleaned, dropped = filter_audit_details({"reason": value, "count": 1},
+                                            event_type="random.event")
+    assert "reason" in dropped and "reason" not in cleaned, value
+    assert value not in json.dumps(cleaned)
+    assert cleaned["count"] == 1
+
+
+@pytest.mark.parametrize("value", [
+    "4915123@s.whatsapp.net",                # WhatsApp JID
+    "123456789012@g.us",                     # WhatsApp group JID
+    "https://user@host.example/path",        # URL userinfo
+    "rejected by user@team",                 # no TLD
+    "2026-09-07T01:40:00",                   # timestamp
+    "2026-09-07",                            # date
+    "123456789012345678",                    # snowflake id (no + / separators)
+    "0.10.112",                              # version
+    "00123456789abcdef0123",                 # hex-ish id
+    "run-0123-4567",                         # short id
+])
+def test_pseudonymous_ids_and_structured_values_preserved(value):
+    cleaned, dropped = filter_audit_details({"target": value}, event_type="random.event")
+    assert cleaned.get("target") == value, value
+    assert dropped == []
+
+
+def test_pii_scan_applies_recursively_under_known_key():
+    cleaned, _ = filter_audit_details(
+        {"extra": {"note": "bob@example.com", "count": 2}}, event_type="random.event")
+    assert "bob@example.com" not in json.dumps(cleaned)
+    assert cleaned["extra"]["count"] == 2
+
+
+def test_pii_scan_not_applied_to_allowlisted_events():
+    # A registered allowlist is a maintainer-vetted field set; its values are
+    # not second-guessed by the shape scan (only the denylist + size floor).
+    from forge.security_events import register_event_allowlist
+    register_event_allowlist("vetted.evt", {"host"})
+    cleaned, dropped = filter_audit_details({"host": "smtp@mail.example.com"},
+                                            event_type="vetted.evt")
+    assert cleaned["host"] == "smtp@mail.example.com" and dropped == []
+
+
 # ── unit: oversize value dropped ──────────────────────────────────────────
 
 def test_oversize_value_dropped():
     big = "x" * 5000
-    cleaned, dropped = filter_audit_details({"blob": big, "n": 3})
-    assert "blob" in dropped and "blob" not in cleaned
-    assert cleaned.get("n") == 3
+    cleaned, dropped = filter_audit_details({"detail": big, "count": 3})
+    assert "detail" in dropped and "detail" not in cleaned
+    assert cleaned.get("count") == 3
     assert big not in json.dumps(cleaned)
 
 
 def test_oversize_nested_blob_dropped():
     # Recursion cleans in place: the oversize nested "rows" is dropped, the
-    # "nested" container survives — the blob value must be absent either way.
-    cleaned, _ = filter_audit_details({"nested": {"rows": ["y" * 3000]}})
+    # "extra" container survives — the blob value must be absent either way.
+    cleaned, _ = filter_audit_details({"extra": {"rows": ["y" * 3000]}})
     assert "y" * 3000 not in json.dumps(cleaned)
-    assert "rows" not in cleaned.get("nested", {})
+    assert "rows" not in cleaned.get("extra", {})
 
 
 def test_short_hash_preserved():
@@ -87,7 +158,7 @@ def test_short_hash_preserved():
 # ── unit: marker + unfiltered ─────────────────────────────────────────────
 
 def test_dropped_fields_marker_lists_keys_not_values():
-    cleaned, _ = filter_audit_details({"prompt": "secret text", "ok": 1})
+    cleaned, _ = filter_audit_details({"prompt": "secret text", "count": 1})
     assert cleaned["_dropped_fields"] == ["prompt"]
     assert "secret text" not in json.dumps(cleaned)
 
@@ -109,12 +180,14 @@ def test_write_event_applies_floor_and_chain_verifies():
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "audit.jsonl"
         write_event(path, "test.event", severity="INFO",
-                    details={"prompt": "LEAK", "tokens_used": 5, "reason": "ok"})
+                    details={"prompt": "LEAK", "tokens_used": 5, "reason": "ok",
+                             "adhoc_key": "x"})
         rec = json.loads(path.read_text().strip().splitlines()[-1])
         assert "prompt" not in rec["details"]
+        assert "adhoc_key" not in rec["details"]
         assert rec["details"]["tokens_used"] == 5
         assert rec["details"]["reason"] == "ok"
-        assert rec["details"]["_dropped_fields"] == ["prompt"]
+        assert rec["details"]["_dropped_fields"] == ["adhoc_key", "prompt"]
         assert "LEAK" not in path.read_text()
         ok, problems = verify_chain(path)
         assert ok, problems
@@ -127,6 +200,18 @@ def test_write_event_unfiltered_keeps_field():
                     unfiltered=True)
         rec = json.loads(path.read_text().strip().splitlines()[-1])
         assert rec["details"]["output_hash"] == "h" * 64
+
+
+def test_write_event_binds_lom_hash():
+    # ADR-0537 / F-A17: a record carrying a LoM always carries its binding.
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "audit.jsonl"
+        write_event(path, "test.event",
+                    details={"lom": "operator/forge/forge/security_events.py:write_event"})
+        rec = json.loads(path.read_text().strip().splitlines()[-1])
+        assert len(rec["details"]["lom_hash"]) == 64
+        ok, problems = verify_chain(path)
+        assert ok, problems
 
 
 # ── M2: per-event positive allowlist ──────────────────────────────────────
@@ -154,14 +239,6 @@ def test_allowlisted_event_keeps_all_declared_fields():
         assert cleaned[k] == d[k]
 
 
-def test_unregistered_event_uses_denylist_only():
-    # No allowlist for this event → arbitrary metadata key survives (floor only).
-    cleaned, dropped = filter_audit_details(
-        {"some_metric": 7, "prompt": "leak"}, event_type="random.event")
-    assert cleaned["some_metric"] == 7
-    assert "prompt" in dropped
-
-
 def test_register_event_allowlist():
     from forge.security_events import register_event_allowlist
     register_event_allowlist("custom.evt", {"a", "b"})
@@ -172,33 +249,33 @@ def test_register_event_allowlist():
 # ── review fixes: nested bypass, marker forgery, value secrets, fail-closed ──
 
 def test_nested_dict_forbidden_key_dropped():
-    cleaned, _ = filter_audit_details({"meta": {"prompt": "SECRET-LEAK", "ok": 1}})
+    cleaned, _ = filter_audit_details({"extra": {"prompt": "SECRET-LEAK", "count": 1}})
     assert "SECRET-LEAK" not in json.dumps(cleaned)
-    assert cleaned["meta"]["ok"] == 1
-    assert "prompt" not in cleaned["meta"]
+    assert cleaned["extra"]["count"] == 1
+    assert "prompt" not in cleaned["extra"]
 
 
 def test_nested_list_secret_dropped():
     cleaned, _ = filter_audit_details(
-        {"items": [{"secret": "sk-leak"}, {"id": 7}]})
+        {"entries": [{"secret": "sk-leak"}, {"id": 7}]})
     assert "sk-leak" not in json.dumps(cleaned)
-    assert {"id": 7} in cleaned["items"]
+    assert {"id": 7} in cleaned["entries"]
 
 
 def test_deeply_nested_forbidden_dropped():
     cleaned, _ = filter_audit_details(
-        {"a": {"b": {"c": {"password": "DEEP-SECRET-VALUE"}}}})
+        {"extra": {"b": {"c": {"password": "DEEP-SECRET-VALUE"}}}})
     # the VALUE is gone; the key NAME may appear in a _dropped_fields marker.
     assert "DEEP-SECRET-VALUE" not in json.dumps(cleaned)
-    assert cleaned["a"]["b"]["c"].get("password") is None
+    assert cleaned["extra"]["b"]["c"].get("password") is None
 
 
 def test_caller_supplied_markers_stripped():
     cleaned, _ = filter_audit_details({"_unfiltered": True,
-                                       "_dropped_fields": ["fake"], "ok": 1})
+                                       "_dropped_fields": ["fake"], "count": 1})
     # caller-forged markers removed; no real drop happened beyond them
     assert cleaned.get("_unfiltered") is None
-    assert cleaned.get("ok") == 1
+    assert cleaned.get("count") == 1
     # _dropped_fields, if present, is the writer's own (lists the stripped markers)
     assert "fake" not in cleaned.get("_dropped_fields", [])
 
@@ -209,28 +286,14 @@ def test_secret_value_under_benign_key_dropped():
                  "AKIAIOSFODNN7EXAMPLE",
                  "ghp_abcdefghijklmnopqrstuvwxyz0123",
                  "-----BEGIN RSA PRIVATE KEY-----"):
-        cleaned, dropped = filter_audit_details({"note": leak})
-        assert "note" in dropped, leak
+        cleaned, dropped = filter_audit_details({"reason": leak})
+        assert "reason" in dropped, leak
         assert leak not in json.dumps(cleaned)
 
 
-def test_at_bearing_ids_and_urls_preserved():
-    # Surroundings-review regression: @-bearing pseudonymous IDs and URL
-    # userinfo are NOT free-text PII — they must survive (path_gate target,
-    # WhatsApp JIDs, ActivityPub actors, error reasons with URLs).
-    for keep in ("4915123@s.whatsapp.net",
-                 "https://user@host.example/path",
-                 "@alice@mastodon.social",
-                 "rejected by user@team",
-                 "user@example.com"):
-        cleaned, dropped = filter_audit_details({"target": keep})
-        assert cleaned.get("target") == keep, keep
-        assert dropped == []
-
-
 def test_benign_short_value_kept():
-    cleaned, dropped = filter_audit_details({"note": "all good", "n": 5})
-    assert cleaned["note"] == "all good" and dropped == []
+    cleaned, dropped = filter_audit_details({"reason": "all good", "count": 5})
+    assert cleaned["reason"] == "all good" and dropped == []
 
 
 def test_structural_fields_survive_allowlist():
@@ -250,7 +313,7 @@ def test_circular_reference_bounded_failclosed():
     # the depth bound + fail-closed serialization check breaks the cycle.
     circular: dict = {}
     circular["self"] = circular
-    cleaned, _ = filter_audit_details({"k": circular})
+    cleaned, _ = filter_audit_details({"extra": circular})
     s = json.dumps(cleaned)  # must serialise (cycle broken) without raising
     assert len(s) < 10_000  # bounded, not infinite
 
@@ -261,19 +324,19 @@ def test_unserialisable_scalar_failclosed():
     class Bad:
         def __str__(self): raise RuntimeError("boom")
         def __repr__(self): raise RuntimeError("boom")
-    cleaned, dropped = filter_audit_details({"k": Bad()})
-    assert "k" in dropped
-    assert "k" not in cleaned
+    cleaned, dropped = filter_audit_details({"reason": Bad()})
+    assert "reason" in dropped
+    assert "reason" not in cleaned
 
 
 def test_write_event_strips_forged_unfiltered_marker():
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "audit.jsonl"
-        write_event(path, "test.x", details={"_unfiltered": True, "n": 1})
+        write_event(path, "test.x", details={"_unfiltered": True, "count": 1})
         rec = json.loads(path.read_text().strip().splitlines()[-1])
         # normal (filtered) write: forged marker must be gone
         assert rec["details"].get("_unfiltered") is None
-        assert rec["details"]["n"] == 1
+        assert rec["details"]["count"] == 1
 
 
 # ── round-4 review: writer/filter serialization symmetry + depth fail-closed ──
@@ -287,15 +350,15 @@ def test_write_event_strips_forged_unfiltered_marker():
 def test_unserialisable_value_dropped_failclosed(val):
     # default=str would make these look "short and fine"; the writer cannot
     # serialize them. Filter must drop (fail-closed), never keep/leak.
-    cleaned, dropped = filter_audit_details({"k": val})
-    assert "k" in dropped and "k" not in cleaned
+    cleaned, dropped = filter_audit_details({"reason": val})
+    assert "reason" in dropped and "reason" not in cleaned
     assert "sk-" not in json.dumps(cleaned) and "ghp_" not in json.dumps(cleaned)
 
 
 def test_depth_bound_forbidden_short_value_dropped():
     # 7 levels deep, a forbidden key with a SHORT value: previously survived
     # (depth fail-open). Now the over-deep subtree is dropped wholesale.
-    deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"password": "x"}}}}}}}}
+    deep = {"entries": {"b": {"c": {"d": {"e": {"f": {"g": {"password": "x"}}}}}}}}
     cleaned, _ = filter_audit_details(deep)
     assert "x" not in json.dumps(cleaned)
     assert "password" not in json.dumps(cleaned)
@@ -306,9 +369,9 @@ def test_non_str_and_mixed_keys_do_not_crash_writer():
         path = Path(td) / "audit.jsonl"
         # mixed int+str keys make sort_keys json.dumps raise; exotic tuple key
         # likewise. Writer must not crash and the chain must verify.
-        write_event(path, "test.keys", details={1: "a", "b": "c", (1, 2): "d"})
+        write_event(path, "test.keys", details={1: "a", "name": "c", (1, 2): "d"})
         rec = json.loads(path.read_text().strip().splitlines()[-1])
-        assert rec["details"].get("b") == "c"
+        assert rec["details"].get("name") == "c"
         ok, problems = verify_chain(path)
         assert ok, problems
 
@@ -318,10 +381,10 @@ def test_write_event_survives_unserialisable_details():
         path = Path(td) / "audit.jsonl"
         # never-raise contract: set/bytes values must not crash the write.
         write_event(path, "test.weird",
-                    details={"s": {"x", "y"}, "b": b"raw", "ok": 1})
+                    details={"skills": {"x", "y"}, "bundle": b"raw", "count": 1})
         rec = json.loads(path.read_text().strip().splitlines()[-1])
-        assert rec["details"]["ok"] == 1
-        assert "s" not in rec["details"] and "b" not in rec["details"]
+        assert rec["details"]["count"] == 1
+        assert "skills" not in rec["details"] and "bundle" not in rec["details"]
         ok, problems = verify_chain(path)
         assert ok, problems
 

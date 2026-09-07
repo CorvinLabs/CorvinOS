@@ -210,7 +210,7 @@ class R4_AuditChainContinuity(_MigrationSandbox):
 
         # Boundary 1: write a hash-chained event before migration
         legacy_audit = self.home / "global" / "forge" / "audit.jsonl"
-        _se.write_event(legacy_audit, "tool.created", details={"phase": "pre"})
+        _se.write_event(legacy_audit, "tool.created", details={"reason": "pre"})
 
         # Migrate
         result = migrate_to_default_tenant_if_needed(corvin_home_path=self.home)
@@ -220,7 +220,7 @@ class R4_AuditChainContinuity(_MigrationSandbox):
         # Resolve via default path → goes through symlink → lands in
         # the physical file under tenants/_default/.
         post_audit = _forge_paths.tenant_global_dir() / "forge" / "audit.jsonl"
-        _se.write_event(post_audit, "skill.created", details={"phase": "post"})
+        _se.write_event(post_audit, "skill.created", details={"reason": "post"})
 
         # The physical chain has: pre-event, migration-event, post-event
         physical = (
@@ -244,10 +244,10 @@ class R4_AuditChainContinuity(_MigrationSandbox):
         # Same content, but verify via the legacy-symlink path
         self._seed_legacy_audit(content="")
         legacy = self.home / "global" / "forge" / "audit.jsonl"
-        _se.write_event(legacy, "tool.created", details={"phase": "pre"})
+        _se.write_event(legacy, "tool.created", details={"reason": "pre"})
 
         migrate_to_default_tenant_if_needed(corvin_home_path=self.home)
-        _se.write_event(legacy, "skill.created", details={"phase": "post"})
+        _se.write_event(legacy, "skill.created", details={"reason": "post"})
 
         # Reading via the symlink must verify just as cleanly
         ok, problems = _se.verify_chain(legacy)
@@ -264,7 +264,7 @@ class R5_GatewayProvisionsAcmeAfterMigration(_MigrationSandbox):
         _se.write_event(
             _forge_paths.tenant_global_dir("_default") / "forge" / "audit.jsonl",
             "tool.created",
-            details={"tenant_hint": "_default"},
+            details={"name": "_default"},
         )
 
         # Gateway provisions acme (mkdir, no migration helper involved)
@@ -272,7 +272,7 @@ class R5_GatewayProvisionsAcmeAfterMigration(_MigrationSandbox):
         _se.write_event(
             _forge_paths.tenant_global_dir("acme") / "forge" / "audit.jsonl",
             "tool.created",
-            details={"tenant_hint": "acme"},
+            details={"name": "acme"},
         )
 
         # _default's chain must NOT mention acme
@@ -314,7 +314,7 @@ class R6_OptOutKeepsLegacyAddressable(_MigrationSandbox):
         self.assertFalse((self.home / "global").is_symlink())
         self.assertTrue(legacy.exists())
         # Write through the legacy path still works
-        _se.write_event(legacy, "tool.created", details={"phase": "optout"})
+        _se.write_event(legacy, "tool.created", details={"reason": "optout"})
         body = legacy.read_text()
         self.assertIn("optout", body)
         # And the new tenants/ tree was NOT created by the helper

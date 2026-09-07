@@ -40,7 +40,8 @@ class PIIPattern:
 # ============================================================================
 
 EMAIL_RFC5322 = re.compile(
-    r"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\b"
+    # A dotted TLD is REQUIRED (``user@localhost`` is not an address).
+    r"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b"
 )
 
 # ============================================================================
@@ -54,8 +55,12 @@ PHONE_US = re.compile(
 
 # International phone: +CC-NNN-NNNN or similar
 PHONE_INTL = re.compile(
-    r"\b\+(?:[0-9]{1,3})[-.\s]?(?:[0-9]{1,4})[-.\s]?(?:[0-9]{1,4})[-.\s]?(?:[0-9]{1,9})\b"
+    # ``\b`` cannot precede "+" (non-word); use a lookbehind so a leading "+" matches.
+    r"(?<![\w+])\+(?:[0-9]{1,3})[-.\s]?(?:[0-9]{1,4})[-.\s]?(?:[0-9]{1,4})[-.\s]?(?:[0-9]{1,9})\b"
 )
+
+# "phone" class: international OR US shape (first match wins in PII_PATTERNS order).
+PHONE_ANY = re.compile(PHONE_INTL.pattern + "|" + PHONE_US.pattern)
 
 # ============================================================================
 # FINANCIAL PATTERNS
@@ -69,7 +74,10 @@ CREDIT_CARD = re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b|\b\d{15}\b|\b\d{14}\b")
 
 # IBAN: Starts with 2-letter country code + 2 check digits + alphanumeric
 IBAN = re.compile(
-    r"\b[A-Z]{2}(?:\d{2})[A-Z0-9]{1,30}\b"
+    # 2 letters + 2 check digits + 11..30 alphanumerics (Norway, 15 chars, is the
+    # shortest real IBAN); optional 4-groups with spaces. A short "AB123456" is a
+    # passport shape, not an IBAN.
+    r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}\s?[A-Z0-9]{1,4}\b"
 )
 
 # ============================================================================
@@ -83,11 +91,13 @@ PASSPORT = re.compile(r"\b[A-Z]{1,2}\d{6,9}\b")
 # DE: 10 digits (Personalausweis)
 # IT: 2 letters + 6 digits + 1 letter + 3 digits
 # FR: 13 digits
-NATIONAL_ID = re.compile(r"\b[A-Z]{2}\d{8,}\b|\b\d{13}\b")
+NATIONAL_ID = re.compile(r"\b[A-Z]{2,3}\d{6,12}\b|\b\d{13}\b")
 
 # Date of Birth (YYYY-MM-DD or similar)
 DATE_OF_BIRTH = re.compile(
-    r"\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b"
+    r"\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b"          # ISO YYYY-MM-DD
+    r"|\b(?:0[1-9]|[12]\d|3[01])\.(?:0[1-9]|1[0-2])\.(?:19|20)\d{2}\b"      # DE DD.MM.YYYY
+    r"|\b(?:0[1-9]|1[0-2])/(?:0[1-9]|[12]\d|3[01])/(?:19|20)\d{2}\b"         # US MM/DD/YYYY
 )
 
 # ============================================================================
@@ -96,7 +106,12 @@ DATE_OF_BIRTH = re.compile(
 
 # Full name pattern: Capital Letter(s) + space + Capital Letter(s)
 # High confidence when combined with other signals
-NAME = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}\b")
+NAME = re.compile(
+    # Two or three capitalised words; a trailing street-type word is an ADDRESS
+    # fragment, not a name ("Main Street").
+    r"\b[A-Z][a-z]+(?:\s+(?!(?:Street|Avenue|Road|Boulevard|Drive|Lane|Court|Circle|"
+    r"Str|Ave|Rd|Blvd|Dr|Ln|Ct|Cir|Straße|Strasse|Platz|Weg|Gasse)\b)[A-Z][a-z]+){1,2}\b"
+)
 
 # Address: street + number (e.g., "123 Main Street" or "Hauptstraße 42")
 ADDRESS = re.compile(
@@ -146,7 +161,7 @@ PII_PATTERNS = {
     # Phone - high confidence
     "phone": PIIPattern(
         name="phone",
-        pattern=PHONE_US,
+        pattern=PHONE_ANY,
         replacement="[PHONE]",
         confidence=0.88,
         description="US phone number"
@@ -206,14 +221,6 @@ PII_PATTERNS = {
         confidence=0.85,
         description="Date of birth"
     ),
-    # Name - medium confidence (high false positive rate)
-    "name": PIIPattern(
-        name="name",
-        pattern=NAME,
-        replacement="[NAME]",
-        confidence=0.60,
-        description="Personal name"
-    ),
     # Address - medium confidence
     "address": PIIPattern(
         name="address",
@@ -221,6 +228,14 @@ PII_PATTERNS = {
         replacement="[ADDRESS]",
         confidence=0.70,
         description="Street address"
+    ),
+    # Name - medium confidence (high false positive rate)
+    "name": PIIPattern(
+        name="name",
+        pattern=NAME,
+        replacement="[NAME]",
+        confidence=0.60,
+        description="Personal name"
     ),
     # AWS access key - very high confidence
     "aws_access_key": PIIPattern(

@@ -155,94 +155,10 @@ class AuditChainWriter:
         )
         return self.write_event(event)
 
-    def enforce_retention(self, max_age_days: int, *, tenant_id: Optional[str] = None) -> dict:
-        """Apply retention policy to audit chain (delete old events).
-
-        Args:
-            max_age_days: Maximum age of events in days
-            tenant_id: Optional tenant to filter retention to
-
-        Returns:
-            Dict with "deleted" count
-        """
-        from datetime import datetime, timedelta
-
-        with self._lock:
-            if not self.log_path.exists():
-                return {"deleted": 0}
-
-            cutoff_date = datetime.utcnow() - timedelta(days=max_age_days)
-            cutoff_iso = cutoff_date.isoformat()
-            deleted = 0
-            kept_lines = []
-
-            try:
-                # Read all events
-                with open(self.log_path, "r") as f:
-                    lines = f.readlines()
-
-                # Filter old events
-                for line in lines:
-                    if not line.strip():
-                        continue
-
-                    try:
-                        entry = json.loads(line)
-                        event_timestamp = entry.get("timestamp", "")
-                        # Keep events newer than cutoff
-                        if event_timestamp >= cutoff_iso:
-                            kept_lines.append(line)
-                        else:
-                            if tenant_id is None or entry.get("tenant_id") == tenant_id:
-                                deleted += 1
-                            else:
-                                kept_lines.append(line)
-                    except json.JSONDecodeError:
-                        kept_lines.append(line)
-
-                # Write back kept events (rebuild hash chain)
-                if deleted > 0:
-                    # Rebuild chain from scratch
-                    self._last_hash = self.GENESIS_HASH
-                    self._event_count = 0
-
-                    with open(self.log_path, "w") as f:
-                        for line in kept_lines:
-                            entry = json.loads(line)
-                            # Recompute hash with current chain state
-                            event = AuditEvent(
-                                event_id=entry["event_id"],
-                                event_type=entry["event_type"],
-                                tenant_id=entry["tenant_id"],
-                                user_id=entry.get("user_id"),
-                                timestamp=entry["timestamp"],
-                                details=entry.get("details", {}),
-                                severity=entry.get("severity"),
-                            )
-                            event_json = event.to_json()
-                            combined = (self._last_hash + event_json).encode("utf-8")
-                            event_hash = hashlib.sha256(combined).hexdigest()
-
-                            record = {
-                                "event_id": event.event_id,
-                                "event_type": event.event_type,
-                                "tenant_id": event.tenant_id,
-                                "user_id": event.user_id,
-                                "timestamp": event.timestamp,
-                                "details": event.details,
-                                "severity": event.severity,
-                                "hash": event_hash,
-                                "prev_hash": self._last_hash,
-                                "sequence": self._event_count,
-                            }
-                            f.write(json.dumps(record) + "\n")
-                            self._last_hash = event_hash
-                            self._event_count += 1
-
-                return {"deleted": deleted}
-
-            except (json.JSONDecodeError, IOError) as e:
-                raise IOError(f"Failed to enforce retention: {e}")
+    # ``enforce_retention`` (delete-and-rehash of old records) was REMOVED on
+    # 2026-09-07 (F-A13): an audit chain is append-only; retention is the
+    # sealed-segment rotation in ``operator/bridges/shared/audit_sealer.py``
+    # (``voice-audit rotate``), which never rewrites a record's hash.
 
     def verify_chain(self) -> bool:
         """Verify hash chain integrity.

@@ -25,10 +25,12 @@ Usage (boot):
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator, List
@@ -135,6 +137,23 @@ def _check_audit_unification() -> TripwireResult:
         old_size = old_path.stat().st_size
         new_size = new_path.stat().st_size
 
+        # F-A7 (2026-09-07): two chains that BOTH received writes today is not
+        # a migration artefact — it is a live split of the GDPR Art. 30 trail
+        # (some writers resolve the legacy path, others the tenant path).
+        # Reporting-only by contract, but logged at ERROR so it is never
+        # mistaken for the benign "stale backup" shapes below.
+        now = time.time()
+        if (now - old_path.stat().st_mtime) < 86400 and (now - new_path.stat().st_mtime) < 86400:
+            _log.error(
+                "audit chains SPLIT: both %s and %s received writes in the last 24h — "
+                "writers disagree on the chain location (route every writer through "
+                "security_events.write_event behind core/paths/tenant)", old_path, new_path,
+            )
+            return TripwireResult(
+                name, True,
+                f"audit chains split and BOTH written today: old={old_size}B, new={new_size}B",
+            )
+
         # If both exist and new is much larger, old is likely stale (expected)
         if new_size > old_size * 2:
             return TripwireResult(
@@ -221,6 +240,48 @@ def audit_writer_reachable() -> TripwireResult:
     return TripwireResult(name, True, str(path.parent))
 
 
+def _corvin_root(audit) -> Path:
+    """The runtime root the writer resolves against (the writer's own resolver)."""
+    return Path(audit.corvin_root())
+
+
+def audit_path_not_redirected() -> TripwireResult:
+    """BLOCKING (F-A3): an env-only redirect of the chain must stay inside the root.
+
+    ``VOICE_AUDIT_PATH`` / ``FORGE_ROOT`` exist so tests and ops tooling can
+    sandbox the chain. They also let an attacker with env access point every
+    tripwire at an EMPTY file while the real chain — the one this process would
+    otherwise write to — is never looked at (``assert_all`` passed on a fresh,
+    zero-record file). A redirect is therefore tolerated only when the
+    redirected path resolves UNDER ``CORVIN_HOME``'s root, or the process is a
+    pytest run (``PYTEST_CURRENT_TEST``, which conftest-level redirects rely on).
+    """
+    name = "audit_path_not_redirected"
+    audit = _audit_module()
+    if audit is None:
+        return TripwireResult(name, False, "audit module not importable")
+    redirect = getattr(audit, "audit_redirect", None)
+    if not callable(redirect):
+        return TripwireResult(name, False, "audit module exposes no audit_redirect() — not the core audit module")
+    redirected, under_pytest = redirect()
+    if not redirected:
+        return TripwireResult(name, True, "no env redirect")
+    if under_pytest:
+        return TripwireResult(name, True, f"redirect via {redirected} tolerated under pytest")
+    try:
+        path = Path(audit.audit_path()).expanduser().resolve()
+        root = _corvin_root(audit).expanduser().resolve()
+    except Exception as exc:  # noqa: BLE001
+        return TripwireResult(name, False, f"path resolution failed: {type(exc).__name__}")
+    if root == path or root in path.parents:
+        return TripwireResult(name, True, f"redirect via {redirected} stays under the CORVIN_HOME root")
+    return TripwireResult(
+        name, False,
+        f"audit chain redirected by {redirected} OUTSIDE the CORVIN_HOME root — "
+        "unset the redirect or point CORVIN_HOME at the same root",
+    )
+
+
 #: How much of the tail must verify for the WRITER to count as sound right now.
 #: The chain is append-only, so a historical break never repairs itself: gating boot
 #: on the whole file means a platform that is permanently unbootable, and the only
@@ -230,72 +291,6 @@ TAIL_RECORDS = 200
 
 #: Cache: verifying 108k records costs ~0.9 s, and two tripwires read the result.
 _verify_cache: dict = {}
-
-
-def _heal_chain_at_line(path: Path, last_good_line: int) -> None:
-    """Truncate audit chain at the last good record (healing strategy).
-
-    Used when recent records are corrupted. Keeps the good history and truncates
-    the broken tail, allowing boot to continue. An audit event marks the healing.
-
-    Args:
-        path: Path to the audit.jsonl file
-        last_good_line: Line number of the last good record (1-indexed)
-
-    Raises:
-        OSError if truncation fails
-    """
-    if last_good_line < 1:
-        raise ValueError("last_good_line must be >= 1")
-
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        if last_good_line > len(lines):
-            raise ValueError(f"last_good_line {last_good_line} exceeds file length {len(lines)}")
-
-        # Truncate at the last good line
-        truncated = lines[:last_good_line]
-
-        # Atomic write: write to a sibling temp file, then os.replace() —
-        # never open the real path with 'w' directly. The previous code did
-        # open(path, 'w') straight away, which truncates the file to empty
-        # BEFORE any new content is written; a crash or power loss between
-        # that open() and the writelines() completing turned "delete a
-        # broken tail" into "lose the entire audit chain" (2026-07-30 review
-        # finding). os.replace() is atomic on POSIX and Windows — the file
-        # is always either the old (pre-heal) or new (healed) content, never
-        # a half-written truncated-to-nothing state.
-        # The canonical writer creates audit.jsonl with os.open(..., 0o600)
-        # "independent of umask. GDPR Art. 32 requires restricted permissions."
-        # A plain open(tmp, 'w') here inherits the umask (typically 0o644), and
-        # os.replace() carries the SOURCE file's mode onto audit.jsonl — silently
-        # downgrading the trail to world-readable. Create the temp file 0o600 via
-        # os.open() so the healed chain keeps the writer's restriction
-        # (2026-07-30 review finding C3).
-        tmp_path = path.with_suffix(path.suffix + f".healing-{os.getpid()}.tmp")
-        try:
-            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.writelines(truncated)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, path)
-        except BaseException:
-            # On any failure (disk-full mid-write, fsync error, replace error)
-            # the temp file must not survive: it is a 0o600 but still-present
-            # copy of the chain prefix that nothing would ever clean up.
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
-            raise
-
-        _log.info(f"audit_chain healed: truncated from {len(lines)} to {last_good_line} records")
-    except (OSError, ValueError) as e:
-        _log.error(f"audit_chain healing failed: {e}")
-        raise
 
 
 def _verify_chain(path: Path):
@@ -317,6 +312,26 @@ def _verify_chain(path: Path):
     return result
 
 
+SEAM_EVENT = "compliance.chain_discontinuity"
+
+
+def _last_record(path: Path) -> dict | None:
+    """The last JSON object in the chain file (best-effort, tail read)."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            fh.seek(max(0, size - 65536))
+            tail = fh.read().splitlines()
+        for raw in reversed(tail):
+            raw = raw.strip()
+            if raw:
+                rec = json.loads(raw)
+                return rec if isinstance(rec, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def audit_chain_intact() -> TripwireResult:
     """BLOCKING: the audit writer must be sound RIGHT NOW.
 
@@ -335,14 +350,16 @@ def audit_chain_intact() -> TripwireResult:
     ``voice-audit verify`` still exits 1. What changes is only whether it takes the
     platform down. There is no env var or flag on either check.
 
-    HEALING: If too many recent records are broken, truncate the chain at the last
-    good record and allow boot to continue. This recovers from corruption without
-    losing the historical record. An audit event is written to mark the healing.
-
-    MULTI-TENANT NOTE: As of ADR-0007, the core audit chain may be smaller than
-    the forge/bridge audit chain. This is expected with multi-tenant deployments
-    where tenant-scoped events are logged separately. The key invariant is that
-    recent records hash-chain correctly, not that the core chain is large.
+    SEAM, NOT TRUNCATION (F-A13, 2026-09-07). A break inside the tail window used
+    to be "healed" by deleting the broken tail — a boot-time rewrite of a GDPR
+    Art. 30/32 trail. Now the break is SEALED: a chained
+    ``compliance.chain_discontinuity`` seam record (line range of the break,
+    ``seam: true``) is appended after the broken tail, and the writer counts as
+    sound iff that record itself verifies against the file. Nothing is ever
+    removed. Two shapes still refuse the boot: a whole-chain failure (the
+    lost/rotated anchor-key shape — the operator restores the key, not the
+    chain) and a current-state anchor problem (``tail_truncated``,
+    ``anchor_key_insecure_mode``, ``mac_stripped_chain``).
     """
     name = "audit_chain_intact"
     audit = _audit_module()
@@ -365,137 +382,81 @@ def audit_chain_intact() -> TripwireResult:
     if ok:
         return TripwireResult(name, True, "chain verifies")
 
+    # Problems without a line number describe the chain's CURRENT state (an
+    # out-of-tree anchor disagreeing with the file), not a historical record.
+    structural = sorted({str(pr.get("issue")) for pr in problems if "line" not in pr})
+    if structural:
+        return TripwireResult(
+            name, False,
+            f"current-state chain problem(s) {structural} — restore the anchor key / "
+            "chain backup (chmod 600 the key for anchor_key_insecure_mode); nothing is truncated",
+        )
+
     tail_start = max(1, total - TAIL_RECORDS + 1)
     recent = [pr for pr in problems if int(pr.get("line", 0)) >= tail_start]
-    if recent:
-        # The writer is producing records that do not chain. Try to heal by
-        # truncating at the last good record before the corruption started.
-        try:
-            # Truncate at the record just before the FIRST break inside the tail
-            # window — NOT at the window boundary. The old `tail_start - 1` always
-            # cut at total-200, so a single broken record at the very end deleted
-            # up to 199 intact, hash-verified GDPR Art. 30 records to remove one
-            # (2026-07-30 review finding C1).
-            first_tail_break = min(int(pr.get("line", 0)) for pr in recent)
-            last_good_line = first_tail_break - 1
-
-            # Only self-heal a chain that HAS established history beyond the tail
-            # window (tail_start > 1, i.e. total > TAIL_RECORDS). A chain that
-            # fits entirely inside the tail window (a young writer) with a break
-            # means the writer is not sound RIGHT NOW — truncating a young chain
-            # is not healing, it is data loss, so refuse and let the operator
-            # look. This preserves the pre-existing "small chain with a current
-            # break refuses to boot" contract while fixing the over-deletion.
-            has_history_before_tail = tail_start > 1
-
-            # Guard against the anchor-key-loss shredder: if ANY problem sits at
-            # or before last_good_line, the corruption is NOT tail-local. The
-            # canonical case is a rotated/lost audit_anchor.key, after which the
-            # WHOLE chain verifies as mac_tampered — healing would then delete
-            # another 200 records on every boot while reporting green, silently
-            # destroying authentic evidence. Refuse to boot instead, so the
-            # operator restores the key/backup (2026-07-30 review finding C2).
-            corruption_reaches_history = any(
-                int(pr.get("line", 0)) <= last_good_line for pr in problems
-            )
-
-            # Guard against sparse corruption (GDPR Art. 30/32 violation):
-            # If the problems list has gaps (e.g., record N is broken but N+1
-            # is not listed), truncating at N-1 would delete N+1 even though
-            # it verified. This can happen when a corrupted record's hash
-            # matches what the next record references, allowing the next record
-            # to verify against the corrupted hash.
-            # Strategy: refuse healing if we cannot confirm ALL records from
-            # first_tail_break onward are genuinely corrupted (2026-08-09).
-            # Before truncating, verify ALL records from first_tail_break onward are broken.
-            # Do NOT delete any record unless confirmed: check every line in the target range.
-            problem_lines_in_tail = {
-                int(pr.get("line", 0)) for pr in recent
-                if int(pr.get("line", 0)) >= first_tail_break
-            }
-            lines_to_delete = list(range(first_tail_break, total + 1))
-            all_records_broken = all(ln in problem_lines_in_tail for ln in lines_to_delete)
-            has_gap_in_corruption = not all_records_broken
-            if has_gap_in_corruption:
-                good_lines = [ln for ln in lines_to_delete if ln not in problem_lines_in_tail]
-                _log.warning(
-                    f"audit_chain_intact: cannot heal — unbroken records exist in tail "
-                    f"(lines {good_lines}, first at {good_lines[0]}). "
-                    f"Refusing boot to prevent deletion of potentially-valid records."
-                )
-
-            if has_history_before_tail and last_good_line > 0 and not corruption_reaches_history and not has_gap_in_corruption:
-                records_deleted = total - last_good_line
-                deleted_lines = list(range(last_good_line + 1, total + 1))
-                _heal_chain_at_line(path, last_good_line)
-                _log.warning(
-                    f"audit_chain_intact: healed {len(recent)} broken record(s) "
-                    f"(lines {first_tail_break}–{total}); "
-                    f"deleted {records_deleted} record(s) at lines {deleted_lines[0]}–{deleted_lines[-1]}"
-                )
-                # The docstring above ("An audit event is written to mark
-                # the healing") and this module's module-level comment made
-                # this claim since 12a3c54 (release 0.10.67) — but nothing
-                # ever wrote it: this success path returns TripwireResult
-                # directly, never through _record_finding (which only fires
-                # for REPORTING_ONLY failures). Deleting 536 records from a
-                # GDPR Art. 30/32 audit trail with zero trace of the
-                # deletion IN that trail is the exact failure this event
-                # exists to prevent (2026-07-30 review finding). Written
-                # AFTER the heal so it becomes the first new entry in the
-                # now-continuing (healed) chain — best-effort: a write
-                # failure here must not re-block a boot that already
-                # recovered.
-                try:
-                    audit = _audit_module()
-                    if audit is not None:
-                        audit.audit_event(
-                            "compliance.chain_discontinuity_healed",
-                            details={
-                                "tripwire": name,
-                                "broken_records": len(recent),
-                                "truncated_at_line": last_good_line,
-                                # The number of records actually removed — NOT the
-                                # same as broken_records once truncation cuts a
-                                # contiguous tail. Reporting only broken_records
-                                # under-stated the deletion (2026-07-30 finding).
-                                "records_deleted": records_deleted,
-                            },
-                        )
-                except Exception as audit_exc:  # noqa: BLE001
-                    _log.error(
-                        f"could not record chain_discontinuity_healed event: "
-                        f"{type(audit_exc).__name__}"
-                    )
-                return TripwireResult(
-                    name, True,
-                    f"chain healed: truncated {len(recent)} broken record(s) at end"
-                )
-        except Exception as heal_exc:  # noqa: BLE001
-            _log.error(f"audit_chain healing failed: {type(heal_exc).__name__}")
-
-        # Healing failed, or was refused because the corruption is not
-        # tail-local (whole-chain failure, e.g. a lost/rotated audit_anchor.key).
-        # Refuse to serve — deleting records here would be the shredder C2 warns
-        # about. The operator recovers by restoring ~/.config/corvin-voice/
-        # audit_anchor.key (or a backup of the chain), NOT by truncating.
-        all_broken = len(problems) >= total
-        detail = (
-            f"{len(recent)} broken record(s) in the last {TAIL_RECORDS}; "
-            + (
-                "the ENTIRE chain fails to verify — this is a lost/rotated "
-                "audit_anchor.key, not tail corruption. Restore "
-                "~/.config/corvin-voice/audit_anchor.key (healing refused so "
-                "authentic records are not destroyed)"
-                if all_broken
-                else "the audit writer is not sound (healing failed)"
-            )
+    if not recent:
+        return TripwireResult(
+            name, True,
+            f"last {TAIL_RECORDS} records verify (chain has "
+            f"{len(problems)} historical break(s) — see audit_chain_history_clean)",
         )
-        return TripwireResult(name, False, detail)
+
+    if len(problems) >= total:
+        return TripwireResult(
+            name, False,
+            f"{len(recent)} broken record(s) in the last {TAIL_RECORDS}; the ENTIRE "
+            "chain fails to verify — this is a lost/rotated audit_anchor.key, not tail "
+            "corruption. Restore ~/.config/corvin-voice/audit_anchor.key (nothing is "
+            "truncated so authentic records are not destroyed)",
+        )
+
+    lines = sorted(int(pr.get("line", 0)) for pr in recent)
+    last = _last_record(path)
+    already_sealed = (
+        isinstance(last, dict)
+        and last.get("event_type") == SEAM_EVENT
+        and isinstance(last.get("details"), dict)
+        and last["details"].get("seam") is True
+        and last["details"].get("last_break_line") == lines[-1]
+    )
+    if not already_sealed:
+        try:
+            audit.audit_event(
+                SEAM_EVENT,
+                details={
+                    "tripwire": name,
+                    "seam": True,
+                    "broken_records": len(recent),
+                    "first_break_line": lines[0],
+                    "last_break_line": lines[-1],
+                    "total_records": total,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            return TripwireResult(name, False, f"seam record could not be written ({type(exc).__name__})")
+        try:
+            ok2, problems2, total2 = _verify_chain(path)
+        except Exception as exc:  # noqa: BLE001
+            return TripwireResult(name, False, f"verify raised {type(exc).__name__}")
+        if total2 <= total:
+            return TripwireResult(name, False, "seam record did not land — the audit writer is not sound")
+        new_problems = [pr for pr in problems2 if "line" not in pr or int(pr.get("line", 0)) > total]
+        if new_problems:
+            return TripwireResult(
+                name, False,
+                f"the audit writer is not sound: the seam record itself does not verify "
+                f"({sorted({str(pr.get('issue')) for pr in new_problems})})",
+            )
+        seam_line = total2
+    else:
+        seam_line = total
+        if any(int(pr.get("line", 0)) == seam_line for pr in problems):
+            return TripwireResult(name, False, "the audit writer is not sound: the existing seam record does not verify")
     return TripwireResult(
         name, True,
-        f"last {TAIL_RECORDS} records verify (chain has "
-        f"{len(problems)} historical break(s) — see audit_chain_history_clean)",
+        f"{len(recent)} broken record(s) in the last {TAIL_RECORDS} (lines "
+        f"{lines[0]}–{lines[-1]}) sealed by a chained seam record at line {seam_line}; "
+        "nothing truncated — see audit_chain_history_clean",
     )
 
 
@@ -697,11 +658,76 @@ def erasure_orchestrator_present() -> TripwireResult:
     return TripwireResult(name, False, "validate_subject_id ACCEPTS an empty subject")
 
 
+def _settings_candidates() -> List[Path]:
+    home = Path.home()
+    cands = [home / ".claude" / "settings.json"]
+    roots = [Path.cwd(), Path(__file__).resolve().parents[3]]
+    seen = set()
+    for r in roots:
+        for nm in ("settings.json", "settings.local.json"):
+            p = r / ".claude" / nm
+            if p not in seen:
+                seen.add(p)
+                cands.append(p)
+    return cands
+
+
+def _hooks_mention_path_gate(cfg: dict) -> bool:
+    hooks = cfg.get("hooks") if isinstance(cfg, dict) else None
+    if not isinstance(hooks, dict):
+        return False
+    for entry in hooks.get("PreToolUse") or []:
+        if not isinstance(entry, dict):
+            continue
+        for h in entry.get("hooks") or []:
+            if isinstance(h, dict) and "path_gate" in str(h.get("command", "")):
+                return True
+    return False
+
+
+def l10_hook_registered() -> TripwireResult:
+    """REPORTING (F-A8): is the L10 path-gate wired as a Claude Code PreToolUse hook?
+
+    ``operator/voice/hooks/hooks.json`` only takes effect when the ``voice``
+    plugin is enabled in the operator's Claude Code, or when the hook is
+    registered directly in a settings file. Neither is something the platform
+    can do for the operator, so this probe REPORTS (it never blocks a boot):
+    a boot without the hook is a boot where Claude Code's own file writes
+    bypass the L10 gate.
+    """
+    name = "l10_hook_registered"
+    checked: List[str] = []
+    for p in _settings_candidates():
+        if not p.is_file():
+            continue
+        checked.append(str(p))
+        try:
+            cfg = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if _hooks_mention_path_gate(cfg):
+            return TripwireResult(name, True, f"path_gate PreToolUse hook registered in {p}")
+        enabled = cfg.get("enabledPlugins") if isinstance(cfg, dict) else None
+        if isinstance(enabled, dict) and any(
+            str(k).startswith("voice@") and v for k, v in enabled.items()
+        ):
+            return TripwireResult(name, True, f"voice plugin (carries hooks.json) enabled in {p}")
+    return TripwireResult(
+        name, False,
+        "L10 path_gate is NOT registered as a Claude Code PreToolUse hook "
+        f"(checked {len(checked)} settings file(s)) — enable the `voice` plugin "
+        "(`/plugin install voice@claudeos-local`) or add the hook to ~/.claude/settings.json; "
+        "see docs/claude-ref/layer-10-path-gate.md",
+    )
+
+
 #: Every tripwire the boot sequence runs, in order.  One per mandatory mechanism
 #: of ADR-0232 § Mandatory, plus the two audit-specific ones.
 #: Reporting-only tripwires: a failure is recorded and surfaced, never fatal.
 #: These describe a permanent historical fact that refusing to boot cannot change.
-REPORTING_ONLY: frozenset = frozenset({"audit_chain_history_clean", "audit_unification"})
+REPORTING_ONLY: frozenset = frozenset({
+    "audit_chain_history_clean", "audit_unification", "l10_hook_registered",
+})
 
 #: plugin_ids that ``bootstrap_global()`` itself put on the compliance boot
 #: layer.  Written by the wheel's own boot code, read only here.
@@ -791,6 +817,7 @@ POST_BOOT_TRIPWIRES: tuple[Callable[[], TripwireResult], ...] = (
 TRIPWIRES: tuple[Callable[[], TripwireResult], ...] = (
     # L16 Audit trail
     audit_writer_reachable,
+    audit_path_not_redirected,  # F-A3: env redirect must stay under CORVIN_HOME
     audit_chain_intact,
     audit_chain_history_clean,
     _check_audit_unification,  # ADR-0007: Multi-tenant audit chain migration
@@ -803,6 +830,8 @@ TRIPWIRES: tuple[Callable[[], TripwireResult], ...] = (
     house_rules_gate_intact,
     # L36 Erasure orchestrator
     erasure_orchestrator_present,
+    # L10 Path gate — reporting only (the hook lives in the operator's Claude Code)
+    l10_hook_registered,
 )
 
 
@@ -889,8 +918,12 @@ def _record_finding(result: TripwireResult) -> None:
     if audit is None:
         return
     try:
+        # Chain findings keep their historical event name; other reporting-only
+        # tripwires (e.g. the L10 hook probe) record a generic finding.
+        event = (SEAM_EVENT if result.name.startswith("audit_")
+                 else "compliance.tripwire_finding")
         audit.audit_event(
-            "compliance.chain_discontinuity",
+            event,
             details={"tripwire": result.name, "detail": result.detail},
         )
     except Exception as exc:  # noqa: BLE001

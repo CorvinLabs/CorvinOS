@@ -6,7 +6,6 @@ from core.learning import (
     TreeNode, LearningEventStore, LearningIntegration, 
     update_confidence, ActiveLearningLoop
 )
-from core.learning.audit import AuditTrail
 from core.learning.migration import MigrationPlanner
 
 
@@ -19,7 +18,6 @@ def test_e2e_full_pipeline():
         # on the same directory never sees it.
         integration = LearningIntegration(Path(tmpdir) / "events")
         store = integration.store
-        audit = AuditTrail(Path(tmpdir) / "audit")
         
         # Register pattern
         pattern = TreeNode(
@@ -49,9 +47,8 @@ def test_e2e_full_pipeline():
         assert node.confidence > 0.5, f"Confidence should increase (got {node.confidence})"
         assert node.calls_in_production >= 1, "Should track production call"
         
-        # Phase 5: Verify audit chain
-        chain_valid = audit.verify()
-        assert chain_valid, "Audit chain should be valid"
+        # Phase 5: the learning audit trail is the CORE hash chain (ADR-0563);
+        # its verification is covered by core/learning/tests/test_event_store_audit_first.py.
 
 
 def test_e2e_confidence_convergence():

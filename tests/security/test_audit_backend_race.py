@@ -203,8 +203,13 @@ class TestAuditBackendRaceConditions:
             # Final verification
             assert writer.verify_chain()
 
-    def test_concurrent_write_and_enforce_retention(self):
-        """Test write + enforce_retention race (HIGH-1 specific)."""
+    def test_concurrent_write_and_read_stats(self):
+        """Concurrent writes + readers must never break the chain (HIGH-1 shape).
+
+        ``enforce_retention`` (a delete-and-rehash rewrite of the chain) was
+        REMOVED on 2026-09-07 (F-A13): the audit chain is append-only, so the
+        rewrite race this test used to exercise no longer exists. The reader
+        side of the race is kept (``get_stats``/``read_events`` while writing)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "audit.jsonl"
             writer = AuditChainWriter(log_path)
@@ -246,13 +251,13 @@ class TestAuditBackendRaceConditions:
 
             def retention_task():
                 try:
-                    result = writer.enforce_retention(max_age_days=7)
-                    retention_results.append(result)
+                    retention_results.append(writer.get_stats())
+                    writer.read_events()
                 except Exception as e:
                     errors.append(e)
 
             threads = []
-            # 20 write tasks + 3 retention enforcement tasks
+            # 20 write tasks + 3 concurrent reader tasks
             for i in range(20):
                 threads.append(threading.Thread(target=write_task, args=(i,)))
             for _ in range(3):
@@ -266,13 +271,11 @@ class TestAuditBackendRaceConditions:
             # Verify: no errors
             assert len(errors) == 0, f"Errors: {errors}"
 
-            # Verify: chain is intact even after retention
+            # Verify: chain is intact and APPEND-ONLY — nothing was removed
             assert writer.verify_chain()
-
-            # Verify: final state is consistent
+            assert len(retention_results) == 3
             final_events = writer.read_events()
-            # Should have new events + some setup events (depending on retention timing)
-            assert len(final_events) > 0
+            assert len(final_events) == 40
 
     def test_tenant_isolation_concurrent(self):
         """Test tenant isolation under concurrent access."""
@@ -385,7 +388,7 @@ class TestAuditBackendRaceConditions:
             def retention_task():
                 try:
                     for _ in range(2):
-                        writer.enforce_retention(max_age_days=7)
+                        writer.get_stats()  # append-only chain: no retention rewrite exists
                         with lock:
                             counters["retention"] += 1
                 except Exception as e:

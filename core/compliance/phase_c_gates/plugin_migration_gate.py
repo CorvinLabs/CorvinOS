@@ -74,7 +74,8 @@ class PluginMigrationGate:
 
         try:
             # Load plugin registry
-            registry_path = "/home/shumway/projects/CorvinOS/core/plugins/registry.yaml"
+            from pathlib import Path as _Path
+            registry_path = str(_Path(__file__).resolve().parents[3] / "core" / "plugins" / "registry.yaml")
             if not os.path.exists(registry_path):
                 return 0, 0, []
 

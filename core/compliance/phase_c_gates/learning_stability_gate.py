@@ -5,6 +5,8 @@ Pass Criteria: confidence >= 0.85 AND no_regression_14d
 """
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
 from typing import Optional
 import json
 from datetime import datetime, timedelta
@@ -27,7 +29,7 @@ class LearningStabilityGate:
     """Gate 1: Verify Learning optimizer is stable before deletion."""
 
     def __init__(self, audit_jsonl_path: str = "~/.corvin/audit.jsonl"):
-        self.audit_path = audit_jsonl_path.replace("~", "/home/shumway")
+        self.audit_path = str(Path(os.path.expandvars(audit_jsonl_path)).expanduser())
 
     def execute(self) -> LearningStabilityResult:
         """

@@ -959,19 +959,14 @@ def main() -> int:
       not (Path(audit_home2) / "global" / "forge" / "audit.jsonl").exists())
 
     # ------------------------------------------------------------------
-    # KNOWN BUG (documented, NOT fixed here — see WRITE_RESULT.bugsDiscovered):
-    # main() (path_gate.py) calls `allow, reason = check(payload)` with NO
-    # enclosing try/except, and check() itself has no top-level guard either.
-    # A payload engineered to make a reachable helper raise (e.g. a NUL byte
-    # in file_path, which makes Path.resolve() inside _abs() raise
-    # ValueError, uncaught by is_protected_path/check) crashes the whole
-    # process with Python's default uncaught-exception exit code — NOT the
-    # module's own documented "exit 0 -> allow, exit 2 -> deny, fail closed"
-    # contract, and none of the deny-side effects (_emit_audit,
-    # _emit_dialectic, stderr deny message) ever run. This pins the CURRENT
-    # (unsafe) behavior so the gap is visible in the suite; when main() gets
-    # a top-level fail-closed backstop, this test's assertions must be
-    # updated to expect returncode == 2 and a written audit event.
+    # FIXED (2026-09-07 hardening): check() is fail-closed. A payload that
+    # makes a reachable helper raise (a NUL byte in file_path makes
+    # Path.resolve() inside _abs() raise ValueError) no longer escapes as an
+    # uncaught traceback with an undocumented exit code — check() converts
+    # the exception into a deny (exit 2), main() prints the module's own
+    # "path_gate internal error (<ExcType>) — fail-closed deny" reason and
+    # the deny-side effects (_emit_audit → path_gate.denied) run. These
+    # assertions pin that contract; the previous BUG-PIN pinned the crash.
     # ------------------------------------------------------------------
     crash_home = tempfile.mkdtemp(prefix="path-gate-crash-")
     crash_audit_jsonl = Path(crash_home) / "global" / "forge" / "audit.jsonl"
@@ -987,20 +982,30 @@ def main() -> int:
         capture_output=True, text=True,
         env={**os.environ, "CORVIN_HOME": crash_home},
     )
-    t("BUG-PIN: NUL-byte file_path crashes main() with an exit code that "
-      "is NEITHER the documented allow (0) NOR deny (2) contract",
-      proc3.returncode not in (0, 2),
-      detail=f"got {proc3.returncode}; expected an undocumented/uncaught-"
-             f"exception exit code (currently {proc3.returncode}), proving "
-             f"there is no top-level fail-closed backstop in main()")
-    t("BUG-PIN: the crash is an uncaught Python traceback, not the "
-      "module's own deny message",
-      "Traceback" in proc3.stderr and "ValueError" in proc3.stderr,
+    t("NUL-byte file_path → exit 2 (fail-closed deny, never an uncaught "
+      "exception exit code)",
+      proc3.returncode == 2,
+      detail=f"got {proc3.returncode}; stderr[:200]={proc3.stderr[:200]!r}")
+    t("NUL-byte file_path → the module's own internal-error deny message on "
+      "stderr, no Python traceback",
+      "path_gate internal error (ValueError) — fail-closed deny" in proc3.stderr
+      and "Traceback" not in proc3.stderr,
       detail=f"stderr[:200]={proc3.stderr[:200]!r}")
-    t("BUG-PIN: no audit event is written when check() crashes (the "
-      "_emit_audit deny-side-effect never runs on an uncaught exception)",
-      not crash_audit_jsonl.exists(),
-      detail=f"audit path: {crash_audit_jsonl}")
+    crash_events = []
+    if crash_audit_jsonl.exists():
+        for _ln in crash_audit_jsonl.read_text().splitlines():
+            try:
+                crash_events.append(json.loads(_ln))
+            except json.JSONDecodeError:
+                pass
+    crash_denies = [e for e in crash_events
+                    if e.get("event_type") == "path_gate.denied"]
+    t("NUL-byte file_path → a path_gate.denied audit event is written "
+      "(deny-side effects run on the internal-error path)",
+      len(crash_denies) == 1
+      and str(crash_denies[0].get("details", {}).get("reason", ""))
+      .startswith("path_gate internal error (ValueError)"),
+      detail=f"audit path: {crash_audit_jsonl}; denies={crash_denies}")
 
     # ----- Roadmap F13 — boot-time self-test --------------------------------
     print("\n[F13] path-gate self-test on boot")

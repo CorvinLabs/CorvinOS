@@ -218,9 +218,12 @@ class L28UserModelHandler:
                     _sys.path.insert(0, str(_forge))
                 from forge.security_events import write_event as _w  # type: ignore
                 _audit_path = _tenant_global(self.tenant_id) / "forge" / "audit.jsonl"
+                # Pseudonymity: the subject is recorded as a sha256 prefix,
+                # never raw (same rule as memory.recall_purged).
+                import hashlib as _hl
                 _w(_audit_path, "erasure.user_model_deleted",
-                   details={"subject_id": subject_id, "files_deleted": files_deleted,
-                            "layer": "L28.2"})
+                   details={"uid_hash": _hl.sha256(str(subject_id).encode("utf-8")).hexdigest()[:16],
+                            "files_deleted": files_deleted, "layer": "L28.2"})
                 return
             # If orchestrator has a writer injected use it; otherwise silent
         except Exception:  # noqa: BLE001
@@ -1068,6 +1071,265 @@ class WorkflowCheckpointHandler:
         )
 
 
+def _tenant_home(tenant_id: str = "_default") -> Path:
+    return _corvin_home() / "tenants" / tenant_id
+
+
+def _load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+#: Keys under which a stored record names its data subject. A file/record is
+#: attributed to ``subject_id`` when any of these equals it (exact match).
+_SUBJECT_KEYS: tuple[str, ...] = (
+    "user_id", "uid", "subject_id", "chat_key", "chat_id", "session_id",
+    "source_session_id", "dest_session_id", "requester", "approver", "owner",
+)
+
+
+def _mentions_subject(obj: Any, subject_id: str, depth: int = 0) -> bool:
+    if depth > 8:
+        return False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in _SUBJECT_KEYS and isinstance(v, str) and v == subject_id:
+                return True
+            if _mentions_subject(v, subject_id, depth + 1):
+                return True
+    elif isinstance(obj, list):
+        return any(_mentions_subject(v, subject_id, depth + 1) for v in obj)
+    return False
+
+
+@dataclass
+class LearningEventHandler:
+    """GDPR Art. 17 erasure for the ADR-0314 learning layer (F-A9).
+
+    Covers ``<tenant>/learning/`` — the date-partitioned learning event store
+    (``EventStore.erase_user_events``: every partition is rewritten atomically
+    and receives a counts-only tombstone; the erasure is audited on the core
+    chain) plus any JSONL side store under ``learning/`` whose records name the
+    subject. ``core/learning/erasure_handler.py`` /
+    ``gdpr_erasure_coordinator.py`` existed but were reachable from NO erasure
+    entry point (zero importers) — this handler is the bridge into the
+    orchestrator's chain.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-learning"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "learning"
+        if not root.is_dir():
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
+                reason="learning store absent", code=ReasonCode.STORE_ABSENT.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        erased = 0
+        try:
+            import asyncio
+            import sys as _sys
+            _repo = Path(__file__).resolve().parents[3]
+            if str(_repo) not in _sys.path:
+                _sys.path.append(str(_repo))
+            from core.learning.event_persistence import EventStore  # type: ignore
+
+            store = EventStore(self.tenant_id)
+            coro = store.erase_user_events(tenant_id=self.tenant_id, user_id=subject_id)
+            try:
+                asyncio.get_running_loop()
+                running = True
+            except RuntimeError:
+                running = False
+            if running:
+                import concurrent.futures as _cf
+                with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+                    erased += int(ex.submit(asyncio.run, coro).result())
+            else:
+                erased += int(asyncio.run(coro))
+            # Side stores (decisions / outcomes / profiles / live experiments):
+            # JSONL records naming the subject are removed in place (atomic).
+            events_dir = root / "events"
+            for f in sorted(root.rglob("*.jsonl")):
+                if events_dir in f.parents:
+                    continue  # handled by EventStore above (tombstoned)
+                kept: list[str] = []
+                removed = 0
+                for line in f.read_text(encoding="utf-8").splitlines():
+                    rec = None
+                    if line.strip():
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            rec = None
+                    if rec is not None and _mentions_subject(rec, subject_id):
+                        removed += 1
+                        continue
+                    kept.append(line)
+                if removed:
+                    tmp = f.with_suffix(f.suffix + ".erasing")
+                    tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+                    os.replace(tmp, f)
+                    erased += removed
+        except Exception as exc:  # noqa: BLE001 — genuine infra failure → FAILED
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=erased,
+                reason=f"learning purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        if erased == 0:
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
+                reason="no learning records matched subject", code=ReasonCode.STORE_EMPTY.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return ErasureLayerResult(
+            layer_id=self.layer_id, status=LayerStatus.APPLIED, count=erased,
+            reason=f"erased {erased} learning record(s) for subject",
+            code=ReasonCode.DELETED.value,
+            duration_ms=int((time.time() - t0) * 1000),
+        )
+
+
+@dataclass
+class InfiniteSessionHandler:
+    """GDPR Art. 17 erasure for infinite-session state (F-A9).
+
+    Covers ``<tenant>/infinite_session/`` (phase snapshots, rollback WAL/log,
+    drift history, session bridges, verification logs) and ``<tenant>/sessions/
+    <subject>/checkpoints``. State is keyed by ``task_id``, not by person, so a
+    file is attributed to the subject when (a) its task/session directory is
+    named after the subject, or (b) its JSON payload names the subject under a
+    known identity key (``session_id``, ``user_id``, ``chat_key`` …).
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-infinite-session"
+
+    def _roots(self) -> list[Path]:
+        home = _tenant_home(self.tenant_id)
+        return [home / "infinite_session", home / "sessions" / self.tenant_id / "checkpoints"]
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        home = _tenant_home(self.tenant_id)
+        roots = [home / "infinite_session", home / "sessions"]
+        if not any(r.is_dir() for r in roots):
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
+                reason="infinite-session store absent", code=ReasonCode.STORE_ABSENT.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        removed = 0
+        try:
+            import shutil
+            # (a) directories named after the subject (task_id / session_id == subject)
+            for r in roots:
+                if not r.is_dir():
+                    continue
+                for d in list(r.rglob(subject_id)):
+                    if d.is_dir() and d.name == subject_id:
+                        shutil.rmtree(d, ignore_errors=False)
+                        removed += 1
+            # (b) JSON/JSONL files under infinite_session/ whose payload names the subject
+            isr = home / "infinite_session"
+            if isr.is_dir():
+                for f in sorted(isr.rglob("*")):
+                    if not f.is_file() or f.suffix not in (".json", ".jsonl"):
+                        continue
+                    if f.suffix == ".json":
+                        if _mentions_subject(_load_json(f), subject_id):
+                            f.unlink()
+                            removed += 1
+                        continue
+                    kept: list[str] = []
+                    hit = 0
+                    for line in f.read_text(encoding="utf-8").splitlines():
+                        rec = None
+                        if line.strip():
+                            try:
+                                rec = json.loads(line)
+                            except json.JSONDecodeError:
+                                rec = None
+                        if rec is not None and _mentions_subject(rec, subject_id):
+                            hit += 1
+                            continue
+                        kept.append(line)
+                    if hit:
+                        tmp = f.with_suffix(f.suffix + ".erasing")
+                        tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+                        os.replace(tmp, f)
+                        removed += hit
+                # index.json entries pointing at deleted snapshots
+                for idx in isr.rglob("index.json"):
+                    data = _load_json(idx)
+                    if isinstance(data, list):
+                        live = [m for m in data if not (isinstance(m, dict)
+                                                        and isinstance(m.get("path"), str)
+                                                        and not Path(m["path"]).exists())]
+                        if len(live) != len(data):
+                            idx.write_text(json.dumps(live), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"infinite-session purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        if removed == 0:
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
+                reason="no infinite-session state matched subject", code=ReasonCode.STORE_EMPTY.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return ErasureLayerResult(
+            layer_id=self.layer_id, status=LayerStatus.APPLIED, count=removed,
+            reason=f"removed {removed} infinite-session item(s) for subject",
+            code=ReasonCode.DELETED.value,
+            duration_ms=int((time.time() - t0) * 1000),
+        )
+
+
+#: Coverage map (F-A9 guard): which directory under ``<tenant_home>`` (or
+#: ``<tenant_home>/global``) each real handler claims. ``tests/security/
+#: test_erasure_coverage_guard.py`` boots the writers it can reach into a temp
+#: home and fails on any created directory that no handler claims and that is
+#: not on the explicit content-free exemption list — so a new persistent store
+#: cannot ship without an Art. 17 path.
+COVERED_DIRS: dict[str, frozenset[str]] = {
+    "L28-recall":            frozenset({"global/memory"}),
+    "L28.2-user-model":      frozenset({"global/memory"}),
+    "L33-artifacts":         frozenset({"sessions"}),
+    "ACS-traces":            frozenset({"sessions"}),
+    "web-chat":              frozenset({"sessions", "global/web_chat"}),
+    "L39-social":            frozenset({"global/social"}),
+    "L41-grants":            frozenset({"global/grants"}),
+    "L42-org":               frozenset({"global/orgs"}),
+    "L-workflow-checkpoints": frozenset({"workflow_runs"}),
+    "L163-ulo":              frozenset({"global/ulo"}),
+    "L-learning":            frozenset({"learning", "experiments"}),
+    "L-infinite-session":    frozenset({"infinite_session", "sessions"}),
+    "L7-skill-forge":        frozenset({"skill-forge", "skills"}),
+    "L24-data-snapshot":     frozenset({"global/data"}),
+}
+
+#: Directories a writer may create under the tenant home that hold NO personal
+#: data by construction (content-free chains, key material, config, code).
+NON_PERSONAL_DIRS: dict[str, str] = {
+    "global/forge":    "hash-chained audit trail — content-free by the ADR-0129 floor, immutable (GDPR Art. 17(3)(b))",
+    "audit.jsonl":     "core hash chain — content-free, immutable",
+    "keys":            "instance/crypto key material, no subject data",
+    "global/erasure":  "erasure trail files (0600) — the record OF erasure",
+    "forge":           "generated tools (code), no subject data",
+    "plugins":         "plugin state/config, no subject data",
+    "global/tenant.corvin.yaml": "operator config",
+}
+
+
 # ── default chain factory ────────────────────────────────────────────
 
 
@@ -1105,6 +1367,8 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         L41GrantHandler(tenant_id=tenant_id),
         L42OrgHandler(tenant_id=tenant_id),
         WorkflowCheckpointHandler(tenant_id=tenant_id),
+        LearningEventHandler(tenant_id=tenant_id),      # F-A9: ADR-0314 learning store
+        InfiniteSessionHandler(tenant_id=tenant_id),    # F-A9: session state + checkpoints
         L7SkillForgeHandler(tenant_id=tenant_id),
         L24DataSnapshotHandler(tenant_id=tenant_id),
         IdentityMappingHandlerBase(),
