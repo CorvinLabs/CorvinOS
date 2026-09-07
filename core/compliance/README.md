@@ -57,8 +57,9 @@ The **Compliance Layer** (`corvin_compliance_reports`) is a regulator-defensible
     │  └────────────────────┬──────────────────────┘  │
     │                       │                          │
     │  ┌────────────────────┴──────────────────────┐  │
-    │  │   Report Template Engine                 │  │
-    │  │  • Markdown → PDF rendering              │  │
+    │  │   Report Template Engine (reportlab)     │  │
+    │  │  • sanitize at the render boundary       │  │
+    │  │  • platypus flowables → PDF              │  │
     │  │  • Metadata injection (anchor_hash, etc) │  │
     │  │  • Page estimation                       │  │
     │  └────────────────────┬──────────────────────┘  │
@@ -182,19 +183,59 @@ Cryptographic integrity proof:
 
 ### 4. Template Engine (`templates.py`)
 
-**Markdown → PDF rendering with metadata injection.**
+**reportlab `platypus` flowables — shared header/footer, styles and tables.**
+There is no Jinja2 and no Markdown stage: the generators build a list of
+flowables and call `doc.build(story)`. `reportlab >= 4.0` is a declared
+dependency in the root `pyproject.toml` and is imported unconditionally, so
+an absent reportlab is an import-time failure of all three reports.
 
-- Jinja2-based template evaluation
-- Page estimation (heuristic)
-- Metadata encoding (anchor_hash, chain_intact, etc.)
-- Standard PDF metadata (title, author, creation date)
-- Support for embedded images and tables
+- `build_doc()` — A4 `BaseDocTemplate` + per-page header/footer canvas, and
+  the PDF metadata fields (Title, Author, Subject)
+- `cover_page()`, `section_heading()`, `subsection()`, `stat_box()`
+- `styled_table()` — brand-coloured header + zebra rows
+- `integrity_banner()` — the hash-chain verdict and, on failure, the first
+  ten `verify_chain` problems
+- `signed_footer_block()` — the hash-chain anchor block
 
-All templates are Unicode-safe and include:
-- Report type and tenant identification
-- Time window and generation timestamp
-- Operator and Corvin version info
-- Audit chain anchor hash (if applicable)
+Every report carries the report type, tenant, time window, generation
+timestamp, generator version and the chain anchor hash.
+
+### 4a. Render sanitisation (`sanitize.py`) — ADR-0656
+
+These PDFs are **evidence**. Everything they render other than the code's
+own literal template strings comes from outside the code: the caller's
+`tenant_id`, and from the audit chain `event_type`, `severity`, `hash`,
+`prev_hash` and the `details.*` fields. The two render surfaces behave
+differently and both are handled at ONE chokepoint, inside `templates.py` —
+never at the call sites:
+
+| Surface | Parses markup? | Helper |
+|---|---|---|
+| `Paragraph` (cover, integrity banner, hash anchor) | **yes** — reportlab mini-HTML: `<font> <b> <i> <para> <a> <img>` | `pdf_markup()` — strip control/bidi, cap, then escape `& < >` |
+| `Table` cell, `canvas` string, PDF metadata | no | `pdf_text()` — strip control/bidi, cap; `<` is left alone so the cell reads as recorded |
+
+Rules that must not be weakened:
+
+- **Escaping stays reversible in the reader's eye.** An escaped `<`
+  displays as `<`. A hostile value is never dropped or blanked — it renders
+  as its own literal characters, which is the truthful rendering of what is
+  on disk, and the integrity banner still names the offending record.
+- **`tenant_id` is a closed vocabulary, so it is REJECTED, not escaped.**
+  `sanitize.validated_tenant_id()` delegates to
+  `forge.tenants.validate_tenant_id` and raises `ReportValueRejected` from
+  `ReportMetadata.__post_init__`. Passing `chain_path=` explicitly
+  short-circuits the tenant-home resolver that used to be the only thing
+  enforcing this.
+- **A hostile chain must never make a report ungeneratable.** Unbalanced
+  markup in a `hash` field used to raise `ValueError: Parse error` out of
+  `doc.build()` and take down all three reports — evidence suppression by
+  anyone who can append to the chain.
+- The code's own literal template strings (`_intro_paragraphs()`, section
+  headings, the banner verdict) deliberately carry markup and are **not**
+  routed through the chokepoint.
+
+Pinned by `core/compliance/tests/test_report_injection.py`, which drives the
+real CLI in a subprocess and reads the produced PDF's text layer back.
 
 ### 5. Audit Emitter (`audit.py`)
 
@@ -261,7 +302,9 @@ compliance.report_failed  (WARNING)
                  ▼
     ┌───────────────────────┐
     │  Template Rendering   │
-    │ • Build Markdown      │
+    │ • Sanitise every      │
+    │   external value      │
+    │ • Build flowables     │
     │ • Encode metadata     │
     │ • Estimate pages      │
     │ • Render to PDF       │
