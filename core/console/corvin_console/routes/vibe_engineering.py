@@ -737,12 +737,60 @@ def _map_event_type(raw_type: str) -> str:
         return "decision"  # Default
 
 
-def _extract_lom_hash(lom_str: str) -> str:
-    """Extract LoM hash from audit write path (ADR-0537)."""
-    if not lom_str:
+def _recorded_lom_hash(details: dict) -> str:
+    """The ``lom_hash`` the WRITER actually stamped into this record (ADR-0537).
+
+    Never derived here. This used to be ``sha256(<the LoM label>)[:16]`` computed
+    at read time from ``details.lom_audit_write`` and emitted under the field
+    name ``lom_hash`` — the exact surface CLAUDE.md cites as the anti-spoofing
+    source binding. A hash of the label is not a binding to source, and it was
+    not the value the registry wrote (which lives in ``details.lom_hash``). A
+    record written without one reports "" and the console renders "(missing)",
+    which is the honest answer.
+    """
+    if not isinstance(details, dict):
         return ""
-    import hashlib
-    return hashlib.sha256(lom_str.encode()).hexdigest()[:16]
+    value = details.get("lom_hash")
+    return value if isinstance(value, str) else ""
+
+
+def _record_lom_label(details: dict) -> str:
+    """The raw LoM *label* on the record (a label, not a binding)."""
+    if not isinstance(details, dict):
+        return ""
+    for key in ("lom", "lom_audit_write"):
+        value = details.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _event_ts(event: dict) -> float:
+    """Best-effort epoch seconds for an audit record (0.0 when unparseable)."""
+    ts = event.get("ts")
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    raw = event.get("timestamp")
+    if isinstance(raw, str) and raw:
+        try:
+            return _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _parse_bound(raw: str | None) -> float | None:
+    """Parse an ISO-8601 (or epoch-seconds) query bound; None when absent/bad."""
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    try:
+        return _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -757,11 +805,23 @@ async def get_audit_chain(
     limit: int = 100,
     types: str | None = None,
     skill_ids: str | None = None,
+    # The SPA sends camelCase (`useAuditQuery.ts` → `params.append('skillIds', …)`),
+    # so the snake_case name alone silently never matched.
+    skillIds: str | None = None,  # noqa: N803
 ) -> dict[str, Any]:
     """Fetch immutable audit events as a hash-chained graph (AuditQueryResult).
 
     Phase 5: VibeDashboard Graph Engineering Edition.
-    Reads REAL events from ~/.corvin/audit.jsonl (hash-chained, immutable).
+
+    Reads the CALLER'S OWN tenant chain — ``<CORVIN_HOME>/tenants/<tenant>/global/
+    forge/audit.jsonl`` via ``_audit_path()`` — and drops any record that carries a
+    different ``tenant_id``. It previously read a hard-wired
+    ``~/.corvin/audit.jsonl`` (ignoring ``CORVIN_HOME`` and the per-tenant
+    resolver), which is a SHARED file holding every tenant's events, and stamped
+    ``"tenant_id": rec.tenant_id`` onto each one — so a caller received other
+    tenants' events mislabelled as their own (CLAUDE.md § Audit Chain as Ground
+    Truth: "audit reads MUST filter by tenant_id; no fallback to 'any tenant'").
+    A record's own ``tenant_id`` is passed through unchanged and never rewritten.
 
     Returns:
     {
@@ -776,14 +836,19 @@ async def get_audit_chain(
       "snapshotFreshness_ms": 145
     }
     """
-    import time
-    from pathlib import Path
+    # Tenant-scoped, CORVIN_HOME-aware chain for the AUTHENTICATED caller only.
+    audit_path = _audit_path(rec.tenant_id)
 
-    now_ms = int(time.time() * 1000)
-    audit_path = Path.home() / ".corvin" / "audit.jsonl"
+    since_ts = _parse_bound(since)
+    until_ts = _parse_bound(until)
+    wanted_types = {t.strip() for t in types.split(",") if t.strip()} if types else None
+    _skills_param = skill_ids or skillIds
+    wanted_skills = (
+        {s.strip() for s in _skills_param.split(",") if s.strip()} if _skills_param else None
+    )
 
     events = []
-    if audit_path.exists():
+    if audit_path is not None and audit_path.exists():
         try:
             # Read real audit events from hash-chained log
             with open(audit_path, "r", encoding="utf-8") as f:
@@ -792,23 +857,54 @@ async def get_audit_chain(
                         continue
                     try:
                         event = json.loads(line)
-                        # Map real audit event to AuditQueryResult format
-                        mapped_event = {
-                            "id": event.get("event_id", ""),
-                            "type": _map_event_type(event.get("event_type", "unknown")),
-                            "timestamp": event.get("timestamp", ""),
-                            "hash": event.get("hash", "")[:16],
-                            "prev_hash": event.get("prev_hash", "")[:16],
-                            "lom_hash": _extract_lom_hash(event.get("details", {}).get("lom_audit_write", "")),
-                            "tenant_id": rec.tenant_id,  # Enforce tenant isolation
-                            "event_type": event.get("event_type", ""),
-                            "details": event.get("details", {}),
-                            "severity": event.get("severity", "INFO"),
-                        }
-                        events.append(mapped_event)
                     except json.JSONDecodeError:
                         continue
-        except Exception:
+                    if not isinstance(event, dict):
+                        continue
+
+                    # ── Tenant isolation (fail-closed): a record that names a
+                    # DIFFERENT tenant is dropped, never relabelled. A record
+                    # with no tenant_id lives in this tenant's own chain file
+                    # and is attributed to it.
+                    record_tenant = event.get("tenant_id")
+                    if isinstance(record_tenant, str) and record_tenant:
+                        if record_tenant != rec.tenant_id:
+                            continue
+                    else:
+                        record_tenant = rec.tenant_id
+
+                    details = event.get("details") or {}
+                    mapped_type = _map_event_type(event.get("event_type", "unknown"))
+
+                    if wanted_types is not None and mapped_type not in wanted_types:
+                        continue
+                    if wanted_skills is not None:
+                        skill_id = details.get("skill_id") if isinstance(details, dict) else None
+                        if skill_id not in wanted_skills:
+                            continue
+                    if since_ts is not None or until_ts is not None:
+                        ts = _event_ts(event)
+                        if since_ts is not None and ts < since_ts:
+                            continue
+                        if until_ts is not None and ts > until_ts:
+                            continue
+
+                    # Map real audit event to AuditQueryResult format
+                    events.append({
+                        "id": event.get("event_id", ""),
+                        "type": mapped_type,
+                        "timestamp": event.get("timestamp", ""),
+                        "hash": (event.get("hash") or "")[:16],
+                        "prev_hash": (event.get("prev_hash") or "")[:16],
+                        # The hash the WRITER stamped — never derived at read time.
+                        "lom_hash": _recorded_lom_hash(details),
+                        "lom": _record_lom_label(details),
+                        "tenant_id": record_tenant,
+                        "event_type": event.get("event_type", ""),
+                        "details": details,
+                        "severity": event.get("severity", "INFO"),
+                    })
+        except OSError:
             # Graceful degradation if audit file unreadable
             pass
 

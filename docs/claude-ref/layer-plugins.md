@@ -400,6 +400,25 @@ events.
   --ttl-days 7`) is the auto-purge for skills that never got graded —
   treat it like forge's task TTL but for the knowledge layer. User
   scope is NEVER pruned.
+- `SkillRegistry._locked()` (guards `create`/`delete`/`grade`/`set_grades`/
+  `bind_content_hash`, i.e. every mutation reachable from the console's
+  `/v1/console/skills/manual` routes) is a BOUNDED `flock`
+  (`LOCK_EX | LOCK_NB` + `LOCK_TIMEOUT_SECONDS` = 2s deadline), not a plain
+  blocking `flock(LOCK_EX)` — matching `core.infinite_session.event_store`,
+  `corvin_plugins.state.registry_mutation` and
+  `core.skills.os_skills.skill_adapter._locked`. A wedged holder now raises
+  `SkillRegistryLockBusy` (a `TimeoutError`/`OSError`) at the deadline
+  instead of hanging the request forever; `routes/skills_manual.py` maps it
+  to a clean, audited `503 {"detail": "lock_busy"}` (`console.action_failed`,
+  reason `lock_busy`) rather than a hang or a 500. Round-4 adversarial
+  review (2026-09-07, finding F2) found this lock unbounded and unlisted in
+  `core/console/tests/test_route_lock_nonblocking_registries.py`'s
+  enumerated scope; both are fixed together — don't reintroduce a plain
+  `flock(LOCK_EX)` here, and don't catch `OSError` generically without
+  checking `SkillRegistryLockBusy` FIRST (it derives from `OSError` via
+  `TimeoutError`, so a generic `except OSError: 500` branch silently
+  swallows the busy-lock case unless the check is ordered first — see
+  `_is_lock_busy` / `_refuse_lock_busy` in `routes/skills_manual.py`).
 
 **What you must NOT do:**
 
@@ -1161,10 +1180,22 @@ it runs **before** `on_load()` — so the slot is never taken, not taken-and-fre
 |---|---|
 | Single tenant (the default install) | allowed — unchanged behaviour |
 | Plugin type that takes no provider slot | allowed |
-| `origin=builtin` (shipped in the wheel — the in-wheel `core/plugins/buildin` root or a code-registered global; the Corvin-Marketplace checkout is `vetted`, see the 2026-09-07 section) | allowed |
+| `origin=builtin` (shipped in the wheel — the in-wheel `core/plugins/buildin` root or a code-registered global; the Corvin-Marketplace checkout is `vetted`, see the 2026-09-07 section) | allowed — **no live subject today, see below** |
 | `origin=vetted` on a multi-tenant install | **refused** — a signature attests who wrote it, not that it is tenant-aware |
 | `origin=community` or unknown, multi-tenant | **refused** |
 | Tenant set cannot be enumerated | **refused** — "could not check" is not "one tenant" |
+
+**The `origin=builtin` exemption is a MECHANISM with ZERO live instances**
+(verified 2026-09-07, round-4 adversarial review). `core/plugins/buildin/` — the
+in-wheel `_BUILTIN_ROOT` anchor that `origin_for_plugin_dir()` derives `builtin`
+from — is EMPTY, and `_GLOBAL_SPECS` (the code-registered global path, the only
+other source of `builtin`) has no production caller. So on this checkout **no
+plugin anywhere resolves to `origin=builtin`**, and this row of the table cannot
+be reached. Describe it the way the boot-layer rules above are described: it is
+implemented, tested and binds the first instance that exists — it is NOT a live
+guarantee today, and it must not be cited as one. `origin_for_plugin_dir()`'s
+`builtin` branch is likewise exercised only by tests that create a directory
+under `_BUILTIN_ROOT` themselves.
 
 The refusal is audited as `plugin.provider_slot_refused` with the tenant *count*
 and never the other tenants' ids. It carries **no feature flag**: a `false` would
@@ -1852,6 +1883,23 @@ Also in this pass:
   which were real plugin bugs fixed in the marketplace (`EventEmitter` returned `True` for
   events a bounded deque silently evicted; `path_gate` checked `..` AFTER `resolve()` had
   collapsed it).
+
+### Round 4 — the same two failure modes, re-opened (2026-09-07, F4 + F5)
+
+| # | Defect | Fix (load-bearing rule) |
+|---|---|---|
+| F4 | `bootstrap._boot_skills_registry` classified "the `core.skills` package is absent" with `missing.startswith("core.skills")`. A DELETED SUBMODULE of a PRESENT package raises `ModuleNotFoundError(name="core.skills.<submodule>")`, which that prefix match sent down the quiet DEBUG branch — re-opening F-K1 exactly: registry `[]`, no ERROR line, "Skill not found" everywhere after a restart. `core/skills/boot.py` imports three internal modules at module level, so this was the likely next break, not an exotic one. | The discriminator is now **whether the PACKAGE ITSELF resolves**, never a prefix: `missing in ("core", "core.skills") and _package_unresolvable("core.skills")`. `_package_unresolvable` walks the ancestors with `importlib.util.find_spec`; anything that prevents a confident answer returns `False`, so the LOUD branch is the default. Guards: `tests/skills/test_skills_boot_subprocess.py::test_broken_transitive_module_fails_loudly` (drives the REAL `_boot_skills_registry` in a subprocess with a broken transitive import and asserts the ERROR line) and `::test_genuinely_stripped_install_stays_quiet` (a shim `core` package with no `skills`, asserting the quiet branch survives). The pre-existing guard imported `core.skills.boot` directly and therefore could never catch the mis-classification. |
+| F5 | F-P2 pinned discovery ↔ loadability (30/30) but left **index ↔ loadability** unpinned, and it was off in BOTH directions: 34 indexed buildin ids vs 30 loadable dirs; 12 indexed ids had a real `src/` + `setup.py` but **no `plugin.yaml`**, so `_builtin_plugin_dirs` never saw them and `resolve_builtin_dir` refuses to install them — the console advertised `path_gate`, `flow_guard`, `consent_gate` and `audit_chain` as installable builtins that can never load; conversely 8 plugins registered into the process at every boot and appeared nowhere in the marketplace surface. `test_marketplace_manifests_loadable.py` was self-referential (`len(loadable) == len(dirs)`, both from the same `plugin.yaml` glob), so it stayed green throughout. | **Indexing is bound to loadability.** `Corvin-Marketplace/generate_index_v2.py` now (a) SKIPS a buildin `plugin.json` with no sibling `plugin.yaml` — with a warning naming the directory — and (b) ERRORS on a loadable `plugin.yaml` with no `plugin.json`, so neither direction can drift silently. The 8 loadable-but-unindexed plugins got a `plugin.json` whose `source_url` points at the MARKETPLACE (CLAUDE.md's rule), whose `boot_layer` is taken from the `plugin.yaml` CorvinOS actually loads, and whose `security_audit` says `{"audited": false}` rather than inventing an auditor and a date — `plugin-schema.json` gained that `audited` property for the purpose, the same honesty-guard treatment `supports_wheel` already had. Index and loadable set now agree exactly: **30 == 30, zero divergence in both directions**. Guards: `test_marketplace_manifests_loadable.py::test_every_indexed_buildin_is_actually_installable` (also drives the REAL `resolve_builtin_dir` on every indexed id) and `::test_every_loadable_buildin_is_visible_in_the_index`. |
+
+**Left for the operator (F5):** the 12 orphan directories are still in the
+marketplace checkout, out of the index and unloadable. Four of them
+(`path_gate`, `flow_guard`, `consent_gate`, `audit_chain`) carry a `src/` that
+mirrors a CorvinOS CORE compliance mechanism — `audit_chain/src/audit_backend.py`
+is a copy of `core/plugins/corvin_plugins/providers/audit_backend.py` — and their
+`plugin.json` `source_url` points INTO CorvinOS, which CLAUDE.md forbids.
+Compliance mechanisms are always-on and non-disableable; advertising them as
+installable plugins is the defect, so "give them a `plugin.yaml`" is the WRONG
+repair. They should be deleted from the marketplace, which is an operator call.
 
 **Must NOT do:** accept any `origin` but `community` from an install body · report a
 marketplace-checkout plugin as `builtin` · put an absolute path into `plugin.loaded.source`

@@ -1,18 +1,31 @@
-"""Integration tests for Phase 1 k=2-5: Feature flags → Skills rewrite.
+"""Phase 1 k=2-5 — the five feature-flag → Skill call sites.
 
-These tests verify:
-1. All 5 call-sites can use Skills registry instead of feature flags
-2. A/B equivalence: old behavior == new behavior
-3. Audit trail contains Skill execution records
-4. Tenant isolation maintained
-5. No regressions in downstream functionality
+HONEST SCOPE (round-4 adversarial review, F6). This file used to declare
+"Call-Site #2: headless_api_mode (console/app.py:440)" in its docstring, never
+import ``corvin_console.app``, and call ``registry.execute("os.headless_mode",
+…)`` itself with its own LoM. That is a UNIT test wearing a call-site label
+(CLAUDE.md § E2E Wiring Proof) — and it is exactly why F1 shipped: the real call
+site omitted the now-mandatory ``lom=``, ``headless_enabled()`` returned False
+for every configuration, and all 20 tests here stayed green.
 
-Test coverage:
-- Call-Site #1: plugin_health_monitoring (gateway/app.py:196)
-- Call-Site #2: headless_api_mode (console/app.py:440)
-- Call-Site #3: plugin_builder_enabled (slash_commands.py:116)
-- Call-Site #4: capabilities flags (routes/capabilities.py:142)
-- Call-Site #5: vibe_engineering_active (routes/vibe_engineering.py:311)
+What is what:
+
+* ``TestCallSite1..4`` / ``TestA2BEquivalence`` / ``TestCompliance`` /
+  ``TestNoRegressions`` — UNIT tests of registry DISPATCH for the five Skills.
+  They supply their own caller. They prove the Skills behave, never that
+  anything calls them.
+* ``TestRealCallSites`` — drives the REAL production function
+  (``corvin_console.app.headless_enabled``), so a broken call site fails here.
+* ``TestEveryProductionCallSitePassesALoM`` — an AST fence over the whole tree:
+  every ``…execute("os.…", …)`` in production code must pass ``lom=``. This is
+  the guard that generalises F1 to all five sites and to the next one added.
+
+The five call sites, as they actually are (verified 2026-09-07):
+- #1 os.plugin_health_monitoring — core/plugins/corvin_plugins/bootstrap.py
+- #2 os.headless_mode           — core/console/corvin_console/app.py
+- #3 os.plugin_builder          — core/console/corvin_console/slash_commands.py
+- #4 os.capabilities            — core/console/corvin_console/routes/capabilities.py
+- #5 os.vibe_engineering        — core/console/corvin_console/routes/vibe_engineering.py
 
 Compliance: GDPR Art. 30, 32; EU AI Act Art. 50; ADR-0544
 """
@@ -360,6 +373,132 @@ class TestNoRegressions:
             result = registry.execute(skill.id, {}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
             # Should either succeed or be a known error (e.g., not found)
             assert result.status in ["success", "error", "timeout"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The parts that can actually fail on a broken CALL SITE (round-4 review, F6)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRealCallSites:
+    """Drives the REAL production functions, not the registry.
+
+    Call site #2 is the one that shipped broken (F1): ``headless_enabled()``
+    omitted the mandatory ``lom=``, so every execution was refused and the
+    function returned False for every configuration while the unit tests above
+    were green. This exercises the function itself.
+    """
+
+    @pytest.fixture
+    def booted(self, mock_audit, monkeypatch, tmp_path):
+        """Boot the GLOBAL registry the production call sites look up."""
+        import core.skills.skill_registry_phase1 as reg_mod
+
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        reg = reg_mod.initialize_registry(audit_backend=mock_audit, tenant_id="_default")
+        register_builtin_skills(reg)
+        return reg
+
+    def _headless(self):
+        import sys
+        from pathlib import Path
+
+        console = Path(__file__).resolve().parents[2] / "core" / "console"
+        if str(console) not in sys.path:
+            sys.path.insert(0, str(console))
+        from corvin_console import app as console_app
+
+        console_app.set_headless_override(None)  # the tenant flag must decide
+        return console_app
+
+    def test_headless_enabled_reaches_the_skill_and_honours_the_flag(self, booted, mock_audit):
+        console_app = self._headless()
+        _set_flag("headless_api_mode", True)
+        mock_audit.events.clear()
+
+        enabled = console_app.headless_enabled(tenant_id="_default")
+
+        executed = [e for e in mock_audit.events if e.get("skill_id") == "os.headless_mode"]
+        assert executed, (
+            "headless_enabled() did not reach os.headless_mode — the call site in "
+            "core/console/corvin_console/app.py is broken (round-4 review, F1)"
+        )
+        assert executed[-1]["status"] == "success", (
+            f"the call site's execution was REFUSED: {executed[-1]}"
+        )
+        assert executed[-1]["lom"].startswith("core/console/corvin_console/app.py:"), (
+            "the call site must name its OWN LoM, not a test's"
+        )
+        assert enabled is True, (
+            "headless_api_mode is on, yet headless_enabled() returned False — "
+            "an 'API-only' deployment would still mount the browser SPA"
+        )
+
+    def test_headless_disabled_flag_is_respected(self, booted):
+        console_app = self._headless()
+        _set_flag("headless_api_mode", False)
+        assert console_app.headless_enabled(tenant_id="_default") is False
+
+
+class TestEveryProductionCallSitePassesALoM:
+    """AST fence: ``lom=`` is mandatory on every production Skill execution.
+
+    Generalises F1. ``SkillsRegistry.execute`` refuses a call without a LoM
+    (ADR-0537/0642) and the refusal is SILENT at the call site — it just looks
+    like the Skill said "off". This finds any ``…execute("os.…", …)`` in
+    production code that forgot one, including call sites added later.
+    """
+
+    def _offenders(self) -> list[str]:
+        import ast
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[2]
+        bad: list[str] = []
+        for root in ("core", "operator", "ops"):
+            for path in (repo / root).rglob("*.py"):
+                if "test" in path.parts or path.name.startswith("test_"):
+                    continue
+                src = path.read_text(encoding="utf-8", errors="replace")
+                if '"os.' not in src or ".execute(" not in src:
+                    continue
+                try:
+                    tree = ast.parse(src)
+                except SyntaxError:
+                    continue
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    if getattr(node.func, "attr", "") != "execute" or not node.args:
+                        continue
+                    first = node.args[0]
+                    if not (isinstance(first, ast.Constant)
+                            and isinstance(first.value, str)
+                            and first.value.startswith("os.")):
+                        continue
+                    if not any(kw.arg == "lom" for kw in node.keywords):
+                        bad.append(
+                            f"{path.relative_to(repo)}:{node.lineno}: "
+                            f"execute({first.value!r}) without lom="
+                        )
+        return sorted(bad)
+
+    def test_no_production_call_site_omits_lom(self):
+        offenders = self._offenders()
+        assert not offenders, (
+            "Skill execution(s) without the mandatory ADR-0537 LoM — each is "
+            "REFUSED at runtime and silently reads as 'feature off':\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_the_fence_can_actually_see_an_offender(self):
+        """Not vacuously green: the detector must match a real bad call."""
+        import ast
+
+        tree = ast.parse('registry.execute("os.headless_mode", {})\n')
+        call = next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+        assert getattr(call.func, "attr", "") == "execute"
+        assert not any(kw.arg == "lom" for kw in call.keywords)
 
 
 if __name__ == "__main__":

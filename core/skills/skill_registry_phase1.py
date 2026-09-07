@@ -53,6 +53,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # never bind to a file an attacker (or the running system itself) can rewrite.
 _LOM_EXCLUDED_PARTS = frozenset({
     ".corvin",          # runtime-writable tenant state
+    ".claude",          # agent worktrees/state the running system rewrites —
+                        # `.claude/worktrees/` holds full .py-bearing copies of
+                        # the repo INSIDE _REPO_ROOT, so a LoM naming one used
+                        # to bind and yield a normal-looking source hash, i.e.
+                        # an audited decision attributed to source that is not
+                        # the shipped source (round-4 review, F8).
     ".venv", "venv",    # vendored interpreters (core/console/.venv/**)
     "site-packages", "dist-packages",
     "node_modules",
