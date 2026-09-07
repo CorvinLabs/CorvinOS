@@ -7,8 +7,8 @@ This test suite verifies that weight updates are audit-first and fail-closed:
 2. Audit commit must succeed before weight change takes effect
 3. If audit write fails, weight is NOT applied in memory
 4. Exceptions are raised on audit failure
-5. Audit events are immutable
-6. Tenant ID is correctly included in audit events
+5. Tenant ID is correctly included in audit events
+6. Silent config changes are blocked
 """
 
 import pytest
@@ -21,8 +21,6 @@ from pathlib import Path
 # Import the security fix
 from core.learning.weight_updater import (
     WeightUpdater,
-    WeightsUpdatedAuditEvent,
-    WeightUpdateValidator,
     WeightAuditFailedError,
 )
 
@@ -34,6 +32,14 @@ class MockAuditBackend:
         self.events: list[dict] = []
         self.fail_on_write = fail_on_write
         self.write_count = 0
+
+    def write_event(self, event: dict) -> None:
+        """Mock write_event."""
+        self.write_count += 1
+        if self.fail_on_write:
+            raise IOError("Simulated audit backend failure")
+
+        self.events.append(event)
 
     def write_event_dict(
         self,
@@ -56,14 +62,6 @@ class MockAuditBackend:
         }
         self.events.append(record)
         return record["hash"]
-
-    def write(self, event_dict: dict) -> str:
-        """Alternative write interface."""
-        return self.write_event_dict(
-            event_type=event_dict.get("event_type", "unknown"),
-            tenant_id=event_dict.get("tenant_id", "default"),
-            details=event_dict,
-        )
 
 
 class TestWeightUpdateAuditEventCreated:

@@ -217,7 +217,7 @@ class TestOutcomeVerificationAuditLogged:
 
     def test_audit_logged_with_correct_event_type(self):
         """Audit logging differentiates verified vs unverified events."""
-        with mock.patch("core.learning.outcome_sink.core_audit_event") as mock_core_audit:
+        with mock.patch("core.learning.event_persistence.core_audit_event") as mock_core_audit:
             mock_core_audit.return_value = "audit-ref-123"
 
             # Test verified outcome

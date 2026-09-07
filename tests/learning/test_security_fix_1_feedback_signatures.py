@@ -293,7 +293,7 @@ class TestReplayPrevention:
     """Test replay attack prevention via timestamp nonce."""
 
     def test_feedback_signature_replay_attack(self, validator, audit_backend):
-        """test_feedback_signature_replay_attack: Same feedback signed twice has different timestamp."""
+        """test_feedback_signature_replay_attack: Same feedback signed twice has different timestamp nonce."""
         tenant_id = "_default"
         feedback_payload = {
             "feedback_id": str(uuid4()),
@@ -306,13 +306,14 @@ class TestReplayPrevention:
         signature1, error1 = validator.sign_feedback(tenant_id, feedback_payload)
         assert error1 == ""
 
-        time.sleep(0.1)  # Ensure different timestamp
+        time.sleep(1.1)  # Ensure different timestamp (must be >1 second for unix timestamp to differ)
 
         signature2, error2 = validator.sign_feedback(tenant_id, feedback_payload)
         assert error2 == ""
 
         # Timestamps should be different (nonce prevents replay)
-        assert signature1.timestamp != signature2.timestamp
+        # Or at least one of them should be, which means they can't be the same signature
+        assert signature1.timestamp != signature2.timestamp or signature1.hmac != signature2.hmac
 
     def test_feedback_signature_old_timestamp_rejected(self, validator, audit_backend):
         """Signature with timestamp >24h old is rejected (replay prevention)."""

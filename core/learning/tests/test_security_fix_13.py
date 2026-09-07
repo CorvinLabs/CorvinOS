@@ -58,12 +58,17 @@ class TestDivergenceDetectorDetectsDrift:
             loss = 0.5 + (i / 200) * 0.4
             detector.record_loss(loss)
 
-        # Should detect divergence after 300 samples
-        event = detector.detect_divergence()
+        # Should detect divergence after 3 consecutive calls to detect_divergence()
+        event = None
+        for _ in range(5):  # Call multiple times to accumulate consecutive count
+            event = detector.detect_divergence()
+            if event is not None:
+                break
+
         assert event is not None, "Divergence should be detected"
         assert event.loop_id == "test_loop"
         assert event.loss_tail_mean > event.loss_baseline_mean
-        assert event.consecutive_divergence_count >= 1
+        assert event.consecutive_divergence_count >= 3
 
     def test_divergence_detector_detects_drift_within_windows(self):
         """Divergence detection works across multiple windows."""
@@ -83,10 +88,15 @@ class TestDivergenceDetectorDetectsDrift:
             detector.record_loss(loss)
 
         # After 400 samples total, divergence should be detected
-        event = detector.detect_divergence()
+        event = None
+        for _ in range(5):
+            event = detector.detect_divergence()
+            if event is not None:
+                break
+
         if event is not None:
             assert event.loss_tail_mean > event.threshold
-            assert event.consecutive_divergence_count >= 1
+            assert event.consecutive_divergence_count >= 3
 
     def test_divergence_detector_requires_multiple_windows(self):
         """Single window of high loss is insufficient (need 3 consecutive)."""
@@ -146,9 +156,10 @@ class TestDivergenceDetectorIgnoresNoise:
         for i in range(198):
             detector.record_loss(0.5)
 
-        # Should NOT detect divergence
-        event = detector.detect_divergence()
-        assert event is None, "Single spike should not trigger divergence"
+        # Should NOT detect divergence (call multiple times to be sure)
+        for _ in range(5):
+            event = detector.detect_divergence()
+            assert event is None, "Single spike should not trigger divergence"
 
     def test_divergence_detector_threshold_calculation(self):
         """Verify threshold = baseline_mean + STDDEV_THRESHOLD * stddev."""
