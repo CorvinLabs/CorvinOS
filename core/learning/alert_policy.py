@@ -228,6 +228,7 @@ class AlertPolicyManager:
         self._signing_key = signing_key or secrets.token_hex(32)
         self._rate_limiters: Dict[str, AlertRateLimiter] = {}
         self._confirmation_queue: Dict[str, AlertConfirmationRequest] = {}
+        self._held_alerts: Dict[str, AlertEvent] = {}
         # Replay guard: nonces are recorded at VERIFY time (first successful
         # verify wins), never at sign time — recording at sign time made the
         # original verification of every freshly signed alert fail as a replay.
@@ -753,6 +754,11 @@ class AlertPolicyManager:
         )
 
         self._confirmation_queue[confirmation_id] = conf_req
+        # Hold the alert itself: approving must be able to FIRE it. Until
+        # 2026-09-07 confirm_alert only stamped a status, so the two most
+        # critical policies could never fire at all — approving did nothing
+        # and the alert never reached history or the notification handlers.
+        self._held_alerts[confirmation_id] = alert
         logger.info(f"Requested confirmation for alert {alert.alert_id} (tenant={self.tenant_id})")
 
         return conf_req
@@ -780,9 +786,20 @@ class AlertPolicyManager:
         if approved:
             conf_req.status = "approved"
             logger.info(f"Alert approved: {conf_req.alert_id} by {confirmed_by} (tenant={self.tenant_id})")
+            # Approving FIRES the alert: rate-limit bookkeeping, history and the
+            # notification handlers, exactly as the direct path in evaluate().
+            held = self._held_alerts.pop(conf_req.confirmation_id, None)
+            if held is not None:
+                self.record_alert_for_rate_limit(conf_req.policy_id, held.alert_id)
+                self._history.append(held)
+                logger.warning(
+                    f"Alert fired after confirmation: {held.alert_id} (tenant={self.tenant_id})"
+                )
+                self._notify_handlers(held)
         else:
             conf_req.status = "rejected"
             conf_req.rejection_reason = "Operator rejected"
+            self._held_alerts.pop(conf_req.confirmation_id, None)
             logger.info(f"Alert rejected: {conf_req.alert_id} by {confirmed_by} (tenant={self.tenant_id})")
 
         return True

@@ -11,6 +11,7 @@ Tests cover:
 Test execution: pytest test_weight_smoother.py -v
 """
 
+import math
 import pytest
 import time
 import numpy as np
@@ -445,45 +446,44 @@ class TestErrorHandlingAndEdgeCases:
 
     def test_smooth_with_large_delta(self):
         """Test that large deltas are handled correctly."""
-        smoother = WeightSmoother()  # default ema_alpha = 0.3
+        smoother = WeightSmoother()
+        # Derived from the CONFIGURED alpha, never a hard-coded one: the default
+        # moved 0.3 -> 0.5 on 2026-09-07 and a literal 0.7 silently went stale.
+        alpha = smoother.config.ema_alpha
+        keep = 1.0 - alpha          # ema_n = d * (1 - keep**n); residual d*keep**n
+        d = 1e6
 
-        output = smoother.smooth('weight_large', 1e6)
-        assert output.filtered_delta > 0  # Should be positive
+        output = smoother.smooth('weight_large', d)
+        assert output.filtered_delta > 0
 
-        # EMA maths (ema_0 = 0, constant input d, alpha = 0.3):
-        #   ema_n = d * (1 - 0.7**n)  ->  residual = d * 0.7**n
-        # After 2 samples the residual is still 0.49*d, so the old
-        # `abs(ema_2 - 1e6) < 1e5` (= 0.1*d) assertion was unreachable by
-        # construction. Assert the exact 2-sample value instead...
-        output2 = smoother.smooth('weight_large', 1e6)
-        assert abs(output2.filtered_delta - 1e6 * (1 - 0.7 ** 2)) < 1.0
+        output2 = smoother.smooth('weight_large', d)
+        assert abs(output2.filtered_delta - d * (1 - keep ** 2)) < 1.0
 
-        # ...and then let it actually converge: 0.7**6 = 0.118 > 0.1 but
-        # 0.7**7 = 0.082 < 0.1, so n = 7 is the first sample count at which a
-        # 0.1*d tolerance is mathematically reachable.
-        for _ in range(5):  # 2 + 5 = 7 samples total
-            output_converged = smoother.smooth('weight_large', 1e6)
-        assert abs(output_converged.filtered_delta - 1e6) < 1e5
+        n_needed = math.ceil(math.log(0.1) / math.log(keep))
+        output_converged = output2
+        for _ in range(max(0, n_needed - 2)):
+            output_converged = smoother.smooth('weight_large', d)
+        assert abs(output_converged.filtered_delta - d) < 0.1 * d
 
     def test_smooth_with_negative_delta(self):
         """Test that negative deltas work correctly."""
-        smoother = WeightSmoother()  # default ema_alpha = 0.3
+        smoother = WeightSmoother()
+        alpha = smoother.config.ema_alpha
+        keep = 1.0 - alpha
+        d = -0.5
 
-        output1 = smoother.smooth('weight_neg', -0.5)
-        output2 = smoother.smooth('weight_neg', -0.5)
-
+        output1 = smoother.smooth('weight_neg', d)
+        output2 = smoother.smooth('weight_neg', d)
         assert output1.filtered_delta < 0
         assert output2.filtered_delta < 0
 
-        # Same EMA maths as test_smooth_with_large_delta: after 2 samples the
-        # residual is 0.7**2 * 0.5 = 0.245, so the old `< 0.1` tolerance was
-        # unreachable. Exact 2-sample value: -0.5 * (1 - 0.7**2) = -0.255.
-        assert abs(output2.filtered_delta + 0.5 * (1 - 0.7 ** 2)) < 1e-9
+        assert abs(output2.filtered_delta - d * (1 - keep ** 2)) < 1e-9
 
-        # Converge for real: 0.7**7 * 0.5 = 0.041 < 0.1.
-        for _ in range(5):  # 2 + 5 = 7 samples total
-            output_converged = smoother.smooth('weight_neg', -0.5)
-        assert abs(output_converged.filtered_delta + 0.5) < 0.1
+        n_needed = math.ceil(math.log(0.1 / abs(d)) / math.log(keep))
+        output_converged = output2
+        for _ in range(max(0, n_needed - 2)):
+            output_converged = smoother.smooth('weight_neg', d)
+        assert abs(output_converged.filtered_delta - d) < 0.1
 
     def test_smooth_output_immutability(self):
         """Test that SmootherOutput is properly dataclass (hashable and frozen)."""

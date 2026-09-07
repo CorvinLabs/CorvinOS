@@ -115,9 +115,18 @@ class TestAlertPolicyManager:
 
         alerts = manager.evaluate(metrics)
 
-        # Should have triggered loss_divergence_critical
-        loss_alerts = [a for a in alerts if a.alert_type == AlertType.LOSS_DIVERGENCE]
-        assert len(loss_alerts) > 0
+        # loss_divergence_critical is a confirmation-gated policy: evaluate()
+        # holds it pending instead of firing it (Fix #11). Assert the FULL
+        # cycle — held, then fired on approval — so a gate that swallows the
+        # alert forever cannot pass as "correctly held".
+        assert not [a for a in alerts if a.alert_type == AlertType.LOSS_DIVERGENCE]
+        pending = [c for c in manager.get_pending_confirmations()
+                   if c.alert_type == AlertType.LOSS_DIVERGENCE]
+        assert len(pending) > 0, "critical loss divergence produced neither an alert nor a confirmation"
+
+        assert manager.confirm_alert(pending[0].confirmation_id, approved=True)
+        fired = [a for a in manager.get_alert_history() if a.alert_type == AlertType.LOSS_DIVERGENCE]
+        assert len(fired) > 0, "approving the confirmation did not fire the alert"
 
     def test_evaluate_gradient_explosion(self):
         """Test gradient explosion alert."""
@@ -133,8 +142,16 @@ class TestAlertPolicyManager:
         alerts = manager.evaluate(metrics)
 
         # Should have triggered gradient_explosion_critical
-        grad_alerts = [a for a in alerts if a.alert_type == AlertType.GRADIENT_EXPLOSION]
-        assert len(grad_alerts) > 0
+        # gradient_explosion_critical is confirmation-gated like loss divergence:
+        # held by evaluate(), fired on approval. Assert the full cycle.
+        assert not [a for a in alerts if a.alert_type == AlertType.GRADIENT_EXPLOSION]
+        pending = [c for c in manager.get_pending_confirmations()
+                   if c.alert_type == AlertType.GRADIENT_EXPLOSION]
+        assert len(pending) > 0, "critical gradient explosion produced neither an alert nor a confirmation"
+
+        assert manager.confirm_alert(pending[0].confirmation_id, approved=True)
+        fired = [a for a in manager.get_alert_history() if a.alert_type == AlertType.GRADIENT_EXPLOSION]
+        assert len(fired) > 0, "approving the confirmation did not fire the alert"
 
     def test_evaluate_parameter_drift(self):
         """Test parameter drift alert."""
@@ -293,11 +310,23 @@ class TestAlertScenarios:
 
         alerts = manager.evaluate(bad_metrics)
 
-        # Should have multiple alert types
+        # Multiple conditions must each produce a signal. The two critical
+        # policies are confirmation-gated (Fix #11) and therefore appear as
+        # pending confirmations rather than in the returned list; the
+        # non-gated one fires directly. Every condition is accounted for —
+        # none may be silently dropped.
         alert_types = {a.alert_type for a in alerts}
-        assert AlertType.LOSS_DIVERGENCE in alert_types
-        assert AlertType.GRADIENT_EXPLOSION in alert_types
+        pending_types = {c.alert_type for c in manager.get_pending_confirmations()}
         assert AlertType.PARAMETER_DRIFT in alert_types
+        assert AlertType.LOSS_DIVERGENCE in pending_types
+        assert AlertType.GRADIENT_EXPLOSION in pending_types
+
+        # ...and approving them fires them.
+        for conf in manager.get_pending_confirmations():
+            assert manager.confirm_alert(conf.confirmation_id, approved=True)
+        fired_types = {a.alert_type for a in manager.get_alert_history()}
+        assert {AlertType.LOSS_DIVERGENCE, AlertType.GRADIENT_EXPLOSION,
+                AlertType.PARAMETER_DRIFT} <= fired_types
 
     def test_alert_audit_trail(self):
         """Test alerts are logged to history (audit trail)."""
