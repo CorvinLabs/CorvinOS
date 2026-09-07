@@ -5,25 +5,28 @@ Confirmed blind spot (adversarial review, 2026-07-13): `message` is capped at
 Pydantic ``Field(max_length=...)``, but `context: dict[str, Any]` has NO size,
 depth, or per-value length constraint. ``_build_context_tag`` reads
 ``ctx["personas"]`` and joins arbitrary-length items with no cap, and the
-resulting string is concatenated into ``full_prompt`` which is passed as a
-SINGLE LITERAL ARGV ELEMENT to ``subprocess.run(["claude", "-p", ...,
-full_prompt], ...)``. On Linux, a single argv string beyond
-``MAX_ARG_STRLEN`` (~128 KB) makes the kernel refuse exec with
-``OSError: [Errno 7] Argument list too long`` (E2BIG) — a plain ``OSError``
-that is caught by the route's blanket ``except Exception:`` and silently
-turned into a generic "An unexpected error occurred" 200 response, with no
-operator-visible signal that the boundary was hit.
+resulting string is concatenated into ``full_prompt`` with no cap.
+
+UPDATE (R3-C1, 2026-09-07): ``full_prompt`` used to be a SINGLE LITERAL ARGV
+ELEMENT (``subprocess.run(["claude", "-p", ..., full_prompt])``), which added a
+hard kernel boundary on top of the missing cap — a single argv string past
+``MAX_ARG_STRLEN`` (~128 KB) makes Linux refuse exec with
+``OSError: [Errno 7] Argument list too long`` (E2BIG). That argv placement is
+gone: the prompt now travels on **stdin** (`input=…`) through the shared
+``guard_prompt_head`` neutraliser, so E2BIG from a large context is no longer
+reachable. The MISSING CAP itself is still open — an oversized `context` is
+still accepted and still spent on tokens; it just no longer trips exec.
 
 This suite:
   (1) proves the Pydantic model accepts an oversized/deeply-nested `context`
       with NO validation error (documents the missing cap that exists on the
-      sibling fields);
-  (2) proves the oversized `context` flows UNTRUNCATED into the literal argv
-      string handed to `subprocess.run` (the actual injection point);
-  (3) reproduces the real OSError/E2BIG failure mode and proves the route's
-      generic exception handler masks it as an "ok" response with a benign
-      message instead of surfacing a 4xx or any distinguishable signal —
-      this is the concrete bug, pinned down as a regression test.
+      sibling fields) — STILL OPEN;
+  (2) pins the FIXED transport: the oversized `context` reaches the subprocess
+      on stdin, is absent from argv entirely, and carries the shared prompt
+      guard;
+  (3) proves the route's generic exception handler still masks a spawn-level
+      ``OSError`` as an "ok" response with a benign message instead of
+      surfacing a distinguishable signal — STILL OPEN.
 
 Uses the same direct-call + monkeypatch pattern as test_console_spawn_gates.py
 (no live LLM, no live house-rules classifier, deterministic).
@@ -106,15 +109,23 @@ class AssistantContextBoundsTests(unittest.TestCase):
         req = asst.AssistantMessageRequest(message="hi", context=nested)
         self.assertIn("n", req.context)
 
-    # ── (2) oversized `context` flows untruncated into the subprocess argv ──
+    # ── (2) oversized `context` travels on stdin, never on argv ─────────────
 
-    def test_oversized_context_flows_untruncated_into_subprocess_argv(self) -> None:
+    def test_oversized_context_travels_on_stdin_and_never_on_argv(self) -> None:
+        """R3-C1 regression (inverted from the round-1 blind-spot test).
+
+        The prompt used to be a positional argv element, which made the missing
+        `context` cap an exec-level failure AND made the operator's own message
+        parseable by the CLI as flags (`--version`) and slash commands
+        (`/pwn`). It now goes on stdin, behind the shared neutraliser.
+        """
         from corvin_console.routes import assistant as asst
+        from agents.claude_code import PROMPT_HEAD_SENTINEL
 
         self._patch_assistant_compute_gate(asst)
         self._patch_gate_pass(asst)
 
-        captured_argv: dict = {}
+        captured: dict = {}
 
         class _R:
             returncode = 0
@@ -122,7 +133,8 @@ class AssistantContextBoundsTests(unittest.TestCase):
             stderr = ""
 
         def _capture_run(argv, **kwargs):
-            captured_argv["argv"] = argv
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
             return _R()
 
         self._patch(asst.subprocess, "run", _capture_run)
@@ -135,21 +147,33 @@ class AssistantContextBoundsTests(unittest.TestCase):
         resp = asst.assistant_message(body, self._fake_session_record())
 
         self.assertTrue(resp["ok"])
-        argv = captured_argv["argv"]
-        full_prompt = argv[-1]
-        # The oversized personas string reaches the literal argv element
-        # completely untruncated — no cap is applied anywhere in the pipeline.
-        self.assertIn(huge_personas, full_prompt)
-        self.assertGreater(len(full_prompt), 2_000_000)
+        argv = captured["argv"]
+        stdin_text = captured["kwargs"]["input"]
+
+        # Nothing user-derived is on argv — no E2BIG surface, and no argv
+        # element the CLI could parse as a flag.
+        for element in argv:
+            self.assertNotIn(huge_personas, element)
+            self.assertNotIn("Where am I?", element)
+        self.assertNotIn("--", argv)
+
+        # The prompt reaches the CLI on stdin, behind the shared sentinel.
+        self.assertTrue(stdin_text.startswith(PROMPT_HEAD_SENTINEL + "\n"))
+        self.assertIn(huge_personas, stdin_text)
+        # STILL OPEN: no cap is applied anywhere in the pipeline.
+        self.assertGreater(len(stdin_text), 2_000_000)
 
     # ── (3) the real E2BIG/OSError failure mode is silently swallowed ───────
 
     def test_oversized_context_oserror_is_silently_swallowed_as_generic_message(self) -> None:
-        """Pins down the actual bug: an OS-level E2BIG from an oversized argv
-        (the real failure mode a 2 MB+ `context` can trigger for real) is
-        caught by the route's blanket `except Exception` and turned into an
+        """Pins down the remaining bug: ANY OS-level spawn failure is caught by
+        the route's blanket `except Exception` and turned into an
         indistinguishable-from-benign 200 response, with no 4xx and no
         operator-visible signal that a boundary was hit.
+
+        E2BIG specifically is no longer reachable from a large `context` (the
+        prompt moved to stdin in R3-C1), so it is simulated here — the masking
+        behaviour it exposes is what is still open.
         """
         from corvin_console.routes import assistant as asst
 
@@ -167,7 +191,7 @@ class AssistantContextBoundsTests(unittest.TestCase):
         )
         resp = asst.assistant_message(body, self._fake_session_record())
 
-        # Current (buggy) behavior: masked as a benign-looking "ok" response
+        # Current (still-buggy) behavior: masked as a benign-looking "ok" response
         # with a generic message — indistinguishable from any other transient
         # failure, and NOT surfaced as a 4xx / distinguishable error to the
         # operator or to any caller inspecting the response.
