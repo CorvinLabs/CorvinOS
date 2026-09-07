@@ -9,6 +9,11 @@ from core.skills.skill_registry_phase1 import (
 from core.skills.os_skills_phase1 import DelegationRouterSkill
 
 
+
+def skill_call() -> None:  # LoM anchor: execute() requires a RESOLVABLE "<file>:<function>"
+    """Line of moral responsibility for the Skill executions in this module."""
+
+
 class MockLearningBackend:
     """Mock learning backend for testing ADR-0314 integration."""
 
@@ -42,7 +47,7 @@ class TestSkillsLearningIntegration:
         result = self.registry.execute(
             "os.delegation_router",
             {"complexity": 7, "task_type": "code"},
-            lom="test:test_learning:100",
+            lom="tests/unit/test_skills_learning_integration.py:skill_call",
         )
 
         # Verify Skill succeeded
@@ -67,7 +72,7 @@ class TestSkillsLearningIntegration:
         self.registry.execute(
             "os.delegation_router",
             {"complexity": 5, "task_type": "chat"},
-            lom="test:confidence:100",
+            lom="tests/unit/test_skills_learning_integration.py:skill_call",
         )
 
         learning_event = self.learning_backend.events[0]
@@ -92,7 +97,7 @@ class TestSkillsLearningIntegration:
             "os.delegation_router",
             {"complexity": 5},
             timeout_ms=1,  # Will timeout
-            lom="test:timeout:100",
+            lom="tests/unit/test_skills_learning_integration.py:skill_call",
         )
 
         # Should be timeout
@@ -111,7 +116,7 @@ class TestSkillsLearningIntegration:
             "os.delegation_router",
             {"complexity": 6, "task_type": "analysis"},
             tenant_id="tenant_a",
-            lom="test:tenant_isolation:100",
+            lom="tests/unit/test_skills_learning_integration.py:skill_call",
         )
 
         learning_event = self.learning_backend.events[0]
@@ -130,7 +135,7 @@ class TestSkillsLearningIntegration:
                 "user_email": "user@example.com",  # PII
                 "api_key": "sk-12345",  # Secret
             },
-            lom="test:no_pii:100",
+            lom="tests/unit/test_skills_learning_integration.py:skill_call",
         )
 
         learning_event = self.learning_backend.events[0]
@@ -150,7 +155,7 @@ class TestSkillsLearningIntegration:
             self.registry.execute(
                 "os.delegation_router",
                 {"complexity": complexity, "task_type": "code"},
-                lom=f"test:optimization_loop:{complexity}",
+                lom="tests/unit/test_skills_learning_integration.py:skill_call",
             )
 
         # Verify events accumulated
