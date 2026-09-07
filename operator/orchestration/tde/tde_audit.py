@@ -72,6 +72,80 @@ _IDENTIFIER_KEYS = {"step_action", "task_type", "engine", "complexity",
                     "tde_run_id"}
 _IDENTIFIER_RE = __import__("re").compile(r"^[A-Za-z0-9_.:-]{1,40}$")
 
+#: The tde.* event types this module owns, each mapped to the closed key set
+#: it may carry. ADR-0640 turned the core writer's details floor default-deny
+#: (``filter_audit_details``: an event type with no registered allowlist keeps
+#: only the universal ``_AUDIT_KNOWN_KEYS`` vocabulary), and ``tde_run_id`` /
+#: ``step_num`` / ``step_action`` / ``delegate`` / ``loss_pct`` … are not in it.
+#: Measured 2026-09-07: every tde.* record reached the chain as
+#: ``{"engine": …, "_dropped_fields": ["tde_run_id", "step_num", …]}``, which
+#: silently killed the ADR-0214 audit-graph endpoint — it keys a turn on
+#: ``details.tde_run_id`` and found none, so every real turn 404'd.
+#:
+#: Registering the vocabulary is the structural answer rather than widening the
+#: universal floor: this module already IS the closed-set owner (``_scrub``
+#: drops everything else and pins the identifier shape), so the floor is told
+#: what the namespace's design already guarantees.
+_EVENT_FIELDS: dict[str, frozenset[str]] = {
+    "tde.engine_selected": frozenset({
+        "engine", "confidence", "override", "trivial", "task_type",
+        "complexity", "tde_run_id",
+    }),
+    "tde.l34_blocked": frozenset({
+        "scope", "reason_code", "variable_class", "tde_run_id", "step_num",
+    }),
+    "tde.l34_prescan": frozenset({
+        "scope", "reason_code", "variable_class", "l34_forced", "tde_run_id",
+        "step_num",
+    }),
+    "tde.delegation_decision": frozenset({
+        "step_action", "delegate", "reason_code", "tde_run_id", "step_num",
+    }),
+    "tde.step_delegated": frozenset({
+        "step_action", "success", "duration_ms", "ipc", "tde_run_id", "step_num",
+    }),
+    "tde.step_executed_local": frozenset({
+        "step_action", "success", "duration_ms", "tde_run_id", "step_num",
+    }),
+    "tde.loss_recorded": frozenset({
+        "task_type", "engine", "loss_pct", "measured", "tde_run_id", "step_num",
+    }),
+    "tde.plan_executed": frozenset({
+        "step_count", "batch_count", "delegated_count", "local_count",
+        "tde_run_id",
+    }),
+    "tde.bench_snapshot": frozenset({"step_count", "batch_count"}),
+}
+
+_allowlists_registered = False
+
+
+def register_allowlists() -> bool:
+    """Fold :data:`_EVENT_FIELDS` into the core writer's registry (idempotent).
+
+    Returns True when the registry was reachable. Called at import so that a
+    process that merely writes tde.* records — the emitter below, or a test
+    building a chain with ``forge.security_events.write_event`` directly —
+    cannot write one before the vocabulary is known to the floor.
+    """
+    global _allowlists_registered
+    if _allowlists_registered:
+        return True
+    try:
+        forge_dir = Path(__file__).resolve().parents[2] / "forge"
+        if forge_dir.is_dir() and str(forge_dir) not in sys.path:
+            sys.path.insert(0, str(forge_dir))
+        from forge import security_events as _se  # type: ignore[import-not-found]
+
+        for event_type, fields in _EVENT_FIELDS.items():
+            _se.register_event_allowlist(event_type, fields)
+    except Exception as exc:  # noqa: BLE001 — no forge here means no chain either
+        _logger.debug("tde.* audit allowlist not registered: %s", exc)
+        return False
+    _allowlists_registered = True
+    return True
+
+
 _audit_fn: Optional[Callable[..., None]] = None
 _resolved = False
 
@@ -164,3 +238,15 @@ def reset_for_tests() -> None:
     global _audit_fn, _resolved
     _audit_fn = None
     _resolved = False
+
+
+# Register at IMPORT: the floor is consulted inside write_event, so the
+# vocabulary has to be known before the first tde.* record is written by
+# anyone — not on the first emit() from this module.
+register_allowlists()
+
+
+def reset_allowlists_for_tests() -> None:
+    """Forget the idempotence latch (test hook, mirrors reset_for_tests)."""
+    global _allowlists_registered
+    _allowlists_registered = False

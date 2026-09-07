@@ -23,6 +23,28 @@ for _p in (_REPO / "core" / "console", _REPO / "operator" / "forge",
 from corvin_console.routes import compute as compute_mod  # noqa: E402
 from forge import security_events as se  # noqa: E402
 
+# The tde.* details vocabulary is owned by the emitter module
+# (operator/orchestration/tde/tde_audit.py) and registered with the writer's
+# ADR-0129/ADR-0640 positive allowlist at ITS import — the floor is
+# default-deny, so without this every ``tde_run_id`` below would be dropped on
+# write and the route would 404 on a run that is right there in the chain
+# (measured 2026-09-07). Production loads the emitter before it writes a
+# record; this file writes the same records by hand and must do the same.
+#
+# Loaded by PATH, not as ``tde.tde_audit``: the package __init__ pulls in the
+# whole engine (executors, IPC, analysis runner) and this file needs exactly
+# one leaf module — binding to the real file keeps the vocabulary single-source
+# without importing the world.
+import importlib.util as _ilu  # noqa: E402
+
+_TDE_AUDIT_PY = _REPO / "operator" / "orchestration" / "tde" / "tde_audit.py"
+_spec = _ilu.spec_from_file_location("tde_audit_vocab", _TDE_AUDIT_PY)
+_tde_audit = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_tde_audit)
+assert _tde_audit.register_allowlists(), (
+    "tde.* audit vocabulary could not be registered with forge.security_events"
+)
+
 
 def _fake_session_record():
     from corvin_console import auth as _auth
@@ -300,7 +322,14 @@ class TestRouteEndToEnd:
         nonexistent one (fail-closed 404, no existence oracle)."""
         path = tmp_path / "audit.jsonl"
         run_id = "tde-999-aaaa"
+        # The foreign records have to be written the only way they can exist:
+        # BY that tenant's own process. Since ADR-0640 (F-A6) the writer refuses
+        # a record whose ``tenant_id`` is not the process tenant — writing
+        # "other-tenant" from a ``_default`` process now raises instead of
+        # producing the fixture, so the fixture moves into that tenant.
+        monkeypatch.setenv("CORVIN_TENANT_ID", "other-tenant")
         _write_normal_turn(path, run_id, tenant_id="other-tenant")
+        monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
         with pytest.raises(HTTPException) as exc_info:
             self._call(run_id, monkeypatch, path)  # caller tenant: _default
         assert exc_info.value.status_code == 404

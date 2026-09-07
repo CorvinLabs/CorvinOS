@@ -1133,6 +1133,13 @@ helper models fed raw public-channel chat text among them) now route their WHOLE
 payload through the shared neutraliser via the fail-closed shim
 `operator/bridges/shared/prompt_guard.py`, whose `guard_prompt_head` raises rather than
 ever returning unguarded text.
+§ "Round 4, second pass" records the follow-up finding that made all of that
+insufficient: the ledger could only discover spawn sites that write a literal `-p`, so
+every site going through `ClaudeCodeEngine.spawn()` was invisible — the `/btw` live
+inject (reachable by any chat user on any bridge), the gateway tenant-Run route, the A2A
+worker and the `delegate_*` MCP tools were live and unguarded. The neutraliser now runs
+**inside** `ClaudeCodeEngine._build_args` / `spawn` / `inject`, so the engine cannot emit
+an unguarded payload regardless of what a caller remembers.
 
 Regression tests: `core/console/tests/test_console_r2_hardening.py`
 (`test_nat64_wrapped_ipv4_is_unwrapped_and_blocked`,
@@ -1212,3 +1219,39 @@ Unrelated bug found and fixed on the way: `routes/engine_pref.py` still imported
 that line. An engine the metadata table does not describe is now simply not
 OS-capable (422), fail-closed, instead of resolving through an invented
 permissive fallback.
+
+---
+
+## Route-table auth guard — three blind spots closed (2026-09-07)
+
+`core/console/tests/test_route_auth_guard.py` walks the live route table of
+`standalone.create_app()` and is what closes the *class* "a mounted router
+nobody authenticated". It was red, so it was gating nothing. Three fixes:
+
+**1. Auth must be a DECLARED dependency, never hand-rolled.** The guard reads
+the live dependant tree, so a route that authenticates inside its own body is
+indistinguishable from a route that does not authenticate at all.
+`WS /v1/console/learning/metrics/stream` (added 2026-09-07) read
+`websocket.cookies` and called `load_session` by hand — safe at runtime,
+invisible to the guard. It now takes `Depends(require_session)` like the other
+four console WebSockets (chat, learning dashboard, tasks, workflows). The guard
+was deliberately NOT widened to recognise hand-rolled auth: a guard that
+recognises hand-rolled auth is a guard that can be fooled by it.
+
+**2. `GET /openapi.json` was anonymous.** `standalone.create_app()` set
+`docs_url=None` / `redoc_url=None` but left `openapi_url` at its default, so an
+unauthenticated caller got 200 with all 496 paths and every request/response
+schema — the full attack map of an install. It is now `openapi_url=None`,
+matching `corvin_gateway/app.py`; nothing in the repo or the SPA consumes the
+schema. Regression test: `TestSchemaIsNotAnonymousDocumentation` asks over the
+wire for `/openapi.json`, `/docs`, `/redoc` and requires 404.
+
+**3. The guard could not SEE that route.** FastAPI registers the schema route
+with `add_route`, producing a bare `starlette.routing.Route` with no dependant
+tree, and `_walk` descended only into `APIRoute` / `APIWebSocketRoute`. It now
+yields bare starlette routes as `authed=False` rows, so such a route must be
+removed or justified in `deps.PUBLIC_ROUTES`.
+
+`KNOWN_OPEN_UNAUTHENTICATED` / `KNOWN_OPEN_NO_CSRF` are now **empty** — the four
+entries (skill-creator status/generate, learning subscribe/unsubscribe) are all
+closed. Both lists may only ever shrink.

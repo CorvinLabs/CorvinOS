@@ -472,7 +472,14 @@ def headless_enabled(tenant_id: str | None = None) -> bool:
             tenant_id = current_tenant()
 
         registry = get_registry()
-        result = registry.execute("os.headless_mode", {"headless_enabled": False})
+        # LoM is MANDATORY on every Skill execution (ADR-0537/0642): a call
+        # without one is refused, and a refused call resolves to False here —
+        # which silently made ``headless_api_mode`` dead for every tenant.
+        result = registry.execute(
+            "os.headless_mode",
+            {"headless_enabled": False},
+            lom="core/console/corvin_console/app.py:headless_enabled",
+        )
 
         if result.status == "success":
             return bool(result.output.get("headless_enabled", False))

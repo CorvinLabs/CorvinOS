@@ -306,15 +306,25 @@ class TestStandaloneServesNoBrowserSurface(_SurfaceAssertions):
         """Headless removes the UI, not the product.
 
         Without this, "delete every route" would pass the test above.
+
+        Asked over the WIRE, not off ``app.routes``: FastAPI keeps an included
+        router as an ``_IncludedRouter`` entry with no ``.path``, so scanning
+        the top-level route objects for a ``/v1/console/`` prefix found nothing
+        even when all 496 console routes were mounted and answering — the test
+        was red for a reason that had nothing to do with headless mode. A 401
+        is the proof this test wants: the route exists, it is gated, and the
+        gate is the session gate.
         """
         with _sandbox(self.tmp, headless=True):
             client = _standalone_client()
-            paths = {getattr(r, "path", "") for r in client.app.routes}
-            self.assertTrue(
-                any(p.startswith("/v1/console/") for p in paths),
-                "headless mode must keep the REST API — it is API-ONLY mode, "
-                "not off mode",
-            )
+            for path in ("/v1/console/settings/features", "/v1/console/tasks"):
+                with self.subTest(path=path):
+                    resp = client.get(path)
+                    self.assertEqual(
+                        resp.status_code, 401,
+                        f"headless mode must keep the REST API — {path} answered "
+                        f"{resp.status_code}; it is API-ONLY mode, not off mode",
+                    )
 
 
 class TestGatewayServesNoBrowserSurface(_SurfaceAssertions):

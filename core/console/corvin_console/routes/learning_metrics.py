@@ -16,9 +16,9 @@ was mounted under a DOUBLED prefix (``/v1/console/v1/console/learning/metrics``,
 F-L4), handed out a fake ``download_url`` on export, and its WebSocket took the
 tenant from a query parameter without any authentication (F-L2/F-L3).
 
-Tenant isolation: REST from ``require_session``; the WebSocket authenticates
-the console session cookie (``auth.load_session``) and derives the tenant from
-the session record — closes 1008 without one.
+Tenant isolation: REST *and* the WebSocket take ``require_session`` as a
+declared dependency and derive the tenant from the session record — an
+anonymous connect is refused before accept.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import io
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -104,6 +104,28 @@ async def get_metrics_history(
 
 _EXPORT_FIELDS = ("event_id", "event_type", "skill_id", "timestamp", "audit_ref", "lom")
 
+#: Characters that make a spreadsheet treat a CSV cell as a FORMULA.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(value: Any) -> Any:
+    """Neutralise CSV formula injection in one exported cell.
+
+    ``skill_id``, ``lom`` and ``audit_ref`` are free-form strings copied out of
+    the event store. A cell that begins with ``=``, ``+``, ``-`` or ``@`` is
+    EXECUTED by Excel / LibreOffice / Google Sheets when the operator opens the
+    export — ``=cmd|'/c calc'!A1`` is the classic payload. Prefixing with a
+    single quote is the standard neutralisation: the cell renders as text and
+    the original value is one character away.
+
+    Round-4 review, adversarial vector 20 (metadata injection): the export wrote
+    these strings through unchanged. The JSON export is untouched — JSON has no
+    formula semantics and the value must round-trip byte-exactly there.
+    """
+    if isinstance(value, str) and value[:1] in _CSV_FORMULA_PREFIXES:
+        return "'" + value
+    return value
+
 
 def _export_window(request: ExportRequest) -> tuple[datetime, datetime]:
     end = datetime.utcnow()
@@ -161,7 +183,7 @@ async def export_metrics(request: ExportRequest, session = Depends(require_csrf)
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=_EXPORT_FIELDS)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows([{k: csv_safe(v) for k, v in row.items()} for row in rows])
         body, media, ext = buf.getvalue(), "text/csv", "csv"
 
     return Response(
@@ -184,27 +206,26 @@ async def export_metrics(request: ExportRequest, session = Depends(require_csrf)
 _active_connections: Dict[str, set[WebSocket]] = {}
 
 
-def _authenticate_websocket(websocket: WebSocket) -> Optional[session_auth.SessionRecord]:
-    """The live console session behind the cookie, or None (same rule as ``require_session``)."""
-    sid = websocket.cookies.get(session_auth.COOKIE_NAME)
-    if not sid:
-        return None
-    return session_auth.load_session(sid)
-
-
 @router.websocket("/stream")
-async def websocket_metrics_stream(websocket: WebSocket):
+async def websocket_metrics_stream(
+    websocket: WebSocket,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+):
     """Real-time push of the tenant's learning status.
 
-    Authentication: the ``corvin_console_sid`` cookie must resolve to a live
-    session; the tenant is the session's tenant. No cookie / expired session →
-    close 1008 (policy violation) before accept. There is no ``tenant_id``
-    parameter — a client must not be able to pick a tenant.
+    Authentication: ``require_session`` as a DECLARED dependency, exactly like
+    the other four console WebSockets (chat, learning dashboard, tasks,
+    workflows). This route first authenticated by hand — reading
+    ``websocket.cookies`` and calling ``load_session`` inside the body — which
+    was equally safe at runtime and INVISIBLE to the route-table guard
+    (``core/console/tests/test_route_auth_guard.py``): the guard reads the live
+    dependant tree, so hand-rolled auth reads to it exactly like no auth at all.
+    Widening the guard to recognise hand-rolled auth would be a guard that can
+    be fooled by hand-rolled auth; the route comes to the pattern instead.
+    No cookie / expired session → 403 before accept, as for every other route.
+    There is no ``tenant_id`` parameter — a client must not be able to pick a
+    tenant.
     """
-    rec = _authenticate_websocket(websocket)
-    if rec is None:
-        await websocket.close(code=1008, reason="no session")
-        return
     tenant_id = rec.tenant_id
 
     await websocket.accept()

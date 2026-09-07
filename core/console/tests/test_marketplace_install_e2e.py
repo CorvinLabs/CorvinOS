@@ -215,7 +215,17 @@ class TestMarketplaceInstallE2E(unittest.TestCase):
             self.assertIn("not in the marketplace index", body["error"])
 
     def test_running_builtin_surfaces_without_an_install_click(self):
-        """A builtin loaded at boot (never installed) still shows under /plugins."""
+        """A builtin loaded at boot (never installed) still shows under /plugins.
+
+        Provenance is LOCATION-derived since ADR-0643/R2-A4: the loader passes
+        the ``(origin, source)`` pair it computed from where the class FILE
+        lives (``bootstrap.origin_for_plugin_dir``), and ``register()`` records
+        exactly that. A caller that says nothing gets ``unknown`` — never
+        ``builtin`` by omission, which is the defect this listing had (every
+        running plugin was stamped ``builtin``). Both halves are asserted here:
+        the bare registration must NOT read as builtin, and the loader's own
+        derived pair must survive to the listing.
+        """
         with self._live() as (client, _csrf, _home):
             from corvin_plugins.bootstrap import build_context
             from corvin_plugins.protocol import HealthStatus
@@ -239,24 +249,57 @@ class TestMarketplaceInstallE2E(unittest.TestCase):
                 def retrieve(self, *a, **k):
                     return []
 
-            get_registry().register(
-                _Live(),
-                build_context(
-                    plugin_id=_REGISTRY_ID, tenant_id="_default", corvin_home=Path("/tmp")
-                ),
-            )
+            def _listed():
+                return {p["plugin_id"]: p for p in
+                        client.get("/v1/console/plugins").json()["plugins"]}.get(
+                            _REGISTRY_ID)
+
+            def _ctx():
+                return build_context(
+                    plugin_id=_REGISTRY_ID, tenant_id="_default",
+                    corvin_home=Path("/tmp"),
+                )
+
+            # (a) No provenance claimed → "unknown", and it still SURFACES.
+            get_registry().register(_Live(), _ctx())
             try:
-                entry = {p["plugin_id"]: p for p in
-                         client.get("/v1/console/plugins").json()["plugins"]}.get(_REGISTRY_ID)
+                entry = _listed()
                 self.assertIsNotNone(
                     entry, "a running builtin must surface under GET /plugins"
                 )
-                self.assertEqual(entry["origin"], "builtin",
-                                 "origin is location-derived for a running builtin")
+                self.assertEqual(
+                    entry["origin"], "unknown",
+                    "a registration that claims no provenance must never be "
+                    "upgraded to builtin by omission",
+                )
             finally:
                 try:
                     get_registry().unregister(_REGISTRY_ID)
-                except Exception:
+                except Exception:  # noqa: BLE001
+                    pass
+
+            # (b) The loader's own derived pair — the real boot path computes it
+            # with origin_for_plugin_dir() over the wheel's builtin root.
+            from corvin_plugins.bootstrap import _BUILTIN_ROOT, origin_for_plugin_dir
+
+            derived_origin, derived_source = origin_for_plugin_dir(
+                _BUILTIN_ROOT / "memory" / "semantic-context-retriever"
+            )
+            self.assertEqual(derived_origin, "builtin",
+                             "a dir under the wheel's builtin root IS builtin")
+            get_registry().register(
+                _Live(), _ctx(), origin=derived_origin, source=derived_source,
+            )
+            try:
+                entry = _listed()
+                self.assertIsNotNone(entry)
+                self.assertEqual(entry["origin"], "builtin",
+                                 "the loader's location-derived origin must "
+                                 "reach the console listing unchanged")
+            finally:
+                try:
+                    get_registry().unregister(_REGISTRY_ID)
+                except Exception:  # noqa: BLE001
                     pass
 
 

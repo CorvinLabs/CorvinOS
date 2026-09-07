@@ -29,27 +29,25 @@ from pathlib import Path
 
 import pytest
 from fastapi.routing import APIRoute, APIWebSocketRoute
+from starlette.routing import Route as StarletteRoute
+from starlette.routing import WebSocketRoute as StarletteWebSocketRoute
 
 pytestmark = pytest.mark.filterwarnings("ignore")
 
 MUTATING = ("POST", "PUT", "PATCH", "DELETE")
 SESSION_COOKIE = "corvin_console_sid"
 
-# TODO(skill-system agent): skill_creator_api.py — status read is unauthenticated.
-KNOWN_OPEN_UNAUTHENTICATED: dict[tuple[str, str], str] = {
-    ("GET", "/v1/console/skill-creator/status/{run_id}"):
-        "routes/skill_creator_api.py — owned by the skill-system workstream",
-}
+#: Violations another workstream is fixing. EMPTY as of 2026-09-07 — the four
+#: entries that lived here are all closed:
+#:   GET  /v1/console/skill-creator/status/{run_id} → Depends(require_session)
+#:   POST /v1/console/skill-creator/generate        → Depends(require_csrf)
+#:   POST /v1/console/api/learning/{,un}subscribe   → Depends(require_csrf)
+#: The list can only ever SHRINK (see the module docstring): a new violation is
+#: a failing test, not a new entry — add one only with the owning workstream
+#: named, and delete it the moment the fix lands.
+KNOWN_OPEN_UNAUTHENTICATED: dict[tuple[str, str], str] = {}
 
-# TODO(learning agent / skill-system agent): mutations with require_session only.
-KNOWN_OPEN_NO_CSRF: dict[tuple[str, str], str] = {
-    ("POST", "/v1/console/api/learning/subscribe"):
-        "routes/learning_dashboard.py — learning workstream",
-    ("POST", "/v1/console/api/learning/unsubscribe"):
-        "routes/learning_dashboard.py — learning workstream",
-    ("POST", "/v1/console/skill-creator/generate"):
-        "routes/skill_creator_api.py — skill-system workstream",
-}
+KNOWN_OPEN_NO_CSRF: dict[tuple[str, str], str] = {}
 
 
 def _is_auth_dep(name: str) -> bool:
@@ -87,6 +85,25 @@ def _walk(routes, prefix=""):
                 "csrf": csrf,
                 "deps": sorted(names),
                 "module": r.endpoint.__module__,
+            }
+        elif isinstance(r, (StarletteRoute, StarletteWebSocketRoute)):
+            # A BARE starlette route — registered with ``add_route`` rather
+            # than a FastAPI decorator, so it has no dependant tree and cannot
+            # carry a dependency at all. FastAPI's own ``/openapi.json``,
+            # ``/docs`` and ``/redoc`` are exactly this shape, and until
+            # 2026-09-07 ``/openapi.json`` answered an anonymous GET with all
+            # 496 paths and every schema — invisible to this guard, which only
+            # descended into APIRoute/APIWebSocketRoute. Such a route is
+            # UNAUTHENTICATED by construction: report it as a row so it has to
+            # be either removed or justified in ``PUBLIC_ROUTES``.
+            yield {
+                "methods": (("WS",) if isinstance(r, StarletteWebSocketRoute)
+                            else tuple(sorted(r.methods or ()))),
+                "path": prefix + r.path,
+                "authed": False,
+                "csrf": False,
+                "deps": [],
+                "module": getattr(r.endpoint, "__module__", "?"),
             }
         elif hasattr(r, "original_router"):
             p = getattr(getattr(r, "include_context", None), "prefix", "") or ""
@@ -231,3 +248,44 @@ class TestDualGateSkipListMatchesAllowlist:
         text = src.read_text(encoding="utf-8")
         assert "PUBLIC_PATH_PREFIXES" in text
         assert "'/v1/console/login'" not in text, "stale inline skip list is back"
+
+
+class TestSchemaIsNotAnonymousDocumentation:
+    """The OpenAPI schema is the whole attack map — it must not be public.
+
+    Asked through the real HTTP boundary, not the route table: FastAPI mounts
+    ``/openapi.json`` with ``add_route``, so it is a bare starlette route with
+    no dependant tree and no way to carry a dependency. ``docs_url``/``redoc_url``
+    were already ``None`` here; ``openapi_url`` was not, so an anonymous
+    ``GET /openapi.json`` returned 200 with all 496 paths and every request /
+    response model (found 2026-09-07).
+    """
+
+    @pytest.fixture(scope="class")
+    def client(self, tmp_path_factory):
+        from fastapi.testclient import TestClient
+
+        home = tmp_path_factory.mktemp("schema_home")
+        (home / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
+        prev = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID")}
+        os.environ["CORVIN_HOME"] = str(home)
+        os.environ.pop("CORVIN_TENANT_ID", None)
+        try:
+            from corvin_console.standalone import create_app
+
+            with TestClient(create_app(), raise_server_exceptions=False) as c:
+                yield c
+        finally:
+            for k, v in prev.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    @pytest.mark.parametrize("path", ["/openapi.json", "/docs", "/redoc"])
+    def test_no_anonymous_api_documentation(self, client, path):
+        resp = client.get(path)
+        assert resp.status_code == 404, (
+            f"{path} answered {resp.status_code} to an anonymous caller — the "
+            "API schema/documentation surface must not be public"
+        )

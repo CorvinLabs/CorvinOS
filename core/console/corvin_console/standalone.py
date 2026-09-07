@@ -533,6 +533,15 @@ def create_app() -> FastAPI:
         version="1.0",
         docs_url=None,   # disable Swagger UI in production
         redoc_url=None,
+        # …and the SCHEMA the disabled UIs render. Leaving openapi_url at its
+        # default kept an anonymous ``GET /openapi.json`` answering 200 with
+        # all 496 paths and every request/response model — the full attack map
+        # of an install, past every session gate. It is invisible to the
+        # route-table guard too: FastAPI registers it with ``add_route``, so it
+        # is a bare ``starlette.routing.Route`` with no dependant tree. The
+        # gateway already ships ``openapi_url=None`` (corvin_gateway/app.py);
+        # nothing in the repo or the SPA consumes the schema.
+        openapi_url=None,
         lifespan=_lifespan,
     )
 
