@@ -248,49 +248,47 @@ class TestLoopHijackingMitigation:
 
     def test_full_feedback_workflow_with_signatures(self, signature_validator, feedback_validator):
         """Integration: create → sign → validate → emit workflow."""
-        # Step 1: Create feedback
-        feedback = FeedbackEvent.create(
-            skill_id="os.context_adapter",
-            task_id="task-999",
-            tenant_id="_default",
-            outcome_feedback=OutcomeFeedbackType.NO,
-            quality_rating=2,
-            confidence=0.5,
-            reason="Answer was inaccurate",
-        )
+        # Step 1: Prepare feedback data
+        now = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        feedback_id = str(uuid4())
 
-        # Step 2: Sign feedback
-        # IMPORTANT: Do NOT include signature/signature_verified in the signing dict
         feedback_dict = {
-            "feedback_id": feedback.feedback_id,
-            "skill_id": feedback.skill_id,
-            "task_id": feedback.task_id,
-            "tenant_id": feedback.tenant_id,
-            "timestamp": feedback.timestamp,
-            "outcome_feedback": feedback.outcome_feedback.value,
-            "quality_rating": feedback.quality_rating,
+            "feedback_id": feedback_id,
+            "skill_id": "os.context_adapter",
+            "task_id": "task-999",
+            "tenant_id": "_default",
+            "timestamp": now,
+            "outcome_feedback": OutcomeFeedbackType.NO.value,
+            "quality_rating": 2,
             "preference_feedback": None,
-            "reason": feedback.reason,
-            "confidence": feedback.confidence,
-            "source": feedback.source,
-            "lom": feedback.lom,
+            "reason": "Answer was inaccurate",
+            "confidence": 0.5,
+            "source": "user",
+            "lom": None,
         }
 
+        # Step 2: Sign feedback
         signature, error = signature_validator.sign_feedback(
             "_default", feedback_dict
         )
         assert signature is not None, f"Signing failed: {error}"
 
         # Step 3: Create event with signature
-        signed_feedback = FeedbackEvent.create(
-            skill_id=feedback.skill_id,
-            task_id=feedback.task_id,
-            tenant_id=feedback.tenant_id,
-            outcome_feedback=feedback.outcome_feedback,
-            quality_rating=feedback.quality_rating,
-            confidence=feedback.confidence,
-            reason=feedback.reason,
+        # We need to use the exact same timestamp and feedback_id
+        signed_feedback = FeedbackEvent(
+            feedback_id=feedback_id,
+            skill_id=feedback_dict["skill_id"],
+            task_id=feedback_dict["task_id"],
+            tenant_id=feedback_dict["tenant_id"],
+            timestamp=now,
+            outcome_feedback=OutcomeFeedbackType.NO,
+            quality_rating=2,
+            confidence=0.5,
+            reason="Answer was inaccurate",
+            source="user",
+            lom=None,
             signature=signature,
+            signature_verified=False,
         )
 
         # Step 4: Validate (FeedbackValidator will strip signature fields before verifying)
