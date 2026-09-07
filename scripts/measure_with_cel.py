@@ -12,7 +12,7 @@ Runs 50 real agent tasks through TaskEngine with CEL and records:
 Compares against baseline_metrics.json for improvement calculation.
 
 Usage:
-    uv run scripts/measure_with_cel.py --day 9 --output day9_metrics.json
+    uv run scripts/measure_with_cel.py --day 9 --output benchmark/cel/day9_metrics.json
 """
 
 import sys
@@ -123,7 +123,7 @@ def measure_task_with_cel(task: str, engine) -> Dict[str, Any]:
 
 def load_baseline() -> Dict[str, Any]:
     """Load baseline metrics from previous measurement."""
-    baseline_file = Path("baseline_metrics.json")
+    baseline_file = Path("benchmark/cel/baseline_metrics.json")
     if baseline_file.exists():
         with open(baseline_file) as f:
             return json.load(f)
@@ -136,7 +136,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Measure CEL performance")
     parser.add_argument("--day", type=int, default=9, help="Day number (9-12)")
-    parser.add_argument("--output", default="day9_metrics.json", help="Output file")
+    parser.add_argument("--output", default="benchmark/cel/day9_metrics.json", help="Output file")
     parser.add_argument("--tasks", type=int, default=50, help="Number of tasks to measure")
     args = parser.parse_args()
 

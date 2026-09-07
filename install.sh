@@ -25,7 +25,7 @@ set -eu
 
 PKG="${CORVIN_PKG:-corvinos}"
 # Keep CORVIN_MIN_VERSION equal to `version` in pyproject.toml (guarded by test).
-CORVIN_MIN_VERSION="1.0.0"
+CORVIN_MIN_VERSION="2.0.0"
 UV_PIN_VERSION="0.12.9"
 UV_INSTALLER_URL="https://github.com/astral-sh/uv/releases/download/${UV_PIN_VERSION}/uv-installer.sh"
 UV_INSTALLER_SHA256="222e006c0fe4a0d793031833e469b21df72311f4e3526ffecca0e19e6dfabc32"

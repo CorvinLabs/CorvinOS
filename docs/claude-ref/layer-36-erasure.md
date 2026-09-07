@@ -27,6 +27,20 @@ overall outcome.
 | Web chat (ADR-0194) | Voice archive at `<session>/voice/<hash>.<ext>` (+ `-fNN` read-aloud segments) — synthesised speech of every assistant reply — user uploads at `<session>/attachments/`, background-task results at `<session>/compute_inbox/` (carry the user's task text as `description`), the turn log at `<global>/web_chat/sessions/<sid>.turns.jsonl`, and the session meta file `<sid>.json` beside it (+ `.json.tmp` crash leftovers), whose `title` is LLM-derived from the user's first message | `WebChatHandler` deletes all of them. Note `voice/`, `attachments/` and `compute_inbox/` are SIBLINGS of `artifacts/` and the turn log + meta live outside the session dir, so none are reachable by `L33ArtifactHandler`. Known gap (needs its own ADR): engine-side transcripts under `~/.claude/projects/<slug>/*.jsonl` |
 | Workflow checkpoints (ADR-0188 M5) | Paused Task-Engine runs at `<tenant>/workflow_runs/<run_id>.json` (raw `chat_id`/`approver` + full `inputs`/`state`) | `WorkflowCheckpointHandler` deletes any checkpoint (+ `.claimed` sidecar) whose `chat_id`/`approver` matches subject_id |
 | L16 identity-mapping | subject_id → real-world identity link | Delete the mapping (audit chain preserved per EDPB) |
+| Learning (ADR-0314, F-A9) | `<tenant>/learning/events/*.jsonl` partitions (via `EventStore.erase_user_events`: atomic rewrite + counts-only tombstone) and any `learning/**/*.jsonl` side store whose records name the subject | `LearningEventHandler` |
+| Infinite session (F-A9) | `<tenant>/infinite_session/**` (snapshots, rollback WAL/log, drift, bridges, verification logs) and `<tenant>/sessions/<subject>/checkpoints` — attributed by directory name or by a `session_id`/`user_id`/`chat_key`… field | `InfiniteSessionHandler` |
+
+**Coverage guard (F-A9):** `erasure_handlers.COVERED_DIRS` maps every handler to
+the tenant-home directories it claims; `NON_PERSONAL_DIRS` lists the
+content-free ones (the hash chain, key material, config). `tests/security/
+test_erasure_coverage_guard.py` boots the reachable writers into a temp home and
+fails on any created directory that neither claims — a new persistent store
+cannot ship without an Art. 17 path.
+
+**CCC `/erase` (F-A9):** `corvin_console.chat_router._route_erasure` runs the
+REAL `ErasureOrchestrator` (real chain + stub backfill, exactly like
+`corvin-erasure run`) in a worker thread; the result carries the request id and
+per-layer statuses (never the subject id). The "queued" placeholder is gone.
 
 ---
 

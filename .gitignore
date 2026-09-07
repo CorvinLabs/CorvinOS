@@ -155,3 +155,15 @@ dist/
 # wrangler (Cloudflare Pages) local deploy cache
 .wrangler/
 playwright-results/
+
+# local virtualenvs / test artifacts (never tracked)
+venv*/
+.venv*/
+.test-env/
+test-results/
+playwright-report/
+dist_release/
+
+# Mid-turn heartbeat markers — legacy location inside the repo tree (F-B8, 2026-09-07):
+# the adapter now writes them under <corvin_home>/bridges/mid_turn_heartbeats/.
+operator/bridges/shared/mid_turn_heartbeats/

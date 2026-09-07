@@ -126,22 +126,35 @@ same commit; the test will fail otherwise.
 
 ---
 
-## Default matrix — residency restriction is opt-in
+## Default matrix — residency is the default, widening is opt-in (F-A10, 2026-09-07)
 
 ```text
 PUBLIC       : {local, eu_cloud, us_cloud}
 INTERNAL     : {local, eu_cloud, us_cloud}
-CONFIDENTIAL : {local, eu_cloud, us_cloud}
+CONFIDENTIAL : {local, eu_cloud}            # personal data never to US cloud by default
 SECRET       : {local}   (+ network_egress == "none")
 ```
 
-The default is **permissive**: a zero-config single-operator install runs
-frictionless on its configured cloud engine (e.g. `claude_code` = `us_cloud`).
-A normal chat message containing a name or e-mail classifies as `CONFIDENTIAL`
-and must NOT be blocked by default. Data-residency restriction (EU/local-only)
-is an explicit operator opt-in via the tenant matrix below (see the
-`tenant.corvin.eu-production-ollama.yaml` preset). This mirrors the classifier's
-own stance: *"Default is PUBLIC — users opt in to restriction."*
+`CONFIDENTIAL` (a message carrying a name / e-mail / phone) stays in EU/local
+jurisdiction unless the operator WIDENS the row explicitly — the audited,
+deliberate choice — in `tenant.corvin.yaml`:
+
+```yaml
+spec:
+  data_classification:
+    matrix:
+      CONFIDENTIAL: [local, eu_cloud, us_cloud]   # opt IN to a US-cloud engine
+```
+
+The enforcement contract is unchanged: with NO `tenant.corvin.yaml` on disk,
+`load_guard_for_tenant` returns `None` (no enforcement). The restrictive default
+applies the moment a tenant config exists without its own `matrix` — and it is
+what the fail-closed fallback for an unparseable config always promised.
+
+`DataClassification.parse()` returns `None` for an unknown value (it used to
+return `INTERNAL`, which every default row allows on a cloud engine — a typo in a
+caller's label silently downgraded the guard to "allow");
+`DataFlowGuard.validate` denies `None` with `matched_rule="unknown_classification"`.
 
 `SECRET` is the only row kept local-only by default. It fires solely on literal
 credentials (API keys, private keys, `password = …`) detected by regex, occurs
@@ -294,6 +307,11 @@ ships + tests in isolation from the adapter wiring.
 * Don't fail-open the gate on error: unknown engine / unparseable config must
   still enforce the DEFAULT matrix (which keeps the SECRET floor), never
   allow-all.
+* Don't fail-open on an engine WITHOUT a `name`: nothing can be matched
+  against the locality matrix, so `adapter._check_compliance_or_fail`
+  refuses the spawn (`[compliance] Spawn rejected … fail-closed`) — it
+  returned `None` until 2026-09-07 (F-B9), which let any nameless /
+  misregistered engine bypass classification entirely.
 * Don't import `anthropic` from this module — CI lint enforces.
 
 ---

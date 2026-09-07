@@ -31,6 +31,10 @@ install -m 0644 "$CORVIN_REPO_DIR/ops/systemd/corvin-audit-verify.service" \
                 /etc/systemd/system/corvin-audit-verify.service
 install -m 0644 "$CORVIN_REPO_DIR/ops/systemd/corvin-audit-verify.timer" \
                 /etc/systemd/system/corvin-audit-verify.timer
+# F-A5: the OnFailure= target named by corvin-audit-verify.service — without it
+# systemd cannot resolve the escalation and a broken chain never alerts.
+install -m 0644 "$CORVIN_REPO_DIR/ops/systemd/corvin-audit-verify-failure@.service" \
+                /etc/systemd/system/corvin-audit-verify-failure@.service
 
 # Render the EnvironmentFile path so units pick up /opt/corvin/.env
 # without baking the path into the unit-file.

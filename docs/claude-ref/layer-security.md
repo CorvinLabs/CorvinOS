@@ -256,7 +256,13 @@ when it's a long paste.
 
 `audit.audit_health_check()` runs once on adapter boot, calls
 `security_events.verify_chain()`, and on integrity failure emits a
-CRITICAL `audit.chain_gap_detected` event WITHOUT `hash_chain=True`.
+CRITICAL `audit.chain_gap_detected` event WITHOUT a `hash` — but, since
+2026-09-07 (F-A1), BOUND to the tail: the writer stamps `prev_hash` = the
+current tail hash and a keyed `mac`, and `verify_chain` accepts a hash-less
+record only as this event type at exactly that position. Any other hash-less
+record (a forged insertion, a moved marker, a legacy marker without
+`prev_hash`) is reported as `unchained_record`. `write_event(hash_chain=False)`
+raises `ValueError` for every other event type.
 The out-of-band write is deliberate: a broken chain would otherwise
 prevent the very mechanism we use to record the corruption.
 
@@ -495,7 +501,16 @@ run, (c) existing canonical key beats silo (no overwrite).
 Two systemd user units in `operator/voice/scripts/systemd/`:
 
 - `corvin-audit-verify.service` — oneshot calling
-  `voice_audit.py verify --notify-bridge`.
+  `voice_audit.py verify --all --notify-bridge` (F-A5, 2026-09-07: `--all`
+  covers every chain under `CORVIN_HOME`), with
+  `OnFailure=corvin-audit-verify-failure@%n.service`.
+- `corvin-audit-verify-failure@.service` — the escalation target: logs
+  `daemon.crit` via `logger -t corvin-audit-alert`. `bridge.sh install_units`
+  and `ops/bootstrap/30-tenant-init.sh` install it alongside the timer; without
+  it systemd cannot resolve the `OnFailure=` and a broken chain never alerts.
+  Re-install on an existing box:
+  `operator/bridges/bridge.sh up` (user units) — or, for the docker layout,
+  `sudo install -m 0644 ops/systemd/corvin-audit-verify-failure@.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
 - `corvin-audit-verify.timer` — `OnCalendar=*-*-* 04:30:00`,
   `Persistent=true`.
 
@@ -833,11 +848,11 @@ sweeping rename.
   `truncated` flag. The forensic value is "we have enough to
   recognise an injection pattern" not "we log everything verbatim";
   long pastes don't belong in the audit chain.
-- Don't make `audit.chain_gap_detected` part of the hash chain. The
-  whole point of the `hash_chain=False` flag is that a broken chain
-  can still record its own gap. Linking the gap event to the broken
-  predecessor would require the chain to be intact to log that the
-  chain is broken.
+- Don't give `audit.chain_gap_detected` a `hash` link. The whole point of
+  the `hash_chain=False` flag is that a broken chain can still record its
+  own gap. It IS bound to the tail (`prev_hash` + keyed `mac`, F-A1) so it
+  cannot be forged or moved — but it is not a link, and it is the ONLY
+  event type `write_event` accepts without a hash.
 - Don't drop the confusable map in favour of "NFKC alone". NFKC
   alone does NOT collapse cyrillic ↔ latin look-alikes — it only
   folds full-width / compatibility forms. Both passes are needed.
@@ -1032,3 +1047,48 @@ When any condition is true but the import fails → `ChainIntegrityFailureGateUn
   `_spec_known("clag")` so a partial install triggers fail-closed uniformly.
 - `import anthropic` from `clag.py` (CI AST lint enforces).
 
+
+## Console hardening — adversarial round 1, 2026-09-07 (F-C3/F-C4/F-C5/F-C9, XSS, SSRF)
+
+Guard test for the whole class: `core/console/tests/test_route_auth_guard.py`
+(walks the live route table of `standalone.create_app()`); regression tests for
+the items below through the real router: `core/console/tests/test_console_hardening_routes_e2e.py`.
+
+- **Vibe context inspector** (`routes/vibe/context_inspector.py`): `GET /v1/console/vibe/health`
+  and `/vibe/tasks/list` are session-gated; the tenant is `rec.tenant_id`; the chain is
+  `forge.paths.tenant_global_dir(tid)/forge/audit.jsonl` under `CORVIN_HOME` (never
+  `Path.home()/.corvin`). The unauthenticated `/vibe/tasks/debug` duplicate was deleted.
+  (Before: `audit_chain_path` was an unresolved name — the task list was permanently empty and
+  the debug route reflected the exception text.)
+- **Audit graph** (`routes/vibe/audit_graph.py`): `GET /v1/console/audit/graph` is session-gated and
+  reads `rec.tenant_id`'s chain — no hardcoded `_default`, no hardcoded repo path.
+- **L5 metrics** (`routes/l5_metrics_api.py`): router paths are relative (`prefix="/metrics/l5"`),
+  so the wire paths are `/v1/console/metrics/l5/{status,timeseries,alerts,...}` (the
+  double-prefixed `/v1/console/v1/metrics/l5/...` is gone). `POST .../alerts/{id}/acknowledge|resolve`
+  require CSRF (`require_csrf`) and a tenant match; 403 from the tenant check is no longer
+  masked as 500; exception text is never returned.
+- **Custom provider SSRF guard** (`routes/custom_provider.py::_assert_provider_endpoint_allowed`):
+  `POST /custom-provider/test-api` and `/create` refuse non-public targets — private LAN ranges,
+  link-local + every cloud-IMDS shape, reserved, blocked hostnames — fail-closed, redirects never
+  followed. **Decision: loopback (127/8, ::1, `localhost`) is allowed** because the panel's main
+  use case is a same-host model/RAG server (Ollama :11434, LM Studio, vLLM) and the console is the
+  operator's own machine. Residual (documented in the module): DNS rebinding after the pre-fetch
+  resolve — httpx does not pin the connect IP the way `datasources_http`'s urllib opener does.
+- **Frontend XSS**: the setup-guide step renderer (`SetupGate.tsx`, `bridges.tsx`) no longer
+  runs a regex→HTML rewrite into `dangerouslySetInnerHTML`; `src/lib/inline-markup.tsx`
+  renders `**bold**` / `` `code` `` as React elements, so text outside the two tokens can never
+  become markup (`tests/unit/inline-markup.test.tsx`).
+- **Production entrypoint** (`Dockerfile.console`, `ops/start_console_production.sh`): both run
+  `uvicorn corvin_console.standalone:create_app --factory` (`PYTHONPATH` includes `core/console`)
+  — the shipped host with the ADR-0232/0233 boot tripwire, dual-gate middleware and SPA mount.
+  `corvin_console.app:app` is the bare router app and must never be the production entrypoint.
+  Docker `HEALTHCHECK` probes `/v1/console/healthz` (the old `/v1/console/api/tasks/health` was a 404).
+- **Inspection query engines** (`corvin_console/query_engines.py`): `corvin_home` comes from
+  `core.paths.tenant.corvin_home()` (honours `CORVIN_HOME`), derived paths are lazy properties,
+  and `TaskGraphQuery.list_tasks` returns the full match count as `total` (was the page size).
+- Deleted dead code: `routes/security_decisions.py` (a Flask blueprint with mock data, never
+  mounted, zero callers) and `web-next/components/VibeEngineering.tsx` (outside `src/`, unreferenced).
+- **Frontend build discipline**: `eslint.config.js` ignores `dist/`, `dist.next/`, `dist.prev/`
+  (the deploy swap/rollback copies) so `npm run lint` reports only real source problems; `npm run lint`
+  is expected to be clean and `tsc -b` must pass — `corvin-console-watch.service` only deploys a
+  bundle when it does.

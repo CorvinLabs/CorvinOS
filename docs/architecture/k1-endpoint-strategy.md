@@ -1,6 +1,6 @@
 # k=1 Endpoint Architecture (ADR-0515)
 
-**Status:** Phase 1 Implementation (COMPLETE)  
+**Status:** HISTORICAL — the Flask `@k1_flask` blueprints (`vibe_dashboard.py`, `federation_receiver.py`, `github_webhooks.py`) and `core/endpoints/k1_*` were never mounted in the FastAPI console and were deleted on 2026-09-07 (adversarial review, zero production callers). The live console surface is the FastAPI router tree in `core/console/corvin_console/routes/`.  
 **Last Updated:** 2026-08-31  
 **Reference:** ADR-0515
 

@@ -65,6 +65,69 @@ next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tena
 
 Only `os.delegation_router` is tunable (`TUNABLE_SKILLS`); any other `skill_id` is a 400.
 
+### Operator interface (`routes/learning.py`, `routes/learning_metrics.py`) — real data or an honest error code (2026-09-07)
+
+Until 2026-09-07 these routes answered with constants (`alpha_core=0.1`,
+`convergence_percent=87.5`, `[]`), `override`/`rollback` reported `"success"`
+while changing nothing, `learning_metrics.py` was mounted under a doubled
+prefix (`/v1/console/v1/console/learning/metrics`) and its WebSocket took the
+tenant from a query parameter with no authentication (adversarial review
+F-L2/F-L3/F-L4). Everything below is computed from the tenant-BOUND
+`event_store.EventStore` and the core chain — never a placeholder.
+
+| Method · path | Answer | Notes |
+|---|---|---|
+| `GET learning/status` | `{event_counts{per type}, recent_outcomes{window:50,total,successes,success_rate}, outcome_loss (1−success_rate), last_outcome_at, last_feedback_at, last_config_update_at, status}` | `status` ∈ `no_data` (no events) · `collecting` (outcomes, no config change yet) · `learning` (≥1 `config_updated`) |
+| `GET learning/metrics?window=1h\|6h\|24h` | 12 equal buckets `{timestamp, outcomes, successes, success_rate, feedback, skill_executions, config_updates}` + `sample_count` | 400 on any other window |
+| `GET learning/checkpoint` | the REAL rollback points: `SkillAdapter.get_version_history()` per tunable Skill (`checkpoint_id` = `version_id`) | `[]` until a hypothesis is accepted; 503 when `core.skills` is absent |
+| `GET learning/audit?limit=` | the tenant's `learning.*` records from the core hash chain (`audit_ref`, type, ts, skill_id, lom, hash, prev_hash) | content-free by construction; 503 when the writer is not resolvable |
+| `POST learning/override` · `POST learning/rollback/{id}` | **501** — there is no live meta loop to override; the real, audited change path is `POST learning/config/rollback?to_version=` | CSRF-gated like every POST |
+| `GET learning/metrics/current` · `GET learning/metrics/history` | the same `learning_status()` / `learning_series()` as above (one computation, three surfaces) | single prefix `/v1/console/learning/metrics` |
+| `POST learning/metrics/export {format: json\|csv, window}` | the tenant's learning events in the window, INLINE (`Content-Disposition: attachment`, `X-Rows-Exported`) — content-free rows (`event_id, event_type, skill_id, timestamp, audit_ref, lom`) | no download token; GDPR Art. 20 |
+| `WS learning/metrics/stream` | pushes `{type: metrics, data: <status>}` immediately and every 10 s; `ping`→`pong` | authenticates the `corvin_console_sid` cookie via `auth.load_session`; **1008** without a live session; tenant = the session's tenant, no `tenant_id` parameter |
+
+Free text is never persisted: `feedback_text` (ratings) and `reason` (grades)
+are accepted and reduced to `has_text`/`text_length` (`has_reason`/
+`reason_length`) before the event is written (`operator_feedback.build_rating_event`,
+`LearningIntegration.grade_pattern` — the latter now writes through the
+audit-first `event_store.EventStore`, not the unchained TreeOfThoughts JSONL).
+`EventStore(tenant_home, tenant_id=…)` is tenant-bound: an event carrying any
+other tenant is refused before the chain write.
+
+### Core-chain allowlists (`event_persistence._LEARNING_EVENT_ALLOWLISTS`)
+
+The core writer's metadata floor is default-deny for detail keys (F-A4). Every
+learning chain record type (`learning.<event_type>`, `learning.retention`,
+`learning.erasure`, `learning.hyperparameter_changed`, the hybrid-context and
+erasure-cascade events) registers its positive key set at writer resolution,
+exactly like `skill_registry_phase1` does for `skill.*`. Without it the
+`audit_ref` the commit check reads back is scrubbed and every learning write
+fails closed. Adding a detail key to a learning record means adding it there.
+
+### 9D / meta loop (`nine_d_loss.py`, `meta_optimizer.py`, `watchdog.py`)
+
+`NineD_LossOptimizer` drives the real `DivergenceWatchdog` (checkpoint →
+`apply_gradients` → `validate_state` → `restore_checkpoint` on divergence);
+checkpoints persist under `<CORVIN_HOME>/tenants/<t>/learning/meta_checkpoints/`.
+Tier 2 loops learn with the meta loop's `α_infra`/`damping_infra` (no hardcoded
+0.01/0.95). `MetaOptimizer.compute_loss` reads both key conventions
+(`core_loss`/`prev_core_loss` and `loss_delta_core`); a non-finite delta scores
+1.0 (never a silent 0). Every hyperparameter change — gradient step, feedback
+step, `set_state`/rollback — is committed to the core chain FIRST as
+`learning.hyperparameter_changed {changes{param{old,new}}, reason}` and is NOT
+applied when the chain write fails; `set_state` validates NaN/Inf/bounds.
+The 9D optimizer has no production caller yet (it is exercised by tests only).
+
+### Live experiment collector (`live_experiment_collector.py`)
+
+Records ONLY measured values: learning counts / recent success rate / outcome
+loss from the `EventStore`, process `rusage` + host load average, audit chain
+size, event counts of the last hour, and per-signal "seen at all" health —
+under `<CORVIN_HOME>/tenants/<t>/experiments/live_measurements/`. A source that
+cannot be read is recorded as `None` and named in `sources`; nothing is ever
+simulated (the pre-2026-09-07 collector wrote `random.gauss` values labelled as
+measurements).
+
 ## Audit events (ADR-0537 attribution)
 
 | Event | Chain | Emitted by |
@@ -83,6 +146,18 @@ continuously (346 executions in ten minutes of polling were observed) and no
 optimizer consumes them. The manifest route additionally caches the resolved
 flags per tenant for 5 s (`routes/capabilities.py::_read_flags`), invalidated
 by `POST /features/toggle`, so an operator decision is never stale.
+
+## Registry hardening (2026-09-07 adversarial review F-K2/F-K3/F-K5/F-K6/F-K8)
+
+| Mechanism | Where | Rule |
+|---|---|---|
+| LoM required | `SkillsRegistry.execute(..., lom=)` | `lom="<file>:<function>"` (or `:L<line>`) is mandatory; missing → audited `skill.executed` with `status=error`, the Skill does NOT run. `lom_hash` = SHA-256 of the named function's source (`ast`), so it survives line drift. Production call sites: `capabilities.py:_read_flags_uncached`, `slash_commands.py:_plugin_builder_enabled`, `vibe_engineering.py:get_pipeline`, `bootstrap.py:start_health_monitoring`, `delegation_policy.py:_acp_shadow_route`. |
+| Decision in the chain | `SkillExecutionResult.to_audit_event` → `decision_summary()` | the core writer drops any `output` key; the chain now carries an allowlisted `decision` (engine, enabled, mode, confidence, shadow/bundled_engine, `flag_count`/`flags_on`/`flags_hash`) — never free text. Field sets are registered as positive allowlists (`SKILL_AUDIT_ALLOWLISTS`). |
+| Compliance tier | `SkillMetadata.tier` (`compliance` / `core` / `installed`) | `os.capabilities` is `compliance`: `unregister()` / `disable_skill()` raise `SkillDisableRefused`, the 3-failure auto-disable is refused — every refusal is audited as `skill.disable.refused`. |
+| Lost-update guard | `SkillAdapter._locked()` | `fcntl.flock` on `<config>.lock` + RELOAD inside the lock around `run_optimizer_epoch` / `rollback`; two concurrent feedback requests advance the epoch by two, never one. |
+| Namespace gate | `skill_forge.registry.SkillRegistry(caller_persona=…)` | create/update/delete/grade/promote are gated on `forge.policy` namespaces when a persona is attached (MCP server hands its turn persona over; console routes act as `assistant` → `assistant.*` only, 422 otherwise). Fail-closed when the policy cannot be loaded. |
+| Grade cap | `SkillRegistry.grade(..., organic=False)` | non-organic grades (self-award, auto, bootstrap) are clamped to `AUTO_GRADE_CAP_MAX = 0.3` and audited `capped`; only a caller vouching for a real run passes `organic=True` (MCP `skill_grade` with a `run_id`; `skill_inject.grade_from_user_followup` — an outcome grade backed by the previous turn's `run_id` and the operator's own follow-up). The post-turn auto-grade stays non-organic. |
+| Ungraded injection | `skill_context.resolve_inject_ungraded` | conjunctive: `CORVIN_DELEGATE_INJECT_SKILLS_UNGRADED=1` alone never widens; `=0` always narrows. |
 
 ## Invariants (must NOT be weakened)
 

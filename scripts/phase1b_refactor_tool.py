@@ -113,6 +113,7 @@ def add_skill_import(content):
             quote = '"""' if '"""' in line else "'''"
             if line.count(quote) == 2:  # Single-line docstring
                 in_docstring = False
+                insert_idx = i + 1  # imports go AFTER the docstring
                 continue
             else:
                 in_docstring = True

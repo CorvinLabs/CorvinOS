@@ -340,5 +340,5 @@ store.save_secret("ANTHROPIC_API_KEY", "sk-ant-...")
 ## See Also
 
 - [compliance-baseline.md](compliance-baseline.md) — GDPR Art. 32 (encryption)
-- [layer-16-security.md](layer-16-security.md) — security hardening
+- [layer-security.md](layer-security.md) — security hardening (Layer 16)
 - [portable-tenants.md](portable-tenants.md) — Phase 1c tenant plugins

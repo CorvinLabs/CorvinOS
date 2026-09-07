@@ -91,7 +91,12 @@ await pool.run()  # Main loop: poll queue, spawn workers
 
 **Lifecycle:**
 1. Poll `task_queue.dequeue()` every 100ms
-2. Spawn subprocess: `claude -p --output-format stream-json`
+2. Spawn subprocess: `claude -p --input-format stream-json --output-format stream-json --verbose`
+   — the instruction is NOT an argv element: it is written to stdin as one
+   stream-json `user` message, then stdin is closed (`_build_worker_argv` +
+   `_worker_stdin_payload`). An instruction beginning with `-` used to be
+   parsed by the CLI as a flag (`/task --add-dir / …` → `--add-dir`;
+   F-E1, 2026-09-07). Regression: `core/console/tests/test_task_worker_pool_argv.py`.
 3. Record events to **both**:
    - TaskManager (session-scoped, for M1 SSE compatibility)
    - TaskPubSub (broadcast to all subscribers)

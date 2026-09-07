@@ -180,18 +180,25 @@ feedback = registry.get("os.vibe_engineering").get_feedback_history()
 
 ## Audit Trail (Automatic)
 
-Every Skill execution is logged:
+Every Skill execution is logged. The chain record never carries the raw
+input/output: ``decision`` is an allowlisted, content-free projection
+(``decision_summary`` — engine / enabled / mode / confidence scalars, and for a
+flag manifest ``flag_count`` + ``flags_on`` + ``flags_hash``). ``lom`` is
+REQUIRED on every ``execute()`` (``"<file>:<function>"``); ``lom_hash`` is the
+SHA-256 of that function's source (ADR-0537). A ``tier=compliance`` Skill
+(``os.capabilities``) can be neither unregistered nor auto-disabled — the
+attempt is audited as ``skill.disable.refused``.
 
 ```json
 {
-  "event_type": "SKILL_EXECUTED",
+  "event_type": "skill.executed",
   "skill_id": "os.delegation_router",
-  "skill_version": "1.2",
-  "input": {"complexity": 10, "task_type": "analysis"},
-  "output": {"engine": "claude-opus-5"},
+  "status": "success",
+  "decision": {"engine": "claude-opus-5", "confidence": 0.95, "shadow": true, "bundled_engine": "native"},
+  "execution_time_ms": 3.2,
   "timestamp": "2026-09-02T12:34:56.789Z",
   "tenant_id": "_default",
-  "lom": "os_delegation_router.py:156",
+  "lom": "operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
   "lom_hash": "sha256(...)",
   "hash": "sha256(...)",
   "prev_hash": "sha256(...)"

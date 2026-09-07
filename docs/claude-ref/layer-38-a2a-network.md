@@ -2,7 +2,7 @@
 
 This document covers the A2A network membership attestation system layered on top of
 the core RemoteTriggerReceiver/Sender protocol (ADR-0048).  Read
-[`layer-38-a2a-flow.md`](layer-38-a2a-flow.md) for the base protocol reference.
+[`docs/agent-communication.md` § Protocol Architecture](../agent-communication.md#protocol-architecture-layer-38--protocol-v4) for the base protocol reference.
 
 ---
 

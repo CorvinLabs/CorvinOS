@@ -232,7 +232,16 @@ faithfulness check into a single LLM turn (zero-latency); for now
 
 Audit chain receives a `decision.dialectical` event with
 `site="voice_summary"`, `mode="cli"`, `choice="faithful"` or
-`"corrected"`, plus the verdict line in `synthesis`.
+`"corrected"`, a controlled `reason` code (`judge-faithful` /
+`judge-corrected`; `decide()` sites use `below-threshold`, `mode-off`,
+`rate-limit`, `cli-antithesis`, …), plus a **content-free** view of the
+judge's verdict line and rationale: `corrected` (bool), `synthesis_len`,
+`synthesis_sha256`, `why_len`, `why_sha256`. The verdict line and the
+`why` rationale are model text and never enter the chain — `Decision.why`
+stays available in-process only (2026-09-07: the audit
+writer became default-deny for unregistered detail keys; `dialectic.py`
+registers positive allowlists for `decision.dialectical` and
+`dialectic.rate_limited` via `forge.security_events.register_event_allowlist`).
 
 Per-subtask E2E in `shared/test_dialectic_voice_summary.py`
 covers seven cases: mode=off no-op (no spawn), cli FAITHFUL,

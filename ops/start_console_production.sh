@@ -4,7 +4,8 @@
 
 set -euo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This script lives in ops/; the repo root is one level up.
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PATH="$PROJECT_ROOT/.venv"
 LOG_FILE="${LOG_FILE:-/tmp/corvin-console-startup.log}"
 PORT="${PORT:-8765}"
@@ -27,7 +28,8 @@ if ! python -c "import fastapi" 2>/dev/null; then
 fi
 
 # Configure Python environment
-export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
+# ``core.*`` from the repo root; the ``corvin_console`` package from core/console.
+export PYTHONPATH="$PROJECT_ROOT:$PROJECT_ROOT/core/console:${PYTHONPATH:-}"
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONUNBUFFERED=1
 export CORVIN_TENANT_ID="_default"
@@ -41,7 +43,7 @@ echo "PYTHONPATH: $PYTHONPATH" | tee -a "$LOG_FILE"
 
 # Verify imports work
 echo "=== Verifying Imports ===" | tee -a "$LOG_FILE"
-python -c "from core.console.corvin_console import app; print('✅ Console imports OK')" | tee -a "$LOG_FILE" || {
+python -c "from corvin_console.standalone import create_app; print('✅ Console imports OK')" | tee -a "$LOG_FILE" || {
     echo "❌ Import failed" | tee -a "$LOG_FILE"
     exit 1
 }
@@ -53,8 +55,10 @@ pkill -f "uvicorn.*:$PORT" 2>/dev/null || true
 echo "=== Starting Console ===" | tee -a "$LOG_FILE"
 echo "Listening on http://$HOST:$PORT" | tee -a "$LOG_FILE"
 
+# The SHIPPED host (boot tripwire, dual-gate middleware, SPA mount) is
+# corvin_console.standalone.create_app — never the bare router app.
 exec uvicorn \
-    core.console.corvin_console.app:app \
+    corvin_console.standalone:create_app --factory \
     --host "$HOST" \
     --port "$PORT" \
     --log-level info \

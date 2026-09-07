@@ -368,6 +368,28 @@ the stderr pipe buffer from filling and stalling the CLI subprocess.
 
 ---
 
+## Inbox / archive hygiene (adversarial hardening 2026-09-07)
+
+Findings F-B3 / F-B5 / F-B8 / F-B9 / F-B12 of the 2026-09-07 bridge review.
+All of it is structural — no flag, no env kill-switch.
+
+| Mechanism | Where | Contract |
+|---|---|---|
+| **Atomic inbox envelopes** | every daemon → `shared/js/inbox_write.js::writeInboxAtomic` | `<id>.json.tmp` (0600) + `rename()`. The adapter's 1 Hz `inbox/*.json` poll can never read a half-written envelope. |
+| **Poison quarantine** | `adapter.py::_quarantine_poison` (from `process_one`) | An unparsable / non-object envelope is MOVED to `processed/poison/` (0700), never unlinked — it is a user's message. Audit `bridge.inbox_poison_quarantined` `{file, bytes, reason}`; content never enters the chain. |
+| **`processed/` retention** | `adapter.py::_sweep_processed` on the cleanup tick (`ADAPTER_CLEANUP_INTERVAL`, 300 s) | Regular files directly under `processed/` older than the window are deleted (GDPR Art. 5(1)(e) — the archive held 264 MB / 8 k envelopes of personal data with no purpose). Window: env `ADAPTER_PROCESSED_RETENTION_DAYS` → shared `settings.json` `processed_retention_days` → **30**. `0`/negative disables. `poison/` and sub-directories are never swept. Audit `bridge.processed_swept` `{removed, bytes, retention_days}` — counts only. |
+| **System-prompt temp files** | `adapter.py::_sweep_sysprompt_tmp` on the same tick | `call_claude()` unlinks its `.corvin-sysprompt-*.txt` in `finally`; a SIGKILL/OOM between `mkstemp` and that `finally` used to leave the file (memory, recall, vault hints) behind forever. Any such file older than 1 h under the sessions root is swept. |
+| **Voice-summary hand-off** | `build_voice_summary` → `summarize.py --stdin-json` | The user's question and the answer travel to `summarize.py` as a JSON envelope `{"text", "task"}` on **stdin**; `summarize.py` hands the prompt to `claude -p` on stdin and the system prompt via `--append-system-prompt-file` (0600 temp). Nothing user-authored is ever an argv value (`/proc/<pid>/cmdline` is world-readable; also removes the E2BIG ceiling). `--task <text>` no longer exists. |
+| **Mid-turn heartbeat markers** | `mid_turn_heartbeat.default_state_dir()` = `<corvin_home>/bridges/mid_turn_heartbeats/` | Previously written into the repo tree (`operator/bridges/shared/`, un-ignored, world-readable, raw chat id in the filename). Now 0700 dir / 0600 files, filename carries a sha256 fingerprint of the session key; the raw ids stay in the marker body only. |
+| **L34 gate on a nameless engine** | `adapter.py::_check_compliance_or_fail` | An engine without `name` cannot be matched against the locality matrix → **refused** (`[compliance] Spawn rejected … fail-closed`). It used to fail-open. |
+| **L44 low-confidence allow is audited** | `adapter.py::_check_house_rules_or_fail` | `house_rules.py` writes `house_rules.escalated` for a `clear_low_confidence` verdict and the adapter then allows the turn; the override is now recorded as `house_rules.allowed_after_lowconf` (WARNING; rule id, reason code, confidence, fingerprinted chat key) so the chain never claims "blocked" for a request that ran. |
+
+Regression tests: `shared/test_adapter_inbox_hygiene.py`, `shared/test_mid_turn_heartbeat.py`,
+`shared/test_adapter_compliance_gate.py`, `shared/test_adapter_house_rules_binary.py`,
+`shared/test_adapter_voice_summarizer_choice.py`, `../voice/scripts/test_summarize.py`;
+live: `shared/test_adapter_live_llm_e2e.py` (`CLAUDE_LIVE_E2E=1`, real `claude -p` haiku turn
+through `process_one`, asserts outbox reply + processed move + hash-chained turn events).
+
 ## Per-chat profiles (layer 1)
 
 Default without `chat_profiles`: max-open (`--dangerously-skip-permissions`, all tools).

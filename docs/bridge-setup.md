@@ -193,6 +193,29 @@ DKIM) pass**. Consequences:
   messages fail closed and senders fall back to the PIN flow.
 - `dev_mode: true` restores the legacy open behaviour **for local testing only**.
 
+How the `Authentication-Results` line is read (hardened 2026-09-07, F-B1): the line is
+split into its `;`-separated method clauses (RFC 8601). A `dmarc=` verdict other than
+`pass` closes the gate regardless of any DKIM clause; without a DMARC verdict the
+fallback accepts only a `dkim=pass` clause whose OWN `header.d=` / `header.i=…@domain`
+is aligned with the From domain — a `header.d=` that belongs to a *failed* signature on
+the same line no longer counts (regression cases in `email/test_inbound_auth.js`).
+
+### 4. What the daemon does with each mail (2026-09-07)
+- **Processed-UID memory:** `<corvin_home>/bridges/email/imap_state.json` (0600) records
+  every UID a decision was reached for (accepted, rejected, or failed), keyed by the
+  mailbox `UIDVALIDITY`. A mail is never re-parsed, so a throwing attachment cannot loop.
+- **`\Seen` only for accepted mail:** the read flag is set only when the bridge actually
+  took the mail (inbox envelope written or an in-chat command answered). Spoofed /
+  unauthorised / rate-limited mail stays **unread** in your mailbox for you to look at.
+- **Attachment names** are sanitised to a safe basename (`.`, `..`, empty → `file`;
+  ≤ 120 chars, extension kept).
+- **Logs carry fingerprints, not addresses:** `voice.log` shows `from=<sha256[:12]>`.
+- **Credentials:** precedence is `EMAIL_IMAP_*` / `EMAIL_SMTP_*` env → `settings.json` →
+  `GMAIL_APP_PASSWORD` (+ `GMAIL_USER`) — so the app password you already export for the
+  rest of CorvinOS works without copying it into a file. Every daemon-side write of
+  `settings.json` is atomic and **0600**; run `chmod 600` once on copies you created by
+  hand.
+
 ---
 
 ## Adding a second bridge

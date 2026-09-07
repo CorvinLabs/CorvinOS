@@ -66,9 +66,36 @@ boundary** (the real perimeter), the **hash-chained audit log** (tamper-evident:
 encryption** (L37). The path-gate blocks the common and moderate-effort shell
 destructive forms; the interpreter class is the sandbox's responsibility.
 
+## Enabling the hook (operator action — the platform cannot do this for you)
+
+`operator/voice/hooks/hooks.json` registers `path_gate.py` on
+`PreToolUse` (`Write|Edit|MultiEdit|NotebookEdit|Bash|WebFetch`) — but only when
+Claude Code loads the `voice` plugin. The boot tripwire
+`l10_hook_registered` (reporting-only, F-A8) checks `~/.claude/settings.json`,
+`<project>/.claude/settings.json` and `settings.local.json` and logs a
+CRITICAL compliance finding on every boot while the hook is missing. Enable it
+either way:
+
+```text
+# in Claude Code (the local marketplace is registered as claudeos-local):
+/plugin install voice@claudeos-local
+```
+
+or register the hook directly in `~/.claude/settings.json`:
+
+```json
+{"hooks": {"PreToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|WebFetch",
+  "hooks": [{"type": "command", "timeout": 3,
+             "command": "python3 /ABSOLUTE/PATH/CorvinOS/operator/voice/hooks/path_gate.py"}]}]}}
+```
+
+`check()` is fail-CLOSED (F-A8): any internal exception is a deny (exit 2),
+never a non-blocking hook error.
+
 ## Must NOT do
 
-- Don't fail-open the gate (an unparseable protected-path command must deny).
+- Don't fail-open the gate (an unparseable protected-path command must deny —
+  and so must an exception inside `check()`).
 - Don't add an env kill-switch or "path-gate off" mode.
 - Don't narrow `_touches_corvin_tree` for *direct* targets (ancestor protection
   on `rm -rf ~` is load-bearing); the at-or-under narrowing applies ONLY to the

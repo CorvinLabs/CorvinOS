@@ -7,7 +7,7 @@ we measure baseline from test results instead.
 This script:
 1. Runs full test suite (289 tests)
 2. Records pass rate, timing, coverage
-3. Outputs baseline_metrics.json for comparison with Phase 1 results
+3. Outputs benchmark/cel/baseline_metrics.json for comparison with Phase 1 results
 
 Usage:
     uv run scripts/measure_baseline.py
@@ -95,7 +95,7 @@ def main():
     print("=" * 70)
 
     # Write results
-    output_file = Path("baseline_metrics.json")
+    output_file = Path("benchmark/cel/baseline_metrics.json")
     with open(output_file, "w") as f:
         json.dump(metrics, f, indent=2)
 

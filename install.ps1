@@ -55,7 +55,7 @@ trap {
 }
 $Package = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
 # Keep $CorvinMinVersion equal to `version` in pyproject.toml (guarded by test).
-$CorvinMinVersion = "1.0.0"
+$CorvinMinVersion = "2.0.0"
 $UvPinVersion = "0.12.9"
 $UvInstallerUrl = "https://github.com/astral-sh/uv/releases/download/$UvPinVersion/uv-installer.ps1"
 $UvInstallerSha256 = "69de475bf929f1ac248efb5a85189177a45517e2346cd68762bde453fec10a6b"
