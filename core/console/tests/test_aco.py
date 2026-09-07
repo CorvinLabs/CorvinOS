@@ -517,14 +517,34 @@ class TestBootHealer(unittest.TestCase):
             self.assertIn("user42", names)
 
     def test_heal_cycle_does_not_raise(self):
-        """_heal_cycle must never raise even with missing or empty sessions."""
+        """_heal_cycle must never raise even with missing or empty sessions.
+
+        Isolated CORVIN_HOME — see
+        TestEngineHealer.test_heal_cycle_with_engine_healer_does_not_raise.
+        """
         import asyncio
+        import os
+        import time
+        from unittest import mock
+
         from corvin_console.aco.boot_healer import _heal_cycle
 
-        async def _run():
-            await _heal_cycle()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            env = {
+                "CORVIN_HOME": str(home),
+                "FORGE_ROOT": str(home / "global" / "forge"),
+                "VOICE_AUDIT_PATH": str(home / "global" / "forge" / "audit.jsonl"),
+            }
+            with mock.patch.dict(os.environ, env):
+                started = time.monotonic()
+                asyncio.run(_heal_cycle())  # must complete without exception
+                elapsed = time.monotonic() - started
 
-        asyncio.run(_run())  # Must complete without exception
+        self.assertLess(
+            elapsed, 60,
+            f"_heal_cycle took {elapsed:.1f}s on an empty CORVIN_HOME",
+        )
 
     def test_healer_cancels_cleanly_on_shutdown(self):
         """Cancelling the task during boot_delay must not raise."""
@@ -601,25 +621,160 @@ class TestEngineHealer(unittest.TestCase):
         self.assertIsInstance(result, bool)
 
     def test_heal_cycle_with_engine_healer_does_not_raise(self):
-        """_heal_cycle (with engine_healer integrated) must not raise."""
+        """_heal_cycle (with engine_healer integrated) must not raise.
+
+        Runs against an ISOLATED CORVIN_HOME. Without it the cycle walked the
+        operator's live root: one full audit-chain verification per discovered
+        tenant (18 here, over a 315 MB chain) plus a CRITICAL alert file written
+        into the live ``.corvin/alerts/`` for each of them — the test took 4m38s
+        and mutated operator state. The production redundancy is fixed in
+        ``integrity_monitor._verify_audit_chain_memoized``; this fixture makes the
+        unit test hermetic, which is a separate requirement.
+        """
         import asyncio
+        import os
+        import time
+        from unittest import mock
+
         from corvin_console.aco.boot_healer import _heal_cycle
 
-        async def _run():
-            await _heal_cycle()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            env = {
+                "CORVIN_HOME": str(home),
+                "FORGE_ROOT": str(home / "global" / "forge"),
+                "VOICE_AUDIT_PATH": str(home / "global" / "forge" / "audit.jsonl"),
+            }
+            with mock.patch.dict(os.environ, env):
+                started = time.monotonic()
+                asyncio.run(_heal_cycle())
+                elapsed = time.monotonic() - started
 
-        asyncio.run(_run())
+        # A heal cycle over an EMPTY home must be near-instant. A generous bound
+        # so this is a hang detector, not a timing flake.
+        assert elapsed < 60, f"_heal_cycle took {elapsed:.1f}s on an empty CORVIN_HOME"
 
 
 # ── Integrity Monitor Tests (Immunsystem) ─────────────────────────────────────
+
+class TestAuditChainVerifyMemoization(unittest.TestCase):
+    """Regression: the audit chain must not be re-verified once per tenant.
+
+    ``check_audit_chain_integrity`` is called for EVERY tenant (and from two
+    call sites per heal cycle), but the audit chain is unified/scope-independent
+    — it is the same file every time. Re-walking it per tenant turned one 5s
+    check into ~230s of blocking work per cycle on a 315 MB chain.
+    """
+
+    def setUp(self):
+        from corvin_console.aco import integrity_monitor as im
+        im._chain_verify_cache.clear()
+
+    def _install_counting_audit_module(self, stack, audit_file, counter):
+        """Install a fake ``audit`` module — the exact import target of the
+        function under test (``from audit import verify_audit, audit_path``)."""
+        import sys
+        import types
+        from unittest import mock
+
+        fake = types.ModuleType("audit")
+
+        def verify_audit(path):
+            counter.append(path)
+            return True, []
+
+        fake.verify_audit = verify_audit
+        fake.audit_path = lambda: audit_file
+        stack.enter_context(mock.patch.dict(sys.modules, {"audit": fake}))
+
+    def test_same_chain_is_verified_once_across_tenants(self):
+        import contextlib
+
+        from corvin_console.aco.integrity_monitor import check_audit_chain_integrity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_file = Path(tmp) / "audit.jsonl"
+            audit_file.write_text('{"event_type":"x"}\n', encoding="utf-8")
+            calls: list = []
+
+            with contextlib.ExitStack() as stack:
+                self._install_counting_audit_module(stack, audit_file, calls)
+                for tenant in ("_default", "t1", "t2", "t3", "t4"):
+                    findings = check_audit_chain_integrity(tenant)
+                    self.assertEqual(findings, [])
+
+            self.assertEqual(
+                len(calls), 1,
+                f"chain verified {len(calls)}x for 5 tenants — memoization broken",
+            )
+
+    def test_modified_chain_is_verified_again(self):
+        """Any change to the file must miss the cache (no stale 'ok')."""
+        import contextlib
+
+        from corvin_console.aco.integrity_monitor import check_audit_chain_integrity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_file = Path(tmp) / "audit.jsonl"
+            audit_file.write_text('{"event_type":"x"}\n', encoding="utf-8")
+            calls: list = []
+
+            with contextlib.ExitStack() as stack:
+                self._install_counting_audit_module(stack, audit_file, calls)
+                check_audit_chain_integrity("_default")
+                self.assertEqual(len(calls), 1)
+
+                # Append a record: identity (size + mtime) changes -> re-verify.
+                with audit_file.open("a", encoding="utf-8") as fh:
+                    fh.write('{"event_type":"y"}\n')
+                check_audit_chain_integrity("_default")
+                self.assertEqual(len(calls), 2)
+
+    def test_cache_does_not_grow(self):
+        """The memo keeps a single fingerprint, never one per appended line."""
+        import contextlib
+
+        from corvin_console.aco import integrity_monitor as im
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_file = Path(tmp) / "audit.jsonl"
+            audit_file.write_text("{}\n", encoding="utf-8")
+            calls: list = []
+
+            with contextlib.ExitStack() as stack:
+                self._install_counting_audit_module(stack, audit_file, calls)
+                for i in range(20):
+                    with audit_file.open("a", encoding="utf-8") as fh:
+                        fh.write('{"n":%d}\n' % i)
+                    im.check_audit_chain_integrity("_default")
+
+            self.assertEqual(len(im._chain_verify_cache), 1)
+
 
 class TestIntegrityMonitor(unittest.TestCase):
     """Tests für den ACO Integrity Monitor (Immunsystem)."""
 
     def test_run_integrity_scan_does_not_raise(self):
-        """run_integrity_scan muss ohne Exception abschließen, auch auf leerem System."""
+        """run_integrity_scan must finish without raising, on an empty system.
+
+        Isolated CORVIN_HOME for the same reason as the heal-cycle test: against
+        the live root this walked the operator's real audit chain and wrote an
+        alert file into ``.corvin/alerts/``.
+        """
+        import os
+        from unittest import mock
+
         from corvin_console.aco.integrity_monitor import run_integrity_scan
-        findings = run_integrity_scan("_default")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            env = {
+                "CORVIN_HOME": str(home),
+                "FORGE_ROOT": str(home / "global" / "forge"),
+                "VOICE_AUDIT_PATH": str(home / "global" / "forge" / "audit.jsonl"),
+            }
+            with mock.patch.dict(os.environ, env):
+                findings = run_integrity_scan("_default")
         self.assertIsInstance(findings, list)
 
     def test_integrity_finding_to_dict(self):
@@ -843,11 +998,31 @@ class TestIntegrityMonitor(unittest.TestCase):
                 self.assertEqual(count, 2)
 
     def test_boot_healer_with_integrity_scan_does_not_raise(self):
-        """_heal_cycle mit integriertem Integrity-Monitor darf nicht werfen."""
+        """_heal_cycle with the integrity monitor wired in must not raise.
+
+        Isolated CORVIN_HOME — see
+        TestEngineHealer.test_heal_cycle_with_engine_healer_does_not_raise.
+        """
         import asyncio
+        import os
+        import time
+        from unittest import mock
+
         from corvin_console.aco.boot_healer import _heal_cycle
 
-        async def _run():
-            await _heal_cycle()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            env = {
+                "CORVIN_HOME": str(home),
+                "FORGE_ROOT": str(home / "global" / "forge"),
+                "VOICE_AUDIT_PATH": str(home / "global" / "forge" / "audit.jsonl"),
+            }
+            with mock.patch.dict(os.environ, env):
+                started = time.monotonic()
+                asyncio.run(_heal_cycle())
+                elapsed = time.monotonic() - started
 
-        asyncio.run(_run())
+        self.assertLess(
+            elapsed, 60,
+            f"_heal_cycle took {elapsed:.1f}s on an empty CORVIN_HOME",
+        )

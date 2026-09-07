@@ -19,6 +19,20 @@ Security (Fix #11 — Alert Spoofing Mitigation):
   - Rate-limiting: Per-policy rate limits to prevent alert spam/DoS
   - Confirmation: Alerts require explicit confirmation before processing
 
+Replay semantics (``verify_alert_signature``):
+  - A signature's nonce is recorded on the FIRST SUCCESSFUL verification, never
+    at signing time: the original verification is accepted, a second one of the
+    same signature is rejected as a replay. A failed verification (tampered,
+    stale, unbound nonce) does not consume the nonce.
+  - The nonce is signed as the last of ``signed_fields`` and must still be there
+    at verify time, so the replay guard cannot be bypassed by swapping nonces.
+  - The replay cache is bounded twice: entries expire after the signature
+    freshness window (a signature that old is rejected as stale anyway) and the
+    cache is hard-capped, evicting oldest-first.
+  - ``request_confirmation`` mints a confirmation id that is unique per REQUEST
+    (``confirm_<alert_id>_<random>``), so two requests for the same alert cannot
+    collide and one approval cannot silently approve the other.
+
 Compliance:
   - GDPR Art. 5 (minimization): alerting uses only learning state, no PII
   - GDPR Art. 32 (security): alerts logged and audit-trailed + signatures
@@ -33,6 +47,8 @@ import hashlib
 import hmac
 import logging
 import secrets
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -185,6 +201,15 @@ class AlertPolicyManager:
     ```
     """
 
+    # Signature freshness window (seconds). A signature older than this is
+    # rejected as stale, which is also why a nonce need not be remembered longer.
+    _SIGNATURE_MAX_AGE_SECONDS = 300
+    # Nonce retention: same as the freshness window (see above).
+    _NONCE_TTL_SECONDS = 300
+    # Hard cap on the replay cache so it can never grow without bound even under
+    # a flood of verifications inside a single freshness window.
+    _NONCE_CACHE_MAX = 10_000
+
     def __init__(self, tenant_id: str, signing_key: Optional[str] = None):
         """Initialize alert manager for a tenant.
 
@@ -202,7 +227,14 @@ class AlertPolicyManager:
         self._signing_key = signing_key or secrets.token_hex(32)
         self._rate_limiters: Dict[str, AlertRateLimiter] = {}
         self._confirmation_queue: Dict[str, AlertConfirmationRequest] = {}
-        self._nonce_cache: Dict[str, str] = {}  # Track used nonces to prevent replay
+        # Replay guard: nonces are recorded at VERIFY time (first successful
+        # verify wins), never at sign time — recording at sign time made the
+        # original verification of every freshly signed alert fail as a replay.
+        # Bounded twice over: entries expire with the freshness window
+        # (_NONCE_TTL_SECONDS, so an entry is only dropped once the signature it
+        # belongs to would be rejected as stale anyway) and the cache is hard-capped
+        # at _NONCE_CACHE_MAX entries, evicting oldest-first.
+        self._nonce_cache: "OrderedDict[str, float]" = OrderedDict()
         self._require_confirmation_policies: set = {"loss_divergence_critical", "gradient_explosion_critical"}
 
         # Load default policies
@@ -532,8 +564,10 @@ class AlertPolicyManager:
             signed_fields=fields_to_sign,
         )
 
-        # Cache nonce to detect replays
-        self._nonce_cache[nonce] = now
+        # NOTE: the nonce is deliberately NOT recorded here. It is recorded by
+        # verify_alert_signature() on the first successful verification, so the
+        # original verification of a freshly signed alert is accepted and only a
+        # SECOND verification of the same signature is rejected as a replay.
 
         logger.debug(f"Signed alert {alert_id} with nonce {nonce} (tenant={self.tenant_id})")
         return alert_sig
@@ -541,10 +575,14 @@ class AlertPolicyManager:
     def verify_alert_signature(self, alert_sig: AlertSignature) -> Tuple[bool, str]:
         """Verify an alert signature (Fix #11).
 
-        Checks:
-        1. Nonce not previously used (replay prevention)
-        2. Signature matches computed HMAC-SHA256
-        3. Timestamp not stale (within 5 minutes)
+        Checks, in order:
+        1. Nonce not previously verified (replay prevention — first verify wins)
+        2. Timestamp not stale (within ``_SIGNATURE_MAX_AGE_SECONDS``)
+        3. Nonce is bound into the signed fields (it must be the last one)
+        4. Signature matches the computed HMAC-SHA256
+
+        The nonce is recorded ONLY after all checks pass, so a tampered or stale
+        signature cannot burn a nonce that a legitimate alert still needs.
 
         Args:
             alert_sig: AlertSignature to verify
@@ -552,18 +590,33 @@ class AlertPolicyManager:
         Returns:
             (is_valid: bool, reason: str)
         """
-        # Check 1: Replay prevention (nonce not reused)
+        self._prune_nonce_cache()
+
+        # Check 1: Replay prevention (nonce not verified before)
         if alert_sig.nonce in self._nonce_cache:
             return False, f"Replay detected: nonce {alert_sig.nonce} already used"
 
-        # Check 2: Timestamp freshness (must be within 5 minutes)
-        sig_time = datetime.fromisoformat(alert_sig.timestamp)
+        # Check 2: Timestamp freshness
+        try:
+            sig_time = datetime.fromisoformat(alert_sig.timestamp)
+        except (TypeError, ValueError):
+            return False, "Signature verification failed: malformed timestamp"
         age_seconds = (datetime.utcnow() - sig_time).total_seconds()
-        if age_seconds > 300:  # 5 minutes
-            return False, f"Stale signature: {age_seconds:.0f}s old (max 300s)"
+        if age_seconds > self._SIGNATURE_MAX_AGE_SECONDS:
+            return (
+                False,
+                f"Stale signature: {age_seconds:.0f}s old "
+                f"(max {self._SIGNATURE_MAX_AGE_SECONDS}s)",
+            )
 
-        # Check 3: Verify HMAC-SHA256 signature
-        message = "|".join(alert_sig.signed_fields + [alert_sig.nonce])
+        # Check 3: The nonce must be bound into the signed fields, otherwise the
+        # replay guard could be bypassed by swapping in a fresh, unsigned nonce.
+        if not alert_sig.signed_fields or alert_sig.signed_fields[-1] != alert_sig.nonce:
+            return False, "Signature verification failed: nonce not bound, tampering detected"
+
+        # Check 4: Verify HMAC-SHA256 signature over exactly the signed fields
+        # (which already end with the nonce — see _sign_alert).
+        message = "|".join(alert_sig.signed_fields)
         expected_signature_bytes = hmac.new(
             self._signing_key.encode(), message.encode(), hashlib.sha256
         ).digest()
@@ -572,8 +625,32 @@ class AlertPolicyManager:
         if not hmac.compare_digest(alert_sig.signature, expected_signature_hex):
             return False, "Signature verification failed: tampering detected"
 
+        # Record the nonce only now: first successful verification wins, any
+        # further verification of the same signature is a replay.
+        self._record_nonce(alert_sig.nonce)
+
         logger.debug(f"Verified alert signature {alert_sig.alert_id} (tenant={self.tenant_id})")
         return True, "OK"
+
+    def _prune_nonce_cache(self) -> None:
+        """Drop nonces older than the signature freshness window.
+
+        A signature whose nonce has expired here would already be rejected by the
+        staleness check, so dropping it cannot re-open a replay window.
+        """
+        cutoff = time.monotonic() - self._NONCE_TTL_SECONDS
+        while self._nonce_cache:
+            nonce, seen_at = next(iter(self._nonce_cache.items()))
+            if seen_at > cutoff:
+                break
+            self._nonce_cache.pop(nonce, None)
+
+    def _record_nonce(self, nonce: str) -> None:
+        """Record a verified nonce, keeping the cache hard-bounded."""
+        self._nonce_cache[nonce] = time.monotonic()
+        self._nonce_cache.move_to_end(nonce)
+        while len(self._nonce_cache) > self._NONCE_CACHE_MAX:
+            self._nonce_cache.popitem(last=False)
 
     def check_rate_limit(self, policy_id: str) -> Tuple[bool, str]:
         """Check rate limits for a policy (Fix #11).
@@ -645,7 +722,10 @@ class AlertPolicyManager:
         Returns:
             AlertConfirmationRequest
         """
-        confirmation_id = f"confirm_{alert.alert_id}"
+        # Unique per REQUEST, not per alert: two confirmation requests for the
+        # same alert must not collide, otherwise approving the first silently
+        # approves (and hides) the second.
+        confirmation_id = f"confirm_{alert.alert_id}_{secrets.token_hex(8)}"
         conf_req = AlertConfirmationRequest(
             confirmation_id=confirmation_id,
             alert_id=alert.alert_id,
