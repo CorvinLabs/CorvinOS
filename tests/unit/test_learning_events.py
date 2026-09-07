@@ -75,8 +75,14 @@ class TestLearningEventSchema:
         assert audit_dict["tags"] == ["manual", "high-priority"]
 
     def test_all_event_types_defined(self):
-        """Verify all 8 event types are defined."""
-        expected_types = {
+        """The 8 ADR-0314 core types are present; later ADRs extend the enum.
+
+        Gap 1/7 (ADR-0321/0327: tool + operator ratings), Phase 1 token metrics
+        and ADR-0548 method discovery add types; every value stays a unique
+        dotted ``<domain>.<event>`` string (the audit chain prefixes it with
+        ``learning.``).
+        """
+        core_types = {
             LearningEventType.CONFIDENCE_SCORE,
             LearningEventType.DECISION_RECORD,
             LearningEventType.USER_FEEDBACK,
@@ -89,7 +95,10 @@ class TestLearningEventSchema:
 
         actual_types = set(LearningEventType)
 
-        assert expected_types == actual_types
+        assert core_types <= actual_types
+        values = [t.value for t in LearningEventType]
+        assert len(values) == len(set(values))
+        assert all(v.count(".") == 1 and v == v.lower() and " " not in v for v in values)
 
 
 class TestPayloadSchemas:

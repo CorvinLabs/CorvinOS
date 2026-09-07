@@ -69,7 +69,10 @@ class TestConsoleChannel:
 
     def test_console_channel_handles_error(self):
         """Console channel fails gracefully."""
-        console_out = Mock(side_effect=IOError("Write failed"))
+        # The failure must come from the stream's ``write`` (what ``send`` calls),
+        # not from calling the stream object itself.
+        console_out = Mock()
+        console_out.write.side_effect = IOError("Write failed")
         channel = ConsoleChannel(console_out=console_out)
 
         alert = AlertEvent(

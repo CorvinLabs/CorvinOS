@@ -379,9 +379,13 @@ class TestMetricsAggregator:
     def test_emit_metric_aggregated_event(self):
         """Emit a METRIC_AGGREGATED learning event."""
         collector = metrics.MetricsCollector("_default")
-        records = [collector.record_accuracy("s1", 0.9 + i * 0.01) for i in range(5)]
+        # ``aggregate`` filters by skill_name → the records must carry that skill
+        records = [
+            collector.record_accuracy("s1", 0.9 + i * 0.01, skill_name="test") for i in range(5)
+        ]
         agg = metrics.MetricsAggregator("_default")
         result = agg.aggregate(records, "1d", skill_name="test")
+        assert result is not None
         event_payload = agg.emit_metric_aggregated_event(result, "instance-1", skill_name="test")
         assert event_payload["event_type"] == "metric.aggregated"
         assert event_payload["window"] == "1d"

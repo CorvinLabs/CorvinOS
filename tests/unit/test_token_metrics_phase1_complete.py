@@ -8,7 +8,17 @@ from core.learning.token_instrumentation import TokenCounter
 from core.learning.token_baseline import BaselineMetrics, ComparisonEngine, ComparisonResult
 from core.learning.token_metrics_store import TokenMetricsStore
 from core.learning.token_metrics_aggregator import TokenMetricsAggregator
-from tests.unit.test_token_metrics_store_k2 import MockEventEmitter
+
+
+class MockEventEmitter:
+    """Recording stand-in for ``EventEmitter`` (the k2 module it was imported from no longer exists)."""
+
+    def __init__(self):
+        self.emitted = []
+
+    def emit(self, event):
+        self.emitted.append(event)
+        return True
 
 
 class TestBaselineMetrics:

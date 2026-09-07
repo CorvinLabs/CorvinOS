@@ -1,40 +1,74 @@
 """TreeOfThoughts Learning Dashboard API — /v1/console/learning
 
 Endpoints:
-  GET /v1/console/learning/nodes    — fetch all TreeNodes with confidences
-  POST /v1/console/learning/grade   — operator grades a pattern
-  POST /v1/console/learning/note    — operator adds note to pattern
-  POST /v1/console/learning/tools/{tool_id}/rating     — rate a tool (Gap 7)
-  POST /v1/console/learning/skills/{skill_id}/rating   — rate a skill (Gap 7)
-  GET /v1/console/learning/tools/{tool_id}/feedback    — get tool feedback stats (Gap 7)
-  GET /v1/console/learning/skills/{skill_id}/feedback  — get skill feedback stats (Gap 7)
+  GET  /v1/console/learning/nodes    — fetch all TreeNodes with confidences
+  POST /v1/console/learning/grade    — operator grades a pattern (chained, no free text)
+  POST /v1/console/learning/note     — operator adds note to pattern (in-memory node)
+  POST /v1/console/tools/{tool_id}/rating      — rate a tool (Gap 7)
+  POST /v1/console/skills/{skill_id}/rating    — rate a skill (Gap 7)
+  GET  /v1/console/tools/{tool_id}/feedback    — tool feedback stats (Gap 7)
+  GET  /v1/console/skills/{skill_id}/feedback  — skill feedback stats (Gap 7)
+  GET  /v1/console/learning/patterns           — discovered workstyle patterns (ADR-0548)
+  POST /v1/console/learning/patterns/{id}/confirm
+  GET  /v1/console/learning/status     — REAL learning-loop status from the EventStore
+  GET  /v1/console/learning/metrics    — REAL time series (bucketed OUTCOME/FEEDBACK events)
+  GET  /v1/console/learning/checkpoint — REAL Skill config versions (the rollback points)
+  GET  /v1/console/learning/audit      — REAL ``learning.*`` records from the core hash chain
+  POST /v1/console/learning/override   — 501 (no live meta loop to override)
+  POST /v1/console/learning/rollback/{checkpoint_id} — 501 (use POST learning/config/rollback)
+
+Until 2026-09-07 ``status``/``metrics``/``checkpoint``/``audit`` answered with
+hard-coded constants (``alpha_core=0.1``, ``convergence_percent=87.5``, ``[]``)
+and ``override``/``rollback`` reported ``"success"`` while changing nothing,
+gated on a ``session.is_admin`` attribute that no ``SessionRecord`` has
+(adversarial review F-L2). Everything here is now computed from the
+audit-first ``event_store.EventStore`` and the core chain, or answers 503
+"not wired" — never a constant.
+
+Tenant: always ``session.tenant_id`` from the authenticated ``SessionRecord``.
+Mutations: ``require_csrf``. Free text (``feedback_text``, grade ``reason``)
+is accepted but NEVER persisted (only presence + length).
 """
 from __future__ import annotations
 
+import json
+import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..deps import require_session
+from ..deps import require_csrf, require_session
+
+logger = logging.getLogger(__name__)
 
 # Optional: core.learning integration (may not be available in all environments)
 try:
     from core.learning import LearningIntegration
     from core.learning.event_store import EventStore
+    from core.learning.learning_events import EventType
     from core.learning.operator_feedback import OperatorFeedbackHandler
-except ImportError:
+except ImportError:  # pragma: no cover - stripped install
     LearningIntegration = None  # type: ignore
     EventStore = None  # type: ignore
+    EventType = None  # type: ignore
     OperatorFeedbackHandler = None  # type: ignore
 
 
 def _tenant_home(tenant_id: str) -> Path:
     """``<corvin_home>/tenants/<tenant_id>/`` — honours CORVIN_HOME (never a bare ~/.corvin)."""
-    from forge.tenants import tenant_home  # type: ignore[import-not-found]
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
 
-    return Path(tenant_home(tenant_id))
+    return tenant_home(tenant_id)
+
+
+def _require_learning() -> None:
+    """503 on a stripped install — the pattern of method_discovery_api.py, never a mock."""
+    if EventStore is None or EventType is None:
+        raise HTTPException(status_code=503, detail="learning subsystem not wired (core.learning unavailable)")
+
 
 router = APIRouter()
 
@@ -43,7 +77,7 @@ class GradeRequest(BaseModel):
     """Operator grades a pattern."""
     pattern_id: str
     grade: float  # -1.0 to +1.0
-    reason: str = ""
+    reason: str = ""  # accepted, never persisted (presence + length only)
 
 
 class NoteRequest(BaseModel):
@@ -72,14 +106,14 @@ class TreeNodeJSON(BaseModel):
 class ToolRatingRequest(BaseModel):
     """Operator rates a tool execution."""
     rating: int  # 1-5
-    feedback_text: Optional[str] = None
+    feedback_text: Optional[str] = None  # accepted, never persisted (has_text/text_length only)
     task_id: Optional[str] = None
 
 
 class SkillRatingRequest(BaseModel):
     """Operator rates a skill execution."""
     rating: int  # 1-5
-    feedback_text: Optional[str] = None
+    feedback_text: Optional[str] = None  # accepted, never persisted (has_text/text_length only)
     task_id: Optional[str] = None
 
 
@@ -99,20 +133,25 @@ class FeedbackStatsResponse(BaseModel):
     window_days: int
 
 
+def _event_store(tenant_id: str) -> "EventStore":
+    """The tenant-BOUND audit-first store (rejects events of any other tenant)."""
+    _require_learning()
+    return EventStore(_tenant_home(tenant_id), tenant_id=tenant_id)
+
+
 def get_feedback_handler(session = Depends(require_session)) -> OperatorFeedbackHandler:
     """Get OperatorFeedbackHandler for this tenant.
 
-    The store is ``event_store.EventStore(tenant_home)`` — the SAME store the
-    EventEmitter writes to — rooted at ``<corvin_home>/tenants/<tenant_id>/``
-    (events land in ``learning/events/YYYY-MM-DD.jsonl``). It used to be handed
-    a FILE path (``.../learning/events.db``) as ``tenant_home``.
+    The store is ``event_store.EventStore(tenant_home, tenant_id)`` — the SAME
+    store the EventEmitter writes to — rooted at ``<corvin_home>/tenants/<tenant_id>/``
+    (events land in ``learning/events/YYYY-MM-DD.jsonl``).
     """
-    event_store = EventStore(_tenant_home(session.tenant_id))
-    return OperatorFeedbackHandler(event_store)
+    return OperatorFeedbackHandler(_event_store(session.tenant_id))
 
 
 def get_learning_integration(session = Depends(require_session)) -> LearningIntegration:
     """Get LearningIntegration for this tenant (``<tenant_home>/learning/``)."""
+    _require_learning()
     store_path = _tenant_home(session.tenant_id) / "learning"
     return LearningIntegration(store_path, tenant_id=session.tenant_id)
 
@@ -120,16 +159,13 @@ def get_learning_integration(session = Depends(require_session)) -> LearningInte
 @router.get("/learning/debug", response_model=dict)
 async def debug_learning(session = Depends(require_session)):
     """Debug endpoint — test if learning system is initialized."""
-    try:
-        store_path = _tenant_home(session.tenant_id) / "learning"
-        return {
-            "tenant_id": session.tenant_id,
-            "store_path": str(store_path),
-            "store_exists": store_path.exists(),
-            "store_is_dir": store_path.is_dir() if store_path.exists() else None,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Debug error: {str(e)}")
+    store_path = _tenant_home(session.tenant_id) / "learning"
+    return {
+        "tenant_id": session.tenant_id,
+        "store_path": str(store_path),
+        "store_exists": store_path.exists(),
+        "store_is_dir": store_path.is_dir() if store_path.exists() else None,
+    }
 
 
 @router.get("/learning/nodes", response_model=dict)
@@ -142,7 +178,6 @@ async def get_learning_nodes(
         store = integration.store
         nodes = store.all_nodes()
 
-        # Serialize to JSON
         serialized = []
         for node in nodes:
             serialized.append(TreeNodeJSON(
@@ -172,60 +207,55 @@ async def get_learning_nodes(
                 pass
         return {"nodes": serialized, "source": source}
     except Exception as e:
-        import traceback
-        error_detail = f"{str(e)}\n{traceback.format_exc()}"
-        raise HTTPException(status_code=500, detail=error_detail)
+        logger.exception("learning/nodes failed for tenant %s", session.tenant_id)
+        raise HTTPException(status_code=500, detail=f"Failed to load nodes: {type(e).__name__}")
 
 
 @router.post("/learning/grade")
 async def grade_pattern(
     request: GradeRequest,
     integration: LearningIntegration = Depends(get_learning_integration),
-    session = Depends(require_session),
+    session = Depends(require_csrf),
 ):
-    """Operator manually grades a pattern."""
+    """Operator manually grades a pattern.
+
+    The grade is committed to the core hash chain + ADR-0314 store BEFORE the
+    confidence moves (``LearningIntegration.grade_pattern``); the free-text
+    ``reason`` is not stored.
+    """
+    grade = max(-1.0, min(1.0, request.grade))
     try:
-        # Clamp grade to [-1.0, +1.0]
-        grade = max(-1.0, min(1.0, request.grade))
-        
-        integration.grade_pattern(
-            request.pattern_id,
-            grade,
-            reason=f"Operator: {request.reason}"
-        )
-        
-        # Return updated node
-        node = integration.store.get_node(request.pattern_id)
-        return {
-            "pattern_id": request.pattern_id,
-            "new_confidence": node.confidence if node else None,
-            "status": "success"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        event_id = integration.grade_pattern(request.pattern_id, grade, reason=request.reason)
+    except RuntimeError as e:  # chain did not commit → nothing was graded
+        raise HTTPException(status_code=503, detail=f"audit chain unavailable: {e}")
+
+    node = integration.store.get_node(request.pattern_id)
+    return {
+        "pattern_id": request.pattern_id,
+        "new_confidence": node.confidence if node else None,
+        "event_id": event_id,
+        "status": "success",
+    }
 
 
 @router.post("/learning/note")
 async def add_operator_note(
     request: NoteRequest,
     integration: LearningIntegration = Depends(get_learning_integration),
-    session = Depends(require_session),
+    session = Depends(require_csrf),
 ):
-    """Operator adds a note to a pattern."""
-    try:
-        node = integration.store.get_node(request.pattern_id)
-        if not node:
-            raise HTTPException(status_code=404, detail="Pattern not found")
+    """Operator adds a note to a pattern (in-memory node; attributed by session fingerprint)."""
+    node = integration.store.get_node(request.pattern_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Pattern not found")
 
-        node.add_operator_note(session.user_id, request.text)
+    node.add_operator_note(session.sid_fingerprint, request.text)
 
-        return {
-            "pattern_id": request.pattern_id,
-            "notes_count": len(node.operator_notes),
-            "status": "success"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "pattern_id": request.pattern_id,
+        "notes_count": len(node.operator_notes),
+        "status": "success",
+    }
 
 
 # ============================================================================
@@ -233,63 +263,48 @@ async def add_operator_note(
 # ============================================================================
 
 
+def _record_rating(kind: str, entity_id: str, request, handler, session) -> dict:
+    if not 1 <= request.rating <= 5:
+        raise HTTPException(status_code=400, detail="Rating must be 1-5")
+    common = dict(
+        rating=request.rating,
+        tenant_id=session.tenant_id,
+        feedback_text=request.feedback_text,  # presence + length only are persisted
+        task_id=request.task_id,
+        session_id=None,  # the session id is a secret; never into a learning record
+        instance_id="console",
+    )
+    try:
+        if kind == "tool":
+            handler.record_tool_rating(tool_id=entity_id, tool_name=entity_id, **common)
+            stats = handler.get_tool_feedback_stats(tool_id=entity_id, tenant_id=session.tenant_id, use_cache=False)
+        else:
+            handler.record_skill_rating(skill_id=entity_id, skill_name=entity_id, **common)
+            stats = handler.get_skill_feedback_stats(skill_id=entity_id, tenant_id=session.tenant_id, use_cache=False)
+    except RuntimeError as e:  # chain did not commit → the rating was NOT recorded
+        raise HTTPException(status_code=503, detail=f"audit chain unavailable: {e}")
+    return {
+        f"{kind}_id": entity_id,
+        "rating_recorded": request.rating,
+        "feedback_stats": {
+            "sample_count": stats.sample_count,
+            "average_rating": round(stats.average_rating, 2),
+            "confidence": round(stats.confidence, 2),
+            "sentiment": stats.feedback_sentiment,
+        },
+        "status": "success",
+    }
+
+
 @router.post("/tools/{tool_id}/rating", response_model=dict)
 async def rate_tool(
     tool_id: str,
     request: ToolRatingRequest,
     handler: OperatorFeedbackHandler = Depends(get_feedback_handler),
-    session = Depends(require_session),
+    session = Depends(require_csrf),
 ):
-    """Record an operator rating for a tool (Gap 7).
-
-    Args:
-        tool_id: Tool identifier
-        request: Rating (1-5) and optional feedback text
-        session: Current user session (for tenant isolation)
-
-    Returns:
-        Confirmation and aggregated feedback stats
-    """
-    try:
-        # Validate rating
-        if not 1 <= request.rating <= 5:
-            raise HTTPException(status_code=400, detail="Rating must be 1-5")
-
-        # Record rating (synchronous: EventEmitter.emit()/EventStore.write_event() are sync)
-        handler.record_tool_rating(
-            tool_id=tool_id,
-            tool_name=tool_id,  # Will be overridden by event payload if available
-            rating=request.rating,
-            tenant_id=session.tenant_id,
-            feedback_text=request.feedback_text,
-            task_id=request.task_id,
-            session_id=session.session_id if hasattr(session, 'session_id') else None,
-            instance_id=session.instance_id if hasattr(session, 'instance_id') else "console",
-        )
-
-        # Get updated feedback stats
-        stats = handler.get_tool_feedback_stats(
-            tool_id=tool_id,
-            tenant_id=session.tenant_id,
-            use_cache=False,  # Force fresh calculation
-        )
-
-        return {
-            "tool_id": tool_id,
-            "rating_recorded": request.rating,
-            "feedback_stats": {
-                "sample_count": stats.sample_count,
-                "average_rating": round(stats.average_rating, 2),
-                "confidence": round(stats.confidence, 2),
-                "sentiment": stats.feedback_sentiment,
-            },
-            "status": "success",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to record tool rating: {str(e)}")
+    """Record an operator rating for a tool (Gap 7). ``feedback_text`` is never persisted."""
+    return _record_rating("tool", tool_id, request, handler, session)
 
 
 @router.post("/skills/{skill_id}/rating", response_model=dict)
@@ -297,58 +312,27 @@ async def rate_skill(
     skill_id: str,
     request: SkillRatingRequest,
     handler: OperatorFeedbackHandler = Depends(get_feedback_handler),
-    session = Depends(require_session),
+    session = Depends(require_csrf),
 ):
-    """Record an operator rating for a skill (Gap 7).
+    """Record an operator rating for a skill (Gap 7). ``feedback_text`` is never persisted."""
+    return _record_rating("skill", skill_id, request, handler, session)
 
-    Args:
-        skill_id: Skill identifier
-        request: Rating (1-5) and optional feedback text
-        session: Current user session (for tenant isolation)
 
-    Returns:
-        Confirmation and aggregated feedback stats
-    """
-    try:
-        # Validate rating
-        if not 1 <= request.rating <= 5:
-            raise HTTPException(status_code=400, detail="Rating must be 1-5")
-
-        # Record rating (synchronous: EventEmitter.emit()/EventStore.write_event() are sync)
-        handler.record_skill_rating(
-            skill_id=skill_id,
-            skill_name=skill_id,  # Will be overridden by event payload if available
-            rating=request.rating,
-            tenant_id=session.tenant_id,
-            feedback_text=request.feedback_text,
-            task_id=request.task_id,
-            session_id=session.session_id if hasattr(session, 'session_id') else None,
-            instance_id=session.instance_id if hasattr(session, 'instance_id') else "console",
-        )
-
-        # Get updated feedback stats
-        stats = handler.get_skill_feedback_stats(
-            skill_id=skill_id,
-            tenant_id=session.tenant_id,
-            use_cache=False,  # Force fresh calculation
-        )
-
-        return {
-            "skill_id": skill_id,
-            "rating_recorded": request.rating,
-            "feedback_stats": {
-                "sample_count": stats.sample_count,
-                "average_rating": round(stats.average_rating, 2),
-                "confidence": round(stats.confidence, 2),
-                "sentiment": stats.feedback_sentiment,
-            },
-            "status": "success",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to record skill rating: {str(e)}")
+def _stats_response(stats) -> FeedbackStatsResponse:
+    return FeedbackStatsResponse(
+        entity_id=stats.entity_id,
+        entity_type=stats.entity_type,
+        entity_name=stats.entity_name,
+        sample_count=stats.sample_count,
+        average_rating=round(stats.average_rating, 2),
+        median_rating=float(stats.median_rating),
+        std_dev=round(stats.std_dev, 2) if stats.std_dev else None,
+        min_rating=stats.min_rating,
+        max_rating=stats.max_rating,
+        confidence=round(stats.confidence, 2),
+        feedback_sentiment=stats.feedback_sentiment,
+        window_days=stats.window_days,
+    )
 
 
 @router.get("/tools/{tool_id}/feedback", response_model=FeedbackStatsResponse)
@@ -358,40 +342,10 @@ async def get_tool_feedback(
     handler: OperatorFeedbackHandler = Depends(get_feedback_handler),
     session = Depends(require_session),
 ):
-    """Retrieve aggregated feedback statistics for a tool (Gap 7).
-
-    Args:
-        tool_id: Tool identifier
-        window_days: Time window for aggregation (default 7 days)
-        session: Current user session (for tenant isolation)
-
-    Returns:
-        Aggregated feedback statistics
-    """
-    try:
-        stats = handler.get_tool_feedback_stats(
-            tool_id=tool_id,
-            tenant_id=session.tenant_id,
-            window_days=window_days,
-        )
-
-        return FeedbackStatsResponse(
-            entity_id=stats.entity_id,
-            entity_type=stats.entity_type,
-            entity_name=stats.entity_name,
-            sample_count=stats.sample_count,
-            average_rating=round(stats.average_rating, 2),
-            median_rating=float(stats.median_rating),
-            std_dev=round(stats.std_dev, 2) if stats.std_dev else None,
-            min_rating=stats.min_rating,
-            max_rating=stats.max_rating,
-            confidence=round(stats.confidence, 2),
-            feedback_sentiment=stats.feedback_sentiment,
-            window_days=stats.window_days,
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve tool feedback: {str(e)}")
+    """Retrieve aggregated feedback statistics for a tool (Gap 7)."""
+    return _stats_response(
+        handler.get_tool_feedback_stats(tool_id=tool_id, tenant_id=session.tenant_id, window_days=window_days)
+    )
 
 
 @router.get("/skills/{skill_id}/feedback", response_model=FeedbackStatsResponse)
@@ -401,40 +355,10 @@ async def get_skill_feedback(
     handler: OperatorFeedbackHandler = Depends(get_feedback_handler),
     session = Depends(require_session),
 ):
-    """Retrieve aggregated feedback statistics for a skill (Gap 7).
-
-    Args:
-        skill_id: Skill identifier
-        window_days: Time window for aggregation (default 7 days)
-        session: Current user session (for tenant isolation)
-
-    Returns:
-        Aggregated feedback statistics
-    """
-    try:
-        stats = handler.get_skill_feedback_stats(
-            skill_id=skill_id,
-            tenant_id=session.tenant_id,
-            window_days=window_days,
-        )
-
-        return FeedbackStatsResponse(
-            entity_id=stats.entity_id,
-            entity_type=stats.entity_type,
-            entity_name=stats.entity_name,
-            sample_count=stats.sample_count,
-            average_rating=round(stats.average_rating, 2),
-            median_rating=float(stats.median_rating),
-            std_dev=round(stats.std_dev, 2) if stats.std_dev else None,
-            min_rating=stats.min_rating,
-            max_rating=stats.max_rating,
-            confidence=round(stats.confidence, 2),
-            feedback_sentiment=stats.feedback_sentiment,
-            window_days=stats.window_days,
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve skill feedback: {str(e)}")
+    """Retrieve aggregated feedback statistics for a skill (Gap 7)."""
+    return _stats_response(
+        handler.get_skill_feedback_stats(skill_id=skill_id, tenant_id=session.tenant_id, window_days=window_days)
+    )
 
 
 # ── Method Discovery (ADR-0548, Phase 1) ────────────────────────────────────
@@ -532,7 +456,7 @@ async def get_method_patterns(session = Depends(require_session)):
 
 
 @router.post("/learning/patterns/{pattern_id}/confirm", response_model=dict)
-async def confirm_method_pattern(pattern_id: str, session = Depends(require_session)):
+async def confirm_method_pattern(pattern_id: str, session = Depends(require_csrf)):
     """Record an explicit user confirmation of a pattern (CONCEPT-0029 C4).
 
     Confirmation is only ever taken from an active user action like this one —
@@ -554,334 +478,325 @@ async def confirm_method_pattern(pattern_id: str, session = Depends(require_sess
 
 
 # ============================================================================
-# Phase 3: Operator Console Interface (ADR-0629)
+# Phase 3: Operator Console Interface (ADR-0629) — REAL data only
 # ============================================================================
-# Read-mostly operator interface for learning loop management:
-# - View current loop status (α, damping, loss, convergence)
-# - Inspect historical metrics and audit trail
-# - Manage checkpoints (view, rollback)
-# - Admin override (rare, audited)
-#
-# Endpoints (Read): status, metrics, checkpoint, audit
-# Endpoints (Write/Admin): override, rollback
-# RBAC: viewer (GET only), admin (POST override, rollback)
-# Compliance: All overrides logged (GDPR Art. 30), reason required, fail-closed on auth
+
+#: Number of most-recent OUTCOME events that define the "recent" success rate
+#: (the same window ``outcome_sink.recent_outcomes`` and the live collector use).
+RECENT_OUTCOME_WINDOW = 50
+_WINDOWS = {"1h": timedelta(hours=1), "6h": timedelta(hours=6), "24h": timedelta(days=1)}
+
+
+class RecentOutcomes(BaseModel):
+    window: int
+    total: int
+    successes: int
+    success_rate: Optional[float]  # None until at least one outcome exists
 
 
 class LearningStatusResponse(BaseModel):
-    """Current learning loop status (ADR-0629)."""
+    """Current learning-loop status, computed from the tenant's EventStore (ADR-0613)."""
     timestamp: str
-    alpha_core: float
-    alpha_infra: float
-    damping_core: float
-    damping_infra: float
-    loss_total: float
-    loss_core: float
-    loss_infra: float
-    convergence_percent: float
-    status: str  # "converged" | "converging" | "diverging" | "stalled"
+    tenant_id: str
+    source: str  # "event_store"
+    event_counts: dict[str, int]  # per EventType, all time
+    recent_outcomes: RecentOutcomes
+    outcome_loss: Optional[float]  # 1 - success_rate of the recent outcomes; None without outcomes
+    last_outcome_at: Optional[str]
+    last_feedback_at: Optional[str]
+    last_config_update_at: Optional[str]
+    status: str  # "no_data" | "collecting" | "learning"
 
 
 class MetricsPoint(BaseModel):
-    """Single metrics time-series point."""
-    timestamp: str
-    loss_total: float
-    loss_core: float
-    loss_infra: float
-    gradient_l2: float
-    alpha_core: float
-    damping_core: float
+    """One bucket of the real event time series."""
+    timestamp: str  # bucket start (UTC ISO)
+    outcomes: int
+    successes: int
+    success_rate: Optional[float]
+    feedback: int
+    skill_executions: int
+    config_updates: int
 
 
 class MetricsResponse(BaseModel):
-    """Time-series metrics for learning loops."""
+    """Time series of learning events over a window."""
     window: str  # "1h" | "6h" | "24h"
+    start: str
+    end: str
+    bucket_seconds: int
     points: list[MetricsPoint]
-    sample_count: int
+    sample_count: int  # events in the window
 
 
 class Checkpoint(BaseModel):
-    """Loop state checkpoint."""
-    checkpoint_id: str
+    """A persisted Skill config version — the real rollback point (ADR-0613)."""
+    checkpoint_id: str  # version_id ("v1", "v2", …)
+    skill_id: str
     timestamp: str
-    loop_state: str
-    loss_at_checkpoint: float
-    created_by: Optional[str] = None
+    change_reason: str
+    improvement_pct: float
+    config: dict[str, float]
 
 
 class CheckpointResponse(BaseModel):
-    """List of checkpoints."""
     checkpoints: list[Checkpoint]
 
 
 class AuditEvent(BaseModel):
-    """Learning audit event."""
-    event_id: str
-    event_type: str  # "override" | "rollback" | "auto_tune"
-    loop_id: str
-    param: str
-    old_value: float
-    new_value: float
-    reason: str
-    operator_id: str
+    """One ``learning.*`` record from the core hash chain (content-free by construction)."""
+    audit_ref: Optional[str]
+    event_type: str
     timestamp: str
+    skill_id: Optional[str]
+    lom: Optional[str]
+    hash: Optional[str]
+    prev_hash: Optional[str]
 
 
 class AuditResponse(BaseModel):
-    """Audit trail for learning operations."""
     events: list[AuditEvent]
     count: int
+    chain_path: str
 
 
 class OverrideRequest(BaseModel):
-    """Admin override request (ADR-0629)."""
-    loop: str  # "core" | "infra"
-    param: str  # "alpha" | "damping"
-    new_value: float
-    reason: str  # Required for audit trail
-
-
-class OverrideResponse(BaseModel):
-    """Override result."""
-    status: str  # "success"
     loop: str
     param: str
-    old_value: float
     new_value: float
-    timestamp: str
+    reason: str
 
 
-class RollbackResponse(BaseModel):
-    """Rollback result."""
-    status: str  # "success"
-    checkpoint_id: str
-    restored_at: str
-    loss_before: float
-    loss_after: float
+def _event_time(ts: str) -> datetime:
+    return datetime.fromisoformat(ts.rstrip("Z"))
 
 
-def _check_admin_role(session) -> bool:
-    """Check if session has admin role (RBAC).
+def _events_since(store, tenant_id: str, event_type, since: datetime) -> list:
+    events = store.query_events(
+        tenant_id, event_type=event_type, since=since.strftime("%Y-%m-%d"), limit=100000
+    )
+    return [e for e in events if _event_time(e.timestamp) >= since]
 
-    Fail-closed: returns False on any uncertainty.
-    In a real implementation, this would check role/permission database.
+
+def learning_status(tenant_id: str) -> LearningStatusResponse:
+    """Status computed from the tenant's real learning events (no constants).
+
+    Shared by ``GET learning/status``, ``GET learning/metrics/current`` and the
+    metrics WebSocket so all three can never disagree.
     """
-    # Placeholder: real implementation would check session.roles or similar
-    return getattr(session, 'is_admin', False)
+    store = _event_store(tenant_id)
+    counts = {et.value: store.count_events(tenant_id, et) for et in EventType}
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    outcomes = _events_since(store, tenant_id, EventType.OUTCOME, week_ago)
+    feedback = _events_since(store, tenant_id, EventType.FEEDBACK, week_ago)
+    config_updates = _events_since(store, tenant_id, EventType.CONFIG_UPDATED, week_ago)
 
+    recent = outcomes[-RECENT_OUTCOME_WINDOW:]
+    total = len(recent)
+    successes = sum(1 for e in recent if (e.signal or {}).get("success") is True)
+    success_rate = (successes / total) if total else None
 
-async def _get_learning_status(tenant_id: str) -> LearningStatusResponse:
-    """Fetch current learning loop status for tenant.
+    if sum(counts.values()) == 0:
+        status = "no_data"
+    elif counts.get(EventType.CONFIG_UPDATED.value, 0) > 0:
+        status = "learning"
+    else:
+        status = "collecting"
 
-    In production, this would read from:
-    - MetaOptimizer.current_state() for α, damping
-    - LiveExperimentCollector metrics for loss, convergence
-    """
-    # Placeholder implementation (will be filled with real data in integration tests)
-    from datetime import datetime
+    def _last(events: list) -> Optional[str]:
+        return max((e.timestamp for e in events), default=None)
 
-    # TODO: Integrate with MetaOptimizer and live collector
     return LearningStatusResponse(
-        timestamp=datetime.utcnow().isoformat(),
-        alpha_core=0.1,
-        alpha_infra=0.05,
-        damping_core=0.9,
-        damping_infra=0.95,
-        loss_total=0.0042,
-        loss_core=0.0025,
-        loss_infra=0.0017,
-        convergence_percent=87.5,
-        status="converging",
+        timestamp=datetime.utcnow().isoformat() + "Z",
+        tenant_id=tenant_id,
+        source="event_store",
+        event_counts=counts,
+        recent_outcomes=RecentOutcomes(
+            window=RECENT_OUTCOME_WINDOW, total=total, successes=successes, success_rate=success_rate
+        ),
+        outcome_loss=(1.0 - success_rate) if success_rate is not None else None,
+        last_outcome_at=_last(outcomes),
+        last_feedback_at=_last(feedback),
+        last_config_update_at=_last(config_updates),
+        status=status,
+    )
+
+
+def learning_series(tenant_id: str, window: str, buckets: int = 12) -> MetricsResponse:
+    """Real event time series over ``window`` in ``buckets`` equal buckets."""
+    if window not in _WINDOWS:
+        raise HTTPException(status_code=400, detail="Invalid window; use 1h, 6h, or 24h")
+    store = _event_store(tenant_id)
+    end = datetime.utcnow()
+    start = end - _WINDOWS[window]
+    bucket = _WINDOWS[window] / buckets
+
+    per_type = {
+        et: _events_since(store, tenant_id, et, start)
+        for et in (EventType.OUTCOME, EventType.FEEDBACK, EventType.SKILL_EXECUTED, EventType.CONFIG_UPDATED)
+    }
+
+    def _index(ts: str) -> int:
+        return min(buckets - 1, int((_event_time(ts) - start) / bucket))
+
+    rows = [
+        {"outcomes": 0, "successes": 0, "feedback": 0, "skill_executions": 0, "config_updates": 0}
+        for _ in range(buckets)
+    ]
+    for e in per_type[EventType.OUTCOME]:
+        row = rows[_index(e.timestamp)]
+        row["outcomes"] += 1
+        if (e.signal or {}).get("success") is True:
+            row["successes"] += 1
+    for et, key in (
+        (EventType.FEEDBACK, "feedback"),
+        (EventType.SKILL_EXECUTED, "skill_executions"),
+        (EventType.CONFIG_UPDATED, "config_updates"),
+    ):
+        for e in per_type[et]:
+            rows[_index(e.timestamp)][key] += 1
+
+    points = [
+        MetricsPoint(
+            timestamp=(start + i * bucket).isoformat() + "Z",
+            success_rate=(r["successes"] / r["outcomes"]) if r["outcomes"] else None,
+            **r,
+        )
+        for i, r in enumerate(rows)
+    ]
+    return MetricsResponse(
+        window=window,
+        start=start.isoformat() + "Z",
+        end=end.isoformat() + "Z",
+        bucket_seconds=int(bucket.total_seconds()),
+        points=points,
+        sample_count=sum(len(v) for v in per_type.values()),
     )
 
 
 @router.get("/learning/status", response_model=LearningStatusResponse)
 async def get_learning_status(session = Depends(require_session)):
-    """Fetch current learning loop status.
-
-    Read-only endpoint, available to all roles (viewer, admin).
-    Tenant isolation enforced via authenticated session.
-    """
-    try:
-        return await _get_learning_status(session.tenant_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch status: {str(e)}")
+    """Current learning-loop status for the caller's tenant — computed, never constant."""
+    return learning_status(session.tenant_id)
 
 
 @router.get("/learning/metrics", response_model=MetricsResponse)
 async def get_learning_metrics(
-    window: str = "1h",
+    window: str = Query("1h"),
     session = Depends(require_session),
 ):
-    """Fetch time-series metrics for learning loops.
-
-    Args:
-        window: Time window ("1h", "6h", "24h")
-        session: Authenticated session (tenant isolation)
-
-    Returns:
-        Time-series points with loss, α, gradient data
-
-    Tenant isolation: all data filtered by session.tenant_id
-    """
-    try:
-        if window not in ("1h", "6h", "24h"):
-            raise HTTPException(status_code=400, detail="Invalid window; use 1h, 6h, or 24h")
-
-        # TODO: Integrate with live collector or metrics database
-        # For now, return empty dataset (will be populated in integration)
-        return MetricsResponse(
-            window=window,
-            points=[],
-            sample_count=0,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch metrics: {str(e)}")
+    """Bucketed time series of the tenant's real learning events."""
+    return learning_series(session.tenant_id, window)
 
 
 @router.get("/learning/checkpoint", response_model=CheckpointResponse)
 async def get_checkpoints(session = Depends(require_session)):
-    """Fetch saved learning loop checkpoints.
+    """The real rollback points: persisted Skill config versions (ADR-0613).
 
-    Checkpoints are immutable snapshots of loop state, used for:
-    - Recovery after failed tuning
-    - A/B testing different parameter sets
-    - Audit trail of significant state changes
-
-    Tenant isolation enforced.
+    Roll back with ``POST /v1/console/learning/config/rollback?to_version=``.
     """
     try:
-        # TODO: Integrate with checkpoint manager (core/learning/checkpoint_manager.py)
-        return CheckpointResponse(checkpoints=[])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch checkpoints: {str(e)}")
+        from core.skills.os_skills.skill_adapter import SkillAdapter  # noqa: PLC0415
+        from .method_discovery_api import TUNABLE_SKILLS  # noqa: PLC0415
+    except ImportError:
+        raise HTTPException(status_code=503, detail="skill adapter not wired (core.skills unavailable)")
+
+    checkpoints: list[Checkpoint] = []
+    for skill_id in TUNABLE_SKILLS:
+        adapter = SkillAdapter(skill_id, session.tenant_id)
+        for v in adapter.get_version_history():
+            ts = v.timestamp.isoformat() if isinstance(v.timestamp, datetime) else str(v.timestamp)
+            checkpoints.append(
+                Checkpoint(
+                    checkpoint_id=v.version_id,
+                    skill_id=v.skill_id,
+                    timestamp=ts,
+                    change_reason=v.change_reason,
+                    improvement_pct=float(v.improvement_pct),
+                    config=v.config.to_dict(),
+                )
+            )
+    return CheckpointResponse(checkpoints=checkpoints)
+
+
+def _chain_path() -> Path:
+    from core.learning.event_persistence import _resolve_core_audit  # noqa: PLC0415
+
+    return Path(_resolve_core_audit().audit_path())
 
 
 @router.get("/learning/audit", response_model=AuditResponse)
 async def get_audit_trail(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=1000),
     session = Depends(require_session),
 ):
-    """Fetch audit trail of learning operations.
+    """The tenant's ``learning.*`` records from the core hash chain (newest last).
 
-    Args:
-        limit: Max events to return (default 50)
-        session: Authenticated session (tenant isolation)
-
-    Returns:
-        List of audit events (override, rollback, auto_tune)
-
-    All events include:
-    - operator_id (who made the change)
-    - reason (why)
-    - timestamp (when)
-    - old/new values (what changed)
-
-    Compliance: GDPR Art. 30 (processing record), immutable, hash-chained
+    Every learning event is committed to this chain BEFORE it reaches disk
+    (``EventStore.write_event``, audit-first); the records are content-free
+    (ids, type, skill, LoM) so nothing here can leak a payload.
     """
+    _require_learning()
     try:
-        # TODO: Integrate with audit backend (core/compliance/audit_backend.py)
-        return AuditResponse(events=[], count=0)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch audit trail: {str(e)}")
+        path = _chain_path()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"core audit writer not wired: {e}")
+
+    events: list[AuditEvent] = []
+    if path.exists():
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"learning.' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                details = rec.get("details") or {}
+                if not str(rec.get("event_type", "")).startswith("learning."):
+                    continue
+                if details.get("tenant_id") != session.tenant_id:
+                    continue
+                ts = rec.get("ts")
+                events.append(
+                    AuditEvent(
+                        audit_ref=details.get("audit_ref"),
+                        event_type=rec["event_type"],
+                        timestamp=datetime.utcfromtimestamp(float(ts)).isoformat() + "Z"
+                        if isinstance(ts, (int, float)) else str(ts),
+                        skill_id=details.get("skill_id"),
+                        lom=details.get("lom"),
+                        hash=rec.get("hash"),
+                        prev_hash=rec.get("prev_hash"),
+                    )
+                )
+    events = events[-limit:]
+    return AuditResponse(events=events, count=len(events), chain_path=str(path))
 
 
-@router.post("/learning/override", response_model=OverrideResponse)
-async def override_learning_param(
-    request: OverrideRequest,
-    session = Depends(require_session),
-):
-    """Manually override a learning parameter (admin only).
+@router.post("/learning/override")
+async def override_learning_param(request: OverrideRequest, session = Depends(require_csrf)):
+    """Not implemented: there is no live meta loop whose α/damping could be overridden.
 
-    Args:
-        request: Override request (loop, param, new_value, reason)
-        session: Authenticated session (for RBAC and audit)
-
-    Returns:
-        Confirmation with before/after values
-
-    **RBAC:** Admin role required (fail-closed: 403 on deny)
-    **Audit:** Logged with operator_id, timestamp, reason
-    **GDPR:** Reason required (transparency)
-
-    Override does NOT affect Meta Loop—it is recorded as an external signal
-    and the Meta Loop can learn from the outcome.
+    The only learned, live-consumed configuration is the Skill config
+    (``confidence_threshold`` of ``os.delegation_router``); it changes through
+    the audited optimizer (``POST learning/feedback``) or a real rollback
+    (``POST learning/config/rollback``). Answering ``"success"`` here without
+    changing anything — as this route did until 2026-09-07 — is exactly the
+    silent no-op the audit-first rule forbids.
     """
-    try:
-        # RBAC check (fail-closed)
-        if not _check_admin_role(session):
-            raise HTTPException(status_code=403, detail="Admin role required")
-
-        # Validate request
-        if request.loop not in ("core", "infra"):
-            raise HTTPException(status_code=400, detail="Loop must be 'core' or 'infra'")
-        if request.param not in ("alpha", "damping"):
-            raise HTTPException(status_code=400, detail="Param must be 'alpha' or 'damping'")
-        if not 0 <= request.new_value <= 1:
-            raise HTTPException(status_code=400, detail="Value must be in [0, 1]")
-        if not request.reason.strip():
-            raise HTTPException(status_code=400, detail="Reason is required for audit trail")
-
-        # TODO: Integrate with MetaOptimizer to apply override
-        # TODO: Emit audit event with operator_id, reason, timestamp
-
-        from datetime import datetime
-
-        return OverrideResponse(
-            status="success",
-            loop=request.loop,
-            param=request.param,
-            old_value=0.1,  # placeholder
-            new_value=request.new_value,
-            timestamp=datetime.utcnow().isoformat(),
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Override failed: {str(e)}")
+    raise HTTPException(
+        status_code=501,
+        detail="learning parameter override is not wired; use POST /v1/console/learning/config/rollback "
+               "for a real, audited config change",
+    )
 
 
-@router.post("/learning/rollback/{checkpoint_id}", response_model=RollbackResponse)
-async def rollback_checkpoint(
-    checkpoint_id: str,
-    session = Depends(require_session),
-):
-    """Rollback learning loops to a saved checkpoint (admin only).
-
-    Args:
-        checkpoint_id: ID of checkpoint to restore
-        session: Authenticated session (for RBAC and audit)
-
-    Returns:
-        Confirmation with loss before/after
-
-    **RBAC:** Admin role required
-    **Audit:** Logged as 'rollback' event
-    **Verification:** Checks that loss did not increase after rollback
-
-    Fail-soft: if loss increased, rollback is recorded but operator is warned.
-    """
-    try:
-        # RBAC check
-        if not _check_admin_role(session):
-            raise HTTPException(status_code=403, detail="Admin role required")
-
-        # TODO: Integrate with checkpoint manager to restore state
-        # TODO: Verify loss after restore
-        # TODO: Emit audit event
-
-        from datetime import datetime
-
-        return RollbackResponse(
-            status="success",
-            checkpoint_id=checkpoint_id,
-            restored_at=datetime.utcnow().isoformat(),
-            loss_before=0.0050,  # placeholder
-            loss_after=0.0045,   # placeholder
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Rollback failed: {str(e)}")
+@router.post("/learning/rollback/{checkpoint_id}")
+async def rollback_checkpoint(checkpoint_id: str, session = Depends(require_csrf)):
+    """Not implemented here — the real rollback is ``POST learning/config/rollback?to_version=``."""
+    raise HTTPException(
+        status_code=501,
+        detail=f"use POST /v1/console/learning/config/rollback?to_version={checkpoint_id} "
+               "(real, audited, 404 on unknown version)",
+    )

@@ -247,7 +247,13 @@ def build_rating_event(
     instance_id: str = "unknown",
     lom: Optional[str] = None,
 ) -> LearningEvent:
-    """Build the FEEDBACK learning event for an operator rating."""
+    """Build the FEEDBACK learning event for an operator rating.
+
+    The free-text ``feedback_text`` is NEVER persisted (CLAUDE.md: never persist
+    free-text user content in learning/audit records; it was stored verbatim
+    until 2026-09-07, F-L6). Only its presence and length survive — enough for
+    the aggregation to know a comment was made, nothing an operator wrote.
+    """
     if kind == RATING_KIND_TOOL:
         subject = tool_subject_id(entity_id)
         id_key, name_key = "tool_id", "tool_name"
@@ -256,6 +262,7 @@ def build_rating_event(
         id_key, name_key = "skill_id", "skill_name"
     else:
         raise ValueError(f"unknown rating kind {kind!r}")
+    text = feedback_text.strip() if isinstance(feedback_text, str) else ""
     return LearningEvent.create(
         event_type=EventType.FEEDBACK,
         skill_id=subject,
@@ -265,7 +272,8 @@ def build_rating_event(
             id_key: entity_id,
             name_key: entity_name,
             "rating": rating,
-            "feedback_text": feedback_text,
+            "has_text": bool(text),
+            "text_length": len(text),
             "task_id": task_id,
             "session_id": session_id,
             "instance_id": instance_id,

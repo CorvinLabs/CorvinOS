@@ -39,14 +39,35 @@ from core.aggregator.routes.stats import router as stats_router
 
 
 @pytest.fixture
-def temp_corvin_home():
-    """Create a temporary CORVIN_HOME for testing."""
+def temp_corvin_home(monkeypatch):
+    """Create a temporary CORVIN_HOME for testing (also the audit-chain root)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         corvin_root = Path(tmpdir)
-        (corvin_root / "tenants" / "_default" / "global" / "learning" / "events").mkdir(
-            parents=True, exist_ok=True
-        )
+        (corvin_root / "tenants" / "_default").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("CORVIN_HOME", str(corvin_root))
         yield corvin_root
+
+
+def _write_loss_events(corvin_root: Path, tenant_id: str, losses: List[Dict[str, Any]]) -> None:
+    """Persist real learning events (audit-chain first) into the tenant store.
+
+    The collector reads ``learning_events.LearningEvent`` records via the
+    tenant-bound ``EventStore`` — loss data lives in ``signal``.
+    """
+    from core.learning.event_store import EventStore
+    from core.learning.learning_events import EventType, LearningEvent
+
+    store = EventStore(corvin_root / "tenants" / tenant_id, tenant_id=tenant_id)
+    for loss in losses:
+        store.write_event(
+            LearningEvent.create(
+                event_type=EventType.METRIC,
+                skill_id="os.unified_loss",
+                tenant_id=tenant_id,
+                signal={"kind": "loss_snapshot", **loss},
+                lom="tests/test_aggregator.py:_write_loss_events",
+            )
+        )
 
 
 @pytest.fixture
@@ -132,51 +153,26 @@ class TestMetricsCollector:
 
     def test_collect_tenant_metrics_with_events(self, metrics_collector, temp_corvin_home):
         """Test collecting metrics for a tenant with events."""
-        # Create test events
-        events_dir = temp_corvin_home / "tenants" / "_default" / "global" / "learning" / "events"
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        events_file = events_dir / f"{today}.jsonl"
-
-        test_events = [
-            {
-                "event_id": "evt_001",
-                "event_type": "skill_executed",
-                "timestamp": datetime.utcnow().isoformat(),
-                "payload": {
-                    "loss_total": 0.35,
-                    "loss_components": {
-                        "routing": 0.3,
-                        "confidence": 0.25,
-                        "feedback": 0.2,
-                    },
-                },
-            },
-            {
-                "event_id": "evt_002",
-                "event_type": "skill_executed",
-                "timestamp": datetime.utcnow().isoformat(),
-                "payload": {
-                    "loss_total": 0.33,
-                    "loss_components": {
-                        "routing": 0.28,
-                        "confidence": 0.24,
-                        "feedback": 0.21,
-                    },
-                },
-            },
-        ]
-
-        with open(events_file, "w") as f:
-            for event in test_events:
-                f.write(json.dumps(event) + "\n")
+        _write_loss_events(
+            temp_corvin_home,
+            "_default",
+            [
+                {"loss_total": 0.35, "loss_components": {"routing": 0.3, "confidence": 0.25, "feedback": 0.2}},
+                {"loss_total": 0.33, "loss_components": {"routing": 0.28, "confidence": 0.24, "feedback": 0.21}},
+            ],
+        )
 
         metrics = metrics_collector.collect_tenant_metrics("_default")
 
         assert metrics.tenant_id == "_default"
         assert metrics.event_count == 2
         assert metrics.status == "collecting"  # Less than 100 events
-        assert 0.0 <= metrics.loss_total <= 1.0
-        assert metrics.loss_routing is not None
+        # Averages of the persisted signals — not the no-data defaults
+        assert metrics.loss_total == pytest.approx(0.34)
+        assert metrics.loss_routing == pytest.approx(0.29)
+        assert metrics.loss_confidence == pytest.approx(0.245)
+        assert metrics.loss_feedback == pytest.approx(0.205)
+        assert metrics.last_event_time is not None
 
     def test_extract_losses_from_events_empty(self, metrics_collector):
         """Test loss extraction from empty event list."""
@@ -186,9 +182,10 @@ class TestMetricsCollector:
 
     def test_extract_losses_from_events_with_data(self, metrics_collector):
         """Test loss extraction from events with loss data."""
+        # Raw store rows carry the content in ``signal`` (learning_events.LearningEvent)
         events = [
             {
-                "payload": {
+                "signal": {
                     "loss_total": 0.4,
                     "loss_components": {
                         "routing": 0.35,
@@ -576,29 +573,11 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_full_collection_pipeline(self, temp_corvin_home):
         """Test full pipeline: collection -> aggregation -> API."""
-        # Create test events
-        events_dir = temp_corvin_home / "tenants" / "_default" / "global" / "learning" / "events"
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        events_file = events_dir / f"{today}.jsonl"
-
-        test_events = [
-            {
-                "event_type": "skill_executed",
-                "timestamp": datetime.utcnow().isoformat(),
-                "payload": {
-                    "loss_total": 0.3,
-                    "loss_components": {
-                        "routing": 0.25,
-                        "confidence": 0.2,
-                    },
-                },
-            }
-            for _ in range(5)
-        ]
-
-        with open(events_file, "w") as f:
-            for event in test_events:
-                f.write(json.dumps(event) + "\n")
+        _write_loss_events(
+            temp_corvin_home,
+            "_default",
+            [{"loss_total": 0.3, "loss_components": {"routing": 0.25, "confidence": 0.2}}] * 5,
+        )
 
         # Create server and collect
         server = MetricsServer(collection_interval_sec=1)

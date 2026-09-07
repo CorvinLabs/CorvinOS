@@ -36,9 +36,13 @@ class ActiveLearningLoop:
         result = None
         
         try:
-            # 1. Execute the method
+            # 1. Execute the method. A method that REPORTS its own failure
+            #    (``{"success": False, ...}``) is a failure — it must not earn
+            #    the +0.05 "used in production" credit.
             result = await method_fn(*args, **kwargs)
-            success = True
+            success = not (isinstance(result, dict) and result.get("success") is False)
+            if not success:
+                error_type = str(result.get("error_type") or "reported_failure")
         except Exception as e:
             error_type = type(e).__name__
             result = None

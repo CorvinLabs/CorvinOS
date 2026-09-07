@@ -154,7 +154,7 @@ class TestMetricsAggregator:
         assert perf.latency_ms == 55.0  # (50 + 60) / 2
         assert perf.confidence == 0.9
         assert perf.user_satisfaction == 4.5
-        assert perf.usage_count == 5
+        assert perf.usage_count == 6  # 2 accuracy + 2 latency + 1 confidence + 1 satisfaction samples
 
     def test_build_dashboard_empty(self):
         """build_dashboard returns empty dashboard for no metrics."""

@@ -100,7 +100,8 @@ class RollbackGuard:
 
         # Persistence: path to rollback_history.jsonl
         if corvin_home is None:
-            corvin_home = os.getenv("CORVIN_HOME", os.path.expanduser("~/.corvin"))
+            from core.paths.tenant import corvin_home as _corvin_home  # noqa: PLC0415
+            corvin_home = _corvin_home()
         self.corvin_home = Path(corvin_home)
         self.history_file = (
             self.corvin_home
@@ -164,8 +165,12 @@ class RollbackGuard:
                                 apply_timestamp = data.get("apply_timestamp", "")
                                 hold_hours = data.get("hold_hours", 12)
                                 self.approval_apply_times[approval_id] = (apply_timestamp, hold_hours)
-                                # Latest effective hold per skill (the attribute existed but was never written)
-                                self.skill_hold_config[skill_id] = hold_hours
+                                # Latest effective hold per skill. (Until 2026-09-07 this
+                                # line read an undefined ``skill_id`` → NameError swallowed
+                                # by the outer handler → NO approval was ever recovered.)
+                                skill_id = data.get("skill_id", "")
+                                if skill_id:
+                                    self.skill_hold_config[skill_id] = hold_hours
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.warning(f"[L5 Rollback] Failed to load history: {e}")
         except Exception as e:
@@ -231,6 +236,8 @@ class RollbackGuard:
             # Record approval with its hold period (prevents overwrites for multiple approvals)
             apply_timestamp = format_iso_timestamp()
             self.approval_apply_times[approval_id] = (apply_timestamp, hold_hours)
+            # Latest effective hold per skill (what suggest_hold_adjustment tunes)
+            self.skill_hold_config[skill_id] = hold_hours
 
             # Track total approval count per skill (for override rate calculation)
             self.approval_count_by_skill[skill_id] = self.approval_count_by_skill.get(skill_id, 0) + 1

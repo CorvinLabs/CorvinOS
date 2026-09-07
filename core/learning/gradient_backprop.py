@@ -47,7 +47,9 @@ class LossBackpropagator:
             'L2_confidence': [('L3_feedback', 0.20), ('L5_latency', 0.10)],
             'L3_feedback': [('L4_attention', 0.10)],
             'L4_attention': [],
-            'L5_latency': [('L2_confidence', 0.10)],
+            # L5 → L2 closed a cycle (L2 → L5 → L2); ``check_dag_validity`` and
+            # the module's own tests require an acyclic graph (ADR-0615).
+            'L5_latency': [],
             'L6_diversity': [],  # no backprop
         }
 
@@ -101,7 +103,9 @@ class LossBackpropagator:
         # L3 (Feedback): depends on L4 (attention budget)
         budget_tightness = self._measure_attention_tightness(task_batch)
         feedback_signal_quality = self._measure_feedback_quality(feedback_signals)
-        grad_L3_direct = -feedback_signal_quality
+        # Feedback gap = 1 − quality: positive when feedback is missing/invalid (the L3
+        # loss), 0 when every signal is valid — same sign convention as L2/L5 below.
+        grad_L3_direct = 1.0 - feedback_signal_quality
         grad_L3_from_attention = budget_tightness * 0.1
 
         gradients['L3_feedback'] = {
@@ -112,7 +116,11 @@ class LossBackpropagator:
         # L2 (Confidence): depends on L3, L5
         calibration_error = self._compute_calibration_error(task_batch, outcomes)
         feedback_labels_available = len([f for f in feedback_signals if f is not None])
-        grad_L2_direct = -2.0 * calibration_error
+        # The gradient is the DERIVATIVE of the Brier loss, mean(2·(conf − actual)),
+        # not −2·(the loss itself): the latter was negative regardless of whether
+        # confidence had to go up or down, so the direction was lost and a badly
+        # miscalibrated batch pushed the same way as a well-calibrated one.
+        grad_L2_direct = self._compute_calibration_gradient(task_batch, outcomes)
         grad_L2_from_feedback = (1.0 - feedback_labels_available / max(len(feedback_signals), 1)) * 0.2
         sla_breach = self._compute_sla_breach_severity(task_batch)
         grad_L2_from_latency = sla_breach * 0.1
@@ -212,6 +220,17 @@ class LossBackpropagator:
             return 0.0
         quality_count = sum(1 for f in feedback_signals if f is not None and f.get('is_valid', False))
         return quality_count / len(feedback_signals)
+
+    def _compute_calibration_gradient(self, task_batch: List[Dict], outcomes: List[Dict]) -> float:
+        """d/dconf of the Brier score: mean(2·(confidence − actual)); 0 without data."""
+        if not task_batch or not outcomes:
+            return 0.0
+        grads = []
+        for task, outcome in zip(task_batch, outcomes):
+            conf = task.get('confidence_score', 0.5)
+            actual = 1.0 if outcome.get('correct', False) else 0.0
+            grads.append(2.0 * (conf - actual))
+        return float(np.mean(grads)) if grads else 0.0
 
     def _compute_calibration_error(self, task_batch: List[Dict], outcomes: List[Dict]) -> float:
         """Brier score: E[(confidence - actual)²]."""
@@ -386,14 +405,13 @@ class CouplingOscillationDetector:
         if len(self.param_history[loop_id]) < self.window_size:
             return False
 
-        # Check sign changes in recent window
+        # Oscillation = the parameter keeps reversing DIRECTION: count sign
+        # changes of consecutive deltas. Checking the sign of the VALUES (as
+        # before) never fires for α/damping, which are always positive.
         recent = self.param_history[loop_id][-self.window_size:]
-        sign_changes = 0
-        for i in range(1, len(recent)):
-            if recent[i] * recent[i-1] < 0:  # Sign change
-                sign_changes += 1
-
-        oscillation_rate = sign_changes / (len(recent) - 1)
+        deltas = [recent[i] - recent[i - 1] for i in range(1, len(recent))]
+        sign_changes = sum(1 for i in range(1, len(deltas)) if deltas[i] * deltas[i - 1] < 0)
+        oscillation_rate = sign_changes / max(1, len(deltas) - 1)
         oscillating = oscillation_rate > 0.6
 
         if oscillating:

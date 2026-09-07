@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from core.paths.tenant import corvin_home
 from typing import Optional
 from collections import defaultdict, Counter
 import json
@@ -71,7 +72,7 @@ class FailureClusterer:
         """
         self.store = store
         if base_dir is None:
-            base_dir = Path.home() / ".corvin" / "learning" / "discoveries"
+            base_dir = corvin_home() / "learning" / "discoveries"
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 

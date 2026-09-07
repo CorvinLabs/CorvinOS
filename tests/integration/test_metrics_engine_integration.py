@@ -66,7 +66,9 @@ def gateway_client(engine_factory=None, default_budget_s: int = 60):
             default_budget_s=default_budget_s,
         )
     try:
-        with TestClient(app) as client:
+        # The gateway admits a Bearer-less caller ONLY from a loopback peer
+        # (local operator); starlette's default peer is "testclient".
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
             yield client
     finally:
         if hasattr(app.state, "dispatcher"):
@@ -98,7 +100,7 @@ class MetricsEngineIntegrationTests(unittest.TestCase):
                 )
                 self.assertEqual(resp.status_code, 202)
                 run_data = resp.json()
-                run_id = run_data["metadata"]["uid"]
+                run_id = run_data["run_id"]  # gateway response: {"run_id", "status"}
 
                 # 2. Wait for the run to complete (with fake delay ~20ms)
                 for _ in range(50):
@@ -145,7 +147,7 @@ class MetricsEngineIntegrationTests(unittest.TestCase):
                 )
                 self.assertEqual(resp.status_code, 202)
                 run_data = resp.json()
-                run_id = run_data["metadata"]["uid"]
+                run_id = run_data["run_id"]  # gateway response: {"run_id", "status"}
 
                 # Wait for completion
                 for _ in range(50):

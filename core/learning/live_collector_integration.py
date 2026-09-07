@@ -14,6 +14,7 @@ Integration points:
 import json
 from datetime import datetime
 from pathlib import Path
+from core.paths.tenant import corvin_home
 from typing import Dict, Any, Optional
 
 
@@ -42,7 +43,7 @@ class LiveCollectorIntegration:
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
         self.event_log_dir = (
-            Path.home() / ".corvin" / "tenants" / tenant_id / "experiments" / "live_events"
+            corvin_home() / "tenants" / tenant_id / "experiments" / "live_events"
         )
         self.event_log_dir.mkdir(parents=True, exist_ok=True)
 

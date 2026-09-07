@@ -38,9 +38,21 @@ class EventStore:
     _EVENTS_DIR = "learning/events"
     _lock = threading.RLock()
 
-    def __init__(self, tenant_home: Path):
-        """Initialize event store for a tenant."""
+    def __init__(self, tenant_home: Path, tenant_id: Optional[str] = None):
+        """Initialize event store for a tenant.
+
+        Args:
+            tenant_home: ``<corvin_home>/tenants/<tenant_id>/`` — the directory
+                the events land under.
+            tenant_id: when given, the store is BOUND to that tenant and
+                ``write_event`` rejects an event carrying any other tenant
+                (a foreign tenant's record must never land under this tenant's
+                directory, GDPR Art. 32). Console routes always bind.
+        """
         self.tenant_home = Path(tenant_home)
+        if tenant_id is not None:
+            _validate_tenant_id(tenant_id)
+        self.tenant_id = tenant_id
         self.events_dir = self.tenant_home / self._EVENTS_DIR
         self.events_dir.mkdir(parents=True, exist_ok=True)
 
@@ -70,6 +82,11 @@ class EventStore:
             IOError: the disk append failed AFTER the chain committed (the
                 chain record stands; the disk copy is the lossy side).
         """
+        if self.tenant_id is not None and event.tenant_id != self.tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: store is bound to {self.tenant_id!r}, "
+                f"event carries {event.tenant_id!r}"
+            )
         with self._lock:
             audit_ref = self._audit_chain_first(event)
             event_file = self._get_event_file(event.timestamp)
@@ -169,6 +186,7 @@ class EventStore:
                                 skill_version=data.get("skill_version"),
                                 lom=data.get("lom"),
                                 prev_hash=data.get("prev_hash"),
+                                audit_ref=data.get("audit_ref"),
                             )
                             results.append(event)
 

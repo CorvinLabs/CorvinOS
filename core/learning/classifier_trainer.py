@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from core.paths.tenant import corvin_home
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ class ClassifierTrainer:
         Args:
             data_dir: Directory for training data (default: ~/.corvin/training_data)
         """
-        self.data_dir = Path(data_dir or Path.home() / ".corvin" / "training_data")
+        self.data_dir = Path(data_dir or corvin_home() / "training_data")
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def collect_training_data(

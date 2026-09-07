@@ -14,6 +14,7 @@ import logging
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
+from core.paths.tenant import corvin_home
 from typing import Optional
 
 import numpy as np
@@ -116,7 +117,7 @@ class LearnedClassifier:
             enable_fallback: Enable fallback to keyword classifier
         """
         self.feature_extractor = feature_extractor
-        self.model_dir = Path(model_dir or Path.home() / ".corvin" / "models")
+        self.model_dir = Path(model_dir or corvin_home() / "models")
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.enable_fallback = enable_fallback
 

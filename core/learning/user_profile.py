@@ -14,6 +14,7 @@ Compliance Notes:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -198,8 +199,23 @@ class UserProfileManager:
         profile_dir.mkdir(parents=True, exist_ok=True)
         return profile_dir
 
+    _USER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:-]{0,127}$")
+
+    @classmethod
+    def _validate_user_id(cls, user_id: str) -> str:
+        """Reject a user_id that could escape the tenant's profile directory.
+
+        ``user_id`` becomes a file name; ``../x`` or an absolute path would read
+        or write outside ``<tenant>/learning/profiles/`` (F-L8, GDPR Art. 32).
+        Fail-closed: anything but a plain identifier raises.
+        """
+        if not isinstance(user_id, str) or not cls._USER_ID_RE.match(user_id) or ".." in user_id:
+            raise ValueError(f"Invalid user_id: {user_id!r}")
+        return user_id
+
     def _get_profile_path(self, user_id: str, tenant_id: str) -> Path:
         """Get JSON file path for a user's profile."""
+        self._validate_user_id(user_id)
         profile_dir = self._get_profiles_dir(tenant_id)
         return profile_dir / f"{user_id}.json"
 

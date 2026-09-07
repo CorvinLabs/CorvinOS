@@ -10,7 +10,8 @@ Tests:
 """
 
 from core.learning.gradient_backprop import LossBackpropagator, CorrelationFilter, CouplingOscillationDetector
-from core.learning.unified_loss import UnifiedLossSnapshot, MockAuditBackend
+from core.learning.unified_loss import UnifiedLossSnapshot
+from tests.learning.mock_audit_backend import MockAuditBackend
 from datetime import datetime
 import numpy as np
 

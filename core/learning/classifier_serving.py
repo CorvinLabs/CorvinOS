@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from core.paths.tenant import corvin_home
 from typing import Optional
 
 from core.learning.classifier_model import LearnedClassifier, PredictionResult
@@ -26,7 +27,7 @@ class ClassifierService:
         enable_fallback: bool = True,
     ):
         """Initialize classifier service."""
-        self.model_dir = Path(model_dir or Path.home() / ".corvin" / "models")
+        self.model_dir = Path(model_dir or corvin_home() / "models")
         self.feature_extractor = feature_extractor or TaskFeatureExtractor()
         self.enable_fallback = enable_fallback
 

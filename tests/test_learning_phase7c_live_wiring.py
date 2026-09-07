@@ -41,13 +41,17 @@ def test_console_learning_route_exists():
 
 
 def test_dashboard_page_exists():
-    """E2E: Learning dashboard page exists for frontend."""
-    page_file = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/pages/learning.tsx")
-    assert page_file.exists(), "Learning page should exist"
+    """E2E: Learning dashboard panel exists, is registered, and calls the learning API."""
+    web = Path(__file__).resolve().parents[1] / "core/console/corvin_console/web-next/src"
+    panel_file = web / "panels" / "LearningDashboard.tsx"
+    assert panel_file.exists(), "LearningDashboard panel should exist"
 
-    content = page_file.read_text()
+    content = panel_file.read_text()
     assert "LearningDashboard" in content
-    assert "/v1/console/learning/nodes" in content
+    assert "/v1/console/learning/" in content, "Panel must call the real learning API"
+
+    registry = (web / "panels" / "registry.tsx").read_text()
+    assert 'rc("learning-dashboard"' in registry, "Panel must be registered in PANELS"
 
     print("✅ Dashboard frontend page wired")
 

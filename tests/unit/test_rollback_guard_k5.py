@@ -69,21 +69,21 @@ class TestRevokePermissions:
 
     def test_can_revoke_after_hold_expires(self, rollback_guard):
         """Test that revoke is allowed after hold period expires."""
-        # Register approval with 1-second hold (for testing)
+        # Hold is recorded PER APPROVAL at registration time (a later change to
+        # skill_hold_config never shortens an existing approval's hold), so an
+        # immediately-revocable approval is registered with a 0h hold.
         rollback_guard.register_approval(
             approval_id="test_approval",
             skill_id="skill_test",
             criticality=Criticality.CRITICAL,
+            custom_hold_hours=0,
         )
 
-        # Override the hold period to 0 hours (immediate)
-        rollback_guard.skill_hold_config["skill_test"] = 0
-
         # Should be allowed immediately
-        allowed, reason = rollback_guard.can_revoke("test_approval", "skill_test")
+        allowed, remaining = rollback_guard.can_revoke("test_approval", "skill_test")
 
         assert allowed is True
-        assert reason is None
+        assert remaining is None
 
     def test_cannot_revoke_during_hold_period(self, rollback_guard):
         """Test that revoke is blocked during hold period."""
@@ -93,24 +93,26 @@ class TestRevokePermissions:
             criticality=Criticality.MEDIUM,  # 12h hold
         )
 
-        allowed, reason = rollback_guard.can_revoke("test_approval", "skill_test")
+        allowed, remaining = rollback_guard.can_revoke("test_approval", "skill_test")
 
         assert allowed is False
-        assert "remaining" in reason.lower()
+        assert isinstance(remaining, timedelta)
+        assert timedelta(hours=11) < remaining <= timedelta(hours=12)
 
-    def test_time_remaining_format(self, rollback_guard):
-        """Test that time remaining is properly formatted."""
+    def test_time_remaining_is_timedelta(self, rollback_guard):
+        """Time remaining is a timedelta the caller formats (not a pre-formatted string)."""
         rollback_guard.register_approval(
             approval_id="test_approval",
             skill_id="skill_test",
             criticality=Criticality.MEDIUM,  # 12h
         )
 
-        allowed, reason = rollback_guard.can_revoke("test_approval", "skill_test")
+        allowed, remaining = rollback_guard.can_revoke("test_approval", "skill_test")
 
-        # Should be HH:MM:SS remaining
-        assert ":" in reason
-        assert "remaining" in reason.lower()
+        assert allowed is False
+        assert isinstance(remaining, timedelta)
+        assert remaining.total_seconds() > 0
+        assert ":" in str(remaining)  # renders as H:MM:SS for the operator
 
 
 class TestForceRevoke:
@@ -351,11 +353,9 @@ class TestAuditIntegration:
         rollback_guard.register_approval(
             approval_id="test_approval",
             skill_id="skill_test",
-            criticality=Criticality.CRITICAL,  # 1h, immediately allowed after
+            criticality=Criticality.CRITICAL,
+            custom_hold_hours=0,  # immediately revocable
         )
-
-        # Override to allow immediate revoke
-        rollback_guard.skill_hold_config["skill_test"] = 0
 
         rollback_guard.request_revoke(
             approval_id="test_approval",
@@ -398,12 +398,13 @@ class TestEdgeCases:
 
     def test_revoke_nonexistent_approval(self, rollback_guard):
         """Test revoking an approval that doesn't exist."""
-        allowed, reason = rollback_guard.can_revoke(
+        allowed, remaining = rollback_guard.can_revoke(
             "nonexistent_approval", "skill_test"
         )
 
+        # Unknown approval: not revocable, and no hold to wait out
         assert allowed is False
-        assert "not found" in reason.lower()
+        assert remaining is None
 
     def test_criticality_levels(self, rollback_guard):
         """Test all criticality levels."""

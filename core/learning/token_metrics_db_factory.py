@@ -48,8 +48,8 @@ def create_metrics_db(
             tenant_path = tenant_home(tenant_id)
         except Exception:
             # Fallback if corvin_core not available (tests, etc)
-            home = Path.home()
-            tenant_path = home / ".corvin" / "tenants" / tenant_id
+            from core.paths.tenant import tenant_home as _core_tenant_home  # noqa: PLC0415
+            tenant_path = _core_tenant_home(tenant_id)
 
         global_dir = tenant_path / "global"
         global_dir.mkdir(parents=True, exist_ok=True)

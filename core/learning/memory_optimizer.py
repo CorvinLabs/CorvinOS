@@ -69,10 +69,16 @@ class MemoryOptimizer(LearningLoop):
                                                + (1 - self.smoothing_alpha) * value)
 
         # Extract components (assume already [0, 1])
-        missing_ratio = feedback_signals.get('missing_context_ratio', 0.0)  # 0=good, 1=all missing
-        irrelevance = feedback_signals.get('irrelevance_score', 0.0)        # 0=good, 1=all irrelevant
-        latency_ms = feedback_signals.get('retrieval_latency_ms', 0.0)
-        token_waste = feedback_signals.get('token_waste_ratio', 0.0)        # 0=good, 1=all wasted
+        # Ratios by contract — clamp to [0, 1] so an out-of-range signal degrades
+        # to "worst case" instead of aborting the whole 9D step (normalize_components
+        # rejects unnormalised input; it no longer asserts).
+        def _ratio(key: str) -> float:
+            return float(min(1.0, max(0.0, feedback_signals.get(key, 0.0))))
+
+        missing_ratio = _ratio('missing_context_ratio')   # 0=good, 1=all missing
+        irrelevance = _ratio('irrelevance_score')         # 0=good, 1=all irrelevant
+        latency_ms = max(0.0, float(feedback_signals.get('retrieval_latency_ms', 0.0)))
+        token_waste = _ratio('token_waste_ratio')         # 0=good, 1=all wasted
 
         # Normalize latency to [0, 1] (threshold at 100ms)
         L_latency = min(1.0, latency_ms / 100.0)
@@ -121,8 +127,6 @@ class MemoryOptimizer(LearningLoop):
             'recall_threshold': delta_loss * 0.01,
         }
 
-        self.record_gradients(gradients)
-
         return gradients
 
     def apply_gradients(self, gradients: Dict[str, float], learning_rate: float = None, damping: float = None):
@@ -138,6 +142,10 @@ class MemoryOptimizer(LearningLoop):
             learning_rate = self.learning_rate
         if damping is None:
             damping = self.damping_factor
+
+        # Convergence tracks the gradients actually APPLIED (recording them at
+        # compute time missed every externally supplied gradient step).
+        self.record_gradients(gradients)
 
         # Update 1: Context window size
         old_window = self.context_window_size
@@ -164,22 +172,15 @@ class MemoryOptimizer(LearningLoop):
         total_flex = new_preserved + new_injected
         if total_flex > 0:
             new_preserved = (new_preserved / total_flex) * 0.5
-            new_injected = (new_injected / total_flex) * 0.5
         else:
             new_preserved = 0.25
-            new_injected = 0.25
 
-        # Clip
-        new_preserved = self.clip_parameter(new_preserved, 0.1, 0.6)
-        new_injected = self.clip_parameter(new_injected, 0.1, 0.6)
-
-        # Renormalize
-        total = new_preserved + new_injected
-        if total > 0:
-            new_preserved /= total
-            new_injected /= total
-            new_preserved *= 0.5
-            new_injected *= 0.5
+        # Bounds: each flexible layer keeps >= 0.1, and with the pair summing
+        # to 0.5 the other one is fully determined. (A former clip-then-
+        # renormalise pass pushed a clipped 0.1 back to ~0.08 whenever the
+        # other layer had overshot, breaking the 0.1 floor.)
+        new_preserved = self.clip_parameter(new_preserved, 0.1, 0.4)
+        new_injected = 0.5 - new_preserved
 
         self.layer_importance['preserved'] = new_preserved
         self.layer_importance['injected'] = new_injected

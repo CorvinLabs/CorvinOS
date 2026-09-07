@@ -72,7 +72,7 @@ class TestAttack1_FalseFeedback:
         # yes_weight = 15 * 0.9 = 13.5
         # no_weight = 0.95
         # Consensus strongly toward yes despite one high-confidence outlier
-        assert yes_weight >> no_weight
+        assert yes_weight > 10 * no_weight
 
 
 # ============================================================================

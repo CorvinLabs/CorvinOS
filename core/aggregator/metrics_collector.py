@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 
-from core.paths.tenant import corvin_home, tenant_home
+from core.paths.tenant import corvin_home
 from core.learning.event_store import EventStore
 
 logger = logging.getLogger(__name__)
@@ -198,7 +198,10 @@ class MetricsCollector:
             TenantMetrics object with aggregated data
         """
         try:
-            t_home = tenant_home(tenant_id)
+            # The tenant home lives under THIS collector's root (never the
+            # process environment: a collector built for one root must not
+            # read another root's learning data).
+            t_home = self.tenants_dir / tenant_id
             store = EventStore(t_home, tenant_id=tenant_id)
 
             # Query events from the lookback window
@@ -310,15 +313,12 @@ class MetricsCollector:
 
         for event in events:
             try:
-                # Handle different event formats
-                payload = None
-                if isinstance(event, dict):
-                    payload = event.get("payload", {})
-                elif hasattr(event, "payload"):
-                    payload = event.payload
-
-                if not payload:
+                # ``learning_events.LearningEvent`` carries its content in
+                # ``signal`` (the store returns dataclasses; raw rows are dicts)
+                signal = event.get("signal") if isinstance(event, dict) else getattr(event, "signal", None)
+                if not isinstance(signal, dict):
                     continue
+                payload = signal
 
                 # Look for loss_total
                 if "loss_total" in payload:

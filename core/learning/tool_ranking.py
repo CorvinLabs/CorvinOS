@@ -350,6 +350,7 @@ class ToolRankingManager:
                     "first_used": event_time,
                     "last_used": event_time,
                     "timestamps": [],
+                    "outcomes": [],  # (event_time, insertion_idx, success) for the trend
                 }
 
             # Update metrics
@@ -361,6 +362,9 @@ class ToolRankingManager:
             metrics_by_tool[tool_id]["first_used"] = min(metrics_by_tool[tool_id]["first_used"], event_time)
             metrics_by_tool[tool_id]["last_used"] = max(metrics_by_tool[tool_id]["last_used"], event_time)
             metrics_by_tool[tool_id]["timestamps"].append(event_time)
+            metrics_by_tool[tool_id]["outcomes"].append(
+                (event_time, len(metrics_by_tool[tool_id]["outcomes"]), status == "success")
+            )
 
         # Compute derived metrics for each tool
         for tool_id, metrics in metrics_by_tool.items():
@@ -401,14 +405,18 @@ class ToolRankingManager:
             # Bayesian confidence (converges at 30 samples)
             metrics["confidence"] = min(1.0, total / 30)
 
-            # Trend: recent (last 3 days) vs overall success rate
-            three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
-            recent_events = [
-                ts for ts in metrics["timestamps"]
-                if ts >= three_days_ago
-            ]
-            # This is approximate; a proper implementation would track recent success count
-            metrics["trend"] = 0.0  # TODO: improve with proper time-series trend
+            # Trend: success rate of the most recent 10% of executions (ordered
+            # by event time, stable on ties) minus the overall success rate.
+            # Positive = improving, negative = degrading; consumed by
+            # ``_score_tool`` (+/- weights.trend beyond |0.1|). Needs at least
+            # 10 executions so a single recent outcome cannot swing the score.
+            metrics["trend"] = 0.0
+            if total >= 10:
+                ordered = sorted(metrics["outcomes"], key=lambda o: (o[0], o[1]))
+                recent = ordered[-max(1, total // 10):]
+                recent_rate = sum(1 for _, _, ok in recent if ok) / len(recent)
+                metrics["trend"] = recent_rate - metrics["success_rate"]
+            del metrics["outcomes"]
 
             # Cold-start detection
             metrics["is_cold_start"] = total < 10

@@ -62,7 +62,76 @@ def _resolve_core_audit():
             raise RuntimeError("core audit writer unavailable") from exc
     if not hasattr(_audit, "audit_event") or getattr(_audit, "_se", None) is None:
         raise RuntimeError("core audit writer unavailable")
+    _register_learning_audit_allowlists(_audit._se)
     return _audit
+
+
+# ── Positive allowlists for every learning chain record ─────────────────────
+#
+# The core writer's metadata floor is DEFAULT-DENY for detail keys (F-A4,
+# 2026-09-07): a key that is neither in the universal vocabulary nor in a
+# positive allowlist registered for the event type is dropped. ``audit_ref`` —
+# the uuid ``core_audit_event`` reads back from the chain tail to PROVE the
+# commit — is not in that vocabulary, so without this registration every
+# learning chain write was scrubbed to a record without its ref and every
+# ``EventStore.write_event`` failed closed ("did not commit"). Registered once,
+# at writer resolution, like ``core/skills/skill_registry_phase1.py`` does for
+# ``skill.*``. Keys are ids, enums, counts, hashes and code locations — never
+# free text (the ``reason`` under ``learning.hyperparameter_changed`` is one of
+# three fixed tokens; the ``reason`` of the erasure cascade is the GDPR basis).
+
+_LEARNING_EVENT_ALLOWLISTS: dict[str, frozenset[str]] = {
+    **{
+        f"learning.{value}": frozenset({
+            "event_id", "event_type", "skill_id", "skill_version", "skill_name",
+            "session_id", "tags", "lom", "audit_ref", "tenant_id",
+        })
+        for value in (
+            # core/learning/learning_events.py::EventType (ADR-0314 store)
+            "confidence", "feedback", "outcome", "preference", "attention", "metric",
+            "config_updated", "skill_executed", "decision",
+            # core/learning/event_schema.py::LearningEventType (event_persistence store)
+            "tool.executed", "operator.rated_tool", "operator.rated_skill", "confidence.score",
+            "decision.record", "feedback.user_provided", "outcome.observed", "preference.set",
+            "attention.consumed", "attention.refunded", "metric.aggregated", "token.metrics",
+            "method.observation", "method.discovered",
+        )
+    },
+    "learning.retention": frozenset({"retention_days", "deleted_count", "partitions_rewritten", "audit_ref"}),
+    "learning.erasure": frozenset({"erasure_id", "erased_count", "partitions_rewritten", "audit_ref"}),
+    "learning.hyperparameter_changed": frozenset({
+        "loop_id", "reason", "update_count", "conservative_mode", "changes", "audit_ref",
+    }),
+    "hybrid_context_request_enriched": frozenset({
+        "component", "session_id", "quality_mode", "confidence", "tier1_present", "tier1_sources",
+        "layers_injected", "layer_names", "selected_adr_count", "selected_memory_count", "lom",
+        "audit_ref",
+    }),
+    **{
+        name: frozenset({
+            "component", "attention_budget", "base_hash", "decisions_count", "deleted_bases",
+            "deleted_layers", "error_count", "failed_count", "field", "hash", "layer_name", "lom",
+            "lom_audit_write", "prev_hash", "reason", "session_id", "stage", "total_layers",
+            "verification_complete", "version", "audit_ref",
+        })
+        for name in ("hybrid_context_merge", "user_context_cascade_deleted")
+    },
+    "user_context_erasure_cascade_complete": frozenset({
+        "component", "reason", "requestor_id", "tier1_deleted", "tier1_count", "tier2_deleted",
+        "tier2_count", "cache_invalidated", "skipped", "complete", "error_count", "audit_ref",
+    }),
+}
+_allowlists_registered_for: set[int] = set()
+
+
+def _register_learning_audit_allowlists(security_events) -> None:
+    """Fold the learning field sets into the core writer (idempotent per writer module)."""
+    register = getattr(security_events, "register_event_allowlist", None)
+    if register is None or id(security_events) in _allowlists_registered_for:
+        return
+    for event_type, fields in _LEARNING_EVENT_ALLOWLISTS.items():
+        register(event_type, fields)
+    _allowlists_registered_for.add(id(security_events))
 
 
 def _tail_contains(path: Path, needle: str, window: int = 65536) -> bool:

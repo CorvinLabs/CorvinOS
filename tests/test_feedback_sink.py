@@ -142,47 +142,38 @@ class TestFeedbackValidator:
     """Test feedback validation (fail-closed checks)."""
 
     def test_missing_tenant_id(self):
-        """Reject feedback without tenant_id."""
-        event = FeedbackEvent.create(
-            skill_id="os.router",
-            task_id="task-123",
-            tenant_id="",  # Empty
-            outcome_feedback=OutcomeFeedbackType.YES,
-        )
-        validator = FeedbackValidator()
-        valid, error = validator.validate(event)
-        assert not valid
-        assert "tenant_id" in error
+        """Feedback without tenant_id cannot even be constructed (fail-closed at the schema)."""
+        with pytest.raises(ValueError, match="tenant_id"):
+            FeedbackEvent.create(
+                skill_id="os.router",
+                task_id="task-123",
+                tenant_id="",  # Empty
+                outcome_feedback=OutcomeFeedbackType.YES,
+            )
 
     def test_missing_skill_id(self):
-        """Reject feedback without skill_id."""
-        event = FeedbackEvent(
-            feedback_id=str(uuid4()),
-            skill_id="",  # Empty
-            task_id="task-123",
-            tenant_id="_default",
-            timestamp=datetime.utcnow().isoformat() + "Z",
-            outcome_feedback=OutcomeFeedbackType.YES,
-        )
-        validator = FeedbackValidator()
-        valid, error = validator.validate(event)
-        assert not valid
-        assert "skill_id" in error
+        """Feedback without skill_id cannot be constructed."""
+        with pytest.raises(ValueError, match="skill_id"):
+            FeedbackEvent(
+                feedback_id=str(uuid4()),
+                skill_id="",  # Empty
+                task_id="task-123",
+                tenant_id="_default",
+                timestamp=datetime.utcnow().isoformat() + "Z",
+                outcome_feedback=OutcomeFeedbackType.YES,
+            )
 
     def test_missing_task_id(self):
-        """Reject feedback without task_id."""
-        event = FeedbackEvent(
-            feedback_id=str(uuid4()),
-            skill_id="os.router",
-            task_id="",  # Empty
-            tenant_id="_default",
-            timestamp=datetime.utcnow().isoformat() + "Z",
-            outcome_feedback=OutcomeFeedbackType.YES,
-        )
-        validator = FeedbackValidator()
-        valid, error = validator.validate(event)
-        assert not valid
-        assert "task_id" in error
+        """Feedback without task_id cannot be constructed."""
+        with pytest.raises(ValueError, match="task_id"):
+            FeedbackEvent(
+                feedback_id=str(uuid4()),
+                skill_id="os.router",
+                task_id="",  # Empty
+                tenant_id="_default",
+                timestamp=datetime.utcnow().isoformat() + "Z",
+                outcome_feedback=OutcomeFeedbackType.YES,
+            )
 
     def test_feedback_too_old(self):
         """Reject feedback older than FEEDBACK_WINDOW_MINUTES (60 min)."""

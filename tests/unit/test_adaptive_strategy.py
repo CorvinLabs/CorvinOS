@@ -482,7 +482,7 @@ class TestAdaptiveStrategyEngine:
                 name="slow_cheap",
                 required_steps=10,
                 avg_latency_ms=500.0,  # High latency
-                avg_cost_cents=20.0,
+                avg_cost_cents=20.0,  # Same cost: speed_preference is the only discriminator
                 success_rate=0.80,  # Same
                 operator_preference_score=0.5,
             ),
@@ -490,7 +490,7 @@ class TestAdaptiveStrategyEngine:
                 name="fast_expensive",
                 required_steps=3,
                 avg_latency_ms=50.0,  # Low latency
-                avg_cost_cents=100.0,
+                avg_cost_cents=20.0,  # Same cost
                 success_rate=0.80,  # Same
                 operator_preference_score=0.5,
             ),

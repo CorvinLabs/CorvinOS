@@ -57,8 +57,12 @@ def test_confidence_antipattern_penalty():
         reason="used in auth_failures context"
     )
     
+    old_conf = node.confidence
     new_conf = update_confidence(node, event)
-    assert new_conf < node.confidence
+    # Bayesian blend of a -0.3 penalty: 0.7*0.8 + 0.3*(0.8-0.3) = 0.71
+    assert new_conf < old_conf
+    assert abs(new_conf - 0.71) < 0.01
+    assert node.confidence == new_conf
 
 
 def test_confidence_decay():

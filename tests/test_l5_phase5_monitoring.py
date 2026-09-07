@@ -50,6 +50,7 @@ class TestMetricsCollectorInit:
     def test_init_default_tenant(self):
         """Initialize collector with default tenant."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, tenant_id="_default")
         assert collector.tenant_id == "_default"
         assert collector.window_hours == 24
@@ -57,12 +58,14 @@ class TestMetricsCollectorInit:
     def test_init_custom_window(self):
         """Initialize with custom time window."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, window_hours=48, tenant_id="_default")
         assert collector.window_hours == 48
 
     def test_init_custom_tenant(self):
         """Initialize with custom tenant."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, tenant_id="tenant_acme")
         assert collector.tenant_id == "tenant_acme"
 
@@ -73,6 +76,7 @@ class TestMetricsCollectorCollection:
     def test_collect_metrics_empty_audit(self):
         """Collect metrics with empty audit trail."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, tenant_id="_default")
         metrics = collector.collect_metrics()
 
@@ -86,6 +90,7 @@ class TestMetricsCollectorCollection:
     def test_collect_metrics_structure(self):
         """Verify collected metrics have correct structure."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, tenant_id="_default")
         metrics = collector.collect_metrics()
 
@@ -110,6 +115,7 @@ class TestMetricsCollectorPercentile:
     def test_percentile_computation(self):
         """Test _percentile method."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, tenant_id="_default")
 
         data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -125,6 +131,7 @@ class TestMetricsCollectorPercentile:
     def test_percentile_empty_list(self):
         """Test percentile with empty list."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, tenant_id="_default")
 
         result = collector._percentile([], 50)
@@ -133,6 +140,7 @@ class TestMetricsCollectorPercentile:
     def test_percentile_single_element(self):
         """Test percentile with single element."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, tenant_id="_default")
 
         result = collector._percentile([42.0], 50)
@@ -445,6 +453,7 @@ class TestL5MonitoringSystemInit:
     def test_init_creates_components(self):
         """Verify init creates all components."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         system = L5MonitoringSystem(mock_audit, tenant_id="_default")
 
         assert system.tenant_id == "_default"
@@ -455,6 +464,7 @@ class TestL5MonitoringSystemInit:
     def test_init_custom_window(self):
         """Initialize with custom metrics window."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         system = L5MonitoringSystem(mock_audit, window_hours=48, tenant_id="_default")
 
         assert system.metrics_collector.window_hours == 48
@@ -466,6 +476,7 @@ class TestL5MonitoringSystemHealthStatus:
     def test_get_health_status(self):
         """Get health status from monitoring system."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         system = L5MonitoringSystem(mock_audit, tenant_id="_default")
 
         # Mock the health checker
@@ -488,6 +499,7 @@ class TestL5MonitoringSystemHealthStatus:
     def test_get_health_status_json(self):
         """Get health status as JSON string."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         system = L5MonitoringSystem(mock_audit, tenant_id="_default")
 
         # Mock the health checker
@@ -516,6 +528,7 @@ class TestL5MonitoringSystemAlerts:
     def test_get_active_alerts(self):
         """Get list of active alerts."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         system = L5MonitoringSystem(mock_audit, tenant_id="_default")
 
         # Create some alerts
@@ -531,6 +544,7 @@ class TestL5MonitoringSystemAlerts:
     def test_acknowledge_alert_through_system(self):
         """Acknowledge alert through monitoring system."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         system = L5MonitoringSystem(mock_audit, tenant_id="_default")
 
         alert = system.alert_manager.create_alert("WARNING", "Test alert")
@@ -541,6 +555,7 @@ class TestL5MonitoringSystemAlerts:
     def test_resolve_alert_through_system(self):
         """Resolve alert through monitoring system."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         system = L5MonitoringSystem(mock_audit, tenant_id="_default")
 
         alert = system.alert_manager.create_alert("WARNING", "Test alert")
@@ -556,6 +571,7 @@ class TestL5MonitoringSystemTimeseries:
     def test_get_timeseries_data(self):
         """Get historical timeseries data."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         system = L5MonitoringSystem(mock_audit, tenant_id="_default")
 
         start_time = (datetime.utcnow() - timedelta(hours=24)).isoformat()
@@ -579,6 +595,7 @@ class TestThreadSafety:
     def test_metrics_collector_thread_safe(self):
         """Verify MetricsCollector uses RLock."""
         mock_audit = Mock()
+        mock_audit.query_events.return_value = []  # real contract: list of event dicts
         collector = MetricsCollector(mock_audit, tenant_id="_default")
         assert collector._lock is not None
 

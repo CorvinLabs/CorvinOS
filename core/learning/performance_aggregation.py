@@ -367,10 +367,15 @@ class PerformanceAggregator:
         Returns:
             ToolPerformanceMetrics or None if no events
         """
-        if not events:
+        # Only records that carry THIS tool_id count: an event whose payload
+        # lacks / mismatches tool_id (malformed, or grouped wrongly upstream)
+        # must never contribute to another tool's success rate.
+        payloads = [
+            e.payload for e in events
+            if isinstance(e.payload, dict) and e.payload.get("tool_id") == tool_id
+        ]
+        if not payloads:
             return None
-
-        payloads = [e.payload for e in events]
 
         # Extract status/success
         successes = sum(

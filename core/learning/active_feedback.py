@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from core.paths.tenant import corvin_home
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ class ActiveFeedbackCollector:
 
     def __init__(self, feedback_dir: Optional[Path] = None):
         """Initialize feedback collector."""
-        self.feedback_dir = Path(feedback_dir or Path.home() / ".corvin" / "feedback")
+        self.feedback_dir = Path(feedback_dir or corvin_home() / "feedback")
         self.feedback_dir.mkdir(parents=True, exist_ok=True)
         self.feedback_log_path = self.feedback_dir / "feedback.jsonl"
 

@@ -14,11 +14,12 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from core.learning.event_schema import LearningEvent, LearningEventType
+from core.learning.learning_events import LearningEvent
 from core.learning.tool_ranking import (
     RankedTool,
     ScoringWeights,
     ToolRankingManager,
+    tool_executed_event,
 )
 from core.learning.event_store import EventStore
 
@@ -27,9 +28,14 @@ from core.learning.event_store import EventStore
 
 @pytest.fixture
 def mock_event_store():
-    """Create mock EventStore for tests."""
-    store = AsyncMock(spec=EventStore)
-    store.read_events = AsyncMock(return_value=[])
+    """Mock of the REAL reader contract: ``EventStore.query_events`` (sync).
+
+    ``ToolRankingManager`` reads ``learning_events.LearningEvent`` records via
+    ``query_events`` (tenant-filtered by the store); the former async
+    ``read_events``-style API this suite mocked never existed on this store.
+    """
+    store = MagicMock(spec=EventStore)
+    store.query_events = MagicMock(return_value=[])
     return store
 
 
@@ -46,21 +52,22 @@ def _create_tool_event(
     cost_cents: int = 10,
     tenant_id: str = "_default",
 ) -> LearningEvent:
-    """Create a TOOL_EXECUTED event."""
-    return LearningEvent(
-        event_type=LearningEventType.TOOL_EXECUTED,
-        tenant_id=tenant_id,
-        instance_id="test-instance",
-        session_id="test-session",
-        skill_name=None,
-        timestamp_utc=datetime.now(timezone.utc),
-        payload={
+    """Create the ONE ``tool_executed`` learning record (ADR-0321 wire format)."""
+    return tool_executed_event(
+        tenant_id,
+        {
             "tool_id": tool_id,
+            "tool_name": tool_id,
+            "tool_type": "generated",
             "status": status,
             "latency_ms": latency_ms,
+            "input_tokens": 0,
+            "output_tokens": 0,
             "estimated_cost_cents": cost_cents,
             "error_type": None,
         },
+        session_id="test-session",
+        instance_id="test-instance",
     )
 
 
@@ -125,7 +132,7 @@ class TestToolRankingManager:
     @pytest.mark.asyncio
     async def test_empty_tool_list(self, ranking_manager):
         """No tools should return empty list."""
-        ranking_manager.event_store.read_events.return_value = []
+        ranking_manager.event_store.query_events.return_value = []
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -142,7 +149,7 @@ class TestToolRankingManager:
             _create_tool_event("tool_1", status="success", latency_ms=100)
             for _ in range(30)
         ]
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -167,7 +174,7 @@ class TestToolRankingManager:
             _create_tool_event("tool_bad", status="failure", latency_ms=500, cost_cents=100)
             for _ in range(30)
         ]
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -189,7 +196,7 @@ class TestToolRankingManager:
             _create_tool_event("tool_new", status="success", latency_ms=100)
             for _ in range(5)
         ]
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -209,7 +216,7 @@ class TestToolRankingManager:
             _create_tool_event("tool_confident", status="success")
             for _ in range(100)
         ]
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -231,7 +238,7 @@ class TestToolRankingManager:
             _create_tool_event("tool_improving", status="success")
             for _ in range(10)
         ]
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -256,7 +263,7 @@ class TestToolRankingManager:
         ]
 
         # Mock separate queries
-        ranking_manager.event_store.read_events.side_effect = lambda **kwargs: (
+        ranking_manager.event_store.query_events.side_effect = lambda **kwargs: (
             events_a if kwargs.get("tenant_id") == "tenant_a" else events_b
         )
 
@@ -277,7 +284,7 @@ class TestToolRankingManager:
                 events.append(
                     _create_tool_event(f"tool_{tool_num}", status="success")
                 )
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -293,7 +300,7 @@ class TestToolRankingManager:
             _create_tool_event("tool_1", status="success")
             for _ in range(30)
         ]
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         # First query
         await ranking_manager.get_ranked_tools(tenant_id="_default", limit=5)
@@ -303,7 +310,7 @@ class TestToolRankingManager:
 
         # EventStore should only be queried once (first call)
         # We can verify this by checking call count
-        assert ranking_manager.event_store.read_events.call_count >= 1
+        assert ranking_manager.event_store.query_events.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_task_type_filter(self, ranking_manager):
@@ -313,10 +320,10 @@ class TestToolRankingManager:
         for task_type in ["extract", "summarize", "code_review"]:
             for _ in range(30):
                 event = _create_tool_event(f"tool_{task_type}", status="success")
-                event.payload["task_type"] = task_type
+                event.signal["task_type"] = task_type
                 events.append(event)
 
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -334,10 +341,10 @@ class TestToolRankingManager:
         for error_class in ["timeout", "api_error", "parsing_error"]:
             for _ in range(30):
                 event = _create_tool_event(f"tool_{error_class}", status="success")
-                event.payload["error_class"] = error_class
+                event.signal["error_class"] = error_class
                 events.append(event)
 
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",
@@ -355,7 +362,7 @@ class TestToolRankingManager:
             _create_tool_event("tool_good", status="success", latency_ms=50, cost_cents=5)
             for _ in range(30)
         ]
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         # Tool should meet reuse threshold
         result = await ranking_manager.get_ranked_tools(
@@ -374,7 +381,7 @@ class TestToolRankingManager:
             _create_tool_event("tool_1", status="success")
             for _ in range(30)
         ]
-        ranking_manager.event_store.read_events.return_value = events
+        ranking_manager.event_store.query_events.return_value = events
 
         result = await ranking_manager.get_ranked_tools(
             tenant_id="_default",

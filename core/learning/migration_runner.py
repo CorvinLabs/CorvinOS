@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from core.paths.tenant import tenant_home
 from core.learning import LearningEventStore, MigrationPlanner
 
 
@@ -17,7 +18,7 @@ def run_migration(tenant_id: str = "default") -> dict:
         "issues": [list of warnings/errors]
     }
     """
-    store_path = Path.home() / ".corvin" / "tenants" / tenant_id / "learning"
+    store_path = tenant_home(tenant_id) / "learning"
     store = LearningEventStore(store_path)
     planner = MigrationPlanner(store)
     

@@ -198,7 +198,7 @@ class TestOutcomeFeedbackStore:
         assert outcome_id == outcome.outcome_id
 
         # Verify retrieval
-        retrieved = store.get_outcome(outcome_id, tenant_id="_default")
+        retrieved = store.get_outcome(outcome_id, tenant_id="tenant-1")
         assert retrieved is not None
         assert retrieved.outcome == OutcomeType.SUCCESS
         assert retrieved.rating == 5
@@ -217,7 +217,7 @@ class TestOutcomeFeedbackStore:
             )
             store.record_outcome(outcome)
 
-        outcomes = store.get_outcomes_by_decision(decision_id, tenant_id="_default")
+        outcomes = store.get_outcomes_by_decision(decision_id, tenant_id="tenant-1")
         assert len(outcomes) == 3
 
     def test_get_outcomes_by_type(self, store):
@@ -239,22 +239,22 @@ class TestOutcomeFeedbackStore:
         """Compute success rate."""
         recorder = OutcomeRecorder("tenant-1")
 
-        outcomes = [
-            OutcomeType.SUCCESS,
-            OutcomeType.SUCCESS,
-            OutcomeType.FAILURE,
-        ]
+        # ADR-0317: neutral 0.5 below N=10 (anti-fingerprinting), actual rate from N=10.
+        # 8 successes + 4 failures = 12 outcomes → 2/3
+        outcomes = [OutcomeType.SUCCESS] * 8 + [OutcomeType.FAILURE] * 4
 
-        for outcome in outcomes:
+        for i, outcome in enumerate(outcomes):
             record = recorder.record_outcome(
                 decision_id="d1",
                 session_id="session-123",
                 outcome=outcome,
             )
             store.record_outcome(record)
+            if i + 1 < 10:
+                assert store.compute_success_rate("tenant-1") == 0.5
 
         success_rate = store.compute_success_rate("tenant-1")
-        assert success_rate == pytest.approx(2 / 3, rel=0.1)
+        assert success_rate == pytest.approx(2 / 3, rel=0.01)
 
     def test_export_training_data_csv(self, store):
         """Export outcomes as CSV for training."""
@@ -277,11 +277,20 @@ class TestOutcomeFeedbackStore:
             assert output_path.exists()
 
             # Verify CSV contents
+            # metadata row + blank separator + header + 5 rows; ids anonymised
+            # by default (GDPR Art. 5 minimisation), user_id never exported
             with open(output_path, "r") as f:
                 reader = csv.reader(f)
                 rows = list(reader)
-                assert len(rows) == 6  # Header + 5 data rows
-                assert rows[0][0] == "outcome_id"
+                assert len(rows) == 8
+                assert rows[0][0].startswith("# CorvinOS Outcome Feedback Export")
+                assert "tenant_id=tenant-1" in rows[0]
+                assert rows[1] == []
+                assert rows[2][:2] == ["outcome_id_anonymous", "decision_id_anonymous"]
+                assert "user_id" not in rows[2]
+                data_rows = rows[3:]
+                assert len(data_rows) == 5
+                assert all(r[0].isdigit() and r[1].isdigit() for r in data_rows)
 
     def test_confidence_delta_success_with_high_rating(self, store):
         """Backprop: success + high rating → +0.15."""
@@ -398,7 +407,7 @@ class TestOutcomeFeedbackLoop:
         await loop.stop()
 
         # Verify outcome was persisted
-        retrieved = store.get_outcome(outcome.outcome_id, tenant_id="_default")
+        retrieved = store.get_outcome(outcome.outcome_id, tenant_id="tenant-1")
         assert retrieved is not None
 
     @pytest.mark.asyncio
