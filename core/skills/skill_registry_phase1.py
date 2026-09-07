@@ -589,7 +589,7 @@ class SkillsRegistry:
             parts = lom.split(":")
             if len(parts) < 2:
                 logger.warning("LoM %r has no function part — label hash only", lom)
-                return label_hash
+                return None
 
             file_path, func_name = parts[0], parts[1].strip()
             source_path = Path(file_path)
@@ -602,11 +602,11 @@ class SkillsRegistry:
             # readable files — refuse and fall back to the label hash.
             if not source_path.is_relative_to(_REPO_ROOT):
                 logger.warning("LoM outside repo root refused: %s", source_path)
-                return label_hash
+                return None
 
             if not source_path.is_file():
                 logger.warning(f"LoM source file not found: {source_path}")
-                return label_hash
+                return None
 
             text = source_path.read_text(encoding="utf-8", errors="ignore")
 
@@ -618,22 +618,35 @@ class SkillsRegistry:
                 lines = text.split("\n")
                 if line_num < 1 or line_num > len(lines):
                     logger.warning(f"LoM line {line_num} outside file length {len(lines)}")
-                    return label_hash
+                    return None
                 return hashlib.sha256(lines[line_num - 1].encode()).hexdigest()
 
             # ``file:function`` — hash the function's source segment.
             tree = ast.parse(text)
+            # ``Class.method`` binds to the method inside that class; a bare name
+            # binds to any def with that name (module level or method).
+            cls_name, _, meth_name = func_name.rpartition(".")
+            if cls_name:
+                for cls in ast.walk(tree):
+                    if isinstance(cls, ast.ClassDef) and cls.name == cls_name:
+                        for node in cls.body:
+                            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == meth_name:
+                                segment = ast.get_source_segment(text, node) or ""
+                                if segment:
+                                    return hashlib.sha256(segment.encode()).hexdigest()
+                logger.warning("LoM method %s not found in %s — unresolvable", func_name, source_path)
+                return None
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
                     segment = ast.get_source_segment(text, node)
                     if segment:
                         return hashlib.sha256(segment.encode()).hexdigest()
             logger.warning("LoM function %s not found in %s — label hash only", func_name, source_path)
-            return label_hash
+            return None
 
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to compute LoM hash for '{lom}': {e}")
-            return label_hash
+            return None
 
     # ── tenant isolation ─────────────────────────────────────────────────────
 
@@ -789,6 +802,17 @@ class SkillsRegistry:
                 skill_id,
                 "LoM missing: pass lom='<file>:<function>' naming the line of moral "
                 "responsibility for this Skill execution (ADR-0537)",
+                effective_tenant_id, None, start_time, track=False,
+            )
+
+        # The LoM must BIND to source (ADR-0537): an unresolvable file:function
+        # used to fall back to sha256(label), indistinguishable from a real
+        # source hash (round-2 review, R2-B1). Refused like a missing LoM.
+        if self._compute_lom_hash(lom) is None:
+            return self._finish_error(
+                skill_id,
+                f"LoM unresolvable: {lom!r} does not name an existing "
+                "<repo-relative file>:<function> (ADR-0537)",
                 effective_tenant_id, None, start_time, track=False,
             )
 

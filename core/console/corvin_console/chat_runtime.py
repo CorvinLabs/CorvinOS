@@ -1964,8 +1964,11 @@ def _sync_acs_result_to_transcript(sess: WebChatSession, res: Any, run_id: str,
             with proc_holder.lock:
                 proc_holder.popen = proc
         try:
+            # R2-E1: the sync note is derived from worker OUTPUT — sentinel at
+            # byte 0 so it can never be read as a slash command.
+            from agents.claude_code import guard_prompt_head as _guard_prompt_head  # noqa: PLC0415
             _acs._communicate_capped(  # noqa: SLF001 — shared, already-hardened helper
-                proc, input_text=note, timeout=_CONTEXT_SYNC_TIMEOUT,
+                proc, input_text=_guard_prompt_head(note), timeout=_CONTEXT_SYNC_TIMEOUT,
                 cap_chars=_CONTEXT_SYNC_OUTPUT_CAP,
             )
         except subprocess.TimeoutExpired:
@@ -6426,8 +6429,13 @@ async def stream_turn(
     try:
         # ADR-0395: when cache-stable CEL is on, the volatile context rides here (in the
         # user message), not in the cached system prompt. Prefix it to the real prompt.
-        _worker_prompt = ((_volatile_user_prefix + "\n\n" + prompt)
-                          if _volatile_user_prefix else prompt)
+        # R2-E1 (2026-09-07): byte 0 of the stdin user text is ALWAYS the
+        # shared non-slash sentinel (agents.claude_code.guard_prompt_head) —
+        # `claude -p` expands a leading "/name" into a slash command / skill
+        # on the stdin transport too, and the CEL prefix is conditional.
+        from agents.claude_code import guard_prompt_head as _guard_prompt_head  # noqa: PLC0415
+        _worker_prompt = _guard_prompt_head((_volatile_user_prefix + "\n\n" + prompt)
+                                            if _volatile_user_prefix else prompt)
         proc.stdin.write(_worker_prompt.encode("utf-8"))
         await proc.stdin.drain()
         proc.stdin.close()

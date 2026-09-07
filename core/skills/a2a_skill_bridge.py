@@ -140,7 +140,7 @@ class A2ASkillBridge:
                 skill_id=skill_id,
                 input=task_envelope.input,
                 timeout_ms=task_envelope.timeout_ms,
-                lom=f"A2A_BRIDGE:{skill_id}",
+                lom="core/skills/a2a_skill_bridge.py:A2ASkillBridge.handle_task",
             )
 
             # Convert Skill result to A2A result

@@ -82,9 +82,13 @@ class TestLomRequired:
                     if isinstance(n, ast.FunctionDef) and n.name == "_chain")
         expected = hashlib.sha256(ast.get_source_segment(text, node).encode()).hexdigest()
         assert r.lom_hash == expected
-        # unknown function / outside repo → label hash, never None, never a foreign file
+        # unknown function / outside repo → UNRESOLVABLE (None): never a foreign
+        # file, and never a label hash that is indistinguishable from a real
+        # source hash (round-2 review, R2-B1). execute() refuses such a LoM.
         label = "../../etc/passwd:root"
-        assert registry._compute_lom_hash(label) == hashlib.sha256(label.encode()).hexdigest()
+        assert registry._compute_lom_hash(label) is None
+        refused = registry.execute("os.headless_mode", {"headless_enabled": False}, lom=label)
+        assert refused.status == "error" and "LoM unresolvable" in (refused.error_message or "")
 
 
 class TestDecisionReachesTheChain:

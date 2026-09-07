@@ -69,6 +69,41 @@ except Exception:  # pragma: no cover
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 
 
+# ── prompt-head guard (R2-E1, adversarial review 2026-09-07) ────────────────
+#
+# `claude -p` expands a user message whose FIRST byte is `/` into a slash
+# command / skill on EVERY transport — the positional-after-`--` form AND the
+# stdin `stream-json` user message alike. Proven live: an instruction `/pwn`
+# executed `.claude/commands/pwn.md` from the worker cwd (bypassPermissions,
+# persona workdir) and `/cost` leaked the operator's subscription usage. A
+# chat user therefore had a command-injection primitive against every spawn
+# site that forwarded their text verbatim (console /task worker, the bridge
+# adapter whenever the CEL prefix was empty, the voice summariser, ...).
+#
+# The only structural fix is at the byte-0 position: every spawn site wraps
+# the outbound user text with `guard_prompt_head()`, which prepends ONE
+# fixed, non-slash sentinel line. It is deliberately independent of whether
+# a CEL brief / observer block / volatile prefix happens to be present — those
+# are conditional, this is not. The user's text is preserved verbatim after
+# the sentinel, so `/pwn` reaches the model as literal text ("the user wrote
+# /pwn"), never as a command.
+PROMPT_HEAD_SENTINEL = "User input:"
+
+
+def guard_prompt_head(text: str | None) -> str:
+    """Return ``text`` behind the fixed non-slash sentinel line.
+
+    Idempotent: a payload that already starts with the sentinel line is
+    returned unchanged (its byte 0 is already safe). ``None`` is treated as an
+    empty message. Never strips or rewrites the caller's text.
+    """
+    body = "" if text is None else str(text)
+    head = PROMPT_HEAD_SENTINEL + "\n"
+    if body.startswith(head):
+        return body
+    return head + body
+
+
 def _configured_claude_bin() -> str:
     """Canonical source for the claude binary name/path, resolved fresh.
 

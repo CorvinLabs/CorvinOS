@@ -12,6 +12,9 @@ ADR-0347/0348/0349/0350: Brain v0.2, ExecutionContext, ContextBus, Plugin System
 """
 
 import pytest
+
+# psutil is not a CorvinOS dependency; this validation suite is optional tooling.
+psutil = pytest.importorskip("psutil")
 import asyncio
 import tempfile
 import time

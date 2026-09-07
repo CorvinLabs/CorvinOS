@@ -109,7 +109,7 @@ class TestCallSite1PluginHealthMonitoring:
     def test_skill_execution(self, registry):
         """E2E: Execute plugin health monitoring Skill."""
         _set_flag("plugin_health_monitoring", True)
-        result = registry.execute("os.plugin_health_monitoring", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        result = registry.execute("os.plugin_health_monitoring", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         assert result.output["enabled"] is True
@@ -118,7 +118,7 @@ class TestCallSite1PluginHealthMonitoring:
     def test_disabled_state(self, registry):
         """E2E: Plugin health monitoring disabled."""
         _set_flag("plugin_health_monitoring", False)
-        result = registry.execute("os.plugin_health_monitoring", {"enabled": False}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        result = registry.execute("os.plugin_health_monitoring", {"enabled": False}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         assert result.output["enabled"] is False
@@ -126,7 +126,7 @@ class TestCallSite1PluginHealthMonitoring:
 
     def test_audit_trail(self, registry, mock_audit):
         """E2E: Audit trail logged for health monitoring decision."""
-        registry.execute("os.plugin_health_monitoring", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        registry.execute("os.plugin_health_monitoring", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         events = mock_audit.get_events("SKILL_EXECUTED", "os.plugin_health_monitoring")
         assert len(events) >= 1
@@ -140,7 +140,7 @@ class TestCallSite2HeadlessMode:
     def test_headless_enabled(self, registry):
         """E2E: Headless mode enabled."""
         _set_flag("headless_api_mode", True)
-        result = registry.execute("os.headless_mode", {"headless_enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        result = registry.execute("os.headless_mode", {"headless_enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         assert result.output["headless_enabled"] is True
@@ -149,7 +149,7 @@ class TestCallSite2HeadlessMode:
     def test_console_mode(self, registry):
         """E2E: Console mode (headless disabled)."""
         _set_flag("headless_api_mode", False)
-        result = registry.execute("os.headless_mode", {"headless_enabled": False}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        result = registry.execute("os.headless_mode", {"headless_enabled": False}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         assert result.output["headless_enabled"] is False
@@ -157,7 +157,7 @@ class TestCallSite2HeadlessMode:
 
     def test_default_console(self, registry):
         """E2E: Default is console mode (headless off)."""
-        result = registry.execute("os.headless_mode", {}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        result = registry.execute("os.headless_mode", {}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         assert result.output["headless_enabled"] is False
@@ -169,7 +169,7 @@ class TestCallSite3PluginBuilder:
     def test_builder_enabled(self, registry):
         """E2E: Plugin builder /build command available."""
         _set_flag("plugin_builder_enabled", True)
-        result = registry.execute("os.plugin_builder", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        result = registry.execute("os.plugin_builder", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         assert result.output["enabled"] is True
@@ -178,7 +178,7 @@ class TestCallSite3PluginBuilder:
     def test_builder_disabled(self, registry):
         """E2E: Plugin builder disabled."""
         _set_flag("plugin_builder_enabled", False)
-        result = registry.execute("os.plugin_builder", {"enabled": False}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        result = registry.execute("os.plugin_builder", {"enabled": False}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         assert result.output["enabled"] is False
@@ -186,7 +186,7 @@ class TestCallSite3PluginBuilder:
 
     def test_audit_trail(self, registry, mock_audit):
         """E2E: Audit trail for builder availability."""
-        registry.execute("os.plugin_builder", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        registry.execute("os.plugin_builder", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         events = mock_audit.get_events("SKILL_EXECUTED", "os.plugin_builder")
         assert len(events) >= 1
@@ -200,7 +200,7 @@ class TestCallSite4Capabilities:
         result = registry.execute("os.capabilities", {
             "tenant_id": "_default",
             "gated_flags": [],
-        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         assert result.output["flags"] == {}
@@ -212,7 +212,7 @@ class TestCallSite4Capabilities:
         result = registry.execute("os.capabilities", {
             "tenant_id": "_default",
             "gated_flags": flags,
-        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result.status == "success"
         output_flags = result.output["flags"]
@@ -226,11 +226,11 @@ class TestCallSite4Capabilities:
         result1 = registry.execute("os.capabilities", {
             "tenant_id": "tenant_a",
             "gated_flags": ["plugin_health_monitoring"],
-        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
         result2 = registry.execute("os.capabilities", {
             "tenant_id": "tenant_b",
             "gated_flags": ["plugin_health_monitoring"],
-        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         assert result1.output["tenant_id"] == "tenant_a"
         assert result2.output["tenant_id"] == "tenant_b"
@@ -246,7 +246,7 @@ class TestA2BEquivalence:
 
         old_enabled = True  # Old feature flag logic
         _set_flag("plugin_health_monitoring", old_enabled)
-        result = registry.execute("os.plugin_health_monitoring", {"enabled": old_enabled}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        result = registry.execute("os.plugin_health_monitoring", {"enabled": old_enabled}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
         new_enabled = result.output["enabled"]
 
         assert old_enabled == new_enabled
@@ -255,7 +255,7 @@ class TestA2BEquivalence:
         """A/B: headless_api_mode flag → Skill returns same output."""
         for old_headless in [True, False]:
             _set_flag("headless_api_mode", old_headless)
-            result = registry.execute("os.headless_mode", {"headless_enabled": old_headless}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+            result = registry.execute("os.headless_mode", {"headless_enabled": old_headless}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
             new_headless = result.output["headless_enabled"]
             assert old_headless == new_headless
 
@@ -266,7 +266,7 @@ class TestA2BEquivalence:
         result = registry.execute("os.capabilities", {
             "tenant_id": "_default",
             "gated_flags": flags_to_check,
-        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        }, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         output_flags = result.output["flags"]
         # Old behavior: flags dict with flag → bool
@@ -282,9 +282,9 @@ class TestCompliance:
     def test_gdpr_art_30_all_executions_logged(self, registry, mock_audit):
         """GDPR Art. 30: Every Skill execution logged."""
         # Execute multiple Skills
-        registry.execute("os.plugin_health_monitoring", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
-        registry.execute("os.headless_mode", {"headless_enabled": False}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
-        registry.execute("os.plugin_builder", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+        registry.execute("os.plugin_health_monitoring", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
+        registry.execute("os.headless_mode", {"headless_enabled": False}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
+        registry.execute("os.plugin_builder", {"enabled": True}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
 
         # Verify all logged
         events = mock_audit.get_events("SKILL_EXECUTED")
@@ -323,7 +323,7 @@ class TestCompliance:
         result = registry.execute(
             "os.plugin_health_monitoring",
             {"enabled": True},
-            lom="core/skills/os_skills_phase1.py::PluginHealthMonitoringSkill.execute:42"
+            lom="core/skills/os_skills_phase1.py:PluginHealthMonitoringSkill.execute"
         )
 
         events = mock_audit.get_events("SKILL_EXECUTED", "os.plugin_health_monitoring")
@@ -348,7 +348,7 @@ class TestNoRegressions:
 
         for i in range(100):
             skill_id, input_data = random.choice(skills_to_test)
-            result = registry.execute(skill_id, input_data, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+            result = registry.execute(skill_id, input_data, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
             assert result.status == "success"
 
     def test_all_builtin_skills_executable(self, registry):
@@ -357,7 +357,7 @@ class TestNoRegressions:
         assert len(skills) >= 4  # At least the 4 new ones + originals
 
         for skill in skills:
-            result = registry.execute(skill.id, {}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:test")
+            result = registry.execute(skill.id, {}, lom="tests/integration/test_phase1_k2_k5_call_sites.py:execute_skill")
             # Should either succeed or be a known error (e.g., not found)
             assert result.status in ["success", "error", "timeout"]
 
