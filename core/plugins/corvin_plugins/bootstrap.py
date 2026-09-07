@@ -2097,6 +2097,29 @@ def _stop_health_monitoring_sync() -> None:
     _publish_collector(None)
 
 
+def _package_unresolvable(name: str) -> bool:
+    """True only when ``name`` genuinely has no importable spec on this install.
+
+    Used to tell "stripped install" apart from "package present, import chain
+    broken". Anything that prevents a confident answer returns False, so the
+    caller takes the LOUD branch — never the quiet one.
+    """
+    import importlib.util  # noqa: PLC0415
+
+    parts = name.split(".")
+    for depth in range(1, len(parts) + 1):
+        ancestor = ".".join(parts[:depth])
+        try:
+            if importlib.util.find_spec(ancestor) is None:
+                return True
+        except ModuleNotFoundError:
+            # An ancestor package is genuinely absent ⇒ stripped install.
+            return True
+        except Exception:  # noqa: BLE001 — cannot confirm ⇒ assume present
+            return False
+    return False
+
+
 def _boot_skills_registry() -> list[str]:
     """Populate the ACP Skills registry for the boot tenant (best-effort, logged).
 
@@ -2112,8 +2135,20 @@ def _boot_skills_registry() -> list[str]:
         # chain is broken (a deleted transitive module, a bad edit) used to be
         # swallowed here at DEBUG, which left the ACP registry silently empty
         # after a restart (2026-09-07 adversarial review, F-K1). Log that loudly.
+        #
+        # The discriminator is "does the PACKAGE ITSELF resolve", never a prefix
+        # match: a deleted submodule raises ``ModuleNotFoundError`` whose ``name``
+        # is ``core.skills.<submodule>``, and ``startswith("core.skills")`` sent
+        # exactly that — the F-K1 failure shape — down the quiet branch (round-4
+        # review, F4). ``core/skills/boot.py`` imports three internal modules at
+        # module level, so a broken transitive import is the likely next break.
         missing = getattr(exc, "name", None) or ""
-        if isinstance(exc, ModuleNotFoundError) and missing.startswith("core.skills"):
+        package_absent = (
+            isinstance(exc, ModuleNotFoundError)
+            and missing in ("core", "core.skills")
+            and _package_unresolvable("core.skills")
+        )
+        if package_absent:
             log.debug("core.skills absent — ACP Skills registry not populated")
             return []
         log.error(

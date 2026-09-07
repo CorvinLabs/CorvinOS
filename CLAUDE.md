@@ -304,14 +304,41 @@ not a hard block for genuinely exempt changes.
 Five-scope model: `(task, session, project, user, tenant_id)`. Default: `_default`.
 Canonical env: `CORVIN_TENANT_ID`. Resolver: `current_tenant()` → `validate_tenant_id()` → `tenant_home()`.
 
-**On-disk:** `<corvin_home>/tenants/_default/{global,sessions,forge,skill-forge,voice,cowork}/`
-with backward-compat symlinks at `<corvin_home>/{global,sessions,...}`.
+**On-disk:** `<corvin_home>/tenants/_default/{global,sessions,forge,skill-forge,voice,cowork}/`.
+
+**The backward-compat symlinks at `<corvin_home>/{global,sessions,...}` are NOT a
+given — never code against them.** They are created by exactly one thing,
+`forge.tenant_migrate.migrate()` (called from `adapter.py`), and only when the
+legacy directory exists AND the tenant target does not. On this install both
+existed — writers had already created `tenants/_default/global/` on their own —
+so the migration short-circuited to a permanent no-op and every one of
+`.corvin/{global,forge,sessions}` is a REAL DIRECTORY holding its own separate
+content. Verified 2026-09-07. A reader that assumes the symlink converges two
+paths is wrong on any tenant-native install and on any install where a writer
+won the race.
+
+**ONE audit chain per tenant: `<corvin_home>/tenants/<tid>/global/forge/audit.jsonl`.**
+Every writer of a hash-chained record resolves it through
+`forge.paths.tenant_audit_chain()` / `core.paths.tenant_audit_chain()` /
+`operator/bridges/shared/paths.py::tenant_audit_chain()` — three byte-identical
+mirrors, pinned together by `tests/security/test_audit_chain_ssot.py`. That file
+is what the ADR-0232 boot tripwire verifies, what `audit_query` reads and what
+every compliance report is generated from, so a record written anywhere else is
+not in the audit trail at all. Until 2026-09-07 `security_events.write_event`
+took its path from the caller and every caller composed its own: SIX live chain
+files for tenant `_default` across two roots (measured — see ADR-0650).
+The historical files are append-only and are NEVER merged, rewritten or deleted;
+the boot check links them with a chained `audit.chain_supersedes` seam naming
+each one's path key and final tail hash (`security_events.chain_seam_links`).
 
 Console routing: All routes use `rec.tenant_id` from authenticated `SessionRecord`, **never env vars**.
 Cross-tenant isolation verified; audit trail records correct `tenant_id` for every event.
 
 **Must NOT do:** fold `tenant_id` into positional args (keyword-only) · use env-var fallback
-for console tenant routing · bypass `validate_tenant_id()`.
+for console tenant routing · bypass `validate_tenant_id()` · compose an audit-chain
+path by hand instead of calling `tenant_audit_chain()` · assume the ADR-0007
+compat symlinks exist · merge, rewrite, reorder or delete an existing chain file
+to "unify" the trail — link it with a seam instead.
 
 ---
 
@@ -832,19 +859,24 @@ feedback signals; Skills infra provides the execution model. Together they make 
 
 **Five Layers of Control Plane Replacement (ADR-0532 Roadmap):**
 
-| Layer | Today | Tomorrow (Skills 2.0) | ADR | Timeline |
-|---|---|---|---|---|
-| **L5: Routing** | Hardcoded persona → engine mapping | `os.delegation_router` Skill (LLM-classified by task type) | ADR-0532 Phase 1 | Weeks 2–4 |
-| **L10: Context** | Snapshot → prompt injection | `os.context_adapter` Skill (learns user/task patterns) | ADR-0532 Phase 1 | Weeks 2–4 |
-| **L22: Workflow** | Stateless request/response | `os.workflow_optimizer` Skill (learns execution chains) | ADR-0532 Phase 2 | Weeks 6–10 |
-| **L16: Security** | Config-driven gates | `os.security_orchestrator` Skill (learns attack patterns) | ADR-0532 Phase 3 | Weeks 11–18 |
-| **L34: Data Flow** | Hardcoded validators | `os.flow_guard` Skill (learns safe data shapes) | ADR-0532 Phase 4 | Weeks 19–24 |
+The **Status** column is the load-bearing one: a Skill that is registered at boot
+is NOT thereby wired. Two of the five have no production caller at all, and saying
+otherwise is what made a whole "E2E wiring proof" suite vacuous (2026-09-07 round-4
+review, F6). Update this column in the same commit that adds or removes a call site.
+
+| Layer | Today | Tomorrow (Skills 2.0) | Status (2026-09-07) | ADR | Timeline |
+|---|---|---|---|---|---|
+| **L5: Routing** | Hardcoded persona → engine mapping | `os.delegation_router` Skill (LLM-classified by task type) | **WIRED, shadow mode** — `delegation_policy.py::_acp_shadow_route`; the bundled engine still stands (ADR-0613) | ADR-0532 Phase 1 | Weeks 2–4 |
+| **L10: Context** | Snapshot → prompt injection | `os.context_adapter` Skill (learns user/task patterns) | **NOT WIRED** — registered at every boot, called by nothing. `adapt_context_l10` has zero production call sites; the CEL context pipeline does not consult it. Fenced by `tests/e2e/test_os_skills_l5_l10_wiring.py::TestL10HasNoProductionCallSite` | ADR-0532 Phase 1 | Weeks 2–4 |
+| **L22: Workflow** | Stateless request/response | `os.workflow_optimizer` Skill (learns execution chains) | not built | ADR-0532 Phase 2 | Weeks 6–10 |
+| **L16: Security** | Config-driven gates | `os.security_orchestrator` Skill (learns attack patterns) | not built | ADR-0532 Phase 3 | Weeks 11–18 |
+| **L34: Data Flow** | Hardcoded validators | `os.flow_guard` Skill (learns safe data shapes) | not built | ADR-0532 Phase 4 | Weeks 19–24 |
 
 **Implementation Roadmap (3 Phases, 8–12 weeks, ~2600 LoC + skills library):**
 
 **Phase 1 (Weeks 1–4): Foundation**
 - Deliver `os.delegation_router` Skill + `os.context_adapter` Skill (2 minimal skills)
-- Wire into L5 (auto-routing) + L10 (context engineering)
+- Wire into L5 (auto-routing) + L10 (context engineering) — **L5 done (shadow), L10 outstanding**
 - Prove E2E: real requests flow through Skills, learning events emitted to ADR-0314
 - Tests: 25 E2E, 12 adversarial (crash recovery, timeout isolation, PII leakage)
 - Blocker: ADR-0532 Phase 1 + ADR-0533 manifest schema + ADR-0534 feedback integration ready

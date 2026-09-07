@@ -72,3 +72,67 @@ def test_marketplace_root_plugins_are_vetted_never_builtin():
         assert origin == "vetted", (d, origin)
         assert source.startswith("marketplace_root:"), source
         assert not source.startswith("/"), "source must be root-relative, never absolute"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F5 (round-4 review): the two tests above compare the ``plugin.yaml`` glob
+# against ITSELF, so they were green while the marketplace INDEX — the surface
+# the operator actually browses and installs from — disagreed with what loads,
+# in BOTH directions: 34 indexed ids vs 30 loadable dirs, 12 indexed ids with no
+# ``plugin.yaml`` at all (``resolve_builtin_dir`` refuses those, so the console
+# advertised ``path_gate``/``flow_guard``/``consent_gate``/``audit_chain`` as
+# installable builtins that can never load), and 8 plugins registering at every
+# boot that appeared nowhere in the index. These compare INDEX ⟷ LOADABLE.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _index_buildin_ids():
+    import json
+
+    # ``_marketplace_root()`` points at ``<checkout>/plugins/buildin``; the
+    # index lives at the checkout root.
+    checkout = bootstrap._marketplace_root().parent.parent
+    index_path = checkout / "index" / "plugins.json"
+    if not index_path.exists():
+        pytest.skip(f"no marketplace index at {index_path}")
+    data = json.loads(index_path.read_text(encoding="utf-8"))
+    return {p["id"] for p in data.get("plugins", []) if p.get("tier") == "buildin"}
+
+
+def _loadable_buildin_ids():
+    """``plugin:buildin-<category>-<name>`` for every dir CorvinOS discovers."""
+    root, dirs = _discovered()  # root == <checkout>/plugins/buildin
+    ids = set()
+    for d in dirs:
+        rel = d.relative_to(root).parts  # <category>/<name>
+        if len(rel) >= 2:
+            ids.add(f"plugin:buildin-{rel[0]}-{rel[1]}")
+    return ids
+
+
+def test_every_indexed_buildin_is_actually_installable():
+    """No entry may advertise a builtin CorvinOS cannot resolve or load."""
+    from corvin_console.routes.marketplace_resolve import resolve_builtin_dir
+
+    indexed = _index_buildin_ids()
+    orphans = sorted(indexed - _loadable_buildin_ids())
+    assert not orphans, (
+        "marketplace index advertises buildin plugin(s) with no plugin.yaml — "
+        "resolve_builtin_dir refuses them, so 'Install' can never succeed:\n  "
+        + "\n  ".join(orphans)
+    )
+    # …and prove it through the REAL resolver, not just the glob.
+    unresolvable = [i for i in sorted(indexed) if resolve_builtin_dir(i) is None]
+    assert not unresolvable, (
+        "resolve_builtin_dir() refuses these indexed ids:\n  " + "\n  ".join(unresolvable)
+    )
+
+
+def test_every_loadable_buildin_is_visible_in_the_index():
+    """The reverse: nothing may register at boot while invisible to the operator."""
+    missing = sorted(_loadable_buildin_ids() - _index_buildin_ids())
+    assert not missing, (
+        "plugin(s) load into the process at every boot but appear nowhere in the "
+        "marketplace surface the operator inspects — run the marketplace's "
+        "generate_index_v2.py:\n  " + "\n  ".join(missing)
+    )

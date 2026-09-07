@@ -54,6 +54,7 @@ def _load_delegation_policy():
 
 
 @pytest.mark.live
+@pytest.mark.live
 @live
 def test_real_haiku_turn_leaves_an_attributed_shadow_router_record(tmp_path: Path, monkeypatch):
     home = tmp_path / "corvin-home"

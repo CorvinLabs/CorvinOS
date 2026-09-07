@@ -1,17 +1,30 @@
-"""E2E Wiring Proof: OS-Skills integrated into L5/L10.
+"""OS-Skills L5/L10 — what is production-wired, and what is NOT.
 
-This test proves that:
-1. DelegationRouterSkill is actually called for L5 routing decisions
-2. ContextAdapterSkill is actually called for L10 context adaptation
-3. Skill failures gracefully fallback to hardcoded defaults
-4. Audit events are logged (no silent operations)
-5. Tenant isolation is enforced (GDPR Art. 5, 6)
+Honest scope (round-4 adversarial review, F6). This file previously opened with
+"This test proves that … ContextAdapterSkill is actually called for L10 context
+adaptation" and then imported ``adapt_context_l10`` and called it ITSELF with a
+mock audit backend — while the module under test states at
+``core/skills/os_skills_integration.py:12-15`` that ``adapt_context_l10`` has NO
+production call site. A test that supplies its own caller cannot fail on the
+wiring being absent; CLAUDE.md § E2E Wiring Proof calls that "a unit test wearing
+an E2E label".
 
-Tests are structured as E2E (not unit tests that call Skill directly):
-- Call route_task_l5() / adapt_context_l10() module-level functions
-- Verify Skill was invoked + audit event was logged
-- Verify fallback works when Skill times out
-- Verify tenant_id isolation prevents cross-tenant access
+What this file now contains, labelled:
+
+* ``TestL5ProductionCallSite`` — the ONE genuine E2E. It drives the real
+  production boundary, ``delegation_policy.resolve_worker_engine`` (the single
+  shared routing function every surface goes through), and asserts that
+  ``os.delegation_router`` was executed in shadow mode and audited. This FAILS
+  if the shadow call site is removed or breaks.
+* ``TestL5EntryPointContract`` / ``TestL10EntryPointContract`` — UNIT tests of
+  the ``route_task_l5`` / ``adapt_context_l10`` entry points (fallback, tenant
+  isolation, 3-tier shape). They supply their own caller, on purpose, and prove
+  behaviour-when-called — never reachability.
+* ``TestL10HasNoProductionCallSite`` — a reachability FENCE. L10 is not wired.
+  The fence fails the moment a production call site appears, forcing the docs
+  (this file, ``os_skills_integration.py``, CLAUDE.md's ADR-0532 table) to be
+  corrected in the same commit.
+* ``TestPIIScrubbing`` — GDPR Art. 32 scrubbing guard, through the real registry.
 """
 
 from __future__ import annotations
@@ -44,8 +57,24 @@ class MockAuditBackend:
         return self.events
 
 
-class TestL5RoutingWiring:
-    """Test L5 (auto-routing) Skills integration."""
+class MockLearningBackend:
+    """Mock ADR-0314 learning backend (implements ``emit_event``)."""
+
+    def __init__(self):
+        self.events = []
+
+    def emit_event(self, event: Dict[str, Any]) -> bool:
+        self.events.append(event)
+        return True
+
+
+class TestL5EntryPointContract:
+    """UNIT: behaviour of the ``route_task_l5`` entry point WHEN CALLED.
+
+    This class supplies its own caller. It proves fallback, tenant isolation and
+    audit shape — it does NOT prove anything is wired. Reachability for L5 is
+    proven by ``TestL5ProductionCallSite`` below.
+    """
 
     def setup_method(self):
         """Setup for each test."""
@@ -54,8 +83,8 @@ class TestL5RoutingWiring:
             audit_backend=self.audit_backend, tenant_id="_default"
         )
 
-    def test_delegation_router_called_on_l5_route(self):
-        """PROOF: DelegationRouterSkill is invoked for L5 routing."""
+    def test_delegation_router_runs_when_the_entry_point_is_called(self):
+        """The entry point dispatches to the Skill and audits it (not reachability)."""
         # Call L5 routing
         result = self.integration.route_task_l5(
             complexity=7, task_type="analysis", user_context={"user_id": "test_user"}
@@ -167,8 +196,13 @@ class TestL5RoutingWiring:
         assert "lom" in audit_event  # Line of Moral Responsibility
 
 
-class TestL10ContextWiring:
-    """Test L10 (context engineering) Skills integration."""
+class TestL10EntryPointContract:
+    """UNIT: behaviour of the ``adapt_context_l10`` entry point WHEN CALLED.
+
+    L10 has NO production call site (see ``TestL10HasNoProductionCallSite``), so
+    nothing here is a wiring proof. It guards the fallback/3-tier contract so the
+    entry point is correct on the day it does get wired.
+    """
 
     def setup_method(self):
         """Setup for each test."""
@@ -177,8 +211,8 @@ class TestL10ContextWiring:
             audit_backend=self.audit_backend, tenant_id="_default"
         )
 
-    def test_context_adapter_called_on_l10_adapt(self):
-        """PROOF: ContextAdapterSkill is invoked for L10 context adaptation."""
+    def test_context_adapter_runs_when_the_entry_point_is_called(self):
+        """The entry point dispatches to the Skill and audits it (NOT reachability)."""
         # Call L10 context adaptation
         result = self.integration.adapt_context_l10(
             complexity=6,
@@ -270,23 +304,182 @@ class TestL10ContextWiring:
         assert result_invalid["skill_executed"] is False
 
 
+class TestL5ProductionCallSite:
+    """E2E: the REAL production boundary for L5.
+
+    ``os.delegation_router`` is reached from exactly one production function —
+    ``operator/bridges/shared/delegation_policy.py::_acp_shadow_route``, called
+    by ``resolve_worker_engine``, the single shared routing function every
+    surface goes through (ADR-0613). This drives THAT function, not the Skill
+    and not ``route_task_l5``, so it fails if the call site is removed, renamed,
+    or stops reaching the registry.
+    """
+
+    def _boot_registry(self):
+        """Boot the real global registry the shadow call site looks up."""
+        from core.skills import skill_registry_phase1 as reg_mod
+        from core.skills.os_skills_phase1 import register_builtin_skills
+
+        backend = MockAuditBackend()
+        registry = reg_mod.initialize_registry(audit_backend=backend, tenant_id="_default")
+        register_builtin_skills(registry)
+        return registry, backend
+
+    def test_resolve_worker_engine_reaches_the_delegation_router_skill(self):
+        import delegation_policy
+
+        registry, backend = self._boot_registry()
+        backend.events.clear()
+
+        engine = delegation_policy.resolve_worker_engine(
+            mode="delegate",
+            force_delegate=True,
+            is_big_data=False,
+            tde_available=True,
+            quota_ok=True,
+            tenant_id="_default",
+        )
+
+        assert isinstance(engine, str) and engine, "routing must still answer"
+        routed = [e for e in backend.events if e.get("skill_id") == "os.delegation_router"]
+        assert routed, (
+            "resolve_worker_engine did not reach os.delegation_router — the L5 "
+            "shadow call site in delegation_policy._acp_shadow_route is broken "
+            "or gone (ADR-0613; adversarial review F1/F6)"
+        )
+        assert routed[-1]["status"] == "success", routed[-1]
+        # ADR-0537: the production call site names its own LoM, not a test's.
+        assert routed[-1]["lom"].startswith(
+            "operator/bridges/shared/delegation_policy.py:"
+        ), routed[-1]["lom"]
+
+    def test_shadow_mode_never_changes_the_wire_answer(self):
+        """The Skill's advice is advisory: the bundled engine stands."""
+        import delegation_policy
+
+        kwargs = dict(
+            mode="delegate",
+            force_delegate=True,
+            is_big_data=False,
+            tde_available=True,
+            quota_ok=True,
+            tenant_id="_default",
+        )
+        bundled = delegation_policy._resolve_worker_engine(**kwargs)
+        self._boot_registry()
+        assert delegation_policy.resolve_worker_engine(**kwargs) == bundled
+
+
+class TestL10HasNoProductionCallSite:
+    """FENCE: L10 is NOT wired — fail the day it becomes wired, so docs follow.
+
+    ``os_skills_integration.py`` states that ``adapt_context_l10`` /
+    ``os.context_adapter`` has no production call site, and CLAUDE.md's ADR-0532
+    roadmap table must not claim otherwise. This fence is the thing that fails
+    when the claim and the code diverge — the entry-point tests above cannot,
+    because they supply their own caller.
+
+    When L10 IS wired: replace this fence with a real E2E through the new call
+    site, and update ``os_skills_integration.py``'s header + CLAUDE.md's table
+    in the same commit.
+    """
+
+    def _production_call_sites(self) -> list[str]:
+        """AST-precise: real CALLS only — not docstrings, comments or stubs.
+
+        A hit is either ``adapt_context_l10(...)`` or a ``.execute("os.context_adapter", ...)``
+        in a non-test file under core/, operator/ or ops/. String mentions in
+        prose (``core/brain/__init__.py``, ``README_PHASE1.md``, the stub
+        dispatch table in ``core/engine/skill_invocation_stubs.py``) are not
+        call sites and must not trip the fence.
+        """
+        import ast
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[2]
+        owner = {
+            repo / "core" / "skills" / "os_skills_integration.py",  # defines it
+        }
+        hits: list[str] = []
+        for root in ("core", "operator", "ops"):
+            for path in (repo / root).rglob("*.py"):
+                if path in owner or "test" in path.parts or path.name.startswith("test_"):
+                    continue
+                # Fast pre-filter: only files that mention it at all are parsed.
+                src = path.read_text(encoding="utf-8", errors="replace")
+                if "adapt_context_l10" not in src and "os.context_adapter" not in src:
+                    continue
+                try:
+                    tree = ast.parse(src)
+                except SyntaxError:
+                    continue
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    fn = node.func
+                    name = fn.id if isinstance(fn, ast.Name) else (
+                        fn.attr if isinstance(fn, ast.Attribute) else ""
+                    )
+                    rel = path.relative_to(repo)
+                    if name == "adapt_context_l10":
+                        hits.append(f"{rel}:{node.lineno}: adapt_context_l10(...)")
+                    elif name == "execute" and node.args:
+                        first = node.args[0]
+                        if isinstance(first, ast.Constant) and first.value == "os.context_adapter":
+                            hits.append(f"{rel}:{node.lineno}: registry.execute('os.context_adapter', ...)")
+        return sorted(hits)
+
+    def test_l10_is_still_unwired(self):
+        hits = self._production_call_sites()
+        assert not hits, (
+            "os.context_adapter now HAS a production call site:\n  "
+            + "\n  ".join(hits)
+            + "\n\nReplace this fence with a real E2E through that call site and "
+              "update core/skills/os_skills_integration.py's header + CLAUDE.md's "
+              "ADR-0532 roadmap table in the SAME commit."
+        )
+
+    def test_the_fence_can_actually_see_a_call_site(self):
+        """The fence must not be vacuously green: prove the detector fires."""
+        import ast
+
+        tree = ast.parse("def f(x):\n    return adapt_context_l10(x)\n")
+        found = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "adapt_context_l10"
+        ]
+        assert found, "the AST detector used by the fence does not match a real call"
+
+
 class TestPIIScrubbing:
-    """Test PII scrubbing in audit events (GDPR Art. 32)."""
+    """GDPR Art. 32: a Skill's PII output never reaches a durable record.
+
+    This guard was RED from the round-3 mandatory-LoM gate until 2026-09-07
+    (round-4 review, F7): it passed ``lom="test:pii_scrubbing:100"``, which the
+    gate refuses, so it aborted on its FIRST assertion and the eight assertions
+    that check ``[REDACTED_PII]`` never ran — the Art. 32 invariant was
+    unguarded while the suite looked green.
+
+    Its premise also drifted. Round 3 removed ``output`` from the audit event
+    entirely (``_DECISION_SCALAR_KEYS`` / the ``skill.executed`` detail floor),
+    so the invariant now has TWO halves, guarded separately below:
+      1. the AUDIT record carries no output at all — the stronger guarantee;
+      2. the LEARNING record (ADR-0314), which does carry output, is scrubbed.
+    """
 
     def setup_method(self):
         """Setup for each test."""
         self.audit_backend = MockAuditBackend()
+        self.learning_backend = MockLearningBackend()
         self.integration = initialize_integration(
             audit_backend=self.audit_backend, tenant_id="_default"
         )
+        self.integration.registry.learning_backend = self.learning_backend
 
-    def test_pii_scrubbing_in_audit(self):
-        """PROOF: PII is redacted from audit events (GDPR Art. 32).
+    _LOM = "tests/e2e/test_os_skills_l5_l10_wiring.py:_run_leaky_skill"
 
-        Registers a Skill whose output carries PII and executes it through the
-        REAL registry (the previous version patched ``registry.execute`` itself,
-        so no audit event was ever written and the assertions were vacuous).
-        """
+    def _run_leaky_skill(self):
+        """Register a Skill whose output carries PII and run it for real."""
         from core.skills.skill_registry_phase1 import Skill, SkillMetadata
 
         class LeakySkill(Skill):
@@ -309,13 +502,48 @@ class TestPIIScrubbing:
 
         self.integration.registry.register(LeakySkill())
         self.audit_backend.events.clear()
+        self.learning_backend.events.clear()
         result = self.integration.registry.execute(
-            "test.leaky", {"complexity": 5, "task_type": "chat"}, lom="test:pii_scrubbing:100",
+            "test.leaky", {"complexity": 5, "task_type": "chat"}, lom=self._LOM,
         )
-        assert result.status == "success"
+        assert result.status == "success", result.error_message
+        return result
 
+    def test_the_lom_this_guard_uses_is_admissible(self):
+        """Fence: if the LoM rots again, THIS fails instead of silently
+        skipping the Art. 32 assertions below (round-4 review, F7)."""
+        from core.skills.skill_registry_phase1 import SkillsRegistry as _R
+
+        assert _R._compute_lom_hash(self._LOM) is not None, (
+            f"{self._LOM} is no longer resolvable — the PII guards below would "
+            "abort on their first assertion and stop guarding anything"
+        )
+
+    def test_audit_event_carries_no_skill_output_at_all(self):
+        """Strongest half: the hash-chained record never sees the output."""
+        import json
+
+        self._run_leaky_skill()
         assert len(self.audit_backend.events) == 1
-        output = self.audit_backend.events[0]["output"]
+        event = self.audit_backend.events[0]
+        assert "output" not in event, (
+            "the audit detail floor forbids an `output` key on skill.executed"
+        )
+        blob = json.dumps(event)
+        for secret in ("user@example.com", "sk-12345678", "hunter2",
+                       "someone@example.org", "abc123"):
+            assert secret not in blob, f"{secret!r} reached the audit chain"
+        # The allowlisted DECISION scalars do survive — that is the point.
+        assert event["decision"]["engine"] == "claude-opus-5"
+        assert event["decision"]["confidence"] == 0.95
+        # ADR-0537: LoM hash present on every success.
+        assert event["lom_hash"]
+
+    def test_learning_event_output_is_scrubbed(self):
+        """Second half: ADR-0314 records DO carry output, redacted."""
+        self._run_leaky_skill()
+        assert len(self.learning_backend.events) == 1
+        output = self.learning_backend.events[0]["output"]
         assert output["user_email"] == "[REDACTED_PII]"
         assert output["api_key"] == "[REDACTED_PII]"
         assert output["password"] == "[REDACTED_PII]"
@@ -325,8 +553,6 @@ class TestPIIScrubbing:
         assert output["engine"] == "claude-opus-5"
         assert output["confidence"] == 0.95
         assert output["input_tokens"] == 42
-        # ADR-0537: LoM hash present on every success
-        assert self.audit_backend.events[0]["lom_hash"]
 
 
 if __name__ == "__main__":

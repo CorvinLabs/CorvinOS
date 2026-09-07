@@ -84,6 +84,27 @@ The steps above describe the v1 `useVibeData()` dashboard; the shipped
 
 - The page queries `GET /v1/console/vibe-engineering/audit?since=&limit=100`
   through `useAuditQuery()` (React Query) and renders the hash chain as a graph.
+- **The endpoint reads the CALLER'S OWN tenant chain** —
+  `<CORVIN_HOME>/tenants/<tenant>/global/forge/audit.jsonl` via `_audit_path()` —
+  and DROPS any record carrying a different `tenant_id`; a record's own
+  `tenant_id` is passed through, never rewritten. Until 2026-09-07 it opened a
+  hard-wired `~/.corvin/audit.jsonl` (ignoring `CORVIN_HOME`), which is a shared
+  file holding every tenant's events, and stamped the caller's `tenant_id` onto
+  each one — so a caller received other tenants' events mislabelled as their own
+  (round-4 adversarial review, F2; CLAUDE.md § Audit Chain as Ground Truth:
+  "audit reads MUST filter by tenant_id; no fallback to 'any tenant'"). Guarded
+  by `core/console/tests/test_vibe_engineering_audit_tenant_isolation.py`.
+- `since` / `until` / `types` / `skillIds` are now actually applied. They were
+  accepted and silently ignored, so every request returned the whole tail.
+- `lom_hash` on an event is **the hash the WRITER stamped** (`details.lom_hash`),
+  or `""` when the record carries none — the Inspector renders `(missing)`. It
+  used to be `sha256(<the LoM label>)[:16]` computed at read time from
+  `details.lom_audit_write`, i.e. a fabricated value under the field name
+  CLAUDE.md cites as the ADR-0537 anti-spoofing SOURCE binding. The raw label is
+  reported separately as `lom`, as a label.
+- The sibling `GET /v1/console/audit/graph` (`routes/vibe/audit_graph.py`,
+  consumed by `AuditGraphPanel`) is a SECOND reader of the same chain. It was
+  already tenant-scoped; both are now. Keep them in sync — or collapse them.
 - The query filter (`since`, `limit`) is fixed **once per mount** with a
   `useState` initializer, in both `VibeDashboard` and the hook's default. The
   filter is part of the query key: computing `since` inline re-keyed the query
