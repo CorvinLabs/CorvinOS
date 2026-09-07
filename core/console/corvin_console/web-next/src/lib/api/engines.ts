@@ -25,7 +25,9 @@ export interface OsEngineSetting {
   // Worker engine (delegation target)
   default_worker_engine: string | null;
   default_worker_model: string | null;
-  valid_worker_engines: string[];
+  /** Absent since routes/engine.py was rewritten for Claude Code only (243690e8);
+   *  kept optional so older payloads still type-check. */
+  valid_worker_engines?: string[];
   // Per-engine model overrides (ADR-0119)
   engine_models: Record<string, EngineModelConfig>;
   // Delegation flag — true when web_chat.delegation_enabled is set
