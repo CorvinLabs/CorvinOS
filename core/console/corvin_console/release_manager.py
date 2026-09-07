@@ -198,7 +198,7 @@ class ReleaseManager:
         if from_version:
             for i, r in enumerate(releases):
                 if r.version == from_version:
-                    start_idx = i
+                    start_idx = i + 1  # inclusive: from_version is the last entry listed
                     break
 
         for release in releases[:start_idx]:

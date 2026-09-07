@@ -48,9 +48,10 @@ function progressReducer(state: ProgressState, action: ProgressAction): Progress
       return { ...state, step: action.step as (0|1|2|3|4|5), error: null }
     case 'PROGRESS_UPDATE':
       return { ...state, progress: action.progress, eta: action.eta }
-    case 'STEP_COMPLETE':
+    case 'STEP_COMPLETE': {
       const nextStep = (action.step + 1) as (0|1|2|3|4|5)
       return { ...state, step: nextStep, progress: 0, eta: 0 }
+    }
     case 'ERROR':
       return { ...state, error: action.message, cancelled: true }
     case 'CANCEL':
@@ -85,7 +86,7 @@ async function runMockInstallJob(
     const eta = Math.max(0, stepDuration - (i / totalSteps) * stepDuration)
 
     // Determine which step we're in (1-5)
-    let currentStep = Math.max(1, Math.min(5, Math.ceil((progress / 100) * 5))) as (1|2|3|4|5)
+    const currentStep = Math.max(1, Math.min(5, Math.ceil((progress / 100) * 5))) as (1|2|3|4|5)
 
     onProgress(progress, currentStep, eta)
 

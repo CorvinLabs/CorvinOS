@@ -265,7 +265,7 @@ test.describe("ACO — Autonomous Chat Observatory", () => {
           const anomalyPanel = page
             .locator('[class*="anomaly"], text="0 anomalies", text="Scan"')
             .first();
-          const panelVisible = await anomalyPanel.isVisible({ timeout: 3_000 }).catch(() => false);
+          await anomalyPanel.isVisible({ timeout: 3_000 }).catch(() => false);
           // Not strict: panel may show loading state initially
 
           await page.screenshot({

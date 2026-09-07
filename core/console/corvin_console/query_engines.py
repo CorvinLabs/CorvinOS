@@ -22,6 +22,8 @@ from typing import Dict, List, Optional, Set, Tuple
 import json
 import logging
 
+from core.paths.tenant import corvin_home as _corvin_home
+
 from .inspection_models import (
     TaskNode, TaskGraph, TaskStatus, DependencyType,
     SkillMetadata, ToolMetadata, ToolStatus, LatencyMetrics, DependencyEdge,
@@ -76,8 +78,14 @@ class TaskGraphQuery(QueryEngine):
     def __init__(self, tenant_id: str = "_default"):
         """Initialize task graph query engine."""
         super().__init__(tenant_id)
-        self.corvin_home = Path.home() / '.corvin'
-        self.tasks_path = self.corvin_home / 'tenants' / tenant_id / 'tasks'
+        # Runtime root honours CORVIN_HOME (CLAUDE.md § Project Identity); the
+        # derived paths are properties so a caller (or a test) that re-points
+        # ``corvin_home`` re-points every query with it.
+        self.corvin_home: Path = _corvin_home()
+
+    @property
+    def tasks_path(self) -> Path:
+        return self.corvin_home / 'tenants' / self.tenant_id / 'tasks'
 
     def validate(self) -> bool:
         """Check if task registry is accessible."""
@@ -110,7 +118,7 @@ class TaskGraphQuery(QueryEngine):
             return [], 0
 
         tasks = []
-        total = 0
+        total = 0  # number of tasks MATCHING the filters, across all pages
 
         try:
             with open(registry_path, 'r') as f:
@@ -121,7 +129,6 @@ class TaskGraphQuery(QueryEngine):
                     try:
                         data = json.loads(line)
                         task = self._json_to_task_node(data)
-                        total += 1
 
                         # Apply filters
                         if status and task.status != status:
@@ -131,12 +138,12 @@ class TaskGraphQuery(QueryEngine):
                         if iteration is not None and task.iteration != iteration:
                             continue
 
-                        # Apply pagination
-                        if len(tasks) >= offset and len(tasks) < offset + limit:
+                        # Apply pagination: the page is [offset, offset+limit) of the
+                        # matching sequence; keep counting past it so ``total`` is
+                        # the full match count, not the page size.
+                        if total >= offset and len(tasks) < limit:
                             tasks.append(task)
-
-                        if len(tasks) >= offset + limit:
-                            break
+                        total += 1
 
                     except (json.JSONDecodeError, KeyError) as e:
                         logger.warning(f"Invalid task JSON: {e}")
@@ -307,8 +314,11 @@ class SkillToolQuery(QueryEngine):
     def __init__(self, tenant_id: str = "_default"):
         """Initialize skill/tool query engine."""
         super().__init__(tenant_id)
-        self.corvin_home = Path.home() / '.corvin'
-        self.base_path = self.corvin_home / 'tenants' / tenant_id
+        self.corvin_home: Path = _corvin_home()
+
+    @property
+    def base_path(self) -> Path:
+        return self.corvin_home / 'tenants' / self.tenant_id
 
     def validate(self) -> bool:
         """Check if skills directory exists."""
@@ -567,8 +577,11 @@ class CategoryQuery(QueryEngine):
     def __init__(self, tenant_id: str = "_default"):
         """Initialize category query engine."""
         super().__init__(tenant_id)
-        self.corvin_home = Path.home() / '.corvin'
-        self.events_path = self.corvin_home / 'tenants' / tenant_id / 'events'
+        self.corvin_home: Path = _corvin_home()
+
+    @property
+    def events_path(self) -> Path:
+        return self.corvin_home / 'tenants' / self.tenant_id / 'events'
 
     def validate(self) -> bool:
         """Check if events directory exists."""

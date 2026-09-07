@@ -17,9 +17,11 @@ RUN cat *.txt | sort | uniq > combined-requirements.txt && \
 # Runtime stage
 FROM python:3.12-slim
 
+# PYTHONPATH: /app for the ``core.*`` packages, /app/core/console for the
+# ``corvin_console`` package the standalone host lives in.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app \
+    PYTHONPATH=/app:/app/core/console \
     CORVIN_HOME=/var/lib/corvin
 
 WORKDIR /app
@@ -44,10 +46,14 @@ EXPOSE 8765
 
 USER corvin
 
-# Health check
+# Health check — /v1/console/healthz is the unauthenticated liveness probe
+# (deps.PUBLIC_ROUTES); the previous /v1/console/api/tasks/health never existed (404).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/v1/console/api/tasks/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/v1/console/healthz')" || exit 1
 
-# Start console
-ENTRYPOINT ["uvicorn", "core.console.corvin_console.app:app", \
+# Start console through the SHIPPED host: corvin_console.standalone.create_app()
+# runs bootstrap.boot_platform() (ADR-0232/0233 boot tripwire), the dual-gate
+# middleware and the SPA mount. ``corvin_console.app:app`` is the bare router
+# app with none of that and must never be the production entrypoint.
+ENTRYPOINT ["uvicorn", "corvin_console.standalone:create_app", "--factory", \
             "--host", "0.0.0.0", "--port", "8765", "--log-level", "info"]

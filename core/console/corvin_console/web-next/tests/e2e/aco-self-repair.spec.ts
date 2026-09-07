@@ -85,20 +85,6 @@ async function runRepair(
   return resp.json();
 }
 
-/** Read a file from the session workdir via the /workdir API */
-async function readWorkdirFile(
-  page: Page,
-  sid: string,
-  filepath: string,
-): Promise<string | null> {
-  const encoded = encodeURIComponent(filepath);
-  const resp = await page.request.get(
-    `${API_BASE}/chat/sessions/${sid}/workdir/${filepath}`,
-  );
-  if (resp.status() !== 200) return null;
-  return resp.text();
-}
-
 function attachJsErrorCollector(page: Page): string[] {
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(err.message));

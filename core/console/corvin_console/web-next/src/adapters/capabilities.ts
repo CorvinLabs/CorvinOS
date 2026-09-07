@@ -85,7 +85,7 @@ const zNavGroup = z.object({
   items: z.array(zNavItem),
 });
 
-const zConsoleManifest = z.object({
+export const zConsoleManifest = z.object({
   version: z.literal("2.0"),
   timestamp: z.string(),
   contract_version: z.string(),

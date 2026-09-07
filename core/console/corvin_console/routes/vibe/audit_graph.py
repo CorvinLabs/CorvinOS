@@ -1,6 +1,6 @@
 """Audit Graph API — DAG visualization of audit-chain events.
 
-Endpoint: GET /v1/vibe/audit/graph
+Endpoint: GET /v1/console/audit/graph (session-authenticated)
 
 Returns nodes (events) + edges (hash-chain causality) for DAG visualization.
 Shows real audit events: boot, compliance, layer_integrity, etc.
@@ -14,11 +14,14 @@ from pathlib import Path
 import json
 import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ... import _bootstrap
 from ... import auth as session_auth
 from ...deps import require_session
+
+_forge_paths = _bootstrap.forge_paths
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +55,9 @@ class AuditGraphResponse(BaseModel):
 
 
 def _find_audit_chain(tenant_id: str) -> Optional[Path]:
-    """Find audit chain in both locations."""
-    # Try both standard locations
-    paths = [
-        Path("/home/shumway/projects/CorvinOS/.corvin/tenants") / tenant_id / "global" / "forge" / "audit.jsonl",
-        Path.home() / ".corvin" / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl",
-    ]
-
-    for path in paths:
-        if path.exists():
-            return path
-    return None
+    """The tenant's core audit chain under ``CORVIN_HOME`` (or None if absent)."""
+    path = _forge_paths.tenant_global_dir(tenant_id) / "forge" / "audit.jsonl"
+    return path if path.exists() else None
 
 
 def _build_dag(
@@ -253,15 +248,17 @@ async def get_audit_graph(
     since: Optional[float] = Query(None, description="Unix timestamp (seconds)"),
     until: Optional[float] = Query(None, description="Unix timestamp (seconds)"),
     limit: int = Query(1000, ge=1, le=5000, description="Max events to include"),
+    rec: session_auth.SessionRecord = Depends(require_session),
 ) -> AuditGraphResponse:
     """Get audit-chain events as a DAG.
 
     Returns nodes (events) + edges (hash-chain causality) for graph visualization.
     Includes critical path (longest chain) and anomalies (cycles, disconnected).
 
-    **Debug mode:** No authentication required (temporary for MVP).
+    **Tenant isolation:** the chain read is the authenticated session's
+    ``rec.tenant_id`` — never a query parameter, never a hardcoded default.
     """
-    tenant_id = "_default"  # Use default tenant for debug
+    tenant_id = rec.tenant_id
 
     try:
         chain_path = _find_audit_chain(tenant_id)
@@ -306,6 +303,6 @@ async def get_audit_graph(
             anomalies=anomalies
         )
 
-    except Exception as e:
+    except OSError as e:
         logger.error(f"Error building audit graph: {e}", exc_info=True)
-        raise
+        raise HTTPException(status_code=500, detail="failed to read audit chain")

@@ -213,7 +213,7 @@ test.describe('🔴 ADVERSARIAL: GitHub Integration — Attack Surface', () => {
     
     // Should either reject or use current tenant
     const currentTenant = await page.evaluate(() => {
-      return (window as any).__TENANT_ID || '_default'
+      return (window as Window & { __TENANT_ID?: string }).__TENANT_ID || '_default'
     })
     
     expect(currentTenant).toBe('_default')

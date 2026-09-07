@@ -47,14 +47,6 @@ KNOWN_OPEN_NO_CSRF: dict[tuple[str, str], str] = {
         "routes/learning_dashboard.py — learning workstream",
     ("POST", "/v1/console/api/learning/unsubscribe"):
         "routes/learning_dashboard.py — learning workstream",
-    ("POST", "/v1/console/learning/grade"):
-        "routes/learning.py — learning workstream",
-    ("POST", "/v1/console/learning/note"):
-        "routes/learning.py — learning workstream",
-    ("POST", "/v1/console/skills/{skill_id}/rating"):
-        "routes/learning.py — learning workstream",
-    ("POST", "/v1/console/tools/{tool_id}/rating"):
-        "routes/learning.py — learning workstream",
     ("POST", "/v1/console/skill-creator/generate"):
         "routes/skill_creator_api.py — skill-system workstream",
 }

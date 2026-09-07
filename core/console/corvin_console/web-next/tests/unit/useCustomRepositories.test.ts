@@ -6,6 +6,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { BASE } from '@/lib/api/client'
+
+// The hook/form thread the CSRF token from useAuth() into every mutation
+// (backend: require_csrf). Provide a session without the real <AuthProvider>.
+vi.mock('@/lib/auth', () => ({
+  useAuth: () => ({
+    session: { tenant_id: '_default', csrf_token: 'csrf-test', tier: 'owner' },
+    loading: false,
+    refresh: vi.fn(),
+    logout: vi.fn(),
+  }),
+}))
 // The hook keeps its 30s cache in MODULE scope, shared by every instance. Left
 // alone it also survives across tests: the first test fills it, and every later
 // test then hits the cache and never calls the mocked fetch at all. Re-import

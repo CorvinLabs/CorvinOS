@@ -166,6 +166,7 @@ class SyncWorker:
             "success": bool,
             "skills_synced": int,
             "error": str | None,
+            "http_code": int,          # only on an HTTP-level failure
             "github_url": str,
             "timestamp": ISO string,
         }
@@ -181,6 +182,7 @@ class SyncWorker:
                 return {
                     'success': False,
                     'error': f'GitHub repository unreachable (HTTP {response.status_code})',
+                    'http_code': response.status_code,
                     'github_url': url,
                     'timestamp': datetime.utcnow().isoformat(),
                 }

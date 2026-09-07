@@ -41,7 +41,7 @@ describe('FeatureStatusDashboard', () => {
   });
 
   it('renders loading state initially', () => {
-    (global.fetch as any).mockImplementation(
+    vi.mocked(global.fetch).mockImplementation(
       () => new Promise(() => {}) // Never resolves
     );
 
@@ -51,10 +51,10 @@ describe('FeatureStatusDashboard', () => {
   });
 
   it('fetches and displays features', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => mockFeaturesResponse,
-    });
+    } as Response);
 
     render(<FeatureStatusDashboard />);
 
@@ -66,10 +66,10 @@ describe('FeatureStatusDashboard', () => {
   });
 
   it('displays error rate and invocation count', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => mockFeaturesResponse,
-    });
+    } as Response);
 
     render(<FeatureStatusDashboard />);
 
@@ -80,10 +80,10 @@ describe('FeatureStatusDashboard', () => {
   });
 
   it('filters by tier', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => mockFeaturesResponse,
-    });
+    } as Response);
 
     render(<FeatureStatusDashboard />);
 
@@ -98,10 +98,10 @@ describe('FeatureStatusDashboard', () => {
   });
 
   it('filters by search text', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => mockFeaturesResponse,
-    });
+    } as Response);
 
     render(<FeatureStatusDashboard />);
 
@@ -116,10 +116,10 @@ describe('FeatureStatusDashboard', () => {
   });
 
   it('shows tier summary', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => mockFeaturesResponse,
-    });
+    } as Response);
 
     render(<FeatureStatusDashboard />);
 
@@ -133,7 +133,7 @@ describe('FeatureStatusDashboard', () => {
   });
 
   it('shows error on fetch failure', async () => {
-    (global.fetch as any).mockRejectedValueOnce(new Error('API error'));
+    vi.mocked(global.fetch).mockRejectedValueOnce(new Error('API error'));
 
     render(<FeatureStatusDashboard />);
 
@@ -143,7 +143,7 @@ describe('FeatureStatusDashboard', () => {
   });
 
   it('auto-refreshes every 5 minutes', async () => {
-    (global.fetch as any).mockResolvedValue({
+    vi.mocked(global.fetch).mockResolvedValue({
       ok: true,
       json: async () => mockFeaturesResponse,
     });

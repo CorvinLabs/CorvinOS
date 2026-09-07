@@ -28,7 +28,6 @@ test.describe('Marketplace Panel - Phase 2 Week 2', () => {
 
     // 3. Click first extension detail
     const firstCard = page.locator('[data-testid="extension-card"]').first()
-    const extensionName = await firstCard.locator('[data-testid="extension-name"]').textContent()
     await firstCard.click()
 
     // 4. Verify detail modal is shown

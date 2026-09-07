@@ -111,7 +111,7 @@ class A2ATaskEnvelope:
         Returns result dict with ok, status, task_id, instance_id, data.
         """
         try:
-            from operator.bridges.shared.remote_trigger_sender import RemoteTriggerSender
+            from remote_trigger_sender import RemoteTriggerSender  # type: ignore[import-not-found]  # bridges/shared on sys.path (see routes/a2a_pair.py)
         except ImportError:
             logger.error("RemoteTriggerSender not available (operator/bridges/shared/)")
             return {

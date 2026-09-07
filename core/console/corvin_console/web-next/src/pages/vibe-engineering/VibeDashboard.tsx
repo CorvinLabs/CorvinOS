@@ -67,7 +67,7 @@ export function VibeDashboard() {
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id as typeof activeTab)}
               style={{
                 padding: '12px 16px',
                 fontWeight: 500,

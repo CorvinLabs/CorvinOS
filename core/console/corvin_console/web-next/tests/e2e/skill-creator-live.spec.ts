@@ -89,7 +89,7 @@ test.afterAll(() => fixtureCmd('purge', ['--prefix', PREFIX]));
 
 test.describe('Skill Creator — live endpoints', () => {
   test('the library, View and Delete work against the real API', async ({ page }) => {
-    const { ctx, csrf } = await apiContext();
+    const { ctx } = await apiContext();
 
     // ── seed ────────────────────────────────────────────────────────────
     fixtureCmd('seed', ['--json', JSON.stringify(FIXTURES)]);

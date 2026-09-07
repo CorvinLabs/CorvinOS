@@ -19,7 +19,7 @@ interface AuditEvent {
   subject: string
   tenant_id: string
   operator_id: string
-  details: Record<string, any>
+  details: Record<string, unknown>
   hash: string
   previous_hash?: string
 }

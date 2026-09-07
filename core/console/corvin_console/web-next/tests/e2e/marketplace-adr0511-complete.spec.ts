@@ -215,7 +215,6 @@ test.describe('Marketplace Panel - ADR-0511 Phase 2', () => {
     await page.waitForTimeout(500)
 
     // Get first page plugin count
-    const firstPageCount = await page.locator('[data-testid="plugin-card"]').count()
 
     // Click "Next" button if visible
     const nextButton = page.locator('button:has-text("Next")')

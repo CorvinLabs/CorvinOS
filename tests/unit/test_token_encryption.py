@@ -50,7 +50,7 @@ class TestTokenFormatValidation:
     def test_invalid_token_format_short(self):
         """Token too short should raise InvalidTokenFormatError."""
         with pytest.raises(InvalidTokenFormatError):
-            validate_token_format("ghp_")
+            validate_token_format("ghp_")  # bare prefix: not a token
 
 
 class TestEncryptionKeyManagement:
@@ -107,7 +107,7 @@ class TestEncryptDecryptRoundTrip:
 
     def test_encrypt_decrypt_round_trip(self, valid_key):
         """Encrypt then decrypt should recover original token."""
-        original_token = "ghp_abcdefghijklmnopqrstuvwxyz123456"
+        original_token = "ghp_abcdefghijklmnopqrstuvwxyz123456xxxx"
 
         encrypted = encrypt_token(original_token, key=valid_key)
         assert isinstance(encrypted, EncryptedToken)
@@ -118,7 +118,7 @@ class TestEncryptDecryptRoundTrip:
 
     def test_encrypt_with_env_key(self, valid_key):
         """Encrypt should use key from env if not provided."""
-        token = "ghp_xyz789"
+        token = "ghp_xyz789xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
         encrypted = encrypt_token(token)  # No key parameter
         decrypted = decrypt_token(encrypted)  # No key parameter
@@ -126,7 +126,7 @@ class TestEncryptDecryptRoundTrip:
 
     def test_different_encryptions_produce_different_ciphertexts(self, valid_key):
         """Same token encrypted twice should produce different ciphertexts (due to random IV)."""
-        token = "ghp_sametoken"
+        token = "ghp_sametokenxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
         encrypted1 = encrypt_token(token, key=valid_key)
         encrypted2 = encrypt_token(token, key=valid_key)
@@ -160,7 +160,7 @@ class TestCorruptedCiphertext:
 
     def test_decrypt_corrupted_ciphertext_auth_fails(self, valid_key):
         """Decrypt should raise DecryptionError if authentication fails (wrong key or corrupted data)."""
-        token = "ghp_correcttoken"
+        token = "ghp_correcttokenxxxxxxxxxxxxxxxxxxxxxxxx"
         encrypted = encrypt_token(token, key=valid_key)
 
         # Use wrong key to decrypt
@@ -190,7 +190,7 @@ class TestKeyRotation:
     def test_reencrypt_token_with_new_key(self, keys):
         """Re-encrypt token with new key should allow decryption with new key."""
         old_key, new_key = keys
-        original_token = "ghp_keyrotationtest"
+        original_token = "ghp_keyrotationtestxxxxxxxxxxxxxxxxxxxxx"
 
         # Encrypt with old key
         encrypted_old = encrypt_token(original_token, key=old_key)
@@ -243,7 +243,7 @@ class TestErrorMessages:
     def test_decryption_error_message(self, valid_key):
         """DecryptionError should provide diagnostic message."""
         wrong_key = os.urandom(32)
-        encrypted = encrypt_token("ghp_test", key=valid_key)
+        encrypted = encrypt_token("ghp_testxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", key=valid_key)
 
         with pytest.raises(DecryptionError) as exc_info:
             decrypt_token(encrypted, key=wrong_key)

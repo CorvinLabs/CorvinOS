@@ -102,7 +102,7 @@ async function loadFromCache(): Promise<AuditQueryResult | null> {
     return new Promise((resolve) => {
       const request = store.get(CACHE_KEY);
       request.onsuccess = () => {
-        const cached = request.result as any;
+        const cached = request.result as { data: AuditQueryResult; timestamp: number } | undefined;
         if (!cached) {
           resolve(null);
           return;
@@ -277,7 +277,7 @@ export function getSkillIdFromEvent(event: AnyAuditEvent): string | null {
     case 'skill_executed':
     case 'learning_event':
     case 'decision':
-      return (event as any).skill_id ?? null;
+      return event.skill_id ?? null;
     default:
       return null;
   }
@@ -312,25 +312,25 @@ export function filterAuditEvents(
 export function getEventLabel(event: AnyAuditEvent): string {
   switch (event.type) {
     case 'skill_executed': {
-      const skill = (event as any).skill_id;
-      const status = (event as any).status;
+      const skill = event.skill_id;
+      const status = event.status;
       return `${skill} (${status})`;
     }
     case 'learning_event': {
-      const type = (event as any).event_type;
+      const type = event.event_type;
       return `Learning: ${type}`;
     }
     case 'decision': {
       // Real chain records carry no decision_name; show the chain event type.
-      const name = (event as any).decision_name ?? event.event_type ?? event.id.slice(0, 8);
+      const name = event.decision_name ?? event.event_type ?? event.id.slice(0, 8);
       return `Decision: ${name}`;
     }
     case 'context_snapshot': {
-      const entropy = (event as any).entropy_score?.toFixed(2) ?? '?';
+      const entropy = event.entropy_score?.toFixed(2) ?? '?';
       return `Context (entropy: ${entropy})`;
     }
     case 'error': {
-      const errorType = (event as any).error_type;
+      const errorType = event.error_type;
       return `Error: ${errorType}`;
     }
   }

@@ -10,7 +10,7 @@
  * app. See makeHostContext() for exactly what the host hands over (PII-free, no
  * secret: the panel calls the same-origin API with the browser's own credentials).
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   PANEL_PROTOCOL_VERSION,
@@ -86,23 +86,25 @@ export function makeHostContext(
 }
 
 export default function PanelHost(props: PanelHostProps) {
-  const { src, sandbox } = props;
+  const { src, srcDoc, sandbox, baseUrl, tenantId, theme, contractVersion } = props;
   const ref = useRef<HTMLIFrameElement>(null);
   const navigate = useNavigate();
   const [height, setHeight] = useState<number>(600);
   const consoleTheme = useConsoleTheme();
-  const ctx = useMemo(() => makeHostContext(props, consoleTheme), [
-    props.baseUrl, props.tenantId, props.theme, props.contractVersion, consoleTheme,
-  ]);
+  const ctx = useMemo(
+    () => makeHostContext({ sandbox, baseUrl, tenantId, theme, contractVersion }, consoleTheme),
+    [sandbox, baseUrl, tenantId, theme, contractVersion, consoleTheme],
+  );
   // Keep a live ref so the panel:ready handler answers host:hello with the CURRENT
   // theme — panel:ready can arrive before useConsoleTheme has read data-theme, so a
   // closed-over ctx would send stale "light". The ref is always current.
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
-  function targetOriginFor(): string {
-    return props.srcDoc != null ? "*" : new URL(src ?? "/", window.location.href).origin;
-  }
+  const targetOriginFor = useCallback(
+    (): string => (srcDoc != null ? "*" : new URL(src ?? "/", window.location.href).origin),
+    [srcDoc, src],
+  );
 
   // Push theme changes to an already-connected panel (initial theme rides in
   // host:hello; this covers the operator toggling AND the case where the panel
@@ -111,7 +113,7 @@ export default function PanelHost(props: PanelHostProps) {
     const win = ref.current?.contentWindow;
     if (!win) return;
     win.postMessage({ type: "corvin:host:theme", theme: ctx.theme }, targetOriginFor());
-  }, [ctx.theme, src, props.srcDoc]);
+  }, [ctx.theme, targetOriginFor]);
 
   useEffect(() => {
     function onMessage(ev: MessageEvent) {

@@ -94,7 +94,7 @@ export function AuditChainGraph({
   onRefresh,
 }: AuditChainGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const cyRef = useRef<any>(null);
+  const cyRef = useRef<cytoscape.Core | null>(null);
   const [filters, setFilters] = useState<GraphFilters>({
     types: ['skill_executed', 'learning_event', 'decision', 'context_snapshot', 'error'],
     skillIds: [],
@@ -131,13 +131,13 @@ export function AuditChainGraph({
       layout: {
         ...AUDIT_GRAPH_LAYOUT,
         roots: rootNodeId ? '#' + rootNodeId : undefined,
-      } as any,
+      } as cytoscape.LayoutOptions,
     });
 
     cyRef.current = cy;
 
     // Event handlers
-    cy.on('tap', 'node', (event: any) => {
+    cy.on('tap', 'node', (event: cytoscape.EventObject) => {
       const nodeId = event.target.id();
       setSelectedNodeId(nodeId);
 
@@ -148,7 +148,7 @@ export function AuditChainGraph({
       }
     });
 
-    cy.on('cxttap', 'node', (event: any) => {
+    cy.on('cxttap', 'node', (event: cytoscape.EventObject) => {
       // Right-click
       event.preventDefault();
       setContextMenu({
@@ -159,11 +159,11 @@ export function AuditChainGraph({
       });
     });
 
-    cy.on('tap', (event: any) => {
+    cy.on('tap', (event: cytoscape.EventObject) => {
       // Click on background
       if (event.target === cy) {
         setSelectedNodeId(null);
-        setContextMenu({ ...contextMenu, visible: false });
+        setContextMenu((c) => ({ ...c, visible: false }));
       }
     });
 
@@ -496,5 +496,5 @@ function getCytoscapeStylesheet() {
         'line-color': '#d1d5db',
       },
     },
-  ] as any;
+  ] as cytoscape.StylesheetStyle[];
 }

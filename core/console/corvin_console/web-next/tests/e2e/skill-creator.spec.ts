@@ -70,7 +70,7 @@ async function stubApi(
     deleteStatus?: number;
   } = {},
 ) {
-  const captured: { generate: any[]; deleted: string[]; csrf: (string | undefined)[] } = {
+  const captured: { generate: unknown[]; deleted: string[]; csrf: (string | undefined)[] } = {
     generate: [],
     deleted: [],
     csrf: [],

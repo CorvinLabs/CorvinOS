@@ -11,10 +11,10 @@ describe('PresetSwitcher', () => {
   });
 
   it('renders preset options', () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ preset: 'standard' }),
-    });
+    } as Response);
 
     render(<PresetSwitcher />);
 
@@ -24,10 +24,10 @@ describe('PresetSwitcher', () => {
   });
 
   it('loads current preset on mount', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ preset: 'advanced' }),
-    });
+    } as Response);
 
     render(<PresetSwitcher />);
 
@@ -37,7 +37,7 @@ describe('PresetSwitcher', () => {
   });
 
   it('shows error when fetch fails', async () => {
-    (global.fetch as any).mockRejectedValueOnce(new Error('Network error'));
+    vi.mocked(global.fetch).mockRejectedValueOnce(new Error('Network error'));
 
     render(<PresetSwitcher />);
 
@@ -47,7 +47,7 @@ describe('PresetSwitcher', () => {
   });
 
   it('handles preset change', async () => {
-    (global.fetch as any)
+    vi.mocked(global.fetch)
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ preset: 'standard' }),
@@ -72,7 +72,7 @@ describe('PresetSwitcher', () => {
   });
 
   it('shows restart message after preset change', async () => {
-    (global.fetch as any)
+    vi.mocked(global.fetch)
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ preset: 'standard' }),

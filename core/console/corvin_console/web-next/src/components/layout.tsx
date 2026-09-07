@@ -158,6 +158,8 @@ const NAV_GROUPS: NavGroup[] = [
     defaultOpen: true,
     items: [
       { to: "/app/learning-dashboard", label: "Learning Dashboard", icon: BookOpen, requiredFlag: "learning_enabled" },
+      { to: "/app/infinite-session", label: "Session Manager", icon: RefreshCw },
+      { to: "/app/world-map", label: "World Map", icon: Globe },
     ],
   },
   {

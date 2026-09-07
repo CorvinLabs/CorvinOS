@@ -2,18 +2,20 @@
 
 REST endpoints for real-time L5 health status and alerting.
 
-Endpoints:
-- GET /v1/metrics/l5/status — Current health snapshot
-- GET /v1/metrics/l5/timeseries — Historical metrics
-- GET /v1/metrics/l5/alerts — Active alerts
-- POST /v1/metrics/l5/alerts/{alert_id}/acknowledge — Acknowledge alert
-- POST /v1/metrics/l5/alerts/{alert_id}/resolve — Resolve alert
+Endpoints (router paths are RELATIVE — the console mounts this router under
+``/v1/console``, so the wire paths are ``/v1/console/metrics/l5/...``):
+- GET  /metrics/l5/status — Current health snapshot
+- GET  /metrics/l5/timeseries — Historical metrics
+- GET  /metrics/l5/alerts — Active alerts
+- POST /metrics/l5/alerts/{alert_id}/acknowledge — Acknowledge alert (CSRF)
+- POST /metrics/l5/alerts/{alert_id}/resolve — Resolve alert (CSRF)
 
 ADR-0588: L5 Deployment Monitoring
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,7 +23,7 @@ from pydantic import BaseModel
 
 from threading import RLock
 from .. import auth as session_auth
-from ..deps import require_session
+from ..deps import require_csrf, require_session
 from core.learning.monitoring_l5 import (
     L5MonitoringSystem,
     L5HealthSnapshot,
@@ -115,7 +117,6 @@ _monitoring_lock = RLock()
 
 def get_monitoring_system(tenant_id: str = "_default", audit_backend=None) -> L5MonitoringSystem:
     """Get or create the L5 monitoring system for a specific tenant."""
-    from threading import RLock
     global _monitoring_systems, _monitoring_lock
 
     if not tenant_id:
@@ -133,10 +134,10 @@ def get_monitoring_system(tenant_id: str = "_default", audit_backend=None) -> L5
 # Routes
 # ============================================================================
 
-router = APIRouter()
+router = APIRouter(prefix="/metrics/l5")
 
 
-@router.get("/v1/metrics/l5/status", response_model=L5HealthSnapshotResponse)
+@router.get("/status", response_model=L5HealthSnapshotResponse)
 async def get_l5_health_status(
     tenant_id: str = Query("_default"),
     rec=Depends(require_session),
@@ -179,11 +180,14 @@ async def get_l5_health_status(
             sla_status=snapshot.sla_status,
             alerts=snapshot.alerts,
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch health status: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("Failed to fetch health status", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch health status")
 
 
-@router.get("/v1/metrics/l5/timeseries", response_model=TimeseriesDataResponse)
+@router.get("/timeseries", response_model=TimeseriesDataResponse)
 async def get_l5_timeseries(
     start: str = Query(..., description="Start time (ISO format)"),
     end: str = Query(..., description="End time (ISO format)"),
@@ -211,11 +215,14 @@ async def get_l5_timeseries(
             end_time=data["end_time"],
             datapoints=data["datapoints"],
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch timeseries: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("Failed to fetch timeseries", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch timeseries")
 
 
-@router.get("/v1/metrics/l5/alerts", response_model=list[AlertResponse])
+@router.get("/alerts", response_model=list[AlertResponse])
 async def get_l5_alerts(
     tenant_id: str = Query("_default"),
     rec=Depends(require_session),
@@ -244,15 +251,18 @@ async def get_l5_alerts(
             )
             for a in alerts
         ]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch alerts: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("Failed to fetch alerts", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch alerts")
 
 
-@router.post("/v1/metrics/l5/alerts/{alert_id}/acknowledge")
+@router.post("/alerts/{alert_id}/acknowledge")
 async def acknowledge_l5_alert(
     alert_id: str,
     req: AlertAcknowledgeRequest,
-    rec=Depends(require_session),
+    rec=Depends(require_csrf),
 ) -> dict:
     """
     Acknowledge an L5 alert.
@@ -275,15 +285,16 @@ async def acknowledge_l5_alert(
         return {"status": "acknowledged", "alert_id": alert_id}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to acknowledge alert: {str(e)}")
+    except Exception:
+        logger.error("Failed to acknowledge alert", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to acknowledge alert")
 
 
-@router.post("/v1/metrics/l5/alerts/{alert_id}/resolve")
+@router.post("/alerts/{alert_id}/resolve")
 async def resolve_l5_alert(
     alert_id: str,
     req: AlertResolveRequest,
-    rec=Depends(require_session),
+    rec=Depends(require_csrf),
 ) -> dict:
     """
     Resolve (archive) an L5 alert.
@@ -306,5 +317,6 @@ async def resolve_l5_alert(
         return {"status": "resolved", "alert_id": alert_id}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to resolve alert: {str(e)}")
+    except Exception:
+        logger.error("Failed to resolve alert", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to resolve alert")

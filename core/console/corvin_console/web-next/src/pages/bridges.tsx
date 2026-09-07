@@ -70,6 +70,7 @@ import {
 } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { renderInlineMarkup } from "@/lib/inline-markup";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
 // ── Channel metadata ──────────────────────────────────────────────────────
@@ -993,17 +994,7 @@ function BridgeWizardDialog({
                       <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent mt-0.5">
                         {i + 1}
                       </span>
-                      <span
-                        className="leading-relaxed"
-                        dangerouslySetInnerHTML={{
-                          __html: s
-                            .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-                            .replace(
-                              /`(.+?)`/g,
-                              "<code class='font-mono bg-muted px-1 rounded text-[10px]'>$1</code>",
-                            ),
-                        }}
-                      />
+                      <span className="leading-relaxed">{renderInlineMarkup(s)}</span>
                     </li>
                   ))}
                 </ol>

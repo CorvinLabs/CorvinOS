@@ -18,7 +18,7 @@
  * Audit: Verifies metadata-only compliance (no PII in audit.jsonl)
  */
 
-import { test, expect, Page, BrowserContext } from '@playwright/test';
+import { test, expect, BrowserContext } from '@playwright/test';
 
 const API_BASE = 'http://localhost:8765/v1/console';
 const FRONTEND_BASE = 'http://localhost:5173';
@@ -207,7 +207,7 @@ test.describe('CorvinOS Console: Critical Workflows (E2E)', () => {
     // Get current engine first
     const getCurrent = await sharedCtx.request.get(`${API_BASE}/settings/engine`);
     expect(getCurrent.status()).toBe(200);
-    const { valid_engines, current_engine } = await getCurrent.json();
+    const { valid_engines } = await getCurrent.json();
 
     // Try to set an engine if there are alternatives
     if (valid_engines.length > 0) {
@@ -289,7 +289,7 @@ test.describe('CorvinOS Console: Critical Workflows (E2E)', () => {
     const r = await sharedCtx.request.get(`${API_BASE}/artifacts`);
     expect([200, 404]).toContain(r.status());
     if (r.status() === 200) {
-      const body = await r.json();
+      await r.json();
       console.log(`✅ 6.1: Artifacts API responding`);
     } else {
       console.log('✅ 6.1: Artifacts API (endpoint may not be exposed)');

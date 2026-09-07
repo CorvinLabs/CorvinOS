@@ -4,7 +4,8 @@ Covers:
   - Config read + mtime cache (M1)
   - _build_spawn_env() env-var injection (M1)
   - L34 compliance gate override (M1)
-  - API GET/PUT /settings/engine/claude-local (M2)
+  - (M2 API GET/PUT /settings/engine/claude-local was removed in 243690e8 --
+    engine.py is Claude-Code-only now; the M1/M3 adapter paths remain)
   - Real Ollama probe against localhost:11434 (integration)
 """
 from __future__ import annotations
@@ -12,11 +13,8 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tempfile
-import threading
 import time
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -171,14 +169,19 @@ class TestL34ComplianceOverride:
         return DataFlowGuard.from_tenant_config({})
 
     def test_claude_code_blocks_confidential_by_default(self) -> None:
-        # ADR-0173: L34 now opt-in — DEFAULT_MATRIX is permissive for CONFIDENTIAL
+        # F-A10 (2026-09-07): DEFAULT_MATRIX is RESTRICTIVE -- CONFIDENTIAL
+        # (personal data) never leaves EU/local jurisdiction unless the operator
+        # widens the matrix explicitly in tenant.corvin.yaml. claude_code is a
+        # us_cloud engine, so the zero-config default must DENY it.
         guard = self._make_guard()
         from data_classification import DataClassification
         decision = guard.validate(
             classification=DataClassification.CONFIDENTIAL,
             engine_id="claude_code",
         )
-        assert decision.allowed
+        assert not decision.allowed
+        assert decision.matched_rule == "matrix"
+        assert "us_cloud" in decision.reason
 
     def test_claude_code_local_allows_confidential(self) -> None:
         guard = self._make_guard()
@@ -324,158 +327,3 @@ class TestRealOllamaProbe:
         result = self._probe("http://localhost:19999")
         assert result["reachable"] is False
         assert result["available_models"] == []
-
-
-# ---------------------------------------------------------------------------
-# Integration — Full API flow (requires running server at 8765)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.live
-class TestLiveApiFlow:
-    """Full API integration test against the running console server.
-
-    Requires: console running at http://localhost:8765
-    Skip if server is not available.
-    """
-
-    BASE = "http://127.0.0.1:8765/v1/console"
-
-    def _get_session(self) -> tuple[str, str]:
-        """Return (sid_cookie, csrf_token). Skip if server unreachable."""
-        import http.cookiejar
-        jar = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-        try:
-            opener.open(f"{self.BASE}/auth/local-login", timeout=3)
-        except Exception:
-            pytest.skip("Console server not running at 8765")
-            return "", ""
-
-        sid = ""
-        for cookie in jar:
-            if cookie.name == "corvin_console_sid":
-                sid = cookie.value
-                break
-        if not sid:
-            pytest.skip("No session cookie received from local-login")
-            return "", ""
-
-        # Get CSRF token
-        cr = urllib.request.Request(
-            f"{self.BASE}/auth/whoami",
-            headers={"Cookie": f"corvin_console_sid={sid}"},
-        )
-        with urllib.request.urlopen(cr, timeout=3) as r:
-            data = json.loads(r.read())
-        return sid, data.get("csrf_token", "")
-
-    def _api(self, method: str, path: str, body: Any = None,
-             sid: str = "", csrf: str = "") -> Any:
-        headers: dict[str, str] = {
-            "Cookie": f"corvin_console_sid={sid}",
-            "Accept": "application/json",
-        }
-        if csrf:
-            headers["X-CSRF-Token"] = csrf
-        data = None
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(body).encode()
-        req = urllib.request.Request(
-            f"{self.BASE}{path}", data=data, headers=headers, method=method
-        )
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return json.loads(r.read())
-
-    def test_get_claude_local_default(self) -> None:
-        sid, _ = self._get_session()
-        result = self._api("GET", "/settings/engine/claude-local", sid=sid)
-        assert "enabled" in result
-        assert "base_url" in result
-        assert "ollama_reachable" in result
-        assert "available_models" in result
-        # Ollama is running on this system
-        assert result["ollama_reachable"] is True
-
-    def test_put_and_get_roundtrip(self) -> None:
-        sid, csrf = self._get_session()
-
-        # Enable with specific models
-        put_body = {
-            "enabled": True,
-            "base_url": "http://localhost:11434",
-            "sonnet_model": "qwen3:8b",
-            "haiku_model": "qwen3:1.7b",
-            "opus_model": "qwen3:8b",
-        }
-        put_result = self._api("PUT", "/settings/engine/claude-local",
-                               body=put_body, sid=sid, csrf=csrf)
-        assert put_result["enabled"] is True
-        assert put_result["sonnet_model"] == "qwen3:8b"
-        assert put_result["ollama_reachable"] is True
-
-        # GET should return the saved state
-        get_result = self._api("GET", "/settings/engine/claude-local", sid=sid)
-        assert get_result["enabled"] is True
-        assert get_result["sonnet_model"] == "qwen3:8b"
-
-        # Disable again (cleanup)
-        disable_body = {**put_body, "enabled": False}
-        self._api("PUT", "/settings/engine/claude-local",
-                  body=disable_body, sid=sid, csrf=csrf)
-        final = self._api("GET", "/settings/engine/claude-local", sid=sid)
-        assert final["enabled"] is False
-
-    def test_validation_rejects_bad_url(self) -> None:
-        sid, csrf = self._get_session()
-        import urllib.error
-        with pytest.raises(urllib.error.HTTPError) as exc_info:
-            self._api("PUT", "/settings/engine/claude-local", body={
-                "enabled": True,
-                "base_url": "ftp://bad-scheme",
-                "sonnet_model": "qwen3:8b",
-                "haiku_model": "qwen3:1.7b",
-                "opus_model": "qwen3:8b",
-            }, sid=sid, csrf=csrf)
-        assert exc_info.value.code == 422
-
-    def test_env_injection_after_api_save(self) -> None:
-        """After saving via API, _read_cc_local_cfg reads the updated YAML."""
-        sid, csrf = self._get_session()
-
-        # Enable via API
-        self._api("PUT", "/settings/engine/claude-local", body={
-            "enabled": True,
-            "base_url": "http://localhost:11434",
-            "sonnet_model": "qwen3:8b",
-            "haiku_model": "qwen3:1.7b",
-            "opus_model": "qwen3:8b",
-        }, sid=sid, csrf=csrf)
-
-        # Find the YAML path the server wrote to
-        corvin_home = Path(os.environ.get("CORVIN_HOME", Path.home() / ".corvin"))
-        yaml_path = corvin_home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
-        assert yaml_path.exists(), f"YAML not found at {yaml_path}"
-
-        # Read and verify the YAML was updated
-        data = yaml.safe_load(yaml_path.read_text()) or {}
-        spec = data.get("spec", {}).get("claude_code_local", {})
-        assert spec.get("enabled") is True
-        assert spec.get("base_url") == "http://localhost:11434"
-        assert spec.get("sonnet_model") == "qwen3:8b"
-
-        # Verify _read_cc_local_cfg picks it up (clears cache first)
-        from adapter import _cc_local_cfg_cache, _read_cc_local_cfg
-        _cc_local_cfg_cache.clear()
-        cfg = _read_cc_local_cfg("_default")
-        assert cfg is not None
-        assert cfg["base_url"] == "http://localhost:11434"
-        assert cfg["sonnet_model"] == "qwen3:8b"
-
-        # Clean up
-        self._api("PUT", "/settings/engine/claude-local", body={
-            "enabled": False,
-            "base_url": "http://localhost:11434",
-            "sonnet_model": "", "haiku_model": "", "opus_model": "",
-        }, sid=sid, csrf=csrf)
-        _cc_local_cfg_cache.clear()

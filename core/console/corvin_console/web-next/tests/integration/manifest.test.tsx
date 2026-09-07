@@ -174,10 +174,10 @@ describe("useConsoleManifest Hook", () => {
   })
 
   it("fetches manifest on mount", async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce({
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => VALID_MANIFEST,
-    })
+    }))
 
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -193,10 +193,10 @@ describe("useConsoleManifest Hook", () => {
   })
 
   it("caches manifest for 5 minutes", async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce({
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => VALID_MANIFEST,
-    })
+    }))
 
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -219,14 +219,14 @@ describe("useConsoleManifest Hook", () => {
   })
 
   it("times out after 200ms", async () => {
-    global.fetch = vi.fn(
+    vi.stubGlobal("fetch", vi.fn(
       () => new Promise((resolve) => setTimeout(() => {
         resolve({
           ok: true,
           json: async () => VALID_MANIFEST,
         })
       }, 500)) // Slower than 200ms timeout
-    )
+    ))
 
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -241,7 +241,7 @@ describe("useConsoleManifest Hook", () => {
   })
 
   it("handles fetch error gracefully", async () => {
-    global.fetch = vi.fn().mockRejectedValueOnce(new Error("Network error"))
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValueOnce(new Error("Network error")))
 
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>

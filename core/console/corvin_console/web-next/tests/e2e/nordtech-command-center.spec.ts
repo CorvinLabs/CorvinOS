@@ -783,7 +783,6 @@ test.describe("F — Artifact Downloads & UI Verification", () => {
 
   let ctx: BrowserContext;
   let page: Page;
-  let csrf = "";
   let sid = "";
 
   test.beforeAll(async ({ browser }) => {
@@ -791,7 +790,7 @@ test.describe("F — Artifact Downloads & UI Verification", () => {
       storageState: path.join(__dirname_e2e, "auth-state.json"),
     });
     page = await ctx.newPage();
-    csrf = await getCsrf(page);
+    await getCsrf(page);
 
     // Find NordTech session
     const r = await page.request.get(`${API}/chat/sessions`);

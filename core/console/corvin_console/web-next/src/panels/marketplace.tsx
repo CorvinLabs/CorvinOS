@@ -5,7 +5,7 @@
  * Phase 2: Full install/uninstall workflow with progress tracking and state management
  */
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Search, Package, ExternalLink, Download, AlertCircle, Check, Loader, Github } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { InstallProgress } from '@/components/install-progress'
@@ -101,9 +101,6 @@ export const MarketplacePanel: React.FC = () => {
     return () => { isMountedRef.current = false }
   }, [])
 
-  useEffect(() => {
-    fetchMarketplace()
-  }, [])
 
   // Load installed plugins when view changes
   useEffect(() => {
@@ -112,7 +109,7 @@ export const MarketplacePanel: React.FC = () => {
     }
   }, [view])
 
-  const fetchMarketplace = async () => {
+  const fetchMarketplace = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
@@ -138,7 +135,12 @@ export const MarketplacePanel: React.FC = () => {
     } finally {
       if (isMountedRef.current) setLoading(false)
     }
-  }
+  }, [category])
+
+  // Initial load + refetch whenever the category filter changes
+  useEffect(() => {
+    fetchMarketplace()
+  }, [fetchMarketplace])
 
   const fetchInstalledPlugins = async () => {
     try {
@@ -231,7 +233,7 @@ export const MarketplacePanel: React.FC = () => {
     }
   }
 
-  const handleInstallComplete = async (extensionId: string, _pollStatus?: any) => {
+  const handleInstallComplete = async (extensionId: string, _pollStatus?: unknown) => {
     // Called when polling completes (from useProgressPolling onComplete)
     try {
       stopPolling()
