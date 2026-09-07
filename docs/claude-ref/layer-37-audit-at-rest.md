@@ -239,6 +239,53 @@ process that seeded it.
 
 ---
 
+## The boot verify is incremental; `voice-audit verify` is not (R4, 2026-09-07)
+
+Verifying an append-only chain costs O(n), and the chain only grows. On the
+maintainer install one walk is 315 MB / 588 827 records / ~5.7 s, and
+`assert_all()` pays it twice (`audit_chain_intact`, then again after the seam
+write, then `audit_chain_history_clean` off the cache).
+
+The chain is append-only, so a prefix that verified once and is **provably**
+unchanged need not be re-walked:
+
+| | |
+|---|---|
+| Witness | `<anchor key dir>/chain_witness/<sha256(resolved chain path)>`, mode 0600, MAC'd under the anchor key |
+| Holds | prefix byte length + line count, **SHA-256 of the prefix bytes**, the walk's loop-carried state (chain position, MAC-epoch flags, tail window) and the prefix's LINE-NUMBERED problems |
+| Admitted only if | the prefix bytes are re-hashed **in the same call** and match `digest`, the witness MAC verifies under the current anchor key, the recorded path/`initial_prev`/`CORVIN_AUDIT_VERIFY_NO_KEY_OK` match, and the file is at least as long as the prefix |
+| Otherwise | **full walk** — missing, unreadable, malformed, wrong version, bad MAC, rotated/absent/refused key, shorter file, any digest mismatch |
+| Never memoised | current-state problems (`tail_truncated`, `chain_replaced`, `records_prepended`, `unanchored_genesis`, `mac_stripped_chain`, `anchor_key_insecure_mode`) — recomputed from the out-of-tree anchors after every walk |
+| Used by | `tripwire._verify_chain` (the boot path) only, via `audit.verify_audit_incremental()` |
+| NOT used by | `security_events.verify_chain()` — `voice-audit verify`, `verify --all` and the daily `corvin-audit-verify.service` stay unconditional full walks |
+
+**Why the digest and not the tail hash.** A tail-hash-at-offset witness catches an
+edit that rehashes forward and misses the one that does not — and "does not"
+is exactly the `tampered` / `mac_missing` class the verifier exists to find,
+because an unrehashed edit leaves every later record's hash untouched. Detecting
+an arbitrary silent byte change in an n-byte file cannot cost less than reading n
+bytes; what the witness removes is the per-record JSON parse, canonicalisation,
+two SHA-256s and HMAC — roughly 30× the cost of the raw read (5.7 s → 0.19 s).
+
+**Threat model.** The witness lives in the anchor-key directory. An attacker who
+can write there can also read the anchor key and forge every `mac` in the chain,
+so the witness adds no attack surface — it is protected by exactly the boundary
+the MAC already depends on. An attacker who can only edit `audit.jsonl` (the one
+this whole layer defends against) cannot reach it, and cannot make a stale
+witness match a file they changed.
+
+Measured on the maintainer chain: `assert_all()` **13.0 s → 6.3 s** (first boot,
+witness written) **→ 0.66 s** (every later boot, fresh process).
+
+Regression: `tests/security/test_chain_witness_regression.py` — a break edited
+into the memoised prefix, a truncation, a whole-file replacement, a prepend, a
+MAC-stripped record, a forged witness, a witness under a different key and a
+witness from another path are all still reported; every check runs in a FRESH
+SUBPROCESS and every verdict is compared against an unconditional full walk of
+the same file.
+
+---
+
 ## Audit events (complete table)
 
 | Event | Severity | Details keys | When |

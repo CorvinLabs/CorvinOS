@@ -448,6 +448,31 @@ def verify_audit(path: Path | None = None) -> tuple[bool, list[dict]]:
     return _se.verify_chain(target)
 
 
+def verify_audit_incremental(path: Path | None = None) -> tuple[bool, list[dict], int]:
+    """Boot-path verify: ``(ok, problems, total_records)`` (ADR-0640 R4).
+
+    Same verdict as :func:`verify_audit`, but the already-proven prefix of the
+    append-only chain is not re-walked (a SHA-256 over the prefix bytes proves it
+    unchanged first; any mismatch falls back to a full walk). Used by the boot
+    tripwire only — ``voice-audit verify`` and the daily ``verify --all`` unit
+    keep doing an unconditional full walk. ``writer_unavailable`` is reported
+    exactly as :func:`verify_audit` does: an absent writer is not a healthy one.
+    """
+    if _se is None:
+        return False, [{"reason": "writer_unavailable"}], 0
+    target = path if path is not None else audit_path()
+    fn = getattr(_se, "verify_chain_incremental", None)
+    if fn is None:  # older forge on the path: full walk, never a free pass
+        ok, problems = _se.verify_chain(target)
+        try:
+            with open(target, "rb") as fh:
+                total = sum(1 for _ in fh)
+        except OSError:
+            total = 0
+        return ok, problems, total
+    return fn(target)
+
+
 def audit_health_check(path: Path | None = None) -> tuple[bool, int]:
     """Boot-time integrity check: verify the chain and emit a CRITICAL
     ``audit.chain_gap_detected`` event when verify_chain finds tampered

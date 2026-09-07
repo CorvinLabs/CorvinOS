@@ -921,26 +921,17 @@ def get_audit_chain_tail(path: Path) -> str | None:
     the A2A wire protocol.  Best-effort — returns None on I/O error or empty
     chain.  Only a 16-hex prefix of the result should appear in audit details
     (never the full 64-hex hash — see ADR-0116 allow-list).
+
+    Delegates to :func:`_last_hash`, which has the SAME semantics (last record
+    carrying a non-empty ``hash``; blank, unparseable and pre-chain records
+    skipped) and reads BACKWARDS from the end of the file. This function was the
+    forward-walking twin that ``_last_hash`` was written to replace in 2026-07-27
+    and it was never redirected: ``clag.gate()`` calls it on every consent check,
+    so the boot tripwire ``consent_gate_denies_by_default`` json.loads()-ed all
+    588 964 records of the maintainer's chain — 2.8 s of the 13 s boot, more than
+    the chain verification itself (ADR-0640 R4).
     """
-    if not path.exists():
-        return None
-    try:
-        last: str | None = None
-        with path.open("r") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                h = rec.get("hash")
-                if isinstance(h, str) and h:
-                    last = h
-        return last
-    except OSError:
-        return None
+    return _last_hash(path) or None
 
 
 _ANCHOR_KEY: bytes | None = None
@@ -1329,6 +1320,204 @@ def note_chain_rotation(chain_path: Path, *, link_hash: str) -> None:
         # the shape of a record in the file — is what later verifies consult.
         "rotation_genesis": str(link_hash),
     })
+
+
+# ── ADR-0640 R4: durable PREFIX WITNESS (boot-path memoisation) ─────────────
+#
+# ``audit_chain_history_clean`` walks the WHOLE chain on every boot. On the
+# maintainer install that is 315 MB / 588 827 records / ~5.7 s, and the cost is
+# O(n) in a file that only ever grows — so boot time (and every test that boots
+# the console app) rises without bound. Skipping history verification is not an
+# option: a break anywhere in an append-only file is permanent and must stay
+# visible.
+#
+# The chain is append-only, so a prefix that verified once and is PROVABLY
+# unchanged need not be re-walked. "Provably unchanged" is a SHA-256 over the
+# prefix bytes — not the record count, not the tail hash, not an mtime. That
+# distinction is the whole security argument:
+#
+#   * a tail-hash-at-offset witness would be forgeable — edit a record in the
+#     middle of the prefix and rehash forward is caught, but edit it WITHOUT
+#     rehashing (which is exactly the "tampered"/"mac_tampered" class this
+#     verifier exists to find) leaves the hash at the offset untouched;
+#   * a byte digest is invalidated by ANY change to ANY byte of the prefix —
+#     an in-place edit, a truncation, a whole-file replacement, a prepend, a
+#     re-encoded line — and any mismatch falls back to a FULL walk.
+#
+# What is memoised is therefore only the LINE-NUMBERED problems and the
+# loop-carried state (chain position, MAC epoch, tail window) of a byte range
+# that has been re-proven identical this very boot. Detecting an arbitrary
+# silent byte change in an n-byte file cannot cost less than reading n bytes;
+# what the witness removes is the per-record JSON parse + canonicalisation +
+# two SHA-256s + HMAC, which is ~30x the cost of the raw read.
+#
+# The witness lives beside the anchor key (``chain_witness/<sha256(realpath)>``,
+# 0600), keyed by the resolved path exactly like the chain-identity record, and
+# is itself MAC'd under the anchor key. Missing, unreadable, version-mismatched,
+# MAC-invalid, path-mismatched, key-rotated, shorter-than-claimed or
+# digest-mismatched → FULL walk. There is no path from a bad witness to trust.
+
+_CHAIN_WITNESS_VERSION = 1
+#: A witness stores the prefix's line-numbered problems verbatim. A chain with
+#: more than this many is pathological; refuse to memoise it rather than write
+#: a multi-megabyte witness (correctness is unaffected — it just walks fully).
+_CHAIN_WITNESS_MAX_PROBLEMS = 20000
+
+
+def _verify_no_key_ok() -> bool:
+    return os.environ.get("CORVIN_AUDIT_VERIFY_NO_KEY_OK", "").strip() in ("1", "true", "yes")
+
+
+def _resolved_str(path: Path) -> str:
+    try:
+        return str(Path(path).resolve())
+    except OSError:  # pragma: no cover - resolve() is non-strict
+        return os.path.abspath(str(path))
+
+
+def _chain_witness_path(chain_path: Path) -> Path:
+    """Beside the anchor key, keyed on the RESOLVED path (R3-A3 rationale)."""
+    digest = hashlib.sha256(_resolved_str(chain_path).encode("utf-8")).hexdigest()[:32]
+    return _mac_sentinel_path().parent / "chain_witness" / digest
+
+
+def _witness_anchor_fp() -> str:
+    """Identity of the key the memoised MAC verdicts were produced under.
+
+    A rotated, removed or newly-refused anchor key changes every ``mac_*``
+    verdict in the prefix, so the witness must not survive it."""
+    ak = _anchor_key()
+    if ak is None:
+        return "none:" + (_ANCHOR_KEY_REFUSED or "absent")
+    return "key:" + hashlib.sha256(b"corvin.chain.witness\n" + ak).hexdigest()[:32]
+
+
+def _witness_mac(payload: str) -> str | None:
+    ak = _anchor_key()
+    if ak is None:
+        return None
+    return hmac.new(ak, payload.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+def _prefix_hasher(path: Path, nbytes: int):
+    """SHA-256 over the first *nbytes* bytes, or ``None`` if the file is shorter.
+
+    Returns the live hasher so the caller can keep feeding it the suffix and get
+    the NEXT witness's digest without a second pass over the prefix."""
+    h = hashlib.sha256()
+    remaining = int(nbytes)
+    try:
+        with Path(path).open("rb") as fh:
+            while remaining > 0:
+                chunk = fh.read(min(1 << 20, remaining))
+                if not chunk:
+                    return None
+                remaining -= len(chunk)
+                h.update(chunk)
+    except OSError:
+        return None
+    return h
+
+
+def _read_chain_witness(chain_path: Path, *, initial_prev: str):
+    """``(state, hasher)`` when a witness is valid for *chain_path* right now.
+
+    Fail-closed in every branch: any doubt returns ``(None, None)`` and the
+    caller does a full walk."""
+    if _skip_out_of_tree_markers(chain_path) or _VERIFY_SIGS:
+        return None, None
+    try:
+        wp = _chain_witness_path(chain_path)
+        if not wp.exists():
+            return None, None
+        doc = json.loads(wp.read_text())
+        body = doc.get("body") if isinstance(doc, dict) else None
+        if not isinstance(body, dict) or int(body.get("v", 0)) != _CHAIN_WITNESS_VERSION:
+            return None, None
+        expected_mac = _witness_mac(_canonical(body))
+        got_mac = doc.get("mac")
+        if expected_mac is None:
+            # No anchor key: nothing can authenticate the witness, so only a
+            # witness that was itself written key-less is admissible — and the
+            # anchor fingerprint below pins that it was the same key-less state.
+            if got_mac is not None:
+                return None, None
+        elif not isinstance(got_mac, str) or not hmac.compare_digest(got_mac, expected_mac):
+            return None, None
+        if body.get("path") != _resolved_str(chain_path):
+            return None, None
+        if body.get("anchor") != _witness_anchor_fp():
+            return None, None
+        if body.get("initial_prev") != initial_prev:
+            return None, None
+        if bool(body.get("no_key_ok")) != _verify_no_key_ok():
+            return None, None
+        nbytes = int(body.get("bytes", 0))
+        digest = body.get("digest")
+        if nbytes <= 0 or not isinstance(digest, str) or not digest:
+            return None, None
+        if not isinstance(body.get("problems"), list) or not isinstance(
+                body.get("recent_hashes"), list):
+            return None, None
+        st = Path(chain_path).stat()
+        if st.st_size < nbytes:
+            # Truncated / replaced by something shorter — the full walk (and its
+            # tail-anchor + chain-identity checks) is what must report that.
+            return None, None
+        hasher = _prefix_hasher(Path(chain_path), nbytes)
+        if hasher is None or not hmac.compare_digest(hasher.hexdigest(), digest):
+            return None, None
+        return body, hasher
+    except Exception:  # noqa: BLE001 - a bad witness is never a reason to trust
+        return None, None
+
+
+def _write_chain_witness(chain_path: Path, state: dict, *, initial_prev: str,
+                         hasher=None) -> None:
+    """Persist the walk's end state. Best-effort: never breaks a verify."""
+    if _skip_out_of_tree_markers(chain_path) or _VERIFY_SIGS:
+        return
+    if not state or not state.get("complete"):
+        return  # the file ends mid-line: the byte range is not a record boundary
+    nbytes = int(state.get("bytes", 0))
+    if nbytes <= 0:
+        return
+    problems = list(state.get("problems") or [])
+    if len(problems) > _CHAIN_WITNESS_MAX_PROBLEMS:
+        return
+    try:
+        if hasher is None:
+            hasher = _prefix_hasher(Path(chain_path), nbytes)
+            if hasher is None:
+                return
+        body = {
+            "v": _CHAIN_WITNESS_VERSION,
+            "path": _resolved_str(chain_path),
+            "initial_prev": initial_prev,
+            "anchor": _witness_anchor_fp(),
+            "no_key_ok": _verify_no_key_ok(),
+            "bytes": nbytes,
+            "lines": int(state.get("lines", 0)),
+            "digest": hasher.hexdigest(),
+            "prev": str(state.get("prev", "")),
+            "chain_started": bool(state.get("chain_started")),
+            "mac_required": bool(state.get("mac_required")),
+            "mac_seen_count": int(state.get("mac_seen_count", 0)),
+            "nonlink_chained": int(state.get("nonlink_chained", 0)),
+            "recent_hashes": list(state.get("recent_hashes") or []),
+            "problems": problems,
+            "ts": time.time(),
+        }
+        doc = {"body": body, "mac": _witness_mac(_canonical(body))}
+        wp = _chain_witness_path(chain_path)
+        wp.parent.mkdir(parents=True, exist_ok=True)
+        tmp = wp.with_name(wp.name + f".{os.getpid()}.tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(doc))
+        os.replace(tmp, wp)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _first_chained_record(chain_path: Path) -> dict | None:
@@ -2911,7 +3100,9 @@ def audit_write_or_die(
         ) from exc
 
 
-def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict]]:
+def verify_chain(path: Path, *, initial_prev: str = "",
+                 _resume: dict | None = None,
+                 _state_out: dict | None = None) -> tuple[bool, list[dict]]:
     """Walk the audit file and verify hash-chain integrity.
 
     Returns ``(ok, problems)`` where ``problems`` is a list of dicts each
@@ -2941,28 +3132,64 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
     verification) so the first entry's ``prev_hash`` (typically that of
     an ``audit.rotation_link`` event) is checked against the cross-
     segment boundary rather than the legacy empty-string default.
+
+    ``_resume`` / ``_state_out`` are the ADR-0640-R4 witness plumbing and are
+    PRIVATE — every public caller (``voice-audit verify``, the daily
+    ``verify --all`` unit, every test) gets an unconditional full walk. See
+    :func:`verify_chain_incremental` for what a resume means and why it cannot
+    hide a break. ``_state_out``, when given, is filled with the walk's end
+    state (chain position, MAC-epoch flags, tail window, the LINE-NUMBERED
+    problems found so far) — never with the current-state problems computed
+    after the walk, which are recomputed on every verify.
     """
     if not path.exists():
         return True, []
-    problems: list[dict] = []
-    prev = initial_prev
-    chain_started = False
-    # R2-FND-04/06: MAC-epoch + full-strip detection state.
-    mac_required = False       # set once a mac'd record is seen under an available key
-    mac_seen_count = 0         # total records carrying a mac field
-    _nonlink_chained = 0       # chained records that are not a rotation link
-    _no_key_ok = os.environ.get("CORVIN_AUDIT_VERIFY_NO_KEY_OK", "").strip() in ("1", "true", "yes")
-    recent_hashes: collections.deque = collections.deque(maxlen=_TAIL_ANCHOR_WINDOW)
-    line_no = 0
-    with path.open("r") as fh:
-        for line in fh:
+    _no_key_ok = _verify_no_key_ok()
+    if _resume is None:
+        problems: list[dict] = []
+        prev = initial_prev
+        chain_started = False
+        # R2-FND-04/06: MAC-epoch + full-strip detection state.
+        mac_required = False   # set once a mac'd record is seen under an available key
+        mac_seen_count = 0     # total records carrying a mac field
+        _nonlink_chained = 0   # chained records that are not a rotation link
+        recent_hashes: collections.deque = collections.deque(maxlen=_TAIL_ANCHOR_WINDOW)
+        line_no = 0
+        start_off = 0
+    else:
+        # Resuming a walk whose PREFIX BYTES were just proven identical to the
+        # ones that produced this state (``_read_chain_witness`` re-hashes them
+        # before handing the state over). The restored values are exactly the
+        # loop-carried state the prefix would have produced, so the suffix walk
+        # below is bit-for-bit the continuation of a full walk.
+        problems = [dict(pr) for pr in _resume["problems"]]
+        prev = str(_resume["prev"])
+        chain_started = bool(_resume["chain_started"])
+        mac_required = bool(_resume["mac_required"])
+        mac_seen_count = int(_resume["mac_seen_count"])
+        _nonlink_chained = int(_resume["nonlink_chained"])
+        recent_hashes = collections.deque(_resume["recent_hashes"],
+                                          maxlen=_TAIL_ANCHOR_WINDOW)
+        line_no = int(_resume["lines"])
+        start_off = int(_resume["bytes"])
+    consumed = start_off
+    tail_complete = True   # False when the file ends mid-line (interrupted write)
+    # Binary, not text: the resume seeks to a BYTE offset, which a TextIOWrapper
+    # cookie cannot express. ``json.loads`` accepts bytes, and a line that is not
+    # valid UTF-8 now reports ``invalid_json`` instead of raising out of verify.
+    with path.open("rb") as fh:
+        if start_off:
+            fh.seek(start_off)
+        for raw in fh:
+            consumed += len(raw)
+            tail_complete = raw.endswith(b"\n")
             line_no += 1
-            line = line.strip()
+            line = raw.strip()
             if not line:
                 continue
             try:
                 rec = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 problems.append({"line": line_no, "issue": "invalid_json"})
                 continue
 
@@ -3138,6 +3365,24 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
                     })
             prev = rec["hash"]
 
+    if _state_out is not None:
+        # Snapshot BEFORE the current-state block below. Everything appended
+        # from here on describes the chain as it is RIGHT NOW (an out-of-tree
+        # anchor disagreeing with the file) and is recomputed on every verify;
+        # baking it into a witness would let a stale fact outlive its cause.
+        _state_out.update({
+            "prev": prev,
+            "chain_started": chain_started,
+            "mac_required": mac_required,
+            "mac_seen_count": mac_seen_count,
+            "nonlink_chained": _nonlink_chained,
+            "recent_hashes": list(recent_hashes),
+            "lines": line_no,
+            "bytes": consumed,
+            "complete": tail_complete,
+            "problems": [dict(pr) for pr in problems],
+        })
+
     # R2-FND-04 + R3-02/R3-04 full-strip detection for the LIVE chain. The
     # earlier ts-gate (max_ts >= sentinel) was bypassable: the rehash-capable
     # attacker the MAC defends against can forge every record's `ts` to predate
@@ -3290,3 +3535,62 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
                                    f"chmod 600 {_anchor_key_path()}"})
 
     return len(problems) == 0, problems
+
+
+def verify_chain_incremental(path: Path, *,
+                             initial_prev: str = "") -> tuple[bool, list[dict], int]:
+    """``(ok, problems, total_lines)`` — the SAME verdict as :func:`verify_chain`,
+    with the already-proven prefix of an append-only chain not re-walked.
+
+    ADR-0640 R4. This is the BOOT path only (``tripwire._verify_chain``).
+    ``voice-audit verify`` / the daily ``verify --all`` unit keep calling
+    :func:`verify_chain`, which is an unconditional full walk with no reliance on
+    any witness — so a full, independent verification still happens on the
+    operator's schedule regardless of what is on disk beside the anchor key.
+
+    Why this cannot hide a break:
+
+    * The witness is admitted only after the prefix bytes are re-hashed THIS
+      CALL and match the recorded SHA-256. Any edit inside the prefix — with or
+      without a rehash — changes the digest and forces a full walk.
+    * A shorter file, a replaced file, a prepended file and a re-encoded file
+      all fail the size or digest check the same way.
+    * A missing, unreadable, malformed, version-mismatched or MAC-invalid
+      witness, a rotated/absent/refused anchor key, a different ``initial_prev``
+      or a different ``CORVIN_AUDIT_VERIFY_NO_KEY_OK`` all force a full walk.
+    * The memoised problems are the prefix's LINE-NUMBERED ones. Current-state
+      problems (``tail_truncated``, ``chain_replaced``, ``records_prepended``,
+      ``unanchored_genesis``, ``mac_stripped_chain``, ``anchor_key_insecure_mode``)
+      are never memoised: :func:`verify_chain` recomputes them after every walk,
+      resumed or not, from the out-of-tree anchors.
+    """
+    p = Path(path)
+    if not p.exists():
+        return True, [], 0
+    witness, hasher = _read_chain_witness(p, initial_prev=initial_prev)
+    state: dict = {}
+    ok, problems = verify_chain(p, initial_prev=initial_prev,
+                                _resume=witness, _state_out=state)
+    if witness is not None and hasher is not None:
+        # Extend the already-computed prefix digest with the suffix we just
+        # walked, so the next witness costs no extra pass over the prefix.
+        start = int(witness.get("bytes", 0))
+        end = int(state.get("bytes", start))
+        if end > start:
+            try:
+                with p.open("rb") as fh:
+                    fh.seek(start)
+                    remaining = end - start
+                    while remaining > 0:
+                        chunk = fh.read(min(1 << 20, remaining))
+                        if not chunk:
+                            hasher = None
+                            break
+                        remaining -= len(chunk)
+                        hasher.update(chunk)
+            except OSError:
+                hasher = None
+    else:
+        hasher = None
+    _write_chain_witness(p, state, initial_prev=initial_prev, hasher=hasher)
+    return ok, problems, int(state.get("lines", 0))
