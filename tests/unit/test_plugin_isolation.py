@@ -149,6 +149,11 @@ async def test_stop_forceful_sends_sigkill(process_manager):
     mock_process = MagicMock()
     mock_process.pid = 12345
     mock_process.poll.return_value = None  # Still running
+    # SIGKILL is not ignorable: after it the process reports an exit code —
+    # stop() waits for exactly that (a never-exiting mock would time out).
+    mock_process.send_signal.side_effect = (
+        lambda sig: setattr(mock_process.poll, "return_value", -int(sig))
+    )
     process_manager._process = mock_process
     process_manager._state = PluginProcessState.HEALTHY
     process_manager.audit_logger = AsyncMock()

@@ -771,8 +771,13 @@ class TestMandatoryMechanismTripwires(unittest.TestCase):
 
     def test_everything_passes_on_a_healthy_install(self):
         results = self.tripwire.check_all()
-        failed = [f"{r.name}: {r.detail}" for r in results if not r.ok]
-        self.assertEqual(failed, [], "a healthy install must boot")
+        fatal = [f"{r.name}: {r.detail}" for r in results
+                 if not r.ok and r.name not in self.tripwire.REPORTING_ONLY]
+        self.assertEqual(fatal, [], "a healthy install must boot")
+        # The only reporting-only finding a healthy CI install may carry is the
+        # L10 hook probe (the hook lives in the operator's Claude Code settings).
+        reported = {r.name for r in results if not r.ok}
+        self.assertLessEqual(reported, {"l10_hook_registered"}, reported)
 
     # ── each tripwire must actually fire ─────────────────────────────────────
 
@@ -1062,19 +1067,44 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
             self.tripwire.assert_all()  # must NOT raise
             lines = path.read_text().splitlines()
             self.assertGreater(len(lines), before, "the finding must be appended")
-            recorded = json.loads(lines[-1])
-            self.assertEqual(recorded["event_type"], "compliance.chain_discontinuity")
+            appended = [json.loads(l)["event_type"] for l in lines[before:]]
+            self.assertIn("compliance.chain_discontinuity", appended, appended)
 
-    def test_a_break_in_the_tail_still_refuses_to_boot(self):
+    def test_a_break_in_the_tail_is_sealed_never_truncated(self):
+        """F-A13 (2026-09-07): a tail-local break is SEALED by a chained
+        ``compliance.chain_discontinuity`` seam record; nothing is deleted and
+        the boot proceeds iff the seam record itself verifies."""
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path, _audit = self._chain(tmp, self.tripwire.TAIL_RECORDS + 20)
+            self._tamper(path, self.tripwire.TAIL_RECORDS + 15)  # inside the tail
+            before = path.read_text()
+
+            result = self.tripwire.audit_chain_intact()
+            self.assertTrue(result.ok, result.detail)
+            self.assertIn("sealed", result.detail)
+            after = path.read_text()
+            self.assertTrue(after.startswith(before), "no record may be removed or rewritten")
+            seam = json.loads(after.splitlines()[-1])
+            self.assertEqual(seam["event_type"], "compliance.chain_discontinuity")
+            self.assertTrue(seam["details"]["seam"])
+            self.assertIn("hash", seam)
+            self.tripwire.assert_all()  # must NOT raise
+
+    def test_a_whole_chain_failure_still_refuses_to_boot(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             path, _audit = self._chain(tmp, 20)
-            self._tamper(path, 5)  # inside the tail: the writer is not sound
-
+            for line in range(20):
+                self._tamper(path, line)  # every record: the lost-anchor-key shape
+            before = path.read_text()
             result = self.tripwire.audit_chain_intact()
-            self.assertFalse(result.ok, "current breakage must block the boot")
-            self.assertIn("not sound", result.detail)
+            self.assertFalse(result.ok, "whole-chain failure must block the boot")
+            self.assertIn("audit_anchor.key", result.detail)
+            self.assertTrue(path.read_text().startswith(before))
             with self.assertRaises(self.tripwire.TripwireError):
                 self.tripwire.assert_all()
 
@@ -1086,8 +1116,12 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
 
     def test_reporting_only_never_grows_to_cover_a_blocking_mechanism(self):
         """A future edit must not quietly move a real gate onto the soft list."""
+        # l10_hook_registered (F-A8, 2026-09-07) is reporting-only by nature: the
+        # PreToolUse hook lives in the OPERATOR's Claude Code settings, which the
+        # platform cannot install for them — it can only report the gap.
         self.assertEqual(
-            self.tripwire.REPORTING_ONLY, frozenset({"audit_chain_history_clean", "audit_unification"}),
+            self.tripwire.REPORTING_ONLY,
+            frozenset({"audit_chain_history_clean", "audit_unification", "l10_hook_registered"}),
             "moving a mandatory mechanism to reporting-only is a compliance change "
             "that needs an ADR, not a set edit",
         )

@@ -1,300 +1,164 @@
-"""E2E tests for AuditBackend plugin integration.
+"""E2E: an ``audit_backend`` plugin, loaded through the REAL registry, receives a
+COPY of a REAL core audit event — and can never disturb the core write.
 
-Tests the full lifecycle: plugin bootstrap → register → emit audit event → fanout called.
+The previous version of this file defined its own ``AuditBackendPlugin`` class
+and tested that; it proved nothing about CorvinOS. This one goes through the
+real boundaries: ``corvin_plugins.registry.register`` (lifecycle + provider
+slot), ``corvin_plugins.providers.audit_backend`` (the ADR-0233 fan-out
+registry) and ``audit.audit_event`` (the hash-chained core writer that fans out
+after its own commit). The chain is isolated per test by ``VOICE_AUDIT_PATH``.
 """
+from __future__ import annotations
+
+import sys
+import threading
+from pathlib import Path
 
 import pytest
-import queue
-import json
-from unittest.mock import Mock, MagicMock, patch
 
-from corvin_plugins.protocol import HealthStatus, PluginContext
+_REPO = Path(__file__).resolve().parents[3]
+for _p in (_REPO / "core" / "plugins", _REPO / "operator" / "bridges" / "shared",
+           _REPO / "operator" / "forge", _REPO / "operator"):
+    if str(_p) not in sys.path:
+        sys.path.append(str(_p))
+
+from corvin_plugins import bootstrap  # noqa: E402
+from corvin_plugins.protocol import HealthStatus, PluginContext  # noqa: E402
+from corvin_plugins.providers import audit_backend as ab  # noqa: E402
+from corvin_plugins.registry import PluginRegistry  # noqa: E402
 
 
-# Test-compatible plugin implementation
-class AuditBackendPlugin:
-    """Concrete implementation based on template."""
+class _CollectingBackend:
+    """A minimal REAL audit_backend plugin: records every copy it is handed."""
 
-    plugin_id = "com.test.audit-backend"
+    plugin_id = "test:collecting-audit-backend"
     plugin_type = "audit_backend"
     version = "1.0.0"
-    display_name = "Test Audit Backend"
-    MAX_QUEUED = 10_000
+    display_name = "Collecting backend"
 
-    def __init__(self) -> None:
-        self._config: dict = {}
-        self._queue: queue.Queue = queue.Queue(maxsize=self.MAX_QUEUED)
-        self._worker = None
-        self._stop = None
-        self._dropped = 0
+    def __init__(self, *, raise_on: str | None = None) -> None:
+        self.received: list[dict] = []
+        self.got = threading.Event()
+        self._raise_on = raise_on
 
     def on_load(self, ctx: PluginContext) -> None:
-        import threading
-        self._config = ctx.config
-        self._stop = threading.Event()
-        self._stop.clear()
-        self._worker = threading.Thread(
-            target=self._drain, name="audit-fanout", daemon=True
-        )
-        self._worker.start()
-        if ctx.audit_registry is not None:
-            ctx.audit_registry.set_active(self)
+        ctx.audit_registry.set_active(self)
 
     def on_unload(self) -> None:
-        if self._stop:
-            self._stop.set()
-        if self._worker is not None:
-            self._worker.join(timeout=5.0)
+        pass
 
     def health_check(self) -> HealthStatus:
-        return HealthStatus(
-            ok=True,
-            message="ok",
-            details={"queued": self._queue.qsize(), "dropped": self._dropped},
-        )
+        return HealthStatus(ok=True, details={"received": len(self.received)})
 
-    def fanout(
-        self,
-        event_type: str,
-        details: dict,
-        *,
-        severity: str = "INFO",
-        tenant_id: str = "_default",
-    ) -> None:
-        """Accept a copy of an already-committed core audit event."""
-        record = {
-            "event_type": event_type,
-            "severity": severity,
-            "tenant_id": tenant_id,
-            "details": details,
-        }
-        try:
-            self._queue.put_nowait(record)
-        except queue.Full:
-            try:
-                self._queue.get_nowait()
-                self._queue.put_nowait(record)
-            except (queue.Empty, queue.Full):
-                pass
-            self._dropped += 1
+    def fanout(self, event_type, details, *, severity="INFO", tenant_id="_default"):
+        if self._raise_on and event_type == self._raise_on:
+            raise RuntimeError("hostile backend")
+        self.received.append({
+            "event_type": event_type, "details": dict(details),
+            "severity": severity, "tenant_id": tenant_id,
+        })
+        self.got.set()
 
-    def verify_chain(self) -> HealthStatus:
-        return HealthStatus(ok=True, message="backend keeps no verifiable copy")
+    def verify_chain(self):
+        return HealthStatus(ok=True)
 
-    def enforce_retention(self, max_age_days: int, *, tenant_id: str = "_default") -> dict:
+    def enforce_retention(self, max_age_days, *, tenant_id="_default"):
         return {"deleted": 0}
 
-    def _drain(self) -> None:
-        import threading
-        while not self._stop.is_set():
-            try:
-                record = self._queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            try:
-                del record  # Placeholder for actual sink
-            except Exception:
-                pass
+
+@pytest.fixture(autouse=True)
+def _clean_slot():
+    ab.clear()
+    yield
+    ab.clear()
 
 
-@pytest.mark.e2e
-class TestAuditBackendE2E:
-    """End-to-end integration tests."""
-
-    def test_e2e_plugin_lifecycle_complete(self):
-        """Test full lifecycle: init → load → fanout → unload."""
-        plugin = AuditBackendPlugin()
-        ctx = MagicMock(spec=PluginContext)
-        ctx.config = {"endpoint": "https://siem.example.com"}
-        ctx.audit_registry = MagicMock()
-
-        # Load
-        plugin.on_load(ctx)
-        assert plugin._worker.is_alive()
-        ctx.audit_registry.set_active.assert_called_once()
-
-        # Emit
-        plugin.fanout("test_event", {"msg": "hello"}, severity="INFO")
-        assert plugin._queue.qsize() == 1
-
-        # Health check
-        health = plugin.health_check()
-        assert health.ok is True
-
-        # Unload
-        plugin.on_unload()
-        assert not plugin._worker.is_alive()
-
-    def test_e2e_audit_event_reaches_queue(self):
-        """Test real audit event from core reaches fanout queue."""
-        plugin = AuditBackendPlugin()
-        ctx = MagicMock(spec=PluginContext)
-        ctx.audit_registry = None
-        plugin.on_load(ctx)
-
-        # Simulate core audit event
-        core_event = {
-            "event_type": "skill_executed",
-            "skill_id": "os.delegation_router",
-            "input": "classify_request(...)",
-            "output": "route_to_opus",
-            "latency_ms": 42,
-            "lom": "Forge::route_request:L237",
-            "tenant_id": "_default",
-        }
-
-        plugin.fanout(
-            core_event["event_type"],
-            {k: v for k, v in core_event.items() if k != "event_type"},
-            severity="INFO",
-            tenant_id=core_event["tenant_id"]
-        )
-
-        # Verify event in queue
-        event = plugin._queue.get_nowait()
-        assert event["event_type"] == "skill_executed"
-        assert event["details"]["skill_id"] == "os.delegation_router"
-        assert event["tenant_id"] == "_default"
-
-        plugin.on_unload()
-
-    def test_e2e_multi_tenant_events_isolated(self):
-        """Test events from different tenants remain isolated."""
-        plugin = AuditBackendPlugin()
-        ctx = MagicMock(spec=PluginContext)
-        ctx.audit_registry = None
-        plugin.on_load(ctx)
-
-        # Emit events for tenant-a
-        plugin.fanout("event_a1", {"data": "a1"}, tenant_id="tenant-a")
-        plugin.fanout("event_a2", {"data": "a2"}, tenant_id="tenant-a")
-
-        # Emit events for tenant-b
-        plugin.fanout("event_b1", {"data": "b1"}, tenant_id="tenant-b")
-
-        # Verify isolation (all events present, tenant_id preserved)
-        events = []
-        try:
-            while True:
-                events.append(plugin._queue.get_nowait())
-        except queue.Empty:
-            pass
-
-        tenant_a_events = [e for e in events if e["tenant_id"] == "tenant-a"]
-        tenant_b_events = [e for e in events if e["tenant_id"] == "tenant-b"]
-
-        assert len(tenant_a_events) == 2
-        assert len(tenant_b_events) == 1
-
-        plugin.on_unload()
-
-    def test_e2e_plugin_health_reflects_queue_state(self):
-        """Test health_check reflects actual queue state."""
-        import time
-        plugin = AuditBackendPlugin()
-        ctx = MagicMock(spec=PluginContext)
-        ctx.audit_registry = None
-        plugin.on_load(ctx)
-
-        # Initially empty
-        health = plugin.health_check()
-        assert health.details["queued"] == 0
-
-        # Add events
-        for i in range(5):
-            plugin.fanout(f"event_{i}", {"index": i})
-
-        time.sleep(0.1)  # Let queue build
-        health = plugin.health_check()
-        assert health.details["queued"] >= 0  # May have drained
-
-        plugin.on_unload()
+def _load(backend, tmp_path, tenant="_default"):
+    reg = PluginRegistry()
+    ctx = bootstrap.build_context(
+        plugin_id=backend.plugin_id, tenant_id=tenant, corvin_home=tmp_path, config={}
+    )
+    reg.register(backend, ctx)
+    assert ab.get_active() is backend, "on_load did not take the provider slot"
+    return reg, ctx
 
 
-@pytest.mark.e2e
-class TestAuditBackendAuditChainIntegration:
-    """Integration with audit chain (simulated)."""
+def test_plugin_loaded_through_the_registry_receives_a_core_event_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    import audit
 
-    def test_e2e_audit_chain_never_disrupted_by_backend_failure(self):
-        """Test core chain is unaffected if backend fails."""
-        plugin = AuditBackendPlugin()
-        ctx = MagicMock(spec=PluginContext)
-        ctx.audit_registry = MagicMock()
-        plugin.on_load(ctx)
+    backend = _CollectingBackend()
+    reg, _ctx = _load(backend, tmp_path)
 
-        # Simulate core chain event (real audit.jsonl write)
-        core_chain_writes = []
+    audit.audit_event("e2e.probe", details={"reason": "probe"}, tenant_id="_default")
+    ab.drain_now(timeout=5.0)
+    assert backend.got.wait(5.0), "backend never received the fan-out copy"
 
-        def mock_core_write(event_type, details):
-            core_chain_writes.append((event_type, details))
+    copies = [r for r in backend.received if r["event_type"] == "e2e.probe"]
+    assert len(copies) == 1, backend.received
+    assert copies[0]["tenant_id"] == "_default"
+    assert copies[0]["details"]["reason"] == "probe"
 
-        # Backend fails in fanout (but core doesn't know)
-        def failing_fanout(*args, **kwargs):
-            raise RuntimeError("Sink unreachable!")
+    # The CORE chain committed regardless of the backend: it is the record of
+    # truth, the backend only ever gets a copy after the write.
+    chain = (tmp_path / "audit.jsonl").read_text()
+    assert '"e2e.probe"' in chain
 
-        plugin.fanout = failing_fanout
-
-        try:
-            # Core event succeeds even if backend fails
-            mock_core_write("skill_executed", {"skill_id": "os.router"})
-        except Exception:
-            pytest.fail("Core write should not raise if backend fails")
-
-        assert len(core_chain_writes) == 1
-
-        plugin.on_unload()
-
-    def test_e2e_backend_registration_gate(self):
-        """Test plugin registers with audit registry on load."""
-        plugin = AuditBackendPlugin()
-        ctx = MagicMock(spec=PluginContext)
-        ctx.audit_registry = MagicMock()
-
-        plugin.on_load(ctx)
-
-        # Registry should be called exactly once
-        ctx.audit_registry.set_active.assert_called_once_with(plugin)
-
-        plugin.on_unload()
+    reg.unregister(backend.plugin_id)
+    assert ab.get_active() is None, "unload must release the slot"
 
 
-@pytest.mark.e2e
-class TestAuditBackendConfigIntegration:
-    """Integration with config system."""
+def test_hostile_backend_cannot_break_the_core_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+    import audit
 
-    def test_e2e_plugin_accepts_config_from_context(self):
-        """Test plugin loads config from PluginContext."""
-        plugin = AuditBackendPlugin()
-        config = {
-            "endpoint": "https://siem.example.com",
-            "api_key": "vault:siem-key",
-            "batch_size": 100,
-        }
-        ctx = MagicMock(spec=PluginContext)
-        ctx.config = config
-        ctx.audit_registry = None
+    backend = _CollectingBackend(raise_on="e2e.boom")
+    _load(backend, tmp_path)
 
-        plugin.on_load(ctx)
+    audit.audit_event("e2e.boom", details={"reason": "probe"}, tenant_id="_default")
+    ab.drain_now(timeout=5.0)
 
-        assert plugin._config == config
-        assert plugin._config["endpoint"] == "https://siem.example.com"
+    chain = (tmp_path / "audit.jsonl").read_text()
+    assert '"e2e.boom"' in chain, "core write must commit even when the backend raises"
+    assert ab.failure_count() >= 1
 
-        plugin.on_unload()
 
-    def test_e2e_config_persists_across_lifecycle(self):
-        """Test config is not lost during lifecycle."""
-        plugin = AuditBackendPlugin()
-        config = {"sink_url": "https://sink.internal"}
-        ctx = MagicMock(spec=PluginContext)
-        ctx.config = config
-        ctx.audit_registry = None
+def test_tenant_id_travels_with_every_copy(tmp_path):
+    backend = _CollectingBackend()
+    _load(backend, tmp_path, tenant="acme")
+    ab.fanout("t.a1", {"k": "a1"}, tenant_id="tenant-a")
+    ab.fanout("t.a2", {"k": "a2"}, tenant_id="tenant-a")
+    ab.fanout("t.b1", {"k": "b1"}, tenant_id="tenant-b")
+    ab.drain_now(timeout=5.0)
+    by_tenant = {}
+    for r in backend.received:
+        by_tenant.setdefault(r["tenant_id"], []).append(r["event_type"])
+    assert by_tenant == {"tenant-a": ["t.a1", "t.a2"], "tenant-b": ["t.b1"]}
 
-        plugin.on_load(ctx)
-        config_at_load = plugin._config.copy()
 
-        plugin.fanout("test", {})
+def test_backend_cannot_mutate_the_details_the_core_wrote(tmp_path):
+    class _Mutating(_CollectingBackend):
+        def fanout(self, event_type, details, *, severity="INFO", tenant_id="_default"):
+            details["injected"] = True
+            super().fanout(event_type, details, severity=severity, tenant_id=tenant_id)
 
-        config_at_unload = plugin._config.copy()
-        plugin.on_unload()
+    backend = _Mutating()
+    _load(backend, tmp_path)
+    original = {"k": "v"}
+    ab.fanout("t.mut", original, tenant_id="_default")
+    ab.drain_now(timeout=5.0)
+    assert original == {"k": "v"}, "the backend was handed the caller's dict, not a copy"
 
-        assert config_at_load == config_at_unload == config
+
+def test_health_reports_what_the_backend_received(tmp_path):
+    backend = _CollectingBackend()
+    reg, _ctx = _load(backend, tmp_path)
+    ab.fanout("t.h", {}, tenant_id="_default")
+    ab.drain_now(timeout=5.0)
+    health = reg.health_check_all()[backend.plugin_id]
+    # register() itself audits plugin.loaded through the real chain, which fans
+    # out to this very backend — so "received" counts that copy too.
+    assert health.ok and health.details["received"] >= 1
+    assert [r["event_type"] for r in backend.received].count("t.h") == 1

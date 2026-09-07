@@ -19,9 +19,9 @@ What "install" REALLY does now (builtin scope):
   checked against the loaded marketplace index, then resolved to a local builtin
   source directory (``marketplace_resolve``);
 * the ADR-0247 manifest gate runs on that directory — it is NOT bypassed;
-* the manifest is projected onto a ``PluginRecord`` with ``origin=builtin``
-  (a LOCATION fact — the dir resolved under a trusted ``buildin/`` root, not a
-  manifest claim) and ``boot_layer=installed``;
+* the manifest is projected onto a ``PluginRecord`` whose ``origin`` is a
+  LOCATION fact (``builtin`` under the in-wheel root, ``vetted`` under the
+  Corvin-Marketplace checkout — never a manifest claim) and ``boot_layer=installed``;
 * ``PluginLifecycle(tenant).install(record)`` writes the tenant-scoped
   ``registry.yaml`` — which is what ``GET /api/v1/plugins`` lists from.
 
@@ -231,7 +231,7 @@ async def install_plugin(
 
     # 4. Project onto a record (origin=builtin is location-derived) and install.
     try:
-        record = _resolve.record_from_manifest(manifest)
+        record = _resolve.record_from_manifest(manifest, plugin_dir=plugin_dir)
     except Exception as exc:  # noqa: BLE001 - malformed manifest values
         return _fail(f"invalid manifest: {type(exc).__name__}: {exc}")
 

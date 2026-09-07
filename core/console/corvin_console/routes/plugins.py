@@ -18,7 +18,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi import status as http_status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import audit as console_audit
 from .. import feature_flags as _feature_flags
@@ -152,6 +152,16 @@ class InstallIn(BaseModel):
     display_name: str
     plugin_type: str
     class_path: str | None = None
+    #: Provenance is never a BODY claim. ``builtin`` means "ships in the wheel"
+    #: and ``vetted`` means "signature verified against a pinned anchor" — both
+    #: are facts the server derives (bootstrap root / trust.verify_signature),
+    #: and both buy privileges: the ADR-0249 trust gate short-circuits on
+    #: ``builtin`` and the ADR-0250 slot gate exempts it, after which the loader
+    #: imports whatever ``class_path`` says. A request body that could say
+    #: ``origin: builtin`` therefore imported arbitrary code past both gates
+    #: (finding F-P1). Only ``community`` is accepted here; a marketplace
+    #: builtin is installed through ``/api/v1/marketplace/.../install``, where
+    #: origin is LOCATION-derived.
     origin: str = "community"
     pii_risk: str = "low"
     # Least-trusted defaults, matching PluginRecord: an installer that says nothing
@@ -162,6 +172,17 @@ class InstallIn(BaseModel):
     settings_schema: dict[str, Any] = Field(default_factory=dict)
     settings: dict[str, Any] = Field(default_factory=dict)
     dependencies: list[str] = Field(default_factory=list)
+
+    @field_validator("origin")
+    @classmethod
+    def _origin_is_never_self_certified(cls, value: str) -> str:
+        if value != "community":
+            raise ValueError(
+                f"origin {value!r} cannot be claimed by an install request — "
+                "builtin/vetted provenance is derived by the server, never "
+                "declared by the caller"
+            )
+        return value
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

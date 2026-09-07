@@ -352,9 +352,16 @@ async def test_monitor_start_creates_task(health_monitor):
 
 
 @pytest.mark.asyncio
-async def test_monitor_start_when_disabled(health_monitor):
+async def test_monitor_start_when_disabled(process_manager, health_config):
     """Test that starting monitor when disabled is logged."""
-    health_monitor.config.enabled = False
+    import dataclasses
+
+    # HealthCheckConfig is frozen (immutable after construction) — a disabled
+    # monitor is built with a disabled config, not mutated into one.
+    health_monitor = PluginHealthMonitor(
+        process_manager=process_manager,
+        config=dataclasses.replace(health_config, enabled=False),
+    )
 
     await health_monitor.start()
 

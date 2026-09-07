@@ -19,7 +19,6 @@ import yaml
 
 from core.gateway.corvin_gateway.plugin_cmd import install_plugin
 from core.plugins.corvin_plugins.manifest import BootLayer, PluginOrigin
-from core.plugins.marketplace import PluginMetadata  # the registry entry type lives in the marketplace module
 from core.plugins.corvin_plugins.state import TenantRegistry
 
 

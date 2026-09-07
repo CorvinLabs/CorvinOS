@@ -227,7 +227,7 @@ _TENANT_RECORD_BOOT_LAYERS = frozenset({BootLayer.BUNDLED, BootLayer.INSTALLED})
 
 
 def _downgrade_privileged_boot_layer(
-    record: PluginRecord, *, path: Path
+    record: PluginRecord, *, path: Path, tenant_id: str
 ) -> PluginRecord:
     """Force a tenant-written record down to ``installed`` if it claims more.
 
@@ -243,6 +243,11 @@ def _downgrade_privileged_boot_layer(
     Downgrading rather than raising is deliberate: a corrupt or over-reaching
     line should cost that entry its privilege, not make the whole registry
     unreadable (which would take every other plugin down with it).
+
+    Applied on READ (``TenantRegistry.load``) and on INSTALL
+    (``PluginLifecycle._install_locked``), so ``registry.yaml`` never stores a
+    privileged claim in the first place. The audit event carries the REAL
+    tenant — it used to say ``_default`` for every tenant (finding F-P4).
     """
     if record.boot_layer in _TENANT_RECORD_BOOT_LAYERS:
         return record
@@ -258,7 +263,7 @@ def _downgrade_privileged_boot_layer(
             "declared_boot_layer": record.boot_layer.value,
             "reason": "privileged_boot_layer_from_tenant_registry",
         },
-        tenant_id="_default",
+        tenant_id=tenant_id,
     )
     return replace(record, boot_layer=BootLayer.INSTALLED)
 
@@ -280,6 +285,9 @@ class TenantRegistry:
         corvin_home_path: Optional[Path] = None,
     ) -> TenantRegistry:
         path = registry_path(tenant_id=tenant_id, corvin_home_path=corvin_home_path)
+        # The audit tenant is the one this registry belongs to, resolved the same
+        # way the path was (explicit arg → CORVIN_TENANT_ID → _default).
+        audit_tenant = _tenants_module().current_tenant(tenant_id)
         if not path.exists():
             return cls(path)
 
@@ -315,7 +323,7 @@ class TenantRegistry:
             if not isinstance(data, dict):
                 raise RegistryCorrupt(f"{path}: record {pid!r} is not a mapping")
             records[pid] = _downgrade_privileged_boot_layer(
-                PluginRecord.from_dict(data), path=path
+                PluginRecord.from_dict(data), path=path, tenant_id=audit_tenant
             )
         return cls(path, records)
 
@@ -447,6 +455,13 @@ class PluginLifecycle:
     ) -> PluginRecord:
         if reg.has(record.plugin_id):
             raise PluginError(f"{record.plugin_id} is already installed")
+
+        # A tenant-scope install may not persist a privileged boot layer: the
+        # read-side downgrade would catch it on the next load, but the file on
+        # disk would still carry the claim in between (F-P3/F-P4 hardening).
+        record = _downgrade_privileged_boot_layer(
+            record, path=reg.path, tenant_id=self.tenant_id
+        )
 
         # Validate declared defaults against the plugin's own schema now, so a
         # broken schema surfaces at install time rather than at first enable.

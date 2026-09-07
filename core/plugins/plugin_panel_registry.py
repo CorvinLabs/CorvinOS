@@ -12,6 +12,8 @@ ADR-0455: Plugin Panel Auto-Registration
 - Graceful degradation if console unavailable
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import hashlib
@@ -21,6 +23,36 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
+
+
+# Content-free keys a panel audit record may carry (registered with the core
+# writer's default-deny floor, see forge.security_events.register_event_allowlist).
+_PANEL_AUDIT_KEYS = frozenset({"panel_id", "plugin_id", "label", "tenant_id", "audit_ref"})
+_PANEL_AUDIT_EVENTS = (
+    "panel_registered", "panel_enabled", "panel_disabled",
+    "panel_unregistered", "panel_unregistered_on_plugin_uninstall",
+)
+_panel_allowlists_registered = False
+
+
+def _register_panel_audit_allowlists() -> None:
+    global _panel_allowlists_registered
+    if _panel_allowlists_registered:
+        return
+    try:
+        # Resolving the core writer first puts operator/bridges/shared (and
+        # with it the forge package) on sys.path exactly like every other
+        # core-chain emitter does; only then is ``forge`` importable here.
+        from core.learning.event_persistence import _resolve_core_audit  # noqa: PLC0415
+
+        _resolve_core_audit()
+        from forge import security_events as _se  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        for ev in _PANEL_AUDIT_EVENTS:
+            _se.register_event_allowlist(f"plugin.panel.{ev}", set(_PANEL_AUDIT_KEYS))
+        _panel_allowlists_registered = True
+    except Exception as e:  # noqa: BLE001
+        logger.error("plugin.panel audit allowlist registration failed: %s", e)
 
 
 @dataclass
@@ -53,7 +85,14 @@ class PluginPanelRegistry:
     4. Logs to audit trail (GDPR Art. 30)
     """
 
-    def __init__(self, registry_path: str = "~/.corvin/plugins/panel_registry.json"):
+    def __init__(self, registry_path: str | None = None, *, tenant_id: str = "_default"):
+        # Tenant-scoped, under CORVIN_HOME (never ``~/.corvin`` — that root is
+        # not the live one on this install; see core/paths/tenant.py).
+        self.tenant_id = tenant_id
+        if registry_path is None:
+            from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+            registry_path = str(tenant_home(tenant_id) / "plugins" / "panel_registry.json")
         self.path = Path(registry_path).expanduser()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.data = self._load()
@@ -186,15 +225,26 @@ class PluginPanelRegistry:
         return count
 
     def _audit_log(self, event_type: str, data: Dict[str, Any]):
-        """Log to audit trail (GDPR Art. 30 compliance)."""
+        """Write ``plugin.panel.<event>`` to the CORE hash chain (GDPR Art. 30).
+
+        Until 2026-09-07 this imported a module that does not exist
+        (``core.audit.audit_chain``) and therefore *always* logged "audit chain
+        not available, skipping" — panel registrations were never on the
+        chain. Now goes through the verified-commit core writer; a failed
+        commit is logged at ERROR (never silently skipped).
+        """
         try:
-            from core.audit.audit_chain import AuditChain
-            audit = AuditChain()
-            audit.log_event(f"plugin.panel.{event_type}", data)
-        except ImportError:
-            logger.warning("Audit chain not available, skipping log")
-        except Exception as e:
-            logger.error(f"Audit log error: {e}")
+            from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
+
+            _register_panel_audit_allowlists()
+            details = {k: v for k, v in data.items() if k in _PANEL_AUDIT_KEYS}
+            core_audit_event(
+                f"plugin.panel.{event_type}",
+                tenant_id=str(data.get("tenant_id") or self.tenant_id),
+                details=details,
+            )
+        except Exception as e:  # noqa: BLE001 — never silent
+            logger.error("plugin.panel.%s audit write FAILED: %s", event_type, e)
 
     def _load(self) -> Dict[str, Any]:
         """Load registry from disk."""

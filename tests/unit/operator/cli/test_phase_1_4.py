@@ -29,7 +29,10 @@ def cli_runner():
 @pytest.fixture
 def temp_tenant_cli(tmp_path, monkeypatch):
     """Create tenant with skills for CLI tests."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    # The CLI resolves every path through core.paths.tenant.tenant_home()
+    # (CORVIN_HOME-aware) -- never Path.home()/".corvin" -- so the fixture
+    # must point CORVIN_HOME, not HOME, at the sandbox.
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
     tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
 
     for scope in ["_platform", "_shared", "_local"]:
@@ -114,7 +117,7 @@ class TestCliValidate:
 
     def test_validate_with_errors(self, cli_runner, tmp_path, monkeypatch):
         """CLI reports validation errors."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
         skill_dir = tenant_path / "_shared" / "skills" / "bad-skill"
         skill_dir.mkdir(parents=True)
@@ -182,7 +185,7 @@ class TestCliMigrate:
 class TestCliInit:
     def test_init_structure(self, cli_runner, tmp_path, monkeypatch):
         """CLI initializes tenant structure."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
 
         result = cli_runner.invoke(init_structure, ["--tenant", "_default"])
         assert result.exit_code == 0
@@ -192,3 +195,47 @@ class TestCliInit:
         tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
         assert (tenant_path / "_shared").exists()
         assert (tenant_path / "_local").exists()
+
+
+class TestCliSkillInfoRealBoundary:
+    """`corvin skill info` through the REAL launcher entry point (subprocess).
+
+    The click group above is exercised in-process; this goes through
+    ``ops/launcher/corvin/cli.py`` → ``skill_cmd.dispatch_argv`` → the
+    package's ``register_skill_commands`` contract, i.e. what an operator's
+    shell actually runs. It pins two behaviours a script can branch on:
+    a missing skill exits non-zero, and the lookup honours CORVIN_HOME
+    (never Path.home()/".corvin").
+    """
+
+    @staticmethod
+    def _run(args, corvin_home):
+        import os, subprocess, sys
+        repo = Path(__file__).resolve().parents[4]
+        env = {**os.environ, "CORVIN_HOME": str(corvin_home)}
+        return subprocess.run(
+            [sys.executable, "-m", "corvin", *args],
+            cwd=str(repo / "ops" / "launcher"), env=env,
+            capture_output=True, text=True, timeout=120,
+        )
+
+    def test_info_missing_skill_exits_nonzero(self, tmp_path):
+        home = tmp_path / "corvin-home"
+        (home / "tenants" / "_default" / "_shared" / "skills").mkdir(parents=True)
+        res = self._run(["skill", "info", "nonexistent", "--tenant", "_default"], home)
+        assert res.returncode != 0, res.stdout + res.stderr
+        assert "not found" in (res.stdout + res.stderr).lower()
+
+    def test_info_reads_skill_under_corvin_home(self, tmp_path):
+        home = tmp_path / "corvin-home"
+        skill_dir = home / "tenants" / "_default" / "_shared" / "skills" / "demo-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "meta.json").write_text(json.dumps({
+            "id": "demo-skill", "name": "Demo", "version": "1.0.0", "scope": "_shared",
+            "created": datetime.now().isoformat(),
+            "last_modified": datetime.now().isoformat(),
+            "dependencies": [], "tags": ["testing"],
+        }))
+        res = self._run(["skill", "info", "demo-skill", "--tenant", "_default"], home)
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert "demo-skill@1.0.0" in res.stdout

@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 # the only one (it used to be doubled, see marketplace_install.py).
 router = APIRouter(prefix="/api/v1/marketplace", tags=["marketplace"])
 
+#: Upper bound for the GitHub index fallback. The real index is ~100 KB; an
+#: unbounded ``response.read()`` let a hostile or broken upstream stream an
+#: arbitrary amount into memory (and json.loads) inside a request handler.
+_MAX_INDEX_BYTES = 8 * 1024 * 1024
+
 
 class _IndexManager:
     """Manages marketplace index loading and caching."""
@@ -69,7 +74,12 @@ class _IndexManager:
                 import urllib.request
                 url = "https://raw.githubusercontent.com/CorvinLabs/Corvin-Marketplace/main/index/plugins.json"
                 with urllib.request.urlopen(url, timeout=5) as response:
-                    self._index = json.loads(response.read())
+                    raw = response.read(_MAX_INDEX_BYTES + 1)
+                if len(raw) > _MAX_INDEX_BYTES:
+                    raise ValueError(
+                        f"remote index exceeds {_MAX_INDEX_BYTES} bytes — refused"
+                    )
+                self._index = json.loads(raw)
                 logger.info(f"✅ Loaded marketplace index from GitHub: {url}")
                 return self._index
             except Exception as e:

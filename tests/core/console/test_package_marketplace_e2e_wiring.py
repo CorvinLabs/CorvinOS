@@ -3,7 +3,7 @@
 Verifies that:
 1. PackageMarketplace component exists and is reachable from PackagesPage
 2. PackagesPage is imported in lazy-pages.ts
-3. /app/packages route is wired in App.tsx
+3. /app/packages route is registered in panels/registry.tsx and merged into App.tsx
 4. Packages link appears in sidebar navigation (layout.tsx)
 """
 import re
@@ -48,22 +48,26 @@ def test_packages_page_lazy_loaded_in_lazy_pages():
     assert 'import("@/pages/packages")' in content, "packages.tsx not lazy-imported"
 
 
+_WEB = Path("/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src")
+
+
 def test_packages_route_wired_in_app():
-    """App.tsx must have /app/packages route wired to PackagesPage."""
-    app_tsx = Path(
-        "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/App.tsx"
+    """The /app/packages route is produced by the panel registry, merged into App.tsx.
+
+    Since the ADR-0561 panel registry, App.tsx no longer lists per-page
+    ``<Route>`` elements: ``PANELS`` (src/panels/registry.tsx) declares the
+    panel, ``mergePanelRoutes()`` turns it into a ``<Route>``, and App.tsx
+    splices that array into ``<Routes>``. The old assertion on a literal
+    ``<Route path="packages">`` in App.tsx was stale."""
+    registry = (_WEB / "panels" / "registry.tsx").read_text()
+    assert re.search(r'\bPackagesPage\b', registry), "PackagesPage not imported in panels/registry.tsx"
+    assert re.search(r'rc\(\s*"packages"\s*,\s*"Packages"\s*,\s*PackagesPage\b', registry), (
+        "packages panel not registered in PANELS (panels/registry.tsx)"
     )
-    assert app_tsx.exists(), f"App.tsx not found at {app_tsx}"
 
-    content = app_tsx.read_text()
-
-    # Check PackagesPage is imported
-    assert "PackagesPage" in content, "PackagesPage not imported in App.tsx"
-    assert "from" in content and "PackagesPage" in content, "PackagesPage import statement not found"
-
-    # Check route is defined
-    assert '<Route path="packages"' in content, "/app/packages route not found in App.tsx"
-    assert "<PackagesPage />" in content, "PackagesPage not rendered in any route"
+    app_tsx = (_WEB / "App.tsx").read_text()
+    assert "mergePanelRoutes" in app_tsx, "App.tsx does not merge the panel registry routes"
+    assert 'from "@/panels/registry"' in app_tsx, "App.tsx does not import the panel registry"
 
 
 def test_packages_link_in_sidebar_navigation():
@@ -81,9 +85,14 @@ def test_packages_link_in_sidebar_navigation():
 
 
 def test_marketplace_routes_exist():
-    """core/console/routes/packages.py must define marketplace routes."""
-    routes_file = Path(
-        "/home/shumway/projects/CorvinOS/core/console/routes/packages.py"
+    """The MOUNTED packages route module must define the marketplace routes.
+
+    ``core/console/routes/packages.py`` (the old target) was an unmounted
+    parallel tree — nothing imported it — and was deleted on 2026-09-07; the
+    live module is the one ``app.py`` include_router()s."""
+    routes_file = (
+        Path(__file__).resolve().parents[3]
+        / "core" / "console" / "corvin_console" / "routes" / "packages.py"
     )
     assert routes_file.exists(), f"packages.py routes not found at {routes_file}"
 
@@ -92,14 +101,15 @@ def test_marketplace_routes_exist():
     # Check required routes
     assert "def upload_package" in content or "@packages_bp.route" in content, "Upload route not found"
     assert "def list_packages" in content or "@packages_bp.route" in content, "List route not found"
-    assert "def delete_package" in content or "@packages_bp.route" in content, "Delete route not found"
+    assert "def uninstall_package" in content, "Uninstall (DELETE) route not found"
 
 
 def test_e2e_call_path_is_complete():
     """Verify the complete E2E call path: sidebar → route → page → component."""
     # This is a meta-test that documents the path:
     # 1. User clicks "Packages" in sidebar (layout.tsx)
-    # 2. React Router navigates to /app/packages (App.tsx)
+    # 2. React Router navigates to /app/packages -- the <Route> comes from
+    #    PANELS in panels/registry.tsx, merged into App.tsx by mergePanelRoutes()
     # 3. PackagesPage component loads (lazy-pages.ts)
     # 4. PackagesPage renders PackageMarketplace (pages/packages.tsx)
     # 5. PackageMarketplace renders UI with upload form (PackageMarketplace.tsx)
@@ -110,10 +120,11 @@ def test_e2e_call_path_is_complete():
     ).read_text()
     assert "/app/packages" in sidebar_ok
 
-    app_ok = Path(
-        "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/App.tsx"
-    ).read_text()
-    assert 'path="packages"' in app_ok
+    registry_ok = (_WEB / "panels" / "registry.tsx").read_text()
+    assert 'rc("packages", "Packages", PackagesPage' in registry_ok
+
+    app_ok = (_WEB / "App.tsx").read_text()
+    assert "mergePanelRoutes" in app_ok
 
     lazy_ok = Path(
         "/home/shumway/projects/CorvinOS/core/console/corvin_console/web-next/src/lazy-pages.ts"
@@ -126,7 +137,7 @@ def test_e2e_call_path_is_complete():
     assert "PackageMarketplace" in page_ok
 
     backend_ok = Path(
-        "/home/shumway/projects/CorvinOS/core/console/routes/packages.py"
+        str(Path(__file__).resolve().parents[3] / "core" / "console" / "corvin_console" / "routes" / "packages.py")
     ).read_text()
     assert "upload_package" in backend_ok
 
