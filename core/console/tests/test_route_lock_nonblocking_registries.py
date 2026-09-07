@@ -13,6 +13,9 @@ console routes import, plus the plugin registry:
   * ``corvin_plugins.state.registry_mutation``
                                            — POST /plugins/{id}/enable (+ every
                                              other lifecycle transition)
+  * ``os_skills.skill_adapter.SkillAdapter._locked``
+                                           — POST /learning/config/rollback,
+                                             POST /learning/feedback
 
 Each was a plain ``flock(LOCK_EX)`` with NO timeout. A wedged holder (a crashed
 writer whose fd the kernel had not reaped, an NFS mount, a debugger-stopped
@@ -420,3 +423,186 @@ def test_plugin_enable_succeeds_once_the_registry_lock_is_free(tmp_path):
         )
         assert res.status_code == 200, res.text
         assert res.json()["enabled"] is True
+
+
+# ── SkillAdapter config lock (os_skills.skill_adapter.SkillAdapter._locked) ──
+#
+# Added round 4: this lock was NOT in the enumerated scope above, which is
+# exactly why the suite stayed green while ``_locked`` used a plain blocking
+# ``LOCK_EX``. Both routes below are ``async def``, so the blocking flock did
+# not stall one request — it stalled the whole console event loop, and an
+# unrelated anonymous ``GET /v1/console/version`` timed out alongside it.
+
+
+def _skill_config_lock(home: Path, skill_id: str = "os.delegation_router") -> Path:
+    return (
+        home / "tenants" / TENANT / "skills" / f"{skill_id.replace('.', '_')}_config.lock"
+    )
+
+
+def test_learning_rollback_refuses_503_when_skill_config_lock_is_wedged(tmp_path):
+    with _console(tmp_path) as (client, home):
+        from corvin_console.routes import method_discovery_api as mda
+        from core.skills.os_skills import skill_adapter as sa
+
+        with patch.object(sa, "LOCK_TIMEOUT_SECONDS", SHORT_DEADLINE), _audited(mda) as audit:
+            with _held(_skill_config_lock(home)):
+                started = time.monotonic()
+                res = client.post(
+                    "/v1/console/learning/config/rollback"
+                    "?skill_id=os.delegation_router&to_version=nope"
+                )
+                elapsed = time.monotonic() - started
+
+        assert res.status_code == 503, res.text
+        assert res.json()["detail"] == "lock_busy"
+        assert elapsed < 5.0, f"learning rollback blocked for {elapsed:.1f}s"
+        reasons = [c.kwargs.get("reason") for c in audit.action_denied.call_args_list]
+        assert "lock_busy" in reasons
+        audit.action_performed.assert_not_called()
+
+
+def test_unrelated_public_route_answers_while_skill_config_lock_is_wedged(tmp_path):
+    """The event loop must survive a wedged holder, not just the one handler.
+
+    This is the assertion the round-4 review actually measured failing: with a
+    blocking ``LOCK_EX``, an anonymous ``GET /v1/console/version`` timed out at
+    the same time as the rollback.
+    """
+    with _console(tmp_path) as (client, home):
+        from core.skills.os_skills import skill_adapter as sa
+
+        with patch.object(sa, "LOCK_TIMEOUT_SECONDS", SHORT_DEADLINE):
+            with _held(_skill_config_lock(home)):
+                started = time.monotonic()
+                busy = client.post(
+                    "/v1/console/learning/config/rollback"
+                    "?skill_id=os.delegation_router&to_version=nope"
+                )
+                public = client.get("/v1/console/version")
+                elapsed = time.monotonic() - started
+
+        assert busy.status_code == 503, busy.text
+        assert public.status_code == 200, public.text
+        assert elapsed < 5.0, f"event loop stalled for {elapsed:.1f}s"
+
+
+def test_learning_rollback_reaches_404_once_the_skill_config_lock_is_free(tmp_path):
+    """The bounded lock must stay a real mutex: the same call runs when free."""
+    with _console(tmp_path) as (client, _home):
+        res = client.post(
+            "/v1/console/learning/config/rollback"
+            "?skill_id=os.delegation_router&to_version=nope"
+        )
+        assert res.status_code == 404, res.text
+
+
+# ── SkillForge registry lock (skill_forge.registry.SkillRegistry._locked) ──
+#
+# Added round 4 (F2): this lock was NOT in the enumerated scope above either
+# — the SAME miss-class as the SkillAdapter lock above, because the suite's
+# "scope" was a fixed list a human had to remember to extend, not a
+# discovery mechanism. ``_locked`` used a plain blocking ``LOCK_EX``, reached
+# from THREE sync ``def`` console routes (create/update/delete manual skill
+# — ``routes/skills_manual.py``), so a wedged holder burned a threadpool
+# worker FOREVER with no 503. A genuinely repo-wide "discover every
+# lock-taking registry reachable from console routes" test was considered
+# and rejected here: a whole-repo grep for unbounded ``flock(...,LOCK_EX)``
+# turns up ~20 pre-existing hits with no console reachability at all (forge
+# sandbox/permissions/registry, license compute-quota, several
+# ``bridges/shared`` daemons) — fixing or triaging all of them is a separate,
+# larger hardening pass outside F2's scope; see the fixer report.
+
+
+def _skillforge_lock(home: Path) -> Path:
+    return home / "tenants" / TENANT / "skill-forge" / ".lock"
+
+
+def _manual_skill_body(text: str = "probe") -> dict:
+    return {
+        "name": "assistant.r4_lockprobe",
+        "body": f"# assistant.r4_lockprobe\n\n{text} body for the SkillForge lock test.\n",
+    }
+
+
+def test_manual_skill_create_refuses_503_when_skillforge_lock_is_wedged(tmp_path):
+    with _console(tmp_path) as (client, home):
+        from corvin_console.routes import skills_manual as sm
+        from skill_forge import registry as sfr
+
+        with patch.object(sfr, "LOCK_TIMEOUT_SECONDS", SHORT_DEADLINE), _audited(sm) as audit:
+            with _held(_skillforge_lock(home)):
+                started = time.monotonic()
+                res = client.post("/v1/console/skills/manual", json=_manual_skill_body())
+                elapsed = time.monotonic() - started
+
+        assert res.status_code == 503, res.text
+        assert res.json()["detail"] == "lock_busy"
+        assert elapsed < 5.0, f"manual skill create blocked for {elapsed:.1f}s"
+        reasons = [c.kwargs.get("reason") for c in audit.action_failed.call_args_list]
+        assert "lock_busy" in reasons
+        audit.action_performed.assert_not_called()
+        # The refusal did not create anything on disk.
+        assert not (
+            home / "tenants" / TENANT / "skill-forge" / "skills" / "assistant.r4_lockprobe"
+        ).exists()
+
+
+def test_manual_skill_update_refuses_503_when_skillforge_lock_is_wedged(tmp_path):
+    with _console(tmp_path) as (client, home):
+        from corvin_console.routes import skills_manual as sm
+        from skill_forge import registry as sfr
+
+        created = client.post("/v1/console/skills/manual", json=_manual_skill_body())
+        assert created.status_code == 200, created.text
+        original_sha = created.json()["sha256"]
+
+        with patch.object(sfr, "LOCK_TIMEOUT_SECONDS", SHORT_DEADLINE), _audited(sm) as audit:
+            with _held(_skillforge_lock(home)):
+                started = time.monotonic()
+                res = client.put(
+                    "/v1/console/skills/manual/assistant.r4_lockprobe",
+                    json={"body": _manual_skill_body("updated")["body"]},
+                )
+                elapsed = time.monotonic() - started
+
+        assert res.status_code == 503, res.text
+        assert res.json()["detail"] == "lock_busy"
+        assert elapsed < 5.0, f"manual skill update blocked for {elapsed:.1f}s"
+        reasons = [c.kwargs.get("reason") for c in audit.action_failed.call_args_list]
+        assert "lock_busy" in reasons
+        audit.action_performed.assert_not_called()
+        # The refusal left the original body untouched.
+        listed = client.get("/v1/console/skills/manual").json()["skills"]
+        assert listed[0]["sha256"] == original_sha, listed
+
+
+def test_manual_skill_delete_refuses_503_when_skillforge_lock_is_wedged(tmp_path):
+    with _console(tmp_path) as (client, home):
+        from corvin_console.routes import skills_manual as sm
+        from skill_forge import registry as sfr
+
+        created = client.post("/v1/console/skills/manual", json=_manual_skill_body())
+        assert created.status_code == 200, created.text
+
+        with patch.object(sfr, "LOCK_TIMEOUT_SECONDS", SHORT_DEADLINE), _audited(sm) as audit:
+            with _held(_skillforge_lock(home)):
+                started = time.monotonic()
+                res = client.delete("/v1/console/skills/manual/assistant.r4_lockprobe")
+                elapsed = time.monotonic() - started
+
+        assert res.status_code == 503, res.text
+        assert res.json()["detail"] == "lock_busy"
+        assert elapsed < 5.0, f"manual skill delete blocked for {elapsed:.1f}s"
+        reasons = [c.kwargs.get("reason") for c in audit.action_failed.call_args_list]
+        assert "lock_busy" in reasons
+        # The skill was NOT deleted.
+        assert client.get("/v1/console/skills/manual").json()["count"] == 1
+
+
+def test_manual_skill_create_succeeds_once_the_skillforge_lock_is_free(tmp_path):
+    """The bounded lock must stay a real mutex — the same POST works when free."""
+    with _console(tmp_path) as (client, _home):
+        res = client.post("/v1/console/skills/manual", json=_manual_skill_body())
+        assert res.status_code == 200, res.text
+        assert res.json()["name"] == "assistant.r4_lockprobe"

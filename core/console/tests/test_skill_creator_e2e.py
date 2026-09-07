@@ -13,6 +13,7 @@ opt-in via CORVIN_E2E_LIVE_ENGINE=1.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 from contextlib import contextmanager
@@ -195,7 +196,8 @@ def test_generate_runs_on_claude_code_engine_and_promotes(tmp_path):
     with console_client(tmp_path, fake_engine()) as (client, route):
         resp = client.post("/v1/console/skill-creator/generate",
                            json={"user_request": "erzeuge einen Skill der JSON validiert",
-                                 "async": True})
+                                 "async": True},
+                           headers=csrf_headers(client.session_record))
         assert resp.status_code == 202, resp.text
         accepted = resp.json()
         assert accepted["engine"] == "claude_code"
@@ -254,7 +256,8 @@ def test_overlong_purpose_no_longer_kills_the_run(tmp_path):
     with console_client(tmp_path, fake_engine(spec_json=OVERLONG_SPEC_JSON)) as (client, _r):
         run_id = client.post("/v1/console/skill-creator/generate",
                              json={"user_request": "erzeuge einen JSON Skill",
-                                   "async": True}).json()["run_id"]
+                                   "async": True},
+                             headers=csrf_headers(client.session_record)).json()["run_id"]
         final = poll_until_done(client, run_id)
 
     assert final["status"] == "success", final
@@ -278,7 +281,8 @@ def test_promoted_skill_reaches_the_injection_block(tmp_path):
     with console_client(tmp_path, fake_engine()) as (client, _route):
         run_id = client.post("/v1/console/skill-creator/generate",
                              json={"user_request": "erzeuge einen JSON Skill",
-                                   "async": True}).json()["run_id"]
+                                   "async": True},
+                             headers=csrf_headers(client.session_record)).json()["run_id"]
         final = poll_until_done(client, run_id)
         assert final["status"] == "success", final
 
@@ -300,7 +304,8 @@ def test_status_reports_every_phase_in_order(tmp_path):
     with console_client(tmp_path, fake_engine()) as (client, route):
         run_id = client.post("/v1/console/skill-creator/generate",
                              json={"user_request": "erzeuge einen JSON Skill",
-                                   "async": True}).json()["run_id"]
+                                   "async": True},
+                             headers=csrf_headers(client.session_record)).json()["run_id"]
         deadline = time.time() + 30
         while time.time() < deadline:
             body = client.get(f"/v1/console/skill-creator/status/{run_id}").json()
@@ -325,7 +330,8 @@ def test_engine_failure_surfaces_actionable_message(tmp_path):
     with console_client(tmp_path, engine) as (client, _route):
         run_id = client.post("/v1/console/skill-creator/generate",
                              json={"user_request": "erzeuge einen JSON Skill",
-                                   "async": True}).json()["run_id"]
+                                   "async": True},
+                             headers=csrf_headers(client.session_record)).json()["run_id"]
         final = poll_until_done(client, run_id)
 
     assert final["status"] == "failed"
@@ -355,6 +361,19 @@ def test_generation_requires_a_session(tmp_path):
         assert resp.status_code in (401, 403)
 
 
+def test_generate_requires_csrf(tmp_path):
+    """Round-4 review F6: a session cookie alone must not be enough to spawn
+    a real ``claude -p`` generation subprocess — a cross-site/XSS caller that
+    only holds the cookie (no CSRF token) must be refused, exactly like
+    DELETE (``test_delete_requires_csrf``). No run must have been recorded."""
+    with console_client(tmp_path, fake_engine()) as (client, _route):
+        resp = client.post("/v1/console/skill-creator/generate",
+                           json={"user_request": "erzeuge einen JSON Skill",
+                                 "async": True})
+        assert resp.status_code == 403, resp.text
+        assert client.get("/v1/console/skill-creator/skills").json()["count"] == 0
+
+
 def test_unknown_run_is_404(tmp_path):
     with console_client(tmp_path, fake_engine()) as (client, _route):
         assert client.get("/v1/console/skill-creator/status/run-nope").status_code == 404
@@ -363,7 +382,8 @@ def test_unknown_run_is_404(tmp_path):
 def test_short_request_is_rejected(tmp_path):
     with console_client(tmp_path, fake_engine()) as (client, _route):
         resp = client.post("/v1/console/skill-creator/generate",
-                           json={"user_request": "short", "async": True})
+                           json={"user_request": "short", "async": True},
+                           headers=csrf_headers(client.session_record))
         assert resp.status_code == 422
 
 
@@ -378,8 +398,53 @@ def test_live_generation(tmp_path):
             "/v1/console/skill-creator/generate",
             json={"user_request": "erzeuge einen Skill der CSV-Dateien auf fehlende Spalten prueft",
                   "async": True},
+            headers=csrf_headers(client.session_record),
         ).json()["run_id"]
         final = poll_until_done(client, run_id, timeout_s=900)
+
+    assert final["status"] == "success", final
+    assert final["engine"] == "claude_code"
+    assert final["skill"]["name"].startswith(("assistant.", "project."))
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.environ.get("CLAUDE_LIVE_E2E", "") != "1" or shutil.which("claude") is None,
+    reason="live skill-creator CSRF E2E needs CLAUDE_LIVE_E2E=1 and the claude CLI",
+)
+def test_generate_with_csrf_drives_a_real_claude_subprocess(tmp_path):
+    """Round-4 review F6, live proof: the newly-added CSRF gate on
+    POST /skill-creator/generate does not just answer 403/202 against a
+    mock — a session cookie AND a valid CSRF token together still reach a
+    REAL ``claude -p`` subprocess and finish a real (if trivial) skill
+    generation. Pinned to ``haiku`` via ``CORVIN_SKILL_CREATOR_MODEL`` so the
+    5-phase LDD run stays cheap (fixer-rules note: a bare ``claude -p
+    --model haiku`` call is ~10s on this machine; this is several such calls
+    back to back).
+    """
+    prev_model = os.environ.get("CORVIN_SKILL_CREATOR_MODEL")
+    os.environ["CORVIN_SKILL_CREATOR_MODEL"] = "haiku"
+    try:
+        with console_client(tmp_path, live=True) as (client, _route):
+            resp = client.post(
+                "/v1/console/skill-creator/generate",
+                json={"user_request": "erzeuge einen Skill der zwei Zahlen addiert",
+                      "async": True},
+                headers=csrf_headers(client.session_record),
+            )
+            assert resp.status_code == 202, resp.text
+            # Matches ``test_live_generation``'s deadline: a real 5-phase LDD
+            # run (planning/validation/ldd_iteration/review/promotion) with
+            # an adversarial review pass regularly runs past 300s even on
+            # haiku — verified live (round-4 review): a first attempt at
+            # 300s was still mid-review (75%) with real ``claude`` calls
+            # already completed for every earlier phase.
+            final = poll_until_done(client, resp.json()["run_id"], timeout_s=900)
+    finally:
+        if prev_model is None:
+            os.environ.pop("CORVIN_SKILL_CREATOR_MODEL", None)
+        else:
+            os.environ["CORVIN_SKILL_CREATOR_MODEL"] = prev_model
 
     assert final["status"] == "success", final
     assert final["engine"] == "claude_code"
@@ -393,7 +458,8 @@ def _generate(client, request: str = "erzeuge einen Skill der JSON validiert",
     payload = {"user_request": request, "async": True}
     if base:
         payload["base_skill"] = base
-    resp = client.post("/v1/console/skill-creator/generate", json=payload)
+    resp = client.post("/v1/console/skill-creator/generate", json=payload,
+                       headers=csrf_headers(client.session_record))
     assert resp.status_code == 202, resp.text
     return poll_until_done(client, resp.json()["run_id"])
 
@@ -462,7 +528,8 @@ def test_refine_of_unknown_skill_is_404_not_a_new_skill(tmp_path):
     with console_client(tmp_path, fake_engine()) as (client, _route):
         resp = client.post("/v1/console/skill-creator/generate",
                            json={"user_request": "aendere diesen Skill bitte",
-                                 "async": True, "base_skill": "assistant.nope"})
+                                 "async": True, "base_skill": "assistant.nope"},
+                           headers=csrf_headers(client.session_record))
         assert resp.status_code == 404
         assert client.get("/v1/console/skill-creator/skills").json()["count"] == 0
 

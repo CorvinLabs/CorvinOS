@@ -86,6 +86,49 @@ def _is_namespace_denied(exc: BaseException) -> bool:
     ).split(".")[-1] == "registry"
 
 
+def _is_lock_busy(exc: BaseException) -> bool:
+    """True when ``exc`` is a SkillForge ``SkillRegistryLockBusy`` of ANY module identity.
+
+    Same re-import hazard as :func:`_is_namespace_denied` — match by qualified
+    name, not ``isinstance``. ``SkillRegistryLockBusy`` derives from
+    ``TimeoutError`` (hence ``OSError``), so this MUST be checked before any
+    bare ``except OSError`` branch or the busy-lock refusal is misreported as
+    a generic storage error (500 instead of 503).
+    """
+    return type(exc).__name__ == "SkillRegistryLockBusy" and (
+        type(exc).__module__ or ""
+    ).split(".")[-1] == "registry"
+
+
+def _refuse_lock_busy(
+    rec: session_auth.SessionRecord, action: str, name: str,
+) -> HTTPException:
+    """Turn a wedged SkillForge registry lock into a clean, audited 503.
+
+    ``SkillRegistry._locked`` used to be an UNBOUNDED ``flock(LOCK_EX)``, so a
+    wedged holder hung this request forever. It is bounded now
+    (``LOCK_EX | LOCK_NB`` + deadline) and raises ``SkillRegistryLockBusy`` at
+    the deadline; 503 (not 500) because nothing was written and a retry is the
+    correct client behaviour — same mapping as ``routes/engine_pref.py`` and
+    ``routes/workflows.py``. Content-free record: action + skill name only.
+    """
+    try:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action=action,
+            target_kind="manual_skill",
+            target_id=name,
+            reason="lock_busy",
+        )
+    except Exception:  # noqa: BLE001 - the refusal must not depend on the audit sink
+        pass
+    return HTTPException(
+        status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="lock_busy",
+    )
+
+
 def _namespace_denied(reg):  # kept for callers: identity-based hint, may be a foreign class
     try:
         registry_cls = type(reg).create.__globals__["SkillRegistry"]
@@ -162,8 +205,10 @@ def _list_manual_skills(tid: str) -> list[dict[str, Any]]:
     return out
 
 
-def _write_skill(tid: str, name: str, body: str, *, overwrite: bool):
-    reg = _registry(tid)
+def _write_skill(
+    rec: session_auth.SessionRecord, name: str, body: str, *, overwrite: bool, action: str,
+):
+    reg = _registry(rec.tenant_id)
     try:
         if overwrite:
             return reg.update_body(
@@ -182,12 +227,21 @@ def _write_skill(tid: str, name: str, body: str, *, overwrite: bool):
         ) from exc
     except (ValueError, KeyError) as exc:
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except OSError as exc:
+        # MUST be checked before the generic ``except Exception`` below:
+        # ``SkillRegistryLockBusy`` derives from ``TimeoutError`` (an
+        # ``OSError``), and this branch used to sit AFTER a bare
+        # ``except Exception`` — making it dead code, so a wedged registry
+        # lock fell into the ``NamespaceDenied``-or-``raise`` branch below
+        # and reached FastAPI's default 500 handler instead of a clean,
+        # audited 503 (F2, round-4 review).
+        if _is_lock_busy(exc):
+            raise _refuse_lock_busy(rec, action, name) from exc
+        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "storage error") from exc
     except Exception as exc:  # noqa: BLE001 — NamespaceDenied of any module identity → 422
         if _is_namespace_denied(exc):
             raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
         raise
-    except OSError as exc:
-        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "storage error") from exc
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -230,7 +284,9 @@ def create_manual_skill(
             f"skill {body.name!r} already exists — use PUT to update",
         )
 
-    spec = _write_skill(rec.tenant_id, body.name, body.body, overwrite=False)
+    spec = _write_skill(
+        rec, body.name, body.body, overwrite=False, action="skill.manual_created",
+    )
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -254,7 +310,9 @@ def update_manual_skill(
     if _manual_spec(rec.tenant_id, name) is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"skill {name!r} not found")
 
-    spec = _write_skill(rec.tenant_id, name, body.body, overwrite=True)
+    spec = _write_skill(
+        rec, name, body.body, overwrite=True, action="skill.manual_updated",
+    )
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -281,13 +339,17 @@ def delete_manual_skill(
     try:
         removed = reg.delete(name, scope=MANUAL_SCOPE, reason="deleted from console")
     except OSError as exc:
+        # MUST be checked before the generic ``except Exception`` below — see
+        # ``_write_skill`` for why (F2, round-4 review). A duplicate,
+        # unreachable ``except OSError`` used to sit AFTER that catch-all;
+        # removed rather than kept as dead code.
+        if _is_lock_busy(exc):
+            raise _refuse_lock_busy(rec, "skill.manual_deleted", name) from exc
         raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "storage error") from exc
     except Exception as exc:  # noqa: BLE001 — NamespaceDenied of any module identity → 422
         if _is_namespace_denied(exc):
             raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
         raise
-    except OSError as exc:
-        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "delete failed") from exc
     if not removed:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"skill {name!r} not found")
 
