@@ -11,7 +11,9 @@ that is embedded verbatim in the prompt.
 from __future__ import annotations
 
 import html
+import os
 import subprocess
+import sys
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -21,6 +23,24 @@ from .. import audit as console_audit
 from .. import auth as session_auth
 from .. import _spawn_gates  # shared fail-closed pre-spawn chokepoint (CRITICAL compliance)
 from ..deps import require_csrf, require_session
+
+# ── shared prompt neutraliser (R3-C1, adversarial review 2026-09-07) ────────
+# This route spawns `claude -p` on operator text and was the ONE spawn site
+# that imported neither the sentinel nor the `@`-neutraliser, and passed the
+# prompt as a POSITIONAL argv element. Proven live: `--version` was parsed as
+# a FLAG (the CLI printed its version, no model turn) and `/pwn` expanded a
+# project slash command from the spawn cwd. Import is fail-closed — exactly
+# like ``task_worker_pool.py``: no helper ⇒ no payload ⇒ no spawn.
+try:  # pragma: no cover - import shape, exercised by the spawn-site test
+    _agents_dir = os.path.abspath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "..", "..", "operator", "bridges", "shared",
+    ))
+    if _agents_dir not in sys.path:
+        sys.path.insert(0, _agents_dir)
+    from agents.claude_code import guard_prompt_head as _guard_prompt_head  # type: ignore  # noqa: E402
+except ImportError:  # pragma: no cover
+    _guard_prompt_head = None  # type: ignore[assignment]
 
 router = APIRouter()
 
@@ -244,7 +264,17 @@ def assistant_message(
 
     ctx_tag = _build_context_tag(body.context)
     history_block = _build_history_block(body.history)
-    full_prompt = f"{ctx_tag}{history_block}{body.message}"
+
+    # R3-C1/R3-C2: the prompt goes through the ONE shared neutraliser (byte-0
+    # `/`,`!`,`#` sentinel + `@<path>` client-side file-expansion joiner) and
+    # travels on STDIN, never on argv. Fail-closed: an unimportable helper
+    # means we refuse to spawn rather than spawn unguarded.
+    if _guard_prompt_head is None:
+        return {"ok": True, "response": (
+            "Assistant unavailable: the shared prompt guard could not be "
+            "loaded, and an unguarded engine spawn is refused."
+        )}
+    full_prompt = _guard_prompt_head(f"{ctx_tag}{history_block}{body.message}")
 
     try:
         result = subprocess.run(
@@ -254,8 +284,8 @@ def assistant_message(
                 "--max-turns", "1",
                 "--tools", "",
                 "--system-prompt", _SYSTEM_PROMPT,
-                full_prompt,
             ],
+            input=full_prompt,
             capture_output=True,
             text=True,
             encoding="utf-8",

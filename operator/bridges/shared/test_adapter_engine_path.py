@@ -27,6 +27,25 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 
+def _guarded(prompt: str) -> str:
+    """What the spawn actually feeds the CLI for ``prompt``.
+
+    Every spawn site routes the outbound user text through the ONE shared
+    neutraliser (``agents.claude_code.guard_prompt_head``): a fixed non-slash
+    sentinel line at byte 0 (R2-E1) plus a zero-width joiner after every ``@``
+    that could otherwise trigger the CLI's client-side ``@<path>`` file
+    expansion (R3-C2). The fake binary echoes back what it received, so these
+    assertions call the REAL helper rather than hard-coding its current output
+    — the guard is pinned, not stripped, and a future change to the
+    neutralisation technique updates both sides at once.
+
+    Imported lazily: ``_fresh_adapter`` deletes ``agents.*`` from
+    ``sys.modules`` between tests.
+    """
+    from agents.claude_code import guard_prompt_head  # noqa: PLC0415
+    return guard_prompt_head(prompt)
+
+
 def _section(title: str) -> None:
     print(f"\n=== {title} ===")
 
@@ -231,7 +250,7 @@ def test_engine_path_simple_prompt() -> None:
             chat_key="simple-chat",
             profile={"permission_mode": "bypassPermissions"},
         )
-        assert result == "final: ping-engine", \
+        assert result == "final: " + _guarded("ping-engine"), \
             f"unexpected final_text: {result!r}"
         print(f"PASS: engine path returned final_text={result!r}")
     finally:
@@ -662,7 +681,7 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
         )
         # The fake claude echoes "final: <prompt>" — proof the OS turn ran on
         # claude_code, not hermes.
-        assert result == "final: ping-autodetect", (
+        assert result == "final: " + _guarded("ping-autodetect"), (
             "stripped-PATH auto-detect did not resolve to claude_code "
             f"(got {result!r}); a hermes downgrade would surface an "
             "Ollama/hermes error instead"

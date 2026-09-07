@@ -112,34 +112,74 @@ def test_full_strip_caught():
       (not ok) and "mac_stripped_chain" in _issues(problems), detail=str(_issues(problems)))
 
 
+def _hand_chain(path, n, *, prev=""):
+    """Write ``n`` hash-chained records BY HAND, with no ``mac`` anywhere.
+
+    This is what a genuine pre-ADR-0137 chain looks like on disk. It matters that
+    the records never go through ``write_event``: that writer mints a mac AND
+    stamps the out-of-tree witnesses (the genesis-keyed per-chain marker and the
+    path-keyed identity record's ``mac`` flag). A fixture that writes mac'd
+    records and then deletes ONE witness is not a legacy chain — it is a
+    partially-laundered stripped chain, and the detector is right to say so.
+    """
+    import hashlib
+    from forge.security_events import _canonical, CHAIN_HASH_EXCLUDED_FIELDS
+    out = []
+    for i in range(n):
+        rec = {"ts": 1.0 + i, "event_type": "tool.created", "severity": "INFO",
+               "run_id": "", "tool": f"n{i}", "details": {}, "prev_hash": prev}
+        canon = _canonical({k: v for k, v in rec.items()
+                            if k not in CHAIN_HASH_EXCLUDED_FIELDS}).encode()
+        h = hashlib.sha256()
+        h.update(prev.encode()); h.update(b"\n"); h.update(canon)
+        rec["hash"] = h.hexdigest()[:16]
+        prev = rec["hash"]
+        out.append(json.dumps(rec))
+    path.write_text("\n".join(out) + "\n")
+    return prev
+
+
 def test_legacy_zero_mac_chain_is_exempt():
-    print("\n[legacy zero-mac chain (no per-chain marker) is NOT flagged]")
-    # A chain that NEVER wrote a mac (e.g. a session that ran no mac-writing
-    # tool) has no per-chain marker, so the full-strip detector must exempt it —
-    # even though the host sentinel exists (another chain wrote a mac above).
+    """THE CONTRACT (2026-09-07): a zero-mac live chain is ``mac_stripped_chain``
+    IFF an out-of-tree witness says THIS chain once carried a mac — the
+    genesis-keyed per-chain marker, the path-keyed identity record's ``mac``
+    flag, or (only for the primary ``<root>/global/forge/audit.jsonl`` layout)
+    the host-wide ``audit_mac_active`` sentinel. With no witness it is a genuine
+    legacy / never-mac'd chain and is exempt, even though the host sentinel
+    exists because some OTHER chain wrote a mac (incident 2026-06-17, where
+    gating on the host sentinel alone broke 20+ session chains).
+    """
+    print("\n[legacy zero-mac chain (no per-chain witness) is NOT flagged]")
     p = _TMP / "legacy_session" / "audit.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
+    _hand_chain(p, 3)
+    ok, problems = verify_chain(p)
+    t("legacy zero-mac chain not flagged mac_stripped_chain",
+      "mac_stripped_chain" not in _issues(problems), detail=str(_issues(problems)))
+
+
+def test_stripped_chain_is_not_laundered_by_deleting_one_witness():
+    """The other side of the same contract, and the reason the fixture above had
+    to be rewritten: deleting the genesis-keyed marker no longer buys anything,
+    because round 2 added a SECOND, independent witness (the path-keyed identity
+    record). A chain the real writer mac'd stays a stripped chain."""
+    print("\n[stripped chain, one witness deleted → still flagged]")
+    p = _TMP / "laundered" / "audit.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("")
-    # Write hash-chained records WITHOUT going through write_event's mac path by
-    # disabling the chain mac: use hash_chain but the key is present, so to get a
-    # genuinely mac-free legacy record we write via write_event then strip — but
-    # crucially NEVER stamp this chain's marker. Simulate by writing to a path
-    # whose marker we ensure is absent.
     for i in range(3):
-        write_event(p, "tool.created", tool=f"n{i}")
-    # Strip any macs so the chain carries zero — a legacy/never-mac'd shape.
+        write_event(p, "tool.created", tool=f"m{i}")
     lines = [json.loads(x) for x in p.read_text().splitlines()]
     for rec in lines:
         rec.pop("mac", None)
     p.write_text("\n".join(json.dumps(r) for r in lines) + "\n")
-    # Remove this chain's per-chain marker to model a chain that never had one.
     from forge.security_events import _mac_chain_marker_path
     mk = _mac_chain_marker_path(p)
     if mk.exists():
         mk.unlink()
     ok, problems = verify_chain(p)
-    t("legacy zero-mac chain not flagged mac_stripped_chain",
-      "mac_stripped_chain" not in _issues(problems), detail=str(_issues(problems)))
+    t("deleting the genesis-keyed marker does not launder a strip",
+      (not ok) and "mac_stripped_chain" in _issues(problems), detail=str(_issues(problems)))
 
 
 def main() -> int:
@@ -148,6 +188,7 @@ def main() -> int:
     test_missing_mac_after_epoch_caught()
     test_full_strip_caught()
     test_legacy_zero_mac_chain_is_exempt()
+    test_stripped_chain_is_not_laundered_by_deleting_one_witness()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

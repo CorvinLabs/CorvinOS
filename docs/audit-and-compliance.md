@@ -262,7 +262,15 @@ written, `filter_audit_details()`:
 * records the dropped key **names** inline under `_dropped_fields` (never the
   values);
 * for event types with a registered **positive allowlist** (M2),
-  additionally drops any key not on that list.
+  additionally drops any key not on that list;
+* **fingerprints** a reserved-spine value (`user`, `chat_key`, `channel`,
+  `persona`, `tenant_id`) that carries an email or phone shape, replacing it with
+  `sha256[:8]` of the value — the same transform `adapter._pii_fp` applies, so
+  the two redaction points share one pseudonym namespace — and lists the affected
+  key NAMES under `_pii_fingerprinted`. These keys are exempt from the key
+  filters because they are what makes a record attributable (GDPR Art. 30); they
+  are not exempt from the value scan, and measuring the live chains showed why
+  (2 962 `user` + 2 580 `chat_key` raw email/phone values in 596 039 records).
 
 It never raises (audit stays best-effort) and offers a per-call
 `unfiltered=True` opt-out (itself flagged inline with `_unfiltered`) for the

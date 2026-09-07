@@ -69,6 +69,7 @@ def _sandbox(tmp_path: Path, tenant_id: str = "_default"):
         from fastapi.testclient import TestClient
 
         webhooks_route._rate_hits.clear()  # per-process window must not leak between tests
+        webhooks_route._seen_signatures.clear()  # ditto for the replay nonce cache
 
         rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint="test-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
@@ -193,14 +194,17 @@ class WebhookHardeningTests(unittest.TestCase):
     # ── R2-C3b: the stored rate limit is enforced ────────────────────────────
 
     def test_rate_limit_per_hour_is_enforced(self):
+        # Distinct bodies per request: the R3 replay guard 409s an EXACT
+        # re-send, which would otherwise mask the 429 this test is about.
         with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
             _legacy_channel(wh, tid, "throttled", hmac_secret_env=ENV_VAR,
                             rate_limit_per_hour=3)
-            body = b"{}"
-            sig = {"X-Hub-Signature-256": _sign(body)}
-            codes = [client.post(f"/v1/console/webhook/{tid}/throttled",
-                                 content=body, headers=sig).status_code
-                     for _ in range(6)]
+            codes = []
+            for i in range(6):
+                body = json.dumps({"n": i}).encode()
+                codes.append(client.post(
+                    f"/v1/console/webhook/{tid}/throttled", content=body,
+                    headers={"X-Hub-Signature-256": _sign(body)}).status_code)
             self.assertEqual(codes[:3], [200, 200, 200], codes)
             self.assertEqual(codes[3:], [429, 429, 429], codes)
 
@@ -208,12 +212,15 @@ class WebhookHardeningTests(unittest.TestCase):
         with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
             _legacy_channel(wh, tid, "a", hmac_secret_env=ENV_VAR, rate_limit_per_hour=1)
             _legacy_channel(wh, tid, "b", hmac_secret_env=ENV_VAR, rate_limit_per_hour=1)
-            body = b"{}"
-            sig = {"X-Hub-Signature-256": _sign(body)}
-            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/a", content=body, headers=sig).status_code, 200)
-            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/a", content=body, headers=sig).status_code, 429)
+            b1, b2, b3 = b'{"n":1}', b'{"n":2}', b'{"n":3}'
+            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/a", content=b1,
+                                         headers={"X-Hub-Signature-256": _sign(b1)}).status_code, 200)
+            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/a", content=b2,
+                                         headers={"X-Hub-Signature-256": _sign(b2)}).status_code, 429)
             # a different channel has its own budget
-            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/b", content=body, headers=sig).status_code, 200)
+            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/b", content=b3,
+                                         headers={"X-Hub-Signature-256": _sign(b3)}).status_code, 200)
+
 
     def test_throttled_request_is_refused_before_hmac_and_before_audit(self):
         """The 429 must be cheap: no body buffering, no chain write."""
@@ -281,3 +288,149 @@ class WebhookHardeningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── R3 follow-up: replay protection (timestamp window + nonce cache) ─────────
+
+def _sign_ts(ts: str, body: bytes) -> str:
+    return "sha256=" + hmac.new(SECRET, ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+
+
+class WebhookReplayTests(unittest.TestCase):
+    """The HMAC proves WHO signed the body, never WHEN. A captured signed
+    request was re-POSTable verbatim up to the hourly rate limit, each replay
+    writing a fresh `webhook.message_received` event into the tenant's chain.
+    Driven through the REAL HTTP boundary."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._prev = os.environ.get(ENV_VAR)
+        os.environ[ENV_VAR] = SECRET.decode()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        if self._prev is None:
+            os.environ.pop(ENV_VAR, None)
+        else:
+            os.environ[ENV_VAR] = self._prev
+
+    def _chain_lines(self, home, tid):
+        chain = home / "tenants" / tid / "global" / "forge" / "audit.jsonl"
+        if not chain.exists():
+            return []
+        return [json.loads(x) for x in chain.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+    def test_exact_replay_of_a_signed_body_is_refused(self):
+        with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
+            _legacy_channel(wh, tid, "replay", hmac_secret_env=ENV_VAR,
+                            rate_limit_per_hour=100)
+            body = b'{"event": "payment.captured", "amount": 500}'
+            hdr = {"X-Hub-Signature-256": _sign(body)}
+            url = f"/v1/console/webhook/{tid}/replay"
+            self.assertEqual(client.post(url, content=body, headers=hdr).status_code, 200)
+            before = len(self._chain_lines(home, tid))
+            for _ in range(3):
+                r = client.post(url, content=body, headers=hdr)
+                self.assertEqual(r.status_code, 409, r.text)
+            received = [e for e in self._chain_lines(home, tid)
+                        if e.get("event_type") == "webhook.message_received"]
+            self.assertEqual(len(received), 1, "a replay still wrote a delivery event")
+            rejected = [e for e in self._chain_lines(home, tid)
+                        if e.get("event_type") == "webhook.replay_rejected"]
+            self.assertEqual(len(rejected), 3, "replays must be audited")
+            self.assertGreater(len(self._chain_lines(home, tid)), before)
+
+    def test_a_distinct_body_is_not_treated_as_a_replay(self):
+        with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
+            _legacy_channel(wh, tid, "replay", hmac_secret_env=ENV_VAR,
+                            rate_limit_per_hour=100)
+            url = f"/v1/console/webhook/{tid}/replay"
+            for i in range(5):
+                body = json.dumps({"n": i}).encode()
+                r = client.post(url, content=body,
+                                headers={"X-Hub-Signature-256": _sign(body)})
+                self.assertEqual(r.status_code, 200, r.text)
+
+    def test_replay_cache_is_scoped_per_channel(self):
+        with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
+            _legacy_channel(wh, tid, "c1", hmac_secret_env=ENV_VAR, rate_limit_per_hour=100)
+            _legacy_channel(wh, tid, "c2", hmac_secret_env=ENV_VAR, rate_limit_per_hour=100)
+            body = b'{"x": 1}'
+            hdr = {"X-Hub-Signature-256": _sign(body)}
+            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/c1", content=body, headers=hdr).status_code, 200)
+            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/c2", content=body, headers=hdr).status_code, 200)
+            self.assertEqual(client.post(f"/v1/console/webhook/{tid}/c1", content=body, headers=hdr).status_code, 409)
+
+    def test_unsigned_request_cannot_poison_the_nonce_cache(self):
+        """The replay check runs AFTER the HMAC check, so a wrong signature can
+        neither register a nonce nor probe whether one exists."""
+        with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
+            _legacy_channel(wh, tid, "replay", hmac_secret_env=ENV_VAR,
+                            rate_limit_per_hour=100)
+            url = f"/v1/console/webhook/{tid}/replay"
+            body = b'{"x": 9}'
+            self.assertEqual(client.post(url, content=body,
+                                         headers={"X-Hub-Signature-256": "sha256=bad"}).status_code, 401)
+            self.assertEqual(wh._seen_signatures, {})
+            self.assertEqual(client.post(url, content=body,
+                                         headers={"X-Hub-Signature-256": _sign(body)}).status_code, 200)
+
+    # ── opt-in signed timestamp ──────────────────────────────────────────────
+
+    def test_signed_timestamp_channel_requires_the_header(self):
+        with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
+            resp = admin.put("/v1/console/bridges/custom/ts",
+                             json={"display_name": "TS", "hmac_secret_env": ENV_VAR,
+                                   "require_signed_timestamp": True})
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertTrue(wh._load_channel(tid, "ts")["require_signed_timestamp"])
+            url = f"/v1/console/webhook/{tid}/ts"
+            body = b'{"x": 1}'
+            # body-only signature (the old scheme) must NOT be accepted
+            r = client.post(url, content=body, headers={"X-Hub-Signature-256": _sign(body)})
+            self.assertEqual(r.status_code, 401, r.text)
+            self.assertIn("Timestamp", r.text)
+
+    def test_signed_timestamp_outside_the_window_is_refused(self):
+        with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
+            admin.put("/v1/console/bridges/custom/ts",
+                      json={"display_name": "TS", "hmac_secret_env": ENV_VAR,
+                            "require_signed_timestamp": True})
+            url = f"/v1/console/webhook/{tid}/ts"
+            body = b'{"x": 1}'
+            stale = str(int(time.time() - wh._TIMESTAMP_SKEW_S - 60))
+            r = client.post(url, content=body,
+                            headers={"X-Hub-Signature-256": _sign_ts(stale, body),
+                                     "X-Corvin-Timestamp": stale})
+            self.assertEqual(r.status_code, 401, r.text)
+            fresh = str(int(time.time()))
+            ok = client.post(url, content=body,
+                             headers={"X-Hub-Signature-256": _sign_ts(fresh, body),
+                                      "X-Corvin-Timestamp": fresh})
+            self.assertEqual(ok.status_code, 200, ok.text)
+
+    def test_timestamp_is_covered_by_the_signature(self):
+        """A captured body whose timestamp header is simply rewritten must fail
+        — otherwise the window is decorative."""
+        with _sandbox(Path(self._tmp)) as (client, admin, home, tid, wh):
+            admin.put("/v1/console/bridges/custom/ts",
+                      json={"display_name": "TS", "hmac_secret_env": ENV_VAR,
+                            "require_signed_timestamp": True})
+            url = f"/v1/console/webhook/{tid}/ts"
+            body = b'{"x": 1}'
+            captured_ts = str(int(time.time()))
+            sig = _sign_ts(captured_ts, body)
+            self.assertEqual(client.post(url, content=body,
+                                         headers={"X-Hub-Signature-256": sig,
+                                                  "X-Corvin-Timestamp": captured_ts}).status_code, 200)
+            # attacker keeps the signature, bumps the timestamp
+            r = client.post(url, content=body,
+                            headers={"X-Hub-Signature-256": sig,
+                                     "X-Corvin-Timestamp": str(int(time.time()) + 1)})
+            self.assertEqual(r.status_code, 401, r.text)
+            # and the verbatim replay is caught by the nonce cache
+            r2 = client.post(url, content=body,
+                             headers={"X-Hub-Signature-256": sig,
+                                      "X-Corvin-Timestamp": captured_ts})
+            self.assertEqual(r2.status_code, 409, r2.text)

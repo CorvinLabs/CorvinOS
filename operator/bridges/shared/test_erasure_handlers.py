@@ -562,3 +562,104 @@ class TestWebChatHandler(unittest.TestCase):
         """A handler nobody registers erases nothing — that WAS the bug."""
         ids = {getattr(h, "layer_id", None) for h in real_handler_chain()}
         self.assertIn("web-chat", ids)
+
+
+# ── R3 follow-ups: filename attribution + crash-atomic rewrites ─────────────
+
+
+class TestFilenameIsAttribution(unittest.TestCase):
+    """A subject id that appears ONLY in a filename.
+
+    Erasure attributed a path two ways: a DIRECTORY named after the subject, or
+    a JSON/JSONL PAYLOAD naming it under a known identity key. A file whose only
+    mention of the subject is its own name — ``<subject>.json``,
+    ``snapshot_<subject>.jsonl`` — matched neither and survived a run the
+    orchestrator then reported COMPLETED. A filename is personal data.
+    """
+
+    def test_a_file_named_after_the_subject_is_erased(self):
+        from erasure_handlers import VibeCheckpointHandler
+
+        with tempfile.TemporaryDirectory(prefix="erasure-fname-") as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                root = Path(td) / "tenants" / "_default" / "vibe" / "checkpoints"
+                root.mkdir(parents=True)
+                # Payload never names the subject — only the filename does.
+                (root / "subj-42.json").write_text('{"state": "opaque"}')
+                (root / "snapshot_subj-42.jsonl").write_text('{"a":1}\n')
+                # A DIFFERENT subject whose id merely CONTAINS ours must survive.
+                (root / "subj-421.json").write_text('{"state": "other"}')
+                (root / "unrelated.json").write_text('{"state": "keep"}')
+
+                result = VibeCheckpointHandler().purge("subj-42", "er-test")
+                self.assertEqual(result.status, LayerStatus.APPLIED, result.reason)
+                self.assertFalse((root / "subj-42.json").exists())
+                self.assertFalse((root / "snapshot_subj-42.jsonl").exists())
+                self.assertTrue((root / "subj-421.json").exists())
+                self.assertTrue((root / "unrelated.json").exists())
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_token_boundaries_are_respected(self):
+        from erasure_handlers import _name_names_subject
+
+        self.assertTrue(_name_names_subject("u1", "u1"))
+        self.assertTrue(_name_names_subject("u1.json", "u1"))
+        self.assertTrue(_name_names_subject("snapshot_u1.jsonl", "u1"))
+        self.assertTrue(_name_names_subject("u1-profile.json", "u1"))
+        # Over-matching deletes ANOTHER subject's data — its own Art. 5 breach.
+        self.assertFalse(_name_names_subject("u12.json", "u1"))
+        self.assertFalse(_name_names_subject("xu1.json", "u1"))
+        self.assertFalse(_name_names_subject("u1x.json", "u1"))
+        self.assertFalse(_name_names_subject("anything.json", ""))
+
+
+class TestErasureRewritesAreCrashAtomic(unittest.TestCase):
+    """Every entry-wise rewrite was ``tmp.write_text`` + ``os.replace``: the
+    rename is atomic, the DATA was never flushed, and the staging name was fixed
+    so two concurrent erasures clobbered each other."""
+
+    def test_the_index_rewrite_flushes_and_uses_a_unique_staging_name(self):
+        import erasure_handlers as EH
+
+        with tempfile.TemporaryDirectory(prefix="erasure-atomic-") as td:
+            target = Path(td) / "index.json"
+            target.write_text('["old"]')
+            seen = {}
+            real_fsync = os.fsync
+
+            def _watch(fd):
+                seen["fsync"] = seen.get("fsync", 0) + 1
+                return real_fsync(fd)
+
+            os.fsync = _watch
+            try:
+                EH._atomic_replace_text(target, '["new"]')
+            finally:
+                os.fsync = real_fsync
+            self.assertEqual(target.read_text(), '["new"]')
+            # file + directory
+            self.assertGreaterEqual(seen.get("fsync", 0), 1)
+            self.assertEqual(sorted(x.name for x in Path(td).iterdir()), ["index.json"])
+
+    def test_a_failed_write_leaves_the_original_and_no_staging_file(self):
+        import erasure_handlers as EH
+
+        with tempfile.TemporaryDirectory(prefix="erasure-atomic2-") as td:
+            target = Path(td) / "index.json"
+            target.write_text('["old"]')
+
+            real_replace = os.replace
+
+            def _boom(src, dst):
+                raise OSError("disk full")
+
+            os.replace = _boom
+            try:
+                with self.assertRaises(OSError):
+                    EH._atomic_replace_text(target, '["new"]')
+            finally:
+                os.replace = real_replace
+            self.assertEqual(target.read_text(), '["old"]')
+            self.assertEqual(sorted(x.name for x in Path(td).iterdir()), ["index.json"])

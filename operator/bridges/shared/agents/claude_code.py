@@ -69,35 +69,147 @@ except Exception:  # pragma: no cover
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 
 
-# ── prompt-head guard (R2-E1, adversarial review 2026-09-07) ────────────────
+# ── prompt neutraliser (R2-E1 + R3-C2, adversarial review 2026-09-07) ──────
 #
-# `claude -p` expands a user message whose FIRST byte is `/` into a slash
-# command / skill on EVERY transport — the positional-after-`--` form AND the
-# stdin `stream-json` user message alike. Proven live: an instruction `/pwn`
-# executed `.claude/commands/pwn.md` from the worker cwd (bypassPermissions,
-# persona workdir) and `/cost` leaked the operator's subscription usage. A
-# chat user therefore had a command-injection primitive against every spawn
-# site that forwarded their text verbatim (console /task worker, the bridge
-# adapter whenever the CEL prefix was empty, the voice summariser, ...).
+# TWO distinct client-side expansions happen in `claude -p` BEFORE the model
+# ever runs. Neither is a tool call, so NO tool policy, permission mode,
+# `--add-dir` or sandbox restricts them. Both were proven live on every
+# transport we spawn with — the positional-after-`--` form AND the stdin
+# `stream-json` user message.
 #
-# The only structural fix is at the byte-0 position: every spawn site wraps
-# the outbound user text with `guard_prompt_head()`, which prepends ONE
-# fixed, non-slash sentinel line. It is deliberately independent of whether
-# a CEL brief / observer block / volatile prefix happens to be present — those
-# are conditional, this is not. The user's text is preserved verbatim after
-# the sentinel, so `/pwn` reaches the model as literal text ("the user wrote
-# /pwn"), never as a command.
+# (1) BYTE 0 (R2-E1). A message whose FIRST byte is `/`, `!` or `#` is
+#     consumed by the CLI itself instead of being sent to the model:
+#       `/pwn`  -> ran `.claude/commands/pwn.md` from the worker cwd under
+#                  bypassPermissions;
+#       `/cost` -> returned the operator's subscription usage, num_turns 0;
+#       `!cat secret.txt` -> executed the shell command locally and injected
+#                  its stdout, with the Bash tool explicitly disallowed;
+#       `#...`  -> routed into the memory-add path.
+#     Fix: prepend ONE fixed sentinel line whose first byte is a letter.
+#     Verified 2026-09-07 that `/cost` and `!cat` behind the sentinel are
+#     inert (the model sees them as ordinary text).
+#
+# (2) ANY POSITION (R3-C2). `@<path>` is expanded into the file's CONTENT
+#     anywhere in the message, not only at byte 0 — so the byte-0 sentinel
+#     did nothing for it. A single public-facing chat/e-mail message
+#     containing `@/etc/hostname`, `@~/.corvin/audit.jsonl` or
+#     `@.env` exfiltrated that file in one turn (`num_turns` 1,
+#     `permission_denials` []). Reachable from Discord / Telegram /
+#     WhatsApp / e-mail bodies, console `/task`, console chat and the voice
+#     summariser — every channel that forwards user text.
+#
+#     Measured trigger condition (2026-09-07, canary-file probe): the `@`
+#     expands ONLY when it is at a *token start* — start-of-string or
+#     preceded by whitespace. `x@canary.txt` and `(`/`<`/`"`/`,`/`:`/`=`/
+#     `[`/`/`/`-` before the `@` all failed to expand, which is why ordinary
+#     e-mail addresses were never an expansion vector.
+#
+#     Fix: insert a U+2060 WORD JOINER immediately BEFORE any `@` that is not
+#     unambiguously inside an e-mail local part. U+2060 is zero-width and
+#     non-breaking, so a human reading the message still sees `@something`
+#     intact and NO user content is deleted or rewritten — but the `@` is no
+#     longer at a token start as far as the CLI's scanner is concerned, and the
+#     reference stays literal text. Verified live: the same `@/etc/hostname` /
+#     `@canary.txt` payloads stop resolving.
+#
+#     Placement was chosen by experiment, not taste. Three variants block the
+#     expansion (`@`+U+200B, `@`+U+2060, U+2060+`@`) and one does NOT:
+#     U+200B BEFORE the `@` still expanded — a zero-width SPACE reads as a token
+#     boundary to the CLI, a WORD JOINER does not. Of the three that work,
+#     joiner-before is the only one that leaves the user's `@token` contiguous:
+#     with the joiner INSIDE the token the model itself called the message
+#     "obfuskiert ... Prompt-Injection-Versuch" and refused an ordinary echo
+#     request. Joiner-before echoed `@/etc/hostname` back cleanly.
+#
+#     This placement rests on ONE measured CLI property (an `@` preceded by a
+#     non-whitespace character is not a file reference). That is deliberate and
+#     it is pinned by a LIVE test, not by belief:
+#     `core/console/tests/test_task_worker_pool_argv.py::
+#     test_live_at_path_reference_is_not_expanded_into_file_content` drives the
+#     REAL CLI through the REAL worker transport and fails if a CLI update ever
+#     widens the rule.
+#
+# TRADE-OFF (deliberate, fail-closed): the neutraliser fires on every `@`
+# whose preceding character is not an e-mail local-part character
+# ([A-Za-z0-9._%+-]). That is strictly WIDER than the measured trigger, to
+# survive a CLI version that widens its own rule. Consequences:
+#   * `user@example.com` is untouched (the `@` follows `r`).
+#   * `@handle` at a word start, `<@1234>` Discord mentions and a pasted
+#     Python decorator `@property` each gain one invisible U+2060 in front of
+#     the `@`. They read identically to a human, and the `@token` itself is
+#     untouched; the only real cost is that a model copying the character
+#     immediately before such a token could carry the invisible joiner with it.
+# Narrowing this to "whitespace-preceded only" would restore decorators
+# exactly, at the price of trusting an undocumented CLI parsing rule. We
+# chose the file-exfiltration side.
+#
+# Both halves live HERE, in the ONE shared helper (ADR-0648 single point of
+# control), so every present and future spawn site inherits them by calling
+# `guard_prompt_head()`.
 PROMPT_HEAD_SENTINEL = "User input:"
+
+#: Zero-width, non-breaking joiner inserted in front of a neutralised ``@``.
+#: MUST be U+2060 WORD JOINER — U+200B ZERO WIDTH SPACE in this position does
+#: NOT stop the expansion (measured 2026-09-07).
+AT_NEUTRALISER = "\u2060"
+
+#: Characters that may legitimately precede the ``@`` of an e-mail address.
+#: An ``@`` preceded by one of these is left alone; every other ``@`` is
+#: neutralised. Keep this set SMALL — widening it re-opens the vector.
+_EMAIL_LOCAL_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789"
+    "._%+-"
+)
+
+
+def neutralise_at_references(text: str) -> str:
+    """Disarm client-side ``@<path>`` expansion without deleting content.
+
+    Inserts :data:`AT_NEUTRALISER` (U+2060 WORD JOINER) directly BEFORE every
+    ``@`` that is not preceded by an e-mail local-part character, which takes
+    the ``@`` out of token-start position. Idempotent: an ``@`` already
+    preceded by the joiner is skipped, so repeated application is a no-op, and
+    the user's own text is never deleted — dropping every joiner restores the
+    input byte-for-byte.
+    """
+    if "@" not in text:
+        return text
+    out: list[str] = []
+    prev = ""
+    for ch in text:
+        if ch == "@" and prev not in _EMAIL_LOCAL_CHARS and prev != AT_NEUTRALISER:
+            out.append(AT_NEUTRALISER)
+        out.append(ch)
+        prev = ch
+    return "".join(out)
 
 
 def guard_prompt_head(text: str | None) -> str:
-    """Return ``text`` behind the fixed non-slash sentinel line.
+    """Return ``text`` neutralised and behind the fixed sentinel line.
 
-    Idempotent: a payload that already starts with the sentinel line is
-    returned unchanged (its byte 0 is already safe). ``None`` is treated as an
-    empty message. Never strips or rewrites the caller's text.
+    Two guarantees, both structural:
+
+    * byte 0 of the returned payload is a letter, so the CLI's ``/`` / ``!``
+      / ``#`` client-side handlers never fire on user text;
+    * every ``@`` that could start a client-side file reference is preceded by
+      the zero-width :data:`AT_NEUTRALISER`, so ``@/etc/passwd`` reaches the
+      model as literal text instead of as that file's contents.
+
+    Idempotent — ``guard_prompt_head(guard_prompt_head(x))`` equals
+    ``guard_prompt_head(x)``. ``None`` is treated as an empty message. Never
+    strips, truncates or rewrites the caller's text: the only edit is the
+    insertion of zero-width joiners.
+
+    The neutraliser is applied to the WHOLE payload, not just the trailing
+    user segment, because several call sites concatenate a CEL brief /
+    volatile prefix with the user's message before calling this and the two
+    are no longer separable here — and those prefixes can themselves carry
+    attacker-influenced text (recalled memory, quoted mail).
     """
     body = "" if text is None else str(text)
+    body = neutralise_at_references(body)
     head = PROMPT_HEAD_SENTINEL + "\n"
     if body.startswith(head):
         return body

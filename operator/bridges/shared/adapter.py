@@ -686,7 +686,21 @@ except Exception:  # noqa: BLE001
         from agents.claude_code import guard_prompt_head as _guard_prompt_head  # type: ignore
     except Exception:  # noqa: BLE001
         _ClaudeCodeEngine = None  # type: ignore[assignment]
-        _guard_prompt_head = None  # type: ignore[assignment]
+
+        def _guard_prompt_head(text):  # type: ignore[misc]
+            """Fail-closed stand-in (R3 follow-up, 2026-09-07).
+
+            This used to be ``None``, so the three call sites below raised an
+            opaque ``TypeError: 'NoneType' object is not callable`` deep inside
+            the spawn path instead of the explicit refusal
+            ``task_worker_pool._worker_stdin_payload`` uses. Same outcome — no
+            unguarded prompt ever reaches ``claude -p`` — but the operator gets
+            a message that names the cause.
+            """
+            raise RuntimeError(
+                "prompt guard unavailable (agents.claude_code not importable) "
+                "— refusing to spawn claude -p with an unneutralised prompt"
+            )
 
 # OpenCodeEngine — optional third backend (Layer 22). Loaded lazily so
 # the adapter stays importable on hosts without opencode installed; the

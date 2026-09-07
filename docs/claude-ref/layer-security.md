@@ -1113,3 +1113,51 @@ Regression tests: `core/console/tests/test_webhook_hardening_r2.py`,
 `core/console/tests/test_webhook_route.py` (the round-1 blind-spot tests were **inverted**,
 not deleted — they now assert the fixed behaviour),
 `web-next/tests/unit/lib/safe-url.test.ts`, `tests/test_world_map.py`.
+
+### Console hardening — adversarial round 3, 2026-09-07
+
+| Finding | Where | Contract |
+|---|---|---|
+| **NAT64 SSRF bypass** | `routes/datasources_http.py::_embedded_ipv4` + `_ip_is_blocked` (still one predicate, imported by `routes/custom_provider.py`) | `not is_global` is not sufficient for an IPv6 **wrapper** around an IPv4 address. `ipaddress` reports `64:ff9b::7f00:1` — the RFC 6052 NAT64 Well-Known Prefix carrying `127.0.0.1` — as `is_global=True` / `is_private=False`, so it passed the guard, and on any host behind a NAT64 gateway that address **is** loopback. The same trick reaches `10.0.0.1`, `192.168.x.x`, CGNAT and `169.254.169.254` (cloud metadata). Every embedded-IPv4 form — IPv4-mapped `::ffff:a.b.c.d`, 6to4 `2002::/16`, Teredo `2001::/32` and NAT64 `64:ff9b::/96` — is now unwrapped and re-checked against the IPv4 rules, fail-closed. (RFC 8215's local-use `64:ff9b:1::/48` was already `is_private`.) |
+| **Webhook replay** | `routes/webhooks.py::_replay_seen`, `receive_webhook` | The HMAC proves **who** signed a body, never **when**, and the signature is a deterministic function of the body — so a captured signed request was re-POSTable verbatim up to the hourly rate limit, each replay writing a fresh `webhook.message_received` event into the tenant's chain. Two layers: **(a)** a nonce cache, always on, no sender change — the signature is remembered per `(tenant, channel)` for `_REPLAY_WINDOW_S` (3600 s) and an exact repeat is refused **409** and audited as `webhook.replay_rejected`; it is checked **after** the HMAC, so an unauthenticated caller can neither probe nor poison it, and it is bounded by `_REPLAY_MAX_PER_CHANNEL`. **(b)** an opt-in per-channel `require_signed_timestamp`: the `X-Corvin-Timestamp` header becomes mandatory, the HMAC is computed over `<ts>.<body>` (so the timestamp cannot be rewritten by whoever captured the body), and the request is refused outside `_TIMESTAMP_SKEW_S` (300 s) — this is what closes a replay arriving after the nonce window. It is opt-in because making it mandatory would break every already-registered sender; a channel that enables it can never fall back to the body-only form. **Behaviour change:** an exact duplicate signed body inside the window is now 409, not 200. |
+| **Fail-open guard import** | `../../operator/bridges/shared/adapter.py` (double-`ImportError` branch) | `_guard_prompt_head` was set to `None`, so the three spawn sites raised an opaque `TypeError: 'NoneType' object is not callable` deep in the spawn path instead of the explicit refusal `task_worker_pool._worker_stdin_payload` uses. It is now a stand-in that raises `RuntimeError` naming the cause. Same outcome — no unguarded prompt ever reaches `claude -p` — with an operator-readable message. |
+
+See `adapter-runtime.md` § "Round 3" for the `@<path>` client-side file-expansion
+finding (R3-C2) and the spawn-site ledger (R3-C1).
+
+Regression tests: `core/console/tests/test_console_r2_hardening.py`
+(`test_nat64_wrapped_ipv4_is_unwrapped_and_blocked`,
+`test_other_ipv6_ipv4_wrappers_unwrap_too`),
+`core/console/tests/test_webhook_hardening_r2.py::WebhookReplayTests`
+(real HTTP boundary, real router),
+`core/console/tests/test_assistant_route_prompt_guard.py`,
+`core/console/tests/test_claude_spawn_site_ledger.py`.
+
+### Console hardening — round 3: unbounded locks on request paths (2026-09-07)
+
+A blocking `fcntl.flock(LOCK_EX)` with **no timeout** on a request path is an
+availability defect that no `try/except` can catch: a wedged holder (a crashed
+writer whose fd the kernel has not reaped, an NFS mount, a debugger-stopped
+process) makes the operator's request hang forever instead of refusing. Three
+such call sites remained on console routes and are now bounded, with the same
+contract and constant style as `core/infinite_session/event_store.py`
+(`LOCK_TIMEOUT_SECONDS` / `LOCK_RETRY_INTERVAL_SECONDS`, `LOCK_EX | LOCK_NB`
+with a bounded retry, a `TimeoutError` subclass at the deadline, every caller
+converting it).
+
+| Where | Endpoint | Contract |
+|---|---|---|
+| `routes/workflows.py::_wf_create_lock` (via `_bounded_flock`) | `POST /v1/console/workflows`, `POST /v1/console/workflows/import` | Raises `WorkflowLockBusy` after `workflows.LOCK_TIMEOUT_SECONDS` (2 s). Both routes answer **503 `lock_busy`** and audit `console.action_failed` (`reason="lock_busy"`, content-free: action + workflow id only). Nothing is written, so a retry is the correct client behaviour — 503, never 500. |
+| `routes/workflows.py::_append_chat_line` (via `_bounded_flock`) | `WS /v1/console/workflows/{wid}/chat` | The lock sat inside an `async def` handler, so it stalled the **whole console event loop**, not one socket. The append now runs through `_append_chat_line_async` → `anyio.to_thread.run_sync`, and a busy lock returns `False` instead of waiting. A WebSocket has no status line, so the refusal is an in-band `{"type": "error", "code": 503}` frame (`_refuse_chat_lock_busy`, socket stays open — same shape as the 402 chat-turn refusal) plus the same content-free `action_failed` record. The **opening** line is pure housekeeping (regenerated on the next connect) and therefore DEGRADES: it is still delivered, only unpersisted. A user turn is refused **before** the design LLM call, so the transcript cannot desynchronise; an assistant reply whose turn already ran is delivered with `persisted: false`. |
+| `routes/chat_settings.py::_save_channel` | `PATCH /v1/console/chat-settings/{channel}/{chat_key}` | Raises `ChatSettingsLockBusy` after `chat_settings.LOCK_TIMEOUT_SECONDS` (2 s). The route catches it **before** its generic `OSError → 500 io-error` branch, so a busy lock answers **503 `lock_busy`** (retry) and the settings file is provably unchanged. |
+
+Both busy exceptions subclass `TimeoutError` (hence `OSError`), matching
+`event_store.SnapshotLockBusy`, so any caller that already degraded on I/O
+failure keeps degrading rather than raising.
+
+Regression tests: `core/console/tests/test_route_lock_nonblocking.py` — every
+case drives the REAL router through `TestClient` with a REAL console session
+(nothing about auth is stubbed) while the lock is held from an **independent
+file description**, asserts 503 (or the in-band 503 frame) within the deadline,
+and pairs each with a lock-free positive control proving the bounded lock is
+still a real mutex.

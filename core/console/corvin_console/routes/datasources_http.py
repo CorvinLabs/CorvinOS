@@ -182,6 +182,37 @@ def _as_ip(text: str) -> "ipaddress._BaseAddress | None":
         return None
 
 
+#: RFC 6052 §2.1 Well-Known Prefix for IPv4/IPv6 translation (NAT64). An
+#: address inside it is a WRAPPER: its low 32 bits are the real IPv4
+#: destination, and a host with a NAT64 gateway reaches that IPv4 address.
+#: ``ipaddress`` classifies the whole /96 as globally routable, so
+#: ``64:ff9b::7f00:1`` (= 127.0.0.1) walked straight through the guard. The
+#: RFC 8215 local-use prefix ``64:ff9b:1::/48`` is already ``is_private``.
+_NAT64_WKP = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _embedded_ipv4(ip: "ipaddress._BaseAddress") -> "ipaddress.IPv4Address | None":
+    """Return the IPv4 address an IPv6 wrapper actually points at, if any.
+
+    Covers every stdlib-known embedding plus NAT64: ``::ffff:a.b.c.d``
+    (IPv4-mapped), 6to4 ``2002::/16``, Teredo ``2001::/32`` and the NAT64
+    Well-Known Prefix. Each is a way of writing an IPv4 destination in IPv6
+    form, so the IPv4 rules must be applied to what is inside.
+    """
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        return mapped
+    sixtofour = getattr(ip, "sixtofour", None)
+    if sixtofour is not None:
+        return sixtofour
+    teredo = getattr(ip, "teredo", None)
+    if teredo:
+        return teredo[1]  # the client's IPv4, not the Teredo server's
+    if isinstance(ip, ipaddress.IPv6Address) and ip in _NAT64_WKP:
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return None
+
+
 def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
     """True for any address that is not a public, routable destination.
 
@@ -191,13 +222,21 @@ def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
     is also False. The guard is therefore ``not is_global`` PLUS the explicit
     flags — anything the stdlib does not classify as globally routable is
     blocked, fail-closed.
+
+    R3 follow-up (2026-09-07): ``not is_global`` is NOT sufficient for IPv6
+    wrappers around an IPv4 address. ``ipaddress`` reports
+    ``64:ff9b::7f00:1`` — the RFC 6052 NAT64 Well-Known Prefix carrying
+    127.0.0.1 — as ``is_global=True``/``is_private=False``, so it passed the
+    guard and, on any host behind a NAT64 gateway, resolved to loopback.
+    Every embedded-IPv4 form (mapped, 6to4, Teredo, NAT64) is now unwrapped
+    via :func:`_embedded_ipv4` and re-checked against the IPv4 rules.
     """
     if (ip.is_private or ip.is_loopback or ip.is_link_local
             or ip.is_reserved or ip.is_multicast or ip.is_unspecified
             or not ip.is_global):
         return True
-    mapped = getattr(ip, "ipv4_mapped", None)
-    if mapped is not None and _ip_is_blocked(mapped):
+    inner = _embedded_ipv4(ip)
+    if inner is not None and _ip_is_blocked(inner):
         return True
     return str(ip) in _IMDS_EXTRA
 
