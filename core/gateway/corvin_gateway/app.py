@@ -47,16 +47,22 @@ import sys
 from pathlib import Path
 
 
-def _plugin_package_absent(err: ImportError) -> bool:
-    """True only when the ``corvin_plugins`` package itself is not installed.
+def _tripwire_assert_all() -> None:
+    """Run the ADR-0232/0233 boot tripwires from ``corvin_compliance_reports``.
 
-    Shared predicate for the two shipped hosts (gateway + console standalone):
-    a ``ModuleNotFoundError`` naming exactly the top-level package is a stripped
-    install and is tolerated; anything else (missing submodule, renamed symbol,
-    an exception raised while importing the package) means the compliance
-    mechanism is present but broken, and the boot must fail closed.
+    The compliance package lives under ``core/compliance/`` in a checkout and
+    at top level in the wheel; extend sys.path the same way ``audit.py`` does
+    and then REQUIRE the import — "the checker is missing" must never read as
+    "the check passed" (F-A2).
     """
-    return isinstance(err, ModuleNotFoundError) and err.name == "corvin_plugins"
+    try:
+        from corvin_compliance_reports.tripwire import assert_all
+    except ImportError:
+        compliance_root = _REPO_ROOT / "core" / "compliance"
+        if compliance_root.is_dir() and str(compliance_root) not in sys.path:
+            sys.path.append(str(compliance_root))
+        from corvin_compliance_reports.tripwire import assert_all
+    assert_all()
 
 
 # CRITICAL: Set CORVIN_HOME BEFORE any imports that call corvin_home().
@@ -225,39 +231,29 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # around it: if the mandatory core audit writer is unreachable or its hash
     # chain does not verify, the platform must refuse to serve rather than run
     # without a GDPR Art. 30/32 trail. There is no override switch by design.
-    # An absent plugin package (stripped install) is not a failure — only a
-    # broken mechanism is; assert_compliance() distinguishes the two.
+    #
+    # F-A2 (2026-09-07): the tripwire runs FIRST and UNCONDITIONALLY, imported
+    # from the compliance package (always on a shipped host's path), BEFORE the
+    # plugin package is touched. A shipped host without ``corvin_plugins`` has
+    # no boot sequence and must not serve — the old "absent package is
+    # tolerated" branch let a stripped install boot with ZERO tripwires.
     _plugins_loaded: list[str] = []
     _health_collector = None
-    try:
-        from corvin_plugins.bootstrap import boot_platform as _boot_platform
-    except ImportError as _pkg_err:
-        # ADR-0232/0233 — only an ABSENT package is tolerated here. A package
-        # that is present but broken (renamed submodule, missing symbol) is a
-        # broken mechanism and must fail the boot; treating every ImportError
-        # as "absent" turned the tripwire into a no-op once (2026-09-01, when
-        # bootstrap's provider imports broke and both hosts kept serving).
-        if not _plugin_package_absent(_pkg_err):
-            raise
-        _boot_platform = None  # type: ignore[assignment]
-        import logging as _tw_log
-        _tw_log.getLogger("corvin.compliance.tripwire").debug(
-            "corvin_plugins absent — compliance tripwires not available"
-        )
-    if _boot_platform is not None:
-        # Tripwires -> plugin load -> post-boot tripwire, in that order and with
-        # no override. The sequence is shared with corvin_console.standalone so
-        # the two shipped hosts cannot drift; see boot_platform's docstring for
-        # why each step sits where it does.
-        _plugins_loaded = _boot_platform()  # raises TripwireError -> boot aborts
+    _tripwire_assert_all()  # raises TripwireError -> boot aborts; no override
+    from corvin_plugins.bootstrap import boot_platform as _boot_platform  # absent -> ImportError -> boot aborts
+    # Tripwires -> plugin load -> post-boot tripwire, in that order and with
+    # no override. The sequence is shared with corvin_console.standalone so
+    # the two shipped hosts cannot drift; see boot_platform's docstring for
+    # why each step sits where it does.
+    _plugins_loaded = _boot_platform()  # raises TripwireError -> boot aborts
 
-        # ADR-0231 Stage 2/3 — health polling + self-healing are started BY
-        # boot_platform() (corvin_plugins.bootstrap.start_health_monitoring),
-        # so the standalone console gets them too. This lifespan only keeps
-        # the handle for the shutdown ordering below.
-        from corvin_plugins.bootstrap import health_collector as _health_collector_handle
+    # ADR-0231 Stage 2/3 — health polling + self-healing are started BY
+    # boot_platform() (corvin_plugins.bootstrap.start_health_monitoring),
+    # so the standalone console gets them too. This lifespan only keeps
+    # the handle for the shutdown ordering below.
+    from corvin_plugins.bootstrap import health_collector as _health_collector_handle
 
-        _health_collector = _health_collector_handle()
+    _health_collector = _health_collector_handle()
     if not hasattr(app.state, "dispatcher") or app.state.dispatcher is None:
         app.state.dispatcher = RunDispatcher()
     if not hasattr(app.state, "rate_limiter") or app.state.rate_limiter is None:

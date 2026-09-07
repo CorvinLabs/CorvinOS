@@ -70,6 +70,42 @@ except Exception:  # pragma: no cover - fail-closed: absent capability blocks sp
     pass
 
 
+def _load_corvin_home():
+    """Load ``corvin_home`` from the sibling ``paths.py`` by file path (avoids
+    the sys.path collision with ``operator/forge/paths.py``)."""
+    _audit_dir = Path(__file__).resolve().parent
+    _local_paths_file = _audit_dir / "paths.py"
+    try:
+        spec = importlib.util.spec_from_file_location("_paths_audit", _local_paths_file)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load spec from {_local_paths_file}")
+        _paths_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_paths_module)
+        return _paths_module.corvin_home  # type: ignore
+    except (ImportError, FileNotFoundError, AttributeError) as e:
+        raise RuntimeError(
+            f"Cannot load corvin_home from paths.py at {_local_paths_file}. "
+            "This is a critical dependency of the audit system."
+        ) from e
+
+
+def corvin_root() -> Path:
+    """The runtime root the default chain lives under (``CORVIN_HOME`` → ``~/.corvin``),
+    independent of any ``FORGE_ROOT``/``VOICE_AUDIT_PATH`` redirect."""
+    return _load_corvin_home()()
+
+
+def audit_redirect() -> tuple[list[str], bool]:
+    """``(redirecting_env_vars, under_pytest)`` for the boot tripwire (F-A3).
+
+    The tripwire module itself must not read ``os.environ`` (a structural
+    guard forbids any env-based switch there); the redirect facts it needs
+    are computed here, next to the resolver that honours those variables.
+    """
+    redirected = [k for k in ("VOICE_AUDIT_PATH", "FORGE_ROOT") if os.environ.get(k, "").strip()]
+    return redirected, bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
 def _forge_workspace_root() -> Path:
     """Resolve the *audit-chain* workspace root.
 
@@ -89,20 +125,7 @@ def _forge_workspace_root() -> Path:
     # operator/forge/paths.py (a stub without corvin_home). This ensures
     # we always get the correct implementation when imported after other
     # modules have polluted sys.path.
-    _audit_dir = Path(__file__).resolve().parent
-    _local_paths_file = _audit_dir / "paths.py"
-    try:
-        spec = importlib.util.spec_from_file_location("_paths_audit", _local_paths_file)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load spec from {_local_paths_file}")
-        _paths_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_paths_module)
-        corvin_home = _paths_module.corvin_home  # type: ignore
-    except (ImportError, FileNotFoundError, AttributeError) as e:
-        raise RuntimeError(
-            f"Cannot load corvin_home from paths.py at {_local_paths_file}. "
-            "This is a critical dependency of the audit system."
-        ) from e
+    corvin_home = _load_corvin_home()
     # Audit-chain default lives at the user-global root regardless of
     # active workspace scope, so it stays unified across sessions.
     return corvin_home() / "global" / "forge"
@@ -150,14 +173,21 @@ def writer_available() -> bool:
     return _se is not None
 
 
-class AuditTenantMismatch(ValueError):
-    """``audit_event(tenant_id=X)`` was called while the process tenant is Y.
+if _se is not None:
+    # F-A6: the tenant-isolation check lives at the chain chokepoint
+    # (``security_events.write_event``) so the 30+ direct callers cannot bypass
+    # it; this module re-exports the exception it raises.
+    AuditTenantMismatch = _se.AuditTenantMismatch
+else:
+    class AuditTenantMismatch(ValueError):  # type: ignore[no-redef]
+        """``audit_event(tenant_id=X)`` was called while the process tenant is Y.
 
-    A ``ValueError`` rather than a ``PermissionError``: ``PermissionError`` is a
-    subclass of ``OSError``, so the I/O-resilience ``except OSError: pass`` in
-    ``audit_event`` swallowed it — every plugin lifecycle/health event for a
-    non-env tenant was DROPPED with no log line and no record (GDPR Art. 30).
-    """
+        A ``ValueError`` rather than a ``PermissionError``: ``PermissionError``
+        is a subclass of ``OSError``, so the I/O-resilience ``except OSError:
+        pass`` in ``audit_event`` swallowed it — every plugin lifecycle/health
+        event for a non-env tenant was DROPPED with no log line and no record
+        (GDPR Art. 30).
+        """
 
 # ── ADR-0233 — optional secondary sink (audit_backend plugin) ────────────────
 # Optional exactly like cowork/forge: the only permitted form is the
@@ -209,6 +239,11 @@ _VOICE_EVENT_SEVERITY: dict[str, str] = {
     # is refused; this record (type/count only, no details) makes the drop
     # observable in the CONTEXT tenant's chain instead of silent.
     "audit.tenant_mismatch":      "ERROR",
+    # ADR-0232 boot tripwires: a chained seam sealing a broken tail (never a
+    # truncation, F-A13) and the generic reporting-only finding (e.g. the L10
+    # hook probe, F-A8).
+    "compliance.chain_discontinuity": "CRITICAL",
+    "compliance.tripwire_finding":    "WARNING",
     # ADR-0169 — boot-time gate-pipeline invariant self-test. A mis-ordered
     # security chain (e.g. egress before classification) is a CRITICAL defect,
     # not an INFO note (security review 2026-06-27).
@@ -313,20 +348,11 @@ def audit_event(
         body["tenant_id"] = tenant_id
     effective_severity = (severity.upper() if severity else None) or _VOICE_EVENT_SEVERITY.get(event_type) or "INFO"
     core_write_committed = False
-    context_tenant: str | None = None
     try:
-        if tenant_id:
-            # Tenant isolation (ADR-0007): a record may only enter the chain
-            # under the process's own tenant. A DEDICATED ValueError subclass,
-            # never PermissionError — that one is an OSError and fell into the
-            # I/O-resilience handler below, which dropped the event in silence.
-            from forge.tenants import current_tenant
-            context_tenant = current_tenant()
-            if tenant_id != context_tenant:
-                raise AuditTenantMismatch(
-                    f"audit_event({event_type}) refused: tenant_id does not "
-                    f"match the process tenant — event dropped"
-                )
+        # Tenant isolation (ADR-0007) is enforced INSIDE write_event (F-A6):
+        # a record tagged with a foreign tenant_id is refused there, recorded
+        # as ``audit.tenant_mismatch`` under the context tenant, and surfaces
+        # here as AuditTenantMismatch (a ValueError, never an OSError).
         _se.write_event(
             path, event_type,
             severity=effective_severity,
@@ -335,9 +361,15 @@ def audit_event(
         )
         core_write_committed = True
     except AuditTenantMismatch as exc:
-        # Logic refusal, not an fs condition: it is logged at ERROR and
-        # RECORDED in the chain (type/count only) so the drop is observable.
-        _record_tenant_mismatch(path, event_type, effective_severity, context_tenant, exc)
+        # Logic refusal, not an fs condition: write_event already recorded it
+        # in the chain (type/count only); log it so the drop is observable.
+        try:
+            import logging as _logging
+            _logging.getLogger(__name__).error(
+                "audit_event(%s): DROPPED — %s: %s", event_type, type(exc).__name__, exc
+            )
+        except Exception:  # noqa: BLE001
+            pass
     except OSError:
         # I/O resilience contract: a write-protected / full fs must never
         # crash the bridge. Prefer silence + missing entry over a crash-loop.
@@ -370,51 +402,6 @@ def audit_event(
                 tenant_id=tenant_id or "_default",
             )
         except Exception:  # noqa: BLE001 - a sink can never affect this call site
-            pass
-
-
-def _record_tenant_mismatch(
-    path: Path, event_type: str, severity: str, context_tenant: str | None,
-    exc: AuditTenantMismatch,
-) -> None:
-    """Log and chain-record a tenant-mismatched audit call (never raises).
-
-    The dropped event's TYPE and severity are recorded, never its details — the
-    details belonged to another tenant's context and must not cross into this
-    chain. Written under the CONTEXT tenant so the record is attributable to
-    the process that refused, and hash-chained like every other record.
-    """
-    try:
-        import logging as _logging
-        _logging.getLogger(__name__).error(
-            "audit_event(%s): DROPPED — %s: %s", event_type, type(exc).__name__, exc
-        )
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        _se.write_event(
-            path, "audit.tenant_mismatch",
-            severity="ERROR", tool="", run_id="",
-            details={
-                "dropped_event_type": event_type,
-                "dropped_severity": severity,
-                "dropped_count": 1,
-                "reason": type(exc).__name__,
-                "channel": "", "chat_key": "", "user": "", "persona": "",
-                **({"tenant_id": context_tenant} if context_tenant else {}),
-            },
-            hash_chain=True,
-        )
-    except OSError:
-        pass  # same I/O resilience contract as the primary write
-    except Exception:  # noqa: BLE001
-        try:
-            import logging as _logging
-            _logging.getLogger(__name__).error(
-                "audit.tenant_mismatch record could not be written (%s)",
-                sys.exc_info()[0].__name__,
-            )
-        except Exception:  # noqa: BLE001
             pass
 
 

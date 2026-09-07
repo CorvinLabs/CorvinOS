@@ -133,8 +133,16 @@ class TestFilePermissionHardener:
         # Different instances
         assert hardener1 is not hardener2
 
-        # Different allowed directories
-        assert hardener1.get_allowed_directories() != hardener2.get_allowed_directories()
+        # A directory registered for tenant1 is invisible to tenant2 — and a
+        # write under it is DENIED for tenant2 (fail-closed), allowed for tenant1.
+        with TemporaryDirectory() as tmpdir:
+            hardener1.register_allowed_directory(tmpdir)
+            target = Path(tmpdir) / "file.txt"
+
+            assert Path(tmpdir).resolve() in hardener1.get_allowed_directories()
+            assert hardener2.get_allowed_directories() == set()
+            assert hardener1.check_write_permission(target).allowed is True
+            assert hardener2.check_write_permission(target).allowed is False
 
     def test_global_hardener_singleton_per_tenant(self):
         """Test get_hardener returns same instance for tenant."""
@@ -172,8 +180,12 @@ class TestFilePermissionHardener:
         """Test clearing audit log."""
         hardener = FilePermissionHardener()
 
-        # Log some operations
-        hardener.check_write_permission("/tmp/file.txt")
+        # check_operation() is the audited entry point (assert_permission
+        # goes through it); the check_* primitives it dispatches to do not
+        # log on their own, otherwise every operation would be logged twice.
+        hardener.check_operation(
+            FileOperation(path=Path("/tmp/file.txt"), mode=OperationMode.WRITE)
+        )
         assert len(hardener.get_audit_log()) > 0
 
         # Clear

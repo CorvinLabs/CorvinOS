@@ -271,7 +271,7 @@ class TestM3NoHashChainNoSig(unittest.TestCase):
             "operator.bridges.shared.instance_identity": self.fake_iid,
             "instance_identity": self.fake_iid,
         }):
-            rec = write_event(self.path, "tool.created", hash_chain=False)
+            rec = write_event(self.path, "audit.chain_gap_detected", hash_chain=False)
 
         self.assertNotIn("hash", rec, "hash_chain=False must not produce 'hash'")
         self.assertNotIn("instance_sig", rec, "hash_chain=False must not produce 'instance_sig'")

@@ -117,6 +117,15 @@ _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\bauthorization\s*[:=]\s*(?:bearer|token|basic)?\s*[^\s\"',}]+"),
      "Authorization: [REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9_\-\.=]{8,}"), "Bearer [REDACTED]"),
+    # PII shapes (F-A16, 2026-09-07): e-mail addresses and phone numbers must
+    # never reach the rotating debug log either — the log is not the audit
+    # chain, but it is persistent and operator-readable (GDPR Art. 5).
+    (re.compile(r"(?<![\w/:@.+-])[A-Za-z0-9._%+-]+@"
+                r"(?!s\.whatsapp\.net\b|g\.us\b|lid\b|broadcast\b)"
+                r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w-])"),
+     "[REDACTED_EMAIL]"),
+    (re.compile(r"(?<![\w.:/-])(?:\+\d{1,3}|0\d{1,4})(?:[\s./()-]{0,3}\d){6,13}(?![\w-])"),
+     "[REDACTED_PHONE]"),
     # key=value envelopes used in our JSON / dict reprs.
     (re.compile(r"(?i)(['\"]?(?:api[_-]?key|password|token|secret|auth)['\"]?\s*[:=]\s*['\"]?)([^'\",}\s]+)"),
      r"\1[REDACTED]"),

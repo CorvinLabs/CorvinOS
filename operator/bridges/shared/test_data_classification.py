@@ -47,9 +47,12 @@ class TestDataClassificationEnum(unittest.TestCase):
         self.assertEqual(DataClassification.parse(3), DataClassification.SECRET)
 
     def test_parse_unknown_defaults_to_internal(self):
-        self.assertEqual(DataClassification.parse("nonsense"), DataClassification.INTERNAL)
-        self.assertEqual(DataClassification.parse(None), DataClassification.INTERNAL)
-        self.assertEqual(DataClassification.parse(99), DataClassification.INTERNAL)
+        # F-A10: unknown input is NOT a permissive middle ground — it is None,
+        # and the guard denies it (unknown_classification).
+        self.assertIsNone(DataClassification.parse("nonsense"))
+        self.assertIsNone(DataClassification.parse(None))
+        self.assertIsNone(DataClassification.parse(99))
+        self.assertIsNone(DataClassification.parse(True))
 
 
 class TestDefaultRegistry(unittest.TestCase):
@@ -115,12 +118,13 @@ class TestDefaultRegistry(unittest.TestCase):
         )
 
     def test_matrix_default(self):
-        # Data-residency restriction is opt-in: the default permits us_cloud for
-        # every tier EXCEPT SECRET, so a zero-config install runs frictionless on
-        # a cloud engine. Tightening to EU/local is the operator's explicit choice.
+        # F-A10: the default is RESTRICTIVE for personal data — CONFIDENTIAL
+        # never reaches a US-cloud engine unless the operator widens the row in
+        # tenant.corvin.yaml. PUBLIC/INTERNAL stay frictionless on any engine.
         self.assertIn("us_cloud", DEFAULT_MATRIX[DataClassification.PUBLIC])
         self.assertIn("us_cloud", DEFAULT_MATRIX[DataClassification.INTERNAL])
-        self.assertIn("us_cloud", DEFAULT_MATRIX[DataClassification.CONFIDENTIAL])
+        self.assertEqual(DEFAULT_MATRIX[DataClassification.CONFIDENTIAL],
+                         frozenset({"local", "eu_cloud"}))
         # SECRET stays local-only by default — the residual security floor.
         self.assertEqual(
             DEFAULT_MATRIX[DataClassification.SECRET],
@@ -158,15 +162,27 @@ class TestGuardCoreMatrix(unittest.TestCase):
         self.assertEqual(self.events[-1][0], "data_flow.approved")
         self.assertEqual(self.events[-1][1], "INFO")
 
-    def test_confidential_allows_us_cloud_by_default(self):
-        # The exact production symptom: a normal PII-bearing message is classified
-        # CONFIDENTIAL; on the default (permissive) matrix it must run on claude_code.
+    def test_confidential_denies_us_cloud_by_default(self):
+        # F-A10: personal data does not leave EU/local by default; the
+        # operator widens the CONFIDENTIAL row explicitly in tenant.corvin.yaml.
         d = self.guard.validate(
             classification=DataClassification.CONFIDENTIAL,
             engine_id="claude_code",
         )
-        self.assertTrue(d.allowed)
-        self.assertEqual(self.events[-1][0], "data_flow.approved")
+        self.assertFalse(d.allowed)
+        self.assertEqual(d.matched_rule, "matrix")
+        self.assertEqual(self.events[-1][0], "data_flow.blocked")
+        d2 = self.guard.validate(
+            classification=DataClassification.CONFIDENTIAL,
+            engine_id="hermes",
+        )
+        self.assertTrue(d2.allowed)
+
+    def test_unknown_classification_is_denied(self):
+        d = self.guard.validate(classification="nonsense", engine_id="hermes")
+        self.assertFalse(d.allowed)
+        self.assertEqual(d.matched_rule, "unknown_classification")
+        self.assertEqual(self.events[-1][0], "data_flow.blocked")
 
     def test_matrix_block_emits_critical(self):
         # The matrix DENY path (and its CRITICAL audit) still works once an
@@ -215,10 +231,11 @@ class TestGuardCoreMatrix(unittest.TestCase):
         self.assertEqual(self.events[-1][0], "data_flow.blocked")
 
     def test_list_engines_for(self):
-        # CONFIDENTIAL is permissive by default → cloud engines are admissible.
+        # F-A10: CONFIDENTIAL is EU/local by default → US-cloud engines excluded.
         conf = self.guard.list_engines_for(DataClassification.CONFIDENTIAL)
         self.assertIn("opencode_ollama", conf)
-        self.assertIn("claude_code", conf)
+        self.assertIn("hermes", conf)
+        self.assertNotIn("claude_code", conf)
         # SECRET still excludes any engine that egresses (egress != none).
         secret = self.guard.list_engines_for(DataClassification.SECRET)
         self.assertNotIn("claude_code", secret)

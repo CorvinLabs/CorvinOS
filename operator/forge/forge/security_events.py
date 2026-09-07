@@ -28,6 +28,7 @@ access to the chain file.
 """
 from __future__ import annotations
 
+import collections
 import fcntl
 import hashlib
 import hmac
@@ -35,6 +36,7 @@ import json
 import math
 import os
 import re
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -796,6 +798,59 @@ EVENT_SEVERITY: dict[str, str] = {
 
 _write_lock = threading.Lock()
 
+#: The ONE event type that may legitimately enter the chain without a ``hash``:
+#: the CRITICAL gap marker a health check writes when the chain it reports on is
+#: already broken (so the marker cannot depend on a sound predecessor). Even
+#: this record is bound to the chain: the writer stamps ``prev_hash`` = the
+#: current tail and (when a key exists) a keyed ``mac``, and ``verify_chain``
+#: refuses it anywhere else (2026-09-07 adversarial finding F-A1: a forged
+#: hash-less record was previously accepted at ANY position).
+CHAIN_GAP_EVENT = "audit.chain_gap_detected"
+
+
+class AuditTenantMismatch(ValueError):
+    """``write_event(details={"tenant_id": X})`` was called while the process
+    tenant is Y — the record is refused and a type/count-only
+    ``audit.tenant_mismatch`` record lands in the CONTEXT tenant's chain.
+
+    A ``ValueError`` rather than a ``PermissionError``: the latter is an
+    ``OSError`` and would be swallowed by the I/O-resilience handlers of every
+    best-effort caller. Enforced at the chain chokepoint (F-A6) so the 30+
+    direct ``write_event`` callers cannot bypass the wrapper's check.
+    """
+
+
+def _current_tenant_id() -> str:
+    """Process tenant (``CORVIN_TENANT_ID`` → ``_default``). Fail-CLOSED: an
+    invalid env value or an unimportable resolver refuses the write."""
+    try:
+        current_tenant = None
+        try:
+            from .tenants import current_tenant  # type: ignore[import]
+        except ImportError:
+            try:
+                from forge.tenants import current_tenant  # type: ignore[import]
+            except ImportError:
+                # Loaded as a top-level module (adapter runtime): the sibling
+                # tenants.py — but NOT the 3-line compat stub at
+                # operator/forge/tenants.py, which has no resolver.
+                import tenants as _t  # type: ignore[import]
+                current_tenant = getattr(_t, "current_tenant", None)
+        if current_tenant is not None:
+            return current_tenant()
+        # Last resort: the same contract inline (env → _default, validated).
+        env = os.environ.get("CORVIN_TENANT_ID", "")
+        if not env:
+            return "_default"
+        if env.startswith("__") or not re.fullmatch(r"[a-z0-9_][a-z0-9_-]{0,62}", env):
+            raise ValueError(f"invalid CORVIN_TENANT_ID {env!r}")
+        return env
+    except Exception as exc:  # noqa: BLE001
+        raise AuditTenantMismatch(
+            f"process tenant unresolvable ({type(exc).__name__}) — tenant-tagged "
+            "audit record refused"
+        ) from exc
+
 # ADR-0153 M3 — when True, verify_chain() also verifies instance_sig on
 # records that carry it. Set by voice-audit via set_verify_sigs(True).
 _VERIFY_SIGS: bool = False
@@ -890,6 +945,14 @@ def get_audit_chain_tail(path: Path) -> str | None:
 
 _ANCHOR_KEY: bytes | None = None
 _ANCHOR_KEY_LOADED = False
+#: Reason a PRESENT key file was refused (e.g. "insecure_mode:0o644"), else None.
+_ANCHOR_KEY_REFUSED: str | None = None
+
+
+def _anchor_key_path() -> Path:
+    env = os.environ.get("CORVIN_AUDIT_ANCHOR_KEY", "").strip()
+    return (Path(env).expanduser() if env
+            else Path(os.path.expanduser("~/.config/corvin-voice/audit_anchor.key")))
 
 
 def _anchor_key() -> bytes | None:
@@ -900,14 +963,12 @@ def _anchor_key() -> bytes | None:
     rehashing a record — ``verify_chain`` then detects the tamper. Returns None
     when the key can't be created/read (graceful: records carry no ``mac`` and
     verify falls back to hash-only, preserving the legacy contract)."""
-    global _ANCHOR_KEY, _ANCHOR_KEY_LOADED
+    global _ANCHOR_KEY, _ANCHOR_KEY_LOADED, _ANCHOR_KEY_REFUSED
     if _ANCHOR_KEY_LOADED:
         return _ANCHOR_KEY
     key: bytes | None = None
     try:
-        env = os.environ.get("CORVIN_AUDIT_ANCHOR_KEY", "").strip()
-        kp = (Path(env).expanduser() if env
-              else Path(os.path.expanduser("~/.config/corvin-voice/audit_anchor.key")))
+        kp = _anchor_key_path()
         if not kp.exists():
             kp.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -916,8 +977,30 @@ def _anchor_key() -> bytes | None:
                     fh.write(os.urandom(32))
             except FileExistsError:
                 pass  # created concurrently by another process
+        # F-A14: a MAC key readable by group/other is no anchor at all — an
+        # attacker who can read it forges every mac. Refuse it (records carry
+        # no mac; verify_chain reports ``anchor_key_insecure_mode`` so the
+        # tripwire fails the boot) instead of silently trusting it. POSIX
+        # mode bits are meaningless on Windows, where the check is skipped.
+        if os.name != "nt":
+            mode = kp.stat().st_mode & 0o777
+            if mode & 0o077:
+                reason = f"insecure_mode:{oct(mode)}"
+                if _ANCHOR_KEY_REFUSED != reason:
+                    try:
+                        import logging as _lg
+                        _lg.getLogger("corvin.audit").critical(
+                            "audit anchor key refused: mode %s allows group/other "
+                            "access — run: chmod 600 %s", oct(mode), kp,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                _ANCHOR_KEY_REFUSED = reason
+                _ANCHOR_KEY = None
+                return None
         data = kp.read_bytes()
         key = data if len(data) >= 16 else None
+        _ANCHOR_KEY_REFUSED = None
     except Exception:  # noqa: BLE001 — key unavailable → graceful hash-only
         key = None
     # Cache ONLY a successful load. Caching None permanently means a process
@@ -950,7 +1033,130 @@ def _mac_sentinel_path() -> Path:
     return base / "audit_mac_active"
 
 
-def _mac_chain_marker_path(chain_path: Path) -> Path:
+def _is_tmp_path(p: Path) -> bool:
+    """True when *p* lives under a temp directory (tests, throwaway chains)."""
+    try:
+        s = os.path.abspath(str(p))
+    except Exception:  # noqa: BLE001
+        return False
+    roots = {tempfile.gettempdir(), "/tmp", "/var/tmp"}
+    if any(s == r or s.startswith(r.rstrip(os.sep) + os.sep) for r in roots):
+        return True
+    return "pytest-of-" in s
+
+
+def _skip_out_of_tree_markers(chain_path: Path) -> bool:
+    """F-A14: a throwaway (tmp) chain must never stamp markers beside the
+    operator's REAL anchor key — that is how ``mac_active_chains/`` grew to
+    267k files / 1.1 GB. Markers are still written when the anchor key itself
+    is in a tmp dir (a test that redirected CORVIN_AUDIT_ANCHOR_KEY), because
+    then nothing real is littered and the strip detector stays testable."""
+    return _is_tmp_path(chain_path) and not _is_tmp_path(_anchor_key_path().parent)
+
+
+_GENESIS_CACHE: dict[tuple[str, int], str] = {}
+_GENESIS_SCAN_LIMIT = 20000
+
+
+def _chain_identity(chain_path: Path) -> str | None:
+    """Stable identity of a chain: the ``hash`` of its first hash-bearing record.
+
+    Keyed by content rather than path (F-A14) so a chain keeps its markers
+    when the install moves and two paths to one file share one marker. Cached
+    per (path, inode); a rotated/replaced file gets a new inode."""
+    try:
+        st = chain_path.stat()
+    except OSError:
+        return None
+    key = (os.path.abspath(str(chain_path)), st.st_ino)
+    cached = _GENESIS_CACHE.get(key)
+    if cached:
+        return cached
+    try:
+        with chain_path.open("rb") as fh:
+            for i, raw in enumerate(fh):
+                if i > _GENESIS_SCAN_LIMIT:
+                    break
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                h = rec.get("hash") if isinstance(rec, dict) else None
+                if isinstance(h, str) and h:
+                    _GENESIS_CACHE[key] = h
+                    return h
+    except OSError:
+        return None
+    return None
+
+
+def _marker_name(genesis: str) -> str:
+    return "g-" + hashlib.sha256(genesis.encode("utf-8")).hexdigest()[:32]
+
+
+def _legacy_mac_chain_marker_path(chain_path: Path) -> Path:
+    """Pre-2026-09-07 marker location (keyed by absolute PATH). Read-only
+    fallback so chains stamped under the old scheme stay strip-protected."""
+    base = _mac_sentinel_path().parent / "mac_active_chains"
+    digest = hashlib.sha256(os.path.abspath(str(chain_path)).encode("utf-8")).hexdigest()[:32]
+    return base / digest
+
+
+def _chain_tail_anchor_path(chain_path: Path, *, genesis: str | None = None) -> Path | None:
+    """F-A12: out-of-tree record of the chain's CURRENT tail hash, beside the
+    anchor key. Deleting the last N records leaves a chain that self-verifies;
+    only an external copy of the tail can expose the truncation."""
+    g = genesis or _chain_identity(chain_path)
+    if not g:
+        return None
+    return _mac_sentinel_path().parent / "chain_tails" / _marker_name(g)
+
+
+def _record_chain_tail(chain_path: Path, tail_hash: str, *, genesis: str | None = None) -> None:
+    """Persist the tail hash atomically (tmp + os.replace). Best-effort: a
+    failure must never break an audit write. Called under the chain lock."""
+    if not tail_hash or _skip_out_of_tree_markers(chain_path):
+        return
+    try:
+        tp = _chain_tail_anchor_path(chain_path, genesis=genesis)
+        if tp is None:
+            return
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        tmp = tp.with_name(tp.name + f".{os.getpid()}.tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps({"tail": tail_hash, "ts": time.time()}))
+        os.replace(tmp, tp)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _hash_in_recent_tail(chain_path: Path, h: str, *, window_bytes: int = 512 * 1024) -> bool:
+    """True when the 16-hex ``h`` appears as a record hash in the file's last bytes."""
+    try:
+        size = chain_path.stat().st_size
+        with chain_path.open("rb") as fh:
+            fh.seek(max(0, size - window_bytes))
+            return (b'"hash": "%s"' % h.encode("ascii")) in fh.read()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _read_chain_tail(chain_path: Path) -> str | None:
+    try:
+        tp = _chain_tail_anchor_path(chain_path)
+        if tp is None or not tp.exists():
+            return None
+        t = json.loads(tp.read_text()).get("tail")
+        return t if isinstance(t, str) and t else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _mac_chain_marker_path(chain_path: Path, *, genesis: str | None = None) -> Path:
     """Out-of-tree per-CHAIN marker recording that THIS chain has carried a mac.
 
     The host-global sentinel (``audit_mac_active``) cannot distinguish a chain
@@ -962,21 +1168,28 @@ def _mac_chain_marker_path(chain_path: Path) -> Path:
     absolute path and kept beside the anchor key (so a filesystem attacker who
     strips macs cannot also delete the proof), makes the detector sound: a chain
     that never had a mac has no marker and is exempt; a chain that had a mac and
-    now carries none has its marker but zero macs → genuine strip."""
-    base = _mac_sentinel_path().parent / "mac_active_chains"
-    digest = hashlib.sha256(os.path.abspath(str(chain_path)).encode("utf-8")).hexdigest()[:32]
-    return base / digest
+    now carries none has its marker but zero macs → genuine strip.
+
+    Keyed by the chain's GENESIS hash (F-A14) — content identity, not path —
+    with the legacy path-keyed location as read-only fallback."""
+    g = genesis or _chain_identity(chain_path)
+    if g:
+        return _mac_sentinel_path().parent / "mac_active_chains" / _marker_name(g)
+    return _legacy_mac_chain_marker_path(chain_path)
 
 
 def _chain_had_mac(chain_path: Path) -> bool:
-    """True iff THIS chain has ever written a mac (per-chain marker present)."""
+    """True iff THIS chain has ever written a mac (per-chain marker present,
+    under the genesis-keyed or the legacy path-keyed scheme)."""
     try:
-        return _mac_chain_marker_path(chain_path).exists()
+        return (_mac_chain_marker_path(chain_path).exists()
+                or _legacy_mac_chain_marker_path(chain_path).exists())
     except Exception:  # noqa: BLE001
         return False
 
 
-def _mark_mac_active(now: float | None = None, chain_path: Path | None = None) -> None:
+def _mark_mac_active(now: float | None = None, chain_path: Path | None = None,
+                     *, genesis: str | None = None) -> None:
     """Idempotently record that MAC writing is active — both host-wide and (when
     ``chain_path`` is given) per chain. Best-effort: a failure here must never
     break an audit write."""
@@ -993,9 +1206,9 @@ def _mark_mac_active(now: float | None = None, chain_path: Path | None = None) -
                 pass
     except Exception:  # noqa: BLE001
         pass
-    if chain_path is not None:
+    if chain_path is not None and not _skip_out_of_tree_markers(chain_path):
         try:
-            mp = _mac_chain_marker_path(chain_path)
+            mp = _mac_chain_marker_path(chain_path, genesis=genesis)
             if not mp.exists():
                 mp.parent.mkdir(parents=True, exist_ok=True)
                 try:
@@ -1083,7 +1296,7 @@ _AUDIT_FORBIDDEN_EXACT: frozenset[str] = frozenset({
     "email", "password", "secret",
     # Writer-only markers — deny on INPUT so a caller can't forge them; the
     # writer re-injects the genuine ones after filtering (review HIGH #2/#3).
-    "_dropped_fields", "_unfiltered",
+    "_dropped_fields", "_unfiltered", "_tail_truncated_since",
 })
 _AUDIT_FORBIDDEN_SUBSTR: tuple[str, ...] = (
     "password", "passphrase", "secret", "credential", "private_key",
@@ -1127,6 +1340,148 @@ _AUDIT_SECRET_VALUE_RE = re.compile(
 _AUDIT_RESERVED_KEYS: frozenset[str] = frozenset({
     "tenant_id", "channel", "chat_key", "user", "persona",
 })
+# F-A4 (2026-09-07) — the floor is DEFAULT-DENY for keys. An event type with a
+# registered positive allowlist admits only its own keys; every OTHER event
+# type admits only keys from this universal metadata vocabulary. Anything else
+# is dropped and named in ``_dropped_fields`` — never widened back to
+# allow-all. The vocabulary was built from a static scan of every emitter in
+# the repo (details={...} literals and audit_event(**kw) forwards) minus the
+# content/PII-shaped names ("snippet", "line_excerpt", "userName", "request",
+# …). Adding a key here is a maintainer decision: it must be metadata — an id,
+# a count, a code, a hash prefix — never free text, never a raw identifier of
+# a natural person. The values under these keys are additionally scanned for
+# email/phone shapes (``_audit_value_pii``) on non-allowlisted event types.
+#
+# HOW A WRITER GETS ITS KEYS THROUGH (read this before adding to the set):
+#   1. Preferred — register a per-event positive allowlist once at import time:
+#          from forge.security_events import register_event_allowlist
+#          register_event_allowlist("my.event", {"run_id", "outcome", "count"})
+#      Only those keys (plus the reserved structural spine channel/chat_key/
+#      user/persona/tenant_id) survive for that event type; the universal
+#      vocabulary below is then NOT consulted for it.
+#   2. Otherwise the top-level keys of ``details`` must be in
+#      ``_AUDIT_KNOWN_KEYS``. Unknown keys are dropped — never written — and
+#      their NAMES (never values) are listed under ``details._dropped_fields``,
+#      so a writer whose keys vanish can see exactly which ones to register.
+#   3. Nested dict keys are not vocabulary-checked; they pass the denylist
+#      floor (``_AUDIT_FORBIDDEN_*``), the oversize cap and the PII value scan.
+# A record's chain reference (``audit_ref``), identifiers (``*_id``), counts,
+# codes, hashes and outcomes are the shape this vocabulary admits.
+_AUDIT_KNOWN_KEYS: frozenset[str] = frozenset({
+    "acs_id", "action", "action_id", "action_type", "activated", "actor_id", "actor_id_prefix",
+    "adapter", "adaptive_n", "age_s", "agent_prefix", "aggregate_score", "allowed",
+    "allowed_engines", "approver_count", "artifact_count", "asst_chars", "attachment_count",
+    "attempt", "attempts", "attention_budget", "audio_s", "audit_ref", "audit_retained",
+    "average_latency_ms", "base_hash", "base_n", "before_ts", "blocked", "boot_layer",
+    "break_lines", "breaker_state", "broken_count", "broken_records", "budget_s",
+    "budget_status", "buffer_lines", "bullet_id", "cache_hit", "bundle", "by_tool", "caller_persona",
+    "can_delegate", "cap_tokens", "capability", "capability_count", "capacity", "category",
+    "cause", "chain_dna", "changed_by_hash", "changes", "channel", "channel_id", "chars",
+    "chat_id", "chat_key", "chat_key_hash", "choice", "chosen", "cit_fp", "claimed_plugin_id",
+    "classes", "classification", "cleared_by", "cluster_id", "columns", "confidence",
+    "configured", "consecutive_failures", "consent_granted_by", "consent_reason",
+    "conservative_mode", "content_hash", "context_id", "conv_rate", "corvin_home", "count",
+    "daily_tokens_limit", "daily_tokens_used", "data_classification", "data_handle",
+    "datasource", "decision", "decision_hash", "decision_type", "decisions_count",
+    "declared_boot_layer", "dedup_key_hash", "delegation_id", "delegation_target", "deleted",
+    "deleted_bases", "deleted_layers", "delivered", "dependents", "depth", "detail", "details",
+    "dna_prefix", "domain", "dropped", "dropped_count", "dropped_event_type", "dropped_oldest",
+    "dropped_severity", "duration_hours", "duration_ms", "effective", "endorsement_id",
+    "endpoint_id", "engine", "engine_attestation", "engine_id", "engine_zone", "entity_id",
+    "entity_type", "entries", "env_keys", "epoch", "error", "error_class", "error_code",
+    "error_count", "error_message", "error_strategy", "error_type", "estimated_tokens",
+    "event", "event_count", "event_id", "event_type", "execution_strategy", "existing_uid",
+    "exit_code", "expected_path", "expected_type", "expires_at", "extra", "fail_count",
+    "failed", "failed_branches", "failed_count", "failed_runs", "failure_count", "fallback",
+    "fallback_engine", "fallback_to", "feature", "field", "file", "file_size_bytes",
+    "files_deleted", "fingerprint", "first_break_line", "first_failures", "first_problems",
+    "first_ts", "fixed", "forbid_engines", "forced", "format", "found", "free_bytes", "from",
+    "from_line", "from_role", "from_uid", "from_uids", "gate_count", "goal_revision_rate",
+    "grant_id", "granted_by_hash", "granted_via", "grantee_prefix", "grantee_type", "grantor",
+    "grantor_role", "has_audio", "has_signature", "hash", "healing_action", "hook",
+    "hook_registered", "host", "ibc_jti", "id", "incident_id", "input_keys", "input_tokens",
+    "installed_by", "instance_id_match", "instruction_hash", "instruction_len", "interval_s",
+    "issue", "issuer", "iteration", "jti", "k_max", "keypair_path_prefix", "keys_after",
+    "keys_before", "killed", "kind", "lang", "last_break_line", "last_error", "last_status",
+    "last_ts", "latency_ms", "layer", "layer_count", "layer_id", "layer_name", "len", "level",
+    "levels", "limit", "limit_msgs", "limit_tokens", "limit_value", "lint_errors",
+    "llm_confidence", "locality", "lockout_s", "lom", "lom_audit_write", "lom_hash", "loop_id",
+    "loss_delta", "loss_gap", "loss_total", "manifest", "manifest_age_days",
+    "matched_pattern_count", "matched_rule", "matcher", "max_attempts", "max_bytes",
+    "max_depth", "max_loops", "member_prefix", "messages_total", "method", "metric", "mime",
+    "min_seal_version", "mismatch_count", "missing", "mode", "model", "model_id", "msg_id",
+    "n_subtasks", "name", "negative_ratio", "network_egress", "new_id_prefix", "new_status",
+    "node_id", "node_type", "nodes", "nonce_epoch", "ok", "old_id_prefix", "old_status",
+    "one_shot_share", "operations", "operator_initiated", "org_handle", "origin", "origin_id",
+    "outcome", "output_hash", "output_tokens", "overwrite", "owner_prefix", "owner_text_len",
+    "p50_ms", "p99_ms", "package_id", "parent_span_id", "parent_worker_id",
+    "participant_count", "passed", "path", "payload_sha256", "payload_size", "persona",
+    "phase", "pii_risk", "pipeline_id", "plugin_id", "plugin_type", "point", "policy",
+    "policy_path", "post_id", "post_id_prefix", "post_type", "prev_epoch_tail_prefix",
+    "prev_hash", "prev_run_id", "primitive", "prior", "prior_action", "prior_bundle",
+    "priority", "probe_set_sha256", "problem_count", "problem_lines", "prompt_length",
+    "protocol_version", "provider", "public_key_hex_prefix", "publisher", "purged_envelopes",
+    "query_chars", "query_count", "query_latency_ms", "queue_depth", "queued", "quorum_size",
+    "quota", "reason", "reason_code", "recipient_count", "recommended_model",
+    "records_deleted", "redacted_class_count", "redacted_classes", "removed_by", "request_id",
+    "request_id_prefix", "requested_tenant_id", "requested_value", "requires_consent",
+    "reset_by", "reset_mode", "resolved_model", "result", "result_count", "retry_after_s",
+    "returned_type", "revoked_tenant_id", "revoker", "revoker_role", "risk", "role",
+    "rowcount", "rows_deleted", "rows_sampled", "run_id", "runs_per_minute", "sandbox", "samples",
+    "saved_from_scope", "scope", "scope_label", "scope_root", "score", "seam", "seam_reason",
+    "secret_ref", "secrets_used", "sender_hash", "sender_instance_id", "seq", "session_id",
+    "set_by", "settings_path", "severity", "sha", "sha256", "sha256_prefix", "sid_fingerprint",
+    "signal", "since", "site", "size", "size_b", "size_bytes", "skill_id", "skill_name",
+    "skill_version", "skills", "skipped", "snapshot_bytes", "snapshot_id", "snapshot_taken",
+    "solicited", "source", "span_id", "spawn_nonce", "spawned", "stack_size", "stage",
+    "started_at", "state", "state_purged", "status", "step", "strategy",
+    "strategy_correction_rate", "subdir_count", "subdirs", "subject", "subtask_count",
+    "succeeded", "success_rate", "success_rate_percent", "successful_runs", "tag_count",
+    "tail_hash_prefix", "target", "target_engine", "target_instance_id_prefix", "target_role",
+    "task_id", "task_type", "tenant_check", "tenant_count", "tenant_id", "tenant_zone",
+    "text_len", "threshold_bytes", "throttled_count", "tier", "timed_out", "timeout_s", "to",
+    "to_line", "toctou_max_s", "token_type", "tokens", "tokens_available", "tokens_remaining",
+    "tokens_requested", "tokens_total", "tokens_used", "tool", "tool_call_count", "tool_id",
+    "tool_name", "tool_names", "tools_called", "total", "total_layers", "total_probes",
+    "total_records", "total_runs", "total_tokens_used", "trace_available",
+    "trigger_chain_hash", "trigger_event", "triggered_by", "tripwire", "truncated",
+    "truncated_at_line", "trust_level", "ttl", "ttl_s", "turn_id", "uid", "uid_hash", "ulo_id",
+    "unparseable", "unpinned_count", "until", "update_count", "used", "user", "user_chars",
+    "user_id", "validation_type", "verdict", "verification_complete", "version", "via",
+    "voice", "wait_time_ms", "wall_clock_s", "wall_ms", "want_voice", "why", "window_end",
+    "window_s", "window_start", "withheld_sensitive", "worker_id", "workers_spawned",
+    "workflow", "workflow_id", "zone",
+})
+
+# High-precision PII VALUE shapes for non-allowlisted event types. Deliberately
+# excludes the pseudonymous "@"-bearing ids the 2026-06 surroundings review
+# found (WhatsApp JIDs ``…@s.whatsapp.net`` / ``…@g.us`` / ``…@lid``, URL
+# userinfo ``https://user@host/``) — those are channel identities, not PII.
+_AUDIT_EMAIL_VALUE_RE = re.compile(
+    r"(?<![\w/:@.+-])[A-Za-z0-9._%+-]+@"
+    r"(?!s\.whatsapp\.net\b|g\.us\b|lid\b|broadcast\b)"
+    r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w-])"
+)
+# International (+CC …) or trunk-prefixed (0…) phone numbers with 8–15 digits.
+# Requires a leading "+" or a separator so hashes, snowflake ids, timestamps
+# and version strings (no "+", no separator, or too few/many digits) never match.
+_AUDIT_PHONE_VALUE_RE = re.compile(
+    r"(?<![\w.:/-])(?:\+\d{1,3}|0\d{1,4})(?:[\s./()-]{0,3}\d){6,13}(?![\w-])"
+)
+
+
+def _audit_value_pii(v: str) -> bool:
+    """True when a string VALUE carries an email or phone shape (F-A4)."""
+    if _AUDIT_EMAIL_VALUE_RE.search(v):
+        return True
+    for m in _AUDIT_PHONE_VALUE_RE.finditer(v):
+        tok = m.group(0)
+        digits = sum(c.isdigit() for c in tok)
+        if 8 <= digits <= 15 and (tok.startswith("+") or any(c in " ./()-" for c in tok)):
+            return True
+    return False
+
+
 _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # ADR-0171 M1 — universal engine-span audit (engine-agnostic, every path).
     # Canonical here so the allowlist is load-bearing regardless of import order;
@@ -1345,6 +1700,46 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "ulo.objective_created":  frozenset({"ulo_id", "priority", "scope", "channel"}),
     "ulo.objective_updated":  frozenset({"ulo_id", "action", "channel"}),
     "ulo.objective_deleted":  frozenset({"ulo_id", "channel"}),
+    # ADR-0030/0243 — plugin lifecycle (structural identity only, never manifest
+    # content, settings values or error text).
+    "plugin.loaded": frozenset({
+        "plugin_id", "plugin_type", "boot_layer", "version", "tenant_id", "origin", "source",
+    }),
+    "plugin.unloaded": frozenset({
+        "plugin_id", "plugin_type", "boot_layer", "version", "tenant_id", "origin", "source",
+        "reason", "operator_initiated",
+    }),
+    "plugin.load_failed": frozenset({
+        "plugin_id", "plugin_type", "boot_layer", "version", "tenant_id", "origin", "source",
+        "reason", "error_class", "error_type",
+    }),
+    # ADR-0017 Phase II — compliance reports: report identity + counters + the
+    # chain anchor hash; report CONTENT never enters the chain.
+    "compliance.report_generated": frozenset({
+        "report_type", "tenant_id", "period_start_ts", "period_end_ts", "total_events",
+        "chain_intact", "anchor_hash", "page_count_estimate", "output_path", "duration_ms",
+    }),
+    "compliance.report_failed": frozenset({
+        "report_type", "tenant_id", "reason", "error_class", "error_type",
+    }),
+    "plugin.disabled": frozenset({
+        "plugin_id", "plugin_type", "boot_layer", "version", "tenant_id", "origin", "source", "reason",
+    }),
+    "plugin.boot_layer_rejected": frozenset({"plugin_id", "tenant_id", "declared_boot_layer", "reason"}),
+    # Layer 18 — read-only member drop: counts/prefixes only, never the text.
+    "bridge.read_only_drop": frozenset({
+        "first_drop", "text_len", "tenant_id", "channel", "chat_id_prefix", "chat_key", "user", "persona",
+    }),
+    # ADR-0015 — console actions: target identity + outcome code, never the request body.
+    "console.action_performed": frozenset({
+        "action", "target_id", "target_type", "tenant_id", "sid_fingerprint", "ok", "reason_code", "reason",
+    }),
+    "console.action_failed": frozenset({
+        "action", "target_id", "target_type", "tenant_id", "sid_fingerprint", "ok", "reason_code", "reason",
+    }),
+    "console.action_denied": frozenset({
+        "action", "target_id", "target_type", "tenant_id", "sid_fingerprint", "ok", "reason_code", "reason",
+    }),
 }
 
 # ADR-0152 — count-map fields: a registered (event_type, field) whose value is a
@@ -1418,7 +1813,7 @@ def _audit_value_leaks(v: Any) -> bool:
 _AUDIT_MAX_SCRUB_DEPTH = 6
 
 
-def _audit_scrub(value: Any, _depth: int = 0):
+def _audit_scrub(value: Any, _depth: int = 0, *, pii_scan: bool = False):
     """Recursively scrub a value (review CRITICAL #1 — nested bypass).
 
     Returns ``(scrubbed, drop)``. ``drop=True`` tells the caller to drop the
@@ -1442,7 +1837,7 @@ def _audit_scrub(value: Any, _depth: int = 0):
             if _audit_key_forbidden(ks):
                 dropped.append(str(k))
                 continue
-            sv, drop = _audit_scrub(v, _depth + 1)
+            sv, drop = _audit_scrub(v, _depth + 1, pii_scan=pii_scan)
             if drop:
                 dropped.append(str(k))
                 continue
@@ -1456,10 +1851,12 @@ def _audit_scrub(value: Any, _depth: int = 0):
     if isinstance(value, (list, tuple)):
         out_list = []
         for item in value:
-            sv, drop = _audit_scrub(item, _depth + 1)
+            sv, drop = _audit_scrub(item, _depth + 1, pii_scan=pii_scan)
             if not drop:
                 out_list.append(sv)
         return out_list, False
+    if pii_scan and isinstance(value, str) and _audit_value_pii(value):
+        return (None, True)
     return (None, True) if _audit_value_leaks(value) else (value, False)
 
 
@@ -1477,13 +1874,19 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
     if unfiltered or not isinstance(details, dict) or not details:
         return (details if isinstance(details, dict) else {}), []
     allow = _EVENT_ALLOWLIST.get(event_type)
+    default_deny = allow is None  # F-A4: no per-event allowlist → vocabulary floor
     cleaned: dict[str, Any] = {}
     dropped: list[str] = []
     for k, v in details.items():
         ks = str(k).lower()
         on_allowlist = allow is not None and ks in allow
+        reserved = ks in _AUDIT_RESERVED_KEYS
         # M2 positive allowlist (top level): key must be allowed or reserved.
-        if allow is not None and not on_allowlist and ks not in _AUDIT_RESERVED_KEYS:
+        if allow is not None and not on_allowlist and not reserved:
+            dropped.append(str(k))
+            continue
+        # F-A4 universal vocabulary (top level) for every other event type.
+        if default_deny and not reserved and ks not in _AUDIT_KNOWN_KEYS:
             dropped.append(str(k))
             continue
         # M1 denylist floor — skipped for keys explicitly on the M2 positive
@@ -1499,7 +1902,7 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
         if on_allowlist and cmf and ks in cmf and _is_safe_count_map(v):
             cleaned[k if isinstance(k, str) else str(k)] = v
             continue
-        sv, drop = _audit_scrub(v)
+        sv, drop = _audit_scrub(v, pii_scan=default_deny and not reserved)
         if drop:
             dropped.append(str(k))
             continue
@@ -1509,11 +1912,64 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
     return cleaned, dropped
 
 
+# ── ADR-0537 — LoM → source binding, applied at the writer (F-A17) ───────────
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def lom_hash_for(lom: str) -> str:
+    """SHA256 binding a Line-of-Moral-Responsibility label to the source it names.
+
+    ``file:function`` hashes the named function's source (resolved with
+    ``ast``); ``file:function:L<line>`` / ``file:function:<line>`` hashes that
+    one source line. Falls back to the hash of the label itself when the source
+    cannot be resolved or lies outside the repo (a non-binding hash is still a
+    hash — the record never goes out without one). Same contract as
+    ``core/skills/skill_registry_phase1.py::_compute_lom_hash``.
+    """
+    label_hash = hashlib.sha256(lom.encode("utf-8")).hexdigest()
+    try:
+        parts = lom.split(":")
+        if len(parts) < 2:
+            return label_hash
+        file_part, func_name = parts[0], parts[1].strip()
+        src_path = Path(file_part)
+        if not src_path.is_absolute():
+            src_path = _repo_root() / src_path
+        src_path = src_path.resolve()
+        if _repo_root() not in src_path.parents or not src_path.is_file():
+            return label_hash
+        source = src_path.read_text(encoding="utf-8")
+        if len(parts) >= 3:
+            ln = parts[2].strip().lstrip("Ll")
+            if ln.isdigit():
+                lines = source.splitlines()
+                idx = int(ln) - 1
+                if 0 <= idx < len(lines):
+                    return hashlib.sha256(lines[idx].encode("utf-8")).hexdigest()
+            return label_hash
+        import ast as _ast
+        tree = _ast.parse(source)
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == func_name:
+                seg = _ast.get_source_segment(source, node)
+                if seg:
+                    return hashlib.sha256(seg.encode("utf-8")).hexdigest()
+        return label_hash
+    except Exception:  # noqa: BLE001 — never block a write on a binding lookup
+        return label_hash
+
+
 #: How much of the tail to read per step when looking for the last chain entry.
 #: One record is a few hundred bytes, so the first block virtually always contains
 #: it; the loop exists for correctness (a long run of unhashed pre-chain records),
 #: not for the common case.
 _TAIL_BLOCK = 8192
+
+#: How many most-recent hashes verify_chain keeps to tell a lagging tail anchor
+#: (benign write race) from a truncated tail (a hash that no longer exists).
+_TAIL_ANCHOR_WINDOW = 2000
 
 
 def _last_hash(path: Path) -> str:
@@ -1592,12 +2048,50 @@ def write_event(
     dropped and recorded under ``_dropped_fields``. ``unfiltered=True`` skips
     the floor for the rare legitimately-long allowlisted field.
     """
+    # F-A1: a hash-less record is admissible for ONE event type only — the gap
+    # marker — and even that one is bound to the tail below. Everything else
+    # must chain; an unchained write is refused, not silently written into a
+    # file whose verifier would then reject it.
+    if not hash_chain and event_type != CHAIN_GAP_EVENT:
+        raise ValueError(
+            f"hash_chain=False is only permitted for {CHAIN_GAP_EVENT!r} "
+            f"(got {event_type!r}) — every audit record must chain"
+        )
     _filtered, _ = filter_audit_details(details or {}, event_type=event_type,
                                         unfiltered=unfiltered)
     # ADR-0129 M3 — make a floor bypass visible/auditable inline (a separate
     # event would re-enter write_event under the chain lock → deadlock).
     if unfiltered and isinstance(_filtered, dict):
         _filtered = {**_filtered, "_unfiltered": True}
+    # ADR-0537 / F-A17: every record that carries a LoM carries its binding.
+    if isinstance(_filtered, dict):
+        _lom = _filtered.get("lom")
+        if isinstance(_lom, str) and _lom and not _filtered.get("lom_hash"):
+            _filtered = {**_filtered, "lom_hash": lom_hash_for(_lom)}
+    # F-A6 / ADR-0007: tenant isolation at the chokepoint. A record tagged with
+    # another tenant's id is refused; the refusal itself is recorded (type +
+    # count only, never the foreign details) under the CONTEXT tenant.
+    _tid = _filtered.get("tenant_id") if isinstance(_filtered, dict) else None
+    if _tid not in (None, "") and event_type != "audit.tenant_mismatch":
+        _ctx = _current_tenant_id()
+        if str(_tid) != _ctx:
+            _sev = str(severity)[:64] if severity else EVENT_SEVERITY.get(event_type, "INFO")
+            try:
+                write_event(
+                    path, "audit.tenant_mismatch", severity="ERROR",
+                    details={
+                        "dropped_event_type": event_type, "dropped_severity": _sev,
+                        "dropped_count": 1, "reason": "AuditTenantMismatch",
+                        "channel": "", "chat_key": "", "user": "", "persona": "",
+                        "tenant_id": _ctx,
+                    },
+                )
+            except OSError:
+                pass
+            raise AuditTenantMismatch(
+                f"write_event({event_type}) refused: tenant_id does not match "
+                f"the process tenant — event dropped"
+            )
     # Symmetry with the details floor (review #5): clamp the top-level
     # rec fields too — they are structurally meant for ids/tool names, never
     # user content, but a buggy caller must not write an unbounded blob there.
@@ -1658,11 +2152,49 @@ def write_event(
         with open(fd, "a", closefd=True) as fh:
             _lock_chain(fh)
             try:
+                # Identity of the chain BEFORE this write (None on a fresh file:
+                # then this record's own hash becomes the genesis).
+                _genesis = _chain_identity(path)
+                if not hash_chain:
+                    # F-A1: the gap marker binds to the tail it was written
+                    # after — prev_hash + keyed mac, no hash — so verify_chain
+                    # can tell a genuine health-check marker from a forged
+                    # hash-less insertion anywhere else in the file.
+                    prev = _last_hash(path)
+                    rec["prev_hash"] = prev
+                    _canon = _canonical(rec).encode("utf-8")
+                    _ak = _anchor_key()
+                    if _ak is not None:
+                        rec["mac"] = hmac.new(
+                            _ak, prev.encode("utf-8") + b"\n" + _canon, hashlib.sha256,
+                        ).hexdigest()[:16]
                 if hash_chain:
                     # Re-read prev hash *after* taking the lock — another
                     # process may have written between our last read and now.
                     prev = _last_hash(path)
                     rec["prev_hash"] = prev
+                    # F-A12 (writer side): the out-of-tree tail anchor is updated
+                    # under this same lock after every write, so at rest it MUST
+                    # equal the file's tail. A recorded tail that is neither the
+                    # tail nor anywhere in the recent file means records were
+                    # deleted since the last write. Make that PERMANENT in the
+                    # chain: this record carries a writer-only marker naming the
+                    # vanished tail, which verify_chain reports as
+                    # ``tail_truncated`` at this line forever (a later legitimate
+                    # write would otherwise re-anchor over the deletion).
+                    if _genesis and not _skip_out_of_tree_markers(path):
+                        _recorded = _read_chain_tail(path)
+                        if (_recorded and _recorded != prev
+                                and not _hash_in_recent_tail(path, _recorded)):
+                            rec["details"] = {**rec["details"], "_tail_truncated_since": _recorded}
+                            try:
+                                import logging as _lg
+                                _lg.getLogger("corvin.audit").critical(
+                                    "audit chain tail TRUNCATED since last write (recorded tail "
+                                    "%s not found) — marker written into %s", _recorded, event_type,
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
                     # ADR-0232/0233: Store the initial tail hash to detect if the
                     # file was modified by another writer while we held the lock.
                     # This catches broken cross-process locks on Windows that allow
@@ -1750,7 +2282,7 @@ def write_event(
                         # host-wide AND per-chain — so a later full-strip of every
                         # `mac` field on THIS chain is detectable without
                         # false-positiving on chains that never carried a mac.
-                        _mark_mac_active(chain_path=path)
+                        _mark_mac_active(chain_path=path, genesis=_genesis or rec["hash"])
 
                     # ADR-0153 M3 — additive instance attestation.
                     # Both fields are added AFTER hash/mac so they are NOT part of
@@ -1826,6 +2358,9 @@ def write_event(
                     fh.write(json.dumps(rec, allow_nan=False) + "\n")
                     fh.flush()
                     os.fsync(fh.fileno())
+                    if hash_chain:
+                        # F-A12: the tail now lives out-of-tree too.
+                        _record_chain_tail(path, rec["hash"], genesis=_genesis or rec["hash"])
                 except OSError as _werr:
                     # FND-03b: a failed audit write (full / read-only fs) was
                     # silently swallowed by best-effort callers, making lost
@@ -1887,7 +2422,6 @@ def _check_disk_headroom(path: Path) -> None:
                 "audit.disk_full_blocked",
                 severity="CRITICAL",
                 details={"free_bytes": free, "threshold_bytes": AUDIT_HEADROOM_CRITICAL_BYTES},
-                hash_chain=False,  # chain write about to fail — don't corrupt it
             )
         except OSError:
             pass
@@ -1954,8 +2488,17 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
          "expected_prev": "...", "actual_prev": "..."}
         {"line": 44, "issue": "invalid_json"}
 
-    Lines without a ``hash`` field are treated as pre-chain entries and
-    are skipped (legitimate if hash_chain was disabled when written).
+    A record without a ``hash`` is admissible ONLY (F-A1) as a pre-chain legacy
+    entry (before the first hash-bearing record) or as a
+    ``audit.chain_gap_detected`` marker whose ``prev_hash`` equals the tail it
+    was written after (and whose ``mac`` verifies when present / is required
+    once the MAC epoch started). Any other hash-less record is reported as
+    ``unchained_record``.
+
+    Out-of-tree checks (beside the anchor key): ``tail_truncated`` when the
+    recorded tail hash (F-A12) is neither the current tail nor a recent
+    predecessor, and ``anchor_key_insecure_mode`` when a key file exists but
+    was refused for group/other permission bits (F-A14).
 
     ``initial_prev`` (default ``""``) is the expected ``prev_hash`` of
     the first chain entry. Pass the previous segment's tail hash when
@@ -1973,6 +2516,7 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
     mac_required = False       # set once a mac'd record is seen under an available key
     mac_seen_count = 0         # total records carrying a mac field
     _no_key_ok = os.environ.get("CORVIN_AUDIT_VERIFY_NO_KEY_OK", "").strip() in ("1", "true", "yes")
+    recent_hashes: collections.deque = collections.deque(maxlen=_TAIL_ANCHOR_WINDOW)
     line_no = 0
     with path.open("r") as fh:
         for line in fh:
@@ -1998,10 +2542,47 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
                 continue
 
             if "hash" not in rec:
-                # Pre-chain or hash_chain-disabled entry; not part of integrity
-                continue
+                if not chain_started and initial_prev == "":
+                    # Legacy pre-chain prefix (written before hash chaining
+                    # existed) — nothing to bind it to yet.
+                    continue
+                et = str(rec.get("event_type", ""))[:64]
+                if et != CHAIN_GAP_EVENT:
+                    problems.append({"line": line_no, "issue": "unchained_record",
+                                     "event_type": et})
+                    continue
+                gap_prev = rec.get("prev_hash")
+                if not isinstance(gap_prev, str) or gap_prev != prev:
+                    problems.append({"line": line_no, "issue": "unchained_record",
+                                     "event_type": et, "expected_prev": prev,
+                                     "actual_prev": gap_prev if isinstance(gap_prev, str) else None})
+                    continue
+                _gap_canon = _canonical({k: v for k, v in rec.items()
+                                         if k not in CHAIN_HASH_EXCLUDED_FIELDS}).encode("utf-8")
+                _gak = _anchor_key()
+                if "mac" in rec:
+                    mac_seen_count += 1
+                    if _gak is not None:
+                        mac_required = True
+                        _exp = hmac.new(_gak, prev.encode("utf-8") + b"\n" + _gap_canon,
+                                        hashlib.sha256).hexdigest()[:16]
+                        if not hmac.compare_digest(str(rec["mac"]), _exp):
+                            problems.append({"line": line_no, "issue": "mac_tampered",
+                                             "expected_mac": _exp, "actual_mac": rec["mac"]})
+                    elif not _no_key_ok:
+                        problems.append({"line": line_no, "issue": "mac_unverifiable_key_absent"})
+                elif mac_required and _gak is not None:
+                    problems.append({"line": line_no, "issue": "mac_missing"})
+                continue  # a gap marker is not a link: prev stays
 
             chain_started = True
+            recent_hashes.append(rec["hash"])
+            _d = rec.get("details")
+            if isinstance(_d, dict) and _d.get("_tail_truncated_since"):
+                # Writer-side truncation marker (F-A12): permanent, line-bound.
+                problems.append({"line": line_no, "issue": "tail_truncated",
+                                 "recorded_tail": str(_d["_tail_truncated_since"])[:16],
+                                 "detail": "records deleted before this write"})
             actual_prev = rec.get("prev_hash", "")
             if actual_prev != prev:
                 problems.append({
@@ -2138,7 +2719,24 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
         problems.append({"issue": "mac_stripped_chain",
                          "detail": "MAC active on this chain but it now carries no mac"})
 
-    # Records written with hash_chain=False are intentionally unchained and
-    # are not an integrity error — verify_chain reports True when all chained
-    # records verify correctly (including the case where none are chained).
+    # F-A12: compare the on-file tail against the out-of-tree tail anchor.
+    # The anchor may lag the file by a few writes (a verify racing a writer)
+    # or lead it (a write landed after our walk) — both benign. A recorded
+    # tail that is neither the current tail, nor among the last
+    # _TAIL_ANCHOR_WINDOW hashes, nor the file's tail right now, names a
+    # record that is gone: the tail was truncated.
+    if chain_started and not _skip_out_of_tree_markers(path):
+        recorded = _read_chain_tail(path)
+        if recorded and recorded != prev and recorded not in recent_hashes \
+                and recorded != _last_hash(path):
+            problems.append({"issue": "tail_truncated",
+                             "recorded_tail": recorded, "actual_tail": prev})
+
+    # F-A14: a present-but-refused anchor key is a broken anchor, not an
+    # absent one — surface it so the boot tripwire fails closed.
+    if _ANCHOR_KEY_REFUSED and _anchor_key_path().exists():
+        problems.append({"issue": "anchor_key_insecure_mode",
+                         "detail": f"anchor key refused ({_ANCHOR_KEY_REFUSED}); "
+                                   f"chmod 600 {_anchor_key_path()}"})
+
     return len(problems) == 0, problems

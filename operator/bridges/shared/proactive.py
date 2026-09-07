@@ -427,12 +427,28 @@ def _consent_ok(tenant_id: str, channel: str, uid: str) -> bool:
         return False
 
 
-def _house_rules_allows(text: str, *, channel: str, chat_key: str) -> bool:
+def _house_rules_allows(text: str, *, channel: str, chat_key: str,
+                        tenant_id: str | None = None) -> bool:
     """L44 acceptable-use gate over the outbound text. Fail-CLOSED: a gate that
-    cannot run denies (the gate module itself fails to a deny-all policy)."""
+    cannot run denies (the gate module itself fails to a deny-all policy).
+
+    F-A19 (2026-09-07): wires the SAME Tier-1 semantic classifier the inbound
+    path uses (``house_rules._house_rules_classifier``: Hermes local → cloud
+    Haiku → fail-closed) and the tenant overlay. Without it the gate ran in
+    Tier-0 (regex-only) degraded mode for every proactive message."""
     try:
         import house_rules  # type: ignore
-        gate = house_rules.HouseRulesGate.from_repo()
+        _tid = tenant_id or "_default"
+        try:
+            overlay = house_rules.load_tenant_overlay(_tid)
+        except Exception:  # noqa: BLE001 — no overlay is a valid state
+            overlay = None
+        gate = house_rules.HouseRulesGate.from_repo(
+            classifier=lambda task, rules, auth: house_rules._house_rules_classifier(
+                task, rules, auth, tenant_id=_tid
+            ),
+            tenant_overlay=overlay,
+        )
         decision = gate.classify(text or "", channel=channel, chat_key=chat_key)
         return bool(decision.allowed)
     except Exception as exc:  # noqa: BLE001 — a broken gate must deny, never allow
@@ -778,7 +794,7 @@ def emit_proactive(*, channel: str, chat_id: str | int | None = None,
             return EmitResult.DENIED
 
         # 3. House-rules (L44), fail-closed — ALWAYS, solicited or not.
-        if not _house_rules_allows(text, channel=channel, chat_key=chat_key):
+        if not _house_rules_allows(text, channel=channel, chat_key=chat_key, tenant_id=tenant_id):
             _audit(EmitResult.DENIED.value, "house-rules")
             return EmitResult.DENIED
 

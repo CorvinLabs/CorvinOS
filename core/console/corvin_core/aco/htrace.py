@@ -55,8 +55,13 @@ _PII = re.compile(
     r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b|"          # MAC address
     r"\b[0-9a-fA-F]{20,}\b|"                               # long hex (≥20) = keys/tokens
     r"\b\d{12,}\b|"                                        # long numeric ID
-    r"(?:\d{1,3}\.){3}\d{1,3}",                            # IPv4
+    r"(?:\d{1,3}\.){3}\d{1,3}|"                            # IPv4
+    r"(?<![\w.:/-])(?:\+\d{1,3}|0\d{1,4})(?:[\s./()-]{0,3}\d){6,13}(?![\w-])|"  # intl/trunk phone
+    r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}\s?[A-Z0-9]{1,4}\b",  # IBAN
 )
+# Free text (>= 4 word tokens) is prose — a prompt, a transcript, a user
+# sentence — never a code-level signature. Applied to every string field.
+_FREE_TEXT = re.compile(r"(?:[A-Za-z][A-Za-z'’,.!?-]*\s+){3,}[A-Za-z]")
 
 # Reduced scanner for fields that are expected to contain hex hashes.
 # sha256 hashes (exactly 64 hex chars) and short tokens are legitimate here;
@@ -68,7 +73,9 @@ _PII_NO_LONGHEX = re.compile(
     r"\b(?:sk|pk|rk|ghp|gho|ghs|xox[baprs]|AKIA|ASIA)[_-]|"
     r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b|"
     r"\b\d{12,}\b|"
-    r"(?:\d{1,3}\.){3}\d{1,3}",
+    r"(?:\d{1,3}\.){3}\d{1,3}|"
+    r"(?<![\w.:/-])(?:\+\d{1,3}|0\d{1,4})(?:[\s./()-]{0,3}\d){6,13}(?![\w-])|"
+    r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}\s?[A-Z0-9]{1,4}\b",
 )
 
 # Fields that contain legitimate long-hex values (sha256 hashes, HMAC tokens).
@@ -235,6 +242,8 @@ def _assert_safe_htrace(record: dict) -> None:
             m = pattern.search(v)
             if m:
                 raise ValueError(f"HealingTrace: PII near {m.group(0)[:20]!r}")
+            if _FREE_TEXT.search(v):
+                raise ValueError("HealingTrace: free text (>=4 words) is not a signature")
         elif isinstance(v, dict):
             for item in v.values():
                 _scan_value(item, reduced=reduced)

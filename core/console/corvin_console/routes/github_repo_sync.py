@@ -24,7 +24,8 @@ class GitHubRepoSync:
     
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
-        self.tenant_path = Path.home() / '.corvin' / 'tenants' / tenant_id
+        from .github_sync import _tenant_path  # CORVIN_HOME-aware SSOT (never Path.home())
+        self.tenant_path = _tenant_path(tenant_id)
         self.config_file = self.tenant_path / 'github-config.json'
         self.sync_state_file = self.tenant_path / 'github-sync-state.json'
         self.audit_file = self.tenant_path / 'github-audit.jsonl'
@@ -171,37 +172,26 @@ class GitHubRepoSync:
             json.dump(state, f, indent=2)
     
     def _log_audit(self, event_type: str, details: Dict[str, Any]):
-        """Log audit event with hash-chain."""
+        """Append a hash-chained record to ``github-audit.jsonl`` via the ONE
+        canonical writer (``forge.security_events.write_event`` — F-A7). The
+        record format is the platform's, so ``voice-audit verify --all`` covers
+        this file; the previous private sha256 chain here was a third format
+        nothing verified."""
         try:
-            prev_hash = "0" * 64
-            if self.audit_file.exists():
-                with open(self.audit_file, 'rb') as f:
-                    lines = f.readlines()
-                    if lines:
-                        last_line = json.loads(lines[-1])
-                        prev_hash = last_line.get('hash', '0' * 64)
-            
-            event = {
-                "event_id": f"evt-{int(__import__('time').time()*1000)}",
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-                "event_type": event_type,
-                "tenant_id": self.tenant_id,
-                "details": details,
-                "prev_hash": prev_hash,
-            }
-            
-            event_json = json.dumps(event, sort_keys=True)
-            event['hash'] = hashlib.sha256(
-                (prev_hash + event_json).encode()
-            ).hexdigest()
-            
+            from .. import _bootstrap  # noqa: PLC0415
+            write_event = _bootstrap.security_events.write_event
+        except Exception:  # noqa: BLE001 — fall back to the repo layout
+            import sys as _sys
+            _forge = Path(__file__).resolve().parents[4] / "operator" / "forge"
+            if str(_forge) not in _sys.path:
+                _sys.path.append(str(_forge))
+            from forge.security_events import write_event  # type: ignore
+        try:
             self.tenant_path.mkdir(parents=True, exist_ok=True)
-            with open(self.audit_file, 'a') as f:
-                f.write(json.dumps(event) + '\n')
-        
-        except Exception as e:
-            logger.error(f"Audit logging failed: {e}")
-
+            write_event(self.audit_file, event_type,
+                        details={**dict(details), "tenant_id": self.tenant_id})
+        except Exception as e:  # noqa: BLE001 — audit is best-effort here; never break a sync
+            logger.warning("github audit write failed: %s", type(e).__name__)
 
 # Global sync instance
 _sync: Optional[GitHubRepoSync] = None

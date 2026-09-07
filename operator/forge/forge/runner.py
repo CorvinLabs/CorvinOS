@@ -650,6 +650,11 @@ def run_tool(
         if allow_network:
             try:
                 from .security_events import write_event as _swe  # type: ignore
+                from .security_events import register_event_allowlist as _rea  # type: ignore
+                # Positive, content-free allowlist (default-deny floor, ADR-0640).
+                _rea("tool.network_share",
+                     {"persona", "sandbox", "deny_loopback", "tool", "run_id",
+                      "tenant_id", "audit_ref"})
                 _audit_path = ctx.audit_path if hasattr(ctx, "audit_path") else None
                 if _audit_path is None:
                     from .paths import corvin_home  # type: ignore

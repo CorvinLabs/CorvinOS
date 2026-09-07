@@ -88,11 +88,27 @@ class TestAuditIntegration:
         ok, problems = verify_chain(_chain(home, "_default"))
         assert ok, problems
 
-    def test_audit_events_are_tenant_scoped(self, skill, home):
+    def test_audit_events_are_tenant_scoped(self, skill, home, monkeypatch):
+        # The core writer refuses a record whose tenant_id is not the PROCESS
+        # tenant (AuditTenantMismatch, fail-closed) — a tenant_test write is
+        # only legitimate from a tenant_test process.
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_test")
         skill.execute({"operation": "is_enabled", "flag_id": "flag", "tenant_id": "tenant_test"})
         events = _events(home, "tenant_test")
         assert events and events[-1]["details"]["tenant_id"] == "tenant_test"
         assert not _chain(home, "_default").exists(), "no cross-tenant write"
+
+    def test_foreign_tenant_write_is_refused(self, skill, home, monkeypatch):
+        """A record tagged with a tenant other than the process tenant never
+        lands in that tenant's chain (AuditTenantMismatch at the chokepoint)."""
+        monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+        skill.execute({"operation": "is_enabled", "flag_id": "flag", "tenant_id": "tenant_other"})
+        events = _events(home, "tenant_other")
+        assert not [e for e in events if e["event_type"] == "skill.executed"], \
+            "cross-tenant skill.executed must be refused"
+        # what DOES land is the type/count-only refusal record — the proof
+        assert events and events[-1]["event_type"] == "audit.tenant_mismatch"
+        assert events[-1]["details"]["dropped_event_type"] == "skill.executed"
 
     def test_audit_events_contain_no_pii(self, skill, home):
         skill.execute({

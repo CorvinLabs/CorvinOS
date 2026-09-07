@@ -15,7 +15,7 @@ start was logged as "skipped (already running elsewhere or unavailable)".
 T5 (LOW): bridge-only deployments started only the ping thread, never the
 presence heartbeat — such instances were systematically missing from
 online_now / online-geo. The same boot path must also start
-corvin_console.aco.heartbeat.start_heartbeat_thread (soft-import, fail-soft).
+corvin_core.aco.heartbeat.start_heartbeat_thread (soft-import, fail-soft).
 """
 from __future__ import annotations
 
@@ -31,14 +31,14 @@ import adapter  # type: ignore
 
 
 def _fake_modules(tmp_path: Path) -> tuple[dict, Mock, Mock, Mock]:
-    """Build fake corvin_console.aco.* / forge.paths modules for sys.modules."""
-    hu_mod = types.ModuleType("corvin_console.aco.htrace_uploader")
+    """Build fake corvin_core.aco.* / forge.paths modules for sys.modules."""
+    hu_mod = types.ModuleType("corvin_core.aco.htrace_uploader")
     start_ping = Mock(return_value=None)
     start_upload = Mock(return_value=None)
     hu_mod.start_ping_thread = start_ping
     hu_mod.start_upload_thread = start_upload
 
-    hb_mod = types.ModuleType("corvin_console.aco.heartbeat")
+    hb_mod = types.ModuleType("corvin_core.aco.heartbeat")
     start_hb = Mock(return_value=None)
     hb_mod.start_heartbeat_thread = start_hb
 
@@ -46,8 +46,8 @@ def _fake_modules(tmp_path: Path) -> tuple[dict, Mock, Mock, Mock]:
     fp_mod.corvin_home = lambda: tmp_path
 
     mods = {
-        "corvin_console.aco.htrace_uploader": hu_mod,
-        "corvin_console.aco.heartbeat": hb_mod,
+        "corvin_core.aco.htrace_uploader": hu_mod,
+        "corvin_core.aco.heartbeat": hb_mod,
         "forge.paths": fp_mod,
     }
     return mods, start_ping, start_upload, start_hb
@@ -91,8 +91,8 @@ def test_heartbeat_failure_is_fail_soft_and_ping_still_starts(tmp_path):
     mods, start_ping, start_upload, _ = _fake_modules(tmp_path)
     # A heartbeat module WITHOUT start_heartbeat_thread → ImportError on the
     # from-import inside the boot path.
-    mods["corvin_console.aco.heartbeat"] = types.ModuleType(
-        "corvin_console.aco.heartbeat"
+    mods["corvin_core.aco.heartbeat"] = types.ModuleType(
+        "corvin_core.aco.heartbeat"
     )
     with patch.dict(sys.modules, mods):
         adapter._start_telemetry_threads()  # must not raise

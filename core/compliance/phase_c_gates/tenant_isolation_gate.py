@@ -5,6 +5,8 @@ Pass Criteria: 0_tenant_id_mismatches_detected
 """
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,7 @@ class TenantIsolationGate:
     """Gate 5: Verify zero cross-tenant leakage (GDPR Art. 5, 6, 32)."""
 
     def __init__(self, audit_jsonl_path: str = "~/.corvin/audit.jsonl"):
-        self.audit_path = audit_jsonl_path.replace("~", "/home/shumway")
+        self.audit_path = str(Path(os.path.expandvars(audit_jsonl_path)).expanduser())
 
     def execute(self) -> TenantIsolationResult:
         """

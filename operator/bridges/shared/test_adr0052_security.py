@@ -265,7 +265,7 @@ class TestF9SkillContentHash:
         from skill_forge.registry import SkillRegistry
         root = tmp_path / "skill-forge"
         root.mkdir()
-        return SkillRegistry(root, hash_chain=False)
+        return SkillRegistry(root, hash_chain=True)
 
     def test_hash_stored_at_create(self, tmp_path):
         reg = self._make_registry(tmp_path)

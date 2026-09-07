@@ -69,16 +69,21 @@ class _BodyTooLarge(Exception):
         self.cap = cap
 
 
-def _plugin_package_absent(err: ImportError) -> bool:
-    """True only when the ``corvin_plugins`` package itself is not installed.
+def _tripwire_assert_all() -> None:
+    """Run the ADR-0232/0233 boot tripwires from ``corvin_compliance_reports``.
 
-    Shared predicate for the two shipped hosts (gateway + console standalone):
-    a ``ModuleNotFoundError`` naming exactly the top-level package is a stripped
-    install and is tolerated; anything else (missing submodule, renamed symbol,
-    an exception raised while importing the package) means the compliance
-    mechanism is present but broken, and the boot must fail closed.
+    Same helper as ``corvin_gateway.app._tripwire_assert_all``: extend sys.path
+    the way ``audit.py`` does, then REQUIRE the import — a missing checker is a
+    boot failure, not a passed check (F-A2).
     """
-    return isinstance(err, ModuleNotFoundError) and err.name == "corvin_plugins"
+    try:
+        from corvin_compliance_reports.tripwire import assert_all
+    except ImportError:
+        compliance_root = Path(__file__).resolve().parents[3] / "core" / "compliance"
+        if compliance_root.is_dir() and str(compliance_root) not in sys.path:
+            sys.path.append(str(compliance_root))
+        from corvin_compliance_reports.tripwire import assert_all
+    assert_all()
 
 
 # CRITICAL: Set CORVIN_HOME BEFORE any imports that call corvin_home().
@@ -296,39 +301,28 @@ def create_app() -> FastAPI:
         # around it. This app is what `corvinos-serve` runs and what install.sh
         # launches, and until this call existed it was the one shipped entry
         # point that served requests without ever asking whether the GDPR
-        # Art. 30/32 audit chain verifies — a console with a corrupted chain
-        # booted happily while the tripwire, called by hand in the same process,
-        # refused. The sequence is shared with corvin_gateway.app so the two
-        # hosts cannot drift; see corvin_plugins.bootstrap.boot_platform.
+        # Art. 30/32 audit chain verifies. The sequence is shared with
+        # corvin_gateway.app so the two hosts cannot drift; see
+        # corvin_plugins.bootstrap.boot_platform.
         #
-        # An ABSENT plugin package (stripped install) is not a failure and must
-        # not stop the boot — only a broken mechanism is. A present-but-failing
-        # tripwire propagates: there is no override, by design.
+        # F-A2 (2026-09-07): the tripwire runs FIRST and UNCONDITIONALLY from
+        # the compliance package, BEFORE the plugin import; a shipped host
+        # without ``corvin_plugins`` has no boot sequence and must not serve.
+        # There is no override, by design — and the error advice below never
+        # suggests deleting the audit chain (that is the evidence).
         _plugins_loaded: list[str] = []
+        _tripwire_assert_all()  # raises TripwireError -> boot aborts
+        from corvin_plugins.bootstrap import boot_platform as _boot_platform  # absent -> boot aborts
         try:
-            from corvin_plugins.bootstrap import boot_platform as _boot_platform
-        except ImportError as _pkg_err:
-            # ADR-0232/0233 — only an ABSENT package is tolerated here. A package
-            # that is present but broken (renamed submodule, missing symbol) is a
-            # broken mechanism and must fail the boot; treating every ImportError
-            # as "absent" turned the tripwire into a no-op once (2026-09-01, when
-            # bootstrap's provider imports broke and both hosts kept serving).
-            if not _plugin_package_absent(_pkg_err):
-                raise
-            _boot_platform = None  # type: ignore[assignment]
-            log.debug("corvin_plugins absent — compliance tripwires not available")
-        if _boot_platform is not None:
-            try:
-                _plugins_loaded = _boot_platform()  # raises -> boot aborts
-            except Exception as e:
-                # Fresh install robustness: provide actionable error message
-                log.error(
-                    "Platform bootstrap failed: %s (%s). "
-                    "This may be a fresh install or corrupted configuration. "
-                    "Try: rm -rf ~/.corvin && corvin start",
-                    e, type(e).__name__
-                )
-                raise
+            _plugins_loaded = _boot_platform()  # raises -> boot aborts
+        except Exception as e:
+            log.error(
+                "Platform bootstrap failed: %s (%s). The audit chain / anchor "
+                "key / tenant config must be repaired — never delete "
+                "audit.jsonl (see docs/claude-ref/compliance-baseline.md).",
+                e, type(e).__name__
+            )
+            raise
 
         # ── Phase 1a: Voice config migration (best-effort — never blocks startup) ─
         # Auto-migrate voice configuration from legacy ~/.config/corvin-voice/

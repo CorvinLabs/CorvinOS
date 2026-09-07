@@ -80,24 +80,31 @@ class DataClassification(IntEnum):
     SECRET = 3
 
     @classmethod
-    def parse(cls, value: "str | int | DataClassification | None") -> "DataClassification":
-        """Coerce a free-form value into a classification. Defaults to
-        ``INTERNAL`` on unknown input (the safe middle ground — neither
-        broadcast PUBLIC nor lockdown SECRET)."""
+    def parse(cls, value: "str | int | DataClassification | None") -> "DataClassification | None":
+        """Coerce a value into a classification, or ``None`` when it is not one.
+
+        F-A10 (2026-09-07): an unknown/unparseable value used to become
+        ``INTERNAL`` — which every default matrix row allows on a cloud
+        engine, i.e. a typo in a caller's label silently DOWNGRADED the flow
+        guard to "allow". ``None`` is returned instead and
+        :meth:`DataFlowGuard.validate` denies it (``unknown_classification``).
+        """
         if value is None:
-            return cls.INTERNAL
+            return None
+        if isinstance(value, bool):
+            return None
         if isinstance(value, cls):
             return value
         if isinstance(value, int):
             try:
                 return cls(value)
             except ValueError:
-                return cls.INTERNAL
+                return None
         if isinstance(value, str):
             v = value.strip().upper()
             if v in cls.__members__:
                 return cls[v]
-        return cls.INTERNAL
+        return None
 
 
 # ----- engine compliance metadata -------------------------------------
@@ -263,24 +270,29 @@ DELEGATION_ENGINE_ID: str = "acs"
 
 # Default matrix — sensitivity → set of allowed localities.
 #
-# DESIGN: data-residency restriction is *opt-in*, not opt-out. The default
-# is permissive so a zero-config single-operator install runs frictionless on
-# its configured cloud engine (e.g. claude_code = us_cloud) — a normal chat
-# message containing a name or e-mail is classified CONFIDENTIAL and must NOT
-# be blocked by default. Operators with stricter data-residency needs tighten
-# the matrix explicitly in tenant.corvin.yaml (see the eu-production preset,
-# which pins every row to [local]). This mirrors the classifier's own stance:
-# "Default is PUBLIC — users opt in to restriction."
+# DESIGN (F-A10, 2026-09-07 — RESTRICTIVE default): PUBLIC and INTERNAL may go
+# anywhere; CONFIDENTIAL (personal data — the classifier grades a message
+# carrying a name / e-mail / phone as CONFIDENTIAL) never leaves EU/local
+# jurisdiction by default; SECRET (literal credentials) is local-only AND
+# additionally requires network_egress=="none" (enforced independently of
+# this mapping). This is what ``load_guard_for_tenant`` already promised for
+# its fail-closed fallback ("the restrictive DEFAULT matrix (CONFIDENTIAL/
+# SECRET → local only)") and what GDPR Art. 44 ff. imply for a zero-config
+# install: residency is the default, WIDENING is the operator's explicit,
+# audited choice in ``tenant.corvin.yaml``:
 #
-# The one residual floor is SECRET (literal API keys / private keys /
-# passwords detected by regex): it stays local-only AND carries an *additional*
-# constraint (network_egress=="none") that the guard enforces independently of
-# this mapping. SECRET fires rarely and protects credentials from egress — it
-# is a security floor, not a residency policy, so it is kept on by default.
+#     spec:
+#       data_classification:
+#         matrix:
+#           CONFIDENTIAL: [local, eu_cloud, us_cloud]   # opt IN to US cloud
+#
+# Note the enforcement contract is unchanged: no tenant.corvin.yaml on disk →
+# ``load_guard_for_tenant`` returns None (no enforcement at all). This matrix
+# applies the moment a tenant config exists without its own ``matrix``.
 DEFAULT_MATRIX: dict[DataClassification, frozenset[Locality]] = {
     DataClassification.PUBLIC:       frozenset({"local", "eu_cloud", "us_cloud"}),
     DataClassification.INTERNAL:     frozenset({"local", "eu_cloud", "us_cloud"}),
-    DataClassification.CONFIDENTIAL: frozenset({"local", "eu_cloud", "us_cloud"}),
+    DataClassification.CONFIDENTIAL: frozenset({"local", "eu_cloud"}),
     DataClassification.SECRET:       frozenset({"local"}),
 }
 
@@ -507,6 +519,14 @@ class DataFlowGuard:
         ``data_flow.approved`` on allow, ``data_flow.blocked`` on deny.
         """
         cls = DataClassification.parse(classification)
+        if cls is None:
+            # F-A10: an unparseable classification is NOT a permissive default.
+            return self._deny(
+                DataClassification.SECRET, engine_id,
+                reason=f"classification {classification!r} is not a known level",
+                matched_rule="unknown_classification",
+                persona=persona, channel=channel, chat_key=chat_key,
+            )
 
         # Unknown engine → fail closed.
         compl = self.engine_compliance.get(engine_id)

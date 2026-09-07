@@ -8,7 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from operator.license.monotonic_time import (
+import sys as _sys
+from pathlib import Path as _Path
+
+# `operator` shadows the stdlib module: import operator packages by bare name
+# with <repo>/operator on sys.path (2026-09-07: the dotted form never resolved).
+_OP = _Path(__file__).resolve().parents[2]
+if str(_OP) not in _sys.path:
+    _sys.path.insert(0, str(_OP))
+
+from license.monotonic_time import (
     check_clock_rollback,
     _load_prior_max,
     _persist_max,

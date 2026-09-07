@@ -177,6 +177,28 @@ _AUDIT_ALLOWED: frozenset[str] = frozenset({
 })
 
 
+# The audit writer (forge.security_events) is DEFAULT-DENY for unknown detail
+# keys: an event type without a registered positive allowlist keeps only the
+# universal vocabulary, which does not know ``rule_id``. Register the gate's
+# own metadata-only list (plus ``error_type``, which spawn_gates emits on the
+# construction / classifier failure paths, and the reserved ``audit_ref`` /
+# ``tenant_id``) so the deny record keeps carrying the rule that fired.
+try:
+    import sys as _sys
+    # Make ``forge`` importable regardless of import order (the same
+    # resolution user_model.py / dialectic.py use): the caller that wires
+    # the forge writer may add the path only AFTER this module is imported.
+    _FORGE_TOP = Path(__file__).resolve().parent.parent.parent / "forge"
+    if _FORGE_TOP.is_dir() and str(_FORGE_TOP) not in _sys.path:
+        _sys.path.insert(0, str(_FORGE_TOP))
+    from forge.security_events import register_event_allowlist as _register_allowlist  # type: ignore
+    for _evt in ("house_rules.denied", "house_rules.escalated",
+                 "house_rules.warned", "house_rules.allowed"):
+        _register_allowlist(_evt, _AUDIT_ALLOWED | {"error_type", "audit_ref", "tenant_id"})
+except Exception:  # noqa: BLE001 — forge absent: the writer is injected by the caller anyway
+    pass
+
+
 def _validate_audit_details(details: dict[str, Any]) -> None:
     for k in details:
         if k not in _AUDIT_ALLOWED:

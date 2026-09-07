@@ -179,14 +179,19 @@ def test_non_dict_json_line_does_not_crash_verifier():
 
 
 def test_hash_chain_disabled_records_dont_break_verify():
-    print("\n[hash_chain=False: events without hash are skipped silently]")
+    print("\n[hash_chain=False: refused for every event but the gap marker (F-A1)]")
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "audit.jsonl"
-        write_event(p, "tool.created", tool="x", hash_chain=False)
-        write_event(p, "tool.deleted", tool="x", hash_chain=False)
+        refused = False
+        try:
+            write_event(p, "tool.created", tool="x", hash_chain=False)
+        except ValueError:
+            refused = True
+        t("hash_chain=False is refused for an ordinary event", refused)
+        write_event(p, "tool.created", tool="x")
+        write_event(p, "audit.chain_gap_detected", hash_chain=False)
         ok, problems = verify_chain(p)
-        t("verify ok when no hash fields exist",
-          ok and not problems)
+        t("a tail-bound gap marker verifies", ok and not problems)
 
 
 # ---------- E2E through MCP server + CLI ----------------------------------

@@ -163,7 +163,12 @@ _LEAK = re.compile(
     r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b|"              # MAC
     r"\b\d{1,3}(?:\.\d{1,3}){3}\b|"                           # IPv4 dotted quad
     r"\b[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){2,}\b|::\b|"    # IPv6 (incl. compressed)
-    r"\b[0-9a-fA-F]{16,}\b|\b\d{12,}\b")                      # long hex / id
+    r"\b[0-9a-fA-F]{16,}\b|\b\d{12,}\b|"                      # long hex / id
+    r"(?<![\w.:/-])(?:\+\d{1,3}|0\d{1,4})(?:[\s./()-]{0,3}\d){6,13}(?![\w-])|"  # intl/trunk phone
+    r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}\s?[A-Z0-9]{1,4}\b")  # IBAN
+# Free text: four or more whitespace-separated word tokens is prose (a prompt,
+# a transcript, a user sentence), never a code-level signature. Fail-closed.
+_FREE_TEXT = re.compile(r"(?:[A-Za-z][A-Za-z'’,.!?-]*\s+){3,}[A-Za-z]")
 # NOTE: this is a FAIL-CLOSED backstop — a match DROPS the record (never sends),
 # so over-matching (e.g. an IPv6-shaped hash) is safe: worst case a benign record
 # is withheld, never a leak. Airtight enough to make the default-ON telemetry
@@ -200,6 +205,8 @@ def _assert_safe(report: dict) -> None:
         m = _LEAK.search(v)
         if m:
             raise ValueError(f"telemetry report failed safety re-check near {m.group(0)!r}")
+        if _FREE_TEXT.search(v):
+            raise ValueError("telemetry report failed safety re-check: free text (>=4 words)")
 
 
 def _content_free(sig) -> dict:

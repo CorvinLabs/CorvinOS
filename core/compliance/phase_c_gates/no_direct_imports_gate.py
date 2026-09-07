@@ -5,6 +5,7 @@ Pass Criteria: 0_static_imports_found AND all_runtime_callers_in_compat_layer
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 import subprocess
 import logging
 
@@ -34,8 +35,15 @@ class NoDirectImportsGate:
         "import core.context_engineering",
     ]
 
-    def __init__(self, audit_jsonl_path: str = "~/.corvin/audit.jsonl"):
-        self.audit_path = audit_jsonl_path.replace("~", "/home/shumway")
+    def __init__(self, audit_jsonl_path: str | None = None):
+        # Never a developer home path: resolve under CORVIN_HOME via the
+        # canonical resolver (CLAUDE.md § Project Identity; wheel-content guard).
+        if audit_jsonl_path is None:
+            from core.paths.tenant import corvin_home
+            self.audit_path = str(corvin_home() / "audit.jsonl")
+        else:
+            import os as _os
+            self.audit_path = str(Path(_os.path.expandvars(audit_jsonl_path)).expanduser())
 
     def execute(self) -> NoDirectImportsResult:
         """
@@ -78,7 +86,8 @@ class NoDirectImportsGate:
         violations = []
         try:
             # Grep all Python files for old imports, exclude compat layer and tests
-            cmd = f"""cd /home/shumway/projects/CorvinOS && \
+            repo_root = Path(__file__).resolve().parents[3]
+            cmd = f"""cd {repo_root} && \
               grep -r "{'|'.join(self.OLD_IMPORTS)}" core/ tests/ --include="*.py" 2>/dev/null | \
               grep -v "legacy_compat" | grep -v "test_" | grep -v "__pycache__" | head -20"""
 

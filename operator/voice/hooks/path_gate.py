@@ -1321,7 +1321,21 @@ def _ota_structural_deny(tool: str) -> "tuple[bool, str]":
 
 
 def check(payload: dict) -> tuple[bool, str]:
-    """Return (allow, reason). allow=False means deny."""
+    """Return (allow, reason). allow=False means deny.
+
+    FAIL-CLOSED (F-A8, 2026-09-07): any exception inside the gate is a DENY,
+    never an allow. Before this wrapper an uncaught error propagated out of
+    ``main()`` as a traceback with a non-2 exit status, which Claude Code
+    treats as a *non-blocking* hook error — i.e. the protected write went
+    through. ``docs/claude-ref/layer-10-path-gate.md``: "Don't fail-open".
+    """
+    try:
+        return _check_unguarded(payload)
+    except Exception as exc:  # noqa: BLE001 — a gate that cannot decide denies
+        return False, f"path_gate internal error ({type(exc).__name__}) — fail-closed deny"
+
+
+def _check_unguarded(payload: dict) -> tuple[bool, str]:
     tool = payload.get("tool_name", "")
     inp = payload.get("tool_input") or {}
     if not isinstance(inp, dict):

@@ -1628,10 +1628,23 @@ def canary_percentage_routing(
         raise ValueError(f"canary_pct must be in [0, 100], got {canary_pct}")
 
     # Import here to avoid circular dependency at module level
+    # `operator` shadows the stdlib module, so a dotted `operator.measurement`
+    # import could NEVER resolve and canary routing silently degraded to
+    # "off" (2026-09-07 review). The operator tree is imported by bare package
+    # name with <repo>/operator on sys.path, like every other core→operator edge.
     try:
-        from operator.measurement.canary_router import CanaryRouter  # noqa: PLC0415
+        try:
+            from measurement.canary_router import CanaryRouter  # type: ignore[import-not-found]  # noqa: PLC0415
+        except ModuleNotFoundError:
+            import sys as _sys  # noqa: PLC0415
+            from pathlib import Path as _Path  # noqa: PLC0415
+
+            _op = _Path(__file__).resolve().parents[3] / "operator"
+            if _op.is_dir() and str(_op) not in _sys.path:
+                _sys.path.insert(0, str(_op))
+            from measurement.canary_router import CanaryRouter  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError:
-        # Gracefully degrade if measurement infrastructure not available
+        # Measurement infrastructure genuinely absent (stripped install)
         return False
 
     router = CanaryRouter()

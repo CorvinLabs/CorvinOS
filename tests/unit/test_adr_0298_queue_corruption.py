@@ -453,7 +453,12 @@ class TestAuditLogging:
         assert event["details"]["source"] == "test"
 
     def test_audit_event_includes_tenant(self, monitor):
-        """Test audit events include tenant_id."""
+        """Audit events carry the monitor's BOUND tenant, never a payload's.
+
+        The tenant of an audit record comes from the tenant-scoped monitor
+        (the context), not from the report it is asked to describe — a report
+        tagged with a foreign tenant cannot relabel the event.
+        """
         report = QueueIntegrityReport(
             total_records=5,
             corrupted_records=0,
@@ -462,7 +467,8 @@ class TestAuditLogging:
         )
 
         event = monitor.create_corruption_audit_event(report)
-        assert event["details"]["tenant_id"] == "tenant_xyz"
+        assert event["details"]["tenant_id"] == monitor.tenant_id == "test_tenant"
+        assert event["details"]["tenant_id"] != "tenant_xyz"
 
 
 # ============================================================================
@@ -522,8 +528,9 @@ class TestTenantIsolation:
         assert monitor1.tenant_id == "tenant_1"
         assert monitor2.tenant_id == "tenant_2"
 
-    def test_audit_event_includes_tenant_id(self, monitor, temp_queue_file, tenant_id):
-        """Test audit events include tenant_id."""
+    def test_audit_event_includes_tenant_id(self, temp_queue_file, tenant_id):
+        """Audit events include the tenant the monitor is bound to."""
+        monitor = QueueIntegrityMonitor(temp_queue_file, tenant_id=tenant_id)
         report = QueueIntegrityReport(
             total_records=5,
             corrupted_records=0,

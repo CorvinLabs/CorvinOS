@@ -198,6 +198,12 @@ _CANARY_UNCOMPUTABLE: object = object()
 # Prevents rapid-cycle reload attacks via the console /license/apply endpoint.
 _LAST_RELOAD_AT: float = 0.0
 _MIN_RELOAD_INTERVAL_SECONDS: float = 5.0
+# Throttled reloads are AGGREGATED into ONE ``license.reload_throttled`` chain
+# record per window (2026-09-07: per-call emission made this event 30% of the
+# live chain — every console poll inside the 5 s cooldown wrote a record).
+_THROTTLE_AUDIT_WINDOW_S: float = 300.0
+_THROTTLED_SINCE_AUDIT: int = 0
+_THROTTLE_WINDOW_STARTED_AT: float = 0.0
 # Hash of the on-disk token content as of the last successful (non-throttled)
 # reload. The throttle above only makes sense for redundant re-reads of the
 # SAME content — reload_from_disk() is also called on every authenticated
@@ -1291,6 +1297,7 @@ def reload_from_disk() -> None:
     genuinely NEW on-disk token always goes through, regardless of timing.
     """
     global _LICENSE_LOADED_AT, _LAST_RELOAD_AT, _LAST_LOADED_TOKEN_HASH
+    global _THROTTLED_SINCE_AUDIT, _THROTTLE_WINDOW_STARTED_AT
 
     if not _LICENSE_INITIALIZED or _CORVIN_HOME_SNAPSHOT is None:
         raise RuntimeError(
@@ -1326,7 +1333,19 @@ def reload_from_disk() -> None:
             "ignoring. Wait %.1fs.",
             _now - _LAST_RELOAD_AT, _MIN_RELOAD_INTERVAL_SECONDS, _remaining,
         )
-        _audit("license.reload_throttled")
+        # Aggregate: count now, write ONE record per _THROTTLE_AUDIT_WINDOW_S
+        # carrying the count and the window — the security-relevant fact
+        # ("reloads were throttled, N times") is preserved without one chain
+        # record per health probe.
+        if _THROTTLE_WINDOW_STARTED_AT <= 0:
+            _THROTTLE_WINDOW_STARTED_AT = _now
+        _THROTTLED_SINCE_AUDIT += 1
+        if (_now - _THROTTLE_WINDOW_STARTED_AT) >= _THROTTLE_AUDIT_WINDOW_S:
+            _audit("license.reload_throttled",
+                   throttled_count=_THROTTLED_SINCE_AUDIT,
+                   window_s=int(_now - _THROTTLE_WINDOW_STARTED_AT))
+            _THROTTLED_SINCE_AUDIT = 0
+            _THROTTLE_WINDOW_STARTED_AT = _now
         return
     _LAST_RELOAD_AT = _now
     _LAST_LOADED_TOKEN_HASH = token_hash

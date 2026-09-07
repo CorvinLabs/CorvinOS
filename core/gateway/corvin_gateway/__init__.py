@@ -21,7 +21,12 @@ sub-phase plan.
 """
 from __future__ import annotations
 
-__version__ = "0.1.0-phase-2.1"
+try:
+    from importlib.metadata import version as _dist_version
+
+    __version__ = _dist_version("corvinos")
+except Exception:  # noqa: BLE001 — not installed as a distribution (source checkout)
+    __version__ = "0.0.0+unknown"
 
 # Wheel-install: vendor operator subtrees onto sys.path so `from forge import paths`
 # and similar bare imports resolve. No-op in source-tree mode (no _vendor/ dir).

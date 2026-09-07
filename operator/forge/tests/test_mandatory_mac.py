@@ -20,7 +20,10 @@ from pathlib import Path
 
 _TMP = Path(tempfile.mkdtemp(prefix="mandatory-mac-"))
 _KEY = _TMP / "audit_anchor.key"
-_KEY.write_bytes(b"\x5a" * 32)
+# 0600 like the writer creates it — a group/other-readable key is REFUSED (F-A14).
+_fd = os.open(str(_KEY), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(_fd, "wb") as _fh:
+    _fh.write(b"\x5a" * 32)
 os.environ["CORVIN_AUDIT_ANCHOR_KEY"] = str(_KEY)
 
 ROOT = Path(__file__).resolve().parents[1]

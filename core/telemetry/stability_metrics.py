@@ -137,6 +137,8 @@ def _is_pii_safe_error(exc: Exception) -> bool:
     pii_regex_patterns = [
         r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b",  # Email
         r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b",  # US phone
+        r"(?<![\w.:/-])(?:\+\d{1,3}|0\d{1,4})(?:[\s./()-]{0,3}\d){6,13}(?![\w-])",  # intl / trunk-prefixed phone
+        r"\b[a-z]{2}\d{2}(?:\s?[a-z0-9]{4}){2,7}\s?[a-z0-9]{1,4}\b",  # IBAN
         r"\b\d{3}[-]?\d{2}[-]?\d{4}\b",  # SSN
         r"\b\d{4}[\s]?\d{4}[\s]?\d{4}[\s]?\d{4}\b",  # Credit card
         r"bearer\s+[a-z0-9_-]{20,}",  # Bearer token

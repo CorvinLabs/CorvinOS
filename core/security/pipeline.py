@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
 from .context import GateName, SecurityContext
@@ -15,6 +17,42 @@ from .exceptions import (
 from .roles import AuditRecorder, CapabilityChecker, ContextEngineer, InputValidator, PIIDetector
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_operator_on_path() -> None:
+    """Make ``operator/`` importable as bare top-level packages. Idempotent.
+
+    Same pattern as ``core/orchestration/quota_gate.py``: the wheel vendors the
+    operator subtrees (``corvin_core._operator_bootstrap``); a source checkout
+    has ``operator/`` as a sibling of ``core/``.
+    """
+    try:
+        from corvin_core._operator_bootstrap import ensure_operator_on_path
+
+        ensure_operator_on_path()
+    except ImportError:
+        pass
+    operator_root = Path(__file__).resolve().parents[2] / "operator"
+    if operator_root.is_dir() and str(operator_root) not in sys.path:
+        sys.path.insert(0, str(operator_root))
+
+
+def _resolve_process_tenant() -> str:
+    """Validated process tenant (``CORVIN_TENANT_ID`` → ``_default``).
+
+    Fail-closed: an invalid env value or an unreachable resolver raises
+    :class:`PipelineExecutionError` — the pipeline never runs a request under
+    a made-up tenant such as ``"unknown"``.
+    """
+    _ensure_operator_on_path()
+    try:
+        from forge.tenants import current_tenant  # type: ignore[import-not-found]
+
+        return current_tenant()
+    except Exception as exc:  # noqa: BLE001 — every failure is a refusal
+        raise PipelineExecutionError(
+            f"process tenant unresolvable ({type(exc).__name__}) — request refused"
+        ) from exc
 
 
 class IntegratedSecurityPipeline:
@@ -52,12 +90,15 @@ class IntegratedSecurityPipeline:
         Returns: (success, result, context)
         Raises: PipelineExecutionError or subclass on any gate failure
         """
-        # Import get_current_tenant (may be mocked in tests)
-        try:
-            from operator.context import get_current_tenant
-            tenant_id = get_current_tenant()
-        except Exception:
-            tenant_id = "unknown"
+        # Process tenant, fail-closed. The former ``from operator.context
+        # import get_current_tenant`` could never resolve (the stdlib
+        # ``operator`` module shadows the repo directory, and no such module
+        # exists) — so every SecurityContext carried tenant_id="unknown" and
+        # the tenant the audit chain later refuses to mismatch was never the
+        # tenant this pipeline recorded. Resolve the same way the chain does
+        # (``forge.tenants.current_tenant``: CORVIN_TENANT_ID → _default,
+        # validated) and refuse to run when it cannot be resolved.
+        tenant_id = _resolve_process_tenant()
 
         context = SecurityContext(
             actor=actor,
