@@ -133,6 +133,23 @@ _CONTROL_CHARS.discard(0x0A)
 # and ">" to bypass the _CLOSING_TAG_RE check — the regex \s* does not
 # match U+2060, so the closing-tag guard is silently bypassed while some
 # LLMs still interpret the sequence as a closing XML tag.
+#
+# ORDERING HAZARD — DO NOT MOVE THIS STRIP AFTER THE PROMPT GUARD
+# (ADR-0648 amendment 2, adversarial review round 4, 2026-09-07).
+# 0x2060 below is the SAME character the shared `claude -p` neutraliser
+# (`agents.claude_code.AT_NEUTRALISER`) inserts in front of every `@` to stop
+# the CLI's client-side `@<path>` file expansion. Stripping it from an ALREADY
+# GUARDED payload silently re-arms that expansion — a remote A2A peer would
+# read arbitrary local files through an instruction body that passed every
+# other A2A defence.
+# The two are safe together only in this order:
+#     sanitize_instruction()  →  frame_instruction()  →  engine.spawn()
+# and `ClaudeCodeEngine.spawn()` applies the neutraliser LAST, after this
+# function has already run (see the spawn call further down in this file).
+# If a future change ever needs the guard applied earlier at this call site,
+# 0x2060 must be removed from this set first — and the closing-tag bypass it
+# was added for (MED-04) must then be re-closed some other way, e.g. by
+# matching U+2060 explicitly in `_CLOSING_TAG_RE`.
 _CONTROL_CHARS |= {
     0x00AD,  # SOFT HYPHEN — invisible, survives NFKC (ADR-0099 iter-4 LOW-IT4-05)
     0x200B,  # ZERO WIDTH SPACE
@@ -775,6 +792,13 @@ def spawn_a2a_worker(
     _emit_a2a_engine_span("start", task_id=task_id, engine_id=engine_name)
 
     try:
+        # ADR-0648 amendment 2: `framed_prompt` is handed over RAW on purpose.
+        # `ClaudeCodeEngine.spawn()` applies `guard_prompt_head()` itself, i.e.
+        # AFTER `sanitize_instruction()` has run — which is the only correct
+        # order, because that sanitiser strips U+2060 (see the ORDERING HAZARD
+        # note at `_CONTROL_CHARS`). Guarding here instead would put the joiner
+        # upstream of nothing, but guarding *before* sanitisation would delete
+        # it and re-arm `@<path>` expansion for a remote peer.
         events = engine.spawn(framed_prompt, **_spawn_kwargs)
         if collect is None:
             raise RuntimeError("agents.collect helper unavailable")

@@ -1332,6 +1332,23 @@ def inject_btw(chat_key: str, text: str) -> bool:
                 log(f"inject_btw: engine.inject failed for chat={chat_key}: {e}")
                 return False
     # Legacy path — write to the raw stdin pipe.
+    #
+    # ADR-0648 amendment 2 (round 4, 2026-09-07): this branch frames the JSONL
+    # user message ITSELF instead of going through `ClaudeCodeEngine.inject()`,
+    # so the engine-level neutraliser never sees it. `/btw <text>` arrives here
+    # verbatim from `daemon.js` (Discord/Telegram/Slack/WhatsApp/Teams) and the
+    # CLI expands `/cmd` at byte 0 and `@<path>` anywhere in EVERY user message
+    # of a stream-json session, not just the first — measured live with
+    # `--disallowedTools "*"`. Guard BEFORE framing, and fail closed: the stub
+    # at the top of this module RAISES when the helper is unimportable, and an
+    # unusable guard must refuse the injection rather than write raw chat text
+    # into a live CLI stdin.
+    try:
+        guarded = _guard_prompt_head(text)
+    except Exception as e:  # noqa: BLE001 — guard unavailable ⇒ refuse
+        log(f"inject_btw: prompt guard unavailable for chat={chat_key}: {e} "
+            "— refusing raw stdin injection")
+        return False
     with _running_stdins_guard:
         stdin = _running_stdins.get(chat_key)
         if stdin is None:
@@ -1339,7 +1356,7 @@ def inject_btw(chat_key: str, text: str) -> bool:
         try:
             payload = {
                 "type": "user",
-                "message": {"role": "user", "content": text},
+                "message": {"role": "user", "content": guarded},
             }
             stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
             stdin.flush()

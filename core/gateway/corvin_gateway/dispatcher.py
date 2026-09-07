@@ -843,6 +843,18 @@ class RunDispatcher:
         error: str | None = None
 
         try:
+            # ADR-0648 amendment 2 (round 4, 2026-09-07): `prompt` is the raw
+            # `spec.input` of a tenant-submitted Run (see `_drive`), i.e.
+            # attacker-authored text behind a tenant JWT — and a tenant is not
+            # the operator (ADR-0007). It is handed over unmodified because
+            # `ClaudeCodeEngine.spawn()` applies `guard_prompt_head()` itself:
+            # byte-0 sentinel (`/cmd`, `!cmd` — the latter is LOCAL SHELL
+            # EXECUTION on the positional-argv transport this dispatcher uses)
+            # plus a U+2060 joiner before every token-start `@` (`@<path>` is
+            # a client-side file read that no `--disallowedTools` restrains).
+            # Do NOT re-introduce a bespoke argv build here: it would leave the
+            # engine's guard behind. Proof:
+            # `core/gateway/tests/test_dispatcher_prompt_guard.py`.
             for event in engine.spawn(prompt, env=env):
                 ev_type = getattr(event, "type", None)
                 ev_text = getattr(event, "text", "") or ""

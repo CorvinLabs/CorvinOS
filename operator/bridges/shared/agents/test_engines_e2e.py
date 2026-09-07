@@ -33,7 +33,7 @@ SHARED = HERE.parent
 sys.path.insert(0, str(SHARED))
 
 from agents import StreamEvent, WorkerEngine, collect, parse_jsonl_line  # noqa: E402
-from agents.claude_code import ClaudeCodeEngine  # noqa: E402
+from agents.claude_code import ClaudeCodeEngine, guard_prompt_head  # noqa: E402
 from agents.codex_cli import CodexCliEngine  # noqa: E402
 
 
@@ -259,11 +259,18 @@ class BuildArgsTests(unittest.TestCase):
         # sentinel (2026-09-07 flag-injection fix): a prompt starting with
         # "-" can never be parsed as a CLI flag, and options placed after
         # `--` would be ignored by the CLI — so all options come first.
+        # R4-F1..F5 (2026-09-07): `_build_args` now applies the shared
+        # neutraliser itself, so the positional element carries the
+        # `User input:` sentinel — byte 0 of a claude prompt is a platform
+        # invariant, not a per-caller concern. Idempotent, so a caller that
+        # already guarded produces the identical argv.
         args = ClaudeCodeEngine._build_args("hello")
         self.assertEqual(
             args,
-            ["claude", "-p", "--dangerously-skip-permissions", "--", "hello"],
+            ["claude", "-p", "--dangerously-skip-permissions",
+             "--", guard_prompt_head("hello")],
         )
+        self.assertEqual(args[-1], "User input:\nhello")
 
     def test_with_system_prompt(self) -> None:
         args = ClaudeCodeEngine._build_args(
@@ -273,15 +280,21 @@ class BuildArgsTests(unittest.TestCase):
             "claude", "-p",
             "--append-system-prompt", "be terse",
             "--dangerously-skip-permissions",
-            "--", "hello",
+            "--", guard_prompt_head("hello"),
         ])
+        # the system prompt is NOT neutralised: `--append-system-prompt` is not
+        # scanned for `@<path>` by the CLI (measured 2026-09-07), and it is
+        # operator-composed rather than user text.
+        self.assertEqual(args[3], "be terse")
 
     def test_prompt_starting_with_dash_is_never_a_flag(self) -> None:
         # F-E1 regression: `/task --add-dir / ...` used to land as argv
         # ["claude", "-p", "--add-dir / ...", ...] → parsed as --add-dir.
         prompt = "--add-dir / then --mcp-config /tmp/x.json please"
         args = ClaudeCodeEngine._build_args(prompt, model="claude-haiku-4-5")
-        self.assertEqual(args[-2:], ["--", prompt])
+        self.assertEqual(args[-2:], ["--", guard_prompt_head(prompt)])
+        # the user's text survives the guard byte-for-byte
+        self.assertIn(prompt, args[-1])
         # every option precedes the sentinel; nothing follows it but the prompt
         sentinel = args.index("--")
         self.assertTrue(all(a != "--" for a in args[:sentinel]))
