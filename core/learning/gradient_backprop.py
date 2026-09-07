@@ -24,6 +24,214 @@ class DAGEdge:
     gradient_multiplier: float = 1.0  # how strongly source affects target
 
 
+class PerTierGradientClipper:
+    """
+    Per-tier gradient clipping to prevent cascading divergence.
+
+    Cascading divergence occurs when gradients grow unboundedly and propagate
+    through the DAG, causing all loops to diverge simultaneously. This mitigation
+    applies tier-specific clipping bounds BEFORE backprop, ensuring upstream tiers
+    (which feed into many downstream loops) use tighter bounds.
+
+    Tier structure (ADR-0647 Security Mitigation #5):
+    - Tier 0 (Sources, no incoming edges): L4_attention, L6_diversity
+      Max gradient: 0.5 (tightest)
+    - Tier 1 (Single-hop to tier 0): L3_feedback
+      Max gradient: 0.7
+    - Tier 2 (Multi-hop or intermediate): L2_confidence, L5_latency
+      Max gradient: 0.8
+    - Tier 3 (Deepest leaves): L1_routing
+      Max gradient: 1.0 (loosest)
+
+    The intuition: upstream loops affect more downstream loops, so they get
+    tighter bounds. Clipping is applied independently per tier before gradients
+    propagate backward.
+    """
+
+    def __init__(self, audit_backend=None, tenant_id: str = "default"):
+        self.audit = audit_backend
+        self.tenant_id = tenant_id
+
+        # Define tier membership and per-tier max_gradient bounds
+        self.tier_definitions = {
+            # Tier 0: Source nodes (no incoming edges)
+            'tier_0': {
+                'loops': ['L4_attention', 'L6_diversity'],
+                'max_gradient': 0.5,
+                'name': 'source_nodes',
+            },
+            # Tier 1: Immediate children of tier 0
+            'tier_1': {
+                'loops': ['L3_feedback'],
+                'max_gradient': 0.7,
+                'name': 'immediate_dependents',
+            },
+            # Tier 2: Intermediate loops with multiple dependencies
+            'tier_2': {
+                'loops': ['L2_confidence', 'L5_latency'],
+                'max_gradient': 0.8,
+                'name': 'intermediate_loops',
+            },
+            # Tier 3: Deepest leaves
+            'tier_3': {
+                'loops': ['L1_routing'],
+                'max_gradient': 1.0,
+                'name': 'leaf_nodes',
+            },
+        }
+
+        # Build reverse lookup (loop_id → tier)
+        self.loop_to_tier: Dict[str, str] = {}
+        for tier_id, tier_info in self.tier_definitions.items():
+            for loop_id in tier_info['loops']:
+                self.loop_to_tier[loop_id] = tier_id
+
+        # Statistics
+        self.num_tier_clips = {tier_id: 0 for tier_id in self.tier_definitions.keys()}
+        self.total_clipped_by_tier: Dict[str, float] = {tier_id: 0.0 for tier_id in self.tier_definitions.keys()}
+
+    def clip_gradients_by_tier(
+        self,
+        gradients: Dict[str, Dict],
+        batch_id: str
+    ) -> Tuple[Dict[str, Dict], bool]:
+        """
+        Clip gradients independently per tier before backprop.
+
+        Returns: (clipped_gradients, success)
+
+        Process:
+        1. For each tier (in order 0→3):
+           - Apply tier-specific max_gradient bound
+           - Track which loops were clipped
+        2. Return clipped gradient dict (replaces original)
+        3. Audit all clipping events
+        """
+        clipped_gradients = {}
+        all_valid = True
+        clipped_by_tier: Dict[str, List[Dict]] = {
+            tier_id: [] for tier_id in self.tier_definitions.keys()
+        }
+
+        for loop_id, grad_dict in gradients.items():
+            grad_value = grad_dict['grad']
+
+            # Check for NaN/Inf
+            if not np.isfinite(grad_value):
+                # Fail-closed: invalid gradients are rejected
+                if self.audit:
+                    self.audit.write_event({
+                        'event_type': 'tier_gradient_invalid_value',
+                        'severity': 'error',
+                        'tenant_id': self.tenant_id,
+                        'batch_id': batch_id,
+                        'loop_id': loop_id,
+                        'value': float(grad_value) if isinstance(grad_value, (int, float)) else str(grad_value),
+                        'action': 'weight_update_refused',
+                        'timestamp': datetime.now().isoformat(),
+                    })
+                all_valid = False
+                continue
+
+            # Find tier for this loop
+            tier_id = self.loop_to_tier.get(loop_id)
+            if tier_id is None:
+                # Unknown loop, reject
+                if self.audit:
+                    self.audit.write_event({
+                        'event_type': 'tier_gradient_unknown_loop',
+                        'severity': 'error',
+                        'tenant_id': self.tenant_id,
+                        'batch_id': batch_id,
+                        'loop_id': loop_id,
+                        'action': 'weight_update_refused',
+                        'timestamp': datetime.now().isoformat(),
+                    })
+                all_valid = False
+                continue
+
+            # Get tier-specific bound
+            max_grad = self.tier_definitions[tier_id]['max_gradient']
+
+            # Clip to tier-specific bound
+            clipped_value = np.clip(grad_value, -max_grad, max_grad)
+            was_clipped = (clipped_value != grad_value)
+
+            if was_clipped:
+                self.num_tier_clips[tier_id] += 1
+                self.total_clipped_by_tier[tier_id] += abs(grad_value - clipped_value)
+                clipped_by_tier[tier_id].append({
+                    'loop': loop_id,
+                    'original': float(grad_value),
+                    'clipped': float(clipped_value),
+                    'tier_bound': max_grad,
+                })
+
+            # Build clipped gradient dict
+            clipped_gradients[loop_id] = {
+                'grad': float(clipped_value),
+                'original_grad': float(grad_value),
+                'was_clipped': was_clipped,
+                'tier_id': tier_id,
+                'tier_bound': max_grad,
+                'contributors': grad_dict.get('contributors', [])
+            }
+
+        # Fail-closed on invalid values
+        if not all_valid:
+            if self.audit:
+                self.audit.write_event({
+                    'event_type': 'tier_clipping_validation_failed',
+                    'severity': 'error',
+                    'tenant_id': self.tenant_id,
+                    'batch_id': batch_id,
+                    'action': 'all_weight_updates_refused',
+                    'timestamp': datetime.now().isoformat(),
+                })
+            return {}, False
+
+        # Audit clipping summary per tier
+        total_clips = sum(self.num_tier_clips.values())
+        if total_clips > 0:
+            if self.audit:
+                self.audit.write_event({
+                    'event_type': 'tier_gradient_clipping_summary',
+                    'severity': 'warning',
+                    'tenant_id': self.tenant_id,
+                    'batch_id': batch_id,
+                    'total_clipped': total_clips,
+                    'clipped_by_tier': {
+                        tier_id: {
+                            'count': self.num_tier_clips[tier_id],
+                            'total_delta': float(self.total_clipped_by_tier[tier_id]),
+                            'bound': self.tier_definitions[tier_id]['max_gradient'],
+                            'tier_name': self.tier_definitions[tier_id]['name'],
+                        }
+                        for tier_id in self.tier_definitions.keys()
+                        if self.num_tier_clips[tier_id] > 0
+                    },
+                    'detailed_clips': clipped_by_tier,
+                    'timestamp': datetime.now().isoformat(),
+                })
+
+        return clipped_gradients, True
+
+    def get_statistics(self) -> Dict:
+        """Return per-tier clipping statistics."""
+        return {
+            'num_tier_clips': dict(self.num_tier_clips),
+            'total_clipped_by_tier': dict(self.total_clipped_by_tier),
+            'tier_definitions': {
+                tier_id: {
+                    'loops': info['loops'],
+                    'max_gradient': info['max_gradient'],
+                    'name': info['name'],
+                }
+                for tier_id, info in self.tier_definitions.items()
+            },
+        }
+
+
 class GradientValidator:
     """
     Hard Gradient Clipping + NaN/Inf Detection (Fail-Closed).
@@ -238,6 +446,12 @@ class LossBackpropagator:
             tenant_id=tenant_id
         )
 
+        # Per-tier gradient clipping (ADR-0647 Security Mitigation #5)
+        self.tier_clipper = PerTierGradientClipper(
+            audit_backend=audit_backend,
+            tenant_id=tenant_id
+        )
+
     def compute_gradients_with_dag(
         self,
         snapshot,  # UnifiedLossSnapshot
@@ -338,7 +552,7 @@ class LossBackpropagator:
                 'timestamp': datetime.now().isoformat(),
             })
 
-        # Divergence detection
+        # Divergence detection (before clipping)
         total_grad_magnitude = sum(abs(v['grad']) for v in gradients.values())
         if total_grad_magnitude > 1.0:
             if self.audit:
@@ -351,26 +565,49 @@ class LossBackpropagator:
                 })
             self.divergence_detected = True
 
-        # Store gradient history (before validation/clipping)
+        # Store gradient history (before clipping)
         for loop_id, grad_dict in gradients.items():
             self.gradient_history[loop_id].append(grad_dict['grad'])
 
-        # CRITICAL: Validate and clip gradients (ADR-0647 Security Mitigation #4)
-        # Save checkpoint BEFORE validation
-        current_weights = {k: v['grad'] for k, v in gradients.items()}
-        self.gradient_validator.save_checkpoint(current_weights, getattr(snapshot, 'batch_id', 'unknown'))
+        # CRITICAL: Multi-stage gradient clipping (ADR-0647 Security Mitigations #4 & #5)
 
-        # Validate and clip
-        clipped_gradients, is_valid = self.gradient_validator.validate_and_clip_gradients(
+        # Stage 1: Per-tier gradient clipping (BEFORE backprop propagation)
+        # This prevents cascading divergence by applying tier-specific bounds
+        batch_id = getattr(snapshot, 'batch_id', 'unknown')
+        tier_clipped_gradients, tier_valid = self.tier_clipper.clip_gradients_by_tier(
             gradients,
-            batch_id=getattr(snapshot, 'batch_id', 'unknown')
+            batch_id=batch_id
+        )
+
+        # If tier clipping detected invalid values, fail-closed
+        if not tier_valid:
+            if self.audit:
+                self.audit.write_event({
+                    'event_type': 'gradient_tier_clipping_failed',
+                    'severity': 'error',
+                    'tenant_id': self.tenant_id,
+                    'batch_id': batch_id,
+                    'action': 'weight_update_refused',
+                    'timestamp': datetime.now().isoformat(),
+                })
+            return {}
+
+        # Stage 2: Global gradient validation (backward compatibility, ADR-0647 #4)
+        # Save checkpoint BEFORE final validation
+        current_weights = {k: v['grad'] for k, v in tier_clipped_gradients.items()}
+        self.gradient_validator.save_checkpoint(current_weights, batch_id)
+
+        # Validate and clip (global bounds)
+        final_clipped_gradients, is_valid = self.gradient_validator.validate_and_clip_gradients(
+            tier_clipped_gradients,
+            batch_id=batch_id
         )
 
         # If validation failed, return empty dict to signal caller to rollback
         if not is_valid:
             return {}
 
-        return clipped_gradients
+        return final_clipped_gradients
 
     def _gradient_attention(self, task_batch: List[Dict]) -> float:
         """L4: Attention budget overrun."""
