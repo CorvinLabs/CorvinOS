@@ -104,6 +104,7 @@ from .routes import (
     learning as learning_route,
     learning_dashboard as learning_dashboard_route,
     learning_metrics as learning_metrics_route,
+    world_map as world_map_route,
     infinite_session_api as infinite_session_route,
     method_discovery_api as method_discovery_api_route,
     l5_metrics_api as l5_metrics_route,
@@ -182,6 +183,7 @@ router.include_router(skills_monitoring_route.router, tags=["console-skills-moni
 router.include_router(learning_route.router, tags=["console-learning"])
 router.include_router(learning_dashboard_route.router, tags=["console-learning-dashboard"])
 router.include_router(learning_metrics_route.router, tags=["console-learning-metrics"])
+router.include_router(world_map_route.router, tags=["console-world-map"])
 router.include_router(infinite_session_route.router, tags=["console-infinite-session"])
 router.include_router(method_discovery_api_route.router, tags=["console-method-discovery"])
 router.include_router(l5_metrics_route.router, tags=["console-l5-metrics"])
