@@ -34,16 +34,34 @@ from core.learning.completion_detectors.completion_event import (
     CompletionTaskType,
 )
 from core.learning.completion_detectors.workflow_detector import WorkflowDetector
-from core.notification.summary_generator import SummaryGenerator
+from core.notification.summary_generator import (
+    StructuredSummary,
+    SummaryGenerator,
+    SummaryType,
+)
 from core.notification.notification_router import NotificationRouter
 from core.notification.pii_scrubber import scrub_text, PIIScrubber
 
 
 @pytest.fixture
-def temp_workflows_dir():
-    """Create temporary workflows directory."""
+def temp_corvin_home():
+    """Temporary CORVIN_HOME root.
+
+    WorkflowDetector polls ``<corvin_home>/workflows`` and NotificationRouter
+    writes ``<corvin_home>/bridges/discord/outbox``; both derive those paths
+    themselves, so the fixture yields the ROOT (never a subdirectory, and never
+    the shared system temp dir via ``.parent``).
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
+
+
+@pytest.fixture
+def temp_workflows_dir(temp_corvin_home):
+    """The ``workflows/`` directory WorkflowDetector actually polls."""
+    wf_dir = temp_corvin_home / "workflows"
+    wf_dir.mkdir(parents=True)
+    return wf_dir
 
 
 @pytest.fixture
@@ -55,22 +73,21 @@ def mock_audit_backend():
 
 
 @pytest.fixture
-def temp_outbox_dir():
-    """Create temporary Discord outbox directory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+def temp_outbox_dir(temp_corvin_home):
+    """The Discord outbox directory NotificationRouter actually writes."""
+    return temp_corvin_home / "bridges" / "discord" / "outbox"
 
 
 class TestWorkflowDetectorPhase1:
     """WorkflowDetector tests."""
 
     @pytest.mark.asyncio
-    async def test_workflow_running_to_complete_transition(self, temp_workflows_dir, mock_audit_backend):
+    async def test_workflow_running_to_complete_transition(self, temp_corvin_home, temp_workflows_dir, mock_audit_backend):
         """Test: RUNNING → COMPLETE transition detected."""
         detector = WorkflowDetector(
             {"poll_interval_sec": 0.1},
             mock_audit_backend,
-            corvin_home=str(temp_workflows_dir.parent),
+            corvin_home=str(temp_corvin_home),
         )
 
         wf_file = temp_workflows_dir / "wf_abc123.json"
@@ -109,12 +126,12 @@ class TestWorkflowDetectorPhase1:
         assert call_args.phase_reached == 5
 
     @pytest.mark.asyncio
-    async def test_workflow_running_to_failed_transition(self, temp_workflows_dir, mock_audit_backend):
+    async def test_workflow_running_to_failed_transition(self, temp_corvin_home, temp_workflows_dir, mock_audit_backend):
         """Test: RUNNING → FAILED transition detected."""
         detector = WorkflowDetector(
             {"poll_interval_sec": 0.1},
             mock_audit_backend,
-            corvin_home=str(temp_workflows_dir.parent),
+            corvin_home=str(temp_corvin_home),
         )
 
         wf_file = temp_workflows_dir / "wf_def456.json"
@@ -146,12 +163,12 @@ class TestWorkflowDetectorPhase1:
         assert "timeout" in call_args.output_summary
 
     @pytest.mark.asyncio
-    async def test_duplicate_notification_prevented(self, temp_workflows_dir, mock_audit_backend):
+    async def test_duplicate_notification_prevented(self, temp_corvin_home, temp_workflows_dir, mock_audit_backend):
         """Test: Idempotency — same transition → no duplicate emit."""
         detector = WorkflowDetector(
             {"poll_interval_sec": 0.1},
             mock_audit_backend,
-            corvin_home=str(temp_workflows_dir.parent),
+            corvin_home=str(temp_corvin_home),
         )
 
         wf_file = temp_workflows_dir / "wf_dup.json"
@@ -173,12 +190,12 @@ class TestWorkflowDetectorPhase1:
         assert mock_audit_backend.emit.call_count == 1  # Still 1, not 2
 
     @pytest.mark.asyncio
-    async def test_corrupted_state_file_skipped_safely(self, temp_workflows_dir, mock_audit_backend):
+    async def test_corrupted_state_file_skipped_safely(self, temp_corvin_home, temp_workflows_dir, mock_audit_backend):
         """Test: Corrupted JSON skipped without crash."""
         detector = WorkflowDetector(
             {"poll_interval_sec": 0.1},
             mock_audit_backend,
-            corvin_home=str(temp_workflows_dir.parent),
+            corvin_home=str(temp_corvin_home),
         )
 
         wf_file = temp_workflows_dir / "wf_corrupt.json"
@@ -211,7 +228,7 @@ class TestSummaryGenerator:
         summary = await gen.generate(event)
         assert summary.outcome == "SUCCESS"
         assert "completed" in summary.title
-        assert "120m" in summary.duration  # 120.5 seconds ≈ 2 minutes
+        assert summary.duration == "2m"  # 120.5s -> "2m" per _format_duration
 
     @pytest.mark.asyncio
     async def test_summary_generation_failed_workflow(self):
@@ -268,7 +285,7 @@ class TestPIIScrubber:
 
     def test_email_scrubbed(self):
         """Test: Email addresses scrubbed."""
-        scrubber = PISScrubber()
+        scrubber = PIIScrubber()
         result = scrubber.scrub("Contact: user@example.com for support")
         assert "user@example.com" not in result.text
         assert "[REDACTED_EMAIL]" in result.text
@@ -294,9 +311,9 @@ class TestNotificationRouter:
     """NotificationRouter tests."""
 
     @pytest.mark.asyncio
-    async def test_discord_notification_envelope_format(self, temp_outbox_dir, mock_audit_backend):
+    async def test_discord_notification_envelope_format(self, temp_corvin_home, temp_outbox_dir, mock_audit_backend):
         """Test: Discord envelope format correct."""
-        router = NotificationRouter(mock_audit_backend, corvin_home=str(temp_outbox_dir.parent))
+        router = NotificationRouter(mock_audit_backend, corvin_home=str(temp_corvin_home))
 
         event = CompletionEvent(
             task_id="wf_123",
@@ -309,8 +326,7 @@ class TestNotificationRouter:
             origin={"channel": "discord"},
         )
 
-        from core.notification.summary_generator import SummaryGenerator, SummaryType
-        summary = SummaryGenerator.StructuredSummary(
+        summary = StructuredSummary(
             summary_type=SummaryType.REPORT,
             title="Task Done",
             outcome="SUCCESS",
@@ -326,9 +342,9 @@ class TestNotificationRouter:
         assert len(outbox_files) >= 1
 
     @pytest.mark.asyncio
-    async def test_idempotency_o_excl_prevents_duplicate(self, temp_outbox_dir, mock_audit_backend):
+    async def test_idempotency_o_excl_prevents_duplicate(self, temp_corvin_home, temp_outbox_dir, mock_audit_backend):
         """Test: O_EXCL lock prevents duplicate notifications."""
-        router = NotificationRouter(mock_audit_backend, corvin_home=str(temp_outbox_dir.parent))
+        router = NotificationRouter(mock_audit_backend, corvin_home=str(temp_corvin_home))
 
         event = CompletionEvent(
             task_id="wf_456",
@@ -341,7 +357,7 @@ class TestNotificationRouter:
             origin={"channel": "discord"},
         )
 
-        summary = SummaryGenerator.StructuredSummary(
+        summary = StructuredSummary(
             summary_type=SummaryType.REPORT,
             title="Task",
             outcome="SUCCESS",
@@ -353,9 +369,33 @@ class TestNotificationRouter:
         # First route: success
         success1 = await router.route(event, summary)
         assert success1 is True
+        assert len(list(temp_outbox_dir.glob("*.json"))) == 1
+        assert mock_audit_backend.emit.call_count == 1
 
-        # Second route (same task_id): should gracefully handle
-        # (In production, would check dedup_hash first)
+        # Second route of the SAME completion: the derived envelope id collides,
+        # the O_EXCL open fails, and nothing is delivered a second time.
+        success2 = await router.route(event, summary)
+        assert success2 is True, "a duplicate route is a no-op, not an error"
+        assert len(list(temp_outbox_dir.glob("*.json"))) == 1, (
+            "exactly-once delivery: a second envelope must not be written"
+        )
+        assert mock_audit_backend.emit.call_count == 1, (
+            "a suppressed duplicate must not emit a second NotificationSentEvent"
+        )
+
+        # A genuinely different completion still gets through.
+        other = CompletionEvent(
+            task_id="wf_457",
+            task_type=CompletionTaskType.WORKFLOW,
+            status=CompletionStatus.COMPLETE,
+            duration_sec=50.0,
+            output_summary="Done",
+            metadata={"discord_chat_id": 67890},
+            tenant_id="_default",
+            origin={"channel": "discord"},
+        )
+        assert await router.route(other, summary) is True
+        assert len(list(temp_outbox_dir.glob("*.json"))) == 2
 
 
 @pytest.mark.asyncio
@@ -365,12 +405,14 @@ async def test_latency_p95_under_load():
     audit_backend = AsyncMock()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-        detector = WorkflowDetector({"poll_interval_sec": 0.01}, audit_backend, corvin_home=str(tmpdir.parent))
+        corvin_home = Path(tmpdir)
+        workflows_dir = corvin_home / "workflows"
+        workflows_dir.mkdir()
+        detector = WorkflowDetector({"poll_interval_sec": 0.01}, audit_backend, corvin_home=str(corvin_home))
 
         # Create 50 workflow files
         for i in range(50):
-            wf_file = tmpdir / f"wf_{i:03d}.json"
+            wf_file = workflows_dir / f"wf_{i:03d}.json"
             state = {
                 "id": f"wf_{i:03d}",
                 "status": "COMPLETE",
