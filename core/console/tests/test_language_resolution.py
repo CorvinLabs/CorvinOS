@@ -1,6 +1,6 @@
 """Test language resolution for web chat turns."""
 
-from core.console.language_resolution import (
+from corvin_console.language_resolution import (
     resolve_turn_language,
     store_language_context_in_metadata,
 )
