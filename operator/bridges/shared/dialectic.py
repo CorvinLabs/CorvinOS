@@ -57,6 +57,21 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 # ── Audit hash chain (best-effort import) ──────────────────────────────────
 #
 # Mirror the optional-dep pattern used by skill_inject / cowork: we want
@@ -452,11 +467,16 @@ def _run_cli_judge(*, site: str, thesis: Any, antithesis: Any) -> str:
             _hm = None
     model_args = _hm.claude_args(_hm.SITE_DIALECTIC_CLI) if _hm else []
     _bin = _hm.resolve_claude_bin() if _hm else "claude"
+    # R4: whole-payload guard on the argv-borne prompt below. Thesis and
+    # antithesis are built from the caller's task text, and the payload is a
+    # POSITIONAL argv element, so byte 0 must not be `-`/`/`/`!`/`#` and every
+    # `@` must be disarmed. Reply contract unaffected: the verdict is the LAST
+    # stdout line (`A | …` / `B | …`), which the guard never touches.
     try:
         proc = subprocess.run(
             [_bin, "-p", "--max-turns", "1", "--tools", "",
              *model_args,
-             "--output-format", "text", prompt],
+             "--output-format", "text", _guard_prompt_head(prompt)],
             capture_output=True, text=True, timeout=_CLI_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -542,11 +562,14 @@ def _run_summary_judge(source: str, candidate: str, lang: str) -> str:
             _hm = None
     model_args = _hm.claude_args(_hm.SITE_DIALECTIC_SUMMARY_JUDGE) if _hm else []
     _bin = _hm.resolve_claude_bin() if _hm else "claude"
+    # R4: same whole-payload guard. `source` is the raw turn text being
+    # summarised — the direct attacker channel for `@<path>`. Reply contract
+    # unaffected: the verdict is the LAST stdout line (`FAITHFUL | …`).
     try:
         proc = subprocess.run(
             [_bin, "-p", "--max-turns", "1", "--tools", "",
              *model_args,
-             "--output-format", "text", prompt],
+             "--output-format", "text", _guard_prompt_head(prompt)],
             capture_output=True, text=True,
             timeout=_SUMMARY_JUDGE_TIMEOUT_SECONDS,
         )

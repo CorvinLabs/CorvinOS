@@ -20,6 +20,21 @@ import time
 from pathlib import Path
 from typing import Any
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 # MUST NOT import anthropic — CI AST lint enforces.
 
 # ── System prompts ─────────────────────────────────────────────────────────
@@ -225,7 +240,11 @@ def _run_haiku(system: str, prompt: str, model: str) -> str | None:
     try:
         out = subprocess.run(
             [
-                _bin, "-p", prompt,
+                # R4: whole-payload guard — the narration prompt embeds run
+                # metadata and operator/user-authored goal text, and rides
+                # POSITIONALLY in argv. Reply contract unaffected: stdout is
+                # returned verbatim to the caller.
+                _bin, "-p", _guard_prompt_head(prompt),
                 "--append-system-prompt", system,
                 "--model", model,
                 "--disallowedTools", "*",

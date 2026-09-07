@@ -77,7 +77,12 @@ class TestMessagesCreate:
 
         assert resp.content[0].text == "PONG"
         argv = run.call_args[0][0]
-        assert argv[1] == "-p" and argv[2] == "ping"
+        # R4 (2026-09-07): the prompt is a POSITIONAL argv element, so it goes
+        # through the shared claude-CLI neutraliser first — byte 0 is the fixed
+        # sentinel line, the user's text follows verbatim underneath it. See
+        # `core/console/tests/test_claude_spawn_site_ledger.py`.
+        assert argv[1] == "-p"
+        assert argv[2] == "User input:\nping", argv[2]
         # Tool-free, single-turn, JSON envelope — the safety envelope the
         # Skill-Creator relies on.
         assert "--max-turns" in argv and "--disallowedTools" in argv

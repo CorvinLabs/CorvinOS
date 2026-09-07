@@ -22,7 +22,34 @@ import time
 import zipfile
 from pathlib import Path
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# The claude CLI expands `/`, `!` and `#` at byte 0 and `@<path>` ANYWHERE in a
+# prompt — client-side, BEFORE the model runs, so no tool policy, permission
+# mode or `--disallowedTools` restricts them. Every payload this module hands
+# to the CLI therefore goes through the ONE shared neutraliser. The fallback is
+# a RAISING stub, never a pass-through: an unimportable guard refuses the
+# spawn, it never downgrades it to an unguarded one.
+try:  # pragma: no cover - import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_d = _pg_os.path.dirname(_pg_os.path.abspath(__file__))
+    while _pg_d != _pg_os.path.dirname(_pg_d):
+        _pg_c = _pg_os.path.join(_pg_d, "operator", "bridges", "shared")
+        if _pg_os.path.isdir(_pg_c):
+            if _pg_c not in _pg_sys.path:
+                _pg_sys.path.insert(0, _pg_c)
+            break
+        _pg_d = _pg_os.path.dirname(_pg_d)
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except Exception:  # pragma: no cover - guard unavailable => refuse, never bypass
+    def _guard_prompt_head(_text):  # type: ignore[misc]
+        raise RuntimeError(
+            "shared claude-CLI prompt guard unavailable "
+            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "unguarded `claude -p` payload"
+        )
+
 # ── Umgebung einrichten ───────────────────────────────────────────────────
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "core" / "console"))
 sys.path.insert(0, str(REPO / "operator" / "forge"))
@@ -407,7 +434,10 @@ Antworte auf Deutsch, präzise und datenbasiert."""
 
 log("Starte Claude-Aufruf (claude -p, max-turns 1)…")
 result = subprocess.run(
-    ["claude", "-p", ANALYST_PROMPT, "--max-turns", "1", "--tools", ""],
+    # R4: guarded like every other spawn site even though this demo's prompt
+    # is a fixed literal today - the ledger's rule is per-SITE, not per-value.
+    ["claude", "-p", _guard_prompt_head(ANALYST_PROMPT),
+     "--max-turns", "1", "--tools", ""],
     capture_output=True, text=True, timeout=120,
     env={**os.environ, "CLAUDE_SKIP_CONFIRMATION": "1"},
 )

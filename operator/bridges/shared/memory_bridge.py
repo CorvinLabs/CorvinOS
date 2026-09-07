@@ -30,6 +30,21 @@ import time
 from pathlib import Path
 from typing import Any
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 # ── Best-effort imports ───────────────────────────────────────────────────────
 
 _log = logging.getLogger(__name__)
@@ -179,9 +194,13 @@ def _run_haiku(prompt: str, timeout_s: float, site: str = "") -> str:
         except Exception:  # noqa: BLE001
             pass
     try:
+        # R4: whole-payload guard — every caller of `_run_haiku` builds its
+        # prompt out of RECALLED USER TEXT, which is precisely the attacker
+        # channel (`@/etc/passwd` stored in memory and replayed later).
+        # Reply contract unaffected: callers parse stdout.
         proc = subprocess.run(
             [bin_path, "-p", "--max-turns", "1", "--tools", "", *model_args],
-            input=prompt,
+            input=_guard_prompt_head(prompt),
             capture_output=True,
             text=True,
             timeout=timeout_s,

@@ -37,6 +37,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 log = logging.getLogger(__name__)
 
 # Ensure shared/ is importable when running standalone (e.g. from project root).
@@ -1541,6 +1556,13 @@ def _call_manager_sync(
             f"claude CLI not found ({binary!r}); "
             "set CORVIN_CLAUDE_BIN to the absolute path of the claude binary"
         )
+    # R4: the payload travels on STDIN, which the CLI expands exactly like a
+    # positional prompt (`/pwn` at byte 0, `@<path>` anywhere). It carries the
+    # user's task verbatim, so it goes through the ONE shared neutraliser.
+    # Applied AFTER the hermes branch: Ollama has no client-side expansion and
+    # must keep the unmodified prompt. Reply contract unaffected — the JSON
+    # envelope is parsed from stdout.
+    prompt = _guard_prompt_head(prompt)
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
     _strip_worker_secrets(env)  # full secret/PII strip (round-2)
@@ -1714,6 +1736,13 @@ def _call_worker_sync(
             f"claude CLI not found ({binary!r}); "
             "set CORVIN_CLAUDE_BIN to the absolute path of the claude binary"
         )
+    # R4: the payload travels on STDIN, which the CLI expands exactly like a
+    # positional prompt (`/pwn` at byte 0, `@<path>` anywhere). It carries the
+    # user's task verbatim, so it goes through the ONE shared neutraliser.
+    # Applied AFTER the hermes branch: Ollama has no client-side expansion and
+    # must keep the unmodified prompt. Reply contract unaffected — the JSON
+    # envelope is parsed from stdout.
+    prompt = _guard_prompt_head(prompt)
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
     # ADR-0109 M6: propagate ACS worker context for engine-trace hooks

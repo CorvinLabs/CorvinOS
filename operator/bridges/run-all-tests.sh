@@ -488,6 +488,7 @@ run "Node: email inbound auth (DMARC/DKIM)" node email/test_inbound_auth.js >/de
 run "Node: email IMAP processed-UID state" node email/test_imap_state.js >/dev/null || fails=$((fails+1))
 run "Node: email disclosure ordering" node email/test_disclosure_ordering.js >/dev/null || fails=$((fails+1))
 run "Python: adapter prompt-head sentinel (R2-E1/E2)" python3 shared/test_adapter_prompt_head.py >/dev/null || fails=$((fails+1))
+run "Python: claude -p spawn guard (R4)" python3 shared/test_spawn_prompt_guard.py >/dev/null || fails=$((fails+1))
 run "Python: adapter inbox hygiene" python3 shared/test_adapter_inbox_hygiene.py >/dev/null || fails=$((fails+1))
 # corvin-compute (ADR-0013) — opt-in plugin; venv is bootstrapped lazily.
 # Phase 13.1's skeleton tests are pure-stdlib and run under system python3,

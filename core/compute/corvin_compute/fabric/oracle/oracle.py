@@ -24,7 +24,34 @@ from .steering import _parse_steering
 
 log = logging.getLogger(__name__)
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# The claude CLI expands `/`, `!` and `#` at byte 0 and `@<path>` ANYWHERE in a
+# prompt — client-side, BEFORE the model runs, so no tool policy, permission
+# mode or `--disallowedTools` restricts them. Every payload this module hands
+# to the CLI therefore goes through the ONE shared neutraliser. The fallback is
+# a RAISING stub, never a pass-through: an unimportable guard refuses the
+# spawn, it never downgrades it to an unguarded one.
+try:  # pragma: no cover - import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_d = _pg_os.path.dirname(_pg_os.path.abspath(__file__))
+    while _pg_d != _pg_os.path.dirname(_pg_d):
+        _pg_c = _pg_os.path.join(_pg_d, "operator", "bridges", "shared")
+        if _pg_os.path.isdir(_pg_c):
+            if _pg_c not in _pg_sys.path:
+                _pg_sys.path.insert(0, _pg_c)
+            break
+        _pg_d = _pg_os.path.dirname(_pg_d)
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except Exception:  # pragma: no cover - guard unavailable => refuse, never bypass
+    def _guard_prompt_head(_text):  # type: ignore[misc]
+        raise RuntimeError(
+            "shared claude-CLI prompt guard unavailable "
+            "(operator/bridges/shared/prompt_guard.py) - refusing to build an "
+            "unguarded `claude -p` payload"
+        )
+
 # Maximum number of metric batches buffered in oracle_queue before dropping oldest
+
 _DEFAULT_QUEUE_MAX = 8
 # Default subprocess command
 _DEFAULT_CMD = ["claude", "-p", "--max-turns", "1", "--tools", ""]
@@ -108,7 +135,11 @@ async def _call_oracle_subprocess(
 
     CRITICAL: uses asyncio.create_subprocess_exec — NEVER asyncio.create_subprocess_shell.
     """
-    prompt = json.dumps({
+    # R4: whole-payload guard - `run_id`, `primary_metric` and the free-form
+    # `extra` dict are job-supplied strings that end up inside this JSON, and a
+    # STDIN prompt is expanded by the CLI exactly like a positional one.
+    # Reply contract unaffected: `_parse_steering` reads stdout.
+    prompt = _guard_prompt_head(json.dumps({
         "task": "gradient_oracle",
         "run_id": run_id,
         "epoch": metrics.epoch,
@@ -122,7 +153,7 @@ async def _call_oracle_subprocess(
             "like '\\u21930.3' (decrease by 30%) or '\\u25911' (increase integer by 1). "
             "No prose, no explanation — pure JSON only."
         ),
-    })
+    }))
 
     try:
         proc = await asyncio.create_subprocess_exec(

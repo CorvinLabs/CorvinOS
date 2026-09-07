@@ -37,6 +37,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# ── shared `claude -p` prompt guard (ADR-0648 / adversarial review R4) ─────
+# Every payload handed to the claude CLI goes through the ONE shared
+# neutraliser: a non-slash sentinel at byte 0 (kills the client-side `/`, `!`,
+# `#` handlers) plus a zero-width U+2060 before every `@` that could start a
+# client-side `@<path>` file expansion. Both fire INSIDE the CLI before the
+# model runs, so no tool policy or permission mode restricts them.
+# Fail-closed: `guard_prompt_head` RAISES when the helper is unimportable, so
+# there is no code path that spawns on raw text.
+try:
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+except ImportError:  # pragma: no cover - flat-module vs package import shape
+    import os as _pg_os, sys as _pg_sys
+    _pg_sys.path.insert(0, _pg_os.path.dirname(_pg_os.path.abspath(__file__)))
+    from prompt_guard import guard_prompt_head as _guard_prompt_head  # type: ignore
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -364,7 +379,13 @@ def _run_critique_sync(result_text: str, goal: str, model: str) -> dict[str, Any
         _bin = "claude"
     if not (shutil.which(_bin) or os.path.isfile(_bin)):
         return None
-    prompt = (
+    # R4: whole-payload guard — `goal` and `result_text` are both
+    # attacker-influenceable (the goal comes from the user's task, the output
+    # from a model that read user text), and they are interleaved with the
+    # template here. `prompt` also rides POSITIONALLY in argv, so byte 0 must
+    # not be `-`/`/`/`!`/`#`. Reply contract unaffected: the verdict is still
+    # the first `{...}` found in stdout.
+    prompt = _guard_prompt_head(
         f"GOAL:\n{goal}\n\n"
         f"OUTPUT:\n{result_text[:4000]}\n\n"
         "Return only JSON: {\"pass\": bool, \"score\": 0-1, \"reason\": string}"
