@@ -77,10 +77,42 @@ def test_worker_prompt_travels_on_stdin_never_argv(fake_claude):
     assert "/tmp/evil.json" not in argv
     assert argv[0] == "-p"
     assert "--max-turns" in argv and "--disallowedTools" in argv
-    assert stdin_text == HOSTILE
+    # R3 (2026-09-07): the TDE worker prompt now also goes through the ONE
+    # shared neutraliser — byte-0 sentinel (`/`,`!`,`#` are client-side CLI
+    # handlers, not model input) plus the `@<path>` client-side file-expansion
+    # joiner. Call the real helper rather than hard-coding its output, so the
+    # assertion tracks the guard instead of a snapshot of it.
+    from agents.claude_code import guard_prompt_head
+    assert stdin_text == guard_prompt_head(HOSTILE)
+    assert stdin_text.endswith(HOSTILE)  # user text preserved verbatim
 
     assert result["success"] is True, result
     assert result["output"] == "fake answer"
+
+
+def test_worker_refuses_to_spawn_without_the_shared_guard(fake_claude, monkeypatch):
+    """Fail-closed, same contract as ``task_worker_pool._worker_stdin_payload``
+    and ``routes/assistant.py``: no helper ⇒ no spawn."""
+    monkeypatch.setattr(worker_ipc, "_guard_prompt_head", None)
+    ipc = worker_ipc.SubprocessWorkerIPC(timeout_s=30)
+    result = ipc._run_worker("hello")
+    assert result["success"] is False, result
+    assert "guard" in str(result["error"]).lower(), result
+    assert not (fake_claude / "argv.json").exists(), "spawned without the guard"
+
+
+def test_worker_at_reference_is_neutralised_on_the_wire(fake_claude):
+    """R3-C2 through the TDE worker's real stdin transport."""
+    from agents.claude_code import AT_NEUTRALISER
+    ipc = worker_ipc.SubprocessWorkerIPC(timeout_s=30)
+    ipc._run_worker("summarise @/etc/hostname for me")
+    stdin_text = (fake_claude / "stdin.txt").read_text()
+    assert AT_NEUTRALISER + "@" in stdin_text
+    for i, ch in enumerate(stdin_text):
+        if ch == "@":
+            assert stdin_text[i - 1: i] == AT_NEUTRALISER, (i, stdin_text)
+    assert stdin_text.replace(AT_NEUTRALISER, "").endswith(
+        "summarise @/etc/hostname for me")
 
 
 @pytest.mark.live

@@ -332,7 +332,9 @@ def test_workflow_chat_ws_real_design_turn_persists_both_lines(tmp_path):
 
     The refusal path is proven above with a wedged lock; this proves the other
     half — that with the lock free the same bounded append still persists both
-    the user message and the LLM's reply around a real model call.
+    the user message and the LLM's reply around a real model call. The prompt
+    deliberately avoids every ``_TEMPLATES`` keyword so ``_design_turn`` cannot
+    short-circuit on a template match and really spawns ``claude -p``.
     """
     with _console(tmp_path) as client:
         assert client.post("/v1/console/workflows", json={"id": "wf_live"}).status_code == 200
@@ -340,7 +342,7 @@ def test_workflow_chat_ws_real_design_turn_persists_both_lines(tmp_path):
         with client.websocket_connect("/v1/console/workflows/wf_live/chat") as ws:
             assert ws.receive_json()["type"] == "init"
             assert ws.receive_json()["type"] == "message"  # opening
-            ws.send_json({"type": "user", "text": "Summarise my unread email every morning."})
+            ws.send_json({"type": "user", "text": "Rename photos in a folder using their EXIF date."})
             frames = []
             while len(frames) < 3:
                 frame = ws.receive_json()
@@ -349,7 +351,8 @@ def test_workflow_chat_ws_real_design_turn_persists_both_lines(tmp_path):
                     break
 
         assert any(f.get("role") == "user" for f in frames), frames
-        assert any(f.get("role") == "assistant" for f in frames), frames
+        replies = [f for f in frames if f.get("role") == "assistant"]
+        assert replies and replies[0]["content"].strip(), frames
 
         from forge import paths as _fp
         chat_path = _fp.tenant_home(TENANT) / "workflows" / "wf_live.chat.jsonl"
