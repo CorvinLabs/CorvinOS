@@ -187,7 +187,12 @@ def _audit(ctx: RepairContext, event: str, **fields: Any) -> None:
     # 2) L16 hash-chained audit (metadata only), best-effort.
     try:
         from forge import security_events as _sec  # type: ignore  # noqa: PLC0415
-        chain = ctx.corvin_home / "tenants" / ctx.tenant_id / "global" / "audit.jsonl"
+        # R4: THE tenant chain — ``<tenant>/global/forge/audit.jsonl``. This was
+        # missing the ``forge`` segment, so 699 repair records (the largest
+        # single event class on the maintainer install) landed one directory
+        # above the chain the tripwire and the compliance reports read.
+        chain = (ctx.corvin_home / "tenants" / ctx.tenant_id
+                 / "global" / "forge" / "audit.jsonl")
         _sec.write_event(chain, event, details={k: v for k, v in fields.items()
                                                  if k in ("action_id", "risk", "status",
                                                           "fixed", "reason")})

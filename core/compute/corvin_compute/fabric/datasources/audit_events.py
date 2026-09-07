@@ -70,3 +70,12 @@ DATASOURCE_AUDIT_EVENTS: dict[str, set[str]] = {
 }
 
 __all__ = ["DATASOURCE_AUDIT_EVENTS"]
+
+
+# ── R4 (2026-09-07) — this vocabulary is MIRRORED in the writer's floor ──────
+# Same defect as ``corvin_compute.audit``: enforced on the way IN, unknown to the
+# ADR-0640 default-deny floor on the way OUT, so ``datasource.registered`` reached
+# the chain without ``adapter`` or ``region`` and ``datasource.watermark_advanced``
+# without either watermark hash. The mirror lives in
+# ``security_events._EVENT_ALLOWLIST`` (import-order independent); the guard test
+# ``tests/security/test_audit_detail_floor_coverage.py`` fails if they drift.

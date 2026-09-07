@@ -67,7 +67,7 @@ def _run(host: str, home: Path) -> dict:
     env.update({
         "HOME_DIR": str(home), "REPO": str(_REPO), "HOST": host,
         "CORVIN_HOME": str(home), "CORVIN_TENANT_ID": "_default",
-        "VOICE_AUDIT_PATH": str(home / "global" / "forge" / "audit.jsonl"),
+        "VOICE_AUDIT_PATH": str(home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"),
         "CORVIN_AUDIT_ANCHOR_KEY": str(home / "keys" / "audit_anchor.key"),
     })
     env.pop("PYTEST_CURRENT_TEST", None)
@@ -83,7 +83,7 @@ def _run(host: str, home: Path) -> dict:
 def test_tripwires_run_exactly_once_per_boot(host, tmp_path):
     home = tmp_path / f"{host}_home"
     (home / "keys").mkdir(parents=True)
-    (home / "global" / "forge").mkdir(parents=True)
+    (home / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
     result = _run(host, home)
     assert not result.get("boot_failed"), result
     assert result["tripwire_runs"] == 1, result
@@ -108,9 +108,9 @@ def test_failure_is_never_recorded_as_asserted(tmp_path, monkeypatch):
     from corvin_compliance_reports import tripwire
 
     home = tmp_path / "home"
-    (home / "global" / "forge").mkdir(parents=True)
+    (home / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
     monkeypatch.setenv("CORVIN_HOME", str(home))
-    monkeypatch.setenv("VOICE_AUDIT_PATH", str(home / "global" / "forge" / "audit.jsonl"))
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"))
     monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "anchor.key"))
     tripwire.reset_asserted()
     tripwire._verify_cache.clear()
@@ -118,7 +118,7 @@ def test_failure_is_never_recorded_as_asserted(tmp_path, monkeypatch):
     # A chain that cannot verify: one record whose hash is simply wrong.
     rec = {"ts": 1.0, "event_type": "test.event", "severity": "INFO", "run_id": "",
            "tool": "", "details": {}, "prev_hash": "", "hash": "deadbeefdeadbeef"}
-    (home / "global" / "forge" / "audit.jsonl").write_text(json.dumps(rec) + "\n")
+    (home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl").write_text(json.dumps(rec) + "\n")
     (tmp_path / "anchor.key").write_bytes(b"A" * 32)
     os.chmod(tmp_path / "anchor.key", 0o644)  # F-A14 → current-state failure
 

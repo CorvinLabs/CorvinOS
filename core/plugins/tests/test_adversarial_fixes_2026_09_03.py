@@ -45,15 +45,20 @@ from corvin_plugins.protocol import HealthStatus  # noqa: E402
 
 
 class _Env(unittest.TestCase):
-    """Isolated CORVIN_HOME + VOICE_AUDIT_PATH, env tenant _default."""
+    """Isolated CORVIN_HOME (no chain redirect), env tenant _default."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name) / "home"
         (self.home / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
         self._prev = {k: os.environ.get(k) for k in ("VOICE_AUDIT_PATH", "CORVIN_HOME", "CORVIN_TENANT_ID")}
-        # R2-A3: inside the CORVIN_HOME set below, at the resolver's own path.
-        os.environ["VOICE_AUDIT_PATH"] = str(self.home / "global" / "forge" / "audit.jsonl")
+        # R4 (2026-09-07): CORVIN_HOME alone isolates the chain. The
+        # VOICE_AUDIT_PATH redirect that used to sit here only re-stated the
+        # resolver's answer — as the PRE-ADR-0007 <home>/global/forge path,
+        # which stopped being that answer when the chain converged on the
+        # tenant path (ADR-0654). Naming a location pins a default instead of
+        # a behaviour and re-breaks on the next move; ask the resolver.
+        os.environ.pop("VOICE_AUDIT_PATH", None)
         os.environ["CORVIN_HOME"] = str(self.home)
         os.environ.pop("CORVIN_TENANT_ID", None)
         if _audit._se is None:
@@ -68,7 +73,7 @@ class _Env(unittest.TestCase):
         self._tmp.cleanup()
 
     def records(self, event_type: str | None = None) -> list[dict]:
-        p = Path(os.environ["VOICE_AUDIT_PATH"])
+        p = Path(_audit.audit_path())
         if not p.exists():
             return []
         rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
@@ -129,7 +134,7 @@ class TestA1WriterAvailabilityIsAsserted(_Env):
         class _Foreign:  # e.g. core/audit shadowing the bridge module
             @staticmethod
             def audit_path():
-                return Path(os.environ["VOICE_AUDIT_PATH"])
+                return Path(_audit.audit_path())
 
         original = tripwire._audit_module
         tripwire._audit_module = lambda: _Foreign()  # type: ignore[assignment]

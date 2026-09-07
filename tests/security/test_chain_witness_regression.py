@@ -111,7 +111,7 @@ def _env(home: Path) -> dict:
         # Chain AND anchor key both under tmp, so the out-of-tree markers (the
         # witness among them) are really written and the operator's real
         # ~/.config/corvin-voice is never touched.
-        "VOICE_AUDIT_PATH": str(home / "global" / "forge" / "audit.jsonl"),
+        "VOICE_AUDIT_PATH": str(home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"),
         "CORVIN_AUDIT_ANCHOR_KEY": str(home / "keys" / "audit_anchor.key"),
     })
     env.pop("PYTEST_CURRENT_TEST", None)
@@ -149,7 +149,7 @@ def chain(tmp_path):
     home = tmp_path / "home"
     (home / "keys").mkdir(parents=True)
     assert "SEEDED" in _run(_SEED, home)
-    path = home / "global" / "forge" / "audit.jsonl"
+    path = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     first = _verify(home)
     assert first["ok"] and first["issues"] == [], first
     assert first["agrees_with_full_walk"], first
@@ -371,10 +371,10 @@ print("FORGED")
         home, path = chain
         other = tmp_path / "other"
         (other / "keys").mkdir(parents=True)
-        (other / "global" / "forge").mkdir(parents=True)
+        (other / "tenants" / "_default" / "global" / "forge").mkdir(parents=True)
         import shutil
         shutil.copy2(home / "keys" / "audit_anchor.key", other / "keys" / "audit_anchor.key")
-        shutil.copy2(path, other / "global" / "forge" / "audit.jsonl")
+        shutil.copy2(path, other / "tenants" / "_default" / "global" / "forge" / "audit.jsonl")
         assert not _witness(other)["exists"]
 
 

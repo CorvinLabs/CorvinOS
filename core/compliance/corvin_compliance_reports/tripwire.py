@@ -87,91 +87,120 @@ def _audit_module():
 
 
 def _check_audit_unification() -> TripwireResult:
-    """Multi-tenant audit chains should remain unified or be explicitly split.
+    """Exactly ONE hash chain per tenant — name every other live one, and link them.
 
-    With ADR-0007 (multi-tenant), the audit chain may reside in either:
-    - Old: ~/.corvin/global/forge/audit.jsonl (pre-multi-tenant)
-    - New: ~/.corvin/tenants/_default/global/forge/audit.jsonl (multi-tenant)
+    R4 (2026-09-07). The old check compared exactly two paths, the pre-ADR-0007
+    ``<root>/global/forge/audit.jsonl`` and the tenant
+    ``<root>/tenants/<tid>/global/forge/audit.jsonl``, and reported a bare
+    "audit chains SPLIT" string when both had been written that day. The measured
+    reality on the maintainer install was SIX distinct chain files for ONE tenant
+    across two roots, none a symlink of another — because
+    ``security_events.write_event`` took its path from the caller and every
+    caller composed its own. A reader of any single chain saw a fraction of the
+    events, so "the chain is the system's complete proof of work"
+    (CLAUDE.md § Audit Chain as Ground Truth) did not hold for any of them.
 
-    But having BOTH with different sizes is a symptom of incomplete migration.
-    This check detects when two audit chains exist and suggests consolidation.
+    What this check now does:
 
-    Returns OK if: only one chain exists, or both exist and sizes are consistent.
-    Returns WARNING if: two chains exist with divergent content (incomplete migration).
+    * enumerates every location this host knows (``forge.paths.all_audit_chains``)
+      and reports the condition ``audit_chain_split`` naming each live sibling,
+      its size and how recently it was written — an operator can act on that;
+    * RECORDS THE SEAM. For every sibling holding records, one chained
+      ``audit.chain_supersedes`` entry is appended to the canonical chain naming
+      the sibling's path key, genesis and FINAL TAIL HASH, and the reverse
+      pointer is written into the sibling's out-of-tree identity record. The
+      historical chains are never merged, rewritten, reordered or deleted — they
+      are append-only and hash-chained, and destroying that to tidy up would be a
+      far worse compliance failure than the split. The seam makes them REACHABLE
+      and VERIFIABLE from the canonical chain instead
+      (``security_events.chain_seam_links``).
+
+    Reporting-only, exactly like the old check: a split is a defect to fix, not a
+    reason to refuse the boot and lock the operator out of their own install.
     """
     name = "audit_unification"
     try:
-        # Derived from the SAME resolvers the writer uses — never from
-        # ``Path.home()/.corvin``: a CORVIN_HOME/VOICE_AUDIT_PATH redirect (every
-        # test, every non-default install) left the old hard-coded check looking
-        # at a directory the running process does not write to (finding A10).
         audit = _audit_module()
         if audit is None:
             return TripwireResult(name, True, "unification check skipped: audit module not importable")
         active_path = Path(audit.audit_path())
         try:
-            from forge.paths import corvin_home as _corvin_home  # type: ignore[import-not-found]
-
-            root = Path(_corvin_home())
-        except Exception:  # noqa: BLE001 - stripped layout: the writer's own root
-            root = Path(audit._forge_workspace_root()).parent.parent
-        try:
+            from forge.paths import all_audit_chains as _all_chains  # type: ignore[import-not-found]
             from forge.tenants import current_tenant as _current_tenant  # type: ignore[import-not-found]
 
-            tenant = _current_tenant()
-        except Exception:  # noqa: BLE001
-            tenant = "_default"
-        old_path = root / "global" / "forge" / "audit.jsonl"
-        new_path = root / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
-
-        old_exists = old_path.exists()
-        new_exists = new_path.exists()
-
-        if not (old_exists and new_exists):
-            # Only one chain, or none — no unification issue
+            chains = _all_chains(_current_tenant())
+        except Exception:  # noqa: BLE001 - stripped layout: nothing to compare
             return TripwireResult(name, True, f"audit chain is unified ({active_path})")
-        if old_path.resolve() == new_path.resolve():
-            # The ADR-0007 backward-compat symlink: one file, two names.
-            return TripwireResult(name, True, "audit chain is unified (compat symlink)")
 
-        old_size = old_path.stat().st_size
-        new_size = new_path.stat().st_size
+        canonical = chains["canonical"]
+        try:
+            canonical_real = canonical.resolve()
+        except OSError:
+            canonical_real = canonical
 
-        # F-A7 (2026-09-07): two chains that BOTH received writes today is not
-        # a migration artefact — it is a live split of the GDPR Art. 30 trail
-        # (some writers resolve the legacy path, others the tenant path).
-        # Reporting-only by contract, but logged at ERROR so it is never
-        # mistaken for the benign "stale backup" shapes below.
         now = time.time()
-        if (now - old_path.stat().st_mtime) < 86400 and (now - new_path.stat().st_mtime) < 86400:
+        live: list[tuple[str, Path, int, float]] = []   # sibling chains with content
+        seen: set = {canonical_real}
+        for label, p in chains.items():
+            if label == "canonical":
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue          # absent — nothing to reconcile
+            try:
+                real = p.resolve()
+            except OSError:
+                real = p
+            if real in seen:
+                continue          # one file, two names (ADR-0007 compat symlink)
+            seen.add(real)
+            if st.st_size == 0:
+                continue
+            live.append((label, p, st.st_size, now - st.st_mtime))
+
+        if not live:
+            return TripwireResult(name, True, f"audit chain is unified ({active_path})")
+
+        # Seam: make every sibling reachable from the canonical chain. Never a
+        # merge — one pointer record naming the sibling's final tail hash.
+        seams = 0
+        try:
+            from forge.security_events import record_chain_supersession  # type: ignore[import-not-found]
+
+            for _label, p, _sz, _age in live:
+                if record_chain_supersession(canonical, p, reason="chain_convergence"):
+                    seams += 1
+        except Exception:  # noqa: BLE001 - a seam must never break the boot
+            pass
+
+        recent = [(l, p, sz, age) for (l, p, sz, age) in live if age < 86400]
+        detail = ", ".join(f"{l}={sz}B/{age / 3600:.1f}h" for l, p, sz, age in sorted(live))
+        if recent:
             _log.error(
-                "audit chains SPLIT: both %s and %s received writes in the last 24h — "
-                "writers disagree on the chain location (route every writer through "
-                "security_events.write_event behind core/paths/tenant)", old_path, new_path,
+                "audit_chain_split: %d sibling chain(s) for this tenant received writes in "
+                "the last 24h alongside the canonical %s — writers disagree on the chain "
+                "location. Route every writer through forge.paths.tenant_audit_chain(). "
+                "Live siblings: %s. Seam records written into the canonical chain: %d "
+                "(the historical chains are append-only and are never merged; follow "
+                "security_events.chain_seam_links to verify them).",
+                len(recent), canonical,
+                ", ".join(str(p) for _l, p, _s, _a in recent), seams,
             )
             return TripwireResult(
                 name, True,
-                f"audit chains split and BOTH written today: old={old_size}B, new={new_size}B",
+                f"audit_chain_split: {len(recent)} sibling chain(s) written in the last "
+                f"24h ({detail}); {seams} seam record(s) link them to {canonical}",
             )
-
-        # If both exist and new is much larger, old is likely stale (expected)
-        if new_size > old_size * 2:
-            return TripwireResult(
-                name, True,
-                f"audit chains diverged: old={old_size}B, new={new_size}B (migration OK)"
-            )
-
-        # If both exist and similar size, one is likely a backup — OK
-        if abs(old_size - new_size) < 1000:
-            return TripwireResult(
-                name, True,
-                f"audit chains similar size (backup or parallel logging)"
-            )
-
-        # Divergence without clear migration — warn operator
+        _log.warning(
+            "audit_chain_split (historical): %d sibling chain(s) hold records but none was "
+            "written in the last 24h — %s. %d seam record(s) link them to %s.",
+            len(live), detail, seams, canonical,
+        )
         return TripwireResult(
-            name, True,  # not blocking, but reported
-            f"audit chains split: old={old_size}B (stale?), new={new_size}B (active)"
+            name, True,
+            f"audit_chain_split (historical, no recent writes): {detail}; "
+            f"{seams} seam record(s) link them to {canonical}",
         )
     except Exception as exc:  # noqa: BLE001
         # If we can't check, don't fail boot — unification is not a blocker

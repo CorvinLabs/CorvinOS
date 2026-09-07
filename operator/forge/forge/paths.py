@@ -362,3 +362,112 @@ def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
     if kind in ("settings", "root"):
         return channel_dir
     return channel_dir / kind
+
+
+# ── R4 — THE audit chain resolver (single source of truth) ────────────────────
+#
+# Measured on the maintainer install 2026-09-07: the hash-chained GDPR Art. 30/32
+# trail for ONE tenant was being appended to SIX distinct files across TWO roots,
+# none of them a symlink of another —
+#
+#   <root>/global/forge/audit.jsonl                  315 MB  bridge adapter, forge
+#                                                            tool exec, engine spans,
+#                                                            CLAG chain-integrity tokens
+#   <root>/tenants/_default/global/forge/audit.jsonl  4.6 MB  console + gateway routes
+#                                                            (THE canonical one)
+#   <root>/tenants/_default/global/audit.jsonl        2.0 MB  ACO repair, datasources,
+#                                                            packaging
+#   <root>/forge/audit.jsonl                          475 KB  forge Registry, global scope
+#   <root>/tenants/_default/forge/audit.jsonl          12 KB  forge Registry, tenant scope
+#   <root>/tenants/_default/audit.jsonl               533 KB  SkillForge SkillRegistry
+#
+# — because ``security_events.write_event(path, ...)`` takes its path from the
+# CALLER and every caller composed its own. A reader of any single chain sees a
+# fraction of the events, so "the chain is the system's complete proof of work"
+# (CLAUDE.md § Audit Chain as Ground Truth) did not hold, and the boot tripwire's
+# "audit chains SPLIT" error was the symptom.
+#
+# THE RULE, from here on: there is exactly ONE hash chain per tenant and this
+# function names it. Not "the forge chain" and "the tenant chain" — one. The
+# forge/skill-forge workspace roots stay separate as WORKSPACES; their audit
+# records are links in the tenant chain, which is what
+# ``skill_forge.multi_registry`` already decided for SkillForge and what the boot
+# tripwire, ``audit_query`` and every compliance report already read.
+#
+# The chains are append-only and hash-chained, so the existing files are NEVER
+# merged, rewritten or deleted. Convergence is forward-only: every writer
+# resolves here, and ``security_events.record_chain_supersession`` writes a
+# chained pointer (path key + final tail hash) so an auditor following the
+# canonical chain can still reach and verify the historical ones.
+
+AUDIT_CHAIN_NAME = "audit.jsonl"
+
+
+def tenant_audit_chain(tenant_id: str | None = None) -> Path:
+    """``<corvin_home>/tenants/<tid>/global/forge/audit.jsonl`` — THE chain.
+
+    Every writer of a hash-chained audit record for *tenant_id* must resolve
+    here. Mirrored byte-identically by ``core/paths/tenant.py::tenant_audit_chain``
+    and ``operator/bridges/shared/paths.py::tenant_audit_chain``; the guard test
+    ``tests/security/test_audit_chain_ssot.py`` fails if the three diverge.
+    """
+    return tenant_global_dir(tenant_id) / "forge" / AUDIT_CHAIN_NAME
+
+
+def legacy_audit_chains(tenant_id: str | None = None) -> "dict[str, Path]":
+    """``{label: path}`` for every NON-canonical location historically written.
+
+    Used by the boot tripwire to name a live split, and by the seam recorder to
+    point at what it superseded. Read-only by contract: nothing may resolve a
+    write here. Order is stable so the reported condition is deterministic.
+    """
+    root = corvin_home()
+    tenant = tenant_home(tenant_id)
+    return {
+        "host_global_forge": root / "global" / "forge" / AUDIT_CHAIN_NAME,
+        "host_forge":        root / "forge" / AUDIT_CHAIN_NAME,
+        "tenant_global":     tenant / "global" / AUDIT_CHAIN_NAME,
+        "tenant_forge":      tenant / "forge" / AUDIT_CHAIN_NAME,
+        "tenant_root":       tenant / AUDIT_CHAIN_NAME,
+    }
+
+
+def all_audit_chains(tenant_id: str | None = None) -> "dict[str, Path]":
+    """``{"canonical": ..., **legacy}`` — every chain location this host knows."""
+    return {"canonical": tenant_audit_chain(tenant_id), **legacy_audit_chains(tenant_id)}
+
+
+def audit_chain_for_workspace(root: "Path | str", *, fallback: "Path | None" = None) -> Path:
+    """THE chain a workspace at *root* must write its audit records to.
+
+    ToolForge (``forge.registry.Registry``) and SkillForge
+    (``skill_forge.registry.SkillRegistry``) each defaulted to an ``audit.jsonl``
+    sitting beside their own workspace — four more chain files for one tenant
+    (``<root>/forge/``, ``<tenant>/forge/``, ``<tenant>/`` …). A workspace is a
+    legitimate boundary for TOOLS and SKILLS; it is not one for the GDPR Art. 30
+    trail, which is per tenant. ``skill_forge.multi_registry`` had already
+    reached that conclusion and passed the tenant chain explicitly; this makes it
+    the default for every other construction path too.
+
+    A root OUTSIDE ``corvin_home()`` — a tmp dir, a test sandbox, a standalone
+    checkout — keeps *fallback* (the caller's sibling default). Without that a
+    unit test constructing a registry under ``/tmp`` would append to the
+    operator's real,append-only chain.
+    """
+    root = Path(root)
+    try:
+        rr = root.resolve()
+        home = corvin_home().resolve()
+    except OSError:
+        return fallback if fallback is not None else tenant_audit_chain()
+    try:
+        rel = rr.relative_to(home)
+    except ValueError:
+        return fallback if fallback is not None else tenant_audit_chain()
+    parts = rel.parts
+    if len(parts) >= 2 and parts[0] == "tenants":
+        try:
+            return tenant_audit_chain(parts[1])
+        except ValueError:
+            pass
+    return tenant_audit_chain()

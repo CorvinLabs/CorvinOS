@@ -8,6 +8,10 @@ ADR-0007 multi-tenant axis: tenant_id is required for all tenant-scoped paths.
 """
 
 from .tenant import (
+    all_audit_chains,
+    corvin_home,
+    legacy_audit_chains,
+    tenant_audit_chain,
     tenant_audit_file,
     tenant_bridge_dir,
     tenant_home,
@@ -19,7 +23,11 @@ from .tenant import (
 )
 
 __all__ = [
+    "corvin_home",
     "tenant_home",
+    "tenant_audit_chain",
+    "legacy_audit_chains",
+    "all_audit_chains",
     "tenant_skill_dir",
     "tenant_tool_dir",
     "tenant_session_dir",

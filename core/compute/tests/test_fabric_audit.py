@@ -36,10 +36,30 @@ def _emit(
     *,
     audit_list: list[dict],
 ) -> dict[str, Any]:
-    """Write to a temp file and capture the returned record."""
+    """Write to a temp file and capture the returned record.
+
+    A record carrying ``tenant_id`` is refused unless it matches the PROCESS
+    tenant (``security_events.AuditTenantMismatch``, F-A6 — the isolation check
+    lives at the chain chokepoint so the 30+ direct callers cannot bypass it).
+    These tests predate that guard and tag records with ``acme``; pinning
+    ``CORVIN_TENANT_ID`` for the call keeps the multi-tenant intent instead of
+    stripping the field, which is what actually gets audited in production.
+    """
+    import os
     td = tempfile.mkdtemp(prefix="fabric-audit-test-")
     path = Path(td) / "audit.jsonl"
-    rec = write_event(path, event_type, details=details)
+    tid = details.get("tenant_id")
+    prev = os.environ.get("CORVIN_TENANT_ID")
+    if tid:
+        os.environ["CORVIN_TENANT_ID"] = str(tid)
+    try:
+        rec = write_event(path, event_type, details=details)
+    finally:
+        if tid:
+            if prev is None:
+                os.environ.pop("CORVIN_TENANT_ID", None)
+            else:
+                os.environ["CORVIN_TENANT_ID"] = prev
     audit_list.append(rec)
     return rec
 
@@ -407,8 +427,11 @@ class TestDatasourceEvents:
         events: list[dict] = []
         rec = _emit(
             "datasource.watermark_advanced",
-            {"name": "crm_events", "cursor_col": "created_at",
-             "watermark_hash": wm_hash},
+            # R4: the real emitter (fabric/datasources/watermark.py:99) passes
+            # previous/new watermark HASHES + rows_read. ``cursor_col`` /
+            # ``watermark_hash`` are names nothing produces.
+            {"name": "crm_events", "previous_watermark_hash": "00000000",
+             "new_watermark_hash": wm_hash, "rows_read": 12},
             audit_list=events,
         )
         detail_str = str(rec["details"])
@@ -433,13 +456,14 @@ class TestDatasourceEvents:
         events: list[dict] = []
         rec = _emit(
             "datasource.pii_detected",
+            # R4: the vocabulary is ``pii_class_counts`` — {class: count}. Column
+            # NAMES were never part of it, and a count-map cannot carry a value.
             {"name": "crm_events",
-             "pii_columns": ["user_id", "email"],
-             "detection_method": "manifest_hint"},
+             "pii_class_counts": {"email": 1, "user_id": 1}},
             audit_list=events,
         )
-        # pii_columns carries NAMES only — never actual PII values
-        assert "pii_columns" in rec["details"]
+        # pii_class_counts carries CLASS LABELS + counts — never actual values
+        assert "pii_class_counts" in rec["details"]
         assert "john@example.com" not in str(rec["details"])
 
     def test_adapter_enabled(self) -> None:
@@ -465,12 +489,14 @@ class TestDatasourceEvents:
         events: list[dict] = []
         rec = _emit(
             "datasource.preview_generated",
-            {"name": "crm_events", "n_rows": 5,
-             "pii_redacted": True},
+            # R4: real emitter (mcp_tools.py:491) — requested/returned counts +
+            # the redacted column names.
+            {"name": "crm_events", "n_rows_requested": 5,
+             "n_rows_returned": 5, "pii_columns_redacted": ["email"]},
             audit_list=events,
         )
-        assert rec["details"]["n_rows"] == 5
-        assert rec["details"]["pii_redacted"] is True
+        assert rec["details"]["n_rows_returned"] == 5
+        assert rec["details"]["pii_columns_redacted"] == ["email"]
 
     def test_unregistered(self) -> None:
         events: list[dict] = []
@@ -485,10 +511,13 @@ class TestDatasourceEvents:
         events: list[dict] = []
         rec = _emit(
             "datasource.schema_refreshed",
-            {"name": "orders_db", "n_columns": 12},
+            # R4: real emitter (mcp_tools.py:353) — the column NAME list and the
+            # PII-tagged subset. ``n_columns`` is a name nothing produces.
+            {"name": "orders_db", "adapter": "postgres",
+             "columns": [f"c{i}" for i in range(12)], "pii_tagged_columns": []},
             audit_list=events,
         )
-        assert rec["details"]["n_columns"] == 12
+        assert len(rec["details"]["columns"]) == 12
 
 
 # ---------------------------------------------------------------------------

@@ -91,11 +91,12 @@ class TestHealingRunsForReal(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name)
         # R2-A3: the resolver's own path under CORVIN_HOME (set below).
-        self.audit_path = self.home / "global" / "forge" / "audit.jsonl"
-        self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         self._prev = {k: os.environ.get(k) for k in ("VOICE_AUDIT_PATH", "CORVIN_HOME")}
-        os.environ["VOICE_AUDIT_PATH"] = str(self.audit_path)
+        os.environ.pop("VOICE_AUDIT_PATH", None)
         os.environ["CORVIN_HOME"] = str(self.home)
+        self.audit_path = (self.home / "tenants" / "_default"
+                           / "global" / "forge" / "audit.jsonl")
+        self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         for pid in list(get_registry().discover()):
             get_registry().unregister(pid)
 
@@ -228,7 +229,7 @@ class TestGatewayBootWiresHealing(unittest.TestCase):
         }
         os.environ["CORVIN_HOME"] = str(self.home)
         os.environ["CORVIN_TENANT_ID"] = "_default"
-        os.environ["VOICE_AUDIT_PATH"] = str(self.home / "global" / "forge" / "audit.jsonl")
+        os.environ.pop("VOICE_AUDIT_PATH", None)
         # Turn the two flags on for this tenant via the features overlay.
         # NOTE the nesting: feature_flags.is_enabled reads overlay["flags"][id],
         # not a flat mapping. A flat file silently reads as "all defaults", which

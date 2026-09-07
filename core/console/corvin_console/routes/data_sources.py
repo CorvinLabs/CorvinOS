@@ -103,7 +103,9 @@ def _make_ds_audit_writer(tenant_id: str):
     if not _FORGE_AVAILABLE:
         return None
     try:
-        audit_path = _forge_paths.tenant_home(tenant_id) / "audit.jsonl"
+        # R4: THE tenant chain, not ``tenant_home/audit.jsonl`` (a file nothing
+        # verifies and no compliance report covers).
+        audit_path = _forge_paths.tenant_audit_chain(tenant_id)
 
         from forge.security_events import write_event
         def _writer(event_type: str, severity: str, details: dict) -> None:
@@ -405,7 +407,7 @@ def get_audit(
         return []
 
     tid = rec.tenant_id
-    audit_path = _forge_paths.tenant_home(tid) / "audit.jsonl"
+    audit_path = _forge_paths.tenant_audit_chain(tid)  # R4: THE tenant chain
     if not audit_path.exists():
         return []
 

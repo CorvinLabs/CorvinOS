@@ -95,11 +95,46 @@ def corvin_root() -> Path:
     return _load_corvin_home()()
 
 
+def _load_tenant_audit_chain():
+    """Load ``tenant_audit_chain`` from the sibling ``paths.py`` (same file-path
+    trick ``_load_corvin_home`` uses, for the same sys.path reason)."""
+    _audit_dir = Path(__file__).resolve().parent
+    _local_paths_file = _audit_dir / "paths.py"
+    spec = importlib.util.spec_from_file_location("_paths_audit", _local_paths_file)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load spec from {_local_paths_file}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.tenant_audit_chain  # type: ignore[attr-defined]
+
+
 def default_audit_path() -> Path:
-    """Where the chain lives with NO redirect in effect — ``corvin_root()`` is
-    resolved independently of ``FORGE_ROOT``/``VOICE_AUDIT_PATH``, so this is
-    the path the tripwire's own resolver would pick."""
-    return corvin_root() / "global" / "forge" / "audit.jsonl"
+    """Where the chain lives with NO redirect in effect — the path the tripwire's
+    own resolver would pick, resolved independently of
+    ``FORGE_ROOT``/``VOICE_AUDIT_PATH``.
+
+    R4 (2026-09-07) — this moved from ``corvin_root()/global/forge/audit.jsonl``
+    to the TENANT chain ``<corvin_home>/tenants/<tid>/global/forge/audit.jsonl``.
+
+    The old value is the PRE-ADR-0007 host-global location. After the tenant
+    migration the console and gateway routes resolved the tenant path while the
+    bridge adapter, the forge tool runner, the engine-span emitter and CLAG kept
+    resolving this one — so on the maintainer install the two files had both
+    received writes within the same hour, 315 MB in the legacy one and 4.6 MB in
+    the one the boot tripwire, ``audit_query`` and every compliance report
+    actually read. That is the "audit chains SPLIT" error, and it means "the
+    chain is the system's complete proof of work" (CLAUDE.md § Audit Chain as
+    Ground Truth) was false for both readers.
+
+    Convergence is FORWARD-ONLY. The legacy file is never merged, rewritten or
+    deleted — it is append-only and hash-chained, and destroying that to tidy up
+    would be a far worse compliance failure than the split. Instead the boot
+    check records a chained ``audit.chain_supersedes`` seam in the canonical
+    chain naming the legacy file's path key and final tail hash, so an auditor
+    following the canonical chain reaches the historical one and can verify it
+    (``security_events.chain_seam_links``).
+    """
+    return _load_tenant_audit_chain()()
 
 
 def audit_redirect() -> tuple[list[str], bool]:
@@ -136,31 +171,31 @@ def audit_redirect() -> tuple[list[str], bool]:
 
 
 def _forge_workspace_root() -> Path:
-    """Resolve the *audit-chain* workspace root.
+    """Resolve the *audit-chain* workspace root — the directory holding the chain.
 
-    NOTE: this intentionally does NOT mirror
-    ``operator/forge/forge.py::_default_root`` — the audit chain is
-    unified (scope-independent) by design (see module docstring), so
-    we skip the scope-detection branch and pin it at
-    ``corvin_home()/global/forge``. ``FORGE_ROOT`` still wins as an
-    explicit override (used by tests + ops tooling that want to
+    The audit chain is unified (scope-independent) by design (see the module
+    docstring), so this skips ``forge.py::_default_root``'s scope-detection
+    branch. R4: it is now pinned at the TENANT chain's parent directory rather
+    than ``corvin_home()/global/forge`` — see :func:`default_audit_path` for why.
+    ``FORGE_ROOT`` still wins as an explicit override (tests + ops tooling that
     sandbox the chain).
     """
     env = os.environ.get("FORGE_ROOT")
     if env:
         return Path(env).expanduser()
-    # paths.py sits next to audit.py in operator/bridges/shared/.
-    # Direct load by file path to avoid sys.path conflicts with
-    # operator/forge/paths.py (a stub without corvin_home). This ensures
-    # we always get the correct implementation when imported after other
-    # modules have polluted sys.path.
-    corvin_home = _load_corvin_home()
-    # Audit-chain default lives at the user-global root regardless of
-    # active workspace scope, so it stays unified across sessions.
-    return corvin_home() / "global" / "forge"
+    # paths.py sits next to audit.py in operator/bridges/shared/. Direct load by
+    # file path to avoid sys.path conflicts with operator/forge/paths.py (a stub
+    # without corvin_home).
+    return _load_tenant_audit_chain()().parent
 
 
 def audit_path() -> Path:
+    """THE hash chain this process appends to.
+
+    Precedence: ``VOICE_AUDIT_PATH`` (explicit file redirect, tests/ops) >
+    ``FORGE_ROOT/audit.jsonl`` (explicit dir redirect) > the canonical tenant
+    chain. There is exactly ONE chain per tenant; see :func:`default_audit_path`.
+    """
     p = os.environ.get("VOICE_AUDIT_PATH")
     if p:
         return Path(p)

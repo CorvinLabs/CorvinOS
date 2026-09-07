@@ -98,6 +98,21 @@ def _check_allow_list(event: str, details: Mapping[str, Any]) -> None:
         )
 
 
+# ── R4 (2026-09-07) — this vocabulary is MIRRORED in the writer's floor ──────
+#
+# ``_ALLOWED_FIELDS`` was enforced only on the way IN (``_check_allow_list``
+# rejects an extra key). It was unknown to the ADR-0640 default-deny detail floor
+# on the way OUT, so ``compute.run_terminal`` reached the chain without
+# ``best_loss`` / ``convergence_reason`` / ``total_iterations`` / ``total_wall_s``,
+# ``compute.worker_unreachable`` without ``attempted_socket``, and every
+# ``batch_*`` event without its ``batch_id_prefix``.
+#
+# The mirror lives in ``security_events._EVENT_ALLOWLIST``, NOT in a
+# ``register_event_allowlist()`` call from here. Registering at import time makes
+# the floor's behaviour depend on whether this module happened to be imported
+# before the write — for a fail-closed compliance mechanism that is a
+# non-determinism, not a feature. ``tests/security/test_audit_detail_floor_coverage.py
+# ::test_subsystem_vocabularies_are_mirrored_in_the_floor`` fails if the two drift.
 def emit(
     event: str,
     *,

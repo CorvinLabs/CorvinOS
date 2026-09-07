@@ -106,7 +106,7 @@ def sandbox(tmp_path: Path, monkeypatch):
     # CORVIN_HOME root (ADR-0641 round-2 amendment — the redirect was an
     # env-var override of a mechanism that must not have one).
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
-    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "global" / "forge" / "audit.jsonl"))
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
     monkeypatch.setenv("CORVIN_TENANT_ID", TENANT)
     return tmp_path
 
@@ -130,7 +130,11 @@ async def _run_five_tasks(md: MethodDiscovery) -> list:
 
 
 def _chain_records(tmp_path: Path) -> list[dict]:
-    chain = tmp_path / "global" / "forge" / "audit.jsonl"
+    # R4: THE tenant chain under this sandbox's CORVIN_HOME (ADR-0654). This
+    # named the pre-ADR-0007 <home>/global/forge path, so after convergence it
+    # read an empty/absent file and the "observations reached the chain"
+    # assertion passed on zero records.
+    chain = tmp_path / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
     if not chain.exists():
         return []
     return [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]

@@ -156,25 +156,72 @@ def tenant_memory_dir(tenant_id: str) -> Path:
     return tenant_home(tenant_id) / "memory"
 
 
-def tenant_audit_file(tenant_id: str) -> Path:
-    """Construct tenant audit trail file path.
+AUDIT_CHAIN_NAME = "audit.jsonl"
 
-    Returns: ~/.corvin/tenants/<tenant_id>/audit.jsonl
 
-    The audit trail is hash-chained and immutable. Each tenant has its own
-    audit file to ensure data isolation (GDPR Art. 30, 32).
+def tenant_audit_chain(tenant_id: str) -> Path:
+    """``<corvin_home>/tenants/<tid>/global/forge/audit.jsonl`` — THE audit chain.
 
-    Args:
-        tenant_id: Tenant identifier (validated)
+    Every writer of a hash-chained audit record for *tenant_id* resolves here.
+    This is the file the ADR-0232 boot tripwire verifies, that
+    ``corvin_compliance_reports.audit_query`` reads, and that every compliance
+    report is generated from — so a record written anywhere else is, from the
+    operator's and the auditor's point of view, not in the audit trail at all.
 
-    Returns:
-        Path to tenant audit trail file
+    Byte-identical mirror of ``operator/forge/forge/paths.py::tenant_audit_chain``
+    and ``operator/bridges/shared/paths.py::tenant_audit_chain`` (the established
+    three-copy paths.py pattern; core/ cannot import forge/ at every call site
+    and the bridge daemons do not have core/ on sys.path). The guard test
+    ``tests/security/test_audit_chain_ssot.py`` fails if the three diverge.
 
-    Raises:
-        ValueError: If tenant_id is invalid
+    R4 (2026-09-07): before this existed, ``security_events.write_event`` took
+    its path from the caller and every caller composed its own — six live chain
+    files for one tenant across two roots, none a symlink of another. See the
+    forge copy for the measured breakdown.
     """
     validate_tenant_id(tenant_id)
-    return tenant_home(tenant_id) / "audit.jsonl"
+    return tenant_home(tenant_id) / "global" / "forge" / AUDIT_CHAIN_NAME
+
+
+def legacy_audit_chains(tenant_id: str) -> dict[str, Path]:
+    """``{label: path}`` for every NON-canonical chain location ever written.
+
+    Read-only by contract — nothing may resolve a WRITE here. Used by the boot
+    tripwire to name a live split and by the seam recorder to point at what the
+    canonical chain superseded.
+    """
+    validate_tenant_id(tenant_id)
+    root = corvin_home()
+    tenant = tenant_home(tenant_id)
+    return {
+        "host_global_forge": root / "global" / "forge" / AUDIT_CHAIN_NAME,
+        "host_forge":        root / "forge" / AUDIT_CHAIN_NAME,
+        "tenant_global":     tenant / "global" / AUDIT_CHAIN_NAME,
+        "tenant_forge":      tenant / "forge" / AUDIT_CHAIN_NAME,
+        "tenant_root":       tenant / AUDIT_CHAIN_NAME,
+    }
+
+
+def all_audit_chains(tenant_id: str) -> dict[str, Path]:
+    """``{"canonical": ..., **legacy}`` — every chain location this host knows."""
+    return {"canonical": tenant_audit_chain(tenant_id), **legacy_audit_chains(tenant_id)}
+
+
+def tenant_audit_file(tenant_id: str) -> Path:
+    """DEPRECATED alias for :func:`tenant_audit_chain`.
+
+    Until 2026-09-07 this returned ``<tenant_home>/audit.jsonl`` and its
+    docstring called that "the tenant audit trail file". It was not: nothing
+    verifies that path, the boot tripwire does not read it, and no compliance
+    report covers it. Its callers (``core/awpkg``, ``core/learning``,
+    ``core/orchestration``) were therefore writing GDPR Art. 30 records into a
+    seventh file that no auditor would ever open — 757 ``skill.create`` records
+    sat there on the maintainer install. It now resolves to the real chain.
+
+    Kept as a name so the existing call sites keep working; new code calls
+    :func:`tenant_audit_chain`.
+    """
+    return tenant_audit_chain(tenant_id)
 
 
 def tenant_bridge_dir(tenant_id: str, channel: str) -> Path:
@@ -201,7 +248,11 @@ def tenant_bridge_dir(tenant_id: str, channel: str) -> Path:
 
 
 __all__ = [
+    "corvin_home",
     "tenant_home",
+    "tenant_audit_chain",
+    "legacy_audit_chains",
+    "all_audit_chains",
     "tenant_skill_dir",
     "tenant_tool_dir",
     "tenant_session_dir",

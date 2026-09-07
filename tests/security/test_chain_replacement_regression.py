@@ -77,7 +77,7 @@ def _env(home: Path) -> dict:
         # markers are really written (they are skipped only when a tmp chain
         # would litter the operator's real key directory) and the operator's
         # own ~/.config/corvin-voice is never touched.
-        "VOICE_AUDIT_PATH": str(home / "global" / "forge" / "audit.jsonl"),
+        "VOICE_AUDIT_PATH": str(home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"),
         "CORVIN_AUDIT_ANCHOR_KEY": str(home / "keys" / "audit_anchor.key"),
     })
     env.pop("PYTEST_CURRENT_TEST", None)
@@ -104,7 +104,7 @@ def chain(tmp_path):
     (home / "keys").mkdir(parents=True)
     out = _run(_SEED, home)
     assert "SEEDED" in out, out[-3000:]
-    path = home / "global" / "forge" / "audit.jsonl"
+    path = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     assert path.exists()
     assert _verify(home) == {"ok": True, "issues": []}
     return home, path
@@ -191,7 +191,7 @@ class TestPrependedRecords:
         """
         home = tmp_path / "home"
         (home / "keys").mkdir(parents=True)
-        chain_path = home / "global" / "forge" / "audit.jsonl"
+        chain_path = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
         chain_path.parent.mkdir(parents=True)
         chain_path.write_text('{"event":"pre-seed-legacy"}\n', encoding="utf-8")
         assert "SEEDED" in _run(_SEED, home)
@@ -378,7 +378,7 @@ class TestChainIdentityFollowsSymlinks:
         real.mkdir(parents=True)
         (home / "global").symlink_to(Path("tenants") / "_default" / "global")
         env_path = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-        return home, env_path, home / "global" / "forge" / "audit.jsonl"
+        return home, env_path, home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
 
     def _seed(self, home: Path, path: Path) -> None:
         env = _env(home)
