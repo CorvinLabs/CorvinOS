@@ -50,7 +50,7 @@ def test_grade_append_and_mean():
         r.create(name="x", type="domain", body_md=GOOD_BODY,
                  description="d", claim={})
         for i, score in enumerate([0.0, 0.4, 0.8, 1.0]):
-            r.grade("x", run_id=f"r{i}", score=score, notes=f"run{i}")
+            r.grade("x", run_id=f"r{i}", score=score, notes=f"run{i}", organic=True)
         spec = r.get("x")
         t("4 grades", spec.n_grades == 4)
         t("mean = 0.55", abs(spec.mean_score - 0.55) < 1e-6,
@@ -65,7 +65,7 @@ def test_grade_clamp_validation():
                  description="d", claim={})
         for bad in (-0.1, 1.1, 5.0):
             try:
-                r.grade("y", "r", bad)
+                r.grade("y", "r", bad, organic=True)
                 t(f"score={bad} accepted (BUG)", False)
             except ValueError:
                 t(f"score={bad} rejected", True)
@@ -83,7 +83,7 @@ def test_grade_rejects_nan():
         r.create(name="nan_y", type="domain", body_md=GOOD_BODY,
                  description="d", claim={})
         try:
-            r.grade("nan_y", "r", float("nan"))
+            r.grade("nan_y", "r", float("nan"), organic=True)
             t("NaN score rejected", False, detail="grade() accepted NaN")
         except ValueError:
             t("NaN score rejected", True)
@@ -144,7 +144,7 @@ def test_grade_unknown_skill():
     with tempfile.TemporaryDirectory() as td:
         r = SkillRegistry(Path(td) / "skill-forge")
         try:
-            r.grade("nope", "r", 0.5)
+            r.grade("nope", "r", 0.5, organic=True)
             t("KeyError raised", False)
         except KeyError:
             t("KeyError raised", True)
@@ -156,8 +156,8 @@ def test_grade_audit_chain():
         r = SkillRegistry(Path(td) / "skill-forge")
         r.create(name="z", type="domain", body_md=GOOD_BODY,
                  description="d", claim={})
-        r.grade("z", "r1", 0.6)
-        r.grade("z", "r2", 0.8)
+        r.grade("z", "r1", 0.6, organic=True)
+        r.grade("z", "r2", 0.8, organic=True)
         audit = r.audit_path()
         events = [json.loads(l) for l in audit.read_text().splitlines() if l.strip()]
         actions = [e["event_type"] for e in events]
@@ -174,7 +174,7 @@ def test_grade_meta_json_synced():
         r = SkillRegistry(Path(td) / "skill-forge")
         r.create(name="m", type="domain", body_md=GOOD_BODY,
                  description="d", claim={})
-        r.grade("m", "r1", 0.3, notes="needs work")
+        r.grade("m", "r1", 0.3, notes="needs work", organic=True)
         meta_path = Path(td) / "skill-forge" / "skills" / "m" / "meta.json"
         meta = json.loads(meta_path.read_text())
         t("meta.json contains grade",

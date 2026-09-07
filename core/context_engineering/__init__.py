@@ -1,32 +1,11 @@
-"""Context Engineering — Persona, Role, Capability Model, and ExecutionContext v2."""
+"""Context Engineering — capability enums and ExecutionContext v2.
+
+The persona model (capability registry, ContextVar persona/role state, transport
+resolvers, auth decorators) was removed with the Personas Elimination
+(commit e7e3560e); capability checks are served by the ``os.capabilities`` Skill.
+"""
 
 from .capabilities import Capability, Persona, Role, Tier
-from .persona_model import (
-    CapabilityDenied,
-    _REGISTRY as REGISTRY,
-    CapabilityLockError,
-    CapabilityRegistry,
-    get_current_persona,
-    get_current_role,
-    get_current_tenant_id,
-    get_registry,
-    has_capability,
-    requires_capability,
-    set_current_persona,
-    set_current_role,
-    set_current_tenant_id,
-)
-from .transport_resolvers import (
-    AuthError,
-    InvalidPersona,
-    TransportResolver,
-    UnresolvablePersona,
-)
-from .auth_decorators import (
-    auth_required_cli,
-    auth_required_flask,
-    requires_auth_capability,
-)
 from .execution_context import (
     ContextStack,
     ContextStackFrame,
@@ -47,25 +26,6 @@ __all__ = [
     "Role",
     "Tier",
     "Capability",
-    "CapabilityRegistry",
-    "CapabilityDenied",
-    # `CapabilityDeniedError` is the spelling used by callers and by
-    # core/capabilities/registry.py's exception of the same role; both names
-    # refer to one class so a caller cannot catch the wrong one.
-    "CapabilityDeniedError",
-    # The process-wide registry singleton. `get_registry()` returns this same
-    # object; the module-level name is what call sites and tests reach for.
-    "REGISTRY",
-    "CapabilityLockError",
-    "get_registry",
-    "get_current_persona",
-    "set_current_persona",
-    "get_current_role",
-    "set_current_role",
-    "get_current_tenant_id",
-    "set_current_tenant_id",
-    "has_capability",
-    "requires_capability",
     # ADR-0358: ExecutionContext v2
     "ExecutionContext",
     "ContextStack",
@@ -78,6 +38,3 @@ __all__ = [
     "MemoryLayerNotFound",
     "EventPersistenceError",
 ]
-
-# Alias: one exception class, two spellings in use across the codebase.
-CapabilityDeniedError = CapabilityDenied

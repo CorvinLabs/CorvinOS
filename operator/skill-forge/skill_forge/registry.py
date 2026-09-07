@@ -68,10 +68,42 @@ def _import_forge_audit():
         sys.path.insert(0, str(forge_top))
     try:
         from forge.security_events import write_event, verify_chain
-        return write_event, verify_chain
     except ImportError:
         return None, None
+    try:
+        from forge.security_events import register_event_allowlist
+    except ImportError:  # older forge without the M2 registry
+        return write_event, verify_chain
+    # The core writer's key floor is default-deny; register the exact field
+    # set of every SkillForge event so its metadata survives the write.
+    # Metadata only: hashes, scope/type codes, run ids, scores, the persona
+    # attribution — never a skill body.
+    for event_type, fields in SKILL_FORGE_AUDIT_ALLOWLISTS.items():
+        register_event_allowlist(event_type, fields)
+    return write_event, verify_chain
 
+
+_SKILL_EVENT_FIELDS = frozenset({
+    "sha", "scope", "type", "persona", "caller_persona", "reason", "run_id", "score",
+    "organic", "capped", "from_scope", "to_scope", "force", "n_grades", "mean_score",
+})
+SKILL_FORGE_AUDIT_ALLOWLISTS: dict[str, frozenset[str]] = {
+    "skill.create": _SKILL_EVENT_FIELDS,
+    "skill.delete": _SKILL_EVENT_FIELDS,
+    "skill.grade": _SKILL_EVENT_FIELDS,
+    "skill.promote": _SKILL_EVENT_FIELDS,
+    "skill.namespace_denied": frozenset({
+        "skill_name", "operation", "caller_persona", "allowed_prefix", "reason",
+        "requested_scope",
+    }),
+    "skill.scope_denied": frozenset({
+        "reason", "operation", "requested_scope", "caller_persona",
+    }),
+    "skill.create_forced_scope": frozenset({"scope", "force", "caller_persona", "sha"}),
+    "skill_forge.content_drift": frozenset({"skill_name", "scope"}),
+    "skill_forge.content_rehash": frozenset({"skill_name", "scope"}),
+    "skill_forge.injection_suspended": frozenset({"skill_name", "scope", "lint_errors"}),
+}
 
 _write_event, _verify_chain = _import_forge_audit()
 
@@ -204,6 +236,19 @@ class PromotionGateError(Exception):
     """Promotion gate refused the requested move."""
 
 
+class NamespaceDenied(PermissionError):
+    """Layer 9 namespace gate: the caller persona does not own this name."""
+
+
+#: Hard cap for a NON-organic grade — one the grading party awards itself
+#: (a persona grading a skill it just used through the MCP tool without a real
+#: run behind it, the post-turn auto-grade, a bootstrap seed). Mirrors
+#: ``skill_inject._AUTO_GRADE_CAP_MAX``; the registry is the last line, so a
+#: caller that forgot to cap cannot promote a skill on its own word
+#: (adversarial review F-K8: ``grade()`` accepted 1.0 from anyone).
+AUTO_GRADE_CAP_MAX = 0.3
+
+
 @dataclass
 class Grade:
     run_id: str
@@ -265,8 +310,23 @@ class SkillRegistry:
     def __init__(
         self, root: Path, *, hash_chain: bool = True,
         audit_path: Path | None = None,
+        caller_persona: str | None = None,
+        policy: Any = None,
     ):
         """``audit_path`` overrides the default ``<root>/../audit.jsonl``.
+
+        ``caller_persona`` is the persona on whose behalf this registry
+        mutates skills — passed by the CALLER (the MCP server from its turn
+        env, the console routes as their acting persona), never read from
+        the environment here. When set and the persona owns a namespace in
+        ``forge.policy.Policy.persona_namespaces``, every mutating call
+        (create / update / delete / grade / promote) is gated on the name
+        prefix and a violation raises :class:`NamespaceDenied` after an
+        audited ``skill.namespace_denied``. ``None`` = wildcard (CLI,
+        operator). Until 2026-09-07 the gate lived only in the MCP server, so
+        the console routes minted and deleted any name (F-K6).
+        ``policy`` injects a Policy (tests); default loads the sibling forge
+        workspace policy with bundle defaults.
 
         ``MultiSkillRegistry`` passes the TENANT CORE CHAIN
         (``<tenant_home>/global/forge/audit.jsonl`` — what the boot tripwire,
@@ -283,10 +343,73 @@ class SkillRegistry:
         self.lock_path = self.root / ".lock"
         self.hash_chain = hash_chain
         self._audit_path_override = Path(audit_path) if audit_path is not None else None
+        self.caller_persona = caller_persona or None
+        self._policy = policy
         if not self.manifest_path.exists():
             self._atomic_write_text(self.manifest_path, "{}\n")
         if not self.resolver_manifest_path.exists():
             self._write_resolver_manifest({})
+
+    # -- Layer 9 namespace gate --------------------------------------------
+
+    def _get_policy(self) -> Any:
+        """The forge Policy (bundle defaults + ``<scope_root>/forge/policy.json``).
+
+        Fail-CLOSED for a gated caller: when a persona is attached and the
+        policy cannot be loaded the gate cannot be evaluated, so the mutation
+        is refused — a missing policy must not silently widen a persona's
+        reach to every name.
+        """
+        if self._policy is not None:
+            return self._policy
+        try:
+            from forge.policy import Policy  # type: ignore  # forge on sys.path via _import_forge_audit
+        except ImportError:
+            return None
+        try:
+            self._policy = Policy.load(self.root.parent / "forge")
+        except Exception:  # noqa: BLE001 — unreadable workspace file → bundle defaults
+            try:
+                self._policy = Policy()
+            except Exception:  # noqa: BLE001
+                return None
+        return self._policy
+
+    def namespace_check(self, name: str) -> tuple[bool, str]:
+        """(allowed, reason) for ``name`` under the attached caller persona."""
+        if not self.caller_persona:
+            return True, ""
+        policy = self._get_policy()
+        if policy is None:
+            return False, (
+                f"namespace-gate: policy unavailable — cannot evaluate persona "
+                f"{self.caller_persona!r} for {name!r} (fail-closed)"
+            )
+        return policy.namespace_check(self.caller_persona, name)
+
+    def allowed_prefix(self) -> str | None:
+        """The prefix the attached persona owns, or None (wildcard)."""
+        if not self.caller_persona:
+            return None
+        policy = self._get_policy()
+        return policy.namespace_for(self.caller_persona) if policy is not None else None
+
+    def _namespace_gate(self, name: str, *, operation: str) -> None:
+        allowed, reason = self.namespace_check(name)
+        if allowed:
+            return
+        self._audit_event(
+            "skill.namespace_denied",
+            severity="WARNING",
+            details={
+                "skill_name": name,
+                "operation": operation,
+                "caller_persona": self.caller_persona,
+                "allowed_prefix": self.allowed_prefix(),
+                "reason": reason,
+            },
+        )
+        raise NamespaceDenied(reason)
 
     # -- locking + atomic IO ----------------------------------------------
 
@@ -571,6 +694,8 @@ class SkillRegistry:
                 f"unsupported skill type: {type!r} (valid: {VALID_TYPES})"
             )
 
+        self._namespace_gate(name, operation="update" if overwrite else "create")
+
         # Linter — fail-closed: violations block the write
         result = lint(body_md)
         if not result.ok:
@@ -642,6 +767,7 @@ class SkillRegistry:
         MultiSkillRegistry.promote() so the higher-scope copy keeps its
         slot when the lower-scope source is dropped.
         """
+        self._namespace_gate(name, operation="delete")
         with self._locked():
             data = self._load()
             d = data.pop(name, None)
@@ -661,11 +787,25 @@ class SkillRegistry:
             return True
 
     def grade(
-        self, name: str, run_id: str, score: float, *, notes: str = ""
+        self, name: str, run_id: str, score: float, *, notes: str = "",
+        organic: bool = False,
     ) -> SkillSpec:
-        """Append a grade to a skill's history. Score in [0.0, 1.0]."""
+        """Append a grade to a skill's history. Score in [0.0, 1.0].
+
+        ``organic=False`` (the default — fail-closed) clamps the score to
+        :data:`AUTO_GRADE_CAP_MAX`: a self-awarded, automatic or bootstrap
+        grade can never on its own lift a skill over the ``session->project``
+        promotion bar (mean >= 0.5). Only a caller that vouches for a REAL
+        usage outcome passes ``organic=True``; the clamp is recorded in the
+        ``skill.grade`` audit record (``organic`` / ``capped``).
+        """
         if not (0.0 <= score <= 1.0):
             raise ValueError(f"score must be in [0,1], got {score!r}")
+        self._namespace_gate(name, operation="grade")
+        requested = float(score)
+        if not organic and score > AUTO_GRADE_CAP_MAX:
+            score = AUTO_GRADE_CAP_MAX
+        capped = score != requested
         with self._locked():
             data = self._load()
             if name not in data:
@@ -690,7 +830,8 @@ class SkillRegistry:
             spec = SkillSpec.from_dict(data[name])
             self._audit(
                 "skill.grade", spec,
-                extra={"run_id": run_id, "score": float(score)},
+                extra={"run_id": run_id, "score": float(score),
+                       "organic": bool(organic), "capped": capped},
             )
             return spec
 
@@ -727,7 +868,7 @@ class SkillRegistry:
         # cowork persona created / graded / promoted / deleted a skill.
         # Empty value means the call ran without an attached persona
         # (CLI use).
-        caller_persona = os.environ.get("CORVIN_CALLER_PERSONA") or ""
+        caller_persona = self.caller_persona or os.environ.get("CORVIN_CALLER_PERSONA") or ""
         if caller_persona:
             details["caller_persona"] = caller_persona
         if extra:

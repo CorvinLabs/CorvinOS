@@ -23,6 +23,7 @@ def _accept(adapter: SkillAdapter, param: str, delta: float) -> None:
     """Drive one accepted hypothesis (past baseline, clear improvement)."""
     adapter.state.epoch = 51
     adapter.state.baseline_success_rate = 0.0
+    adapter._persist()  # every epoch reloads from disk under the lock (F-K5) — persist the fast-forward
     hyp = ConfigHypothesis(
         hypothesis_id=f"h-{param}", skill_id=SKILL, param=param, delta=delta,
         reason="test", confidence=0.9,

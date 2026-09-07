@@ -119,8 +119,8 @@ def test_grade_appends():
         r = SkillRegistry(Path(td) / "skill-forge")
         r.create(name="g1", type="domain", body_md=GOOD_BODY,
                  description="d", claim={})
-        r.grade("g1", "run-1", 0.5)
-        r.grade("g1", "run-2", 0.7, notes="better")
+        r.grade("g1", "run-1", 0.5, organic=True)
+        r.grade("g1", "run-2", 0.7, notes="better", organic=True)
         spec = r.get("g1")
         t("two grades stored", spec.n_grades == 2)
         t("mean score correct", abs(spec.mean_score - 0.6) < 1e-6)
@@ -130,7 +130,7 @@ def test_grade_appends():
         t("meta.json grades synced", len(meta["grades"]) == 2)
         # invalid score range
         try:
-            r.grade("g1", "r", 1.5)
+            r.grade("g1", "r", 1.5, organic=True)
             t("score>1 rejected", False)
         except ValueError:
             t("score>1 rejected", True)
@@ -157,7 +157,7 @@ def test_audit_chain_verifiable():
         r = SkillRegistry(Path(td) / "skill-forge")
         r.create(name="a1", type="domain", body_md=GOOD_BODY,
                  description="d", claim={})
-        r.grade("a1", "r", 0.6)
+        r.grade("a1", "r", 0.6, organic=True)
         r.delete("a1", reason="test")
         audit = r.audit_path()
         # audit lives ONE LEVEL UP — sibling to skill-forge dir

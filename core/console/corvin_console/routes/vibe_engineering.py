@@ -310,7 +310,11 @@ async def get_pipeline(
     try:
         from core.skills.skill_registry_phase1 import get_registry as _get_vibe_registry  # noqa: PLC0415
         _vibe_registry = _get_vibe_registry()
-        _vibe_result = _vibe_registry.execute("os.vibe_engineering", {"tenant_id": rec.tenant_id})
+        _vibe_result = _vibe_registry.execute(
+            "os.vibe_engineering",
+            {"tenant_id": rec.tenant_id},
+            lom="core/console/corvin_console/routes/vibe_engineering.py:get_pipeline",
+        )
         _active = bool(_vibe_result.status == "success" and _vibe_result.output.get("enabled", False))
     except Exception:  # noqa: BLE001 — unknown → report not-active (honest default)
         _active = False

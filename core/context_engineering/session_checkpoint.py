@@ -131,7 +131,10 @@ class SessionContinuationManager:
         self.corvin_home = Path(corvin_home)
         self.tenant_id = tenant_id
         self._checkpoint_base = self.corvin_home / "tenants" / tenant_id / "checkpoints"
-        self._checkpoint_base.mkdir(parents=True, exist_ok=True)
+        # No eager mkdir: the directory is created inside ``save_checkpoint``'s
+        # guarded block, so an unwritable root surfaces as
+        # ``CheckpointPersistenceError`` at save time (the documented contract)
+        # instead of a bare OSError escaping the constructor.
 
     def save_checkpoint(
         self,

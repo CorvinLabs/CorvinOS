@@ -111,7 +111,13 @@ class SkillInvocationService:
 
     async def _phase_intake(self, request: SkillInvocationRequest, trace: List[str]) -> None:
         """Phase 0: Validate request (already done in __post_init__)."""
-        await self._run_phase(0, lambda: None, trace, "Intake")
+        async def _noop() -> None:
+            return None
+
+        # ``_run_phase`` awaits ``coro()`` under ``asyncio.wait_for``; a plain
+        # ``lambda: None`` returned ``None`` there and raised TypeError, so
+        # EVERY invocation died at phase 0 and no Skill ever ran.
+        await self._run_phase(0, _noop, trace, "Intake")
 
     async def _phase_manifest(self, request: SkillInvocationRequest, trace: List[str]):
         """Phase 1: Load Skill manifest."""

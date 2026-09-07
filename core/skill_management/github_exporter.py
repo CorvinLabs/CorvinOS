@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from core.skill_management.github_sync import GitClient, GitPushResult
 from core.skill_management.resolver import SkillDependencyResolver
 from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002: Fixed import
+from core.paths.tenant import tenant_home
 
 
 @dataclass
@@ -36,7 +37,7 @@ class GitHubExporter:
         self.repo_url = repo_url
         self.branch = branch
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        self.base_path = tenant_home(tenant_id)
         # CVE-TENANT-001 FIX: Pass tenant_id to GitClient for path scoping
         self.git_client = GitClient(repo_url, branch, tenant_id=tenant_id)
 
@@ -64,16 +65,19 @@ class GitHubExporter:
                     exported_skills.append(skill_dir.name)
 
         # Step 2: Create tarball
-        tarball_path = self.base_path / "exports" / f"skills_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
-        tarball_path.parent.mkdir(parents=True, exist_ok=True)
+        # make_archive appends ".tar.gz" itself — hand it the bare stem and
+        # take the path it RETURNS (the old with_suffix('') on a ".tar.gz" name
+        # kept ".tar" and every consumer then opened a file that did not exist).
+        stem = self.base_path / "exports" / f"skills_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        stem.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            shutil.make_archive(
-                str(tarball_path.with_suffix('')),
+            tarball_path = Path(shutil.make_archive(
+                str(stem),
                 'gztar',
                 shared_dir.parent,
                 "_shared"
-            )
+            ))
         except Exception as e:
             return ExportResult(
                 success=False,
@@ -188,15 +192,15 @@ class GitHubExporter:
             )
 
         # Create tarball
-        tarball_path = self.base_path / "exports" / f"skill_{skill_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
+        stem = self.base_path / "exports" / f"skill_{skill_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         try:
-            shutil.make_archive(
-                str(tarball_path.with_suffix('')),
+            tarball_path = Path(shutil.make_archive(
+                str(stem),
                 'gztar',
                 temp_export.parent,
                 temp_export.name
-            )
+            ))
         finally:
             shutil.rmtree(temp_export)
 

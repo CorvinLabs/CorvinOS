@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 from core.skill_management.tenant_validator import validate_tenant_id
+from core.paths.tenant import tenant_home
 
 
 @dataclass
@@ -35,7 +36,7 @@ class ConfigLoader:
     def __init__(self, tenant_id: str = "_default"):
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        self.base_path = tenant_home(tenant_id)
         self.config_dir = self.base_path / "config"
         self.config_dir.mkdir(parents=True, exist_ok=True)
 

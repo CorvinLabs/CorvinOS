@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002
+from core.paths.tenant import tenant_home
 
 
 class UnsafeTarMember(ValueError):
@@ -84,10 +85,10 @@ class GitHubImporter:
 
         self.tenant_id = tenant_id
         # ``base_path`` lets tests (and embedders) target a tmp root instead of
-        # the live ~/.corvin tree. Default is unchanged.
+        # the live CORVIN_HOME tree (core.paths.tenant.tenant_home).
         self.base_path = (
             Path(base_path) if base_path is not None
-            else Path.home() / ".corvin" / "tenants" / tenant_id
+            else tenant_home(tenant_id)
         )
 
     def import_from_tarball(
@@ -140,7 +141,7 @@ class GitHubImporter:
             )
 
         # Step 3: Detect conflicts
-        for skill_dir in import_skills_dir.iterdir():
+        for skill_dir in sorted(import_skills_dir.iterdir()):  # deterministic order
             if not skill_dir.is_dir() or skill_dir.name.startswith('.'):
                 continue
 
@@ -169,7 +170,7 @@ class GitHubImporter:
             shared_skills_dir = self.base_path / "_shared" / "skills"
             shared_skills_dir.mkdir(parents=True, exist_ok=True)
 
-            for skill_dir in import_skills_dir.iterdir():
+            for skill_dir in sorted(import_skills_dir.iterdir()):  # deterministic order
                 if not skill_dir.is_dir() or skill_dir.name.startswith('.'):
                     continue
 

@@ -13,9 +13,9 @@ from core.engine.skill_invocation_models import SkillInvocationRequest
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class UIRequest:
-    """Incoming request from UI layer."""
+    """Incoming request from UI layer (immutable value object, like UIResponse)."""
     tenant_id: str
     user_id: Optional[str]
     skill_id: str

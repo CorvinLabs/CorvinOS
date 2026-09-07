@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from core.skill_management.tenant_validator import validate_tenant_id  # TENANT-002
+from core.paths.tenant import tenant_home
 
 
 @dataclass
@@ -81,7 +82,7 @@ class GitClient:
 
         # CVE-TENANT-001 FIX: Tenant-scope is MANDATORY, no bypass via local_repo_path parameter
         self.local_repo_path = (
-            Path.home() / ".corvin" / "tenants" / tenant_id / "git_sync_repo"
+            tenant_home(tenant_id) / "git_sync_repo"
         )
 
     def clone_or_pull(self) -> bool:

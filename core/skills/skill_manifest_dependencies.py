@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-from core.plugins.corvin_plugins.manifest_capabilities import CapabilityType
+from corvin_plugins.manifest_capabilities import CapabilityType
 
 log = logging.getLogger(__name__)
 

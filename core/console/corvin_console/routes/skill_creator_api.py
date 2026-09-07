@@ -69,6 +69,11 @@ from .. import _bootstrap
 _forge_paths = _bootstrap.forge_paths
 
 
+#: The Skill-Creator mints as the ``assistant`` persona (registry_bridge
+#: .CALLER_PERSONA); generated names are normalised to ``assistant.<name>``.
+SKILL_NAMESPACE = "assistant."
+
+
 def _require_valid_name(name: str) -> str:
     """Reject anything the registry would not accept, before a path join.
 
@@ -78,6 +83,23 @@ def _require_valid_name(name: str) -> str:
     if (not name or len(name) > 128 or ".." in name
             or not all(c.isalnum() or c in "._" for c in name)):
         raise HTTPException(status_code=400, detail="invalid skill name")
+    return name
+
+
+def _require_namespace(name: str) -> str:
+    """422 for a MUTATION on a name outside the Skill-Creator's namespace.
+
+    Layer 9 (F-K6): the console must not be the one door through which a
+    ``code.*`` / ``web.*`` skill can be deleted or rewritten; the registry
+    enforces the same gate (``caller_persona``), this is the early, explicit
+    answer.
+    """
+    _require_valid_name(name)
+    if not name.startswith(SKILL_NAMESPACE):
+        raise HTTPException(
+            status_code=422,
+            detail=f"skill name must lie in the {SKILL_NAMESPACE!r} namespace: {name!r}",
+        )
     return name
 
 
@@ -346,7 +368,7 @@ async def delete_generated_skill(
     if delete_skill is None:
         raise HTTPException(status_code=500, detail="Skill-Creator not available")
 
-    _require_valid_name(name)
+    _require_namespace(name)
     removed = delete_skill(_registry_root(rec.tenant_id), name,
                            reason="deleted from console Skill Creator")
     if not removed:
@@ -399,7 +421,7 @@ def _resolve_base_skill(tenant_id: str, name: Optional[str]) -> Optional[Dict[st
     if skill_body is None or strip_front_matter is None:
         raise HTTPException(status_code=500, detail="Skill-Creator not available")
 
-    _require_valid_name(name)
+    _require_namespace(name)  # a refine rewrites the skill in place — a mutation
     body = skill_body(_registry_root(tenant_id), name)
     if body is None:
         raise HTTPException(status_code=404, detail=f"skill not found: {name}")

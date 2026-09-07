@@ -12,6 +12,7 @@ from core.skill_management.resolver import SkillDependencyResolver, resolve_depe
 def temp_tenant_with_skills(tmp_path, monkeypatch):
     """Create tenant with test skills."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
     tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
 
     for scope in ["_platform", "_shared", "_local"]:
@@ -103,6 +104,7 @@ class TestDependencyResolver:
     def test_detect_simple_cycle(self, tmp_path, monkeypatch):
         """Detect simple circular dependency A->B->A."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
         (tenant_path / "_shared" / "skills").mkdir(parents=True)
 
@@ -143,6 +145,7 @@ class TestDependencyResolver:
     def test_detect_complex_cycle(self, tmp_path, monkeypatch):
         """Detect complex circular dependency A->B->C->A."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
         (tenant_path / "_shared" / "skills").mkdir(parents=True)
 
@@ -214,6 +217,7 @@ class TestDependencyResolver:
     def test_diamond_dependencies(self, tmp_path, monkeypatch):
         """Handle diamond dependency pattern: A->[B,C], B->D, C->D."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
         (tenant_path / "_shared" / "skills").mkdir(parents=True)
 

@@ -28,7 +28,9 @@ Execution model (adversarial review 2026-09-03):
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import json
 import logging
 import re
 import threading
@@ -90,6 +92,25 @@ class SkillOrigin(str, Enum):
     COMMUNITY = "community"  # User-contributed
 
 
+class SkillTier(str, Enum):
+    """Disableability tier — the Skills twin of the plugin ``boot_layer`` axis.
+
+    ``compliance`` Skills have NO off switch: ``unregister()`` refuses, the
+    three-failure auto-disable refuses, and there is no env var or flag that
+    changes that (CLAUDE.md § Plugin-Based Isolation — "Security/compliance
+    mechanism: always on, never toggleable"). Until 2026-09-07 three timed-out
+    ``os.capabilities`` calls disabled the capability manifest for the tenant
+    and every flag-gated console panel vanished (adversarial review F-K3).
+    """
+    COMPLIANCE = "compliance"
+    CORE = "core"
+    INSTALLED = "installed"
+
+
+class SkillDisableRefused(RuntimeError):
+    """A compliance-tier Skill was asked to go away; it did not (audited)."""
+
+
 @dataclass(frozen=True)
 class SkillMetadata:
     """Skill identification + versioning."""
@@ -106,6 +127,8 @@ class SkillMetadata:
     #: minutes of console polling, doubling the chain and filling the learning
     #: store with events no optimizer can use — adversarial review F31).
     learn: bool = True
+    #: See :class:`SkillTier`. ``compliance`` cannot be unregistered or disabled.
+    tier: SkillTier = SkillTier.CORE
 
 
 def _utc_now_iso() -> str:
@@ -138,12 +161,22 @@ class SkillExecutionResult:
     tenant_id: str = "_default"
 
     def to_audit_event(self) -> Dict[str, Any]:
-        """Convert to audit trail event format."""
+        """Convert to audit trail event format.
+
+        The raw ``output`` is deliberately NOT part of the audit record: the
+        core writer's denylist floor (``forge.security_events``) drops any
+        ``output`` key, so until 2026-09-07 every ``skill.executed`` chain
+        record carried ``lom: null`` and no decision at all — an execution was
+        provable, its DECISION was not (adversarial review F-K2). What goes
+        into the chain is :func:`decision_summary`: an allowlisted, PII-free
+        projection (engine, flag counts + hash, enabled/mode …) under keys the
+        floor keeps.
+        """
         return {
             "event_type": "SKILL_EXECUTED",
             "skill_id": self.skill_id,
             "status": self.status,
-            "output": self.output,
+            "decision": decision_summary(self.output),
             "execution_time_ms": self.execution_time_ms,
             "error_message": self.error_message,
             "timestamp": self.timestamp,
@@ -151,6 +184,73 @@ class SkillExecutionResult:
             "lom_hash": self.lom_hash,
             "tenant_id": self.tenant_id,
         }
+
+
+#: Scalar output fields that may appear verbatim in the audit chain. Every key
+#: here is chosen to survive ``forge.security_events._AUDIT_FORBIDDEN_EXACT`` /
+#: ``_AUDIT_FORBIDDEN_SUBSTR`` (no "output", "message", "content", "token", …)
+#: and to name a DECISION, never user content: which engine, whether a feature
+#: is on, which mode, how confident. Free-text fields (``reasoning``,
+#: ``task_description`` echoes) are never copied.
+_DECISION_SCALAR_KEYS: tuple[str, ...] = (
+    "engine",
+    "bundled_engine",
+    "shadow",
+    "confidence",
+    "confidence_threshold",
+    "learned_config_version",
+    "enabled",
+    "enabled_source",
+    "headless_enabled",
+    "mode",
+    "source",
+    "vibe_score",
+    "priority_adjustment",
+)
+_DECISION_MAX_STR = 64
+
+
+def decision_summary(output: Any) -> Optional[Dict[str, Any]]:
+    """Allowlisted, content-free projection of a Skill output for the audit chain.
+
+    * scalar decision fields (``engine``, ``enabled``, ``mode`` …) are copied
+      when they are short scalars;
+    * a ``flags`` mapping (``os.capabilities``) becomes ``flag_count`` /
+      ``flags_on`` / ``flags_hash`` (sha256 over the sorted flag states, 16 hex)
+      so a reviewer can prove WHICH manifest was served without listing it;
+    * a 3-tier context (``merged_tier``) is reduced to its engine + priority.
+
+    Returns ``None`` for ``None`` output. Never raises.
+    """
+    if output is None:
+        return None
+    if not isinstance(output, dict):
+        return {"kind": type(output).__name__}
+    summary: Dict[str, Any] = {}
+    for key in _DECISION_SCALAR_KEYS:
+        value = output.get(key)
+        if isinstance(value, bool) or isinstance(value, (int, float)):
+            summary[key] = value
+        elif isinstance(value, str) and 0 < len(value) <= _DECISION_MAX_STR:
+            summary[key] = value
+    flags = output.get("flags")
+    if isinstance(flags, dict):
+        states = sorted((str(k), bool(v)) for k, v in flags.items())
+        summary["flag_count"] = len(states)
+        summary["flags_on"] = sum(1 for _k, v in states if v)
+        summary["flags_hash"] = hashlib.sha256(
+            json.dumps(states, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+    merged = output.get("merged_tier")
+    if isinstance(merged, dict):
+        engine = merged.get("engine")
+        if isinstance(engine, str) and 0 < len(engine) <= _DECISION_MAX_STR:
+            summary["engine"] = engine
+        priority = merged.get("priority")
+        if isinstance(priority, (int, float)) and not isinstance(priority, bool):
+            summary["priority"] = priority
+        summary["injected_tier"] = output.get("injected_tier") is not None
+    return summary
 
 
 class Skill(ABC):
@@ -185,6 +285,45 @@ class Skill(ABC):
         return f"Skill({self.metadata.id}:v{self.metadata.version})"
 
 
+#: Positive allowlists for the Skill audit events (ADR-0129 M2). The core
+#: writer's key floor is DEFAULT-DENY (``forge.security_events._AUDIT_KNOWN_KEYS``);
+#: an event type that registers its exact field set keeps those keys and only
+#: those. Every key here is metadata: ids, a status/tier/operation code, a
+#: number, a hash, the LoM label — ``decision`` is :func:`decision_summary`
+#: (allowlisted scalars + counts + hash, never output content).
+SKILL_AUDIT_ALLOWLISTS: Dict[str, frozenset] = {
+    # ONE event type, three emitters (this registry; ``core/skills/executor.py``
+    # and ``core/skills/skill_manager.py`` via ``skill_audit.emit_skill_audit``)
+    # — the union of their metadata fields, registered once here.
+    "skill.executed": frozenset({
+        "skill_id", "status", "decision", "execution_time_ms", "error_message",
+        "timestamp", "lom", "lom_hash", "tenant_id",
+        "skill_version", "latency_ms", "run_id", "timeout_ms", "exc_type",
+        "phase_completed", "error_class",
+    }),
+    "skill.auto.disabled": frozenset({"skill_id", "timestamp", "tenant_id", "failures"}),
+    "skill.disable.refused": frozenset({
+        "skill_id", "tier", "operation", "timestamp", "tenant_id", "failures",
+    }),
+    "skill.manually.enabled": frozenset({"skill_id", "timestamp", "tenant_id"}),
+    "skill.manually.disabled": frozenset({"skill_id", "timestamp", "tenant_id"}),
+}
+
+
+def _register_skill_audit_allowlists() -> bool:
+    """Fold the Skill event field sets into the core writer (idempotent)."""
+    try:
+        from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]
+    except ImportError:
+        return False
+    for event_type, fields in SKILL_AUDIT_ALLOWLISTS.items():
+        register_event_allowlist(event_type, fields)
+    return True
+
+
+_register_skill_audit_allowlists()
+
+
 class CoreAuditBackend:
     """Audit backend that writes Skill events into the hash-chained core audit log.
 
@@ -211,6 +350,7 @@ class CoreAuditBackend:
             from audit import audit_event  # type: ignore[import-not-found]
         except ImportError:
             return None
+        _register_skill_audit_allowlists()  # the writer is importable now — bind the field sets
 
         tenant_id = self.tenant_id
 
@@ -353,11 +493,60 @@ class SkillsRegistry:
         logger.info(f"Registered Skill: {skill_id}:{skill.metadata.version}")
 
     def unregister(self, skill_id: str) -> None:
-        """Unregister a Skill."""
-        if skill_id in self._skills:
-            del self._skills[skill_id]
-            del self._metadata_by_id[skill_id]
-            logger.info(f"Unregistered Skill: {skill_id}")
+        """Unregister a Skill.
+
+        Raises:
+            SkillDisableRefused: for a ``tier=compliance`` Skill (audited as
+                ``skill.disable.refused``); the Skill stays registered.
+        """
+        if skill_id not in self._skills:
+            return
+        self._refuse_if_compliance(skill_id, operation="unregister", tenant_id=self.tenant_id)
+        del self._skills[skill_id]
+        del self._metadata_by_id[skill_id]
+        logger.info(f"Unregistered Skill: {skill_id}")
+
+    def _tier_of(self, skill_id: str) -> SkillTier:
+        meta = self._metadata_by_id.get(skill_id)
+        tier = getattr(meta, "tier", SkillTier.CORE)
+        try:
+            return SkillTier(tier)
+        except ValueError:
+            return SkillTier.CORE
+
+    def _refuse_if_compliance(self, skill_id: str, *, operation: str, tenant_id: str) -> None:
+        """Audit + raise when ``skill_id`` is a compliance-tier Skill.
+
+        One helper for every path that could remove a Skill from service
+        (``unregister``, ``disable_skill``, and — without the raise — the
+        auto-disable in :meth:`_track_failure`), so a future off switch cannot
+        forget the check.
+        """
+        if self._tier_of(skill_id) is not SkillTier.COMPLIANCE:
+            return
+        self._audit_disable_refused(skill_id, operation=operation, tenant_id=tenant_id)
+        raise SkillDisableRefused(
+            f"{skill_id} is a compliance-tier Skill and cannot be {operation}d "
+            f"(no off switch — CLAUDE.md § Plugin-Based Isolation)"
+        )
+
+    def _audit_disable_refused(
+        self, skill_id: str, *, operation: str, tenant_id: str, failures: Optional[int] = None,
+    ) -> None:
+        logger.error(
+            "compliance-tier Skill %s: %s REFUSED for tenant %s", skill_id, operation, tenant_id
+        )
+        event: Dict[str, Any] = {
+            "event_type": "SKILL_DISABLE_REFUSED",
+            "skill_id": skill_id,
+            "tier": SkillTier.COMPLIANCE.value,
+            "operation": operation,
+            "timestamp": _utc_now_iso(),
+            "tenant_id": tenant_id,
+        }
+        if failures is not None:
+            event["failures"] = failures
+        self._write_audit(event)
 
     def get(self, skill_id: str) -> Optional[Skill]:
         """Get a Skill by ID."""
@@ -378,7 +567,16 @@ class SkillsRegistry:
 
     @staticmethod
     def _compute_lom_hash(lom: Optional[str]) -> Optional[str]:
-        """SHA256 of the source line at the LoM (``file:function:line`` or ``file:function:L<line>``).
+        """SHA256 binding a LoM to the source it names (ADR-0537).
+
+        Two shapes are accepted:
+
+        * ``file:function`` — the hash of the named function's source segment
+          (resolved with ``ast``, so it survives line drift above it). This is
+          the shape production call sites use.
+        * ``file:function:L<line>`` / ``file:function:<line>`` — the hash of
+          that one source line (``os_skills_integration._lom`` derives it from
+          the live frame).
 
         Falls back to hashing the LoM string itself when the source cannot be
         resolved; the fallback is logged so a non-binding hash is observable.
@@ -386,16 +584,14 @@ class SkillsRegistry:
         if not lom:
             return None
 
+        label_hash = hashlib.sha256(lom.encode()).hexdigest()
         try:
             parts = lom.split(":")
-            if len(parts) < 3:
-                return None
+            if len(parts) < 2:
+                logger.warning("LoM %r has no function part — label hash only", lom)
+                return label_hash
 
-            file_path, line_str = parts[0], parts[2].strip()
-            if line_str[:1] in ("L", "l"):
-                line_str = line_str[1:]
-            line_num = int(line_str)
-
+            file_path, func_name = parts[0], parts[1].strip()
             source_path = Path(file_path)
             if not source_path.is_absolute():
                 source_path = _REPO_ROOT / source_path
@@ -406,22 +602,38 @@ class SkillsRegistry:
             # readable files — refuse and fall back to the label hash.
             if not source_path.is_relative_to(_REPO_ROOT):
                 logger.warning("LoM outside repo root refused: %s", source_path)
-                return hashlib.sha256(lom.encode()).hexdigest()
+                return label_hash
 
             if not source_path.is_file():
                 logger.warning(f"LoM source file not found: {source_path}")
-                return hashlib.sha256(lom.encode()).hexdigest()
+                return label_hash
 
-            lines = source_path.read_text(encoding="utf-8", errors="ignore").split("\n")
-            if line_num < 1 or line_num > len(lines):
-                logger.warning(f"LoM line {line_num} outside file length {len(lines)}")
-                return hashlib.sha256(lom.encode()).hexdigest()
+            text = source_path.read_text(encoding="utf-8", errors="ignore")
 
-            return hashlib.sha256(lines[line_num - 1].encode()).hexdigest()
+            if len(parts) >= 3:
+                line_str = parts[2].strip()
+                if line_str[:1] in ("L", "l"):
+                    line_str = line_str[1:]
+                line_num = int(line_str)
+                lines = text.split("\n")
+                if line_num < 1 or line_num > len(lines):
+                    logger.warning(f"LoM line {line_num} outside file length {len(lines)}")
+                    return label_hash
+                return hashlib.sha256(lines[line_num - 1].encode()).hexdigest()
+
+            # ``file:function`` — hash the function's source segment.
+            tree = ast.parse(text)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                    segment = ast.get_source_segment(text, node)
+                    if segment:
+                        return hashlib.sha256(segment.encode()).hexdigest()
+            logger.warning("LoM function %s not found in %s — label hash only", func_name, source_path)
+            return label_hash
 
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to compute LoM hash for '{lom}': {e}")
-            return hashlib.sha256(lom.encode()).hexdigest()
+            return label_hash
 
     # ── tenant isolation ─────────────────────────────────────────────────────
 
@@ -542,7 +754,10 @@ class SkillsRegistry:
             skill_id: Which Skill to execute
             input: Input dictionary
             timeout_ms: Execution timeout in milliseconds
-            lom: Line of moral responsibility (source code location)
+            lom: Line of moral responsibility — REQUIRED. ``"<file>:<function>"``
+                (or ``"<file>:<function>:L<line>"``) naming the call site; a
+                missing/empty LoM is refused like a tenant violation (audited
+                error result, the Skill does not run).
             tenant_id: Override registry tenant_id. ``None`` → registry tenant;
                 an EMPTY string is a violation, not a default (fail-closed).
 
@@ -563,6 +778,18 @@ class SkillsRegistry:
             return self._finish_error(
                 skill_id, f"Tenant isolation violation: {effective_tenant_id!r} not authorized",
                 effective_tenant_id or "", lom, start_time, track=False,
+            )
+
+        # LoM is REQUIRED (ADR-0537, EU AI Act Art. 50): a decision nobody is
+        # responsible for is not executed. Refused like a tenant violation — an
+        # audited error result, the Skill never runs (adversarial review F-K2:
+        # every production call site passed no LoM and the chain said ``null``).
+        if not isinstance(lom, str) or not lom.strip():
+            return self._finish_error(
+                skill_id,
+                "LoM missing: pass lom='<file>:<function>' naming the line of moral "
+                "responsibility for this Skill execution (ADR-0537)",
+                effective_tenant_id, None, start_time, track=False,
             )
 
         # Check if Skill exists
@@ -685,21 +912,63 @@ class SkillsRegistry:
         self._emit_audit_event(result)
         return result
 
+    def disable_skill(self, skill_id: str, tenant_id: Optional[str] = None) -> bool:
+        """Manually disable a Skill for one tenant (the operator's off switch).
+
+        Returns True if disabled (or already disabled), False if not registered.
+
+        Raises:
+            SkillDisableRefused: for a ``tier=compliance`` Skill (audited).
+        """
+        if skill_id not in self._skills:
+            return False
+        effective_tenant_id = tenant_id or self.tenant_id or "_default"
+        self._refuse_if_compliance(skill_id, operation="disable", tenant_id=effective_tenant_id)
+        key = (skill_id, effective_tenant_id)
+        with self._failure_lock:
+            newly = key not in self._auto_disabled
+            self._auto_disabled.add(key)
+        if newly:
+            self._write_audit({
+                "event_type": "SKILL_MANUALLY_DISABLED",
+                "skill_id": skill_id,
+                "timestamp": _utc_now_iso(),
+                "tenant_id": effective_tenant_id,
+            })
+        return True
+
     def _track_failure(self, skill_id: str, tenant_id: Optional[str] = None) -> None:
-        """Track consecutive failures per (skill, tenant); auto-disable after threshold."""
+        """Track consecutive failures per (skill, tenant); auto-disable after threshold.
+
+        A ``tier=compliance`` Skill is never auto-disabled: the refusal is
+        audited (``skill.disable.refused``, once per threshold crossing) and the
+        Skill keeps answering — a flaky compliance Skill is an incident, not a
+        reason to switch the compliance mechanism off.
+        """
         effective_tenant_id = tenant_id or self.tenant_id or "_default"
         key = (skill_id, effective_tenant_id)
+        compliance = self._tier_of(skill_id) is SkillTier.COMPLIANCE
+        refused = False
         with self._failure_lock:  # FIX #3: Prevent TOCTOU race
             self._failure_count[key] = self._failure_count.get(key, 0) + 1
-            if self._failure_count[key] >= self.AUTO_DISABLE_THRESHOLD and key not in self._auto_disabled:
-                logger.error(
-                    f"Skill {skill_id} auto-disabled for tenant {effective_tenant_id} "
-                    f"after {self.AUTO_DISABLE_THRESHOLD}+ consecutive failures"
-                )
-                self._auto_disabled.add(key)
-                disabled = True
+            failures = self._failure_count[key]
+            if failures >= self.AUTO_DISABLE_THRESHOLD and key not in self._auto_disabled:
+                if compliance:
+                    disabled = False
+                    refused = failures == self.AUTO_DISABLE_THRESHOLD
+                else:
+                    logger.error(
+                        f"Skill {skill_id} auto-disabled for tenant {effective_tenant_id} "
+                        f"after {self.AUTO_DISABLE_THRESHOLD}+ consecutive failures"
+                    )
+                    self._auto_disabled.add(key)
+                    disabled = True
             else:
                 disabled = False
+        if refused:
+            self._audit_disable_refused(
+                skill_id, operation="auto_disable", tenant_id=effective_tenant_id, failures=failures,
+            )
         if disabled:
             self._write_audit({
                 "event_type": "SKILL_AUTO_DISABLED",
@@ -834,17 +1103,6 @@ def get_registry() -> SkillsRegistry:
                     logger.error("builtin Skills could not be registered lazily: %s", exc)
                 _global_registry = registry
     return _global_registry
-
-
-def execute_skill(
-    skill_id: str,
-    input: Dict[str, Any],
-    timeout_ms: int = 5000,
-    lom: Optional[str] = None,
-) -> SkillExecutionResult:
-    """Execute a Skill via global registry."""
-    registry = get_registry()
-    return registry.execute(skill_id, input, timeout_ms, lom)
 
 
 def is_skill_enabled(skill_id: str, version: Optional[str] = None) -> bool:

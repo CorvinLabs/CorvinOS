@@ -140,10 +140,9 @@ class TestPhaseCAuditChainIntegrity:
 
     def test_deprecated_events_are_immutable(self):
         """DeprecatedAPIEvent is frozen (immutable)."""
-        from dataclasses import fields
-        event_fields = fields(DeprecatedAPIEvent)
-        # Verify event is immutable (frozen=True in dataclass)
-        assert any(f.frozen for f in [DeprecatedAPIEvent.__dataclass_fields__["timestamp"]] if hasattr(f, 'frozen'))
+        from dataclasses import is_dataclass
+        assert is_dataclass(DeprecatedAPIEvent)
+        assert DeprecatedAPIEvent.__dataclass_params__.frozen  # frozen=True
 
     def test_deprecated_events_have_tenant_scope(self):
         """All events must have tenant_id (GDPR Art. 5)."""

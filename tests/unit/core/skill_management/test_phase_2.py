@@ -23,6 +23,7 @@ configure_sync = _skill_sync.configure_sync
 def temp_tenant_export(tmp_path, monkeypatch):
     """Create tenant with skills for export."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
     tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
     (tenant_path / "_shared" / "skills").mkdir(parents=True)
 
@@ -111,6 +112,7 @@ class TestGitHubImporter:
         """Importer extracts and imports skills."""
         # Export first
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         exporter = GitHubExporter("https://github.com/test/repo")
         export_result = exporter.export_shared_skills(dry_run=True)
 
@@ -119,15 +121,18 @@ class TestGitHubImporter:
         (import_tenant / "_shared" / "skills").mkdir(parents=True)
 
         monkeypatch.setenv("HOME", str(tmp_path))
+
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         import_tenant_id = "import_test"
 
-        # Need to mock the tenant path
-        # For now, just verify importer loads tarball
+        # A dry run imports nothing by contract; import for real into the
+        # second tenant and prove the skills landed under ITS tenant home.
         importer = GitHubImporter(import_tenant_id)
-        result = importer.import_from_tarball(export_result.tarball_path, dry_run=True)
+        result = importer.import_from_tarball(export_result.tarball_path, dry_run=False)
 
         assert result.success is True
-        assert len(result.imported_skills) > 0
+        assert len(result.imported_skills) == 3
+        assert (import_tenant / "_shared" / "skills" / "skill-0" / "meta.json").exists()
 
     def test_import_detects_conflicts(self, temp_tenant_export):
         """Importer detects conflicting skills."""
@@ -190,6 +195,7 @@ class TestCliSync:
     def test_cli_configure_sync(self, cli_runner, tmp_path, monkeypatch):
         """CLI configures GitHub sync."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
 
         result = cli_runner.invoke(configure_sync, [
             "--tenant", "_default",
@@ -203,6 +209,7 @@ class TestCliSync:
     def test_cli_sync_status(self, cli_runner, tmp_path, monkeypatch):
         """CLI shows sync status."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
 
         # Configure first
         cli_runner.invoke(configure_sync, [
@@ -233,6 +240,7 @@ class TestPhase2Robustness:
     def test_export_missing_shared_dir(self, tmp_path, monkeypatch):
         """Exporter handles missing _shared/ gracefully."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
 
         exporter = GitHubExporter("https://github.com/test/repo")
         result = exporter.export_shared_skills(dry_run=True)
@@ -243,6 +251,7 @@ class TestPhase2Robustness:
     def test_import_invalid_tarball(self, tmp_path, monkeypatch):
         """Importer handles invalid tarball."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
 
         bad_tarball = tmp_path / "bad.tar.gz"
         bad_tarball.write_text("not a tarball")
@@ -255,6 +264,7 @@ class TestPhase2Robustness:
     def test_export_corrupted_metadata(self, tmp_path, monkeypatch):
         """Exporter handles corrupted metadata gracefully."""
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
         tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
         skill_dir = tenant_path / "_shared" / "skills" / "bad-skill"
         skill_dir.mkdir(parents=True)

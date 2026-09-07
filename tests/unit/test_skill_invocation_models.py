@@ -28,7 +28,7 @@ class TestSkillInvocationRequest:
 
     def test_request_missing_tenant_id(self):
         """tenant_id is required (fail-closed)."""
-        with pytest.raises(ValueError, match="tenant_id is required"):
+        with pytest.raises(ValueError, match="tenant_id required"):
             SkillInvocationRequest(
                 tenant_id="",
                 skill_id="os.delegation_router",

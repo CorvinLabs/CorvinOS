@@ -106,9 +106,20 @@ class TestUILayers:
         request = await adapter.parse_input(raw_input)
         assert request.tenant_id == "123456"
         assert request.user_id == "user_1"
-        assert request.skill_id == "skill"
-        assert request.input_data.get("os.delegation_router") == "os.delegation_router"
+        # "/skill <skill_id> k=v": the skill id is the first bare argument
+        assert request.skill_id == "os.delegation_router"
+        assert request.input_data == {"task_shape": "small"}
         assert request.channel_id == "ch_1"
+
+    @pytest.mark.asyncio
+    async def test_discord_parse_skill_as_command(self):
+        """"/<skill_id> k=v" — the skill itself as the slash command."""
+        adapter = DiscordUILayer()
+        request = await adapter.parse_input(
+            {"guild_id": "g", "user_id": "u", "channel_id": "c", "content": "/os.delegation_router task_shape=small"}
+        )
+        assert request.skill_id == "os.delegation_router"
+        assert request.input_data == {"task_shape": "small"}
 
     @pytest.mark.asyncio
     async def test_cli_parse_input(self):

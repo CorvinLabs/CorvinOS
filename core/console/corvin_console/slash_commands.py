@@ -118,7 +118,11 @@ def _plugin_builder_enabled(tenant_id: str) -> bool:
     try:
         from core.skills.skill_registry_phase1 import get_registry
         registry = get_registry()
-        result = registry.execute("os.plugin_builder", {"enabled": True, "tenant_id": tenant_id})
+        result = registry.execute(
+            "os.plugin_builder",
+            {"enabled": True, "tenant_id": tenant_id},
+            lom="core/console/corvin_console/slash_commands.py:_plugin_builder_enabled",
+        )
         if result.status == "success":
             return bool(result.output.get("enabled", False))
         return False

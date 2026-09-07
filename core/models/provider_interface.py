@@ -17,7 +17,7 @@ class ModelProviderConfig:
     timeout_s: int = 30
 
 
-@dataclass
+@dataclass(frozen=True)
 class ModelResponse:
     """Response from model (immutable)."""
     content: str

@@ -15,6 +15,7 @@ from core.skill_management.promotion import SkillPromoter, promote_skill
 def temp_tenant_phase3(tmp_path, monkeypatch):
     """Create tenant with config + skills for Phase 3."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / ".corvin"))
     tenant_path = tmp_path / ".corvin" / "tenants" / "_default"
 
     for scope in ["_shared", "_local"]:

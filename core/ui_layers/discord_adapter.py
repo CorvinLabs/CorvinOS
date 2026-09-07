@@ -28,14 +28,26 @@ class DiscordUILayer(UILayer):
             # Assume caller passes properly parsed dict, not raw discord.Message
             raise TypeError(f"Expected dict, got {type(raw_input)}")
 
-        # Parse skill command from message content
-        # Example: "/skill os.delegation_router task_shape=small"
+        # Parse skill command from message content. Two accepted shapes:
+        #   "/skill os.delegation_router task_shape=small"  (generic command)
+        #   "/os.delegation_router task_shape=small"        (skill as command)
+        # Until 2026-09-07 the first shape yielded skill_id="skill" and the
+        # real skill id was silently dropped (no "=" → not an argument).
         content = raw_input.get("content", "")
         parts = content.split()
 
-        skill_id = parts[0].lstrip("/") if parts else "unknown"
+        skill_id = "unknown"
+        arg_parts = parts[1:]
+        if parts:
+            head = parts[0].lstrip("/")
+            if head == "skill":
+                if len(arg_parts) >= 1 and "=" not in arg_parts[0]:
+                    skill_id = arg_parts[0]
+                    arg_parts = arg_parts[1:]
+            else:
+                skill_id = head or "unknown"
         input_data = {}
-        for part in parts[1:]:
+        for part in arg_parts:
             if "=" in part:
                 key, val = part.split("=", 1)
                 input_data[key] = val

@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 import logging
 from dataclasses import dataclass
 
-from .skill_registry_phase1 import Skill, SkillMetadata, SkillOrigin
+from .skill_registry_phase1 import Skill, SkillMetadata, SkillOrigin, SkillTier
 
 logger = logging.getLogger(__name__)
 
@@ -579,6 +579,10 @@ class CapabilitiesSkill(Skill):
             owner="corvin-os-team",
             tags=["capabilities", "manifest", "api"],
             learn=False,  # flag/manifest lookup: audited, not a learning signal (F31)
+            # The capability manifest gates every flag-gated console panel; a
+            # compliance-tier Skill has no off switch (no unregister, no
+            # three-failure auto-disable) — adversarial review F-K3.
+            tier=SkillTier.COMPLIANCE,
         )
         super().__init__(metadata)
 

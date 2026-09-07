@@ -15,6 +15,13 @@ mirror for free.
 Name contract: registry names are ``[a-z0-9][a-z0-9_.]*`` — no ``-`` (the
 registry rejects it), so the console validates the same shape.
 
+Namespace contract (Layer 9, adversarial review F-K6): the console mints as
+the ``assistant`` persona, so a manual skill must be named ``assistant.<name>``
+— the same rule every other persona is held to by the MCP server, and the
+one CLAUDE.md states for assistant-minted skills. Names outside the namespace
+are refused with 422 before any registry write; the registry enforces the
+same gate itself (``caller_persona``), so the route cannot be the only line.
+
 Routes:
   GET    /skills/manual              list manually created skills
   POST   /skills/manual              create a new manual skill
@@ -41,6 +48,8 @@ router = APIRouter()
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.]{0,127}$")
 #: ``SkillSpec.created_by`` marker that identifies a console-authored skill.
 MANUAL_CREATED_BY = "console-manual"
+#: Persona the console acts as when it mutates the registry (Layer 9 gate).
+CONSOLE_PERSONA = "assistant"
 MANUAL_SCOPE = "user"
 MANUAL_TYPE = "domain"
 
@@ -56,7 +65,24 @@ def _registry(tid: str):
             http_status.HTTP_503_SERVICE_UNAVAILABLE,
             "SkillForge registry unavailable",
         ) from exc
-    return MultiSkillRegistry(tenant_id=tid)
+    return MultiSkillRegistry(tenant_id=tid, caller_persona=CONSOLE_PERSONA)
+
+
+def _namespace_denied(reg):
+    """``NamespaceDenied`` as seen by THIS registry instance (see _linter_error)."""
+    try:
+        registry_cls = type(reg).create.__globals__["SkillRegistry"]
+        return registry_cls.create.__globals__["NamespaceDenied"]
+    except (KeyError, AttributeError):  # pragma: no cover — defensive
+        return ()
+
+
+def _require_namespace(tid: str, name: str) -> None:
+    """422 unless ``name`` lies in the console persona's namespace."""
+    reg = _registry(tid)
+    allowed, reason = reg._registry(MANUAL_SCOPE).namespace_check(name)
+    if not allowed:
+        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, reason)
 
 
 def _linter_error(reg):
@@ -137,6 +163,8 @@ def _write_skill(tid: str, name: str, body: str, *, overwrite: bool):
             http_status.HTTP_400_BAD_REQUEST,
             "linter rejected: " + "; ".join(getattr(exc, "violations", []) or [str(exc)]),
         ) from exc
+    except _namespace_denied(reg) as exc:  # type: ignore[misc]
+        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except (ValueError, KeyError) as exc:
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except OSError as exc:
@@ -176,6 +204,7 @@ def create_manual_skill(
             http_status.HTTP_400_BAD_REQUEST,
             "name must be lowercase alphanumeric with _ or . (max 128 chars)",
         )
+    _require_namespace(rec.tenant_id, body.name)
     if _registry(rec.tenant_id).get_in_scope(body.name, MANUAL_SCOPE) is not None:
         raise HTTPException(
             http_status.HTTP_409_CONFLICT,
@@ -202,6 +231,7 @@ def update_manual_skill(
 ) -> dict[str, Any]:
     if not _SKILL_NAME_RE.match(name):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid skill name")
+    _require_namespace(rec.tenant_id, name)
     if _manual_spec(rec.tenant_id, name) is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"skill {name!r} not found")
 
@@ -224,13 +254,15 @@ def delete_manual_skill(
 ) -> dict[str, Any]:
     if not _SKILL_NAME_RE.match(name):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid skill name")
+    _require_namespace(rec.tenant_id, name)
     if _manual_spec(rec.tenant_id, name) is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"skill {name!r} not found")
 
+    reg = _registry(rec.tenant_id)
     try:
-        removed = _registry(rec.tenant_id).delete(
-            name, scope=MANUAL_SCOPE, reason="deleted from console",
-        )
+        removed = reg.delete(name, scope=MANUAL_SCOPE, reason="deleted from console")
+    except _namespace_denied(reg) as exc:  # type: ignore[misc]
+        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except OSError as exc:
         raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "delete failed") from exc
     if not removed:

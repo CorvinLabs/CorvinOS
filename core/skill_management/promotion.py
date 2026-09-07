@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from core.skill_management.validator import MetadataValidator
 from core.skill_management.tenant_validator import validate_tenant_id
+from core.paths.tenant import tenant_home
 
 
 @dataclass
@@ -28,7 +29,7 @@ class SkillPromoter:
     def __init__(self, tenant_id: str = "_default"):
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        self.base_path = tenant_home(tenant_id)
 
     def promote_local_to_shared(
         self,

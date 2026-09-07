@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from core.skill_management.config_loader import load_tenant_skill_config
 from core.skill_management.tenant_validator import validate_tenant_id
+from core.paths.tenant import tenant_home
 
 
 @dataclass
@@ -25,7 +26,7 @@ class LocalSkillCleanup:
     def __init__(self, tenant_id: str = "_default"):
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
-        self.base_path = Path.home() / ".corvin" / "tenants" / tenant_id
+        self.base_path = tenant_home(tenant_id)
 
     def cleanup_expired_local_skills(self, ttl_days: int = 90, dry_run: bool = False) -> CleanupResult:
         """Delete _local/ skills older than ttl_days."""

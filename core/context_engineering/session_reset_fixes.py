@@ -62,7 +62,11 @@ class SessionResetManager:
     """Manages correct session reset: token budget + session-id + memory."""
 
     def __init__(self, corvin_home: Optional[Path] = None):
-        self.corvin_home = corvin_home or Path.home() / ".corvin"
+        if corvin_home is None:
+            from core.paths.tenant import corvin_home as _corvin_home  # noqa: PLC0415
+
+            corvin_home = _corvin_home()  # honours CORVIN_HOME — never a bare ~/.corvin
+        self.corvin_home = Path(corvin_home)
         self.memory_dir = Path(__file__).parent.parent.parent / ".claude" / "projects" / "-home-shumway-projects-CorvinOS" / "memory"
 
     def reset_token_budget(self, old_budget: Optional[Dict[str, Any]] = None) -> TokenBudget:

@@ -37,6 +37,9 @@ class _Learning:
         return True
 
 
+LOM = "core/skills/tests/test_learning_emission_gate.py:_registry"  # every execution names its LoM (F-K2)
+
+
 def _registry() -> tuple[SkillsRegistry, _Audit, _Learning]:
     audit, learning = _Audit(), _Learning()
     reg = SkillsRegistry(audit_backend=audit, tenant_id="_default", learning_backend=learning)
@@ -54,7 +57,7 @@ def test_lookup_skills_declare_learn_false():
 
 def test_learn_false_is_audited_but_not_learned():
     reg, audit, learning = _registry()
-    res = reg.execute("os.capabilities", {"tenant_id": "_default", "gated_flags": ["vibe_engineering"]})
+    res = reg.execute("os.capabilities", {"tenant_id": "_default", "gated_flags": ["vibe_engineering"]}, lom=LOM)
     assert res.status == "success"
     assert [e.get("skill_id") for e in audit.events if e.get("skill_id") == "os.capabilities"], "must be audited"
     assert not [e for e in learning.events if e.get("skill_id") == "os.capabilities"], "must NOT be learned"
@@ -62,7 +65,7 @@ def test_learn_false_is_audited_but_not_learned():
 
 def test_learn_true_is_audited_and_learned():
     reg, audit, learning = _registry()
-    res = reg.execute("os.delegation_router", {"complexity": 4, "task_type": "chat", "tenant_id": "_default"})
+    res = reg.execute("os.delegation_router", {"complexity": 4, "task_type": "chat", "tenant_id": "_default"}, lom=LOM)
     assert res.status == "success"
     assert [e for e in audit.events if e.get("skill_id") == "os.delegation_router"]
     assert [e for e in learning.events if e.get("skill_id") == "os.delegation_router"]
@@ -79,5 +82,5 @@ def test_custom_skill_without_the_field_defaults_to_learning():
 
     reg, audit, learning = _registry()
     reg.register(Echo())
-    assert reg.execute("test.echo", {}).status == "success"
+    assert reg.execute("test.echo", {}, lom=LOM).status == "success"
     assert [e for e in learning.events if e.get("skill_id") == "test.echo"]

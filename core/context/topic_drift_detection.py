@@ -8,6 +8,7 @@ k=3: Topic Drift Detection (target: 95%+ accuracy, <10% false positives)
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -43,31 +44,56 @@ class TopicDriftDetector:
     """Detects topic drift in pipeline additions.
 
     Analyzes whether an addition is on-topic, blocks the goal, or shifts topics.
+
+    Matching is on WORD TOKENS (punctuation stripped), never substrings: the
+    previous ``kw in text`` matched "arch" inside "architecture" and "the"
+    inside "other", and ``"the"`` / ``"by"`` / ``"way"`` were tangential
+    keywords on their own — almost any sentence was "tangential". Multi-word
+    signals ("by the way") are matched as phrases.
+
+    Precedence (first hit wins) — the order encodes the k=3 accuracy contract
+    (``tests/unit/test_context_pipeline_k3_drift.py``):
+
+    1. TOPIC_SHIFT   — explicit redirect language ("instead", "forget", ...)
+                       dominates: "forget X, rebuild the architecture" is a
+                       shift even though "architecture" is a precedent word.
+    2. SAME_FAMILY   — >20% keyword overlap with the goal: an addition ABOUT
+                       the goal is on-topic even when it mentions "access" or
+                       "best practice".
+    3. HARD_BLOCKER  — safety/audit/compliance prerequisites (include).
+    4. TANGENTIAL    — "by the way", "also", "related" (skip).
+    5. ORDER_SUGGESTION — ADR/pattern/precedent (flag).
+    6. default       — SAME_FAMILY at low confidence (include).
+    Both HARD_BLOCKER and SAME_FAMILY recommend "include", so ranking overlap
+    above blocking never drops a safety note; it only labels it correctly.
     """
 
     # Keywords that indicate blocking/safety concerns
     BLOCKING_KEYWORDS = {
-        "prerequisite", "requires", "must", "blocking", "audit", "safety",
-        "compliance", "constraint", "critical", "fail-closed", "verify",
-        "validate", "permission", "access", "security", "protection",
+        "prerequisite", "requires", "required", "must", "blocking", "audit",
+        "safety", "compliance", "constraint", "critical", "fail-closed",
+        "verify", "verification", "validate", "validation", "permission",
+        "access", "security", "protection",
     }
 
     # Keywords that indicate architectural guidance (precedent)
     PRECEDENT_KEYWORDS = {
-        "adr", "pattern", "practice", "convention", "standard", "approach",
-        "design", "architecture", "best", "follows", "consistent", "aligned",
+        "adr", "pattern", "practice", "practices", "convention", "standard",
+        "approach", "design", "architecture", "best", "follows", "follow",
+        "consistent", "aligned", "precedent",
     }
 
-    # Keywords that indicate tangential/optional info
+    # Keywords/phrases that indicate tangential/optional info
     TANGENTIAL_KEYWORDS = {
-        "also", "related", "meanwhile", "by", "the", "way", "consider",
-        "might", "could", "optional", "alternative", "different", "instead",
+        "also", "related", "meanwhile", "consider", "might", "could",
+        "optional", "alternative", "aside", "tangent", "info",
     }
+    TANGENTIAL_PHRASES = ("by the way", "as an aside", "side note")
 
     # Keywords that indicate topic shift (different area)
     SHIFT_KEYWORDS = {
-        "instead", "rather", "forget", "focus", "skip", "ignore", "abandon",
-        "redirect", "change", "switch", "different", "other", "separate",
+        "instead", "rather", "forget", "skip", "ignore", "abandon", "redirect",
+        "switch", "separate", "unrelated", "drop",
     }
 
     def __init__(self, original_goal: str):
@@ -77,7 +103,15 @@ class TopicDriftDetector:
             original_goal: User's stated goal (immutable)
         """
         self.original_goal = original_goal.lower()
-        self.goal_keywords = set(self.original_goal.split())
+        self.goal_keywords = self._tokens(self.original_goal)
+
+    @staticmethod
+    def _tokens(text: str) -> set:
+        """Word tokens: lowercase, punctuation stripped (hyphens kept)."""
+        return {
+            t for t in re.findall(r"[a-z0-9][a-z0-9\-']*", text.lower())
+            if t
+        }
 
     def analyze_addition(self, addition: PipelineAddition) -> DriftAnalysis:
         """Analyze whether this addition causes topic drift.
@@ -91,36 +125,10 @@ class TopicDriftDetector:
         combined_text = (
             f"{addition.source} {addition.relevance} {addition.content}"
         ).lower()
+        tokens = self._tokens(combined_text)
 
-        # Check for blocking/safety signals (HARD_BLOCKER)
-        if self._has_blocking_signals(combined_text):
-            return DriftAnalysis(
-                classification=DriftClassification.HARD_BLOCKER,
-                confidence=0.95,
-                reasoning="Contains blocking/safety keywords (prerequisite, audit, compliance)",
-                recommended_action="include",
-            )
-
-        # Check for architectural precedent signals (PRECEDENT)
-        if self._has_precedent_signals(combined_text):
-            return DriftAnalysis(
-                classification=DriftClassification.ORDER_SUGGESTION,
-                confidence=0.85,
-                reasoning="Contains architectural/precedent keywords (ADR, pattern, practice)",
-                recommended_action="flag",
-            )
-
-        # Check for same-family topic match
-        if self._same_topic_family(combined_text):
-            return DriftAnalysis(
-                classification=DriftClassification.SAME_FAMILY,
-                confidence=0.90,
-                reasoning="Addition is in same topic family as original goal",
-                recommended_action="include",
-            )
-
-        # Check for topic shift signals
-        if self._has_shift_signals(combined_text):
+        # 1. Explicit topic-shift language dominates everything else.
+        if self._has_shift_signals(tokens):
             return DriftAnalysis(
                 classification=DriftClassification.TOPIC_SHIFT,
                 confidence=0.80,
@@ -128,13 +136,40 @@ class TopicDriftDetector:
                 recommended_action="ask_user",
             )
 
-        # Check for tangential signals
-        if self._has_tangential_signals(combined_text):
+        # 2. On-topic by keyword overlap with the goal.
+        if self._same_topic_family(tokens):
+            return DriftAnalysis(
+                classification=DriftClassification.SAME_FAMILY,
+                confidence=0.90,
+                reasoning="Addition is in same topic family as original goal",
+                recommended_action="include",
+            )
+
+        # 3. Blocking/safety prerequisites.
+        if self._has_blocking_signals(tokens):
+            return DriftAnalysis(
+                classification=DriftClassification.HARD_BLOCKER,
+                confidence=0.95,
+                reasoning="Contains blocking/safety keywords (prerequisite, audit, compliance)",
+                recommended_action="include",
+            )
+
+        # 4. Tangential asides.
+        if self._has_tangential_signals(tokens, combined_text):
             return DriftAnalysis(
                 classification=DriftClassification.TANGENTIAL,
                 confidence=0.75,
                 reasoning="Addition is related but tangential to goal",
                 recommended_action="skip",
+            )
+
+        # 5. Architectural precedent.
+        if self._has_precedent_signals(tokens):
+            return DriftAnalysis(
+                classification=DriftClassification.ORDER_SUGGESTION,
+                confidence=0.85,
+                reasoning="Contains architectural/precedent keywords (ADR, pattern, practice)",
+                recommended_action="flag",
             )
 
         # Default: same family (optimistic)
@@ -145,29 +180,30 @@ class TopicDriftDetector:
             recommended_action="include",
         )
 
-    def _has_blocking_signals(self, text: str) -> bool:
+    def _has_blocking_signals(self, tokens: set) -> bool:
         """Check for blocking/safety signals."""
-        return any(kw in text for kw in self.BLOCKING_KEYWORDS)
+        return bool(tokens & self.BLOCKING_KEYWORDS)
 
-    def _has_precedent_signals(self, text: str) -> bool:
+    def _has_precedent_signals(self, tokens: set) -> bool:
         """Check for architectural precedent signals."""
-        return any(kw in text for kw in self.PRECEDENT_KEYWORDS)
+        return bool(tokens & self.PRECEDENT_KEYWORDS)
 
-    def _has_shift_signals(self, text: str) -> bool:
+    def _has_shift_signals(self, tokens: set) -> bool:
         """Check for topic shift signals."""
-        return any(kw in text for kw in self.SHIFT_KEYWORDS)
+        return bool(tokens & self.SHIFT_KEYWORDS)
 
-    def _has_tangential_signals(self, text: str) -> bool:
-        """Check for tangential signals."""
-        return any(kw in text for kw in self.TANGENTIAL_KEYWORDS)
+    def _has_tangential_signals(self, tokens: set, text: str) -> bool:
+        """Check for tangential signals (single words or phrases)."""
+        if tokens & self.TANGENTIAL_KEYWORDS:
+            return True
+        return any(phrase in text for phrase in self.TANGENTIAL_PHRASES)
 
-    def _same_topic_family(self, text: str) -> bool:
+    def _same_topic_family(self, tokens: set) -> bool:
         """Check if text is in same topic family as goal.
 
         Simple heuristic: overlap of keywords between goal and text.
         """
-        text_keywords = set(text.split())
-        overlap = self.goal_keywords.intersection(text_keywords)
+        overlap = self.goal_keywords.intersection(tokens)
 
         # If >20% keyword overlap, likely same family
         overlap_pct = len(overlap) / max(len(self.goal_keywords), 1)

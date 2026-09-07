@@ -6,8 +6,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from core.plugins.corvin_plugins.capability_registry import CapabilityRegistry, get_registry
-from core.plugins.corvin_plugins.manifest_capabilities import Capability, CapabilityType
+from corvin_plugins.capability_registry import CapabilityRegistry, get_registry
+from corvin_plugins.manifest_capabilities import Capability, CapabilityType
 
 from .skill_manifest_dependencies import (
     CapabilityDependency,
@@ -64,15 +64,23 @@ class SkillDependencyResolver:
                 tenant_id=tenant_id,
             )
 
-            # 2. Filter by whitelist
+            # 2. Filter by whitelist AND the capability the dependency names.
+            # Filtering by whitelist alone let any whitelisted plugin that
+            # implements the TYPE satisfy a dependency on a different
+            # capability id (a "deep retrieval" plugin answered a request for
+            # "semantic retrieval") — the whitelist was decorative.
             allowed_impls = [
                 (plugin_id, cap)
                 for plugin_id, cap in implementations
                 if plugin_id in dep.allowed_plugins
+                and (not dep.capability_id or cap.id == dep.capability_id)
             ]
 
             if not allowed_impls:
-                error = f"Dependency {dep.id}: no plugins found in whitelist {dep.allowed_plugins}"
+                error = (
+                    f"Dependency {dep.id}: no whitelisted plugin {dep.allowed_plugins} "
+                    f"implements {dep.capability_id!r}"
+                )
                 resolution.errors.append(error)
 
                 if dep.required:
