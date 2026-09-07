@@ -7,6 +7,33 @@ from the legacy ~/.config/corvin-voice/ location into tenant-scoped directories
 at <corvin_home>/tenants/<tenant_id>/voice/.
 
 Automatic migration on first access (idempotent).
+
+Two invariants were added on 2026-09-07 after the migration was measured
+copying 1.4 GB / 275,414 files on every fresh voice home (adversarial review):
+
+1. **Allow-list, not "copy everything".** ``migrate_from_legacy()`` copies only
+   the named configuration artefacts in ``MIGRATABLE_FILES`` /
+   ``MIGRATABLE_DIRS``. The legacy directory is not only configuration — it is
+   also the anchor-key directory for the Layer-16 audit chain
+   (``audit.jsonl``, ``audit_anchor.key``, ``chain_ids/``, ``chain_tails/``,
+   ``mac_active_chains/`` — 268k marker files on the maintainer's host), a
+   virtualenv (``google/venv``, 147 MB), pid/lock/log files, and setup markers.
+   Copying an audit chain or an anchor key into a second location is a
+   compliance hazard, and copying runtime state is unbounded. An ALLOW-list is
+   used rather than a deny-list because the failure mode of a deny-list is
+   "the next runtime directory someone drops in here gets copied again",
+   which is exactly the bug; the failure mode of an allow-list is "a new
+   config file is not carried over", which is visible, recoverable, and
+   already covered by the legacy read-fallback below.
+
+2. **The ambient user config never migrates into a non-ambient home.**
+   ``~/.config/corvin-voice`` is user-global. The install home is per-install.
+   Pairing them implicitly meant every test that set ``CORVIN_HOME`` to a
+   throwaway temp dir "needed migration" and copied the maintainer's real
+   1.4 GB config into ``/tmp``. Now the ambient legacy dir is only a migration
+   source for the AMBIENT corvin home (the one ``corvin_home()`` resolves to
+   with ``CORVIN_HOME`` unset). A redirected home must name its legacy source
+   explicitly via ``VOICE_CONFIG_DIR``. See ``legacy_source_allowed()``.
 """
 from __future__ import annotations
 
@@ -19,6 +46,36 @@ from typing import Optional
 
 _log = logging.getLogger(__name__)
 
+#: Top-level FILES carried over by a legacy→tenant migration. Everything not
+#: listed here stays in the legacy directory (see module docstring). Notable
+#: deliberate exclusions: ``audit.jsonl`` + ``audit_anchor.key`` +
+#: ``audit_mac_active`` + ``audit_manifest_mac_active`` (Layer-16 audit chain
+#: and its anchor — an audit chain is evidence and is never duplicated),
+#: ``maintainer.key`` / ``maintainer.env`` (host-level maintainer credentials,
+#: not tenant config), ``current.pgid`` / ``tts.lock`` (runtime), ``*.log``,
+#: ``*.bak-*`` and the ``.*_setup_complete`` markers.
+MIGRATABLE_FILES: frozenset[str] = frozenset({
+    "profile.json",     # Tier-1 voice profile (profile_path())
+    "config.json",      # voice runtime configuration
+    "secrets.json",     # BYOK secret index
+    "service.env",      # bridge/service configuration
+    ".env",             # provider keys / environment configuration
+    "license.jwt",      # Tier licence token (ADR-0156)
+})
+
+#: Top-level DIRECTORIES carried over by a legacy→tenant migration. Deliberate
+#: exclusions: ``mac_active_chains`` / ``chain_ids`` / ``chain_tails`` /
+#: ``manifest_mac_active_dirs`` (out-of-tree audit anchors, keyed to the anchor
+#: key's own directory — meaningless anywhere else, and 268k files on the
+#: maintainer's host), ``forge`` (holds a second ``audit.jsonl`` hash chain),
+#: ``google`` and ``venv`` (virtualenvs — build artefacts, 147 MB), and
+#: ``whatsapp`` (pid files).
+MIGRATABLE_DIRS: frozenset[str] = frozenset({
+    "vault",            # Tier-3 encrypted credential vault (vault_dir())
+    "memory",           # Tier-2 topic memory (memory_dir())
+    "piper-models",     # piper TTS voices (piper_models_dir())
+    "whisper-models",   # local STT models
+})
 
 @dataclass
 class MigrationResult:
@@ -60,10 +117,43 @@ class VoiceConfigManager:
             return tenant_home(self.tenant_id)
         except ImportError:
             # Fallback when forge is not available (test environment)
-            corvin_home = os.environ.get("CORVIN_HOME")
-            if corvin_home:
-                return Path(corvin_home) / "tenants" / self.tenant_id
-            return Path.home() / ".corvin" / "tenants" / self.tenant_id
+            return self._corvin_home() / "tenants" / self.tenant_id
+
+    def _corvin_home(self) -> Path:
+        """The EFFECTIVE runtime root — ``$CORVIN_HOME`` when set, else ambient.
+
+        Delegates to ``forge.paths.corvin_home()`` when forge is importable so
+        this cannot drift from the resolver ``_tenant_home()`` actually uses.
+        """
+        try:
+            from forge.paths import corvin_home
+            return corvin_home()
+        except ImportError:
+            env = os.environ.get("CORVIN_HOME", "").strip()
+            if env:
+                return Path(os.path.expanduser(os.path.expandvars(env)))
+            return self._ambient_corvin_home()
+
+    def _ambient_corvin_home(self) -> Path:
+        """The runtime root as it resolves WITHOUT the ``CORVIN_HOME`` override.
+
+        Mirrors ``forge.paths.corvin_home()`` minus its env branch: the
+        repo-local ``.corvin`` in a source checkout, else ``~/.corvin``. This is
+        "the home this user's install would use by default", and it is the only
+        home the AMBIENT ``~/.config/corvin-voice`` may be migrated into.
+        """
+        try:
+            from forge.paths import _repo_root  # type: ignore[attr-defined]
+            repo = _repo_root()
+            if repo is not None:
+                return Path(repo) / ".corvin"
+        except Exception:  # noqa: BLE001 - forge absent / private API moved
+            pass
+        # core/console/corvin_console/voice_config.py -> repo root
+        repo_local = Path(__file__).resolve().parents[3] / ".corvin"
+        if repo_local.is_dir():
+            return repo_local
+        return Path.home() / ".corvin"
 
     def voice_home(self) -> Path:
         """Return tenant's voice config directory.
@@ -87,9 +177,42 @@ class VoiceConfigManager:
             return Path(xdg_config) / "corvin-voice"
         return Path.home() / ".config" / "corvin-voice"
 
+    def legacy_source_explicit(self) -> bool:
+        """True when the legacy location was named explicitly (VOICE_CONFIG_DIR).
+
+        An explicit source is a deliberate act by the operator (or a test) and
+        is always an admissible migration source, whatever the target home is.
+        """
+        return bool(os.environ.get("VOICE_CONFIG_DIR", "").strip())
+
+    def legacy_source_allowed(self) -> bool:
+        """May this manager read/migrate FROM the legacy directory at all?
+
+        ``~/.config/corvin-voice`` is USER-global; the corvin home is
+        PER-INSTALL. Before 2026-09-07 the two were paired implicitly, so a
+        process that pointed ``CORVIN_HOME`` at a throwaway directory — every
+        test that builds the console app does exactly that — still resolved its
+        legacy source to the operator's real ``~/.config/corvin-voice`` and
+        "needed migration" from it (1.4 GB / 275k files, copied per test run).
+
+        The honest rule: an ambient user-global config is a migration source
+        only for the AMBIENT install home. A redirected home must name its
+        source explicitly via ``VOICE_CONFIG_DIR``.
+        """
+        if self.legacy_source_explicit():
+            return True
+        try:
+            return self._corvin_home().resolve() == self._ambient_corvin_home().resolve()
+        except OSError:  # unresolvable path -> deny (fail closed)
+            return False
+
     def has_legacy_config(self) -> bool:
-        """Check if legacy ~/.config/corvin-voice exists."""
-        return self.legacy_voice_config_dir().exists()
+        """Check if a *usable* legacy config directory exists.
+
+        False when the legacy source is not admissible for this home
+        (``legacy_source_allowed()``), even if the directory is on disk.
+        """
+        return self.legacy_source_allowed() and self.legacy_voice_config_dir().exists()
 
     def has_new_config(self) -> bool:
         """Check if new tenant/voice/ exists."""
@@ -102,6 +225,18 @@ class VoiceConfigManager:
         """
         return self.has_legacy_config() and not self.has_new_config()
 
+    def _legacy_child(self, name: str) -> Optional[Path]:
+        """An EXISTING entry inside the legacy dir, or None.
+
+        Returns None whenever the legacy source is not admissible for this home
+        (``legacy_source_allowed()``), so an isolated/redirected home never
+        reads the operator's ambient ``~/.config/corvin-voice``.
+        """
+        if not self.legacy_source_allowed():
+            return None
+        candidate = self.legacy_voice_config_dir() / name
+        return candidate if candidate.exists() else None
+
     def profile_path(self) -> Path:
         """Path to voice profile.json (Tier 1 memory).
 
@@ -111,8 +246,8 @@ class VoiceConfigManager:
         if new_path.exists():
             return new_path
 
-        legacy_path = self.legacy_voice_config_dir() / "profile.json"
-        if legacy_path.exists():
+        legacy_path = self._legacy_child("profile.json")
+        if legacy_path is not None:
             return legacy_path
 
         # Default to new location (will be created if needed)
@@ -127,8 +262,8 @@ class VoiceConfigManager:
         if new_path.exists():
             return new_path
 
-        legacy_path = self.legacy_voice_config_dir() / "vault"
-        if legacy_path.exists():
+        legacy_path = self._legacy_child("vault")
+        if legacy_path is not None:
             return legacy_path
 
         return new_path
@@ -142,8 +277,8 @@ class VoiceConfigManager:
         if new_path.exists():
             return new_path
 
-        legacy_path = self.legacy_voice_config_dir() / "memory"
-        if legacy_path.exists():
+        legacy_path = self._legacy_child("memory")
+        if legacy_path is not None:
             return legacy_path
 
         return new_path
@@ -157,17 +292,26 @@ class VoiceConfigManager:
         if new_path.exists():
             return new_path
 
-        legacy_path = self.legacy_voice_config_dir() / "piper-models"
-        if legacy_path.exists():
+        legacy_path = self._legacy_child("piper-models")
+        if legacy_path is not None:
             return legacy_path
 
         return new_path
 
     def migrate_from_legacy(self) -> MigrationResult:
-        """Migrate voice config from legacy to tenant location.
+        """Migrate voice CONFIGURATION from legacy to tenant location.
 
-        Copies all voice configuration from ~/.config/corvin-voice/
-        to the new tenant-scoped directory.
+        Copies only the artefacts named in :data:`MIGRATABLE_FILES` and
+        :data:`MIGRATABLE_DIRS`. The legacy directory is not a pure config
+        directory — it is also the Layer-16 audit anchor-key directory, a
+        virtualenv, a pid/lock/log directory and a marker store — and copying
+        all of it moved 1.4 GB / 275,414 files on the maintainer's host every
+        time a fresh voice home was initialised. Anything outside the
+        allow-list is left where it is and reported in ``warnings``; the
+        legacy read-fallbacks above keep it reachable.
+
+        Runs only when the legacy source is admissible for this home
+        (``legacy_source_allowed()``).
 
         This is idempotent: safe to call multiple times. A `.migrated`
         marker file prevents re-running the copy on subsequent calls.
@@ -175,8 +319,8 @@ class VoiceConfigManager:
         Returns:
             MigrationResult with success status, item count, and any errors.
         """
-        errors = []
-        warnings = []
+        errors: list[str] = []
+        warnings: list[str] = []
         migrated_items = 0
 
         # Check if already migrated
@@ -190,7 +334,10 @@ class VoiceConfigManager:
                 warnings=[]
             )
 
-        # Nothing to migrate if legacy config doesn't exist
+        # Nothing to migrate if the legacy config does not exist -- or is not an
+        # admissible source for this home (an isolated CORVIN_HOME must never
+        # inherit the user-global ~/.config/corvin-voice; see
+        # legacy_source_allowed()).
         if not self.has_legacy_config():
             _log.debug(f"No legacy voice config found for tenant {self.tenant_id}")
             return MigrationResult(
@@ -204,14 +351,19 @@ class VoiceConfigManager:
             # Create new directory
             self.voice_home().mkdir(parents=True, exist_ok=True)
 
-            # Copy files and directories
             legacy_dir = self.legacy_voice_config_dir()
-            for item in legacy_dir.iterdir():
+            for item in sorted(legacy_dir.iterdir(), key=lambda q: q.name):
+                is_dir = item.is_dir()
+                allowed = (MIGRATABLE_DIRS if is_dir else MIGRATABLE_FILES)
+                if item.name not in allowed:
+                    warnings.append(f"not migrated (not voice configuration): {item.name}")
+                    _log.debug(f"  Skipping {item.name} (outside migration allow-list)")
+                    continue
                 try:
                     src = item
                     dst = self.voice_home() / item.name
 
-                    if src.is_dir():
+                    if is_dir:
                         # Copy directory recursively
                         if dst.exists():
                             _log.debug(f"  Destination {item.name}/ exists, skipping")
@@ -238,7 +390,8 @@ class VoiceConfigManager:
 
             _log.info(
                 f"Voice migration complete for tenant {self.tenant_id}: "
-                f"{migrated_items} items, {len(errors)} errors"
+                f"{migrated_items} items, {len(errors)} errors, "
+                f"{len(warnings)} left in place"
             )
 
             return MigrationResult(
@@ -255,7 +408,7 @@ class VoiceConfigManager:
                 success=False,
                 migrated_items=migrated_items,
                 errors=[error_msg],
-                warnings=[]
+                warnings=warnings
             )
 
 

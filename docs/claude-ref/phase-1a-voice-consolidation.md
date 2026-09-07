@@ -1,6 +1,6 @@
 # Phase 1a: Voice Directory Consolidation
 
-**Status:** IMPLEMENTED (2026-07-27)  
+**Status:** IMPLEMENTED (2026-07-27) · **AMENDED 2026-09-07** (migration allow-list + legacy-source isolation)  
 **Scope:** Transparent migration of voice config from legacy `~/.config/corvin-voice/` to tenant-scoped `<corvin_home>/tenants/<tenant_id>/voice/`  
 **Owner:** VoiceConfigManager (core/console/corvin_console/voice_config.py)
 
@@ -73,7 +73,8 @@ if mgr.needs_migration():
 - Runs once per console startup
 - Idempotent (migration marker `.migrated` prevents re-running)
 - Best-effort (errors logged but don't block boot)
-- Migrates all files/directories from legacy to new location
+- Migrates **only the allow-listed configuration artefacts** (see below) — never
+  runtime, audit or build state
 
 #### 2. Bridge Readers (Backward Compatible)
 
@@ -106,7 +107,9 @@ def _profile_path() -> Path:
 3. **Check legacy** → if `~/.config/corvin-voice/` missing, done
 4. **Copy phase**:
    - Create `<corvin_home>/tenants/<tenant_id>/voice/`
-   - Copy each item from legacy (directories recursively, files with metadata)
+   - Copy each **allow-listed** item from legacy (directories recursively, files
+     with metadata); everything else is left in place and reported in
+     `MigrationResult.warnings`
    - Skip if destination already exists (no overwrite)
 5. **Mark complete** → write `.migrated` marker
 6. **Continue boot** → app proceeds normally
@@ -117,6 +120,113 @@ def _profile_path() -> Path:
 - **File copy error:** Logged, non-blocking; migration continues
 - **Marker write failure:** Degraded mode (migration retries next boot)
 - **Destination conflicts:** Skipped (preserves existing, logs at DEBUG)
+
+## Migration Allow-List (2026-09-07 — load-bearing)
+
+`migrate_from_legacy()` used to `copytree` **every** subdirectory of the legacy
+directory. `~/.config/corvin-voice/` is not a pure config directory: it is also
+the Layer-16 audit anchor-key directory, a virtualenv, and a pid/lock/log store.
+On the maintainer's host it measured **1.4 GB / 275,414 files**, of which
+**268,220** were `mac_active_chains/` markers — and all of it was copied into
+every freshly initialised voice home (see "Legacy source isolation" below for
+why that fired in tests).
+
+The migration now carries an explicit **allow-list**, declared in
+`core/console/corvin_console/voice_config.py`:
+
+| Constant | Contents |
+|---|---|
+| `MIGRATABLE_FILES` | `profile.json` · `config.json` · `secrets.json` · `service.env` · `.env` · `license.jwt` |
+| `MIGRATABLE_DIRS` | `vault/` · `memory/` · `piper-models/` · `whisper-models/` |
+
+Everything else stays in the legacy directory and is reported as a warning.
+Deliberate exclusions and why:
+
+| Excluded | Reason |
+|---|---|
+| `audit.jsonl`, `audit_anchor.key`, `audit_mac_active`, `audit_manifest_mac_active` | Layer-16 audit chain + its anchor key. An audit chain is evidence and is **never** duplicated to a second location (GDPR Art. 30/32). |
+| `mac_active_chains/`, `chain_ids/`, `chain_tails/`, `manifest_mac_active_dirs/` | Out-of-tree audit anchors keyed to the anchor key's own directory — meaningless anywhere else, and the bulk of the 1.4 GB. |
+| `forge/` | Holds a second `audit.jsonl` hash chain plus generated tools/skills. |
+| `google/`, `venv/` | Python virtualenvs (147 MB) — build artefacts, not config. |
+| `whatsapp/` | pid files. |
+| `maintainer.key`, `maintainer.env` | Host-level maintainer credentials, not tenant voice config; duplicating secrets is the wrong direction. |
+| `current.pgid`, `tts.lock`, `*.log`, `*.bak-*`, `.*_setup_complete` | Runtime state and markers. |
+
+**Allow-list, not deny-list — deliberate.** A deny-list fails open: the next
+runtime directory dropped into `~/.config/corvin-voice/` would silently be
+copied again, which is exactly how this bug arose. An allow-list fails closed:
+the worst case is "a new config file is not carried over", which is visible,
+recoverable, and already covered by the legacy read-fallback.
+
+## Legacy Source Isolation (2026-09-07 — load-bearing)
+
+`~/.config/corvin-voice/` is **user-global**; `<corvin_home>` is **per-install**.
+The two used to be paired implicitly, so any process that pointed `CORVIN_HOME`
+at a throwaway directory — every test that builds the console app does exactly
+that — resolved its legacy source to the operator's real `~/.config/corvin-voice`,
+reported `needs_migration() == True`, and copied 1.4 GB into `/tmp`. That alone
+made `core/console/tests/test_adapter_ensured_at_boot.py` take 37 s.
+
+`VoiceConfigManager.legacy_source_allowed()` now decides whether the legacy
+directory may be read from at all:
+
+| Situation | Legacy source admissible? |
+|---|---|
+| `VOICE_CONFIG_DIR` set (explicit) | **Yes** — always; a deliberate act by the operator or a test |
+| `CORVIN_HOME` unset, or equal to the ambient home | **Yes** — the real operator upgrade path |
+| `CORVIN_HOME` redirected elsewhere, no `VOICE_CONFIG_DIR` | **No** — an isolated home never inherits ambient user config |
+
+"Ambient home" is what `corvin_home()` resolves to with `CORVIN_HOME` unset: the
+repo-local `.corvin` in a source checkout, else `~/.corvin`
+(`VoiceConfigManager._ambient_corvin_home()`).
+
+When the source is not admissible, `has_legacy_config()`, `needs_migration()`
+and every legacy read-fallback (`profile_path()`, `vault_dir()`, `memory_dir()`,
+`piper_models_dir()`) behave as if the legacy directory did not exist.
+
+### Operator note — pruning the dead `mac_active_chains/` markers
+
+The migration no longer copies them, but on a host that ran the pre-F-A14 writer
+the markers are still on disk (268,220 files / ~1.1 GB of block allocation on the
+maintainer's machine). They are still **read** by
+`forge.security_events._chain_had_mac()`, so a blind `rm -rf` would turn a
+mac-stripped chain into a "never had a mac" chain and weaken the Layer-16
+strip detector. Prune selectively instead — keep every genesis-keyed (`g-*`)
+marker and every path-keyed marker whose chain file still exists; a path-keyed
+marker for a path that no longer exists can never be consulted:
+
+```bash
+python3 - <<'EOF'   # add --apply as the first argv to actually delete
+import hashlib, os, sys
+from pathlib import Path
+MK = Path.home() / ".config" / "corvin-voice" / "mac_active_chains"
+ROOTS = [Path.home() / ".corvin",                       # add any other
+         Path.home() / "projects" / "CorvinOS" / ".corvin",   # CORVIN_HOME roots
+         Path.home() / ".config" / "corvin-voice"]
+names = set(os.listdir(MK))
+keep = {n for n in names if n.startswith("g-")}
+for r in ROOTS:
+    if r.is_dir():
+        for c in r.rglob("*.jsonl"):
+            keep.add(hashlib.sha256(os.path.abspath(str(c)).encode()).hexdigest()[:32])
+dead = sorted(names - keep)
+print(f"markers={len(names)} keep={len(names & keep)} dead={len(dead)} "
+      f"frees~{len(dead) * 4096 / 2**30:.2f} GiB")
+if "--apply" in sys.argv:
+    for n in dead:
+        os.unlink(MK / n)
+    print("pruned", len(dead))
+EOF
+
+# then reclaim the ~15 MB directory inode itself
+cd ~/.config/corvin-voice \
+  && cp -a mac_active_chains mac_active_chains.new \
+  && rm -rf mac_active_chains && mv mac_active_chains.new mac_active_chains
+```
+
+Note the writer can still mint a *path-keyed* marker for a chain whose genesis
+cannot be read yet, so the directory can regrow slowly; the F-A14 tmp-chain
+guard in `security_events._skip_out_of_tree_markers()` is what stops the bulk.
 
 ## Path Resolution Order
 
@@ -169,9 +279,14 @@ export VOICE_CONFIG_DIR=/custom/voice
 
 **Location:** `core/console/tests/test_voice_config.py`
 
-22 test cases covering:
+27 test cases covering:
 - Path resolution (new vs. legacy preferences)
 - Migration logic (copy, idempotence, skipping)
+- Migration allow-list (`TestMigrationAllowList`) — a real operator upgrade still
+  carries config/vault/models; audit chain, anchor key, markers, virtualenv, pid
+  files and logs are never copied
+- Legacy source isolation (`TestLegacySourceIsolation`) — a redirected
+  `CORVIN_HOME` never reaches into the ambient `~/.config/corvin-voice`
 - Error handling (missing source, conflicts)
 - Caching (singleton instances per tenant)
 
@@ -179,7 +294,7 @@ All tests pass cleanly without isolation issues.
 
 ```bash
 pytest core/console/tests/test_voice_config.py -v
-# 22 passed in 0.11s
+# 27 passed in 0.13s
 ```
 
 ## Implementation Details
