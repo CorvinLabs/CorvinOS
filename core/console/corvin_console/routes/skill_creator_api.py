@@ -278,15 +278,20 @@ async def generate_skill(
 
 
 @router.get("/status/{run_id}", response_model=GenerationStatusResponse)
-async def check_status(run_id: str) -> GenerationStatusResponse:
+async def check_status(
+    run_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> GenerationStatusResponse:
     """GET /skill-creator/status/<run_id>
 
-    Poll the status of an async skill generation run.
+    Poll the status of an async skill generation run. Session-gated and
+    tenant-bound: a run belongs to the tenant that started it; any other
+    tenant (or a guessed run id) gets 404 (round-2 review, R2-B7).
     """
     with _runs_lock:
         run = dict(_generation_runs.get(run_id) or {})
 
-    if not run:
+    if not run or run.get("tenant_id") != rec.tenant_id:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
     response = {
@@ -448,6 +453,7 @@ def _spawn_generation_task(user_request: str, tenant_id: str,
 
     with _runs_lock:
         _generation_runs[run_id] = {
+            "tenant_id": tenant_id,  # status polls are tenant-bound (R2-B7)
             "status": "running",
             "phase": PHASES[0],
             "progress": 5,

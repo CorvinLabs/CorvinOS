@@ -294,7 +294,9 @@ class TestIteration2Hardening:
 
         for lom in ("../../../../etc/passwd:x:1", "/etc/passwd:x:1", "core/../../etc/hostname:f:1"):
             h = SkillsRegistry._compute_lom_hash(lom)
-            assert h == hashlib.sha256(lom.encode()).hexdigest(), lom  # label hash, not file content
+            # unresolvable / outside the repo → None (refused by execute), never
+            # file content and never a label hash (round-2 review, R2-B1)
+            assert h is None, lom
 
         real = SkillsRegistry._compute_lom_hash("core/skills/boot.py:boot_skills:L1")
         assert real != hashlib.sha256(b"core/skills/boot.py:boot_skills:L1").hexdigest()

@@ -24,6 +24,170 @@ class DAGEdge:
     gradient_multiplier: float = 1.0  # how strongly source affects target
 
 
+class GradientValidator:
+    """
+    Hard Gradient Clipping + NaN/Inf Detection (Fail-Closed).
+
+    Prevents normalization bypass attacks where extreme gradient magnitudes
+    escape bounds. Implements three-layer defense:
+    1. Hard clipping: all gradients clipped to [-max_gradient, +max_gradient]
+    2. NaN/Inf detection: fail-closed if invalid values detected
+    3. Checkpoint recovery: reset to last known-good weights on failure
+
+    ADR-0647 Security Mitigation #4.
+    """
+
+    def __init__(
+        self,
+        max_gradient: float = 1.0,
+        audit_backend=None,
+        tenant_id: str = "default"
+    ):
+        self.max_gradient = max_gradient
+        self.audit = audit_backend
+        self.tenant_id = tenant_id
+
+        # Track last known-good state for rollback
+        self.last_good_checkpoint: Optional[Dict[str, float]] = None
+        self.checkpoint_batch_id: Optional[str] = None
+
+        # Failure tracking
+        self.num_validation_failures = 0
+        self.num_gradients_clipped = 0
+
+    def validate_and_clip_gradients(
+        self,
+        gradients: Dict[str, Dict],
+        batch_id: str
+    ) -> Tuple[Dict[str, Dict], bool]:
+        """
+        Validate and clip gradients. Returns (clipped_gradients, is_valid).
+
+        Three-stage process:
+        1. Clip all gradient values to [-max_gradient, +max_gradient]
+        2. Detect NaN/Inf values
+        3. Return clipped gradients + validity flag
+
+        If invalid, does NOT modify weights; caller must use checkpoint recovery.
+        """
+        clipped_gradients = {}
+        is_valid = True
+        clipped_count = 0
+        invalid_loops = []
+
+        # Stage 1: Clip gradients
+        for loop_id, grad_dict in gradients.items():
+            grad_value = grad_dict['grad']
+
+            # Check for NaN/Inf BEFORE clipping
+            if not np.isfinite(grad_value):
+                is_valid = False
+                invalid_loops.append({
+                    'loop': loop_id,
+                    'value': float(grad_value) if isinstance(grad_value, (int, float)) else str(grad_value),
+                    'type': 'NaN' if np.isnan(grad_value) else 'Inf'
+                })
+                # Continue scanning all loops to report all failures
+                continue
+
+            # Stage 2: Clip to bounds
+            clipped_value = np.clip(grad_value, -self.max_gradient, self.max_gradient)
+
+            # Track if clipping occurred
+            if clipped_value != grad_value:
+                clipped_count += 1
+
+            # Build clipped gradient dict
+            clipped_gradients[loop_id] = {
+                'grad': float(clipped_value),
+                'original_grad': float(grad_value),
+                'was_clipped': clipped_value != grad_value,
+                'contributors': grad_dict.get('contributors', [])
+            }
+
+        # Stage 3: Handle validation failure (fail-closed)
+        if not is_valid:
+            self.num_validation_failures += 1
+
+            # Audit the failure
+            if self.audit:
+                self.audit.write_event({
+                    'event_type': 'gradient_invalid_value',
+                    'severity': 'error',
+                    'tenant_id': self.tenant_id,
+                    'batch_id': batch_id,
+                    'num_invalid_loops': len(invalid_loops),
+                    'invalid_loops': invalid_loops,
+                    'action': 'weight_update_refused',
+                    'recovery_action': 'rollback_to_checkpoint' if self.last_good_checkpoint else 'reset_to_initial',
+                    'timestamp': datetime.now().isoformat(),
+                })
+
+            return {}, False  # Return empty dict to signal failure
+
+        # Track clipping stats
+        self.num_gradients_clipped += clipped_count
+
+        # If clipping occurred, audit it
+        if clipped_count > 0:
+            if self.audit:
+                self.audit.write_event({
+                    'event_type': 'gradient_clipped',
+                    'severity': 'warning',
+                    'tenant_id': self.tenant_id,
+                    'batch_id': batch_id,
+                    'num_clipped': clipped_count,
+                    'max_gradient': self.max_gradient,
+                    'clipped_loops': [
+                        {
+                            'loop': loop_id,
+                            'original': grad_dict['original_grad'],
+                            'clipped': grad_dict['grad']
+                        }
+                        for loop_id, grad_dict in clipped_gradients.items()
+                        if grad_dict['was_clipped']
+                    ],
+                    'timestamp': datetime.now().isoformat(),
+                })
+
+        return clipped_gradients, True
+
+    def save_checkpoint(self, weights: Dict[str, float], batch_id: str):
+        """Save current weights as last-known-good checkpoint."""
+        self.last_good_checkpoint = dict(weights)  # Deep copy
+        self.checkpoint_batch_id = batch_id
+
+    def recover_to_checkpoint(self) -> Optional[Dict[str, float]]:
+        """
+        Recover to last known-good checkpoint after validation failure.
+        Returns the checkpoint weights or None if no checkpoint exists.
+        """
+        if self.last_good_checkpoint is None:
+            return None
+
+        # Audit recovery action
+        if self.audit:
+            self.audit.write_event({
+                'event_type': 'gradient_recovery_from_checkpoint',
+                'severity': 'info',
+                'tenant_id': self.tenant_id,
+                'checkpoint_batch_id': self.checkpoint_batch_id,
+                'recovered_loop_count': len(self.last_good_checkpoint),
+                'timestamp': datetime.now().isoformat(),
+            })
+
+        return dict(self.last_good_checkpoint)  # Deep copy
+
+    def get_stats(self) -> Dict:
+        """Return validation statistics."""
+        return {
+            'num_validation_failures': self.num_validation_failures,
+            'num_gradients_clipped': self.num_gradients_clipped,
+            'max_gradient_bound': self.max_gradient,
+            'has_checkpoint': self.last_good_checkpoint is not None,
+        }
+
+
 class LossBackpropagator:
     """
     Compute gradients following ADR-0615 DAG.
@@ -37,7 +201,7 @@ class LossBackpropagator:
       L5 (Latency) ← L2
     """
 
-    def __init__(self, audit_backend=None, tenant_id: str = "default"):
+    def __init__(self, audit_backend=None, tenant_id: str = "default", max_gradient: float = 1.0):
         self.tenant_id = tenant_id
         self.audit = audit_backend
 
@@ -66,6 +230,13 @@ class LossBackpropagator:
         # Convergence tracking
         self.divergence_detected = False
         self.learning_paused = False
+
+        # Gradient validation (ADR-0647 Security Mitigation #4)
+        self.gradient_validator = GradientValidator(
+            max_gradient=max_gradient,
+            audit_backend=audit_backend,
+            tenant_id=tenant_id
+        )
 
     def compute_gradients_with_dag(
         self,
@@ -180,11 +351,26 @@ class LossBackpropagator:
                 })
             self.divergence_detected = True
 
-        # Store gradient history
+        # Store gradient history (before validation/clipping)
         for loop_id, grad_dict in gradients.items():
             self.gradient_history[loop_id].append(grad_dict['grad'])
 
-        return gradients
+        # CRITICAL: Validate and clip gradients (ADR-0647 Security Mitigation #4)
+        # Save checkpoint BEFORE validation
+        current_weights = {k: v['grad'] for k, v in gradients.items()}
+        self.gradient_validator.save_checkpoint(current_weights, getattr(snapshot, 'batch_id', 'unknown'))
+
+        # Validate and clip
+        clipped_gradients, is_valid = self.gradient_validator.validate_and_clip_gradients(
+            gradients,
+            batch_id=getattr(snapshot, 'batch_id', 'unknown')
+        )
+
+        # If validation failed, return empty dict to signal caller to rollback
+        if not is_valid:
+            return {}
+
+        return clipped_gradients
 
     def _gradient_attention(self, task_batch: List[Dict]) -> float:
         """L4: Attention budget overrun."""

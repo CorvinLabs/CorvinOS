@@ -25,7 +25,9 @@ from typing import Any, Callable, Optional
 from core.paths.tenant import corvin_home as _corvin_home
 from core.tenants import validate_tenant_id
 
-ID_PATTERN = r"^[A-Za-z0-9_.-]{1,128}$"
+# Leading char is alnum/underscore: "." / "-" / "index.json"-style ids collapsed
+# a task dir onto the snapshots root (round-2 review, R2-B4).
+ID_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
 _ID_RE = re.compile(ID_PATTERN)
 
 AuditFn = Callable[..., str]

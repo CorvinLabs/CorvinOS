@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import Field, BaseModel
 
 from ..deps import require_csrf, require_session
 
@@ -76,7 +76,9 @@ router = APIRouter()
 class GradeRequest(BaseModel):
     """Operator grades a pattern."""
     pattern_id: str
-    grade: float  # -1.0 to +1.0
+    # A finite float in [-1, 1]; NaN/inf used to clamp to +1.0 — the strongest
+    # positive learning signal from garbage input (round-2 review, R2-B5).
+    grade: float = Field(..., ge=-1.0, le=1.0, allow_inf_nan=False)
     reason: str = ""  # accepted, never persisted (presence + length only)
 
 

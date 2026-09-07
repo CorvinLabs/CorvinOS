@@ -678,12 +678,15 @@ except Exception:  # noqa: BLE001
 # low-level argv composition to ClaudeCodeEngine._build_args().
 try:
     from agents.claude_code import ClaudeCodeEngine as _ClaudeCodeEngine  # type: ignore
+    from agents.claude_code import guard_prompt_head as _guard_prompt_head  # type: ignore
 except Exception:  # noqa: BLE001
     try:
         sys.path.insert(0, str(ROOT))
         from agents.claude_code import ClaudeCodeEngine as _ClaudeCodeEngine  # type: ignore
+        from agents.claude_code import guard_prompt_head as _guard_prompt_head  # type: ignore
     except Exception:  # noqa: BLE001
         _ClaudeCodeEngine = None  # type: ignore[assignment]
+        _guard_prompt_head = None  # type: ignore[assignment]
 
 # OpenCodeEngine — optional third backend (Layer 22). Loaded lazily so
 # the adapter stays importable on hosts without opencode installed; the
@@ -3747,8 +3750,14 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
                        chat_key: str | None = None,
                        prompt_via_stdin: bool = False,
                        msg_id: str | None = None,
-                       workload_hint: dict | None = None) -> list[str]:
+                       workload_hint: dict | None = None,
+                       spawn_prompt_out: list[str] | None = None) -> list[str]:
     """Build the `claude -p` argv list.
+
+    ``spawn_prompt_out`` (R2-E2, 2026-09-07): when given, receives the exact
+    user text the spawn must feed on stdin (sentinel + CEL prefix + prompt)
+    so a ``prompt_via_stdin=True`` caller never has to re-derive it — and
+    never falls back to argv.
 
     Phase 2.1 wrapper: the high-level orchestration (system-prompt
     assembly, MCP materialization, add_dirs expansion, capability-flag
@@ -3790,7 +3799,11 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
     # not the system file. Prepend it to the spawn prompt only; the raw `prompt` stays intact
     # for the caller's gates / budget accounting / logging.
     _vprefix = resolved.pop("_volatile_user_prefix", "") or ""
-    _spawn_prompt = (_vprefix + "\n\n" + prompt) if _vprefix else prompt
+    # R2-E1 (2026-09-07): byte 0 of the outbound user text is ALWAYS the fixed
+    # non-slash sentinel (guard_prompt_head), independent of whether the CEL
+    # prefix is present — a leading "/name" would otherwise be expanded by the
+    # CLI into a slash command / skill on every transport.
+    _spawn_prompt = _guard_prompt_head((_vprefix + "\n\n" + prompt) if _vprefix else prompt)
 
     # Windows fresh-install fix (same bug class ClaudeCodeEngine.spawn()
     # fixes for the engine-driven path — see its docstring): `resolved
@@ -3819,6 +3832,8 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
         except OSError:
             pass  # best-effort — falls back to the historical inline arg
 
+    if spawn_prompt_out is not None:
+        spawn_prompt_out.append(_spawn_prompt)
     return _ClaudeCodeEngine._build_args(
         _spawn_prompt,
         binary="claude",
@@ -4869,8 +4884,17 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         env.pop("ANTHROPIC_AUTH_TOKEN", None)
         env.pop("ANTHROPIC_API_BASE", None)
 
+    # R2-E2 (2026-09-07): this legacy fallback used to place the prompt in
+    # argv (prompt_via_stdin default False) — world-readable via
+    # /proc/<pid>/cmdline for the process lifetime and subject to the ~128 KiB
+    # E2BIG ceiling. The prompt now travels on stdin as plain text (no
+    # --input-format flag → the CLI reads the whole of stdin as the user
+    # message); `_spawn_out` carries the sentinel-guarded text.
+    _spawn_out: list[str] = []
     base_args = _build_claude_args(prompt, mode, profile, add_dir, channel=channel, chat_key=chat_key,
-                                   workload_hint=workload_hint)
+                                   workload_hint=workload_hint, prompt_via_stdin=True,
+                                   spawn_prompt_out=_spawn_out)
+    _stdin_prompt = _spawn_out[0] if _spawn_out else _guard_prompt_head(prompt)
     # Track the temp file _build_claude_args wrote the system prompt into
     # (if any — see its docstring) so it's cleaned up once this function is
     # done with it, regardless of which return/exception path is taken.
@@ -4918,6 +4942,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         # 0 (a safe no-op) on POSIX.
         proc = subprocess.Popen(
             windows_shim_command(args), cwd=workdir,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=env, start_new_session=True,
             creationflags=no_console_window_flags(),
@@ -4935,7 +4960,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         # call_claude() call site) — dead on arrival, removed 2026-09-01.
         try:
             actual_timeout = run_timeout if run_timeout else None
-            stdout, stderr = proc.communicate(timeout=actual_timeout)
+            stdout, stderr = proc.communicate(input=_stdin_prompt, timeout=actual_timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
@@ -5123,7 +5148,10 @@ def _call_claude_streaming_via_engine(
     # so the pre-spawn compliance gates (L34 flow-guard, egress, house-rules) keep inspecting
     # the real user task, and budget accounting / logging keep recording it.
     _vprefix = resolved.pop("_volatile_user_prefix", "") or ""
-    _spawn_prompt = (_vprefix + "\n\n" + prompt) if _vprefix else prompt
+    # R2-E1 (2026-09-07): sentinel line at byte 0, unconditionally — see
+    # agents.claude_code.guard_prompt_head. The raw `prompt` stays intact for
+    # the gates / accounting above; only the spawn copy is wrapped.
+    _spawn_prompt = _guard_prompt_head((_vprefix + "\n\n" + prompt) if _vprefix else prompt)
     engine = _ClaudeCodeEngine()
     persona = (profile or {}).get("persona", "assistant")
     # EU AI Act Art. 12/13: unique ID for this OS-turn; emitted once proc

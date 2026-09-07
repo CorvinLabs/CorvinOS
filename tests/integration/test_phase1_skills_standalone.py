@@ -24,6 +24,10 @@ from core.skills.a2a_skill_bridge import A2ASkillBridge, A2ATaskEnvelope
 from core.skills.os_skills_phase1 import BUILTIN_SKILL_IDS, register_builtin_skills
 
 
+def e2e() -> None:  # LoM anchor: registry.execute requires a RESOLVABLE "<file>:<function>"
+    """Line of moral responsibility for the Skill executions in this test module."""
+
+
 class MockAuditBackend:
     """Mock audit backend for testing."""
 
@@ -66,7 +70,7 @@ def test_skill_execution_success():
 
     # Execute delegation router skill
     input_data = {"complexity": 8, "task_type": "analysis"}
-    result = registry.execute("os.delegation_router", input_data, lom="test_phase1_skills_standalone.py:e2e")
+    result = registry.execute("os.delegation_router", input_data, lom="tests/integration/test_phase1_skills_standalone.py:e2e")
 
     assert result.status == "success", f"Expected success, got {result.status}"
     assert result.output is not None
@@ -94,7 +98,7 @@ def test_skill_not_found():
     registry = SkillsRegistry(audit_backend=mock_audit)
     register_builtin_skills(registry)
 
-    result = registry.execute("os.nonexistent", {}, lom="test_phase1_skills_standalone.py:e2e")
+    result = registry.execute("os.nonexistent", {}, lom="tests/integration/test_phase1_skills_standalone.py:e2e")
 
     assert result.status == "error", f"Expected error, got {result.status}"
     assert "not found" in result.error_message.lower()
@@ -135,7 +139,7 @@ def test_vibe_engineering_execution():
         "priority_hint": 5,
         "time_budget_ms": 60000,
     }
-    result = registry.execute("os.vibe_engineering", input_data, lom="test_phase1_skills_standalone.py:e2e")
+    result = registry.execute("os.vibe_engineering", input_data, lom="tests/integration/test_phase1_skills_standalone.py:e2e")
 
     assert result.status == "success"
     assert "vibe_score" in result.output
@@ -160,7 +164,7 @@ def test_context_adapter_composition():
         "task_description": "Complex data analysis",
         "priority_hint": 6,
     }
-    result = registry.execute("os.context_adapter", input_data, lom="test_phase1_skills_standalone.py:e2e")
+    result = registry.execute("os.context_adapter", input_data, lom="tests/integration/test_phase1_skills_standalone.py:e2e")
 
     assert result.status == "success"
     assert "routing_decision" in result.output
@@ -191,8 +195,8 @@ def test_tenant_isolation():
     register_builtin_skills(registry_b)
 
     # Execute in each tenant
-    registry_a.execute("os.delegation_router", {"complexity": 5}, lom="test_phase1_skills_standalone.py:e2e")
-    registry_b.execute("os.delegation_router", {"complexity": 7}, lom="test_phase1_skills_standalone.py:e2e")
+    registry_a.execute("os.delegation_router", {"complexity": 5}, lom="tests/integration/test_phase1_skills_standalone.py:e2e")
+    registry_b.execute("os.delegation_router", {"complexity": 7}, lom="tests/integration/test_phase1_skills_standalone.py:e2e")
 
     # Verify tenant isolation
     events_a = [e for e in mock_audit.events if e.get("tenant_id") == "tenant_a"]
@@ -278,7 +282,7 @@ def test_feature_flag_replacement():
     register_builtin_skills(registry)
 
     # Old way: if config.features.vibe_engineering_v0_2: route = smart_route()
-    # New way: if registry.is_enabled("os.vibe_engineering"): result = registry.execute(, lom="test_phase1_skills_standalone.py:e2e")
+    # New way: if registry.is_enabled("os.vibe_engineering"): result = registry.execute(, lom="tests/integration/test_phase1_skills_standalone.py:e2e")
 
     assert registry.is_enabled("os.delegation_router") is True
 
@@ -292,7 +296,7 @@ def test_feature_flag_replacement():
         result = registry.execute(
             "os.delegation_router",
             {"complexity": complexity, "task_type": "analysis"},
-            lom="test_phase1_skills_standalone.py:e2e",
+            lom="tests/integration/test_phase1_skills_standalone.py:e2e",
         )
         assert result.status == "success"
         assert result.output["engine"] == expected_engine

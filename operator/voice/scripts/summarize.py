@@ -1414,6 +1414,16 @@ def _run_claude_print(payload: str, system_prompt: str, model: str, timeout_s: f
     already handle (CalledProcessError / TimeoutExpired / OSError).
     """
     import tempfile as _tempfile
+    # R2-E1 (2026-09-07): a transcript / answer whose first byte is "/" would
+    # be expanded by `claude -p` into a slash command (stdin transport
+    # included). Always put the shared non-slash sentinel line at byte 0 —
+    # fail-closed: no guard, no spawn (the caller's OSError path degrades to
+    # the Hermes / no-LLM ladder instead of shipping an unguarded payload).
+    try:
+        from agents.claude_code import guard_prompt_head  # type: ignore  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        raise OSError("prompt-head guard unavailable (agents.claude_code)") from exc
+    payload = guard_prompt_head(payload)
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
     fd, sys_path = _tempfile.mkstemp(prefix=".corvin-summarize-sys-", suffix=".txt")

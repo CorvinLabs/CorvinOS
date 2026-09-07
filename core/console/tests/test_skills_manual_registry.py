@@ -167,12 +167,14 @@ class TestManualSkillsThroughRegistry(unittest.TestCase):
             self.assertEqual(client.delete("/v1/console/skills/manual/code.review").status_code, 422)
             # The registry itself carries the gate (defence in depth): a
             # persona-bound registry refuses too, and audits the refusal.
-            from skill_forge.registry import NamespaceDenied
-            with self.assertRaises(NamespaceDenied):
+            # Matched by NAME: a process that re-imported skill_forge.registry
+            # (other suites do) carries two NamespaceDenied identities.
+            with self.assertRaises(Exception) as cm:
                 MultiSkillRegistry(tenant_id=tid, caller_persona="assistant").create(
                     scope="user", name="code.direct", type="domain", body_md=BODY,
                     description="x", claim={},
                 )
+            self.assertEqual(type(cm.exception).__name__, "NamespaceDenied", cm.exception)
             chain = (home / "tenants" / tid / "global" / "forge" / "audit.jsonl").read_text()
             self.assertIn('"skill.namespace_denied"', chain)
 

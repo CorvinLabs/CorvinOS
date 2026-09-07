@@ -90,34 +90,29 @@ def scrub_pii_from_text(text: str) -> str:
 def _check_dict_for_pii(state_dict: dict[str, Any], max_depth: int = 10) -> bool:
     """Recursively check if a dictionary contains PII.
 
-    Args:
-        state_dict: Dictionary to check
-        max_depth: Maximum recursion depth to prevent DoS
+    Fail-closed: exhausting ``max_depth`` counts as PII (a deeper structure
+    cannot be vouched for), dict KEYS are scanned like values, and lists nest
+    (round-2 review, R2-B3).
 
     Returns:
-        True if PII detected, False otherwise
+        True if PII detected (or the structure could not be fully scanned).
     """
     if max_depth <= 0:
-        return False
+        return True
 
-    for key, value in state_dict.items():
-        # Check value itself
-        if _detect_pii_risk(value):
+    def _scan(value: Any, depth: int) -> bool:
+        if depth <= 0:
             return True
-        # Recursively check nested dicts
         if isinstance(value, dict):
-            if _check_dict_for_pii(value, max_depth - 1):
-                return True
-        # Check list items
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                if _detect_pii_risk(item):
+            for k, v in value.items():
+                if _detect_pii_risk(k) or _scan(v, depth - 1):
                     return True
-                if isinstance(item, dict):
-                    if _check_dict_for_pii(item, max_depth - 1):
-                        return True
+            return False
+        if isinstance(value, (list, tuple, set)):
+            return any(_scan(item, depth - 1) for item in value)
+        return bool(_detect_pii_risk(value))
 
-    return False
+    return _scan(state_dict, max_depth)
 
 
 class SnapshotType(str, Enum):

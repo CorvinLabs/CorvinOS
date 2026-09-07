@@ -68,13 +68,30 @@ def _registry(tid: str):
     return MultiSkillRegistry(tenant_id=tid, caller_persona=CONSOLE_PERSONA)
 
 
-def _namespace_denied(reg):
-    """``NamespaceDenied`` as seen by THIS registry instance (see _linter_error)."""
+class _NamespaceDeniedByName(Exception):
+    """Sentinel used by :func:`_is_namespace_denied`; never raised."""
+
+
+def _is_namespace_denied(exc: BaseException) -> bool:
+    """True when ``exc`` is a SkillForge ``NamespaceDenied`` of ANY module identity.
+
+    A process that re-imports ``skill_forge.registry`` (test isolation does,
+    and so may a hot-reloading host) carries two ``NamespaceDenied`` classes;
+    matching by class identity turned the gate's refusal into a 500 when the
+    identities diverged (round-2 review). Matching by qualified name is what
+    the route contract needs: the gate refused → 422.
+    """
+    return type(exc).__name__ == "NamespaceDenied" and (
+        type(exc).__module__ or ""
+    ).split(".")[-1] == "registry"
+
+
+def _namespace_denied(reg):  # kept for callers: identity-based hint, may be a foreign class
     try:
         registry_cls = type(reg).create.__globals__["SkillRegistry"]
         return registry_cls.create.__globals__["NamespaceDenied"]
     except (KeyError, AttributeError):  # pragma: no cover — defensive
-        return ()
+        return _NamespaceDeniedByName
 
 
 def _require_namespace(tid: str, name: str) -> None:
@@ -163,10 +180,12 @@ def _write_skill(tid: str, name: str, body: str, *, overwrite: bool):
             http_status.HTTP_400_BAD_REQUEST,
             "linter rejected: " + "; ".join(getattr(exc, "violations", []) or [str(exc)]),
         ) from exc
-    except _namespace_denied(reg) as exc:  # type: ignore[misc]
-        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except (ValueError, KeyError) as exc:
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — NamespaceDenied of any module identity → 422
+        if _is_namespace_denied(exc):
+            raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise
     except OSError as exc:
         raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "storage error") from exc
 
@@ -261,8 +280,12 @@ def delete_manual_skill(
     reg = _registry(rec.tenant_id)
     try:
         removed = reg.delete(name, scope=MANUAL_SCOPE, reason="deleted from console")
-    except _namespace_denied(reg) as exc:  # type: ignore[misc]
-        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "storage error") from exc
+    except Exception as exc:  # noqa: BLE001 — NamespaceDenied of any module identity → 422
+        if _is_namespace_denied(exc):
+            raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise
     except OSError as exc:
         raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "delete failed") from exc
     if not removed:

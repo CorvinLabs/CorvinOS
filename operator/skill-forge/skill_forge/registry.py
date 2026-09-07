@@ -368,11 +368,12 @@ class SkillRegistry:
             return None
         try:
             self._policy = Policy.load(self.root.parent / "forge")
-        except Exception:  # noqa: BLE001 — unreadable workspace file → bundle defaults
-            try:
-                self._policy = Policy()
-            except Exception:  # noqa: BLE001
-                return None
+        except Exception:  # noqa: BLE001 — unreadable/malformed workspace policy
+            # A bare ``Policy()`` has EMPTY persona namespaces (the bundle defaults
+            # are loaded by ``Policy.load``, not by the constructor), which turned a
+            # corrupt policy.json into a wildcard (2026-09-07 round-2 review, R2-B2).
+            # ``namespace_check`` treats ``None`` as fail-closed — return that.
+            return None
         return self._policy
 
     def namespace_check(self, name: str) -> tuple[bool, str]:

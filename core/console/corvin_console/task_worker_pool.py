@@ -101,10 +101,12 @@ try:
     if _agents_dir not in sys.path:
         sys.path.insert(0, os.path.abspath(_agents_dir))
     from agents.claude_code import ClaudeCodeEngine as _ClaudeCodeEngine  # type: ignore
+    from agents.claude_code import guard_prompt_head as _guard_prompt_head  # type: ignore
     _ENGINE_AVAILABLE = True
 except ImportError:
     _ENGINE_AVAILABLE = False
     _ClaudeCodeEngine = None
+    _guard_prompt_head = None  # type: ignore[assignment]
 
 # L34 data-classification + L35 egress are NOT imported here directly any more.
 # The full pre-spawn gate (L44 + ADR-0141 capability + L34 + L35) runs through
@@ -256,9 +258,22 @@ def _worker_stdin_payload(instruction: str) -> bytes:
     FLAG — argv injection straight from chat text. It travels as the first
     (and only) stdin message instead — the same wire the bridge adapter uses
     for every turn (``prompt_via_stdin=True``) and for ``/btw`` injection.
+
+    R2-E1 (2026-09-07): the CLI ALSO expands a leading ``/name`` at byte 0 of
+    the stdin user message into a slash command / skill (``/pwn`` ran
+    ``.claude/commands/pwn.md`` from the persona workdir under
+    bypassPermissions). The instruction is therefore always placed behind the
+    shared non-slash sentinel line (``agents.claude_code.guard_prompt_head``)
+    — fail-closed: without the guard there is no payload and no spawn.
     """
+    if _guard_prompt_head is None:
+        raise RuntimeError(
+            "prompt-head guard unavailable (agents.claude_code not importable) "
+            "— refusing to build an unguarded /task worker payload"
+        )
     return (json.dumps(
-        {"type": "user", "message": {"role": "user", "content": instruction}},
+        {"type": "user",
+         "message": {"role": "user", "content": _guard_prompt_head(instruction)}},
         ensure_ascii=False,
     ) + "\n").encode("utf-8")
 

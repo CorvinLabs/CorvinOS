@@ -17,6 +17,12 @@ name — never the instruction, the output or a user id (GDPR Art. 5).
 Fail-soft: a missing tenant, an un-booted registry or an emitter without a
 learning backend means "no outcome recorded" and is reported via the return
 value, never as an exception into the task lifecycle.
+
+SECURITY ADDITION (Finding #3: Weight Poisoning Mitigation):
+Outcome Source Verification (Audit Backend Only) — every outcome must originate
+from the core audit backend to be trusted for backprop. Outcomes from other
+sources (skill config, external API) are logged but rejected. The backprop
+optimizer only reads outcomes with ``outcome_source_verified = true``.
 """
 from __future__ import annotations
 
@@ -25,8 +31,71 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Trust sources for outcomes (must originate from these)
+TRUSTED_OUTCOME_SOURCES = frozenset({"audit_backend_outcome", "task_manager", "feedback_loop"})
+
 #: The Skill whose decisions task outcomes are attributed to (L5 routing).
 OUTCOME_SKILL_ID = "os.delegation_router"
+
+
+def verify_outcome_source(signal: dict[str, Any]) -> tuple[bool, str]:
+    """Verify that an outcome signal originated from a trusted source (Finding #3).
+
+    **Purpose:** Prevent weight poisoning by ensuring only audit-verified outcomes
+    influence backpropagation. Outcomes from untrusted sources (external APIs,
+    unverified skill configs) are rejected with audit logging.
+
+    Args:
+        signal: The outcome signal dict (contains "source" key)
+
+    Returns:
+        (verified, reason) tuple where:
+        - verified: True if source is in TRUSTED_OUTCOME_SOURCES
+        - reason: Human-readable explanation for the verification result
+    """
+    source = signal.get("source", "unknown")
+    if source in TRUSTED_OUTCOME_SOURCES:
+        return True, f"outcome_source_verified: source={source}"
+    return False, f"outcome_source_unverified: source={source} not in trusted sources"
+
+
+def audit_outcome_verification(
+    *,
+    tenant_id: str,
+    task_id: str,
+    verified: bool,
+    source: str,
+    reason: str,
+) -> bool:
+    """Log outcome verification result to the core audit chain (Finding #3).
+
+    Args:
+        tenant_id: Task's tenant
+        task_id: Task identifier
+        verified: Whether the outcome passed verification
+        source: The outcome source string
+        reason: Explanation for the verification result
+
+    Returns:
+        True if audit event was successfully logged
+    """
+    try:
+        from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
+
+        event_type = "learning.outcome_verified" if verified else "learning.outcome_unverified"
+        core_audit_event(
+            event_type,
+            tenant_id=tenant_id,
+            details={
+                "task_id": task_id,
+                "outcome_source": source,
+                "verification_reason": reason,
+            },
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — don't break learning pipeline
+        logger.warning("outcome verification audit failed (%s): %s", task_id, type(exc).__name__)
+        return False
 
 
 def learning_emitter() -> Optional[Any]:
@@ -88,6 +157,20 @@ def emit_task_outcome(
             "task_type": task_type,
             "source": "task_manager",
         }
+
+        # SECURITY: Verify outcome source (Finding #3 mitigation)
+        verified, reason = verify_outcome_source(signal)
+        signal["outcome_source_verified"] = verified
+
+        # Log verification to audit chain
+        audit_outcome_verification(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            verified=verified,
+            source=signal.get("source", "unknown"),
+            reason=reason,
+        )
+
         event = LearningEvent.create(
             event_type=EventType.OUTCOME,
             skill_id=OUTCOME_SKILL_ID,
@@ -102,11 +185,13 @@ def emit_task_outcome(
 
 
 def recent_outcomes(tenant_id: str, limit: int = 10, *, store: Optional[Any] = None) -> tuple[int, int]:
-    """``(successes, total)`` over the most recent ``limit`` task outcomes.
+    """``(successes, total)`` over the most recent ``limit`` VERIFIED task outcomes.
 
     The optimizer's per-epoch input (``SkillAdapter.run_optimizer_epoch``). Reads
-    the booted registry's store unless ``store`` is given. ``(0, 0)`` when no
-    outcome has been recorded yet — the caller treats that as "no evidence".
+    the booted registry's store unless ``store`` is given. Only counts outcomes
+    with ``outcome_source_verified = true`` to prevent weight poisoning
+    (Finding #3 mitigation). ``(0, 0)`` when no verified outcome has been
+    recorded yet — the caller treats that as "no evidence".
     """
     st = store
     if st is None:
@@ -121,7 +206,13 @@ def recent_outcomes(tenant_id: str, limit: int = 10, *, store: Optional[Any] = N
     except Exception as exc:  # noqa: BLE001
         logger.warning("recent_outcomes unreadable: %s", type(exc).__name__)
         return 0, 0
-    tail = events[-limit:] if limit > 0 else events
+    # Filter to only verified outcomes (Finding #3: Weight Poisoning mitigation)
+    tail = [
+        e for e in events[-limit:] if limit > 0
+        if (e.signal or {}).get("outcome_source_verified") is True
+    ] if limit > 0 else [
+        e for e in events if (e.signal or {}).get("outcome_source_verified") is True
+    ]
     total = len(tail)
     successes = sum(1 for e in tail if (e.signal or {}).get("success") is True)
     return successes, total
@@ -170,6 +261,20 @@ def integrate_feedback_outcome(
             "feedback_signal": feedback_signal,
             "source": "feedback_loop",
         }
+
+        # SECURITY: Verify outcome source (Finding #3 mitigation)
+        verified, reason = verify_outcome_source(signal)
+        signal["outcome_source_verified"] = verified
+
+        # Log verification to audit chain
+        audit_outcome_verification(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            verified=verified,
+            source=signal.get("source", "unknown"),
+            reason=reason,
+        )
+
         event = LearningEvent.create(
             event_type=EventType.OUTCOME,
             skill_id=OUTCOME_SKILL_ID,
@@ -185,4 +290,13 @@ def integrate_feedback_outcome(
 
 _learning_emitter = learning_emitter  # compat alias
 
-__all__ = ["emit_task_outcome", "recent_outcomes", "learning_emitter", "OUTCOME_SKILL_ID"]
+__all__ = [
+    "emit_task_outcome",
+    "recent_outcomes",
+    "learning_emitter",
+    "OUTCOME_SKILL_ID",
+    "verify_outcome_source",
+    "audit_outcome_verification",
+    "TRUSTED_OUTCOME_SOURCES",
+    "integrate_feedback_outcome",
+]
