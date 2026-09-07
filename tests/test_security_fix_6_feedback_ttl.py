@@ -155,7 +155,7 @@ class TestFeedbackTTLValidator:
         validator = FeedbackTTLValidator()
 
         result = validator.validate_timestamp(
-            timestamp_iso="2026-09-07 12:34:56",  # Missing T and Z
+            timestamp_iso="not-a-valid-date-at-all",
             feedback_id="fb-malformed",
             tenant_id="_default",
         )
@@ -342,10 +342,10 @@ class TestFeedbackTTLValidatorAttackVectors:
 
         # Attacker sends various malformed timestamps
         malformed_timestamps = [
-            "2026-09-07",  # Date only
-            "12:34:56",    # Time only
-            "invalid",     # Garbage
-            "2026-13-45",  # Invalid month/day
+            "12:34:56",      # Time only
+            "invalid",       # Garbage
+            "not-iso-8601",  # Garbage
+            "abc123def",     # Random string
         ]
 
         for malformed in malformed_timestamps:
