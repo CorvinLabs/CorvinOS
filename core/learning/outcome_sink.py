@@ -18,11 +18,25 @@ Fail-soft: a missing tenant, an un-booted registry or an emitter without a
 learning backend means "no outcome recorded" and is reported via the return
 value, never as an exception into the task lifecycle.
 
-SECURITY ADDITION (Finding #3: Weight Poisoning Mitigation):
-Outcome Source Verification (Audit Backend Only) — every outcome must originate
-from the core audit backend to be trusted for backprop. Outcomes from other
-sources (skill config, external API) are logged but rejected. The backprop
-optimizer only reads outcomes with ``outcome_source_verified = true``.
+What actually protects the optimizer from poisoned outcomes (round-4 review, F6):
+the AUDIT-FIRST write in :meth:`core.learning.event_store.EventStore.write_event`
+— a learning event that does not commit to the core hash chain is never written
+to disk, and the store is tenant-bound, so a foreign tenant's OUTCOME is refused.
+That is the whole mitigation.
+
+Until 2026-09-07 this module also carried a ``verify_outcome_source`` check and
+an ``outcome_source_verified`` flag, described in this header as the weight-
+poisoning mitigation. It was a tautology: ``emit_task_outcome`` set
+``source="task_manager"`` one line above the check, ``TRUSTED_OUTCOME_SOURCES``
+contained that literal, no other producer of ``EventType.OUTCOME`` exists in the
+repo, and the flag was therefore ``True`` on 100 % of records — the branch that
+returns False was unreachable and the consumer filter filtered nothing. It also
+offered nothing against the stated threat: the flag was an ordinary field on the
+same JSONL line an attacker would have to be able to write in the first place,
+so anyone able to inject an outcome could set it. A check that cannot fail is
+not a mitigation, so it was removed rather than left standing as one. A real
+source gate needs a source the CALLER does not control; if one is ever built
+(e.g. outcomes arriving over A2A), it belongs at the producer boundary, not here.
 """
 from __future__ import annotations
 
@@ -31,71 +45,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Trust sources for outcomes (must originate from these)
-TRUSTED_OUTCOME_SOURCES = frozenset({"audit_backend_outcome", "task_manager", "feedback_loop"})
-
 #: The Skill whose decisions task outcomes are attributed to (L5 routing).
 OUTCOME_SKILL_ID = "os.delegation_router"
-
-
-def verify_outcome_source(signal: dict[str, Any]) -> tuple[bool, str]:
-    """Verify that an outcome signal originated from a trusted source (Finding #3).
-
-    **Purpose:** Prevent weight poisoning by ensuring only audit-verified outcomes
-    influence backpropagation. Outcomes from untrusted sources (external APIs,
-    unverified skill configs) are rejected with audit logging.
-
-    Args:
-        signal: The outcome signal dict (contains "source" key)
-
-    Returns:
-        (verified, reason) tuple where:
-        - verified: True if source is in TRUSTED_OUTCOME_SOURCES
-        - reason: Human-readable explanation for the verification result
-    """
-    source = signal.get("source", "unknown")
-    if source in TRUSTED_OUTCOME_SOURCES:
-        return True, f"outcome_source_verified: source={source}"
-    return False, f"outcome_source_unverified: source={source} not in trusted sources"
-
-
-def audit_outcome_verification(
-    *,
-    tenant_id: str,
-    task_id: str,
-    verified: bool,
-    source: str,
-    reason: str,
-) -> bool:
-    """Log outcome verification result to the core audit chain (Finding #3).
-
-    Args:
-        tenant_id: Task's tenant
-        task_id: Task identifier
-        verified: Whether the outcome passed verification
-        source: The outcome source string
-        reason: Explanation for the verification result
-
-    Returns:
-        True if audit event was successfully logged
-    """
-    try:
-        from core.learning.event_persistence import core_audit_event  # noqa: PLC0415
-
-        event_type = "learning.outcome_verified" if verified else "learning.outcome_unverified"
-        core_audit_event(
-            event_type,
-            tenant_id=tenant_id,
-            details={
-                "task_id": task_id,
-                "outcome_source": source,
-                "verification_reason": reason,
-            },
-        )
-        return True
-    except Exception as exc:  # noqa: BLE001 — don't break learning pipeline
-        logger.warning("outcome verification audit failed (%s): %s", task_id, type(exc).__name__)
-        return False
 
 
 def learning_emitter() -> Optional[Any]:
@@ -158,19 +109,6 @@ def emit_task_outcome(
             "source": "task_manager",
         }
 
-        # SECURITY: Verify outcome source (Finding #3 mitigation)
-        verified, reason = verify_outcome_source(signal)
-        signal["outcome_source_verified"] = verified
-
-        # Log verification to audit chain
-        audit_outcome_verification(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            verified=verified,
-            source=signal.get("source", "unknown"),
-            reason=reason,
-        )
-
         event = LearningEvent.create(
             event_type=EventType.OUTCOME,
             skill_id=OUTCOME_SKILL_ID,
@@ -185,14 +123,22 @@ def emit_task_outcome(
 
 
 def recent_outcomes(tenant_id: str, limit: int = 10, *, store: Optional[Any] = None) -> tuple[int, int]:
-    """``(successes, total)`` over the most recent ``limit`` VERIFIED task outcomes.
+    """``(successes, total)`` over the ``limit`` MOST RECENT task outcomes.
 
-    The optimizer's per-epoch input (``SkillAdapter.run_optimizer_epoch``). Reads
-    the booted registry's store unless ``store`` is given. Only counts outcomes
-    with ``outcome_source_verified = true`` to prevent weight poisoning
-    (Finding #3 mitigation). ``(0, 0)`` when no verified outcome has been
-    recorded yet — the caller treats that as "no evidence".
+    The optimizer's per-epoch input (``SkillAdapter.run_optimizer_epoch``) and
+    therefore the sole ground truth behind every accept/reject of a config
+    hypothesis for ``os.delegation_router``. Reads the booted registry's store
+    unless ``store`` is given. ``(0, 0)`` when no outcome has been recorded yet
+    — the caller treats that as "no evidence".
+
+    Round-4 review, F3: this used to ask for ``limit=5000`` and then slice
+    ``events[-limit:]``. ``query_events`` selected the OLDEST 5000, so past a
+    tenant's 5000th outcome the optimizer's ground truth was frozen forever on
+    outcomes #4991–#5000 of all time. ``query_events`` now always windows from
+    the newest end, and this asks for exactly ``limit``.
     """
+    if limit <= 0:
+        return 0, 0
     st = store
     if st is None:
         em = learning_emitter()
@@ -202,19 +148,12 @@ def recent_outcomes(tenant_id: str, limit: int = 10, *, store: Optional[Any] = N
     try:
         from core.learning.learning_events import EventType  # noqa: PLC0415
 
-        events = st.query_events(tenant_id, event_type=EventType.OUTCOME, limit=5000)
+        events = st.query_events(tenant_id, event_type=EventType.OUTCOME, limit=limit)
     except Exception as exc:  # noqa: BLE001
         logger.warning("recent_outcomes unreadable: %s", type(exc).__name__)
         return 0, 0
-    # Filter to only verified outcomes (Finding #3: Weight Poisoning mitigation)
-    tail = [
-        e for e in events[-limit:] if limit > 0
-        if (e.signal or {}).get("outcome_source_verified") is True
-    ] if limit > 0 else [
-        e for e in events if (e.signal or {}).get("outcome_source_verified") is True
-    ]
-    total = len(tail)
-    successes = sum(1 for e in tail if (e.signal or {}).get("success") is True)
+    total = len(events)
+    successes = sum(1 for e in events if (e.signal or {}).get("success") is True)
     return successes, total
 
 
@@ -262,19 +201,6 @@ def integrate_feedback_outcome(
             "source": "feedback_loop",
         }
 
-        # SECURITY: Verify outcome source (Finding #3 mitigation)
-        verified, reason = verify_outcome_source(signal)
-        signal["outcome_source_verified"] = verified
-
-        # Log verification to audit chain
-        audit_outcome_verification(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            verified=verified,
-            source=signal.get("source", "unknown"),
-            reason=reason,
-        )
-
         event = LearningEvent.create(
             event_type=EventType.OUTCOME,
             skill_id=OUTCOME_SKILL_ID,
@@ -295,8 +221,5 @@ __all__ = [
     "recent_outcomes",
     "learning_emitter",
     "OUTCOME_SKILL_ID",
-    "verify_outcome_source",
-    "audit_outcome_verification",
-    "TRUSTED_OUTCOME_SOURCES",
     "integrate_feedback_outcome",
 ]

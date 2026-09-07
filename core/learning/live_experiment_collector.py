@@ -22,6 +22,21 @@ Until 2026-09-07 every one of these was ``random.gauss(...)`` — synthetic
 numbers written to disk labelled as measurements, under ``~/.corvin`` (F-L5).
 A collector that cannot read a real source records ``None`` for that field and
 says so in ``sources``; it never invents a value.
+
+**Provenance (round-4 review, F4).** Every record now carries ``schema`` and
+``provenance``, so a measured record is distinguishable from a fabricated one
+by inspection — the pre-fix files carry neither field and nothing else told
+them apart, even though the documented purpose of this data is "export for
+papers". Readers MUST filter on ``schema == MEASUREMENT_SCHEMA``;
+:mod:`core.learning.live_collection_dashboard` does.
+
+**Entry point.** Run it as ``corvin-live-collector start`` (a
+``[project.scripts]`` console script) or ``python -m
+core.learning.live_experiment_collector start``. It is NOT an executable
+script: the file has no +x bit and its shebang is the system interpreter,
+which has no ``core`` package on its path — a systemd unit that exec'd the
+file directly failed with 203/EXEC, and with PYTHONPATH patched in it then
+failed with ``ModuleNotFoundError: core``.
 """
 
 from __future__ import annotations
@@ -30,6 +45,7 @@ import json
 import math
 import os
 import resource
+import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -40,6 +56,11 @@ from core.paths.tenant import corvin_home, tenant_home
 
 #: Window over which "recent outcomes" are judged (matches the console status endpoint).
 RECENT_OUTCOME_WINDOW = 50
+
+#: Identifies a record as a MEASURED sample of this schema. Records without it
+#: predate 2026-09-07 and were generated with ``random.gauss`` — fabricated
+#: data that must be quarantined, never aggregated or published.
+MEASUREMENT_SCHEMA = "corvin.live_measurement/1"
 
 
 class LiveExperimentCollector:
@@ -92,8 +113,12 @@ class LiveExperimentCollector:
         store = self._event_store()
         counts = {et.value: store.count_events(self.tenant_id, et) for et in EventType}
         since = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
-        outcomes = store.query_events(self.tenant_id, event_type=EventType.OUTCOME, since=since, limit=100000)
-        recent = outcomes[-RECENT_OUTCOME_WINDOW:]
+        # ``limit`` windows from the NEWEST end (event_store contract), so this
+        # is literally "the last RECENT_OUTCOME_WINDOW outcomes" — it used to ask
+        # for the oldest 100 000 and slice the tail of that (round-4 review, F3).
+        recent = store.query_events(
+            self.tenant_id, event_type=EventType.OUTCOME, since=since, limit=RECENT_OUTCOME_WINDOW
+        )
         successes = sum(1 for e in recent if (e.signal or {}).get("success") is True)
         total = len(recent)
         success_rate = (successes / total) if total else None
@@ -178,6 +203,12 @@ class LiveExperimentCollector:
             sources["user_actions"] = f"unavailable: {type(exc).__name__}"
 
         return {
+            "schema": MEASUREMENT_SCHEMA,
+            "provenance": {
+                "generator": "core.learning.live_experiment_collector",
+                "measured": True,
+                "host_pid": os.getpid(),
+            },
             "timestamp": timestamp,
             "unix_time": int(time.time()),
             "tenant_id": self.tenant_id,
@@ -304,12 +335,12 @@ class LiveExperimentCollector:
 
 
 # ============================================================================
-# DAEMON ENTRY POINT
+# ENTRY POINT
 # ============================================================================
 
-def run_collector_daemon(tenant_id: str = "_default") -> None:
-    """Run as a daemon (systemd service)."""
-    collector = LiveExperimentCollector(tenant_id)
+def run_collector_daemon(tenant_id: str = "_default", interval_s: int = 60) -> None:
+    """Run the collection loop until interrupted (systemd ``Type=simple``)."""
+    collector = LiveExperimentCollector(tenant_id, interval_s=interval_s)
     collector.start()
     try:
         while True:
@@ -318,14 +349,31 @@ def run_collector_daemon(tenant_id: str = "_default") -> None:
         collector.stop()
 
 
-if __name__ == "__main__":
-    import sys
+def main(argv: Optional[List[str]] = None) -> int:
+    """Console entry point (``corvin-live-collector``).
 
-    if len(sys.argv) > 1 and sys.argv[1] == "start":
-        run_collector_daemon(os.environ.get("CORVIN_TENANT_ID", "_default"))
-    else:
-        print("Usage: python live_experiment_collector.py start")
-        collector = LiveExperimentCollector(os.environ.get("CORVIN_TENANT_ID", "_default"))
-        measurement = collector.collect_all_metrics()
-        print(json.dumps(measurement, indent=2))
-        print(f"\nData directory: {collector.base_dir}")
+    ``start``  — run the collection loop forever (the systemd unit's command).
+    ``sample`` — take exactly ONE measurement, print it, exit. Use this to check
+                 the unit's environment before enabling it: it exercises the
+                 same code path and writes nothing.
+    """
+    import argparse  # noqa: PLC0415
+
+    parser = argparse.ArgumentParser(prog="corvin-live-collector")
+    parser.add_argument("command", choices=("start", "sample"), nargs="?", default="sample")
+    parser.add_argument("--tenant", default=os.environ.get("CORVIN_TENANT_ID", "_default"))
+    parser.add_argument("--interval", type=int, default=60, help="seconds between measurements")
+    args = parser.parse_args(argv)
+
+    if args.command == "start":
+        run_collector_daemon(args.tenant, interval_s=args.interval)
+        return 0
+
+    collector = LiveExperimentCollector(args.tenant, interval_s=args.interval)
+    print(json.dumps(collector.collect_all_metrics(), indent=2))
+    print(f"\nData directory: {collector.base_dir}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":  # `python -m core.learning.live_experiment_collector`
+    raise SystemExit(main())

@@ -138,19 +138,29 @@ class EventStore:
     ) -> list[LearningEvent]:
         """Query events with optional filters.
 
-        Order and selection (round-3 review, R3-B2):
+        **Selection and order are two separate things (round-4 review, F3).**
 
-        * ``newest_first=False`` (default) — date files ascending, events in
-          write order, and ``offset``/``limit`` select from the OLDEST end.
-        * ``newest_first=True`` — date files descending and each file's lines
-          reversed, so ``limit`` selects the NEWEST N and the result is ordered
-          newest → oldest. Consumers that want "the last N samples" (e.g.
-          :class:`core.learning.consistency_checker.FeedbackConsistencyValidator`)
-          MUST pass this: the default returned the oldest N, so a "recent"
-          window computed from it never advanced.
+        * ``limit``/``offset`` ALWAYS window from the NEWEST end: ``limit=N``
+          means "the N most recent matching events", ``offset=K`` skips the K
+          most recent. There is no way to ask for "the oldest N", because no
+          consumer in this repo wants that and the previous default silently
+          gave it to them: after a tenant's ``limit``-th event, every "recent"
+          window computed from a default query was frozen ancient history and
+          never advanced again (``outcome_sink.recent_outcomes`` fed exactly
+          that constant into the live optimizer as its ground truth).
+        * ``newest_first`` only controls the ORDER of the returned list:
+          ``False`` (default) → chronological, oldest → newest, so ``[-1]`` is
+          the most recent and ``[-n:]`` the last n. ``True`` → newest → oldest.
+
+        Round 3 introduced ``newest_first`` as a *selection* flag and passed it
+        at one call site only; making the newest-end window the contract of the
+        method removes the class of defect rather than one instance of it.
         """
         # FIX #6: Validate tenant_id upfront (prevent cross-tenant leakage, GDPR Art. 32)
         _validate_tenant_id(tenant_id)
+
+        if limit < 0 or offset < 0:
+            raise ValueError("limit and offset must be non-negative")
 
         with self._lock:
             results: list[LearningEvent] = []
@@ -159,7 +169,10 @@ class EventStore:
             start_date = since or "2026-01-01"
             end_date = until or datetime.utcnow().strftime("%Y-%m-%d")
 
-            for event_file in sorted(self.events_dir.glob("*.jsonl"), reverse=newest_first):
+            # Newest date file first: the newest ``wanted`` events live at the
+            # END of the newest files, so we walk backwards and stop as soon as
+            # we hold enough. Older files are never opened.
+            for event_file in sorted(self.events_dir.glob("*.jsonl"), reverse=True):
                 file_date = event_file.stem
 
                 if file_date < start_date or file_date > end_date:
@@ -228,26 +241,26 @@ class EventStore:
                             )
                             file_results.append(event)
 
-                            # FIX #21 optimization: early exit when limit+offset
-                            # reached. Only valid oldest-first — the newest N of
-                            # a file live at its END, so a newest-first query
-                            # must read the whole file before slicing.
-                            if not newest_first and len(results) + len(file_results) >= wanted:
-                                break
+                            # No early break here: the NEWEST events of a file
+                            # live at its END, so the whole file has to be read
+                            # before it can be sliced. FIX #21's bound is kept
+                            # by stopping after the first file that satisfies
+                            # ``wanted`` — older files are never opened at all.
 
                 except IOError as e:
                     logger.error(f"IO error reading {event_file}: {e}")
                     continue
 
-                if newest_first:
-                    file_results.reverse()
+                file_results.reverse()  # newest → oldest within the file
                 results.extend(file_results)
 
                 if len(results) >= wanted:
-                    return results[offset:wanted]
+                    break
 
-            # FIX #21: Apply limit + offset to prevent OOM
-            return results[offset:wanted]
+            # FIX #21: Apply limit + offset to prevent OOM. ``results`` is
+            # newest → oldest, so this window is always the newest slice.
+            window = results[offset:wanted]
+            return window if newest_first else window[::-1]
 
     def count_events(self, tenant_id: str, event_type: Optional[EventType] = None) -> int:
         """Count events for a tenant (stream-based, O(n) time, O(1) space).

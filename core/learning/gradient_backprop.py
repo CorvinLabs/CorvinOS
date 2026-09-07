@@ -316,7 +316,9 @@ class GradientValidator:
             clipped_gradients[loop_id] = {
                 'grad': float(clipped_value),
                 'original_grad': float(grad_value),
-                'was_clipped': clipped_value != grad_value,
+                # bool(), not np.bool_: this dict is handed to the audit backend
+                # and np.bool_ is not JSON-serialisable.
+                'was_clipped': bool(clipped_value != grad_value),
                 'contributors': grad_dict.get('contributors', [])
             }
 
@@ -916,86 +918,94 @@ class CouplingOscillationDetector:
 
         return oscillation_rate > 0.6
 
+    #: FFT window. 200 samples resolves a period up to ~200 batches.
+    FFT_WINDOW = 200
+    #: A raw drift larger than this over the window is itself a divergence signal.
+    DRIFT_LIMIT = 0.3
+    #: Share of the AC power the dominant bin must carry for the series to be
+    #: called *periodic* rather than noise or a trend.
+    MIN_SPECTRAL_CONCENTRATION = 0.35
+    #: Amplitude of that dominant component, below which an oscillation is not
+    #: worth pausing learning for (sensor noise, float wobble).
+    MIN_OSCILLATION_AMPLITUDE = 0.002
+
     def _detect_low_frequency_oscillation(self, loop_id: str) -> bool:
         """
-        LAYER 2: Detect low-frequency oscillations via FFT frequency analysis (SECURITY FIX #7 ROUND 3).
+        LAYER 2: Detect a PERIODIC component of any resolvable period.
 
-        Problem (Round 3 FINAL): Attackers use ultra-slow oscillations (T ≥ 100 batches, f < 0.01 Hz)
-        that escape the 50-sample FFT window, which cannot resolve frequencies lower than 0.02 Hz.
+        Round-4 review: the round-3 implementation did not work on its own
+        fixtures — 13 of this module's tests were red. It computed
+        ``dominant_freq = bin / (len(deltas) / 2)``, which is the fraction of
+        NYQUIST, and then compared it against thresholds written in
+        cycles-per-batch (``<= 0.001``, ``<= 0.01``). For the documented T=100
+        attack that expression yields 0.0201 — outside BOTH bands — so the
+        detector was silent on exactly the signal it was added for, and the
+        band edge sat on 0.01 for T=100, i.e. a threshold a fixture lands on.
 
-        Solution:
-          1. Increase FFT window from 50 → 200 samples (resolves f down to 0.005 Hz / T=200 batches)
-          2. Lower frequency threshold from 0.2 Hz → 0.001 Hz (catches T ≥ 1000 batches)
-          3. Add raw sum-of-squares drift check: if drift > 0.3 in 200 samples = oscillation
+        The criterion is now scale- and period-free, and does not need a
+        frequency threshold at all:
 
-        Returns True if suspicious low-frequency oscillation detected.
+          1. drift over the window > ``DRIFT_LIMIT`` → divergence (kept);
+          2. least-squares DETREND (a ramp is not an oscillation, and removing
+             it is what lets a sawtooth *with net drift* still be seen);
+          3. FFT of the residual: if the dominant bin carries at least
+             ``MIN_SPECTRAL_CONCENTRATION`` of the AC power (periodic, not
+             broadband noise) AND its amplitude is at least
+             ``MIN_OSCILLATION_AMPLITUDE``, that is an oscillation.
+
+        A monotone ramp detrends to ~0 residual, and noise spreads its power
+        across every bin, so neither trips it.
         """
-        if len(self.ema_history[loop_id]) < 200:
-            # Increased from 50 to 200 samples for ultra-low frequency resolution
-            # 200 samples resolves frequencies down to ~0.005 Hz (T=200 batches)
+        history = self.ema_history[loop_id]
+        if len(history) < self.FFT_WINDOW:
             return False
 
-        # Use EMA-filtered history for frequency detection
-        recent_ema = self.ema_history[loop_id][-200:]
+        recent_ema = history[-self.FFT_WINDOW:]
 
-        # Compute FFT to detect frequency content
+        # (1) Raw drift check — a large one-way move is a divergence signal in
+        # its own right, whatever its spectrum.
+        if abs(recent_ema[-1] - recent_ema[0]) > self.DRIFT_LIMIT:
+            return True
+
+        if not HAS_NUMPY:
+            return self._detect_low_frequency_oscillation_fallback(recent_ema)
+
         try:
-            deltas = [recent_ema[i] - recent_ema[i-1] for i in range(1, len(recent_ema))]
-
-            if len(deltas) < 4:
+            y = np.asarray(recent_ema, dtype=np.float64)
+            if not np.all(np.isfinite(y)):
+                # NaN/Inf in the parameter history is a divergence, not an
+                # oscillation — GradientValidator owns that signal. Do not
+                # pretend to have measured a spectrum of it.
                 return False
 
-            # FALLBACK: Raw sum-of-squares drift check (catches attacks that escape FFT)
-            # If drift is very large relative to oscillation period, flag it
-            drift = abs(recent_ema[-1] - recent_ema[0])
-            if drift > 0.3:  # Large drift in 200 samples indicates problematic oscillation
-                return True
+            n = int(y.size)
+            t = np.arange(n, dtype=np.float64)
 
-            # Compute FFT (only if numpy available)
-            if not HAS_NUMPY:
-                return self._detect_low_frequency_oscillation_fallback(recent_ema)
+            # (2) Least-squares detrend (removes ramp / net drift).
+            t_mean = t.mean()
+            denom = float(((t - t_mean) ** 2).sum())
+            slope = float(((t - t_mean) * (y - y.mean())).sum() / denom) if denom else 0.0
+            residual = y - (slope * (t - t_mean) + y.mean())
 
-            fft_vals = np.fft.rfft(np.array(deltas, dtype=np.float64))
-            power_spectrum = np.abs(fft_vals) ** 2
-
-            if len(power_spectrum) < 2:
+            # (3) Spectral concentration of the residual.
+            spectrum = np.abs(np.fft.rfft(residual))
+            ac_power = (spectrum[1:]) ** 2
+            total = float(ac_power.sum())
+            if total <= 0.0 or ac_power.size == 0:
                 return False
 
-            # Find dominant frequency (skip DC component at index 0)
-            ac_spectrum = power_spectrum[1:]
-            if len(ac_spectrum) == 0:
-                return False
+            k = int(np.argmax(ac_power))
+            concentration = float(ac_power[k]) / total
+            amplitude = 2.0 * float(spectrum[k + 1]) / n
 
-            # Dominant frequency bin
-            max_power_bin = np.argmax(ac_spectrum) + 1  # +1 because we skipped DC
+            return (
+                concentration >= self.MIN_SPECTRAL_CONCENTRATION
+                and amplitude >= self.MIN_OSCILLATION_AMPLITUDE
+            )
 
-            # Normalize: frequency = bin / (num_samples / 2)
-            # For 200 samples, Nyquist = 100 (frequency bins 0-100)
-            # Frequency in cycles per batch = bin / (len(deltas) / 2)
-            dominant_freq = max_power_bin / (len(deltas) / 2.0)
-
-            # LOWERED THRESHOLD: detect frequencies down to 0.001 Hz (period ≥ 1000 batches)
-            # Rationale: Even ultra-slow oscillations (T=100+) can cause parameter drift
-            # over millions of batches. Catching f <= 0.001 Hz covers T >= 1000 batches.
-            # In practice, EMA will filter much higher frequencies, but this catches escapes.
-            if dominant_freq <= 0.001 and max_power_bin > 0:
-                # Also check if this frequency carries significant power
-                mean_power = np.mean(ac_spectrum)
-                if ac_spectrum[max_power_bin - 1] > mean_power * 1.5:
-                    # Dominant frequency has significant energy → oscillation detected
-                    return True
-
-            # Also catch intermediate frequencies that escape EMA but aren't ultra-slow
-            # Flag if 0.001 < f <= 0.01 Hz (10 < T <= 1000 batches) with high power
-            if 0.001 < dominant_freq <= 0.01 and max_power_bin > 0:
-                mean_power = np.mean(ac_spectrum)
-                if ac_spectrum[max_power_bin - 1] > mean_power * 2.0:  # Higher threshold for mid-range freqs
-                    return True
-
-            return False
-
-        except (ValueError, IndexError, ZeroDivisionError):
-            # Fail-closed: if FFT fails, assume safe (no oscillation signal)
+        except (ValueError, IndexError, ZeroDivisionError, FloatingPointError):
+            # No usable spectrum → no Layer-2 signal. Layers 1 and 3 still run,
+            # and the watchdog's own bounds/NaN checks are unaffected.
             return False
 
     def _detect_low_frequency_oscillation_fallback(self, recent_ema: List[float]) -> bool:
@@ -1073,11 +1083,21 @@ class CouplingOscillationDetector:
         if variance > 0.01 and drift > 0.05:
             return True
 
-        # Also check: ratio of drift to variance
-        # Large drift / small variance suggests unidirectional accumulation
-        if variance < 0.001 and drift > 0.02:
-            # Drift accumulation without oscillation (smooth upward trend)
-            # Less likely to be an oscillation attack, but possible sawtooth
+        # Small per-step moves that nevertheless accumulate: an attack only if
+        # the series actually REVERSES. Round-4 review: this branch used to be
+        # ``variance < 0.001 and drift > 0.02`` with the comment "Drift
+        # accumulation without oscillation (smooth upward trend) — Less likely
+        # to be an oscillation attack", i.e. it deliberately fired on a plain
+        # monotone ramp, which is exactly what ``test_monotonic_trend_not_
+        # detected`` forbids (that test was red). A ramp has zero reversals; a
+        # sawtooth or micro-oscillation has many, so requiring reversals keeps
+        # Attacks #2/#4 caught and drops the false positive. A genuinely large
+        # one-way move is still caught by Layer 2's ``DRIFT_LIMIT``.
+        deltas = [recent_100[i] - recent_100[i - 1] for i in range(1, len(recent_100))]
+        reversals = sum(
+            1 for i in range(1, len(deltas)) if deltas[i] * deltas[i - 1] < 0
+        )
+        if drift > 0.02 and reversals >= 2:
             return True
 
         return False

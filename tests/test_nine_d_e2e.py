@@ -238,7 +238,13 @@ class TestWeek3Integration_ConvergenceWithoutOscillation:
             f"Average delta {avg_delta:.4f} suggests instability"
 
     def test_convergence_gradient_threshold_holds(self):
-        """After 100 steps, avg gradient magnitude < threshold"""
+        """After 100 steps, avg gradient magnitude is under the REAL gate.
+
+        Round-4 review: this asserted ``< 0.01`` under a comment that said the
+        threshold is 0.001 — ten times looser than the gate
+        ``check_convergence()`` actually applies, so the test could pass on a
+        run the product calls non-converged. It now asserts the gate itself.
+        """
         optimizer = NineD_LossOptimizer()
 
         for batch in range(100):
@@ -248,12 +254,18 @@ class TestWeek3Integration_ConvergenceWithoutOscillation:
 
         metrics = optimizer.get_convergence_metrics()
 
-        # Threshold is 0.001
-        assert metrics["avg_gradient_magnitude"] < 0.01, \
-            f"Gradient magnitude {metrics['avg_gradient_magnitude']:.4f} too high"
+        assert metrics["avg_gradient_magnitude"] < optimizer.convergence_gradient_threshold, \
+            f"Gradient magnitude {metrics['avg_gradient_magnitude']:.6f} too high"
 
     def test_loss_variance_under_threshold_at_100_batches(self):
-        """At 100 batches, loss variance < 0.05"""
+        """At 100 batches, loss variance is under the gate AND L_core is labelled.
+
+        The variance number here is NOT a 9D convergence proof: with
+        ``update_core_loop_loss`` unwired, 0.6 × L_core is a constant and makes
+        up ~58 % of L_total, so a large part of "variance < 0.05" holds by
+        construction (round-4 review, F7). The test now records that fact
+        instead of letting the number be quoted as a 9D result.
+        """
         optimizer = NineD_LossOptimizer()
 
         for batch in range(100):
@@ -264,8 +276,56 @@ class TestWeek3Integration_ConvergenceWithoutOscillation:
         recent_losses = optimizer.loss_history[-50:]
         variance = np.var(recent_losses)
 
-        assert variance < 0.05, \
-            f"Variance {variance:.4f} exceeds 0.05 threshold"
+        assert variance < optimizer.convergence_variance_threshold, \
+            f"Variance {variance:.4f} exceeds the gate"
+        assert optimizer.tier1_is_connected() is False, (
+            "If Tier 1 is now fed by a real producer, this test's caveat is "
+            "stale — re-derive the convergence claim instead of deleting the assert."
+        )
+
+    def test_a_permanent_limit_cycle_is_not_reported_as_converged(self):
+        """A max-amplitude square wave must NOT satisfy check_convergence().
+
+        Round-4 review drove exactly this and measured a permanent
+        0.375 / 0.175 / 0.375 / … limit cycle whose variance over the last 50
+        steps was 0.01 — under the 0.05 gate — with zero rollbacks. Variance
+        alone cannot separate a small stable band from a small oscillating one.
+        """
+        optimizer = NineD_LossOptimizer()
+
+        for batch in range(400):
+            quality = 1.0 if batch % 2 == 0 else 0.0
+            optimizer.step(self._realistic_feedback(quality))
+
+        recent = optimizer.loss_history[-50:]
+        assert np.var(recent) < 0.05, "fixture must reproduce the low-variance limit cycle"
+        assert len(set(round(v, 6) for v in recent)) > 1, "fixture must actually oscillate"
+        assert optimizer.check_convergence() is False, \
+            "a permanent limit cycle must never be reported as converged"
+
+    def test_a_nan_in_feedback_is_detected_not_clamped(self):
+        """NaN/Inf must raise, not be smoothed into the loss.
+
+        ``max(0.0, min(1.0, nan))`` returns a number, so a NaN batch used to
+        produce a finite L_total with no error and no divergence event.
+        """
+        from core.learning.nine_d_loss import NonFiniteLossError
+
+        optimizer = NineD_LossOptimizer()
+        optimizer.step(self._realistic_feedback(0.3))
+
+        poisoned = self._realistic_feedback(0.3)
+        poisoned["memory"]["missing_context_ratio"] = float("nan")
+        with pytest.raises(NonFiniteLossError):
+            optimizer.step(poisoned)
+
+        poisoned_inf = self._realistic_feedback(0.3)
+        poisoned_inf["skills"]["composition_error_rate"] = float("inf")
+        with pytest.raises(NonFiniteLossError):
+            optimizer.step(poisoned_inf)
+
+        with pytest.raises(NonFiniteLossError):
+            optimizer.update_core_loop_loss("routing", float("nan"))
 
     def test_individual_loops_converge(self):
         """Each loop converges individually"""

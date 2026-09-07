@@ -129,6 +129,40 @@ step, `set_state`/rollback — is committed to the core chain FIRST as
 `learning.hyperparameter_changed {changes{param{old,new}}, reason}` and is NOT
 applied when the chain write fails; `set_state` validates NaN/Inf/bounds.
 The 9D optimizer has no production caller yet (it is exercised by tests only).
+`L_core` is a CONSTANT while that holds: `core_loop_losses` is six literals and
+`update_core_loop_loss()` — its only writer — has no caller outside tests, so
+`0.6 · L_core` contributes a fixed 0.081, about 58 % of a typical `L_total`.
+`tier1_is_connected()` reports this and `get_convergence_metrics()` returns it
+as `tier1_connected`; a convergence number taken here describes the Tier-2
+loops plus a constant, not the 9D system. `check_convergence()` additionally
+rejects a run the watchdog reports as oscillating (a permanent limit cycle has
+low variance and is not convergence), and a non-finite loss or gradient raises
+`NonFiniteLossError` instead of being clamped by `max(0.0, min(1.0, nan))`.
+Tier-2 gradients go through `GradientValidator` (hard clipping + NaN/Inf,
+fail-closed) — its first non-test caller, added 2026-09-07.
+
+### Staged but UNWIRED — do not cite these as live guarantees
+
+Thirteen further `core/learning` modules are reachable only from tests and from
+each other: `unified_loss`, `weight_smoother`, `weight_updater`, `alert_policy`,
+`alert_dispatcher`, `geo_validator`, `feedback_validator`, `outcome_validator`,
+`feedback_sink`, `metrics_exporter`, `export_import`, `divergence_detector`,
+`consistency_checker` (plus `gradient_backprop`, now reached from `nine_d_loss`
+only). No systemd unit, console route, CLI, skill or plugin imports any of them.
+
+The security mitigations attributed to them — feedback HMAC (#1), gradient
+clipping / NaN-Inf (#4), tiered damping (#5), stale-feedback TTL (#6),
+oscillation detection (#7), audit-first weight updates (#8), export HMAC (#10),
+alert nonce (#11), geo validation (#12) — are implemented and unit-tested.
+They are **not live guarantees**, because they have no live subject. Same rule
+as CLAUDE.md's `user_backend` note: say "implemented", never "enforced", until
+something calls it. `docs/PHASE_2B_PRODUCTION_SIGNOFF.md` claimed "PRODUCTION
+READY" for exactly this code until 2026-09-07 and now carries the same caveat.
+
+What IS live in the learning subsystem: the audit-first `EventStore`, the
+outcome sink, the console `/v1/console/learning/*` routes, the `SkillAdapter`
+config the delegation router reads, and the live experiment collector's
+schema — everything described in the sections above this one.
 
 ### Live experiment collector (`live_experiment_collector.py`)
 
@@ -139,6 +173,61 @@ under `<CORVIN_HOME>/tenants/<t>/experiments/live_measurements/`. A source that
 cannot be read is recorded as `None` and named in `sources`; nothing is ever
 simulated (the pre-2026-09-07 collector wrote `random.gauss` values labelled as
 measurements).
+
+Every record carries `schema: "corvin.live_measurement/1"`
+(`MEASUREMENT_SCHEMA`) and a `provenance` block, so a measured record is
+distinguishable from a fabricated one by inspection — the pre-fix files carry
+neither, and nothing else told them apart even though the documented purpose of
+this data is "export for papers". `live_collection_dashboard` reads that schema
+(it previously indexed the synthetic keys `learning.loss_total`,
+`learning.accuracy_routing`, `system.latency_p99_ms` and raised `KeyError` on
+every honest record) and IGNORES any record without the marker, with a warning.
+
+Run it as `corvin-live-collector start` (console script) or
+`python -m core.learning.live_experiment_collector start`. It is NOT an
+executable script: no +x bit, and its shebang is the system interpreter, which
+has no `core` package on its path.
+
+## Console surface — bounded, CSRF-gated, honest
+
+* **`SkillAdapter._locked` is BOUNDED** (`LOCK_EX | LOCK_NB` + `LOCK_TIMEOUT_SECONDS`
+  = 2.0s, then `SkillConfigLockBusy`). `POST learning/feedback` and
+  `POST learning/config/rollback` map it to **503 `lock_busy`** and audit the
+  refusal. Both handlers are `async def`, so a plain blocking `flock` did not
+  stall one request — it stalled the whole console event loop (an anonymous
+  `GET /v1/console/version` timed out alongside it). Never reintroduce a
+  blocking `LOCK_EX` here; `core/console/tests/test_route_lock_nonblocking_registries.py`
+  covers it.
+* **`POST /v1/console/api/learning/subscribe` and `/unsubscribe` require CSRF.**
+  They read only query params, so with `content-type: text/plain` they stayed
+  CORS-*simple* requests and a browser sent them cross-site with the console
+  cookie. The subscriber store is capped (`MAX_SUBSCRIBERS_PER_TENANT`, 503 at
+  the cap) and `prune_stale_subscribers` runs on every registration — it
+  previously had no caller at all.
+* **`GET /api/learning/skills/{name}` is computed from real events**
+  (accuracy from OUTCOME, latency from `latency_ms`/`duration_ms`, confidence
+  from CONFIDENCE, satisfaction from FEEDBACK `quality_rating`, usage from
+  SKILL_EXECUTED). A dimension with no events is `null` = *not recorded*, never
+  0. `GET /api/learning/user/{id}` returns `available: false` + a reason:
+  ADR-0314 events carry NO user dimension (GDPR Art. 5), so per-user metrics
+  cannot be computed — the endpoint says so instead of returning nulls under a
+  docstring promising metrics. `/summary`'s `cached` flag is the real cache
+  state (it was hard-coded `true`).
+* **The CSV export neutralises spreadsheet formulas** (`csv_safe` in
+  `routes/learning_metrics.py`): a cell beginning `=`, `+`, `-`, `@`, TAB or CR
+  is prefixed with `'`. `skill_id`, `lom` and `audit_ref` are free-form strings
+  from the event store and are executed by Excel/Sheets otherwise. The JSON
+  export is byte-exact and untouched.
+
+## `query_events` — limit always windows from the NEWEST end
+
+`EventStore.query_events(limit=N)` returns the **N most recent** matching events;
+`offset=K` skips the K most recent; `newest_first` controls only the ORDER of the
+returned list (default `False` = chronological, so `[-1]` is the newest). There
+is no way to ask for the oldest N, deliberately: the old default gave callers
+the oldest N, and `recent_outcomes` — the optimizer's sole ground truth — was
+therefore frozen on outcomes #4991–#5000 of all time once a tenant passed 5000
+of them.
 
 ## Audit events (ADR-0537 attribution)
 
@@ -163,7 +252,7 @@ by `POST /features/toggle`, so an operator decision is never stale.
 
 | Mechanism | Where | Rule |
 |---|---|---|
-| LoM required AND resolvable | `SkillsRegistry.execute(..., lom=)` | `lom="<file>:<function>"` (or `<file>:<function>:L<line>`) is mandatory; missing OR unresolvable → audited `skill.executed` with `status=error`, the Skill does NOT run. `lom_hash` = SHA-256 of the named function's source segment (`ast`), so it survives line drift; for the `:L<line>` form the FUNCTION is resolved first and the line must fall inside it (decorators included) — before 2026-09-07 that form hashed the line without ever looking the function up, so a fabricated name still "bound", and a blank line produced the constant `sha256("")` (R3-B1). A blank line, a non-`.py` target, anything outside the repo root and anything under `.corvin/`, `.venv/`, `site-packages/`, `node_modules/` or `.git/` are all refused, and a source file > 2 MB is not parsed. Resolution is memoised on `(lom, path, mtime, size)` — `execute()` resolves twice per call and re-parsing cost up to 80 ms each time. Production call sites: `capabilities.py:_read_flags_uncached`, `slash_commands.py:_plugin_builder_enabled`, `vibe_engineering.py:get_pipeline`, `bootstrap.py:start_health_monitoring`, `delegation_policy.py:_acp_shadow_route`. |
+| LoM required AND resolvable | `SkillsRegistry.execute(..., lom=)` | `lom="<file>:<function>"` (or `<file>:<function>:L<line>`) is mandatory; missing OR unresolvable → audited `skill.executed` with `status=error`, the Skill does NOT run. `lom_hash` = SHA-256 of the named function's source segment (`ast`), so it survives line drift; for the `:L<line>` form the FUNCTION is resolved first and the line must fall inside it (decorators included) — before 2026-09-07 that form hashed the line without ever looking the function up, so a fabricated name still "bound", and a blank line produced the constant `sha256("")` (R3-B1). A blank line, a non-`.py` target, anything outside the repo root and anything under `.corvin/`, `.claude/`, `.venv/`, `site-packages/`, `node_modules/` or `.git/` are all refused — the exclusion set names every root the RUNNING SYSTEM can rewrite, and `.claude/` was missing from it until 2026-09-07 (round-4 review, F8) while `.claude/worktrees/` held 17 full `.py`-bearing copies of the repo inside the repo root, so a LoM naming one bound and produced a normal-looking source hash for source that is not the shipped source, and a source file > 2 MB is not parsed. Resolution is memoised on `(lom, path, mtime, size)` — `execute()` resolves twice per call and re-parsing cost up to 80 ms each time. Production call sites: `capabilities.py:_read_flags_uncached`, `slash_commands.py:_plugin_builder_enabled`, `vibe_engineering.py:get_pipeline`, `bootstrap.py:start_health_monitoring`, `delegation_policy.py:_acp_shadow_route`, `console/app.py:headless_enabled`. A call site that forgets `lom=` is REFUSED and the refusal is SILENT at the call site — it just reads as "the feature is off" — which is how `headless_api_mode` shipped dead. `tests/integration/test_phase1_k2_k5_call_sites.py::TestEveryProductionCallSitePassesALoM` is an AST fence over `core/`, `operator/` and `ops/` that fails on the next one. |
 | Decision in the chain | `SkillExecutionResult.to_audit_event` → `decision_summary()` | the core writer drops any `output` key; the chain now carries an allowlisted `decision` (engine, enabled, mode, confidence, shadow/bundled_engine, `flag_count`/`flags_on`/`flags_hash`) — never free text. Field sets are registered as positive allowlists (`SKILL_AUDIT_ALLOWLISTS`). |
 | Compliance tier | `SkillMetadata.tier` (`compliance` / `core` / `installed`) | `os.capabilities` is `compliance`: `unregister()` / `disable_skill()` raise `SkillDisableRefused`, the 3-failure auto-disable is refused — every refusal is audited as `skill.disable.refused`. |
 | Lost-update guard | `SkillAdapter._locked()` | `fcntl.flock` on `<config>.lock` + RELOAD inside the lock around `run_optimizer_epoch` / `rollback`; two concurrent feedback requests advance the epoch by two, never one. |

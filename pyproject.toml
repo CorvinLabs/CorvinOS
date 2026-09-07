@@ -210,6 +210,10 @@ corvinos-run = "ops.launcher.corvin.run_entry:main"
 corvin-wdat-report = "ops.launcher.wdat_report_entry:main"
 # ADR-0121: CorvinFlow declarative multi-node workflow CLI
 corvin-flow = "ops.launcher.flow_entry:main"
+# Round-4 review F4: the live experiment collector had no runnable entry point
+# (not executable, system-python shebang, no `core` on the path). `start` runs
+# the loop; `sample` takes one measurement and prints it.
+corvin-live-collector = "core.learning.live_experiment_collector:main"
 # ADR-0142: Layer Extension API — manage user-managed layer extensions.
 corvin-layer = "ops.launcher.layer_entry:main"
 # L38 A2A: agent-to-agent pairing/send CLI + local instance identity.

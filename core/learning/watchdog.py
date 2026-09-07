@@ -32,6 +32,17 @@ class DivergenceWatchdog:
 
     Security (Fix #2): All checkpoints are now signed with Merkle root + tenant
     signature. Restoration verifies signature; any tampering → fail-closed.
+    The signing key is the tenant's SECRET 0600 key file (round-4 review, F2 —
+    it used to be ``sha256("checkpoint.signer:" + tenant_id)``, i.e. public).
+
+    ``restore_checkpoint`` deliberately reads ONLY ``self.signed_checkpoints``
+    (in-process). The on-disk copies written by ``save_checkpoint`` are
+    forensic: an operator can inspect what the meta loop held at step N. They
+    are NOT a restore source, and must not become one without going through
+    ``CheckpointSigner.verify_checkpoint`` first — that is what makes an
+    on-disk forgery unreachable rather than merely unlikely. A checkpoint
+    written before 2026-09-07 carries a signature made with the old PUBLIC
+    derivation and will not verify; that is intended (see checkpoint_signer).
     """
 
     def __init__(self, tenant_id: str = "_default"):

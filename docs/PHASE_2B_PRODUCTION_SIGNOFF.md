@@ -1,9 +1,58 @@
 # Phase 2B Production Sign-Off (Weeks 11–13)
 
-**Status:** ✅ PRODUCTION READY  
-**Date:** 2026-09-07  
-**ADRs:** ADR-0615, ADR-0616  
+**Status:** ⚠️ **STAGED — NOT LIVE.** Implemented and unit-tested; **not on any
+production code path.**
+**Date:** 2026-09-07 (status corrected same day, see the amendment below)
+**ADRs:** ADR-0614, ADR-0615, ADR-0616
 **Commits:** (see end)
+
+---
+
+## Amendment 2026-09-07 — the "PRODUCTION READY" line was wrong
+
+This document said **"Status: ✅ PRODUCTION READY"** (here and in the summary
+table) while `docs/claude-ref/learning-loop.md` said the 9D optimizer "has no
+production caller yet (it is exercised by tests only)". Two documents in the
+same repo stated opposite things about the same code. The round-4 adversarial
+review resolved it in favour of the ref doc, because that is what the code
+says. Nothing below is deleted; read it with these three corrections.
+
+**1. Zero production importers.** Every module this sign-off covers —
+`unified_loss`, `nine_d_loss`, `gradient_backprop`, `weight_smoother`,
+`weight_updater`, `alert_policy`, `alert_dispatcher`, `geo_validator`,
+`feedback_validator`, `outcome_validator`, `feedback_sink`, `metrics_exporter`,
+`export_import`, `divergence_detector`, `consistency_checker` — is imported
+only from `tests/`, `core/learning/tests/` and each other. No systemd unit,
+console route, CLI, skill or plugin reaches any of them. The security
+mitigations attributed to them (fixes #1, #4, #5, #6, #7, #8, #10, #11, #12)
+are **implemented and unit-tested, and are not live guarantees**. Do not cite
+them as shipped mitigations in a compliance or release context.
+
+**2. Item 6 ("Loss Convergence") measures a partly-constant function.**
+`nine_d_loss.core_loop_losses` holds six hard-coded literals and its only
+writer, `update_core_loop_loss()`, has no caller outside tests. `0.6 · L_core`
+is therefore a fixed 0.081 — roughly **58 %** of a typical `L_total`. The
+100-batch convergence figure is a statement about the Tier-2 loops plus a
+constant, not about the 6D/9D system ADR-0614 specifies.
+`NineD_LossOptimizer.tier1_is_connected()` reports this in code, and
+`get_convergence_metrics()` returns it as `tier1_connected`, so a caller
+rendering a convergence number can label it honestly.
+
+**3. Two gates were weaker than stated, and have been tightened.**
+* The documented variance criterion (< 0.05) did not detect a permanent limit
+  cycle: a max-amplitude square wave settled into 0.375 / 0.175 with variance
+  0.01 and zero rollbacks, and `check_convergence()` returned `True`. It now
+  also rejects a run the divergence watchdog reports as oscillating.
+* NaN/Inf fed through `feedback` were silently clamped by
+  `max(0.0, min(1.0, nan))` and never detected, because the detector
+  (`gradient_backprop.GradientValidator`) had no caller. It is now called from
+  `NineD_LossOptimizer._step_loop`, and a non-finite loss or gradient raises
+  `NonFiniteLossError` instead of being smoothed into `L_total`.
+
+**What "ready" would require:** a producer feeding the six Tier-1 losses, a
+production importer for each module whose mitigation is being claimed, and a
+convergence measurement taken with Tier 1 connected. Until then this document
+is a record of an implementation, not a release gate.
 
 ---
 
@@ -198,16 +247,20 @@
 | 1. DAG Definition | ✅ PASS | None |
 | 2. Gradient Backprop | ✅ PASS | None |
 | 3. Correlation Filter | ✅ PASS | None |
-| 4. Divergence Detection | ✅ PASS | None |
+| 4. Divergence Detection | ⚠️ PASS after 2026-09-07 fixes (limit cycle + NaN/Inf were undetected) | — |
 | 5. Audit-First Design | ✅ PASS | None |
-| 6. Loss Convergence | ✅ PASS | None |
+| 6. Loss Convergence | ⚠️ PASS (unit-level only — ~58 % of `L_total` is a constant, see amendment) | Figure is not a 9D result |
 | 7. E2E Pipeline | ✅ PASS | None |
 | 8. Adversarial Review | ✅ PASS (0 CRITICAL) | None |
 | 9. Test Coverage | ✅ PASS (36/36) | None |
 | 10. Documentation | ✅ PASS | None |
 | 11. Performance | ✅ PASS | None |
 
-**Overall:** **✅ PRODUCTION READY**
+**Overall:** **⚠️ STAGED — NOT LIVE** (see the 2026-09-07 amendment at the top:
+zero production importers; item 6's convergence figure is measured on a
+partly-constant loss; items 4 and 6's gates were weaker than stated and have
+since been tightened). The per-item PASS marks above describe unit-level
+verification and are accurate as such.
 
 ---
 

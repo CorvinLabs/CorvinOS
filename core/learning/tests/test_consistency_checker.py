@@ -57,17 +57,31 @@ def _write(store: EventStore, date: str, seq: int, total_loss: float) -> None:
 
 
 class TestNewestFirstSelection:
-    def test_query_returns_the_newest_n_when_asked(self, store):
+    def test_limit_always_windows_from_the_newest_end(self, store):
+        """``limit=N`` means "the N most recent", in EVERY order (round-4, F3).
+
+        This used to assert the opposite for the default — that ``limit=2``
+        returned the two OLDEST events — which is the contract that froze
+        ``recent_outcomes`` on outcomes #4991–#5000 of all time. Selection is
+        now always the newest window; ``newest_first`` only orders the result.
+        """
         _write(store, "2026-01-01", 1, 0.90)
         _write(store, "2026-01-01", 2, 0.88)
         _write(store, "2026-09-05", 1, 0.20)
         _write(store, "2026-09-06", 1, 0.10)
 
-        oldest = store.query_events(TENANT, limit=2)
-        assert [e.signal["total_loss"] for e in oldest] == [0.90, 0.88]
+        chronological = store.query_events(TENANT, limit=2)
+        assert [e.signal["total_loss"] for e in chronological] == [0.20, 0.10]
 
         newest = store.query_events(TENANT, limit=2, newest_first=True)
         assert [e.signal["total_loss"] for e in newest] == [0.10, 0.20]
+
+    def test_offset_skips_the_most_recent_events(self, store):
+        for seq, loss in enumerate([0.5, 0.4, 0.3, 0.2, 0.1], start=1):
+            _write(store, "2026-09-06", seq, loss)
+
+        page2 = store.query_events(TENANT, limit=2, offset=2)
+        assert [e.signal["total_loss"] for e in page2] == [0.4, 0.3]
 
     def test_newest_first_reverses_within_a_single_date_file(self, store):
         for seq, loss in enumerate([0.5, 0.4, 0.3, 0.2, 0.1], start=1):
@@ -166,3 +180,70 @@ class TestOneBadLineDoesNotBlindTheQuery:
         )
         assert result.loss_trend == "decreasing", result
         assert result.loss_trend != "unknown"
+
+
+# ── round-4 F8: the "chronological" sort was a plain string sort ─────────────
+#
+# Python's sort is stable, so equal or empty keys preserved the INPUT order —
+# and the input is newest-first. A monotonically DECREASING loss was therefore
+# reported as INCREASING whenever the timestamps were missing, identical, or
+# lexically incomparable (mixed UTC offsets).
+
+
+class _NewestFirstStore:
+    """Minimal store stub with the REAL store's ordering contract."""
+
+    def __init__(self, losses, timestamps):
+        # losses/timestamps are given oldest→newest; the store answers reversed.
+        self._events = [
+            LearningEvent(
+                event_id=f"ev{i}",
+                event_type=EventType.METRIC,
+                skill_id=SKILL,
+                tenant_id=TENANT,
+                timestamp=ts,
+                signal={"total_loss": loss},
+            )
+            for i, (loss, ts) in enumerate(zip(losses, timestamps))
+        ][::-1]
+
+    def query_events(self, *args, **kwargs):
+        return list(self._events)
+
+
+_FALLING = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
+
+
+def _trend(timestamps):
+    validator = FeedbackConsistencyValidator(
+        event_store=_NewestFirstStore(_FALLING, timestamps)
+    )
+    result = validator.validate_consistency(
+        feedback_id="fb1", skill_id=SKILL, task_id="t1",
+        feedback_signal=FeedbackSignal.GOOD, tenant_id=TENANT,
+    )
+    return result.loss_trend
+
+
+def test_well_formed_utc_timestamps_read_as_decreasing():
+    stamps = [f"2026-09-06T00:{i:02d}:00Z" for i in range(10)]
+    assert _trend(stamps) == "decreasing"
+
+
+def test_missing_timestamps_do_not_invert_the_trend():
+    assert _trend([None] * 10) == "decreasing"
+
+
+def test_identical_timestamps_do_not_invert_the_trend():
+    assert _trend(["2026-09-06T00:00:00Z"] * 10) == "decreasing"
+
+
+def test_mixed_utc_offsets_are_ordered_by_instant_not_by_string():
+    # Alternating Z / +02:00 stamps whose real instants are still increasing.
+    stamps = []
+    for i in range(10):
+        if i % 2 == 0:
+            stamps.append(f"2026-09-06T02:{i:02d}:00Z")
+        else:
+            stamps.append(f"2026-09-06T04:{i:02d}:00+02:00")  # == 02:0i UTC
+    assert _trend(stamps) == "decreasing"

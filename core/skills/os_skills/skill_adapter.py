@@ -40,6 +40,7 @@ import fcntl
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,10 +55,28 @@ __all__ = [
     "SkillConfig",
     "SkillConfigVersion",
     "SkillAdapter",
+    "SkillConfigLockBusy",
     "OptimizerState",
     "load_skill_config",
     "skill_config_path",
+    "LOCK_TIMEOUT_SECONDS",
 ]
+
+#: Deadline for the per-skill config flock. Same value and same contract as
+#: ``core.infinite_session.event_store.LOCK_TIMEOUT_SECONDS`` and
+#: ``corvin_plugins.state.LOCK_TIMEOUT_SECONDS``.
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_INTERVAL_SECONDS = 0.02
+
+
+class SkillConfigLockBusy(TimeoutError):
+    """The per-skill config lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
+
+    Raised instead of blocking. The console routes that mutate a Skill config
+    (``POST /learning/feedback``, ``POST /learning/config/rollback``) map this
+    to HTTP 503 ``lock_busy`` — a wedged holder must never hang an ``async``
+    handler, because that stalls the whole console event loop, not one socket.
+    """
 
 
 @dataclass(frozen=True)
@@ -213,21 +232,47 @@ class SkillAdapter:
         return self.config_file.with_suffix(".lock")
 
     @contextlib.contextmanager
-    def _locked(self) -> Iterator[None]:
-        """Exclusive advisory lock + reload: the only way state is mutated.
+    def _locked(self, *, timeout: Optional[float] = None) -> Iterator[None]:
+        """BOUNDED exclusive advisory lock + reload: the only way state is mutated.
 
         The reload inside the lock is what makes this a fix and not a decoration:
         without it, two adapters that both loaded epoch N would serialise their
         WRITES but still both persist N+1.
+
+        The acquisition is ``LOCK_EX | LOCK_NB`` with a hard deadline, the
+        contract already used by ``core.infinite_session.event_store`` and
+        ``corvin_plugins.state`` — NEVER a plain blocking ``LOCK_EX``. Both
+        callers (:meth:`rollback`, :meth:`run_optimizer_epoch`) are reached from
+        ``async def`` console handlers, so a blocking flock does not stall one
+        request, it stalls the whole event loop: with the lock wedged by a
+        foreign process, an unrelated anonymous ``GET /v1/console/version``
+        timed out too (round-4 console review, F1). Refusing at the deadline is
+        the only safe direction; the routes map :class:`SkillConfigLockBusy` to
+        503 ``lock_busy``.
         """
+        limit = LOCK_TIMEOUT_SECONDS if timeout is None else float(timeout)
         fd = os.open(self.lock_file, os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            deadline = time.monotonic() + limit
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise SkillConfigLockBusy(
+                            f"skill config lock busy for {self.skill_id!r}: still held "
+                            f"after {limit:g}s — refusing to block the caller"
+                        ) from None
+                    time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
             self.state = OptimizerState()
             self._load_or_init()
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            if locked:
+                fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
     def _load_or_init(self) -> None:

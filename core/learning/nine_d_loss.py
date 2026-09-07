@@ -21,13 +21,31 @@ and damping are NOT hardcoded here: they are the meta optimizer's ``α_infra`` /
 Divergence safety (ADR-0625): every meta update is bracketed by the
 ``DivergenceWatchdog`` — checkpoint → apply → validate → restore on divergence.
 Checkpoints are persisted under ``<CORVIN_HOME>/tenants/<tenant>/learning/
-meta_checkpoints/`` (never ``~/.corvin``, F-L12).
+meta_checkpoints/`` (never ``~/.corvin``, F-L12). Tier-2 gradients additionally
+go through ``GradientValidator`` (hard clipping + NaN/Inf detection, fail-closed:
+an invalid gradient is NOT applied), and every incoming loss value is required
+to be finite — ``max(0.0, min(1.0, nan))`` silently yields a number, so a NaN
+fed through ``feedback`` used to pass straight through the loss with no error
+and no divergence event (round-4 review, F7).
+
+**What L_core currently is — read this before quoting a convergence number.**
+``core_loop_losses`` holds six literals and its only writer,
+:meth:`update_core_loop_loss`, has NO production caller: the six Tier-1 loops
+are not wired to this optimizer yet. ``L_core`` therefore contributes a CONSTANT
+0.6 × 0.135 = 0.081 to ``L_total``, i.e. ~58 % of a typical total. A "100-batch
+convergence" measured on this object is a statement about the Tier-2 loops plus
+a constant, NOT about the 9D system ADR-0614 describes. Do not present it as
+one. :meth:`tier1_is_connected` reports the state programmatically, and
+:meth:`get_convergence_metrics` returns it as ``tier1_connected`` so any caller
+rendering a convergence figure can label it honestly.
 """
 
+import math
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
 from core.learning.base import LearningLoop
+from core.learning.gradient_backprop import GradientValidator
 from core.learning.memory_optimizer import MemoryOptimizer
 from core.learning.composition_optimizer import CompositionOptimizer
 from core.learning.plugin_optimizer import PluginOrchestrator
@@ -35,6 +53,21 @@ from core.learning.live_collector_integration import LiveCollectorIntegration
 from core.learning.meta_optimizer import MetaOptimizer
 from core.learning.watchdog import DivergenceWatchdog
 from core.paths.tenant import tenant_home
+
+
+class NonFiniteLossError(ValueError):
+    """A NaN/Inf reached the loss pipeline — refuse rather than clamp it away."""
+
+
+def _require_finite(value: Any, what: str) -> float:
+    """Return ``float(value)`` or raise :class:`NonFiniteLossError`."""
+    try:
+        as_float = float(value)
+    except (TypeError, ValueError) as exc:
+        raise NonFiniteLossError(f"{what} is not a number: {value!r}") from exc
+    if not math.isfinite(as_float):
+        raise NonFiniteLossError(f"{what} is not finite: {as_float!r}")
+    return as_float
 
 
 class NineD_LossOptimizer:
@@ -82,6 +115,11 @@ class NineD_LossOptimizer:
         # ===== META LOOP (Tier 3) =====
         self.meta_optimizer = meta_optimizer or MetaOptimizer(tenant_id=tenant_id)
         self.watchdog = DivergenceWatchdog(tenant_id)
+        #: Hard clipping + NaN/Inf detection for Tier-2 gradients (fix #4).
+        #: Until 2026-09-07 this class existed with no caller anywhere, so the
+        #: NaN/Inf half of the fix had no subject (round-4 review, F1/F7).
+        self.gradient_validator = GradientValidator(tenant_id=tenant_id)
+        self.invalid_gradient_batches = 0
         self.checkpoint_dir: Path = tenant_home(tenant_id) / "learning" / "meta_checkpoints"
         self._last_meta_losses: Optional[Dict[str, float]] = None
         self._last_infra_loss = 0.0
@@ -200,10 +238,34 @@ class NineD_LossOptimizer:
     # ── one optimisation step ──────────────────────────────────────────────
 
     def _step_loop(self, loop: LearningLoop, loop_feedback: Dict[str, float]) -> Dict[str, float]:
-        """Gradient step for one Tier 2 loop with the meta loop's α/damping."""
-        current = loop.compute_loss(loop_feedback)
+        """Gradient step for one Tier 2 loop with the meta loop's α/damping.
+
+        Fail-closed on a non-finite loss or gradient: the update is NOT applied
+        and the batch is counted in ``invalid_gradient_batches``.
+        """
+        for key, value in (loop_feedback or {}).items():
+            if isinstance(value, (int, float)):
+                _require_finite(value, f"feedback {key!r} for {type(loop).__name__}")
+
+        current = _require_finite(
+            loop.compute_loss(loop_feedback), f"{type(loop).__name__} loss"
+        )
         previous = loop.loss_history[-2] if len(loop.loss_history) > 1 else current
         gradients = loop.compute_gradients(current, previous)
+
+        # Hard clipping + NaN/Inf detection (fix #4) — fail-closed.
+        wrapped = {k: {"grad": v} for k, v in gradients.items()}
+        checked, ok = self.gradient_validator.validate_and_clip_gradients(
+            wrapped, batch_id=f"{type(loop).__name__}:{self.step_count}"
+        )
+        if not ok:
+            self.invalid_gradient_batches += 1
+            raise NonFiniteLossError(
+                f"non-finite gradient in {type(loop).__name__} at step {self.step_count} "
+                "— weight update refused"
+            )
+        gradients = {k: float(v["grad"]) for k, v in checked.items()}
+
         loop.apply_gradients(
             gradients,
             learning_rate=self.infra_learning_rate,
@@ -381,10 +443,38 @@ class NineD_LossOptimizer:
         return {
             "avg_gradient_magnitude": float(avg_grad_mag),
             "loss_variance": float(loss_var),
+            # Honesty flag: False means L_core is a constant and any
+            # convergence number here describes Tier 2 + a constant only.
+            "tier1_connected": self.tier1_is_connected(),
             "memory_param_stability": self.memory_loop.get_parameter_stability(100),
             "skills_param_stability": self.skills_loop.get_parameter_stability(100),
             "plugins_param_stability": self.plugins_loop.get_parameter_stability(100),
         }
+
+    #: The literal Tier-1 baseline `core_loop_losses` starts from. While the
+    #: live values still equal it, nothing has ever fed a real Tier-1 loss.
+    TIER1_BASELINE = {
+        "routing": 0.3,
+        "confidence": 0.25,
+        "feedback": 0.2,
+        "attention": 0.25,
+        "latency": 0.2,
+        "diversity": 0.15,
+    }
+
+    def tier1_is_connected(self) -> bool:
+        """Has any real Tier-1 loss ever been fed in?
+
+        ``update_core_loop_loss`` is the only writer of ``core_loop_losses`` and
+        has no production caller, so this is ``False`` in production today. Any
+        caller that renders a convergence figure MUST say so rather than
+        presenting a 9D result computed from six literals (round-4 review, F7).
+        """
+        return any(
+            abs(self.core_loop_losses[k] - v) > 1e-12
+            for k, v in self.TIER1_BASELINE.items()
+            if k in self.core_loop_losses
+        )
 
     def check_convergence(self) -> bool:
         """
@@ -414,6 +504,14 @@ class NineD_LossOptimizer:
             return False
 
         if metrics["loss_variance"] > self.convergence_variance_threshold:
+            return False
+
+        # A permanent limit cycle is NOT convergence. Round-4 review: a
+        # max-amplitude square wave settled into 0.375 / 0.175 / 0.375 / … for
+        # 400 steps with variance 0.01 — comfortably under the 0.05 gate — and
+        # this method returned True. Variance alone cannot tell a small stable
+        # band from a small oscillating one; the sign-flip rate can.
+        if self.watchdog.detect_oscillation(self.loss_history):
             return False
 
         return True
@@ -465,6 +563,11 @@ class NineD_LossOptimizer:
             loss: scalar loss value in [0, 1]
         """
         if loop_id in self.core_loop_losses:
+            # Detect, do not clamp: ``max(0.0, min(1.0, nan))`` returns nan's
+            # partner silently, so a poisoned core-loop signal used to be
+            # smoothed straight into L_core with no error and no divergence
+            # event (round-4 review, F7).
+            loss = _require_finite(loss, f"core loop {loop_id!r} loss")
             loss = float(max(0.0, min(1.0, loss)))
             # Exponential smoothing with the meta loop's Tier 1 damping
             alpha = self.core_smoothing
