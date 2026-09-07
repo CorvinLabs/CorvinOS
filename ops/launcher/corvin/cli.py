@@ -710,6 +710,8 @@ def cmd_status(args: argparse.Namespace) -> int:
 # ── parser ────────────────────────────────────────────────────────────────────
 
 def _build_parser() -> argparse.ArgumentParser:
+    from . import __version__ as _corvin_version
+
     p = argparse.ArgumentParser(
         prog="corvin",
         description="Corvin launcher — manage your local AI assistant gateway.",
@@ -735,6 +737,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                            Re-enable the UI, then restart
         """),
     )
+    p.add_argument("--version", action="version", version=f"corvin {_corvin_version}")
     sub = p.add_subparsers(dest="command", metavar="command")
 
     # serve (native, no Docker)

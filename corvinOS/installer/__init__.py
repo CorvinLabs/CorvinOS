@@ -6,7 +6,12 @@ Entry point: python -m operator.installer [install|uninstall|status]
 
 import sys
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version as _dist_version
+
+    __version__ = _dist_version("corvinos")
+except Exception:  # noqa: BLE001 — not installed as a distribution (source checkout)
+    __version__ = "0.0.0+unknown"
 
 
 def main_install():

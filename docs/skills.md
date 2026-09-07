@@ -458,11 +458,13 @@ verbs — distinct from the **plural** `corvin skills` monitoring group
 (health / cache-stats / circuit-breaker, ADR-0425). Wired via
 `ops/launcher/corvin/skill_cmd.py` (ADR-0446); the underlying logic lives
 in `core/skill_management/` and is exposed through the package's own
-`register_skill_commands` / `register_sync_commands` entry points.
+`register_skill_commands` / `register_sync_commands` entry points. Every
+verb resolves the tenant tree through `core.paths.tenant.tenant_home()`,
+i.e. it honours `CORVIN_HOME` (never `~/.corvin` directly).
 
 ```
 corvin skill list [--format {text,json}]   # list tenant skills across layers
-corvin skill info <name>                    # show one skill's metadata
+corvin skill info <name>                    # show one skill's metadata (rc 1 if not found)
 corvin skill validate <path>                # lint/validate a skill body
 corvin skill deps <name>                    # show declared dependencies
 corvin skill migrate --confirm              # migrate legacy skills into the layer model

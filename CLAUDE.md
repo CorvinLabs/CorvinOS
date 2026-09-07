@@ -109,8 +109,8 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
 | Core Mechanism | Regulation | Ref |
 |---|---|---|
 | Bot-disclosure card (one-time per uid) | EU AI Act Art. 50 | [compliance-baseline.md](docs/claude-ref/compliance-baseline.md) |
-| Hash-chained audit log (`audit.jsonl` + daily verify) | GDPR Art. 30, 32 | [Layer 16](docs/claude-ref/layer-16-security.md) |
-| Per-user consent gate (deny-by-default, TTL-capped) | GDPR Art. 6, 7 | [Layer 16](docs/claude-ref/layer-16-security.md) |
+| Hash-chained audit log (`audit.jsonl` + daily verify) | GDPR Art. 30, 32 | [Layer 16](docs/claude-ref/layer-security.md) |
+| Per-user consent gate (deny-by-default, TTL-capped) | GDPR Art. 6, 7 | [Layer 16](docs/claude-ref/layer-security.md) |
 | Path-gate hook (L10, fail-closed) | GDPR Art. 32 | [Layer 10](docs/claude-ref/layer-10-path-gate.md) |
 | Voice-transcribe audit (metadata only, never text) | GDPR Art. 5 | [Layer 23](docs/claude-ref/layer-23-stt.md) |
 | House-rules gate (acceptable-use, fail-closed) | EU AI Act Art. 5, 50 | [Layer 44](docs/claude-ref/layer-44-house-rules.md) |

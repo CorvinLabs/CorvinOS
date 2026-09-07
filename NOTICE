@@ -65,10 +65,71 @@ in SECURITY.md or see docs/licensing/ for current licensing information.
 
 ────────────────────────────────────────────────────────────────────────
 
-Third-party components
-──────────────────────
+Third-party software
+────────────────────
 
 This software depends on third-party components distributed under their
-own licenses. See requirements.txt (Python) and the package.json files
-under operator/bridges/*/ (Node.js) for the dependency list; each
-package retains its upstream license.
+own licenses; each package retains its upstream license. The authoritative
+dependency list is `pyproject.toml` (`[project] dependencies`) for Python
+and `core/console/corvin_console/web-next/package.json` (`dependencies`)
+for the web console. License identifiers below were read from the installed
+package metadata on 2026-09-07 and may lag upstream changes.
+
+Python runtime dependencies (pyproject.toml):
+
+  numpy              BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+  scikit-learn       BSD-3-Clause
+  fastapi            MIT
+  uvicorn            BSD-3-Clause
+  pyyaml             MIT
+  pydantic           MIT
+  httpx              BSD-3-Clause
+  PyJWT              MIT
+  cryptography       Apache-2.0 OR BSD-3-Clause
+  anthropic          MIT
+  python-multipart   Apache-2.0
+  edge-tts           LGPL-3.0 (GNU Lesser General Public License v3)
+  piper-tts          GPL-3.0-or-later
+  imageio-ffmpeg     BSD-2-Clause (bundles an ffmpeg binary; ffmpeg carries its
+                     own LGPL/GPL terms — see the imageio-ffmpeg package)
+  pywhispercpp       MIT
+  openai             Apache-2.0
+  mcp                MIT
+  jsonschema         MIT
+  qrcode             BSD
+  flask              BSD-3-Clause
+  flask-cors         MIT
+  semver             BSD
+
+Web console runtime dependencies (web-next/package.json):
+
+  @fontsource-variable/fraunces   OFL-1.1
+  @fontsource-variable/inter      OFL-1.1
+  @radix-ui/react-dialog          MIT
+  @radix-ui/react-dropdown-menu   MIT
+  @radix-ui/react-slot            MIT
+  @radix-ui/react-tabs            MIT
+  @tanstack/react-query           MIT
+  class-variance-authority        Apache-2.0
+  clsx                            MIT
+  d3                              ISC
+  highlight.js                    BSD-3-Clause
+  lucide-react                    ISC
+  mermaid                         MIT
+  qrcode.react                    ISC
+  react, react-dom                MIT
+  react-hook-form                 MIT
+  react-markdown                  MIT
+  react-router-dom                MIT
+  reactflow                       MIT
+  recharts                        MIT
+  rehype-highlight                MIT
+  remark-gfm                      MIT
+  tailwind-merge                  MIT
+  tailwindcss-animate             MIT
+  terser                          BSD-2-Clause
+  vis-network                     Apache-2.0 OR MIT
+  zod                             MIT
+
+The messaging bridges under operator/bridges/*/ carry their own package.json
+files with additional Node.js dependencies.

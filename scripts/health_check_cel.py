@@ -162,7 +162,7 @@ def main():
         "details": results,
     }
 
-    output_file = Path("health_check_cel.json")
+    output_file = Path("benchmark/cel/health_check_cel.json")
     with open(output_file, "w") as f:
         json.dump(report, f, indent=2)
 

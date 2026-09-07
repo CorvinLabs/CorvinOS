@@ -178,6 +178,14 @@ This adds the LIP integrity pin on top of the committed-anchor check.
       * **No-keyword clear:** low-confidence clear with NO Tier-0 keyword hit → ALLOW
         (benign case). The dominant source of false-positives (0.4 confidence "analyse logs.csv")
         is now allowed instead of escalated.
+  - **Audit truth for the low-confidence allow (2026-09-07, F-B4):** the gate
+    itself writes `house_rules.escalated` for a `clear_low_confidence` verdict,
+    and the bridge adapter then lets the turn run. The adapter now records that
+    override as `house_rules.allowed_after_lowconf` (WARNING; `rule_id`,
+    `reason_code`, `confidence`, `channel`, fingerprinted `chat_key`,
+    `overrides: house_rules.escalated`) so the chain never says "blocked" for a
+    request that executed. Regression:
+    `test_adapter_house_rules_binary.py::test_lowconf_allow_is_recorded_in_the_audit_chain`.
   - **User-facing message split:** an `escalate` caused by a non-finding —
     `classifier_error` (transient) or `clear_low_confidence` (classifier judged the
     task clean but unsure) — returns a neutral "couldn't be safety-checked just now,
@@ -353,6 +361,14 @@ NOT mean allow — that was the original M2 bug, review R-1).
   + the L10 path-gate (both `house_rules.yaml` and `house_rules.py` are path-gate protected).
   The cryptographic LIP pin is a release-time step.
 
+## Proactive (outbound) messages use the same classifier
+
+`proactive._house_rules_allows()` (F-A19, 2026-09-07) builds the gate with the
+same Tier-1 semantic classifier the inbound bridge path wires
+(`house_rules._house_rules_classifier`, Hermes local → cloud Haiku →
+fail-closed) and the tenant overlay. Before, proactive text was checked by the
+Tier-0 regex floor only. Still fail-closed: a gate that cannot run denies.
+
 ## Tenant overlay
 
 `tenant.corvin.yaml::spec.house_rules` may **add stricter** rules or **raise** a rule's
@@ -362,7 +378,12 @@ floor semantics — like the compliance baseline).
 ## Audit allow-list (metadata only — never task text)
 
 `rule_id`, `action`, `persona`, `channel`, `chat_key`, `engine_id`, `reason`,
-`confidence`, `matched_pattern_count`.
+`confidence`, `matched_pattern_count` (+ `error_type` on the spawn_gates
+construction-/classifier-failure paths). `house_rules.py` registers this list
+for `house_rules.{denied,escalated,warned,allowed}` with the audit writer
+(`forge.security_events.register_event_allowlist`) at import — the writer is
+default-deny for unregistered detail keys since 2026-09-07, and without the
+registration the deny record would lose `rule_id`.
 
 ## Must NOT do
 

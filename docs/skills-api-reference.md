@@ -225,18 +225,20 @@ class ContextAdapterSkill(Skill):
 Every Skill execution is logged automatically:
 
 ```python
-result = skill_registry.execute("os.vibe_engineering", input)
+result = skill_registry.execute(
+    "os.vibe_engineering", input,
+    lom="core/console/corvin_console/routes/vibe_engineering.py:get_pipeline",  # REQUIRED
+)
 
-# Automatically emits:
+# Automatically emits (chain record — content-free, see decision_summary()):
 # {
-#   "event_type": "SKILL_EXECUTED",
+#   "event_type": "skill.executed",
 #   "skill_id": "os.vibe_engineering",
-#   "skill_version": "0.3",
-#   "input": input,
-#   "output": result,
+#   "status": "success",
+#   "decision": {"enabled": true, "vibe_score": 0.4, "priority_adjustment": 0},
 #   "timestamp": "2026-09-02T12:34:56.789Z",
 #   "tenant_id": "_default",
-#   "lom": "os_vibe_engineering.py:156",
+#   "lom": "core/console/corvin_console/routes/vibe_engineering.py:get_pipeline",
 #   "hash": "sha256(...)",
 #   "prev_hash": "sha256(...)"
 # }
@@ -276,7 +278,10 @@ All Skill errors are:
 
 ```python
 try:
-    result = skill_registry.execute("os.vibe_engineering", {"bad": "input"})
+    result = skill_registry.execute(
+        "os.vibe_engineering", {"bad": "input"},
+        lom="my/module.py:my_function",  # a missing LoM is itself an audited error result
+    )
 except ValueError as e:
     print(f"Input validation failed: {e}")
     # Error is in audit trail at this point

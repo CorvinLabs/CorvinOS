@@ -3,8 +3,11 @@
 [![CI/CD](https://img.shields.io/badge/ci%2Fcd-passing-brightgreen)](https://github.com/CorvinLabs/CorvinOS)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-Production-blue)](CHANGELOG.md)
-[![Compliance](https://img.shields.io/badge/compliance-GDPR%20%2B%20EU%20AI%20Act%20Compliant-green)](docs/compliance/10_COMPLIANCE_BASELINE.md)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![Compliance](https://img.shields.io/badge/compliance-GDPR%20%2B%20EU%20AI%20Act%20Compliant-green)](docs/claude-ref/compliance-baseline.md)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](CHANGELOG.md)
+
+**Version:** 2.0.0 (see [CHANGELOG.md](CHANGELOG.md)) · **Python:** 3.10+ · **License:** Apache-2.0 + CLA v3.1
 
 ---
 
@@ -177,6 +180,44 @@ Every arrow = immutable audit event (logged, hash-chained, cryptographically pro
 
 ---
 
+## 🚀 Install
+
+The installer has **zero prerequisites**: it bootstraps a pinned, checksum-verified
+[`uv`](https://github.com/astral-sh/uv) (which brings its own Python), installs the
+`corvinos` package as a `uv tool`, runs the setup wizard, starts the console and opens
+`http://localhost:8765/console/` in your browser. Idempotent — safe to re-run.
+
+```sh
+# Linux / macOS
+curl -fsSL https://corvin-labs.com/install.sh | sh
+
+# Windows (PowerShell 5.1+)
+irm https://corvin-labs.com/install.ps1 | iex
+
+# Developer install from a local clone (editable)
+sh install.sh --editable /path/to/CorvinOS
+```
+
+`install.sh` flags: `--editable|-e <path>` (dev install) · `--autostart` (start-at-login even
+when piped without a TTY) · `--always-on` (survives reboot without login, needs sudo) ·
+`--lan` (open TCP 8765 in ufw for LAN A2A pairing; off by default) ·
+`--preset {minimal|standard|advanced}`.
+
+After install:
+
+| Command | What it does |
+|---|---|
+| `corvinos-serve` | Start the web console |
+| `corvin-install` | Setup wizard (bridges, tokens, voice) |
+| `corvin-uninstall` | Remove CorvinOS |
+| `corvin-a2a` | Agent-to-agent pairing and messaging |
+| `corvin --version` | Print the installed version (`corvin 2.0.0`) |
+
+Requires Python 3.10+ only if you install with plain `pip install corvinos` instead of the
+installer.
+
+---
+
 ## 🎓 Learn More
 
 | Document | What You'll Learn | Read Time |
@@ -185,8 +226,8 @@ Every arrow = immutable audit event (logged, hash-chained, cryptographically pro
 | **[ACP Vision: Skills 2.0](docs/architecture/06_ACP_VISION.md)** | Why hardcoded logic became Skills, versioning model | 15 min |
 | **[9D Learning Design](docs/learning/CONCEPT_0032_9D_DESIGN.md)** | How 9D loss works, damping prevents oscillation, meta-loop | 25 min |
 | **[Phase 1 Roadmap](docs/learning/PHASE_1_ROADMAP_9D_TIER2.md)** | 4-week implementation (infrastructure loops) | 20 min |
-| **[Audit Chain](docs/architecture/09_AUDIT_CHAIN.md)** | Immutable proof system, operator queries | 12 min |
-| **[Plugin System](docs/architecture/08_PLUGIN_SYSTEM.md)** | Trust tiers, lifecycle, marketplace | 15 min |
+| **[Audit Chain](docs/audit-and-compliance.md)** | Immutable hash-chained log, regulatory emitters, operator queries | 12 min |
+| **[Plugin System](docs/plugin-system.md)** ([reference](docs/claude-ref/layer-plugins.md)) | Trust tiers, lifecycle, marketplace | 15 min |
 
 **Or start here:** [Complete Documentation Hub](docs/README.md)
 
@@ -196,7 +237,7 @@ Every arrow = immutable audit event (logged, hash-chained, cryptographically pro
 
 | Component | Status | Details |
 |---|---|---|
-| **v1.0 Core** | ✅ Production | Skills 2.0 (L5, L10), 6D learning, audit chain, plugins |
+| **v2.0.0 Core** | ✅ Production | Skills 2.0 (L5, L10), learning loops, audit chain, plugins, infinite-session engine; personas removed (breaking) |
 | **Phase 1** | 🆕 Design Ready | Tier 2 infrastructure loops (4-week roadmap) |
 | **Phase 2** | 📋 Planned | Meta loop (3-week roadmap) |
 | **Compliance** | ✅ Complete | GDPR + EU AI Act structural constraints live |

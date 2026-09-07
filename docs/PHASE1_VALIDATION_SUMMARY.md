@@ -289,7 +289,7 @@ Decision: NO-GO, escalate to legal review
 - `docs/PHASE1_ADVERSARIAL_REVIEW_FINDINGS.md` — Original 10 findings (reference)
 
 **Reference (not required for execution):**
-- `docs/OBSOLESCENCE_EXEC_SUMMARY.txt` — Phase 1–3 deprecation roadmap
+- `docs/reports/OBSOLESCENCE_EXEC_SUMMARY.txt` — Phase 1–3 deprecation roadmap
 - `docs/PHASE1_BIGBANG_IMPLEMENTATION_PLAN.md` — Original high-level plan
 
 ---

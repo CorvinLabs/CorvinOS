@@ -10,7 +10,11 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
 | Bot-disclosure card (`/join`/`/pass`/`/leave`, one-time per uid) | L19 | EU AI Act Art. 50 | ✅ Locked |
 | Per-user consent gate (`/consent on\|off\|<ttl>`, deny-by-default) | L16 Phase 4 | GDPR Art. 6, 7 | ✅ Locked |
 | Hash-chained tamper-evident audit log (`audit.jsonl` + daily verify) | L16 | GDPR Art. 30, 32 | ✅ Locked |
-| Boot tripwire audit-chain healing — bounded, minimal-truncation, fail-closed on whole-chain failure (`tripwire.py::audit_chain_intact`) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
+| Boot tripwire seals a broken tail with a chained `compliance.chain_discontinuity` seam record — NEVER truncates; whole-chain failure and current-state anchor problems (`tail_truncated`, `anchor_key_insecure_mode`) refuse the boot (`tripwire.py::audit_chain_intact`, 2026-09-07 F-A13) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
+| Every audit record chains: a hash-less record is admissible ONLY as `audit.chain_gap_detected` bound to the tail it was written after (`prev_hash` + keyed `mac`); anything else is `unchained_record` and `write_event(hash_chain=False)` is refused for every other event (`security_events.py`, 2026-09-07 F-A1) | L16 | GDPR Art. 30, 32 | ✅ Locked |
+| Out-of-tree tail anchor (`<key dir>/chain_tails/<genesis>`) — deleting the last records is reported as `tail_truncated` by the verifier AND stamped into the next record by the writer; anchor key with group/other bits is refused (`anchor_key_insecure_mode`); markers are genesis-keyed and never written for tmp chains (F-A12/F-A14) | L16 / ADR-0137 | GDPR Art. 32 | ✅ Locked |
+| Audit-detail floor is DEFAULT-DENY for keys: a per-event allowlist (`register_event_allowlist`) or the universal metadata vocabulary `_AUDIT_KNOWN_KEYS`; unknown keys are dropped and named in `_dropped_fields`; string values on unregistered events are scanned for email/phone shapes; tenant mismatch is refused at the chokepoint (`write_event`) for every caller; every `lom` gets a `lom_hash` (F-A4/F-A6/F-A17) | L16 / ADR-0129, ADR-0537 | GDPR Art. 5, 30 | ✅ Locked |
+| Both shipped hosts run `assert_all()` UNCONDITIONALLY from `corvin_compliance_reports` before the plugin import; an absent `corvin_plugins` is a boot failure; an env-only chain redirect (`VOICE_AUDIT_PATH`/`FORGE_ROOT`) outside the `CORVIN_HOME` root refuses the boot outside pytest (F-A2/F-A3) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
 | Boot tripwire asserts the audit WRITER is loaded (`audit.writer_available()`; `tripwire.py::audit_writer_reachable`, `bootstrap._assert_core_audit_inline`) — a stripped or broken forge import is a refusal to boot, and `verify_audit` never answers `(True, [])` without a writer (2026-09-03 A1/A8) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
 | Tenant-mismatched audit writes are refused, logged at ERROR and recorded as `audit.tenant_mismatch` (type/count only) under the context tenant — never dropped silently (2026-09-03 A2) | L16 / ADR-0007 | GDPR Art. 30, 32 | ✅ Locked |
 | Compliance-zone routing (`tenant.corvin.yaml::data_residency`) | ADR-0007 | EU AI Act Art. 14 | ✅ Verified |
@@ -36,20 +40,57 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
 
 4. **Don't lower audit-chain integrity** — no event skips the hash-chain link.
    Every spawn, tool-call, audit-emit must write to `audit.jsonl` before the action.
-   - **Boot-tripwire healing is bounded and fail-closed** (`tripwire.py::audit_chain_intact`,
-     2026-07-30 review): a *tail-local* break (records before it verify AND there is
-     established history beyond the `TAIL_RECORDS` window) truncates at the record just
-     before the FIRST break — deleting the minimum, never the whole tail window. A break
-     that reaches the pre-tail history, or a chain that fits entirely inside the tail
-     window, or a whole-chain failure (the anchor-key-loss shape, every record
-     `mac_tampered`) is **NOT** healed — boot is refused so the operator restores
-     `~/.config/corvin-voice/audit_anchor.key` or a backup. Every heal writes a
-     `compliance.chain_discontinuity_healed` event carrying `records_deleted`, and the
-     healed file keeps `0600`. Don't make healing delete more, don't let it fire on a
-     whole-chain failure, and don't add an override.
+   - **The boot tripwire never truncates** (`tripwire.py::audit_chain_intact`, F-A13,
+     2026-09-07 — replaces the 2026-07-30 "bounded healing"): a break inside the
+     `TAIL_RECORDS` window is SEALED by appending one chained
+     `compliance.chain_discontinuity` seam record (`seam: true`, `first_break_line`,
+     `last_break_line`, `total_records`); the writer counts as sound iff that record
+     verifies against the file. Re-boots do not stack seams. A whole-chain failure
+     (every record `mac_tampered` — the lost/rotated anchor-key shape) and any
+     current-state anchor problem (`tail_truncated`, `anchor_key_insecure_mode`,
+     `mac_stripped_chain`) REFUSE the boot so the operator restores
+     `~/.config/corvin-voice/audit_anchor.key` / a backup — never by deleting records.
+     Don't reintroduce truncation, don't add an override.
+   - **Only one hash-less record shape exists** (F-A1): `audit.chain_gap_detected`,
+     written by `audit_health_check` with `prev_hash` = the current tail and a keyed
+     `mac`. `verify_chain` reports every other hash-less record — and a gap marker
+     anywhere but at the tail it names — as `unchained_record`;
+     `write_event(hash_chain=False)` raises for any other event type.
+   - **Tail anchor + key hygiene** (F-A12/F-A14): every chained write updates
+     `<anchor key dir>/chain_tails/<genesis-hash>`; a verify whose recorded tail is gone
+     reports `tail_truncated`, and the next writer stamps `_tail_truncated_since` into its
+     record so the deletion is permanent evidence. An anchor key with group/other mode
+     bits is refused (no mac written, `anchor_key_insecure_mode` on verify → boot refused);
+     fix with `chmod 600`. Per-chain markers are keyed by the genesis hash and never
+     written for chains under a tmp dir against the operator's real key.
 
 5. **Don't leak PII** into Prometheus labels, audit details, or log lines.
    Audit allow-lists are strictly enforced per layer; see the respective layer docs.
+   - **The detail floor is default-deny for keys** (`security_events.py`, F-A4): an event
+     type with `register_event_allowlist()` admits only its keys; every other event admits
+     only `_AUDIT_KNOWN_KEYS` (ids, counts, codes, hashes — never `prompt`/`text`/
+     `email`/`snippet`/`userName`…). Unknown keys are dropped and NAMED in
+     `_dropped_fields`; string values on unregistered events are also scanned for email
+     and phone shapes. A writer whose keys vanish registers an allowlist — the vocabulary
+     is never widened back to allow-all.
+   - **Tenant isolation at the chokepoint** (F-A6): `write_event` itself refuses a
+     `details.tenant_id` that is not the process tenant (`AuditTenantMismatch`, a
+     `ValueError`), after recording `audit.tenant_mismatch` (type/count only) under the
+     context tenant — no direct caller can bypass the wrapper's check any more.
+   - **`lom` ⇒ `lom_hash`** (ADR-0537, F-A17): the writer binds every LoM label to its
+     source (`lom_hash_for`), so no caller can forget it.
+   - Telemetry backstops (`_assert_safe`, `_assert_safe_htrace`, `_is_pii_safe_error`)
+     also drop international/trunk-prefixed phone numbers, IBANs and free text of four or
+     more words (F-A15); `debug_logging.redact()` masks e-mail and phone shapes (F-A16);
+     the STT route logs transcript LENGTH only.
+   - **Data residency default is restrictive** (L34, F-A10): `CONFIDENTIAL → {local,
+     eu_cloud}` in `DEFAULT_MATRIX`; an unparseable classification is `None` and DENIED
+     (`unknown_classification`), never `INTERNAL`.
+   - **Art. 17 coverage** (L36, F-A9): `real_handler_chain()` includes
+     `LearningEventHandler` (ADR-0314 learning store) and `InfiniteSessionHandler`
+     (session state + checkpoints); the CCC `/erase` route runs the real orchestrator;
+     `tests/security/test_erasure_coverage_guard.py` fails on any tenant-home directory no
+     handler claims.
 
 6. **Don't widen engine reach** past the tenant's `allowed_engines`/zone gate.
    L34 + L35 gates are fail-closed; data flows through matrix checks at every spawn.

@@ -56,49 +56,71 @@ jobs:
           echo "$CORE_CHANGES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # Filter ADR changes
-          ADR_CHANGES=$(echo "$CHANGED_FILES" | grep -E '^Corvin-ADR/decisions/ADR-[0-9]{4}' || true)
-          echo "adr_changes<<EOF" >> $GITHUB_OUTPUT
-          echo "$ADR_CHANGES" >> $GITHUB_OUTPUT
+          # ADR references: ADRs live ONLY in the sibling Corvin-ADR repo (ADR-0516),
+          # so a CorvinOS diff can never contain one. What a commit MUST carry
+          # instead is a reference to the ADR that documents it ("[ADR-0635]",
+          # "ADR-0635 documents ...") — we collect every ADR id named in the
+          # commit messages of the range and verify each exists upstream.
+          COMMIT_MSGS=$(git log --format=%B $BASE_REF..HEAD 2>/dev/null || git log -1 --format=%B)
+          ADR_REFS=$(echo "$COMMIT_MSGS" | grep -oE 'ADR-[0-9]{4}' | sort -u || true)
+          echo "adr_refs<<EOF" >> $GITHUB_OUTPUT
+          echo "$ADR_REFS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          echo "commit_msgs<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMIT_MSGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check out Corvin-ADR (single source of truth)
+        uses: actions/checkout@v4
+        with:
+          repository: CorvinLabs/Corvin-ADR
+          path: .corvin-adr
+          fetch-depth: 1
 
       - name: Validate ADR documentation
         id: validate
         run: |
           CORE_CHANGES="${{ steps.detect.outputs.core_changes }}"
-          ADR_CHANGES="${{ steps.detect.outputs.adr_changes }}"
+          ADR_REFS="${{ steps.detect.outputs.adr_refs }}"
+          COMMIT_MSGS="${{ steps.detect.outputs.commit_msgs }}"
 
-          # Wenn kein core code geändert, pass
+          # No core code changed -> pass
           if [ -z "$CORE_CHANGES" ]; then
             echo "status=pass" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Wenn core code UND ADR geändert, pass
-          if [ -n "$ADR_CHANGES" ]; then
-            echo "status=pass" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Core code OHNE ADR — check ob es eine Ausnahme ist
-          # Ausnahme: Nur Tests/Docs/Refactors geändert
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-
-          if echo "$COMMIT_MSG" | grep -qE "(skip-adr-check|test-only|docs-only|refactor:)"; then
+          # Explicit exception tags (see CLAUDE.md "Exception Workflow")
+          if echo "$COMMIT_MSGS" | grep -qE '\[(skip-adr-check|test-only|docs-only)\]|^refactor(\(|:)'; then
             echo "status=pass_with_exception" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # FAIL: Core code ohne ADR und keine Ausnahme
-          echo "status=fail" >> $GITHUB_OUTPUT
-          exit 1
+          # Core code changed: every referenced ADR must exist in Corvin-ADR
+          if [ -z "$ADR_REFS" ]; then
+            echo "status=fail" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          MISSING=""
+          for ref in $ADR_REFS; do
+            if ! ls .corvin-adr/decisions/ | grep -qE "^${ref}-|^${ref#ADR-}-"; then
+              MISSING="$MISSING $ref"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "Referenced ADRs not found in Corvin-ADR/decisions:$MISSING"
+            echo "status=fail" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "status=pass" >> $GITHUB_OUTPUT
+          exit 0
 
       - name: Report results
         if: always()
         run: |
           STATUS="${{ steps.validate.outputs.status }}"
           CORE_CHANGES="${{ steps.detect.outputs.core_changes }}"
-          ADR_CHANGES="${{ steps.detect.outputs.adr_changes }}"
+          ADR_REFS="${{ steps.detect.outputs.adr_refs }}"
 
           case "$STATUS" in
             pass)
@@ -114,11 +136,11 @@ jobs:
               echo "Geänderte Core-Module:"
               echo "$CORE_CHANGES" | sed 's/^/  • /'
               echo ""
-              echo "Geänderte ADRs:"
-              if [ -z "$ADR_CHANGES" ]; then
-                echo "  (keine)"
+              echo "Referenced ADRs:"
+              if [ -z "$ADR_REFS" ]; then
+                echo "  (none — add [ADR-NNNN] to the commit message, or an exception tag)"
               else
-                echo "$ADR_CHANGES" | sed 's/^/  • /'
+                echo "$ADR_REFS" | sed 's/^/  • /'
               fi
               exit 1
               ;;

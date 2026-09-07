@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corvinos"
-version = "1.0.0"
+version = "2.0.0"
 description = "CorvinOS — universal, self-contained, cross-platform AI assistant framework"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -225,6 +225,24 @@ corvin-voice = "ops.launcher.voice_entry:main"
 # Phase 6.5: Installation preset setup — configure tenant after install
 corvin-preset-setup = "ops.launcher.corvin.preset_setup:main"
 
+[tool.hatch.build.targets.sdist]
+# Belt-and-braces on top of the git-tracked filter in hatch_build.py: local
+# virtualenvs, test artefacts and build outputs never ship in a source
+# distribution even if they are (accidentally) tracked or the filter is off.
+exclude = [
+    "venv*/",
+    ".venv*/",
+    ".test-env/",
+    "test-results/",
+    "playwright-report/",
+    "dist_release/",
+    "node_modules/",
+    "**/__pycache__/",
+    "**/*.pyc",
+    "**/*.so",
+    ".corvin/",
+]
+
 [tool.hatch.build.targets.sdist.force-include]
 # Ship the PRE-BUILT SPA in the sdist so a wheel built FROM the sdist (the
 # `python -m build` sdist→wheel pipeline, and any `pip install` that falls back
@@ -414,7 +432,6 @@ path = "hatch_build.py"
 # /detect and /bootstrap endpoints work in a pure wheel install
 # (source-tree mode uses the sys.path injection in engine.py as before).
 "operator/bridges/shared/engine_detection.py" = "corvin_console/engine_detection.py"
-"operator/bridges/shared/hermes_bootstrap.py" = "corvin_console/hermes_bootstrap.py"
 # First-run language propagation (install-time Piper language -> profile
 # display_language): installer needs profile.set_value() in a pure wheel
 # install, same shim pattern as the two entries above.

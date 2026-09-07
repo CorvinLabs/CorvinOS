@@ -667,9 +667,13 @@ chat_profile**, both routed through the unified audit hash chain.
   slash-command `/recall`) do.
 - **Audit events** (`_AUDIT_ALLOWED_FIELDS`):
   `memory.user_model_distilled` (changed_fields + distill_count
-  + wall_clock_s), `memory.user_model_distill_failed` (reason +
-  200-char error), `memory.user_model_forgotten`. NEVER the spec
-  values.
+  + wall_clock_s), `memory.user_model_distill_failed` (reason code +
+  `error_type` = exception class name, or `raw_chars` = length of an
+  unparseable judge reply — never `str(exc)` / the reply text, which can
+  quote conversation content), `memory.user_model_forgotten`. NEVER the
+  spec values. The same lists are registered with the audit writer
+  (`forge.security_events.register_event_allowlist`), which is default-deny
+  for unregistered detail keys since 2026-09-07.
 
 ### Path-gate protection
 

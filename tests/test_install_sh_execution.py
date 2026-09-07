@@ -125,7 +125,10 @@ def test_missing_curl_and_wget_dies_with_clear_message() -> None:
     # crashing on a missing utility earlier in the script.
     result = _run([], env={"PATH": ""})
     assert result.returncode == 1
-    assert "Need curl or wget to bootstrap uv" in result.stderr
+    # install.sh first tries to auto-install curl via a package manager (line ~143) and
+    # only falls through to the uv-bootstrap message when one exists; both paths die
+    # with a "curl or wget" message and exit 1.
+    assert "curl or wget" in result.stderr
 
 
 # ── stubbed-PATH integration: drive the real happy path end-to-end ─────────

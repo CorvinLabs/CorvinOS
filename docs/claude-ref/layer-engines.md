@@ -15,7 +15,7 @@ subprocesses through a unified contract. AWP-integration roadmap
 | File | Purpose |
 |---|---|
 | `__init__.py` | `WorkerEngine` Protocol + `StreamEvent` + `SpawnResult` + `collect()` helper + `parse_jsonl_line()` tolerant JSONL parser |
-| `claude_code.py` | Spawns `claude -p --output-format stream-json --verbose`. Capabilities: mid-stream-inject, hooks, skills_tool, mcp, all 4 permission_modes. Owns argv composition (`_build_args`), stdin pipe lifecycle, `inject()` for `/btw`, and `ADAPTER_FAKE_CLAUDE` fixture support. |
+| `claude_code.py` | Spawns `claude -p --output-format stream-json --verbose`. Capabilities: mid-stream-inject, hooks, skills_tool, mcp, all 4 permission_modes. Owns argv composition (`_build_args`), stdin pipe lifecycle, `inject()` for `/btw`, and `ADAPTER_FAKE_CLAUDE` fixture support. **Prompt placement (F-E1, 2026-09-07):** the bridge feeds the prompt over stdin (`prompt_via_stdin=True`); when a caller asks for a positional prompt instead, `_build_args` emits it LAST behind a literal `--` end-of-options sentinel — options first, because the CLI silently ignores options placed after `--`. A prompt beginning with `-` (`--add-dir /`, `--mcp-config …`, `--version`) can therefore never be parsed as a flag. |
 | `codex_cli.py` | Spawns `codex exec --json --skip-git-repo-check --ephemeral`. Capabilities: mcp + stream_json only — no skills_tool, no hooks, no mid-stream-inject |
 | `opencode_cli.py` | Spawns `opencode run --format json` (anomalyco/opencode, provider-agnostic — Claude/OpenAI/Google/Ollama via the `--model provider/model` flag). Capabilities: mcp + stream_json only — no skills_tool, no hooks, no mid-stream-inject. Opt-in via `OPENCODE_BIN` or adapter `engine_factory`; default backend stays Claude Code. The intended local-first path uses Ollama through opencode's openai-compatible provider config (`~/.config/opencode/opencode.json::provider.ollama` pointing at `http://localhost:11434/v1`). |
 | `hermes_engine.py` | Drives Ollama HTTP streaming API (`POST /api/chat`) via stdlib `urllib` — no subprocess, no new dependency. Capabilities: stream_json=True; mcp=FCB-bridged (tool-use loop via `teb/fcb.py`), hooks=TEB (L10 path-gate via Forge MCP server), mid-stream-inject=buffered (ECI). L34: locality=local, network_egress=none — qualifies for CONFIDENTIAL tasks. ADR-0066 M1, ADR-0069. |
@@ -464,6 +464,14 @@ right shape.
   `ADAPTER_FAKE_ARGS_DUMP` tests in `test_adapter_profiles.py` /
   `test_adapter_cowork.py` / `test_adapter_skill_inject.py`. Argv
   shape is the load-bearing back-compat invariant.
+- Don't put a prompt into argv as a bare positional again — not in
+  `_build_args`, not in a hand-rolled spawn (`task_worker_pool.py`,
+  `tde/worker_ipc.py` both moved the prompt to stdin on 2026-09-07). A
+  positional prompt goes behind `--` and LAST; anything else is argv
+  injection from chat text (`BuildArgsTests::
+  test_prompt_starting_with_dash_is_never_a_flag`,
+  `core/console/tests/test_task_worker_pool_argv.py`,
+  `tests/test_tde_worker_prompt_stdin.py`).
 - Don't drop the engine-path's dual-register of `_running_engines`
   AND `_running_stdins`. The legacy registry stays populated as a
   liveness signal for tests; only the routing in `inject_btw`
@@ -668,6 +676,18 @@ path is classified with `engine_id=hermes` (locality=local / egress=none).
 Other engines (opencode/codex/copilot) still surface the honest "not drivable
 by the web-chat" message. Live E2E:
 `core/console/tests/test_chat_hermes_engine_e2e.py` (gated on Ollama reachable).
+
+**Engine substitution is audited (F-E2, 2026-09-07).** The console resolves the
+OS engine per turn in `chat_runtime._resolve_os_engine(tenant_id)` →
+`(configured, effective, reason)`; `_effective_os_engine()` swaps a
+`claude_code`-configured tenant onto `hermes` when the claude binary is missing
+(`claude-binary-missing`) or unauthenticated (`claude-not-authenticated`). Every
+such swap writes `os_turn.engine_substituted {configured, effective, reason}` on
+the tenant's console audit chain (`corvin_console.audit.system_event`, positive
+allow-list registered via `forge.security_events.register_event_allowlist`). The
+pre-turn WebSocket guard (`get_engine_unavailable_message`) resolves with
+`audit=False`, so one turn produces exactly one record. Regression:
+`core/console/tests/test_os_engine_substitution_audit.py`.
 
 **M2.5 — Prometheus metrics**
 

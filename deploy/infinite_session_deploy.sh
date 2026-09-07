@@ -24,9 +24,14 @@
 #   help           Show this help message
 #
 # Environment:
-#   CORVIN_HOME       Path to .corvin (default: $HOME/.corvin)
-#   SKIP_TESTS        Skip test suite (default: false)
-#   FORCE_DEPLOY      Skip health checks (emergency only)
+#   CORVIN_HOME                 Runtime root (default: resolved by core.paths.tenant.corvin_home —
+#                               the repo-local .corvin in a source checkout, else ~/.corvin)
+#   INFINITE_SESSION_METRICS_FILE
+#                               JSON file with the live SLO metrics (availability, latency_p99_ms,
+#                               audit_events_logged, error_rate). REQUIRED for every canary
+#                               promotion — the script never fabricates metrics.
+#   SKIP_TESTS                  Skip test suite (default: false)
+#   FORCE_DEPLOY                Skip health checks (emergency only)
 #
 # Examples:
 #   ./infinite_session_deploy.sh build
@@ -55,7 +60,10 @@ log_step() { echo -e "${CYAN}▶  $1${NC}"; }
 # ─ CONFIGURATION ──────────────────────────────────────────────────────────
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CORVIN_HOME="${CORVIN_HOME:-$HOME/.corvin}"
+PYTHON="${PROJECT_ROOT}/.venv/bin/python"
+[[ -x "${PYTHON}" ]] || PYTHON="python3"
+CORVIN_HOME="${CORVIN_HOME:-$(cd "${PROJECT_ROOT}" && "${PYTHON}" -c 'from core.paths.tenant import corvin_home; print(corvin_home())')}"
+export CORVIN_HOME
 DEPLOY_STATE_DIR="${CORVIN_HOME}/infinite-session-deploy"
 DEPLOY_STATE_FILE="${DEPLOY_STATE_DIR}/state.json"
 DEPLOY_METRICS_FILE="${DEPLOY_STATE_DIR}/metrics.jsonl"
@@ -97,7 +105,7 @@ read_state() {
 write_state() {
     local stage="$1"
     local healthy_since="${2:-null}"
-    python3 << PYTHON_STATE
+    "${PYTHON}" << PYTHON_STATE
 import json, sys
 from datetime import datetime
 
@@ -117,28 +125,26 @@ PYTHON_STATE
 build_phase() {
     log_step "Building Infinite Session Engine..."
 
-    # Type checking
-    log_info "Running type checking..."
     cd "${PROJECT_ROOT}"
-    mypy core/infinite_session/ --ignore-missing-imports --no-error-summary 2>/dev/null || log_warn "Type hints incomplete (non-critical)"
-    log_success "Type checking passed"
 
-    # Unit + Integration tests
+    # Unit + Integration + HTTP tests (real store, real router)
     if [[ "${SKIP_TESTS}" == "false" ]]; then
         log_info "Running test suite..."
-        pytest tests/skills/test_infinite_session_phase_a.py -v --tb=short || log_error "Phase A tests failed"
-        pytest tests/skills/test_infinite_session_phase_b.py -v --tb=short || log_error "Phase B tests failed"
-        pytest tests/skills/test_infinite_session_phase_c.py -v --tb=short || log_error "Phase C tests failed"
-        pytest tests/skills/test_infinite_session_phase_d.py -v --tb=short || log_error "Phase D tests failed"
+        "${PYTHON}" -m pytest -q -o addopts="" -p no:cacheprovider \
+            tests/skills/test_infinite_session_phase_a.py \
+            tests/skills/test_infinite_session_phase_b.py \
+            tests/skills/test_infinite_session_phase_c.py \
+            tests/skills/test_infinite_session_phase_d.py \
+            || log_error "Infinite-session phase tests failed"
         log_success "All phase tests passed"
     else
         log_warn "Skipping test suite (SKIP_TESTS=true)"
     fi
 
-    # E2E validation
-    log_info "Running E2E validation..."
-    python3 "${PROJECT_ROOT}/test_infinite_session_verify.py" || log_error "E2E validation failed"
-    log_success "E2E validation passed"
+    # Round-trip validation against the real engine (temp CORVIN_HOME)
+    log_info "Running round-trip validation..."
+    "${PYTHON}" "${PROJECT_ROOT}/scripts/verify_infinite_session.py" || log_error "Round-trip validation failed"
+    log_success "Round-trip validation passed"
 
     write_state "${STAGE_BUILD}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     log_success "Build phase complete"
@@ -147,30 +153,27 @@ build_phase() {
 # ─ CANARY DEPLOYMENT ──────────────────────────────────────────────────────
 
 collect_metrics() {
-    python3 << 'PYTHON_METRICS'
-import json, time, random
-from datetime import datetime
-
-# In production, these would come from Prometheus/monitoring system
-# For now, simulate healthy values
-metrics = {
-    'timestamp': int(time.time()),
-    'iso_timestamp': datetime.utcnow().isoformat() + 'Z',
-    'availability': 0.9995,        # 99.95%
-    'latency_p99_ms': 92,          # 92ms p99
-    'audit_events_logged': 1.0,    # 100% logged
-    'error_rate': 0.0005,          # 0.05%
-    'throughput_rps': 1200,        # Requests per second
-    'active_tasks': 42,            # Long-running tasks
-    'session_switches': 8,         # Invisible session switches
-}
+    # Fail-closed: metrics come from the monitoring export named by
+    # INFINITE_SESSION_METRICS_FILE. No file → no promotion. Never simulated.
+    local src="${INFINITE_SESSION_METRICS_FILE:-}"
+    if [[ -z "${src}" || ! -f "${src}" ]]; then
+        log_error "INFINITE_SESSION_METRICS_FILE is unset or missing — refusing to evaluate health without real metrics"
+    fi
+    "${PYTHON}" - "${src}" << 'PYTHON_METRICS'
+import json, sys
+required = ("availability", "latency_p99_ms", "audit_events_logged", "error_rate")
+with open(sys.argv[1]) as fh:
+    metrics = json.load(fh)
+missing = [k for k in required if k not in metrics]
+if missing:
+    sys.exit(f"metrics file lacks required keys: {missing}")
 print(json.dumps(metrics))
 PYTHON_METRICS
 }
 
 evaluate_health() {
     local metrics_json="$1"
-    python3 << 'PYTHON_HEALTH'
+    "${PYTHON}" - "${metrics_json}" << 'PYTHON_HEALTH'
 import json, sys
 metrics = json.loads(sys.argv[1])
 
@@ -246,7 +249,7 @@ deploy_canary() {
         local metrics=$(collect_metrics)
         log_info "Evaluating health..."
         local health=$(evaluate_health "${metrics}")
-        local overall_healthy=$(echo "${health}" | python3 -c "import sys, json; print(json.load(sys.stdin)['overall_healthy'])")
+        local overall_healthy=$(echo "${health}" | "${PYTHON}" -c "import sys, json; print(json.load(sys.stdin)['overall_healthy'])")
 
         if [[ "${overall_healthy}" != "True" ]]; then
             log_error "Health check failed, aborting deployment"
@@ -259,7 +262,7 @@ deploy_canary() {
     # Update tenant config to enable infinite-session at this traffic level
     local tenant_config="${CORVIN_HOME}/tenants/_default/tenant.corvin.yaml"
     if [[ -f "${tenant_config}" ]]; then
-        python3 << PYTHON_UPDATE
+        "${PYTHON}" << PYTHON_UPDATE
 import yaml
 try:
     with open('${tenant_config}', 'r') as f:
@@ -290,10 +293,10 @@ PYTHON_UPDATE
 
 show_status() {
     local state=$(read_state)
-    local current_stage=$(echo "${state}" | python3 -c "import sys, json; print(json.load(sys.stdin)['stage'])")
-    local traffic=$(echo "${state}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('traffic_percent', 0))")
-    local started_at=$(echo "${state}" | python3 -c "import sys, json; print(json.load(sys.stdin)['started_at'])")
-    local healthy_since=$(echo "${state}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('healthy_since', 'N/A'))")
+    local current_stage=$(echo "${state}" | "${PYTHON}" -c "import sys, json; print(json.load(sys.stdin)['stage'])")
+    local traffic=$(echo "${state}" | "${PYTHON}" -c "import sys, json; print(json.load(sys.stdin).get('traffic_percent', 0))")
+    local started_at=$(echo "${state}" | "${PYTHON}" -c "import sys, json; print(json.load(sys.stdin)['started_at'])")
+    local healthy_since=$(echo "${state}" | "${PYTHON}" -c "import sys, json; print(json.load(sys.stdin).get('healthy_since', 'N/A'))")
 
     echo ""
     echo "╔════════════════════════════════════════════════════════════╗"
@@ -308,7 +311,7 @@ show_status() {
 
     # Show recent metrics
     echo "Recent Metrics:"
-    tail -1 "${DEPLOY_METRICS_FILE}" 2>/dev/null | python3 -c "
+    tail -1 "${DEPLOY_METRICS_FILE}" 2>/dev/null | "${PYTHON}" -c "
 import sys, json
 line = sys.stdin.read().strip()
 if line:
@@ -328,7 +331,7 @@ health_check() {
     local metrics=$(collect_metrics)
     local health=$(evaluate_health "${metrics}")
 
-    echo "${health}" | python3 << 'PYTHON_DISPLAY'
+    echo "${health}" | "${PYTHON}" << 'PYTHON_DISPLAY'
 import json, sys
 health = json.load(sys.stdin)
 checks = health['checks']
@@ -381,7 +384,7 @@ Examples:
   FORCE_DEPLOY=true ./infinite_session_deploy.sh canary-25
 
 For detailed information, see:
-  docs/infinite_session_deployment_guide.md
+  docs/claude-ref/infinite-session.md
   deploy/canary_rollout_infinite_session.yaml
   monitoring/infinite_session_slos.yaml
 
@@ -423,7 +426,7 @@ main() {
         rollback)
             log_step "Rolling back to previous stage..."
             local state=$(read_state)
-            local current_stage=$(echo "${state}" | python3 -c "import sys, json; print(json.load(sys.stdin)['stage'])")
+            local current_stage=$(echo "${state}" | "${PYTHON}" -c "import sys, json; print(json.load(sys.stdin)['stage'])")
 
             case "${current_stage}" in
                 "${STAGE_CANARY_5}")

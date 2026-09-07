@@ -82,9 +82,9 @@ Config Applied + Audit Trail (immutable, tenant-scoped, hash-chained)
 - Takes: recent_deltas, EMA-smoothed delta, EMA confidence, config history
 - Computes 4 metrics:
   - `overfitting_risk`: divergence between deltas and EMA (high = overfitting)
-  - `noise_ratio`: fraction of isolated outliers (high = noisy)
+  - `noise_ratio`: share of the window's |delta| mass carried by isolated outliers — a magnitude that occurs once AND is ≥3× (or ≤⅓×) the median of the other deltas (high = noisy; a consistently large signal is NOT noise; the former population z-score could never flag one spike in ≤5 deltas)
   - `convergence_rate`: stability of recent deltas (low std = converged)
-  - `stability_score`: variance in config path (low var = stable)
+  - `stability_score`: `1 − peak-to-peak swing / |mean config|` (a path that swung by 100% of its operating point scores 0.0; ±0.1% scores ≈1.0)
 - Collapses via PCA-weighted average:
   ```
   reliability_score = 0.4*(1-overfitting) + 0.3*(1-noise) + 0.2*convergence + 0.1*stability

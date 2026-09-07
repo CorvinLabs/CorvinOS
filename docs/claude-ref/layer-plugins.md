@@ -589,6 +589,13 @@ absolute targets, not deltas:
 | rejection  | 0.1    | 0.2                        | blocked               |
 | rephrase   | 0.3    | 0.3                        | blocked, soft hint    |
 
+Outcome grades are the one **organic** grade source: `grade_from_user_followup`
+calls `registry.grade(..., organic=True)` because the grade is backed by a real
+prior run (`prev_run_id`) and the operator's own follow-up turn. Auto-grade and
+bootstrap seeds stay non-organic and are clamped by the registry to
+`AUTO_GRADE_CAP_MAX` (0.3) — which is why the table above can reach the
+promotion gate at all (2026-09-07 hardening, see `learning-loop.md`).
+
 Precedence is rejection > approval > rephrase, so "thanks but actually
 wrong" lands as rejection. Detection is purely substring-based against
 two curated phrase lists in `skill_inject._OUTCOME_APPROVAL_PHRASES` /
@@ -1128,7 +1135,7 @@ it runs **before** `on_load()` — so the slot is never taken, not taken-and-fre
 |---|---|
 | Single tenant (the default install) | allowed — unchanged behaviour |
 | Plugin type that takes no provider slot | allowed |
-| `origin=builtin` (shipped in the wheel) | allowed |
+| `origin=builtin` (shipped in the wheel — the in-wheel `core/plugins/buildin` root or a code-registered global; the Corvin-Marketplace checkout is `vetted`, see the 2026-09-07 section) | allowed |
 | `origin=vetted` on a multi-tenant install | **refused** — a signature attests who wrote it, not that it is tenant-aware |
 | `origin=community` or unknown, multi-tenant | **refused** |
 | Tenant set cannot be enumerated | **refused** — "could not check" is not "one tenant" |
@@ -1764,3 +1771,65 @@ Twelve verified findings against the plugin system + boot path, fixed at the roo
 | A10 | `_check_audit_unification` looked at `Path.home()/.corvin`. | Derived from `forge.paths.corvin_home()` + `forge.tenants.current_tenant()` + `audit.audit_path()`; compat symlink recognised. |
 | A11 | Two perf tests put `<repo>/core` first on `sys.path` → `import audit` resolved to `core/audit` for every later test (26 order-dependent failures). | Inserts deleted; guard test asserts no such entry and no such insert in any test source. |
 | A12 | Stale tests (extension-point flag module, marketplace preload, `web_surface` surface row, healing boot wiring, install-listing import). | Tests updated to the current contracts; `web_surface` row added to `surface_map.SURFACES` (consumed by `routes/capabilities.py`); `corvin_core` added to `_FLAG_MODULES`. |
+
+### Provenance + boot-layer audit hardening — adversarial review 2026-09-07 (F-P1–F-P6)
+
+Six findings against the plugin load paths, fixed at the root. Guard tests:
+`core/plugins/tests/test_boot_layer_rejected_audit.py`,
+`core/plugins/tests/test_marketplace_manifests_loadable.py`,
+`core/plugins/tests/test_boot_marketplace_e2e_subprocess.py`,
+`core/console/tests/test_plugins_route.py::TestOriginIsNeverSelfCertified`,
+`tests/unit/operator/cli/test_plugin_runtime_marketplace.py`.
+
+| # | Defect | Fix (load-bearing rule) |
+|---|---|---|
+| F-P1 | `POST /v1/console/plugins` accepted `origin: builtin` from the body. `builtin` short-circuits the ADR-0249 trust gate and exempts the ADR-0250 slot gate, after which the loader imports `class_path` — arbitrary code past both gates. | `InstallIn.origin` accepts ONLY `community` (422 otherwise). `builtin`/`vetted` are server-derived facts: the marketplace install route derives them from the source directory's root, never from a request or a manifest. |
+| F-P2 | 29/30 Corvin-Marketplace `plugin.yaml` manifests had no `plugin_type`; the ADR-0247 gate refused them (`manifest_invalid`) and the live console booted ONE plugin while the index said 30. Their `provider.py` stubs matched no loader shape either. | Marketplace commits `1dafe6a9` (+ `4a76fe36`): every manifest carries a `plugin_type` from `KNOWN_PLUGIN_TYPES` (closest surface for the domain — a taxonomy label; the providers deliberately take NO slot on load), every `provider.py` is CorvinPlugin-shaped. `test_marketplace_manifests_loadable.py` pins loadable == discovered against the REAL gate + class loader; the subprocess E2E boots all of them under a temp `CORVIN_HOME`. |
+| F-P3 | `registry._resolve_boot_layer` downgraded a self-promoting plugin (privileged `boot_layer` on the object, register-from-inside-`on_load`, cross-/same-epoch re-escalation, unknown value) with a log line only. | Every branch emits `plugin.boot_layer_rejected` through `ctx.audit_emit` with a closed `reason` (`privileged_self_declared` · `privileged_from_on_load` · `cross_epoch_reescalation` · `same_epoch_reescalation` · `unknown_boot_layer`), the same event the tenant-scope guard emits. |
+| F-P4 | `state._downgrade_privileged_boot_layer` audited under a hard-coded `tenant_id="_default"`; `PluginLifecycle.install` stored whatever boot layer the record claimed and left the read-side downgrade to catch it later. | The tenant is threaded through (`TenantRegistry.load` resolves it the way it resolved the path); the downgrade ALSO runs at install time, so `registry.yaml` never stores a privileged claim. |
+| F-P5 | `bootstrap_builtin` loaded the Corvin-Marketplace checkout as `origin=builtin` — wheel-level exemptions for a sibling directory reachable via `CORVIN_MARKETPLACE_ROOT` — and `plugin.loaded` said nothing about where the code came from. | `bootstrap.origin_for_plugin_dir()`: origin is derived from WHICH ROOT a directory was discovered under — `builtin` ONLY for `_BUILTIN_ROOT`, `vetted` for the marketplace checkout or an explicit `root=`; the manifest's `origin:` line is never believed. `plugin.loaded` now carries `origin` and `source` (closed label + root-RELATIVE dir, e.g. `marketplace_root:memory/semantic_context_retriever` — never an absolute path). Every `_register_instance` call site names its load path (`wheel_global` · `tenant_declared` · `tenant_registry` · `tenant_plugins_registry`). The console marketplace install (`marketplace_resolve.record_from_manifest`) uses the same derivation. |
+| F-P6 | `routes/admin.py::_entries` had a "defensive" fallback that built `PluginRecord(name=…, description=…, config=…)` — keyword arguments the class does not have — raised `TypeError` on every entry and swallowed it. | Deleted. A declared plugin appears through the runtime view once loaded. |
+
+Also in this pass:
+
+* **`corvin plugin install <id>` never worked.** `plugin_runtime_cmd._cmd_install_marketplace`
+  called `PluginMarketplace.get_default()` / `.get_index()` / `.install_plugin()` — none of
+  which existed — and swallowed the `AttributeError` into `exit 2`. It now resolves the id
+  (`plugin:buildin-<category>-<name>` or a bare directory name) to LOCAL builtin source
+  through the console's `marketplace_resolve` (the one index-id → directory bridge) and
+  installs it exactly like a local path. Community-tier ids are refused with a clear
+  message — there is no signed-artifact download path, and the CLI does not pretend
+  there is. Tests drive `python -m corvin plugin install …` as a subprocess.
+* **Marketplace index fallback fetch is bounded** (`routes/marketplace.py`,
+  `_MAX_INDEX_BYTES` = 8 MiB): an unbounded `response.read()` inside a request handler was
+  a memory DoS from a hostile or broken upstream.
+* **Dead code removed (zero non-test callers, tests deleted with it):** `core/plugins/api_v2.py`;
+  the ADR-0345 "recursive architecture" set (`corvin_plugins/{hierarchical_registry,delegation,
+  plugin_state,node,graph,dag_validator,health_check_tree,audit_verification}.py` — nothing
+  outside the set imported any of it); `core/plugins/registry/` (namespace dir, no
+  `__init__`); `core/plugins/{marketplace,marketplace_rollback,marketplace_secrets,
+  marketplace_validator,marketplace_versioning,dependency_resolver}.py` (the ADR-0385
+  `PluginMarketplace` backend the console route's docstring already declared replaced —
+  its last caller was the broken CLI path above); the unmounted
+  `corvin_console/routes/{marketplace_api,marketplace_backend,marketplace_community,
+  marketplace_cache,marketplace_errors}.py` (`marketplace_backend` carried a bare
+  `extractall`); the parallel `core/console/routes/` tree (excluded from the wheel, mounted
+  nowhere); `core/package_manager/{signing.py,package_manager/}`; the repo-root
+  `buildin/observability/` index husks. `core/plugins/buildin/` stays: it is the
+  in-wheel `_BUILTIN_ROOT` anchor, empty today.
+* **Stale tests:** `tests/plugins/unit/test_audit_chain.py`, `unit/test_audit_backend.py`
+  and `adversarial/test_audit_backend_hostile.py` asserted against classes defined in the
+  test file (deleted); `integration/test_audit_backend_e2e.py` rewritten against the real
+  registry + `providers.audit_backend` + `audit.audit_event`; `test_phase1_critical_security.py`
+  loads the marketplace plugin sources by file path (no hard-coded home directory, skips
+  without a checkout) and its three stale assertions now state the real behaviour — two of
+  which were real plugin bugs fixed in the marketplace (`EventEmitter` returned `True` for
+  events a bounded deque silently evicted; `path_gate` checked `..` AFTER `resolve()` had
+  collapsed it).
+
+**Must NOT do:** accept any `origin` but `community` from an install body · report a
+marketplace-checkout plugin as `builtin` · put an absolute path into `plugin.loaded.source`
+· downgrade a boot layer without the `plugin.boot_layer_rejected` event · audit a tenant
+registry's downgrade under a tenant other than its own · re-add a `PluginMarketplace`-style
+downloader (distribution stays ADR-0096/0142/0156).
+

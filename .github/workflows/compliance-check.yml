@@ -14,7 +14,6 @@ on:
       - "core/compliance/**"
       - "compliance/**"
       - "CLAUDE.md"
-      - "docs/decisions/**"
 
 jobs:
   compliance-review:

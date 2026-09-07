@@ -115,7 +115,7 @@ What changes as a result? What becomes easier/harder?
 
 ## Related
 - [ADR-YYYY](...) — Previous decisions this builds on
-- [Layer 16](../docs/claude-ref/layer-16-security.md) — Implementation details
+- [Layer 16](docs/claude-ref/layer-security.md) — Implementation details (path relative to the CorvinOS repo root, as in the `docs:` frontmatter)
 ```
 
 Never hand-fill `superseded_by` — omit it. `scripts/adr_graph.py` derives it automatically

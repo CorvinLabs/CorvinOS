@@ -37,63 +37,83 @@ def _is_plugin_id(s: str) -> bool:
     return "/" not in s and "\\" not in s
 
 
+def _marketplace_resolver():
+    """The console's marketplace resolver — the ONE index-id → source-dir bridge.
+
+    ``corvin_console.routes.marketplace_resolve`` lives in ``core/console``; the
+    launcher runs from a source checkout or a wheel that vendors the console, so
+    the package is tried first and the checkout path appended as a fallback
+    (append, never insert(0) — the same rule routes/plugins.py follows).
+    """
+    try:
+        from corvin_console.routes import marketplace_resolve  # type: ignore[import-not-found]
+        return marketplace_resolve
+    except ImportError:
+        pass
+    console = Path(__file__).resolve().parents[3] / "core" / "console"
+    if (console / "corvin_console").is_dir() and str(console) not in sys.path:
+        sys.path.append(str(console))
+    from corvin_console.routes import marketplace_resolve  # type: ignore[import-not-found]
+    return marketplace_resolve
+
+
 def _cmd_install_marketplace(plugin_id: str, args: argparse.Namespace, tenant_id: str) -> int:
-    """Install a plugin by ID from the marketplace."""
+    """Install a plugin by marketplace id — resolved to LOCAL builtin source.
+
+    Accepts the console index-id form (``plugin:buildin-<category>-<name>``) or
+    a bare directory name (``semantic_context_retriever``), resolves it under
+    the trusted roots (the Corvin-Marketplace checkout, then the in-wheel
+    ``core/plugins/buildin``) via the same ``marketplace_resolve`` module the
+    console install route uses, and then installs it exactly like a local path.
+
+    Until 2026-09-07 this called ``PluginMarketplace.get_default()`` /
+    ``.get_index()`` / ``.install_plugin()`` — none of which existed — and the
+    resulting AttributeError was swallowed into ``exit 2: marketplace install
+    failed``. ``corvin plugin install <id>`` never worked once.
+
+    Out of scope (stated, not hidden): remote download of community plugins.
+    There is no signed-artifact fetch path yet, so a non-builtin id is refused
+    with a clear message instead of being pretended.
+    """
     try:
-        from core.plugins.marketplace import PluginMarketplace
-        from core.plugins.dependency_resolver import DependencyResolver
-        from corvin_plugins.tenant_plugins import get_tenant_registry
+        resolver = _marketplace_resolver()
     except ImportError as exc:
-        _err(f"marketplace not available: {exc}")
+        _err(f"marketplace resolver not available: {exc}")
+        return 2
+    if not resolver.available():
+        _err("plugin subsystem unavailable in this installation")
         return 2
 
-    try:
-        # 1. Load marketplace index
-        marketplace = PluginMarketplace.get_default()
-        index = marketplace.get_index()
+    candidates = [plugin_id]
+    if not plugin_id.startswith("plugin:"):
+        # Bare name: try it under every category the marketplace ships.
+        try:
+            from corvin_plugins import bootstrap as _bootstrap
+            roots = [_bootstrap._marketplace_root(), _bootstrap._BUILTIN_ROOT]
+        except ImportError:
+            roots = []
+        for root in roots:
+            for cat in sorted(p.name for p in root.iterdir() if p.is_dir()) if root.is_dir() else []:
+                candidates.append(f"plugin:buildin-{cat}-{plugin_id}")
 
-        if not index:
-            _warn("marketplace index is empty or unavailable")
-            return 1
+    plugin_dir: Path | None = None
+    last_error = ""
+    for index_id in candidates:
+        try:
+            plugin_dir = resolver.resolve_builtin_dir(index_id)
+            break
+        except resolver.MarketplaceResolveError as exc:
+            last_error = str(exc)
+    if plugin_dir is None:
+        _err(f"plugin not found in marketplace: {plugin_id} ({last_error})")
+        return 1
 
-        # 2. Resolve dependencies
-        resolver = DependencyResolver(index)
-        install_order, conflicts = resolver.resolve_install_order([plugin_id])
-
-        if conflicts:
-            _err("dependency conflicts found:")
-            for conflict in conflicts:
-                print(f"  {conflict}", file=sys.stderr)
-            return 1
-
-        if not install_order:
-            _err(f"plugin not found in marketplace: {plugin_id}")
-            return 1
-
-        # 3. Install each plugin in dependency order
-        registry = get_tenant_registry(tenant_id)
-        for p_id in install_order:
-            try:
-                # Download, verify (Gap 2), and register
-                result = marketplace.install_plugin(p_id, tenant_id=tenant_id)
-                print(f"  ✓ {p_id}")
-            except Exception as e:
-                _err(f"  ✗ {p_id}: {e}")
-                # TODO: implement rollback of previously installed plugins
-                return 1
-
-        print(f"\n✓ Installed {len(install_order)} plugin(s) to tenant {tenant_id}")
-        return 0
-
-    except Exception as exc:
-        _err(f"marketplace install failed: {exc}")
-        return 2
+    print(f"resolved {plugin_id} → {plugin_dir}")
+    return _cmd_install_local(str(plugin_dir), args, tenant_id)
 
 
 def _cmd_install_local(path_str: str, args: argparse.Namespace, tenant_id: str) -> int:
     """Install a plugin from a local directory."""
-    from corvinOS.shared.paths import _resolve_tenant_id
-
     try:
         from corvin_plugins.tenant_plugins import get_tenant_registry
         from corvin_plugins.validation import validate_manifest_file
