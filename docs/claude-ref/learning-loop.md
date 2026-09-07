@@ -94,6 +94,18 @@ audit-first `event_store.EventStore`, not the unchained TreeOfThoughts JSONL).
 `EventStore(tenant_home, tenant_id=…)` is tenant-bound: an event carrying any
 other tenant is refused before the chain write.
 
+`EventStore.query_events(..., newest_first=False)` selects from the OLDEST end
+by default (date files ascending, write order within a file). A consumer that
+wants "the last N samples" — e.g. `consistency_checker.FeedbackConsistencyValidator`
+— MUST pass `newest_first=True`, which walks the date files descending, reverses
+each file's lines and returns newest → oldest; the default returned the oldest N,
+so a "recent" window computed from it never advanced (2026-09-07, R3-B2). One
+unreadable line never costs more than itself: a malformed JSON line AND an
+unknown `event_type` enum value (a newer schema, corruption) are logged and
+skipped per line — the unknown enum used to raise `ValueError` out of
+`query_events` and discard every later event, so a single record made consumers
+see an empty history (R3-B3).
+
 ### Core-chain allowlists (`event_persistence._LEARNING_EVENT_ALLOWLISTS`)
 
 The core writer's metadata floor is default-deny for detail keys (F-A4). Every
@@ -151,7 +163,7 @@ by `POST /features/toggle`, so an operator decision is never stale.
 
 | Mechanism | Where | Rule |
 |---|---|---|
-| LoM required | `SkillsRegistry.execute(..., lom=)` | `lom="<file>:<function>"` (or `:L<line>`) is mandatory; missing → audited `skill.executed` with `status=error`, the Skill does NOT run. `lom_hash` = SHA-256 of the named function's source (`ast`), so it survives line drift. Production call sites: `capabilities.py:_read_flags_uncached`, `slash_commands.py:_plugin_builder_enabled`, `vibe_engineering.py:get_pipeline`, `bootstrap.py:start_health_monitoring`, `delegation_policy.py:_acp_shadow_route`. |
+| LoM required AND resolvable | `SkillsRegistry.execute(..., lom=)` | `lom="<file>:<function>"` (or `<file>:<function>:L<line>`) is mandatory; missing OR unresolvable → audited `skill.executed` with `status=error`, the Skill does NOT run. `lom_hash` = SHA-256 of the named function's source segment (`ast`), so it survives line drift; for the `:L<line>` form the FUNCTION is resolved first and the line must fall inside it (decorators included) — before 2026-09-07 that form hashed the line without ever looking the function up, so a fabricated name still "bound", and a blank line produced the constant `sha256("")` (R3-B1). A blank line, a non-`.py` target, anything outside the repo root and anything under `.corvin/`, `.venv/`, `site-packages/`, `node_modules/` or `.git/` are all refused, and a source file > 2 MB is not parsed. Resolution is memoised on `(lom, path, mtime, size)` — `execute()` resolves twice per call and re-parsing cost up to 80 ms each time. Production call sites: `capabilities.py:_read_flags_uncached`, `slash_commands.py:_plugin_builder_enabled`, `vibe_engineering.py:get_pipeline`, `bootstrap.py:start_health_monitoring`, `delegation_policy.py:_acp_shadow_route`. |
 | Decision in the chain | `SkillExecutionResult.to_audit_event` → `decision_summary()` | the core writer drops any `output` key; the chain now carries an allowlisted `decision` (engine, enabled, mode, confidence, shadow/bundled_engine, `flag_count`/`flags_on`/`flags_hash`) — never free text. Field sets are registered as positive allowlists (`SKILL_AUDIT_ALLOWLISTS`). |
 | Compliance tier | `SkillMetadata.tier` (`compliance` / `core` / `installed`) | `os.capabilities` is `compliance`: `unregister()` / `disable_skill()` raise `SkillDisableRefused`, the 3-failure auto-disable is refused — every refusal is audited as `skill.disable.refused`. |
 | Lost-update guard | `SkillAdapter._locked()` | `fcntl.flock` on `<config>.lock` + RELOAD inside the lock around `run_optimizer_epoch` / `rollback`; two concurrent feedback requests advance the epoch by two, never one. |

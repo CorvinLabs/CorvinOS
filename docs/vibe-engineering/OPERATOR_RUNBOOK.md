@@ -317,13 +317,24 @@ orchestrator.checkpoint_manager.delete_old_checkpoints(
 )
 ```
 
-Or manually:
-```bash
-# List all checkpoints for a task
-ls -la ~/.corvin/vibe/checkpoints/task_001_*.json
+Scope: `delete_old_checkpoints` / `get_latest` / `list_checkpoints` act on the
+task whose id is stored INSIDE each checkpoint, not on the filename prefix. The
+on-disk name is `{task_id}_{checkpoint_id}_{iter}.json` and `_` is a legal
+task-id character, so `task_001_*` also matches `task_001_docs_*`; every listing
+is filtered on `checkpoint.task_id == task_id`, and the delete path re-checks it
+before unlinking (2026-09-07, R3-B4 — `get_latest("build")` used to resume
+`build_docs`' state, and cleaning up `build` deleted its only checkpoint while
+keeping `build_docs`').
 
-# Delete old ones (keep 5 newest)
-ls -t ~/.corvin/vibe/checkpoints/task_001_*.json | tail -n +6 | xargs rm
+Manually — note the shell glob has NO such filter, so it will happily sweep a
+sibling task whose id starts with the same prefix:
+```bash
+# List all checkpoints for a task (prefix glob — verify the task_id inside!)
+ls -la "$CORVIN_HOME"/tenants/_default/vibe/checkpoints/task_001_*.json
+
+# Prefer the API, which filters on the stored task_id:
+python -c "from core.vibe_engineering.checkpoint_manager import CheckpointManager; \
+  print(CheckpointManager(tenant_id='_default').list_checkpoints('task_001'))"
 ```
 
 ## API Reference

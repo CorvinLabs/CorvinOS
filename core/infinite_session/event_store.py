@@ -30,6 +30,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -50,8 +51,28 @@ from core.infinite_session.snapshot_schema import (
 from core.tenants import validate_tenant_id
 
 INDEX_FILE = "index.json"
+
+# The per-task index lock is NON-BLOCKING BY CONSTRUCTION (ADR-0645 §6: "a
+# snapshot failure never fails the task"). It used to be a plain
+# ``flock(LOCK_EX)`` with no timeout, taken twice per producer call, on the
+# console task-completion path (``task_worker_pool._snapshot_task_turn``) —
+# BEFORE the completion notification. A wedged lock holder (a crashed writer
+# whose fd the kernel had not yet reaped, an NFS mount, a debugger-stopped
+# process) hung that path forever, and no ``try/except`` can catch a hang: the
+# task finished, and the user was never told. A bounded deadline turns that
+# availability failure into an ordinary ``(False, reason)`` the producer logs.
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_INTERVAL_SECONDS = 0.01
 EVENT_SNAPSHOT_CREATED = "infinite_session.snapshot_created"
 EVENT_SNAPSHOT_ARCHIVED = "infinite_session.snapshot_archived"
+
+
+class SnapshotLockBusy(TimeoutError):
+    """The per-task snapshot lock stayed held past ``LOCK_TIMEOUT_SECONDS``.
+
+    A ``TimeoutError`` (hence an ``OSError``) so existing read paths that
+    already degrade on I/O failure keep degrading instead of raising.
+    """
 
 
 def _fsync_dir(path: Path) -> None:
@@ -117,11 +138,32 @@ class EventStore:
         return safe_child(self.root_dir, task_id, f"{snapshot_id}.json")
 
     @contextmanager
-    def _task_lock(self, task_dir: Path) -> Iterator[None]:
+    def _task_lock(
+        self, task_dir: Path, *, timeout: Optional[float] = None
+    ) -> Iterator[None]:
+        """Exclusive per-task lock with a hard deadline (never blocks forever).
+
+        Raises :class:`SnapshotLockBusy` when the lock is still held at the
+        deadline. Every caller turns that into a returned ``(False, reason)`` /
+        ``([], reason)`` — the producer is non-blocking by construction, not by
+        convention (ADR-0645 §6, round-3 review R3-B5).
+        """
+        limit = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
         task_dir.mkdir(parents=True, exist_ok=True)
         lock = task_dir / ".lock"
         with open(lock, "a+") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            deadline = time.monotonic() + limit
+            while True:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise SnapshotLockBusy(
+                            f"snapshot lock for {task_dir.name!r} still held after "
+                            f"{limit:g}s — refusing to block the caller"
+                        ) from None
+                    time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
             try:
                 yield
             finally:
@@ -164,46 +206,53 @@ class EventStore:
         payload = snapshot.to_dict()
         size_bytes = len(json.dumps(payload, sort_keys=True).encode("utf-8"))
 
-        with self._task_lock(task_dir):
-            index = self._read_index(task_dir)
-            if any(m.snapshot_id == snapshot.snapshot_id for m in index) or target.exists():
-                return False, f"snapshot {snapshot.snapshot_id} already exists (append-only)"
-            head = index[-1].content_hash if index else None
-            if snapshot.prev_snapshot_hash != head:
-                return False, (
-                    "chain link mismatch: prev_snapshot_hash must equal the current "
-                    f"head ({head!r}) (fail-closed)"
-                )
-            seq = (index[-1].seq + 1) if index else 1
+        try:
+            with self._task_lock(task_dir):
+                index = self._read_index(task_dir)
+                if any(m.snapshot_id == snapshot.snapshot_id for m in index) or target.exists():
+                    return False, f"snapshot {snapshot.snapshot_id} already exists (append-only)"
+                head = index[-1].content_hash if index else None
+                if snapshot.prev_snapshot_hash != head:
+                    return False, (
+                        "chain link mismatch: prev_snapshot_hash must equal the current "
+                        f"head ({head!r}) (fail-closed)"
+                    )
+                seq = (index[-1].seq + 1) if index else 1
 
-            # Audit FIRST (core chain); no commit → nothing on disk.
-            details = content_free({
-                "task_id": snapshot.task_id,
-                "phase_id": snapshot.phase_id,
-                "snapshot_id": snapshot.snapshot_id,
-                "snapshot_type": snapshot.snapshot_type.value,
-                "content_hash": snapshot.content_hash,
-                "prev_snapshot_hash": snapshot.prev_snapshot_hash or "",
-                "seq": seq,
-                "size_bytes": size_bytes,
-            })
-            emit = audit_callback or self._audit
-            try:
-                audit_ref = emit(
-                    EVENT_SNAPSHOT_CREATED, tenant_id=snapshot.tenant_id, details=details
-                )
-            except Exception as exc:  # fail-closed: writer refused / unavailable
-                return False, f"audit write did not commit (fail-closed): {exc}"
-            if not audit_ref:
-                return False, "audit write did not commit (fail-closed)"
+                # Audit FIRST (core chain); no commit → nothing on disk.
+                details = content_free({
+                    "task_id": snapshot.task_id,
+                    "phase_id": snapshot.phase_id,
+                    "snapshot_id": snapshot.snapshot_id,
+                    "snapshot_type": snapshot.snapshot_type.value,
+                    "content_hash": snapshot.content_hash,
+                    "prev_snapshot_hash": snapshot.prev_snapshot_hash or "",
+                    "seq": seq,
+                    "size_bytes": size_bytes,
+                })
+                emit = audit_callback or self._audit
+                try:
+                    audit_ref = emit(
+                        EVENT_SNAPSHOT_CREATED, tenant_id=snapshot.tenant_id, details=details
+                    )
+                except Exception as exc:  # fail-closed: writer refused / unavailable
+                    return False, f"audit write did not commit (fail-closed): {exc}"
+                if not audit_ref:
+                    return False, "audit write did not commit (fail-closed)"
 
-            try:
-                _write_atomic(target, payload)
-                meta = SnapshotMetadata.from_snapshot(snapshot, str(target), seq=seq)
-                index.append(meta)
-                _write_atomic(task_dir / INDEX_FILE, [m.to_dict() for m in index])  # type: ignore[arg-type]
-            except OSError as exc:
-                return False, f"Failed to write snapshot: {exc}"
+                try:
+                    _write_atomic(target, payload)
+                    meta = SnapshotMetadata.from_snapshot(snapshot, str(target), seq=seq)
+                    index.append(meta)
+                    _write_atomic(task_dir / INDEX_FILE, [m.to_dict() for m in index])  # type: ignore[arg-type]
+                except OSError as exc:
+                    return False, f"Failed to write snapshot: {exc}"
+
+        except SnapshotLockBusy as exc:
+            # Availability over completeness: the producer runs on the
+            # task-completion path and must never wait on another
+            # writer (ADR-0645 §6).
+            return False, f"snapshot lock busy (no snapshot written): {exc}"
 
         return True, ""
 
@@ -236,6 +285,8 @@ class EventStore:
         try:
             with self._task_lock(task_dir):
                 index = self._read_index(task_dir)
+        except SnapshotLockBusy as exc:
+            return [], f"snapshot lock busy (index not read): {exc}"
         except (OSError, ValueError, KeyError) as exc:
             return [], f"Failed to list snapshots: {exc}"
         if phase_id is not None:
@@ -328,28 +379,31 @@ class EventStore:
             return 0, ""
         emit = audit_callback or self._audit
         count = 0
-        with self._task_lock(task_dir):
-            index = self._read_index(task_dir)
-            keep: list[SnapshotMetadata] = []
-            prunable = True
-            for meta in index:
-                if prunable and meta.timestamp < timestamp and meta is not index[-1]:
-                    try:
-                        emit(EVENT_SNAPSHOT_ARCHIVED, tenant_id=tenant_id, details={
-                            "task_id": task_id, "snapshot_id": meta.snapshot_id,
-                            "content_hash": meta.content_hash, "seq": meta.seq,
-                        })
-                    except Exception as exc:
-                        return count, f"audit write did not commit (fail-closed): {exc}"
-                    target = self._snapshot_file(task_id, meta.snapshot_id)
-                    if target.exists():
-                        target.unlink()
-                    count += 1
-                else:
-                    prunable = False
-                    keep.append(meta)
-            if count:
-                _write_atomic(task_dir / INDEX_FILE, [m.to_dict() for m in keep])  # type: ignore[arg-type]
+        try:
+            with self._task_lock(task_dir):
+                index = self._read_index(task_dir)
+                keep: list[SnapshotMetadata] = []
+                prunable = True
+                for meta in index:
+                    if prunable and meta.timestamp < timestamp and meta is not index[-1]:
+                        try:
+                            emit(EVENT_SNAPSHOT_ARCHIVED, tenant_id=tenant_id, details={
+                                "task_id": task_id, "snapshot_id": meta.snapshot_id,
+                                "content_hash": meta.content_hash, "seq": meta.seq,
+                            })
+                        except Exception as exc:
+                            return count, f"audit write did not commit (fail-closed): {exc}"
+                        target = self._snapshot_file(task_id, meta.snapshot_id)
+                        if target.exists():
+                            target.unlink()
+                        count += 1
+                    else:
+                        prunable = False
+                        keep.append(meta)
+                if count:
+                    _write_atomic(task_dir / INDEX_FILE, [m.to_dict() for m in keep])  # type: ignore[arg-type]
+        except SnapshotLockBusy as exc:
+            return count, f"snapshot lock busy (nothing archived): {exc}"
         return count, ""
 
 

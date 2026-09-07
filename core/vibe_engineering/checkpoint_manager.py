@@ -602,6 +602,17 @@ class CheckpointManager:
         for filepath in sorted(self.checkpoint_dir.glob(pattern)):
             try:
                 checkpoint = self.load(filepath)
+                # `{task_id}_*.json` is a PREFIX glob and `_` is a legal task-id
+                # character, so task "build" matched every "build_docs_*" file.
+                # `load()` verifies tenant, merkle root and signature — all of
+                # which a sibling task's own valid checkpoint passes — but never
+                # the task identity, so `get_latest("build")` resumed
+                # build_docs' state and `delete_old_checkpoints("build")` deleted
+                # build's only checkpoint while keeping build_docs' (round-3
+                # review, R3-B4). The stored task_id is the authority; the
+                # filename is only a hint.
+                if checkpoint.task_id != task_id:
+                    continue
                 metadata = CheckpointMetadata(
                     checkpoint_id=checkpoint.checkpoint_id,
                     task_id=checkpoint.task_id,
@@ -651,6 +662,15 @@ class CheckpointManager:
         to_delete = checkpoints[keep_count:]
 
         for metadata in to_delete:
+            # Second, independent guard on the destructive path: never unlink a
+            # file whose checkpoint belongs to another task, whatever produced
+            # the candidate list (R3-B4).
+            if metadata.task_id != task_id:
+                logger.error(
+                    "Refusing to delete checkpoint of task %r while cleaning up %r: %s",
+                    metadata.task_id, task_id, metadata.file_path,
+                )
+                continue
             try:
                 metadata.file_path.unlink()
                 logger.info(f"Deleted old checkpoint: {metadata.file_path}")

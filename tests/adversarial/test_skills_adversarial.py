@@ -298,8 +298,15 @@ class TestIteration2Hardening:
             # file content and never a label hash (round-2 review, R2-B1)
             assert h is None, lom
 
-        real = SkillsRegistry._compute_lom_hash("core/skills/boot.py:boot_skills:L1")
-        assert real != hashlib.sha256(b"core/skills/boot.py:boot_skills:L1").hexdigest()
+        # A LoM whose line is OUTSIDE the named function does not bind either
+        # (round-3 review, R3-B1: the ``:L<n>`` form never resolved the function,
+        # so a fabricated name always produced a "bound" hash).
+        assert SkillsRegistry._compute_lom_hash("core/skills/boot.py:boot_skills:L1") is None
+        assert SkillsRegistry._compute_lom_hash("core/skills/boot.py:no_such_function") is None
+
+        real = SkillsRegistry._compute_lom_hash("core/skills/boot.py:boot_skills")
+        assert real is not None
+        assert real != hashlib.sha256(b"core/skills/boot.py:boot_skills").hexdigest()
 
     def test_hanging_skill_cannot_leak_unbounded_threads(self):
         """Sustained timeouts are capped per skill; the cap is audited and counts as failures."""

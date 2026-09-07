@@ -47,6 +47,29 @@ logger = logging.getLogger(__name__)
 # Repo root, derived — never hardcoded. core/skills/skill_registry_phase1.py → parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# LoM source admissibility (ADR-0537). A LoM names CorvinOS SOURCE — not data,
+# not a vendored dependency, and not the runtime-writable state tree. Anything
+# under these path segments is refused before the file is read, so a LoM can
+# never bind to a file an attacker (or the running system itself) can rewrite.
+_LOM_EXCLUDED_PARTS = frozenset({
+    ".corvin",          # runtime-writable tenant state
+    ".venv", "venv",    # vendored interpreters (core/console/.venv/**)
+    "site-packages", "dist-packages",
+    "node_modules",
+    ".git",
+})
+_LOM_MAX_SOURCE_BYTES = 2 * 1024 * 1024  # a 2 MB .py is not a LoM target
+
+# ``_compute_lom_hash`` reads AND ``ast.parse``s the named source; execute()
+# calls it twice per execution (the gate, then the result). Measured 3.4–79.6 ms
+# per call on real call sites, i.e. up to 160 ms of pure re-parsing per Skill
+# execution. Memoised on (lom, path, st_mtime_ns, st_size): an edit to the named
+# file changes mtime/size and invalidates the entry, so the hash still binds to
+# the source as it is on disk NOW.
+_LOM_HASH_CACHE: Dict[tuple, Optional[str]] = {}
+_LOM_HASH_CACHE_LOCK = Lock()
+_LOM_HASH_CACHE_MAX = 1024
+
 # PII Patterns (GDPR Art. 32 redaction, FIX #8: Enhanced domain-specific patterns)
 # Applied to string VALUES.
 _PII_PATTERNS = {
@@ -566,6 +589,71 @@ class SkillsRegistry:
     # ── LoM binding (ADR-0537) ───────────────────────────────────────────────
 
     @staticmethod
+    def _resolve_lom_source(file_part: str) -> Optional[Path]:
+        """The admissible source file a LoM names, or None (fail-closed).
+
+        Admissible means: inside the repo root, a ``.py`` file that exists, not
+        under a vendored/runtime-writable segment (``_LOM_EXCLUDED_PARTS``), and
+        small enough to parse. Everything else is refused BEFORE the file is
+        read, so ``_compute_lom_hash`` is never a hash oracle over arbitrary
+        readable content.
+        """
+        if not file_part:
+            return None
+        source_path = Path(file_part)
+        if not source_path.is_absolute():
+            source_path = _REPO_ROOT / source_path
+        try:
+            source_path = source_path.resolve()
+        except OSError as exc:
+            logger.warning("LoM path not resolvable: %s (%s)", file_part, exc)
+            return None
+
+        # A LoM names CorvinOS source. Anything outside the repo root (``../``,
+        # absolute paths) would turn this into a hash oracle over arbitrary
+        # readable files — refuse.
+        if not source_path.is_relative_to(_REPO_ROOT):
+            logger.warning("LoM outside repo root refused: %s", source_path)
+            return None
+        if source_path.suffix != ".py":
+            logger.warning("LoM source is not a .py file: %s", source_path)
+            return None
+        rel_parts = source_path.relative_to(_REPO_ROOT).parts
+        if any(part in _LOM_EXCLUDED_PARTS for part in rel_parts):
+            logger.warning("LoM source in a non-source tree refused: %s", source_path)
+            return None
+        if not source_path.is_file():
+            logger.warning("LoM source file not found: %s", source_path)
+            return None
+        return source_path
+
+    @staticmethod
+    def _find_lom_function(
+        tree: ast.AST, func_name: str
+    ) -> List[Any]:
+        """Every ``def``/``async def`` a LoM's function part can name.
+
+        ``Class.method`` binds to that method inside that class; a bare name
+        binds to any def with that name (module level or method). A name can be
+        defined more than once in a file (an overload, a method on two classes,
+        a module-level function shadowed by a method) — all matches are
+        returned so the ``:L<line>`` form can pick the one containing the line.
+        """
+        cls_name, _, meth_name = func_name.rpartition(".")
+        matches: List[Any] = []
+        if cls_name:
+            for cls in ast.walk(tree):
+                if isinstance(cls, ast.ClassDef) and cls.name == cls_name:
+                    for node in cls.body:
+                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == meth_name:
+                            matches.append(node)
+            return matches
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                matches.append(node)
+        return matches
+
+    @staticmethod
     def _compute_lom_hash(lom: Optional[str]) -> Optional[str]:
         """SHA256 binding a LoM to the source it names (ADR-0537).
 
@@ -576,72 +664,128 @@ class SkillsRegistry:
           the shape production call sites use.
         * ``file:function:L<line>`` / ``file:function:<line>`` — the hash of
           that one source line (``os_skills_integration._lom`` derives it from
-          the live frame).
+          the live frame). The FUNCTION is resolved first and the line must fall
+          inside it (decorators included): before 2026-09-07 this form returned
+          ``sha256(line)`` without ever looking the function up, so a fabricated
+          function name still produced a "bound" hash — and a blank line
+          produced the constant ``sha256("")`` for ANY file (round-3 review,
+          R3-B1). A blank/whitespace-only line is now refused too.
 
-        Falls back to hashing the LoM string itself when the source cannot be
-        resolved; the fallback is logged so a non-binding hash is observable.
+        Returns None when the LoM does not bind — ``execute()`` refuses such a
+        LoM, so an unresolvable LoM is never indistinguishable from a real
+        source hash.
         """
         if not lom:
             return None
 
-        label_hash = hashlib.sha256(lom.encode()).hexdigest()
+        parts = lom.split(":")
+        if len(parts) < 2:
+            logger.warning("LoM %r has no function part — unresolvable", lom)
+            return None
+
+        source_path = SkillsRegistry._resolve_lom_source(parts[0])
+        if source_path is None:
+            return None
         try:
-            parts = lom.split(":")
-            if len(parts) < 2:
-                logger.warning("LoM %r has no function part — label hash only", lom)
-                return None
+            stat = source_path.stat()
+        except OSError as exc:
+            logger.warning("LoM source not stat-able: %s (%s)", source_path, exc)
+            return None
+        if stat.st_size > _LOM_MAX_SOURCE_BYTES:
+            logger.warning(
+                "LoM source too large to bind (%d bytes > %d): %s",
+                stat.st_size, _LOM_MAX_SOURCE_BYTES, source_path,
+            )
+            return None
 
-            file_path, func_name = parts[0], parts[1].strip()
-            source_path = Path(file_path)
-            if not source_path.is_absolute():
-                source_path = _REPO_ROOT / source_path
-            source_path = source_path.resolve()
+        key = (lom, str(source_path), stat.st_mtime_ns, stat.st_size)
+        with _LOM_HASH_CACHE_LOCK:
+            if key in _LOM_HASH_CACHE:
+                return _LOM_HASH_CACHE[key]
 
-            # A LoM names CorvinOS source. Anything outside the repo root (``../``,
-            # absolute paths) would turn this into a hash oracle over arbitrary
-            # readable files — refuse and fall back to the label hash.
-            if not source_path.is_relative_to(_REPO_ROOT):
-                logger.warning("LoM outside repo root refused: %s", source_path)
-                return None
+        value = SkillsRegistry._compute_lom_hash_uncached(lom, parts, source_path)
 
-            if not source_path.is_file():
-                logger.warning(f"LoM source file not found: {source_path}")
+        with _LOM_HASH_CACHE_LOCK:
+            if len(_LOM_HASH_CACHE) >= _LOM_HASH_CACHE_MAX:
+                _LOM_HASH_CACHE.clear()  # bounded; a cold cache only costs a re-parse
+            _LOM_HASH_CACHE[key] = value
+        return value
+
+    @staticmethod
+    def _compute_lom_hash_uncached(
+        lom: str, parts: List[str], source_path: Path
+    ) -> Optional[str]:
+        """The read + parse half of :meth:`_compute_lom_hash` (memoised there)."""
+        try:
+            func_name = parts[1].strip()
+            if not func_name:
+                logger.warning("LoM %r has an empty function part — unresolvable", lom)
                 return None
 
             text = source_path.read_text(encoding="utf-8", errors="ignore")
+            try:
+                tree = ast.parse(text)
+            except SyntaxError as exc:
+                logger.warning("LoM source does not parse: %s (%s)", source_path, exc)
+                return None
+
+            matches = SkillsRegistry._find_lom_function(tree, func_name)
+            if not matches:
+                logger.warning(
+                    "LoM function %s not found in %s — unresolvable", func_name, source_path
+                )
+                return None
 
             if len(parts) >= 3:
                 line_str = parts[2].strip()
                 if line_str[:1] in ("L", "l"):
                     line_str = line_str[1:]
-                line_num = int(line_str)
+                try:
+                    line_num = int(line_str)
+                except ValueError:
+                    logger.warning("LoM line part %r is not a number", parts[2])
+                    return None
                 lines = text.split("\n")
                 if line_num < 1 or line_num > len(lines):
                     logger.warning(f"LoM line {line_num} outside file length {len(lines)}")
                     return None
-                return hashlib.sha256(lines[line_num - 1].encode()).hexdigest()
+                # The line must lie INSIDE the named function (decorators
+                # included) — otherwise the function part is decorative and any
+                # fabricated name binds (R3-B1).
+                inside = False
+                for node in matches:
+                    first = min(
+                        [node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])]
+                    )
+                    last = node.end_lineno or node.lineno
+                    if first <= line_num <= last:
+                        inside = True
+                        break
+                if not inside:
+                    logger.warning(
+                        "LoM line %d is outside %s in %s — unresolvable",
+                        line_num, func_name, source_path,
+                    )
+                    return None
+                line = lines[line_num - 1]
+                if not line.strip():
+                    # sha256("") is the same constant for every blank line in
+                    # every file — a hash that binds to nothing.
+                    logger.warning(
+                        "LoM line %d in %s is blank — unresolvable", line_num, source_path
+                    )
+                    return None
+                return hashlib.sha256(line.encode()).hexdigest()
 
             # ``file:function`` — hash the function's source segment.
-            tree = ast.parse(text)
-            # ``Class.method`` binds to the method inside that class; a bare name
-            # binds to any def with that name (module level or method).
-            cls_name, _, meth_name = func_name.rpartition(".")
-            if cls_name:
-                for cls in ast.walk(tree):
-                    if isinstance(cls, ast.ClassDef) and cls.name == cls_name:
-                        for node in cls.body:
-                            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == meth_name:
-                                segment = ast.get_source_segment(text, node) or ""
-                                if segment:
-                                    return hashlib.sha256(segment.encode()).hexdigest()
-                logger.warning("LoM method %s not found in %s — unresolvable", func_name, source_path)
-                return None
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-                    segment = ast.get_source_segment(text, node)
-                    if segment:
-                        return hashlib.sha256(segment.encode()).hexdigest()
-            logger.warning("LoM function %s not found in %s — label hash only", func_name, source_path)
+            for node in matches:
+                segment = ast.get_source_segment(text, node)
+                if segment:
+                    return hashlib.sha256(segment.encode()).hexdigest()
+            logger.warning(
+                "LoM function %s in %s has no source segment — unresolvable",
+                func_name, source_path,
+            )
             return None
 
         except Exception as e:  # noqa: BLE001
