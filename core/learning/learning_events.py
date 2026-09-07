@@ -14,7 +14,7 @@ from uuid import uuid4
 
 
 class EventType(str, Enum):
-    """8 learning event types (ADR-0314)."""
+    """Learning event types (ADR-0314, Security Fix #12)."""
 
     CONFIDENCE = "confidence"  # Skill confidence score changed
     FEEDBACK = "feedback"  # User gave feedback on Skill decision
@@ -25,6 +25,7 @@ class EventType(str, Enum):
     CONFIG_UPDATED = "config_updated"  # Skill config changed by optimizer
     SKILL_EXECUTED = "skill_executed"  # Skill was executed (from audit chain)
     DECISION = "decision"  # Skill selection decision recorded (ADR-0316, Phase 4 hooks)
+    GEO_MISMATCH = "geo_mismatch"  # Geolocation mismatch detected (Security Fix #12)
 
 
 @dataclass(frozen=True)
