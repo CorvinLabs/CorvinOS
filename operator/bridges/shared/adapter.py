@@ -12117,15 +12117,35 @@ def _cleanup_outbox_voice_files(max_age_s: float = 600.0) -> int:
     return removed
 
 
+def _peek_envelope(inbox_file: Path) -> dict | None:
+    """Non-blocking, never-raising read of an inbox envelope for the
+    dispatcher's pre-submit peeks (R2-B4, 2026-09-07).
+
+    Returns the envelope dict, or None for ANYTHING that is not a JSON
+    object in valid UTF-8 — unreadable file, truncated / invalid JSON,
+    non-UTF-8 bytes (``UnicodeDecodeError``), or a valid JSON that is a
+    list / string / number (``AttributeError`` on ``.get`` in the old code).
+    The old peeks caught only ``(OSError, JSONDecodeError)``: a non-object
+    or non-UTF-8 envelope raised out of ``submit_inbox_item`` BEFORE the
+    future was attached, aborted the whole poll tick, and left the msg_id
+    pinned in ``_in_flight`` for IN_FLIGHT_TTL (3600 s). Such an envelope is
+    poison; ``process_one`` quarantines it — the peeks only need to route it.
+    """
+    try:
+        msg = json.loads(inbox_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # ValueError covers JSONDecodeError + UnicodeDecodeError
+        return None
+    return msg if isinstance(msg, dict) else None
+
+
 def _route_key(inbox_file: Path) -> str:
     """Derive the lock key (channel + chat) from an inbox JSON without
     blocking. Must mirror the chat_key logic used inside process_one():
         chat_key = chat_id or sender   (sender = msg["from"])
     Falls back to the filename so a malformed JSON still serialises with
     itself rather than crashing the dispatcher."""
-    try:
-        msg = json.loads(inbox_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    msg = _peek_envelope(inbox_file)
+    if msg is None:
         return f"unknown:{inbox_file.stem}"
     channel = msg.get("channel") or "whatsapp"
     chat = msg.get("chat_id") or msg.get("from") or inbox_file.stem
@@ -12138,9 +12158,8 @@ def _peek_side_channel(inbox_file: Path) -> bool:
     and Phase-4.1.5 /sig signals must reach the *currently locked* live
     subprocess (or write to the buffer) without queuing behind the very
     turn they belong to."""
-    try:
-        msg = json.loads(inbox_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    msg = _peek_envelope(inbox_file)
+    if msg is None:
         return False
     return bool(
         msg.get("_btw") or msg.get("_cancel")

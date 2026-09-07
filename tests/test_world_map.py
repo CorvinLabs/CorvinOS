@@ -71,8 +71,11 @@ class TestInstanceLocator:
         )
 
         assert location.instance_id == "instance-123"
-        assert location.geo.latitude == 52.52
-        assert location.geo.longitude == 13.41
+        # Round-2 hardening (2026-09-07): a Tier-3 record is quantised to the
+        # 10km grid at CONSTRUCTION, not only in `grid_cell_id` — the raw
+        # telemetry fix (52.52 / 13.41) must never reach the API or the cache.
+        assert location.geo.latitude == 52.5
+        assert location.geo.longitude == 13.4
         assert location.geo.country == "DE"
         assert location.geo.city == "Berlin"
         assert location.loss_score == 0.3
@@ -305,6 +308,45 @@ class TestGeoCoordinate:
         assert data["latitude"] == 52.5
         assert data["country"] == "DE"
         assert data["tier"] == 3
+
+    def test_coordinates_are_quantised_at_construction(self):
+        """Round-2 follow-up: `to_dict()` used to serialise the RAW lat/lon
+        while only `grid_cell_id` was quantised, so a record that advertises
+        itself as "Tier 3 / 10km quantized" leaked a precise position to every
+        consumer (world-map API response + the on-disk cache). Snapping happens
+        in __post_init__ so no consumer can see the precise value."""
+        geo = GeoCoordinate(
+            latitude=52.5219,
+            longitude=13.4132,
+            country="DE",
+            region="Berlin",
+            city="Berlin",
+            grid_cell_id="geo_525_134",
+            timestamp="2026-09-07T12:00:00Z",
+        )
+        assert geo.latitude == 52.5
+        assert geo.longitude == 13.4
+        assert geo.to_dict()["latitude"] == 52.5
+        assert geo.to_dict()["longitude"] == 13.4
+
+    def test_quantisation_handles_negatives_zero_and_bad_values(self):
+        assert GeoCoordinate.quantize(-33.8688) == -33.8
+        assert GeoCoordinate.quantize(0.0) == 0.0
+        assert GeoCoordinate.quantize(-0.05) == 0.0
+        assert GeoCoordinate.quantize(float("nan")) == 0.0
+        assert GeoCoordinate.quantize(float("inf")) == 0.0
+        assert GeoCoordinate.quantize("nonsense") == 0.0
+
+    def test_cached_precise_record_is_requantised_on_reload(self):
+        """A cache file written before the fix carries precise coordinates;
+        rebuilding the dataclass from it must coarsen them again."""
+        stale = {
+            "latitude": 52.5219, "longitude": 13.4132, "country": "DE",
+            "region": "Berlin", "city": "Berlin", "grid_cell_id": "geo_525_134",
+            "timestamp": "2026-09-07T12:00:00Z", "tier": 3,
+        }
+        geo = GeoCoordinate(**stale)
+        assert (geo.latitude, geo.longitude) == (52.5, 13.4)
 
 
 class TestInstanceLocation:

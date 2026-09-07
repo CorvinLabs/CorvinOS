@@ -31,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { safeHttpUrl } from "@/lib/safe-url";
 import {
   getLicenseInfo,
   listRAGProviders,
@@ -247,10 +248,17 @@ function QueryTester() {
                         {(item.score * 100).toFixed(0)}%
                       </Badge>
                     </div>
+                    {/* R2-C1: `source_url` comes from a remote RAG provider —
+                        only an absolute http(s) URL may become an href; anything
+                        else renders as inert text. */}
                     {item.source_url && (
-                      <a href={item.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
-                        {item.source_url}
-                      </a>
+                      safeHttpUrl(item.source_url) ? (
+                        <a href={safeHttpUrl(item.source_url) as string} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
+                          {item.source_url}
+                        </a>
+                      ) : (
+                        <span className="text-xs text-muted-foreground break-all">{item.source_url}</span>
+                      )
                     )}
                   </div>
                 ))}

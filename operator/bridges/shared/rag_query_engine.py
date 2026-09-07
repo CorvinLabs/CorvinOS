@@ -14,7 +14,8 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
+from urllib.parse import urlsplit
 
 try:
     import httpx
@@ -60,6 +61,35 @@ class RAGQuery:
             raise ValueError("Query cannot be empty")
         if self.limit < 1 or self.limit > 100:
             raise ValueError("Limit must be between 1 and 100")
+
+
+def safe_http_url(value: Any) -> Optional[str]:
+    """Return ``value`` only if it is an absolute http(s) URL, else None.
+
+    R2-C1 (2026-09-07): ``source_url`` comes from a REMOTE RAG provider and
+    is rendered as an ``<a href>`` in the console. Without a scheme allowlist
+    a hostile provider could return ``javascript:`` / ``data:`` / ``vbscript:``
+    hrefs. Fail-closed: anything that is not a well-formed absolute http(s)
+    URL with a host is dropped (the item still renders, without a link).
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 2048 or any(ch in text for ch in "\r\n\t\x00"):
+        return None
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https"):
+        return None
+    try:
+        host = parts.hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    return text
 
 
 @dataclass
@@ -287,7 +317,7 @@ class RAGQueryEngine:
                     content=item.get("content", ""),
                     score=min(1.0, max(0.0, float(item.get("score", 0.5)))),
                     metadata=item.get("metadata", {}),
-                    source_url=item.get("source_url"),
+                    source_url=safe_http_url(item.get("source_url")),
                 )
             )
         return results

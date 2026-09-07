@@ -480,6 +480,15 @@ run "Node: chat_toggle (T/D/S)"  node shared/js/test_chat_toggle.js >/dev/null  
 run "Python: i18n + summarize i18n + lang_cli" python3 shared/test_i18n.py >/dev/null || fails=$((fails+1))
 run "Node: /lang dispatcher"     node shared/js/test_lang_dispatcher.js >/dev/null    || fails=$((fails+1))
 run "Python: voice-audit emit"   python3 ../voice/scripts/test_voice_audit_emit.py >/dev/null || fails=$((fails+1))
+# Email bridge (adversarial hardening 2026-09-07). These existed but were never
+# registered here, so nothing ran them in a full pass — the inbound-auth suite
+# is the ONLY coverage of the DMARC/DKIM gate that decides whether a `From`
+# address may act as the owner.
+run "Node: email inbound auth (DMARC/DKIM)" node email/test_inbound_auth.js >/dev/null || fails=$((fails+1))
+run "Node: email IMAP processed-UID state" node email/test_imap_state.js >/dev/null || fails=$((fails+1))
+run "Node: email disclosure ordering" node email/test_disclosure_ordering.js >/dev/null || fails=$((fails+1))
+run "Python: adapter prompt-head sentinel (R2-E1/E2)" python3 shared/test_adapter_prompt_head.py >/dev/null || fails=$((fails+1))
+run "Python: adapter inbox hygiene" python3 shared/test_adapter_inbox_hygiene.py >/dev/null || fails=$((fails+1))
 # corvin-compute (ADR-0013) — opt-in plugin; venv is bootstrapped lazily.
 # Phase 13.1's skeleton tests are pure-stdlib and run under system python3,
 # so the skip-gate only kicks in when the plugin DIR itself is absent

@@ -5,16 +5,15 @@ Target: corvin_console/routes/webhooks.py :: receive_webhook()
 
 This endpoint is deliberately session-less ("No session required" — see the
 route docstring) so external systems can post to it directly. If the operator
-registers a channel *without* an ``hmac_secret_env``, the endpoint also skips
-signature verification entirely — meaning it can be a fully unauthenticated
-POST target. Confirmed blind spot: unlike every other console route that
-buffers a raw request body (see routes/memory.py's ``_MAX_BODY_BYTES = 256 *
-1024`` cap, enforced with a 413 *before* any expensive processing),
-``receive_webhook`` does ``body_bytes = await request.body()``
-unconditionally, with no size cap anywhere in the file. These tests document
-that gap with real HTTP traffic through the TestClient (mirrors the
-``_sandbox`` TestClient pattern from test_instance_route.py /
-test_license_http_gates.py), not just a static-analysis claim.
+UPDATED 2026-09-07 (R2-C3): the three gaps this file originally *documented*
+as blind spots — a signature-less channel being a fully unauthenticated POST
+target, ``rate_limit_per_hour`` persisted but never read, and an uncapped
+``await request.body()`` — are FIXED in ``routes/webhooks.py``. The tests that
+asserted the vulnerable behaviour are inverted here rather than deleted, so
+this file keeps covering the same real HTTP paths through the TestClient
+(mirrors the ``_sandbox`` pattern from test_instance_route.py /
+test_license_http_gates.py). The dedicated regression suite for the fixes is
+``test_webhook_hardening_r2.py``.
 """
 from __future__ import annotations
 
@@ -110,20 +109,20 @@ class TestReceiveWebhookNoAuth(unittest.TestCase):
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    def test_no_hmac_channel_is_reachable_with_zero_auth(self):
-        """Documents the endpoint's designed exposure: with hmac_secret_env
-        omitted, a bare POST (no cookie, no signature header) is accepted."""
+    def test_no_hmac_channel_is_refused_not_reachable_with_zero_auth(self):
+        """R2-C3 (was: "documents the endpoint's designed exposure"). A channel
+        persisted without ``hmac_secret_env`` is no longer an anonymous writer
+        to the audit chain: the receiver fails closed with 503 and the operator
+        must re-register the channel with a secret."""
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
+            webhooks_route._rate_hits.clear()
             _register_channel(webhooks_route, tid, "open-channel")
             resp = client.post(
                 f"/v1/console/webhook/{tid}/open-channel",
                 content=b'{"hello": "world"}',
                 headers={"content-type": "application/json"},
             )
-            self.assertEqual(resp.status_code, 200, resp.text)
-            body = resp.json()
-            self.assertTrue(body["ok"])
-            self.assertEqual(body["payload_size"], len(b'{"hello": "world"}'))
+            self.assertEqual(resp.status_code, 503, resp.text)
 
     def test_unknown_channel_returns_404_before_any_processing(self):
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
@@ -133,38 +132,37 @@ class TestReceiveWebhookNoAuth(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 404, resp.text)
 
-    def test_no_hmac_channel_accepts_multi_megabyte_body_with_no_size_cap(self):
-        """BLIND SPOT: routes/memory.py enforces `_MAX_BODY_BYTES = 256 * 1024`
-        and returns 413 for an oversized body on an *authenticated* route.
-        This route has no equivalent cap anywhere, despite being reachable
-        with zero authentication. A body far larger than memory.py's cap is
-        accepted and fully echoed back in `payload_size` -- proving the whole
-        thing was buffered into process memory with no rejection path."""
+    def test_oversized_body_is_capped_like_memory_route(self):
+        """R2-C3 (was: BLIND SPOT — no size cap). The receiver now enforces the
+        same order of cap as routes/memory.py's ``_MAX_BODY_BYTES``, so an
+        oversized body is refused rather than buffered. (A signature-less
+        channel is refused before the cap even matters — see the 503 test — so
+        the cap itself is exercised in test_webhook_hardening_r2.py.)"""
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
             _register_channel(webhooks_route, tid, "open-channel")
-            oversized = b"a" * (4 * 1024 * 1024)  # 4 MiB, 16x memory.py's cap
+            self.assertLessEqual(webhooks_route._MAX_WEBHOOK_BODY_BYTES, 1024 * 1024)
+            oversized = b"a" * (4 * 1024 * 1024)
             resp = client.post(
                 f"/v1/console/webhook/{tid}/open-channel",
                 content=oversized,
                 headers={"content-type": "application/octet-stream"},
             )
-            self.assertEqual(resp.status_code, 200, resp.text)
-            self.assertEqual(resp.json()["payload_size"], len(oversized))
+            self.assertNotEqual(resp.status_code, 200, resp.text)
 
-    def test_rate_limit_per_hour_field_is_not_enforced(self):
-        """BLIND SPOT: `rate_limit_per_hour` is accepted and persisted in the
-        channel manifest (routes/webhooks.py L104/L139) but `receive_webhook`
-        never reads it back or tracks a request count. A channel configured
-        with the minimum allowed limit (1/hour) still accepts unlimited
-        back-to-back requests -- the field is decorative, not enforced."""
+    def test_rate_limit_per_hour_field_is_enforced(self):
+        """R2-C3 (was: BLIND SPOT — the field was decorative). The stored limit
+        is now read back and enforced with a 429, checked before the body is
+        read. Signature handling is orthogonal, so this asserts the limit fires
+        regardless of the (here unset) secret."""
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
-            _register_channel(webhooks_route, tid, "throttled", rate_limit_per_hour=1)
-            for _ in range(5):
-                resp = client.post(
-                    f"/v1/console/webhook/{tid}/throttled",
-                    content=b"{}",
-                )
-                self.assertEqual(resp.status_code, 200, resp.text)
+            webhooks_route._rate_hits.clear()
+            _register_channel(webhooks_route, tid, "throttled",
+                              hmac_secret_env="NO_SUCH_ENV_VAR_SET", rate_limit_per_hour=1)
+            first = client.post(f"/v1/console/webhook/{tid}/throttled", content=b"{}")
+            self.assertEqual(first.status_code, 503, first.text)  # consumed the one hit
+            for _ in range(3):
+                resp = client.post(f"/v1/console/webhook/{tid}/throttled", content=b"{}")
+                self.assertEqual(resp.status_code, 429, resp.text)
 
 
 class TestReceiveWebhookHmac(unittest.TestCase):
@@ -215,24 +213,21 @@ class TestReceiveWebhookHmac(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 200, resp.text)
 
-    def test_oversized_body_is_fully_buffered_even_when_hmac_verification_fails(self):
-        """BLIND SPOT (compounding the missing cap): `body_bytes =
-        await request.body()` (L212) runs unconditionally, *before* the HMAC
-        branch (L215+). So even a channel that requires a signature still
-        pays the full in-memory buffering cost for an oversized body -- the
-        eventual 401 for a bad/missing signature does not save the process
-        from having read the whole thing into memory first."""
+    def test_oversized_body_is_refused_before_hmac_verification(self):
+        """R2-C3 (was: BLIND SPOT — full buffering before the 401). The capped
+        read aborts as soon as the limit is passed, so an oversized body is 413
+        and never reaches the signature compare."""
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
-            _register_channel(webhooks_route, tid, "signed", hmac_secret_env=self._env_var)
+            webhooks_route._rate_hits.clear()
+            _register_channel(webhooks_route, tid, "signed", hmac_secret_env=self._env_var,
+                              rate_limit_per_hour=10_000)
             oversized = b"b" * (4 * 1024 * 1024)
             resp = client.post(
                 f"/v1/console/webhook/{tid}/signed",
                 content=oversized,
                 headers={"X-Hub-Signature-256": "sha256=deadbeef"},
             )
-            # Rejected for a bad signature -- but only *after* full buffering;
-            # there is no early-exit/size-limited read anywhere in the path.
-            self.assertEqual(resp.status_code, 401, resp.text)
+            self.assertEqual(resp.status_code, 413, resp.text)
 
     def test_missing_vault_secret_returns_503(self):
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
@@ -254,10 +249,26 @@ class TestReceiveWebhookAudit(unittest.TestCase):
         """GDPR Art. 5 convention check: the audit event must record
         metadata (channel_id, payload_size, has_signature) but never the
         raw payload content itself."""
+        env_var = "TEST_WEBHOOK_AUDIT_SECRET"
+        prev = os.environ.get(env_var)
+        os.environ[env_var] = "s3cr3t"
+        try:
+            self._audit_case(env_var)
+        finally:
+            if prev is None:
+                os.environ.pop(env_var, None)
+            else:
+                os.environ[env_var] = prev
+
+    def _audit_case(self, env_var: str):
         with _sandbox(Path(self._tmp)) as (client, home, tid, webhooks_route):
-            _register_channel(webhooks_route, tid, "open-channel")
+            webhooks_route._rate_hits.clear()
+            _register_channel(webhooks_route, tid, "open-channel", hmac_secret_env=env_var)
             secret_payload = b'{"super_secret_field": "should-not-be-logged"}'
-            resp = client.post(f"/v1/console/webhook/{tid}/open-channel", content=secret_payload)
+            sig = "sha256=" + hmac.new(b"s3cr3t", secret_payload, hashlib.sha256).hexdigest()
+            resp = client.post(f"/v1/console/webhook/{tid}/open-channel",
+                               content=secret_payload,
+                               headers={"X-Hub-Signature-256": sig})
             self.assertEqual(resp.status_code, 200, resp.text)
 
             chain_path = home / "tenants" / tid / "global" / "forge" / "audit.jsonl"

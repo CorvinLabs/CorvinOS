@@ -14,7 +14,7 @@ import sys
 import httpx
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -124,6 +124,30 @@ _LOOPBACK_NAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
 
 def _assert_provider_endpoint_allowed(url: str) -> None:
     """Raise :class:`_UnsafeUrl` unless ``url`` targets loopback or a public host."""
+    _validated_provider_pin(url)
+
+
+def _pinned_request_url(url: str, pin: str) -> str:
+    """Rewrite ``url``'s host to the validated IP (bracketing IPv6)."""
+    parts = urlsplit(url)
+    host = pin if ":" not in pin else f"[{pin}]"
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def _validated_provider_pin(url: str) -> str | None:
+    """Validate ``url`` and return the ONE IP the fetch must connect to.
+
+    Returns None when no pin is needed (loopback — allowed by the DECISION
+    above — or a literal-IP endpoint, which has no name to re-resolve).
+
+    Unverified follow-up (round 2, 2026-09-07): the guard resolved the host and
+    then handed the NAME to httpx, which resolved it again at connect time — a
+    ~0-TTL record answers a public IP to the guard and 169.254.169.254 to the
+    connect (DNS rebinding). ``datasources_http`` already closes this with an
+    IP-pinned urllib opener; this path now pins too, by connecting to the
+    validated address while keeping the original Host header and TLS SNI.
+    """
     try:
         parts = urlsplit(url)
     except ValueError as exc:
@@ -137,14 +161,14 @@ def _assert_provider_endpoint_allowed(url: str) -> None:
     if not host:
         raise _UnsafeUrl("endpoint has no host")
     if host in _LOOPBACK_NAMES:
-        return  # same-host model server (Ollama & co.) — see DECISION above
+        return None  # same-host model server (Ollama & co.) — see DECISION above
     lit = _as_ip(host)
     if lit is not None:
         if lit.is_loopback:
-            return
+            return None
         if _ip_is_blocked(lit):
             raise _UnsafeUrl("endpoint IP is private/link-local/metadata/reserved")
-        return
+        return None  # already a literal — nothing to re-resolve
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except (OSError, ValueError, UnicodeError) as exc:
@@ -152,6 +176,7 @@ def _assert_provider_endpoint_allowed(url: str) -> None:
     addrs = [info[4][0] for info in infos if info and len(info) > 4 and info[4]]
     if not addrs:
         raise _UnsafeUrl("endpoint host resolves to no address")
+    pin: str | None = None
     for addr in addrs:
         ip = _as_ip(str(addr))
         if ip is None:
@@ -160,6 +185,9 @@ def _assert_provider_endpoint_allowed(url: str) -> None:
             continue
         if _ip_is_blocked(ip):
             raise _UnsafeUrl("endpoint host resolves to a private/link-local/metadata address")
+        if pin is None:
+            pin = str(ip)
+    return pin
 
 
 # ── API Connectivity Testing ───────────────────────────────
@@ -202,7 +230,7 @@ async def test_api_connectivity(
             return {"status": "failed", "error": "No endpoint provided"}
 
         try:
-            _assert_provider_endpoint_allowed(endpoint)
+            _endpoint_pin = _validated_provider_pin(endpoint)
         except _UnsafeUrl as exc:
             return {"status": "failed", "error": f"endpoint blocked: {exc}"}
 
@@ -226,13 +254,25 @@ async def test_api_connectivity(
         else:
             body = None
 
-        # Make request
+        # Make request. When the guard produced a pin, connect to THAT address
+        # and carry the original hostname in the Host header + TLS SNI, so the
+        # name cannot be re-resolved to a blocked target between check and
+        # connect (DNS rebinding).
         MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10 MB limit
+        request_url = endpoint
+        extensions: dict[str, Any] = {}
+        if _endpoint_pin:
+            _orig_host = (urlsplit(endpoint).hostname or "").strip()
+            request_url = _pinned_request_url(endpoint, _endpoint_pin)
+            headers["Host"] = (urlsplit(endpoint).netloc or _orig_host)
+            extensions["sni_hostname"] = _orig_host
         async with httpx.AsyncClient(timeout=timeout_ms / 1000.0, follow_redirects=False) as client:
             if method == "POST":
-                response = await client.post(endpoint, json=body, headers=headers)
+                response = await client.post(request_url, json=body, headers=headers,
+                                             extensions=extensions)
             else:
-                response = await client.get(endpoint, headers=headers)
+                response = await client.get(request_url, headers=headers,
+                                            extensions=extensions)
 
         # Check response size (DoS mitigation)
         if len(response.content) > MAX_RESPONSE_SIZE:
