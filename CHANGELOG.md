@@ -122,6 +122,22 @@ who configured either. Everything below is taken from the commit history between
 - **Console:** frontend build repaired (was red since 2026-09-06 16:59), routes hardened (CSRF/session on vibe + l5 + learning + infinite-session), double-prefixed routers fixed, XSS sinks removed, SSRF guard on custom providers, lint 986 → 0, vitest green, Docker/ops entrypoints use `standalone:create_app`.
 - **Repository:** 840 MB of tracked virtualenvs untracked, root scratch reports removed/moved, wheel build repaired, `corvin --version`, CI gates fixed (ADR gate verifies commit-referenced ADRs against Corvin-ADR), README/docs links repaired, NOTICE third-party section, governance files back at the root.
 
+#### Round 2 — attacking the round-1 fixes
+
+- **Prompt spawn contract (ADR-0648):** `claude -p` resolves a leading `/name` as a slash command on every transport, stdin included, and `--` does not stop it. The `/task` worker runs with `--dangerously-skip-permissions`, so this — not argv — was the real injection channel. One shared sentinel is prepended at every spawn site, unconditionally.
+- **Inbound channels authenticate before they write:** Authentication-Results is stripped of comments and quoted strings before any token is read, the expected authserv-id is derived from the mailbox being polled, the processed-UID set gained a low-water mark and a per-poll cap, unparsable envelopes are quarantined, webhooks require an HMAC secret at registration and enforce their stored rate limit and a body cap.
+- **Audit chain, again (ADR-0640):** a whole-file rewrite with a fresh genesis passed every check, because the anchors were keyed by the genesis itself; identity is now path-keyed. `PYTEST_CURRENT_TEST` no longer disables the redirect tripwire.
+- **Plugins (ADR-0643):** a per-tenant `registry.yaml` claiming `origin: builtin` was still believed at runtime and won a process-wide provider slot; origin is derived from the class file location before the trust gate runs.
+- **GDPR (ADR-0641):** workflow chat logs, browser session profiles, vibe checkpoints and datasource connections had no erasure handler while the orchestrator reported COMPLETED.
+
+#### Round 3 — attacking the round-2 fixes
+
+- **Client-side prompt expansion (ADR-0648):** the CLI expands `@<path>` anywhere in a prompt and runs `!command` at byte 0, before the model and outside every tool policy. Proven with all tools disabled: one chat message read a local file. All 34 spawn sites — router, ACS classifier and gate chain, house-rules gate, output sentinel, dialectic judge, user-model distiller, memory bridge among them — now route the whole payload through one neutraliser, behind a fail-closed shim; a ledger test fails on any new unguarded site.
+- **Rotation is an out-of-tree fact (ADR-0640):** a forged `audit.rotation_link` laundered a whole-chain replacement past the tripwire, because the link's binding value is readable from the file being rewritten. Rotation now requires an anchor-key MAC or a sealer-written record, and an unanchored genesis is a blocking, line-less verdict.
+- **Provenance without execution (ADR-0643):** the origin probe used `find_spec`, which imports the parent package — attacker code ran before the trust gate.
+- **Locks (ADR-0645):** every `flock` reachable from an HTTP request or the task-completion path is bounded; compliance-guarding sites refuse with 503, housekeeping degrades, and each gate is proven lock-free so a busy lock can never suppress a consent check or a disclosure card.
+- **Bugs found while fixing:** `restore_checkpoint` could only restore the newest checkpoint; the heal cycle verified the same 315 MB chain 36 times per pass; signed alerts rejected their own first verification; the weight smoother's harmonic-energy detector returned 1.0 for every signal and its confidence convergence factor never moved; `list_checkpoints` matched task ids by prefix, so one task could resume and delete another's state; `reportlab` was undeclared, so all three regulator-facing PDF reports crashed on every install.
+
 ## Historical releases
 
 Per-release notes and the pre-2.0 changelog are archived unchanged:
