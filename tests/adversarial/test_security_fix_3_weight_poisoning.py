@@ -191,29 +191,30 @@ class TestOutcomeVerificationAuditLogged:
         assert call_kwargs["verified"] is True  # task_manager is trusted
         assert call_kwargs["source"] == "task_manager"
 
-    @mock.patch("core.learning.outcome_sink.audit_outcome_verification")
-    def test_verification_logged_for_untrusted_source(self, mock_audit):
+    def test_verification_logged_for_untrusted_source(self):
         """Audit logs when outcome is from untrusted source."""
-        mock_audit.return_value = True
+        with mock.patch("core.learning.event_persistence.core_audit_event") as mock_core_audit:
+            mock_core_audit.return_value = "audit-ref-123"
 
-        # Simulate an outcome from an untrusted source
-        signal = {
-            "task_id": "task-456",
-            "source": "external_api",
-        }
+            # Simulate an outcome from an untrusted source
+            signal = {
+                "task_id": "task-456",
+                "source": "external_api",
+            }
 
-        verified, reason = verify_outcome_source(signal)
+            verified, reason = verify_outcome_source(signal)
 
-        # Manually call audit logging (simulating what emit_task_outcome does)
-        audit_outcome_verification(
-            tenant_id="_default",
-            task_id="task-456",
-            verified=verified,
-            source=signal["source"],
-            reason=reason,
-        )
+            # Manually call audit logging (simulating what emit_task_outcome does)
+            audit_outcome_verification(
+                tenant_id="_default",
+                task_id="task-456",
+                verified=verified,
+                source=signal["source"],
+                reason=reason,
+            )
 
-        mock_audit.assert_called_once()
+            # Should have called core audit event
+            mock_core_audit.assert_called_once()
 
     def test_audit_logged_with_correct_event_type(self):
         """Audit logging differentiates verified vs unverified events."""
@@ -409,30 +410,30 @@ class TestAttackScenarios:
         assert verified is False
         assert "outcome_source_unverified" in reason
 
-    @mock.patch("core.learning.outcome_sink.audit_outcome_verification")
-    def test_poisoning_attempt_is_audited(self, mock_audit):
+    def test_poisoning_attempt_is_audited(self):
         """Attack: Poisoning attempt is logged to audit chain."""
-        mock_audit.return_value = True
+        with mock.patch("core.learning.event_persistence.core_audit_event") as mock_core_audit:
+            mock_core_audit.return_value = "audit-ref-123"
 
-        # Simulate poisoning attempt
-        signal = {
-            "task_id": "task-attack-3",
-            "source": "malicious_source",
-        }
+            # Simulate poisoning attempt
+            signal = {
+                "task_id": "task-attack-3",
+                "source": "malicious_source",
+            }
 
-        verified, reason = verify_outcome_source(signal)
+            verified, reason = verify_outcome_source(signal)
 
-        # Verify the poisoning attempt was logged
-        audit_outcome_verification(
-            tenant_id="_default",
-            task_id="task-attack-3",
-            verified=verified,
-            source=signal["source"],
-            reason=reason,
-        )
+            # Verify the poisoning attempt was logged
+            audit_outcome_verification(
+                tenant_id="_default",
+                task_id="task-attack-3",
+                verified=verified,
+                source=signal["source"],
+                reason=reason,
+            )
 
-        # Should have called audit logging
-        mock_audit.assert_called_once()
+            # Should have called audit logging
+            mock_core_audit.assert_called_once()
 
 
 class TestCompliance:
@@ -441,7 +442,7 @@ class TestCompliance:
     def test_outcome_source_verification_is_audited_gdpr_art_30(self):
         """GDPR Art. 30: Every decision/processing step is audited."""
         # The outcome source verification itself is audited
-        with mock.patch("core.learning.outcome_sink.core_audit_event") as mock_core_audit:
+        with mock.patch("core.learning.event_persistence.core_audit_event") as mock_core_audit:
             mock_core_audit.return_value = "audit-ref-123"
 
             audit_outcome_verification(
@@ -457,7 +458,7 @@ class TestCompliance:
 
     def test_tenant_isolation_in_verification(self):
         """GDPR Art. 32: Tenant isolation in outcome verification."""
-        with mock.patch("core.learning.outcome_sink.core_audit_event") as mock_core_audit:
+        with mock.patch("core.learning.event_persistence.core_audit_event") as mock_core_audit:
             mock_core_audit.return_value = "audit-ref-123"
 
             # Verify for tenant-1
@@ -476,7 +477,7 @@ class TestCompliance:
 
     def test_content_free_audit_logging(self):
         """ADR-0314: Audit logging is content-free (no PII/prompt data)."""
-        with mock.patch("core.learning.outcome_sink.core_audit_event") as mock_core_audit:
+        with mock.patch("core.learning.event_persistence.core_audit_event") as mock_core_audit:
             mock_core_audit.return_value = "audit-ref-123"
 
             # Call audit logging
