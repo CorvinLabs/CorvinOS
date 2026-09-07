@@ -19,8 +19,8 @@ overall outcome.
 
 | Layer | What it holds | Erasure action |
 |---|---|---|
-| L7 skill-forge | User-scope skills referencing subject | Purge skill files + slot mirror |
-| L24 data-snapshot | Snapshots that referenced subject in metadata | Purge snapshots |
+| L7 skill-forge | User-scope skills under `<tenant>/skill-forge`, `<tenant>/skills`, `<tenant>/_shared` and their `global/` twins | `L7SkillForgeHandler` — real purge since 2026-09-07 (R4-F4); was a `SKIPPED / not_applicable` stub while `COVERED_DIRS` claimed the directories |
+| L24 data-snapshot | Snapshot manifests under `<tenant>/global/data` | `L24DataSnapshotHandler` — real purge since 2026-09-07 (R4-F4); same stub-behind-a-claim defect |
 | L28 recall | FTS5 row per chat turn | `DELETE FROM turns WHERE user_id = ?` |
 | L28.2 user-model | Distilled JSON at `<tenant>/global/memory/user_model/*.json` | File deletion |
 | L33 artifacts | Files in `<session>/artifacts/` and `<global>/artifacts/` | Unpinned: purge; pinned: operator-ACK required |
@@ -29,13 +29,43 @@ overall outcome.
 | L16 identity-mapping | subject_id → real-world identity link | Delete the mapping (audit chain preserved per EDPB) |
 | Learning (ADR-0314, F-A9) | `<tenant>/learning/events/*.jsonl` partitions (via `EventStore.erase_user_events`: atomic rewrite + counts-only tombstone) and any `learning/**/*.jsonl` side store whose records name the subject | `LearningEventHandler` |
 | Infinite session (F-A9) | `<tenant>/infinite_session/**` (snapshots, rollback WAL/log, drift, bridges, verification logs) and `<tenant>/sessions/<subject>/checkpoints` — attributed by directory name or by a `session_id`/`user_id`/`chat_key`… field | `InfiniteSessionHandler` |
+| CEL anchor (R4-F1) | `<tenant>/cel_anchors/<safe_key>.jsonl` — the load-bearing-fact store, written by `context_engineering/anchor.py` on every turn under the `cel_load_bearing_anchor` flag. Each entry's `text` is the user's or the model's VERBATIM sentence | `CELAnchorHandler`. Attribution is the file NAME only (entries carry no identity field), so the subject id is matched both raw and through the writer's `_safe_key` transform — `web:sid` is stored as `web_sid.jsonl` |
+| ACS global index (R4-F1) | `<tenant>/global/acs/runs/<run_id>/manifest.json` — the tenant-global index whose `run_dir` points into `sessions/<subject>/…`, plus the quota-fallback branch's whole `output/` working tree | `ACSGlobalIndexHandler`. A run is the subject's when a manifest names them under an identity key OR when any path value has them as a segment |
+| Generic tenant stores (R4-F1) | `files`, `artifacts`, `packages`, `backups`, `idea-pipeline`, `plugin-builder`, `measurement-week`, `compute`, `voice`, `bridges`, `memory`, `agents`, `extensions`, `global/gateway`, `global/rag`, `global/flows`, `global/space`, `global/incidents`, `global/scim`, `global/chat_activity.jsonl`, … | `TenantStoreHandler` — one data-driven class per claim group (`L-user-content`, `L-compute-runs`, `L-voice`, `L-tenant-registries`, `L-store-sweep`, …), all applying the same documented attribution rule |
 
-**Coverage guard (F-A9):** `erasure_handlers.COVERED_DIRS` maps every handler to
-the tenant-home directories it claims; `NON_PERSONAL_DIRS` lists the
-content-free ones (the hash chain, key material, config). `tests/security/
-test_erasure_coverage_guard.py` boots the reachable writers into a temp home and
-fails on any created directory that neither claims — a new persistent store
-cannot ship without an Art. 17 path.
+**Coverage guard (F-A9, rebuilt R4-F1).** Three registries in
+`erasure_handlers.py` classify every tenant-home entry:
+
+| Registry | Meaning |
+|---|---|
+| `COVERED_DIRS[layer_id] -> {entry, …}` | a handler erases everything in that entry **attributable to the subject by the documented rule** |
+| `NON_PERSONAL_DIRS[entry] -> reason` | holds no personal data by construction (hash chain, key material, operator config, generated code) |
+| `UNATTRIBUTABLE_DIRS[entry] -> reason` | holds personal data with **no per-subject attribution at all** — reported as `SKIPPED / not_erasable`, never folded into a silent `completed` |
+
+**The attribution rule** (`_purge_path`) is exactly three routes: a DIRECTORY
+named after the subject · a FILE named after the subject (token-bounded, any
+suffix) · a JSON/JSONL payload naming them under a `_SUBJECT_KEYS` identity
+field. Free text that names nobody is deliberately left alone — a substring hunt
+deletes other subjects' records, which is its own Art. 5 breach. Aggregate
+documents (a list of runs, a `{id: record}` registry, a SCIM user file) are
+rewritten entry-wise rather than deleted whole, for the same reason.
+
+**The guard's universe is DERIVED, not enumerated.** `tests/security/
+test_erasure_coverage_guard.py` AST-scans the production source for every
+`tenant_home()/"…"`, `tenant_global_dir()/"…"` and
+`corvin_home()/"tenants"/<tid>/"…"` path literal, AND boots the writers it can
+reach into a temp home. Every entry either scan finds must appear in one of the
+three registries. The round-2 version enumerated only the five writers its author
+chose to import — which is why it was green while `cel_anchors/` (the operator's
+own conversation text) and `global/acs/` had no Art. 17 path at all.
+
+**A `COVERED_DIRS` entry is a promise that is tested.** The round-2 guard
+asserted only `layer_id in chain_ids`, so `skill-forge`, `skills` and
+`global/data` passed while their handlers returned `SKIPPED / not_applicable`
+without a filesystem call. `TestEveryCoveredEntryActuallyErases` now plants a
+subject-attributed record in **every** claimed entry, runs the real chain, and
+requires it to be gone — and requires a second subject's record beside it to
+survive.
 
 **CCC `/erase` (F-A9):** `corvin_console.chat_router._route_erasure` runs the
 REAL `ErasureOrchestrator` (real chain + stub backfill, exactly like
@@ -244,7 +274,7 @@ Five event types on the L16 hash chain:
     "layer_id": "L24-data-snapshot",
     "status": "skipped",
     "count": 0,
-    "code": "store_empty"
+    "code": "store_empty"   // or "not_erasable" — see UNATTRIBUTABLE_DIRS
   }
 }
 
@@ -342,21 +372,40 @@ other. `_atomic_replace_text()` is now the single writer: pid-unique tmp → wri
 `fsync` the file → `os.replace` → `fsync` the directory, with the tmp removed on
 any failure so the original always stands.
 
-**The coverage guard boots the real writers.** `tests/security/
-test_erasure_coverage_guard.py` used to hand-seed `mkdir`s mirroring what the
-writers were believed to do, so it could only confirm its author's own picture —
-which is why four live stores went uncovered. It now drives the production code
-paths (the workflows route helpers, `CheckpointManager.save`, `RollbackManager`,
-the browser and datasource path resolvers) and fails on any directory under the
-tenant home that no handler claims.
+**The coverage guard boots the real writers — and no longer depends on that.**
+`tests/security/test_erasure_coverage_guard.py` used to hand-seed `mkdir`s
+mirroring what the writers were believed to do, so it could only confirm its
+author's own picture — which is why four live stores went uncovered. Round 2
+replaced the `mkdir`s with real writer calls, but the WRITER LIST was still
+hand-written, so it missed `cel_anchors/` and `global/acs/` for exactly the same
+reason (R4-F1). Round 4 makes the universe mechanical: an AST scan of the
+production source for tenant-home path literals, unioned with what the booted
+writers create. The writer boot is kept (it catches stores whose path is built
+through a helper the scan cannot resolve statically) and now includes the CEL
+anchor writer and the ACS index writer, so removing either claim fails the guard.
+
+**Never let a claim be satisfied by a list someone has to remember to extend.**
+That is the single recurring defect in this guard's history: three consecutive
+versions were green over live personal-data stores because the thing being
+enumerated was chosen by the test's author rather than derived from the system.
 
 ## Built-in stubs
 
 `StubHandler` returns `SKIPPED` with a reason describing which real
 handler is not yet registered. `builtin_stub_chain()` covers the
 five expected layers (L28-recall, L33, L7, L24, L16-identity-mapping).
-Note: `L28UserModelHandler` is now fully implemented and registered in
-`real_handler_chain()` — it is NOT covered by the stub chain.
+Note: `L28UserModelHandler`, `L7SkillForgeHandler` and
+`L24DataSnapshotHandler` are now fully implemented and registered in
+`real_handler_chain()` — they are NOT covered by the stub chain.
+
+**A stub is only honest while nothing claims it is covered.** The R4 review
+found the opposite arrangement: `COVERED_DIRS` claimed `skill-forge`, `skills`
+and `global/data`, and the claiming handlers were permanent no-ops. That turns a
+documented gap into a passing coverage assertion — worse than an outright
+failure, because the operator ends up holding a hash-chained receipt saying the
+data is gone. Never claim a directory for a stub; either implement the purge or
+leave the entry out (or, when the store genuinely cannot be attributed, put it in
+`UNATTRIBUTABLE_DIRS` so the orchestrator says `not_erasable`).
 
 Use case: deploy L36 *before* the per-layer real handlers ship.
 Operator who runs `corvin-erasure user_42` gets a `COMPLETED`
@@ -397,16 +446,27 @@ silent.
   * `WorkflowCheckpointHandler` (full FS purge of paused Task-Engine
     checkpoints under `<tenant>/workflow_runs/`, matched on
     `chat_id`/`approver`, ADR-0188 M5)
-  * `L7SkillForgeHandler` + `L24DataSnapshotHandler` as documented
-    stubs (operator subclasses / replaces)
+  * `L7SkillForgeHandler` + `L24DataSnapshotHandler` — real purges since
+    2026-09-07 (R4-F4); previously documented stubs that `COVERED_DIRS`
+    nonetheless claimed as covered
+  * `CELAnchorHandler` (R4-F1) — `<tenant>/cel_anchors/`, matched through the
+    writer's `_safe_key` transform
+  * `ACSGlobalIndexHandler` (R4-F1) — `<tenant>/global/acs/runs/`, matched on
+    identity fields AND on path values naming the subject's session
+  * `TenantStoreHandler` (R4-F1) — one data-driven instance per claim group for
+    the remaining ~40 live tenant-home stores; entries come from `COVERED_DIRS`
+    so the map and the chain cannot drift apart
+  * `UnattributableStoreHandler` (R4-F1) — reports every `UNATTRIBUTABLE_DIRS`
+    store that is present and non-empty as `SKIPPED / not_erasable`
   * `IdentityMappingHandlerBase` for the operator-owned subject_id ↔
     identity mapping
 
   The CLI registers `real_handler_chain()` automatically; `--use-stubs`
   keeps the M4-shipped stub-only mode.
-* **Future:** real implementations for L7 + L24 + the
-  identity-mapping subclass land alongside the respective layer's
-  per-tenant schema work.
+* **Future:** the identity-mapping subclass lands alongside the operator's
+  own identity store. `global/acs_tmp` (mkstemp-named plaintext system prompts)
+  is the one store currently in `UNATTRIBUTABLE_DIRS`; the real fix is a TTL
+  sweep at the writer, not a handler.
 
 ### subject_id shape
 
@@ -459,5 +519,14 @@ python3 operator/bridges/shared/test_erasure_orchestrator.py
   audit despite being in request).
 * `_aggregate_status` (every combination).
 * `StubHandler` + `builtin_stub_chain` covers expected layers.
+* `TestEveryCoveredEntryActuallyErases` — parametrized over every entry in
+  `COVERED_DIRS`: a planted subject record must be gone after the real chain
+  runs, and a second subject's record beside it must survive.
+* `test_every_source_derived_store_is_classified` — the AST-derived universe.
+* `test_unattributable_layer_reaches_the_real_erase_route` — `not_erasable`
+  reaches the CCC `/erase` payload and the chain.
+* `test_live_llm_reply_captured_by_cel_anchor_is_erased` (`@pytest.mark.live`,
+  `CLAUDE_LIVE_E2E=1`) — a real `claude -p` reply through the real outbound
+  capture hook into `cel_anchors/`, then the real `/erase` route.
 * `L28UserModelHandler` (APPLIED when model file exists, SKIPPED when absent, verified in chain).
 * CI lint (no `import anthropic`).
