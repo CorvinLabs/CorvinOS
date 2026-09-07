@@ -20,7 +20,7 @@ class TestGoalContextCreation:
         goal = "Implement feature X with tests"
         ctx = GoalContext.create(goal)
 
-        assert ctx.goal == goal
+        assert ctx.original_goal == goal
         assert len(ctx.goal_hash) == 64  # SHA256 hex digest length
         assert ctx.created_at.endswith("Z")
 
@@ -83,7 +83,7 @@ class TestGoalContextIntegrity:
 
         # Manually corrupt the goal (simulating data corruption)
         corrupted_ctx = GoalContext(
-            goal="Corrupted goal",
+            original_goal="Corrupted goal",
             goal_hash=ctx.goal_hash,
             created_at=ctx.created_at,
         )
@@ -98,7 +98,7 @@ class TestGoalContextIntegrity:
 
         # Manually corrupt the hash
         corrupted_ctx = GoalContext(
-            goal=ctx.goal,
+            original_goal=ctx.original_goal,
             goal_hash="0" * 64,  # Invalid hash
             created_at=ctx.created_at,
         )
@@ -116,7 +116,7 @@ class TestGoalContextSerialization:
         ctx = GoalContext.create(goal)
         data = ctx.to_dict()
 
-        assert data["goal"] == goal
+        assert data["original_goal"] == goal
         assert len(data["goal_hash"]) == 64
         assert data["created_at"].endswith("Z")
 
@@ -128,7 +128,7 @@ class TestGoalContextSerialization:
 
         restored_ctx = GoalContext.from_dict(data)
 
-        assert restored_ctx.goal == ctx.goal
+        assert restored_ctx.original_goal == ctx.original_goal
         assert restored_ctx.goal_hash == ctx.goal_hash
         assert restored_ctx.created_at == ctx.created_at
 
@@ -139,13 +139,13 @@ class TestGoalContextSerialization:
             "created_at": "2026-08-30T00:00:00Z",
         }
 
-        with pytest.raises(ValueError, match="goal field is required"):
+        with pytest.raises(ValueError, match="original_goal field is required"):
             GoalContext.from_dict(data)
 
     def test_from_dict_missing_hash_raises(self):
         """Test that missing goal_hash field raises ValueError."""
         data = {
-            "goal": "Test goal",
+            "original_goal": "Test goal",
             "created_at": "2026-08-30T00:00:00Z",
         }
 
@@ -155,7 +155,7 @@ class TestGoalContextSerialization:
     def test_from_dict_missing_created_at_raises(self):
         """Test that missing created_at field raises ValueError."""
         data = {
-            "goal": "Test goal",
+            "original_goal": "Test goal",
             "goal_hash": "abc123",
         }
 
@@ -165,7 +165,7 @@ class TestGoalContextSerialization:
     def test_from_dict_corrupted_hash_raises(self):
         """Test that corrupted hash raises AssertionError on from_dict."""
         data = {
-            "goal": "Test goal",
+            "original_goal": "Test goal",
             "goal_hash": "0" * 64,  # Wrong hash
             "created_at": "2026-08-30T00:00:00Z",
         }
@@ -186,7 +186,7 @@ class TestGoalContextSerialization:
             data = ctx.to_dict()
             restored = GoalContext.from_dict(data)
 
-            assert restored.goal == ctx.goal
+            assert restored.original_goal == ctx.original_goal
             assert restored.goal_hash == ctx.goal_hash
             assert restored.created_at == ctx.created_at
 
@@ -228,7 +228,7 @@ class TestGoalContextImmutability:
         ctx = GoalContext.create("Test goal")
 
         with pytest.raises((AttributeError, TypeError)):
-            ctx.goal = "Modified goal"  # type: ignore
+            ctx.original_goal = "Modified goal"  # type: ignore
 
         with pytest.raises((AttributeError, TypeError)):
             ctx.goal_hash = "modified_hash"  # type: ignore

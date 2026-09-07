@@ -133,6 +133,7 @@ class TaskExecutorIntegration:
             iterations=iterations,
             context=context,
             audit_trail_hash=audit_trail_hash,
+            goal=goal,
         )
 
         if new_session_id:

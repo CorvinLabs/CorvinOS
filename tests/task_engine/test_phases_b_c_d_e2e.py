@@ -328,7 +328,7 @@ class TestPhaseD:
 
         handler = RevertControlHandler(validator, store)
         try:
-            success = handler.handle_revert_click("test-task")
+            success = handler.handle_revert_click("test-task", user_id="user-1", tenant_id="_default")
             print(f"✅ Phase D Fix 3.4: Revert button handler works (success: {success})")
         except Exception as e:
             if "append_event" in str(e):

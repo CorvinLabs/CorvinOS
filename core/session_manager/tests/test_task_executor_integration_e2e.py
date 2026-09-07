@@ -129,7 +129,9 @@ async def test_e2e_task_with_simulated_splits(task_engine, task_integrator):
 
         return f"iteration {iteration_count[0]} completed"
 
-    # Register task
+    # Register task (the engine runs the handler ONCE per attempt; the
+    # iteration loop lives in the executor, per TaskExecutorIntegration's
+    # documented usage, so it is driven here).
     task = TaskDefinition(
         task_id="pressure_task_1",
         name="Pressure Task",
@@ -146,13 +148,19 @@ async def test_e2e_task_with_simulated_splits(task_engine, task_integrator):
         task_id="pressure_task_1",
         goal="Simulate context pressure",
     )
+    assert state.current_session_id.startswith("session_pressure_task_1")
 
-    # Execute (will trigger splits at iteration 5+)
-    result = await task_engine.execute_task("pressure_task_1")
+    # Executor loop: 8 iterations, pressure crosses 85% at iteration 5
+    context = task_engine.contexts["pressure_task_1"] if "pressure_task_1" in task_engine.contexts else None
+    for _ in range(8):
+        await pressure_handler(context or type("Ctx", (), {"task_id": "pressure_task_1"})())
 
-    # Verify split occurred
+    # Verify split occurred at the documented threshold
     assert len(session_log) >= 1, "Expected at least one session split"
-    assert session_log[0]["iteration"] >= 5, "Split should occur at iteration 5+"
+    assert session_log[0]["iteration"] == 5, "Split should occur at iteration 5"
+    assert session_log[0]["new_session"] != state.current_session_id
+    # every later high-pressure iteration split again into a distinct session
+    assert len({s["new_session"] for s in session_log}) == len(session_log)
 
 
 @pytest.mark.asyncio

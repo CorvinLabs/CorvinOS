@@ -30,7 +30,7 @@ class TestFullAutonomyPipeline:
 
         self.session_manager = SessionLifecycleManager()
         self.context_reducer = ContextReducer(target_reduction_pct=91)
-        self.checkpoint_manager = CheckpointManager(Path(self.tmpdir))
+        self.checkpoint_manager = CheckpointManager(Path(self.tmpdir), tenant_id="_default")
         self.recovery_engine = RecoveryEngine()
         self.fallback = CheckpointFallback(self.checkpoint_manager, self.recovery_engine)
 
@@ -79,6 +79,7 @@ class TestFullAutonomyPipeline:
         # 5. Create checkpoint with reduced context
         checkpoint = CheckpointState(
             checkpoint_id="ckpt_e2e_001",
+            tenant_id="_default",
             task_id="task_audit",
             session_id="session_001",
             phase="execution",
@@ -155,6 +156,7 @@ class TestFullAutonomyPipeline:
         # 3. Create and save checkpoint
         checkpoint = CheckpointState(
             checkpoint_id="ckpt_stall_001",
+            tenant_id="_default",
             task_id="task_stalled",
             session_id="session_stall",
             phase="debugging",
@@ -188,6 +190,7 @@ class TestFullAutonomyPipeline:
         # Split 1: Context limit at iteration 25
         checkpoint1 = CheckpointState(
             checkpoint_id="ckpt_s1_025",
+            tenant_id="_default",
             task_id=task_id,
             session_id="session_split1",
             phase="execution",
@@ -207,6 +210,7 @@ class TestFullAutonomyPipeline:
         # Split 2: Iteration cap at iteration 50
         checkpoint2 = CheckpointState(
             checkpoint_id="ckpt_s2_050",
+            tenant_id="_default",
             task_id=task_id,
             session_id="session_split2",
             phase="execution",

@@ -14,10 +14,18 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 from uuid import uuid4
+
+from core.infinite_session.paths import validate_id
+from core.tenants import validate_tenant_id
+
+
+def utc_now_iso() -> str:
+    """ISO-8601 UTC timestamp with microseconds and a ``Z`` suffix."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _detect_pii_risk(value: Any) -> bool:
@@ -152,18 +160,14 @@ class Snapshot:
 
     def __post_init__(self):
         """Validate snapshot on creation (frozen dataclass, fail-closed)."""
-        if not self.tenant_id or not self.tenant_id.strip():
+        if not self.tenant_id or not isinstance(self.tenant_id, str) or not self.tenant_id.strip():
             raise ValueError("tenant_id is required and must not be empty (GDPR Art. 32)")
-        if not self.task_id or not self.task_id.strip():
-            raise ValueError("task_id is required")
-        if '..' in self.task_id or self.task_id.startswith('/'):
-            raise ValueError("task_id contains invalid path sequence (fail-closed)")
-        if not self.phase_id or not self.phase_id.strip():
-            raise ValueError("phase_id is required")
-        if '..' in self.phase_id or self.phase_id.startswith('/'):
-            raise ValueError("phase_id contains invalid path sequence (fail-closed)")
-        if not self.snapshot_id or not self.snapshot_id.strip():
-            raise ValueError("snapshot_id is required")
+        validate_tenant_id(self.tenant_id)
+        validate_id(self.task_id, "task_id")
+        validate_id(self.phase_id, "phase_id")
+        validate_id(self.snapshot_id, "snapshot_id")
+        if not isinstance(self.state_dict, dict):
+            raise ValueError("state_dict must be a dict")
 
         # Verify content_hash matches state_dict
         computed_hash = Snapshot.compute_hash(self.state_dict)
@@ -216,12 +220,13 @@ class Snapshot:
         Raises:
             ValueError: If tenant_id is empty, or identifiers contain path traversal (fail-closed)
         """
-        if not tenant_id or not tenant_id.strip():
+        if not tenant_id or not isinstance(tenant_id, str) or not tenant_id.strip():
             raise ValueError("tenant_id is required and must not be empty (fail-closed)")
-        if '..' in task_id or task_id.startswith('/'):
-            raise ValueError("task_id contains invalid path sequence (fail-closed)")
-        if '..' in phase_id or phase_id.startswith('/'):
-            raise ValueError("phase_id contains invalid path sequence (fail-closed)")
+        validate_tenant_id(tenant_id)
+        validate_id(task_id, "task_id")
+        validate_id(phase_id, "phase_id")
+        if not isinstance(state_dict, dict):
+            raise ValueError("state_dict must be a dict")
 
         # Check for PII in state_dict (GDPR Art. 5 - data minimization)
         if _check_dict_for_pii(state_dict):
@@ -247,13 +252,20 @@ class Snapshot:
             task_id=task_id,
             phase_id=phase_id,
             snapshot_type=snapshot_type,
-            timestamp=datetime.utcnow().isoformat() + "Z",
-            state_dict=state_dict.copy(),  # Immutable copy
+            timestamp=utc_now_iso(),
+            state_dict=json.loads(serialized),  # Deep, JSON-clean copy
             content_hash=content_hash,
             prev_snapshot_hash=prev_snapshot_hash,
             base_commit=base_commit,
             worktree_path=worktree_path,
         )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Snapshot:
+        """Reconstruct a snapshot from its stored dict (re-validates the hash)."""
+        payload = dict(data)
+        payload["snapshot_type"] = SnapshotType(payload["snapshot_type"])
+        return cls(**payload)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize snapshot to dict (for storage/JSON).
@@ -305,9 +317,20 @@ class SnapshotMetadata:
     timestamp: str
     snapshot_type: SnapshotType
     file_path: Optional[str] = None  # Path on disk
+    seq: int = 0  # Monotonic position in the task chain (assigned by EventStore)
+    prev_snapshot_hash: Optional[str] = None
 
     @classmethod
-    def from_snapshot(cls, snapshot: Snapshot, file_path: Optional[str] = None) -> SnapshotMetadata:
+    def from_dict(cls, data: dict[str, Any]) -> SnapshotMetadata:
+        """Reconstruct metadata from its stored dict."""
+        payload = dict(data)
+        payload["snapshot_type"] = SnapshotType(payload["snapshot_type"])
+        return cls(**payload)
+
+    @classmethod
+    def from_snapshot(
+        cls, snapshot: Snapshot, file_path: Optional[str] = None, seq: int = 0
+    ) -> SnapshotMetadata:
         """Create metadata from snapshot.
 
         Args:
@@ -326,6 +349,8 @@ class SnapshotMetadata:
             timestamp=snapshot.timestamp,
             snapshot_type=snapshot.snapshot_type,
             file_path=file_path,
+            seq=seq,
+            prev_snapshot_hash=snapshot.prev_snapshot_hash,
         )
 
     def to_dict(self) -> dict[str, Any]:

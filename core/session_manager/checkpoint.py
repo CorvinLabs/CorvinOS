@@ -244,14 +244,36 @@ class SessionCheckpoint:
                 reduction_percentage=ce.get("reduction_percentage", 0.0),
             )
 
-        # Deserialize workflow_execution_state if present
-        # Note: We store it as-is (dict or object) to avoid circular import on WorkflowExecutionState
-        # Conversion to actual WorkflowExecutionState happens in WorkflowExecutor.restore_execution_state()
+        # Deserialize workflow_execution_state if present. Reconstructed HERE
+        # (lazy import — execution_engine imports this module only inside a
+        # function, so there is no cycle): a round-tripped checkpoint used to
+        # hand back a plain dict, and every reader doing
+        # ``checkpoint.workflow_execution_state.workflow_id`` failed.
         workflow_execution_state = None
         if data.get("workflow_execution_state"):
             wes = data["workflow_execution_state"]
-            # Store the dict representation; WorkflowExecutor will reconstruct the actual object
-            workflow_execution_state = wes
+            if isinstance(wes, dict):
+                from core.workflows.execution_engine import (  # noqa: PLC0415
+                    WorkflowExecutionState,
+                    WorkflowNodeEvent,
+                )
+
+                events = [
+                    ev if not isinstance(ev, dict) else WorkflowNodeEvent(**ev)
+                    for ev in wes.get("events", []) or []
+                ]
+                workflow_execution_state = WorkflowExecutionState(
+                    workflow_id=wes["workflow_id"],
+                    run_id=wes["run_id"],
+                    status=wes["status"],
+                    started_at=wes["started_at"],
+                    completed_at=wes.get("completed_at"),
+                    nodes_executed=list(wes.get("nodes_executed", []) or []),
+                    errors=list(wes.get("errors", []) or []),
+                    events=events,
+                )
+            else:
+                workflow_execution_state = wes
 
         # Deserialize goal_context if present (Phase 1: Task Context Drift)
         goal_context = None

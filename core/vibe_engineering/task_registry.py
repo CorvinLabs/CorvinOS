@@ -57,9 +57,16 @@ class TaskMetadata:
     tenant_id: str = "_default"
     parent_task_id: Optional[str] = None
 
+    #: Bookkeeping timestamps are NOT content: two registrations of the same
+    #: task state must hash equal, or conflict detection can never match.
+    _HASH_EXCLUDED = ("created_at", "updated_at")
+
     def content_hash(self) -> str:
         """Deterministic content hash for conflict detection."""
-        content = json.dumps(asdict(self), sort_keys=True, default=str)
+        data = asdict(self)
+        for key in self._HASH_EXCLUDED:
+            data.pop(key, None)
+        content = json.dumps(data, sort_keys=True, default=str)
         return hashlib.sha256(content.encode()).hexdigest()
 
 

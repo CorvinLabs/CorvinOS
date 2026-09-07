@@ -76,6 +76,7 @@ def sample_checkpoint():
     """Create sample CheckpointState."""
     return CheckpointState(
         checkpoint_id="ckpt_001",
+        tenant_id="_default",
         task_id="task_001",
         session_id="session_001",
         phase="execution",
@@ -458,6 +459,7 @@ class TestBackwardCompatibility:
         """Conversion with recovery_reason should create error node."""
         checkpoint = CheckpointState(
             checkpoint_id="ckpt_001",
+            tenant_id="_default",
             task_id="task_001",
             session_id="session_001",
             phase="execution",
@@ -489,6 +491,7 @@ class TestBackwardCompatibility:
         # Create second checkpoint
         cp2 = CheckpointState(
             checkpoint_id="ckpt_002",
+            tenant_id="_default",
             task_id=sample_checkpoint.task_id,
             session_id="session_001",
             phase="execution",
@@ -519,6 +522,7 @@ class TestBackwardCompatibility:
         # Checkpoint with minimal fields
         minimal_checkpoint = CheckpointState(
             checkpoint_id="ckpt_minimal",
+            tenant_id="_default",
             task_id="task_001",
             session_id="sess_001",
             phase="execution",

@@ -101,19 +101,19 @@ class ExplorationScheduler(MonitorBase):
         # Get recent success rates
         recent_rates = state.success_rates[-self.plateau_detection_window :]
 
-        # Check if all rates are in plateau zone [0.6-0.8]
-        in_plateau = all(
-            self.plateau_min_success_rate <= rate <= self.plateau_max_success_rate
-            for rate in recent_rates
-        )
+        # Plateau length = number of TRAILING samples inside [min, max]. It is a
+        # property of the recorded series, not of how often check() was called
+        # (counting evaluations doubled the required 15 iterations to 30).
+        trailing = 0
+        for rate in reversed(state.success_rates):
+            if self.plateau_min_success_rate <= rate <= self.plateau_max_success_rate:
+                trailing += 1
+            else:
+                break
+        state.iterations_at_plateau = trailing
 
-        if not in_plateau:
-            # Reset plateau counter if we break out
-            state.iterations_at_plateau = 0
+        if trailing < self.plateau_detection_window:
             return None
-
-        # All rates in plateau zone
-        state.iterations_at_plateau += 1
 
         # Alert after sustained plateau
         if state.iterations_at_plateau >= self.plateau_detection_window:

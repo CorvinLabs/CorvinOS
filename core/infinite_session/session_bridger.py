@@ -1,57 +1,66 @@
 """Phase B: Session Bridging (ADR-0541).
 
-Manages session-to-session state handoff via cryptographically signed snapshots.
-Creates bridge events that prove state continuity across session boundaries.
-All operations are audit-first and fail-closed on any error.
+A *bridge* is the signed hand-off record between two sessions of one task:
+"session A finished phase P at snapshot H; session B may resume from H".
 
-Compliance:
-- GDPR Art. 30/32: Audit continuity, cryptographic proof of state
-- Immutability: Bridge events are append-only, never edited
-- Tenant isolation: Every bridge operation scoped by tenant_id
+Security model:
+- The signature covers the CANONICAL JSON of the WHOLE bridge event minus the
+  ``signature`` field — every field (ids, sessions, hashes, phase, artifacts,
+  metadata, timestamp) is bound; changing any of them invalidates the bridge.
+- ``resume_from_bridge`` re-verifies the signature, checks the bridge's tenant
+  and task against the request, loads the referenced snapshot through the
+  tenant-bound :class:`EventStore` and checks its ``content_hash`` — the
+  recovered ``state_dict`` is only returned when all of that holds.
+- Bridges are stored at ``<tenant_root>/bridges/<task_id>/<bridge_id>.json``;
+  ids are validated and the path is resolve-checked before any open.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
-from dataclasses import dataclass, asdict
-from datetime import datetime
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Tuple
 from uuid import uuid4
 
-from core.infinite_session.event_store import EventStore
 from core.infinite_session.crypto_binding import CryptoBinding
-from core.infinite_session.snapshot_schema import Snapshot, SnapshotType
+from core.infinite_session.event_store import EventStore
+from core.infinite_session.paths import safe_child, validate_id
+from core.infinite_session.snapshot_schema import Snapshot
+from core.tenants import validate_tenant_id
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass(frozen=True)
 class SessionBridgeEvent:
-    """Immutable event representing a session bridge (state handoff).
-
-    Guarantees:
-    - Frozen (immutable after creation)
-    - Tenant-scoped (fail-closed on missing tenant_id)
-    - Cryptographically signed (signature must verify)
-    - Timestamped (audit trail)
-    """
+    """Immutable, signed hand-off record (see module docstring)."""
 
     bridge_id: str
     tenant_id: str
     task_id: str
     source_session_id: str
     dest_session_id: str
-    snapshot_hash: str  # Hash of the snapshot being handed off
-    prev_hash: str  # Hash of the previous event (for chain continuity)
-    signature: str  # HMAC-SHA256 signature of snapshot_hash
-    timestamp: str  # ISO 8601 UTC
-    artifacts: list[str]  # Artifacts passed to next session (ADRs, test results, etc.)
-    phase_completed: str  # Phase that completed in source session
-    metadata: dict[str, Any]  # Additional bridge metadata
+    snapshot_id: str
+    snapshot_hash: str
+    prev_hash: str
+    signature: str  # HMAC-SHA256 over canonical JSON of every other field
+    timestamp: str
+    artifacts: list[str]
+    phase_completed: str
+    metadata: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict (for storage/audit trail)."""
         return asdict(self)
+
+    def signed_payload(self) -> dict[str, Any]:
+        """Every field except ``signature`` — the bytes the HMAC binds."""
+        data = self.to_dict()
+        data.pop("signature", None)
+        return data
 
     @classmethod
     def create(
@@ -60,83 +69,63 @@ class SessionBridgeEvent:
         task_id: str,
         source_session_id: str,
         dest_session_id: str,
+        snapshot_id: str,
         snapshot_hash: str,
         prev_hash: str,
-        signature: str,
         phase_completed: str,
-        artifacts: list[str] = None,
-        metadata: dict[str, Any] = None,
-    ) -> SessionBridgeEvent:
-        """Factory for creating new bridge events.
-
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            source_session_id: Source session ID
-            dest_session_id: Destination session ID
-            snapshot_hash: Hash of snapshot being handed off
-            prev_hash: Hash of previous event (for chain)
-            signature: Cryptographic signature
-            phase_completed: Phase that completed
-            artifacts: List of artifacts passed to next session
-            metadata: Additional metadata
-
-        Returns:
-            Frozen SessionBridgeEvent instance
-
-        Raises:
-            ValueError: If tenant_id is empty (fail-closed)
-        """
-        if not tenant_id or not tenant_id.strip():
-            raise ValueError("tenant_id is required (fail-closed)")
-
+        artifacts: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        signature: str = "",
+    ) -> "SessionBridgeEvent":
+        validate_tenant_id(tenant_id)
+        validate_id(task_id, "task_id")
+        validate_id(snapshot_id, "snapshot_id")
+        for name, value in (
+            ("source_session_id", source_session_id),
+            ("dest_session_id", dest_session_id),
+            ("phase_completed", phase_completed),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} is required")
         return cls(
             bridge_id=str(uuid4()),
             tenant_id=tenant_id,
             task_id=task_id,
             source_session_id=source_session_id,
             dest_session_id=dest_session_id,
+            snapshot_id=snapshot_id,
             snapshot_hash=snapshot_hash,
             prev_hash=prev_hash,
             signature=signature,
-            timestamp=datetime.utcnow().isoformat() + "Z",
-            artifacts=artifacts or [],
+            timestamp=_now(),
+            artifacts=list(artifacts or []),
             phase_completed=phase_completed,
-            metadata=metadata or {},
+            metadata=dict(metadata or {}),
         )
 
 
 class SessionBridger:
-    """Session-to-session bridging with cryptographic signatures (ADR-0541).
+    """Session-to-session bridging with whole-event signatures (ADR-0541)."""
 
-    Manages:
-    - Snapshot creation at session boundary
-    - Cryptographic signing (HMAC-SHA256)
-    - Bridge event emission (audit trail)
-    - State validation before handoff
-    """
-
-    def __init__(
-        self,
-        event_store: EventStore,
-        crypto_binding: CryptoBinding,
-        corvin_home: str = None,
-    ):
-        """Initialize session bridger.
-
-        Args:
-            event_store: EventStore instance (Phase A)
-            crypto_binding: CryptoBinding instance (Phase B crypto)
-            corvin_home: Corvin home directory (defaults to ~/.corvin)
-        """
-        if corvin_home is None:
-            corvin_home = (Path.home() / ".corvin").as_posix()
-
+    def __init__(self, event_store: EventStore, crypto_binding: CryptoBinding):
         self.event_store = event_store
         self.crypto_binding = crypto_binding
-        self.corvin_home = Path(corvin_home)
-        self.bridge_dir = self.corvin_home / "bridges"
+        self.tenant_id = event_store.tenant_id
+        self.bridge_dir = event_store.root_dir.parent / "bridges"
         self.bridge_dir.mkdir(parents=True, exist_ok=True)
+
+    def _bind(self, tenant_id: Any) -> Optional[str]:
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            return "tenant_id is required (fail-closed)"
+        try:
+            validate_tenant_id(tenant_id)
+        except ValueError as exc:
+            return str(exc)
+        if tenant_id != self.tenant_id:
+            return f"Tenant mismatch: bridger is bound to {self.tenant_id!r}, got {tenant_id!r}"
+        return None
+
+    # ── create ───────────────────────────────────────────────────────────
 
     def create_bridge(
         self,
@@ -146,343 +135,220 @@ class SessionBridger:
         dest_session_id: str,
         snapshot: Snapshot,
         phase_completed: str,
-        artifacts: list[str] = None,
-        metadata: dict[str, Any] = None,
+        artifacts: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         audit_callback: Optional[callable] = None,
     ) -> Tuple[Optional[SessionBridgeEvent], str]:
-        """Create a session bridge with cryptographic signature (audit-first).
+        """Sign and persist a bridge for ``snapshot`` (audit-first, fail-closed).
 
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            source_session_id: Source session ID
-            dest_session_id: Destination session ID
-            snapshot: Snapshot to hand off (already created)
-            phase_completed: Phase that completed
-            artifacts: List of artifacts passed to next session
-            metadata: Additional metadata
-            audit_callback: Optional callback to emit audit events
-
-        Returns:
-            (bridge_event, error_message)
-
-        Notes:
-            - Validates snapshot before bridging
-            - Signs snapshot_hash with tenant's signing key
-            - Emits bridge event to audit trail (audit-first)
-            - Fail-closed: any error → returns (None, error_message)
+        The snapshot must already be persisted in the bound EventStore under the
+        same tenant/task — a bridge can never point at state that is not stored.
         """
-        try:
-            # Validate inputs
-            if not tenant_id or not tenant_id.strip():
-                return None, "tenant_id is required (fail-closed)"
-            if not task_id or not task_id.strip():
-                return None, "task_id is required"
-            if not source_session_id or not source_session_id.strip():
-                return None, "source_session_id is required"
-            if not dest_session_id or not dest_session_id.strip():
-                return None, "dest_session_id is required"
-            if not snapshot:
-                return None, "snapshot is required"
+        error = self._bind(tenant_id)
+        if error:
+            return None, error
+        if snapshot is None:
+            return None, "snapshot is required"
+        if snapshot.tenant_id != tenant_id:
+            return None, f"Snapshot tenant_id mismatch: {snapshot.tenant_id} != {tenant_id}"
+        if snapshot.task_id != task_id:
+            return None, f"Snapshot task_id mismatch: {snapshot.task_id} != {task_id}"
 
-            # Verify snapshot tenant_id matches bridge tenant_id
-            if snapshot.tenant_id != tenant_id:
-                return None, f"Snapshot tenant_id mismatch: {snapshot.tenant_id} != {tenant_id}"
+        stored, read_error = self.event_store.read_snapshot(tenant_id, task_id, snapshot.snapshot_id)
+        if read_error or stored is None or stored.content_hash != snapshot.content_hash:
+            return None, "snapshot is not persisted in the event store (fail-closed)"
 
-            # Emit audit event: bridge creation started
-            if audit_callback:
-                audit_callback(
-                    event_type="session_bridge_started",
-                    tenant_id=tenant_id,
-                    task_id=task_id,
-                    source_session_id=source_session_id,
-                    dest_session_id=dest_session_id,
-                    snapshot_hash=snapshot.content_hash,
-                )
-
-            # Sign snapshot hash
-            signature, error = self.crypto_binding.sign_snapshot(
-                tenant_id=tenant_id,
-                snapshot_hash=snapshot.content_hash,
-                audit_callback=audit_callback,
-            )
-            if error:
-                if audit_callback:
-                    audit_callback(
-                        event_type="session_bridge_failed",
-                        tenant_id=tenant_id,
-                        task_id=task_id,
-                        reason=f"Signature generation failed: {error}",
-                        timestamp=datetime.utcnow().isoformat() + "Z",
-                    )
-                return None, f"Failed to sign snapshot: {error}"
-
-            # Create bridge event
-            # prev_hash is the hash of the last event in the source session
-            # For now, use the snapshot's prev_snapshot_hash (if available)
-            prev_hash = snapshot.prev_snapshot_hash or "genesis"
-
-            bridge = SessionBridgeEvent.create(
+        if audit_callback:
+            audit_callback(
+                event_type="session_bridge_started",
                 tenant_id=tenant_id,
                 task_id=task_id,
                 source_session_id=source_session_id,
                 dest_session_id=dest_session_id,
                 snapshot_hash=snapshot.content_hash,
-                prev_hash=prev_hash,
-                signature=signature,
+            )
+
+        try:
+            unsigned = SessionBridgeEvent.create(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                source_session_id=source_session_id,
+                dest_session_id=dest_session_id,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_hash=snapshot.content_hash,
+                prev_hash=snapshot.prev_snapshot_hash or "genesis",
                 phase_completed=phase_completed,
                 artifacts=artifacts,
                 metadata=metadata,
             )
+        except ValueError as exc:
+            return None, str(exc)
 
-            # Emit bridge event to audit trail (audit-first)
-            if audit_callback:
-                audit_emitted = audit_callback(
-                    event_type="task_session_bridged",
-                    tenant_id=tenant_id,
-                    task_id=task_id,
-                    bridge_id=bridge.bridge_id,
-                    source_session_id=source_session_id,
-                    dest_session_id=dest_session_id,
-                    snapshot_hash=snapshot.content_hash,
-                    signature=signature,
-                    phase_completed=phase_completed,
-                    timestamp=bridge.timestamp,
-                )
-                if not audit_emitted:
-                    return None, "Failed to emit audit event for bridge"
-
-            # Persist bridge to disk
-            success, error = self._persist_bridge(bridge)
-            if not success:
-                return None, f"Failed to persist bridge: {error}"
-
-            return bridge, ""
-
-        except Exception as e:
+        signature, error = self.crypto_binding.sign_payload(
+            tenant_id, unsigned.signed_payload(), audit_callback=audit_callback
+        )
+        if error or not signature:
             if audit_callback:
                 audit_callback(
-                    event_type="session_bridge_failed",
-                    tenant_id=tenant_id,
-                    task_id=task_id,
-                    reason=f"Exception: {str(e)}",
-                    timestamp=datetime.utcnow().isoformat() + "Z",
+                    event_type="session_bridge_failed", tenant_id=tenant_id,
+                    task_id=task_id, reason="signature generation failed", timestamp=_now(),
                 )
-            return None, f"Failed to create bridge: {str(e)}"
+            return None, f"Failed to sign bridge: {error}"
+
+        bridge = SessionBridgeEvent(**{**unsigned.to_dict(), "signature": signature})
+
+        if audit_callback:
+            emitted = audit_callback(
+                event_type="task_session_bridged",
+                tenant_id=tenant_id,
+                task_id=task_id,
+                bridge_id=bridge.bridge_id,
+                source_session_id=source_session_id,
+                dest_session_id=dest_session_id,
+                snapshot_hash=snapshot.content_hash,
+                phase_completed=phase_completed,
+                timestamp=bridge.timestamp,
+            )
+            if not emitted:
+                return None, "Failed to emit audit event for bridge"
+
+        ok, error = self._persist_bridge(bridge)
+        if not ok:
+            return None, f"Failed to persist bridge: {error}"
+        return bridge, ""
+
+    # ── resume ───────────────────────────────────────────────────────────
+
+    def verify_bridge(
+        self,
+        tenant_id: str,
+        bridge: SessionBridgeEvent,
+        audit_callback: Optional[callable] = None,
+    ) -> Tuple[bool, str]:
+        """Signature + binding checks for a loaded bridge (no state load)."""
+        error = self._bind(tenant_id)
+        if error:
+            return False, error
+        if bridge.tenant_id != tenant_id:
+            return False, "Bridge tenant_id mismatch (fail-closed)"
+        return self.crypto_binding.verify_payload(
+            tenant_id, bridge.signed_payload(), bridge.signature, audit_callback=audit_callback
+        )
 
     def resume_from_bridge(
         self,
         tenant_id: str,
         task_id: str,
         bridge_id: str,
-        user_id: Optional[str] = None,
         audit_callback: Optional[callable] = None,
     ) -> Tuple[Optional[dict[str, Any]], str]:
-        """Resume session from a bridge (load previous state).
+        """Load, fully verify and return the state handed off by ``bridge_id``.
 
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            bridge_id: Bridge ID to resume from
-            user_id: User ID (for consent checking, GDPR Art. 6)
-            audit_callback: Optional callback to emit audit events
-
-        Returns:
-            (state_dict, error_message)
-
-        Notes:
-            - Loads bridge from disk
-            - Verifies signature (fail-closed on mismatch)
-            - Checks user consent before restoring state (GDPR Art. 6, L16)
-            - Returns restored state
+        Returns ``{"bridge_id", "source_session_id", "dest_session_id",
+        "phase_completed", "artifacts", "metadata", "timestamp",
+        "snapshot_id", "snapshot_hash", "state_dict"}`` or ``(None, reason)``.
         """
-        try:
-            if not tenant_id or not tenant_id.strip():
-                return None, "tenant_id is required (fail-closed)"
+        def _fail(reason: str) -> Tuple[None, str]:
+            if audit_callback:
+                audit_callback(
+                    event_type="session_resume_failed", tenant_id=tenant_id or "<invalid>",
+                    task_id=task_id, bridge_id=bridge_id, reason=reason, timestamp=_now(),
+                )
+            return None, reason
 
-            # Check user consent to resume session (GDPR Art. 6, L16)
-            # TODO: Integrate with L16 consent gate when available
-            # For now: placeholder that documents the requirement
-            if user_id:
-                # Future: check consent_gate.requires_consent(
-                #   user_id=user_id,
-                #   consent_type="session_resume",
-                #   tenant_id=tenant_id
-                # )
-                # if not has_consent:
-                #   return None, "User has not consented to session restoration (GDPR Art. 6)"
-                pass
+        error = self._bind(tenant_id)
+        if error:
+            return _fail(error)
 
-            # Load bridge from disk
-            bridge, error = self._load_bridge(tenant_id, task_id, bridge_id)
-            if error:
-                if audit_callback:
-                    audit_callback(
-                        event_type="session_resume_failed",
-                        tenant_id=tenant_id,
-                        task_id=task_id,
-                        bridge_id=bridge_id,
-                        reason=f"Bridge load failed: {error}",
-                        timestamp=datetime.utcnow().isoformat() + "Z",
-                    )
-                return None, error
+        bridge, error = self._load_bridge(tenant_id, task_id, bridge_id)
+        if error or bridge is None:
+            return _fail(f"Bridge load failed: {error}")
+        if bridge.tenant_id != tenant_id or bridge.task_id != task_id or bridge.bridge_id != bridge_id:
+            return _fail("Bridge binding mismatch (tenant/task/id) (fail-closed)")
 
-            # Verify signature
-            is_valid, error = self.crypto_binding.verify_signature(
-                tenant_id=tenant_id,
-                snapshot_hash=bridge.snapshot_hash,
-                signature=bridge.signature,
-                audit_callback=audit_callback,
+        ok, error = self.crypto_binding.verify_payload(
+            tenant_id, bridge.signed_payload(), bridge.signature, audit_callback=audit_callback
+        )
+        if not ok:
+            return _fail(f"Signature verification failed: {error}")
+
+        snapshot, error = self.event_store.read_snapshot(tenant_id, task_id, bridge.snapshot_id)
+        if error or snapshot is None:
+            return _fail(f"Referenced snapshot unavailable: {error}")
+        if snapshot.content_hash != bridge.snapshot_hash:
+            return _fail("Referenced snapshot hash mismatch (fail-closed)")
+
+        if audit_callback:
+            audit_callback(
+                event_type="session_resumed", tenant_id=tenant_id, task_id=task_id,
+                bridge_id=bridge_id, source_session_id=bridge.source_session_id,
+                phase_completed=bridge.phase_completed, timestamp=_now(),
             )
-            if not is_valid:
-                if audit_callback:
-                    audit_callback(
-                        event_type="session_resume_failed",
-                        tenant_id=tenant_id,
-                        task_id=task_id,
-                        bridge_id=bridge_id,
-                        reason=f"Signature verification failed: {error}",
-                        timestamp=datetime.utcnow().isoformat() + "Z",
-                    )
-                return None, f"Signature verification failed: {error}"
+        return {
+            "bridge_id": bridge.bridge_id,
+            "source_session_id": bridge.source_session_id,
+            "dest_session_id": bridge.dest_session_id,
+            "phase_completed": bridge.phase_completed,
+            "artifacts": list(bridge.artifacts),
+            "metadata": dict(bridge.metadata),
+            "timestamp": bridge.timestamp,
+            "snapshot_id": snapshot.snapshot_id,
+            "snapshot_hash": snapshot.content_hash,
+            "state_dict": dict(snapshot.state_dict),
+        }, ""
 
-            # Emit audit event: session resumed
-            if audit_callback:
-                audit_callback(
-                    event_type="session_resumed",
-                    tenant_id=tenant_id,
-                    task_id=task_id,
-                    bridge_id=bridge_id,
-                    source_session_id=bridge.source_session_id,
-                    phase_completed=bridge.phase_completed,
-                    timestamp=datetime.utcnow().isoformat() + "Z",
-                )
+    # ── storage ──────────────────────────────────────────────────────────
 
-            # Return bridge metadata + artifacts for state reconstruction
-            return {
-                "bridge_id": bridge.bridge_id,
-                "source_session_id": bridge.source_session_id,
-                "phase_completed": bridge.phase_completed,
-                "artifacts": bridge.artifacts,
-                "metadata": bridge.metadata,
-                "timestamp": bridge.timestamp,
-            }, ""
-
-        except Exception as e:
-            if audit_callback:
-                audit_callback(
-                    event_type="session_resume_failed",
-                    tenant_id=tenant_id,
-                    task_id=task_id,
-                    reason=f"Exception: {str(e)}",
-                    timestamp=datetime.utcnow().isoformat() + "Z",
-                )
-            return None, f"Failed to resume from bridge: {str(e)}"
+    def _bridge_file(self, task_id: str, bridge_id: str) -> Path:
+        validate_id(bridge_id, "bridge_id")
+        return safe_child(self.bridge_dir, task_id, f"{bridge_id}.json")
 
     def _persist_bridge(self, bridge: SessionBridgeEvent) -> Tuple[bool, str]:
-        """Persist bridge event to disk.
-
-        Args:
-            bridge: Bridge event to persist
-
-        Returns:
-            (success, error_message)
-        """
         try:
-            # Create bridge directory
-            bridge_task_dir = (
-                self.bridge_dir
-                / bridge.tenant_id
-                / bridge.task_id
-            )
-            bridge_task_dir.mkdir(parents=True, exist_ok=True)
-
-            # Write bridge to file
-            bridge_file = bridge_task_dir / f"{bridge.bridge_id}.json"
-            bridge_data = bridge.to_dict()
-            with open(bridge_file, "w") as f:
-                json.dump(bridge_data, f, indent=2)
-
+            target = self._bridge_file(bridge.task_id, bridge.bridge_id)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(target.name + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(bridge.to_dict(), fh, indent=2, sort_keys=True)
+            tmp.replace(target)
             return True, ""
-
-        except Exception as e:
-            return False, f"Failed to persist bridge: {str(e)}"
+        except (OSError, ValueError) as exc:
+            return False, str(exc)
 
     def _load_bridge(
-        self,
-        tenant_id: str,
-        task_id: str,
-        bridge_id: str,
+        self, tenant_id: str, task_id: str, bridge_id: str
     ) -> Tuple[Optional[SessionBridgeEvent], str]:
-        """Load bridge event from disk.
-
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            bridge_id: Bridge ID
-
-        Returns:
-            (bridge_event, error_message)
-        """
+        error = self._bind(tenant_id)
+        if error:
+            return None, error
         try:
-            if not tenant_id or not tenant_id.strip():
-                return None, "tenant_id is required (fail-closed)"
-
-            bridge_file = (
-                self.bridge_dir
-                / tenant_id
-                / task_id
-                / f"{bridge_id}.json"
-            )
-
-            if not bridge_file.exists():
-                return None, f"Bridge not found: {bridge_id}"
-
-            with open(bridge_file, "r") as f:
-                bridge_data = json.load(f)
-
-            # Reconstruct bridge from dict
-            bridge = SessionBridgeEvent(**bridge_data)
-            return bridge, ""
-
-        except Exception as e:
-            return None, f"Failed to load bridge: {str(e)}"
-
-    def list_bridges(
-        self,
-        tenant_id: str,
-        task_id: str,
-    ) -> Tuple[list[SessionBridgeEvent], str]:
-        """List all bridges for a task.
-
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-
-        Returns:
-            (bridge_list, error_message)
-        """
+            target = self._bridge_file(task_id, bridge_id)
+        except ValueError as exc:
+            return None, str(exc)
+        if not target.exists():
+            return None, f"Bridge not found: {bridge_id}"
         try:
-            if not tenant_id or not tenant_id.strip():
-                return [], "tenant_id is required (fail-closed)"
+            with open(target, "r", encoding="utf-8") as fh:
+                return SessionBridgeEvent(**json.load(fh)), ""
+        except (OSError, ValueError, TypeError) as exc:
+            return None, f"Failed to load bridge: {exc}"
 
-            task_dir = self.bridge_dir / tenant_id / task_id
-
-            if not task_dir.exists():
-                return [], ""
-
-            bridges = []
-            for bridge_file in sorted(task_dir.glob("*.json")):
-                try:
-                    with open(bridge_file, "r") as f:
-                        bridge_data = json.load(f)
-                    bridge = SessionBridgeEvent(**bridge_data)
-                    bridges.append(bridge)
-                except Exception:
-                    # Skip malformed bridges
-                    continue
-
-            return bridges, ""
-
-        except Exception as e:
-            return [], f"Failed to list bridges: {str(e)}"
+    def list_bridges(self, tenant_id: str, task_id: str) -> Tuple[list[SessionBridgeEvent], str]:
+        error = self._bind(tenant_id)
+        if error:
+            return [], error
+        try:
+            task_dir = safe_child(self.bridge_dir, task_id)
+        except ValueError as exc:
+            return [], str(exc)
+        if not task_dir.exists():
+            return [], ""
+        bridges: list[SessionBridgeEvent] = []
+        for bridge_file in sorted(task_dir.glob("*.json")):
+            try:
+                with open(bridge_file, "r", encoding="utf-8") as fh:
+                    bridges.append(SessionBridgeEvent(**json.load(fh)))
+            except (OSError, ValueError, TypeError) as exc:
+                return [], f"Malformed bridge {bridge_file.name}: {exc} (fail-closed)"
+        bridges.sort(key=lambda b: b.timestamp)
+        return bridges, ""

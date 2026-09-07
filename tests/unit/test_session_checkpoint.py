@@ -121,9 +121,17 @@ class TestSessionCheckpoint:
 class TestSessionContinuationManager:
     """Tests for SessionContinuationManager."""
 
-    def test_init_creates_checkpoint_dir(self, temp_corvin_home):
-        """Test that init creates checkpoint base directory."""
+    def test_init_resolves_checkpoint_dir_lazily(self, temp_corvin_home, mock_execution_context):
+        """Init resolves the tenant checkpoint base but does NOT touch the disk;
+        the directory is created by the first save (so an unwritable root is a
+        CheckpointPersistenceError at save time, see
+        test_checkpoint_persistence_error_on_bad_path)."""
         manager = SessionContinuationManager(temp_corvin_home)
+        assert manager._checkpoint_base == Path(temp_corvin_home) / "tenants" / "_default" / "checkpoints"
+        assert not manager._checkpoint_base.exists()
+        manager.save_checkpoint(
+            task_id="t", tenant_id="_default", execution_context=mock_execution_context, session_id="s"
+        )
         assert manager._checkpoint_base.exists()
 
     def test_save_checkpoint(self, temp_corvin_home, mock_execution_context):

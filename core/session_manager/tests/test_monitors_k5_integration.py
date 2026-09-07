@@ -238,6 +238,13 @@ class TestMonitorIntegration:
             "validation", 2
         )
 
+        self.self_monitoring.record_iteration(
+            session_a2, task, tenant,
+            error_occurred=False,
+            strategy_used="consistency_check",
+            context_size=110000
+        )
+
         # Run consistency check
         consistency_state = self.consistency.session_states[session_a2]
         alert = self.consistency.evaluate_session(consistency_state)

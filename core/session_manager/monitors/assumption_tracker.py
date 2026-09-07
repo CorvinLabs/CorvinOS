@@ -62,7 +62,7 @@ class AssumptionTracker(MonitorBase):
     ASSUMPTION_PATTERNS = [
         r"assuming\s+that\s+([^.!?]*[.!?])",
         r"we\s+expect\s+([^.!?]*[.!?])",
-        r"based\s+on\s+\w+,?\s+(?:we\s+)?(?:infer|assume|believe)\s+([^.!?]*[.!?])",
+        r"based\s+on\s+[^,.!?]{1,80},?\s+(?:we\s+)?(?:infer|assume|believe)\s+(?:that\s+)?([^.!?]*[.!?])",
         r"it'?s\s+(?:likely|probable)\s+that\s+([^.!?]*[.!?])",
         r"we\s+assume\s+([^.!?]*[.!?])",
         r"assumption:\s+([^.!?]*[.!?])",
@@ -188,10 +188,11 @@ class AssumptionTracker(MonitorBase):
             List of Assumption objects found
         """
         assumptions = []
-        text_lower = text.lower()
 
+        # Match case-insensitively on the ORIGINAL text so the extracted
+        # assumption keeps its casing (identifiers like "API" stay searchable).
         for pattern in self.ASSUMPTION_PATTERNS:
-            for match in re.finditer(pattern, text_lower, re.IGNORECASE):
+            for match in re.finditer(pattern, text, re.IGNORECASE):
                 assumption_text = match.group(1) if match.groups() else match.group(0)
                 # Clean up whitespace
                 assumption_text = " ".join(assumption_text.split())

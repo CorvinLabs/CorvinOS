@@ -1,39 +1,67 @@
 """Phase C: Rollback Manager (ADR-0542).
 
-Implements transaction semantics with Write-Ahead Logging (WAL) for infinite session
-configuration changes. Ensures atomic commits and safe rollback.
+Transaction semantics with Write-Ahead Logging for infinite-session state
+changes (the dashboard revert, the drift revert button).
 
-Guarantees:
-- Atomic commit: all-or-nothing state transitions
-- WAL semantics: log-first, commit-after
-- Rollback DELETE: not archive (fail-closed)
-- Audit trail: every transaction logged
-- Tenant isolation: scoped by tenant_id
-
-Compliance:
-- GDPR Art. 30/32: Audit continuity
-- Immutability: Commit logs are append-only
+Chain design:
+- The transaction log ``<tenant_root>/rollback/log.jsonl`` is an append-only
+  JSONL chain. Every entry — COMMITTED, ROLLED_BACK **and FAILED alike** —
+  carries ``prev_mac`` (the previous entry's ``mac``) and ``mac`` =
+  HMAC-SHA256(tenant signing key, canonical JSON of the entry minus ``mac``).
+  The key comes from :class:`CryptoBinding`, so an attacker who can edit the
+  file cannot re-sign it (an unkeyed SHA-256 chain could be rewritten
+  wholesale). ``verify_chain_integrity`` recomputes every MAC and link.
+- WAL: ``begin_transaction`` writes ``<tenant_root>/rollback/wal/<tx>.json``
+  (fsynced) BEFORE anything is committed. ``recover_pending`` (run at
+  construction and callable at any time) replays the WAL: an entry with no
+  matching log record that is older than the grace window
+  (``WAL_GRACE_SECONDS``, default 60 s — a transaction another live manager
+  has prepared but not yet committed must not be swept) is a transaction
+  whose process died — it is closed as ROLLED_BACK in the log and the WAL
+  file removed. ``recover_pending(max_age_s=0)`` forces a full sweep. The
+  log never has a "silent" transaction.
+- Durability: log appends are fsynced under an exclusive file lock.
+- Audit callbacks carry ids, config_path and STATE HASHES only — never
+  ``old_state`` / ``new_state`` (those live in the transaction log, which is
+  the mechanism's own data, not the audit chain).
 """
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
-import tempfile
-from dataclasses import dataclass, asdict, field
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Optional, Tuple, Dict, List
+import os
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 from uuid import uuid4
+
+from core.infinite_session.crypto_binding import CryptoBinding, canonical_json
+from core.infinite_session.paths import safe_child, tenant_root, validate_id
+from core.tenants import validate_tenant_id
 
 
 class TransactionStatus(str, Enum):
-    """Status of a transaction."""
     PREPARED = "prepared"
     COMMITTED = "committed"
     ROLLED_BACK = "rolled_back"
     FAILED = "failed"
+
+
+WAL_GRACE_SECONDS = 60.0
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def state_hash(state: Dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(state)).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -42,18 +70,17 @@ class TransactionLog:
 
     transaction_id: str
     tenant_id: str
-    timestamp: str  # ISO 8601 UTC
+    timestamp: str
     status: TransactionStatus
-    operation: str  # "update", "delete", "revert"
-    config_path: str  # Path to config being changed
-    old_state: Dict[str, Any]  # Previous state (for rollback)
-    new_state: Dict[str, Any]  # New state being committed
+    operation: str
+    config_path: str
+    old_state: Dict[str, Any]
+    new_state: Dict[str, Any]
     error: Optional[str] = None
-    hash: str = ""  # SHA256 of log entry
-    prev_hash: str = ""  # Hash of previous log (for chain)
+    mac: str = ""
+    prev_mac: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict."""
         return {
             "transaction_id": self.transaction_id,
             "tenant_id": self.tenant_id,
@@ -64,64 +91,134 @@ class TransactionLog:
             "old_state": self.old_state,
             "new_state": self.new_state,
             "error": self.error,
-            "hash": self.hash,
-            "prev_hash": self.prev_hash,
+            "mac": self.mac,
+            "prev_mac": self.prev_mac,
         }
 
-    @classmethod
-    def compute_hash(cls, data: dict) -> str:
-        """Compute SHA256 hash of transaction data."""
-        content = json.dumps(data, sort_keys=True, default=str)
-        return hashlib.sha256(content.encode()).hexdigest()
 
-
-@dataclass
 class RollbackManager:
-    """Manages transactional state with WAL semantics.
+    """Tenant-bound transactional log with a keyed hash chain (ADR-0542)."""
 
-    Features:
-    - Write-Ahead Logging (WAL)
-    - Atomic commits (all-or-nothing)
-    - Transaction rollback
-    - Audit trail with hash-chain
-    - Fail-closed on errors
-    """
-
-    corvin_home: str
-
-    def __post_init__(self):
-        """Initialize paths and validate."""
-        if not self.corvin_home:
-            raise ValueError("corvin_home is required")
-
-        self.log_dir = Path(self.corvin_home) / "infinite_session" / "rollback_logs"
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.wal_dir = Path(self.corvin_home) / "infinite_session" / "wal"
+    def __init__(
+        self,
+        tenant_id: str,
+        corvin_home: Optional[str | Path] = None,
+        crypto: Optional[CryptoBinding] = None,
+    ):
+        self.tenant_id = validate_tenant_id(tenant_id)
+        root = tenant_root(self.tenant_id, corvin_home) / "rollback"
+        self.log_dir = root
+        self.wal_dir = root / "wal"
         self.wal_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file = root / "log.jsonl"
+        self.crypto = crypto or CryptoBinding(corvin_home)
+        self.recover_pending()
+
+    # ── binding / locking ────────────────────────────────────────────────
+
+    def _bind(self, tenant_id: Any) -> Optional[str]:
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            return "tenant_id is required"
+        try:
+            validate_tenant_id(tenant_id)
+        except ValueError as exc:
+            return str(exc)
+        if tenant_id != self.tenant_id:
+            return f"Tenant mismatch: manager is bound to {self.tenant_id!r}, got {tenant_id!r}"
+        return None
+
+    @contextmanager
+    def _lock(self) -> Iterator[None]:
+        with open(self.log_dir / ".lock", "a+") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+    # ── chain primitives ─────────────────────────────────────────────────
+
+    def _read_entries(self) -> List[Dict[str, Any]]:
+        if not self.log_file.exists():
+            return []
+        entries = []
+        with open(self.log_file, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    entries.append(json.loads(line))
+        return entries
 
     def get_last_log_hash(self, tenant_id: str) -> str:
-        """Get hash of the last transaction log entry.
+        """MAC of the last entry (``""`` for an empty log)."""
+        error = self._bind(tenant_id)
+        if error:
+            raise ValueError(error)
+        entries = self._read_entries()
+        return entries[-1].get("mac", "") if entries else ""
 
-        Returns:
-            Last hash for chain continuity, or empty string if no logs exist.
+    def _append_locked(self, entry: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Chain + MAC + fsynced append. Caller holds the lock."""
+        entries = self._read_entries()
+        entry = dict(entry)
+        entry["prev_mac"] = entries[-1]["mac"] if entries else ""
+        entry.pop("mac", None)
+        mac, error = self.crypto.hmac_bytes(self.tenant_id, canonical_json(entry))
+        if error or not mac:
+            return False, f"chain MAC failed: {error}"
+        entry["mac"] = mac
+        with open(self.log_file, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        return True, None
+
+    # ── WAL ──────────────────────────────────────────────────────────────
+
+    def _wal_file(self, transaction_id: str) -> Path:
+        validate_id(transaction_id, "transaction_id")
+        return safe_child(self.wal_dir, f"{transaction_id}.json")
+
+    def recover_pending(self, max_age_s: float = WAL_GRACE_SECONDS) -> List[str]:
+        """Replay the WAL: close every abandoned transaction as ROLLED_BACK.
+
+        A WAL entry is abandoned when no log record exists for it and it is
+        older than ``max_age_s`` (younger entries may belong to a transaction
+        another live manager is about to commit). Returns the recovered ids.
         """
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
-
-        log_file = self.log_dir / f"{tenant_id}.jsonl"
-        if not log_file.exists():
-            return ""
-
-        try:
-            with open(log_file, "r") as f:
-                lines = f.readlines()
-                if lines:
-                    last_entry = json.loads(lines[-1])
-                    return last_entry.get("hash", "")
-        except Exception:
-            return ""
-
-        return ""
+        recovered: List[str] = []
+        now = time.time()
+        with self._lock():
+            known = {e["transaction_id"] for e in self._read_entries()}
+            for wal_file in sorted(self.wal_dir.glob("*.json")):
+                try:
+                    age = now - wal_file.stat().st_mtime
+                    with open(wal_file, "r", encoding="utf-8") as fh:
+                        wal = json.load(fh)
+                except (OSError, ValueError):
+                    wal_file.unlink(missing_ok=True)
+                    continue
+                tx_id = wal.get("transaction_id", wal_file.stem)
+                if tx_id not in known and age < max_age_s:
+                    continue  # in flight elsewhere — leave it
+                if tx_id not in known:
+                    entry = {
+                        "transaction_id": tx_id,
+                        "tenant_id": self.tenant_id,
+                        "timestamp": _now(),
+                        "status": TransactionStatus.ROLLED_BACK.value,
+                        "operation": wal.get("operation", "update"),
+                        "config_path": wal.get("config_path", ""),
+                        "old_state": wal.get("old_state", {}),
+                        "new_state": wal.get("new_state", {}),
+                        "error": "recovered from WAL: transaction never committed",
+                    }
+                    ok, _ = self._append_locked(entry)
+                    if not ok:
+                        continue
+                    recovered.append(tx_id)
+                wal_file.unlink(missing_ok=True)
+        return recovered
 
     def begin_transaction(
         self,
@@ -131,46 +228,34 @@ class RollbackManager:
         new_state: Dict[str, Any],
         operation: str = "update",
     ) -> Tuple[str, Optional[str]]:
-        """Begin a transaction (prepare WAL entry).
-
-        Args:
-            tenant_id: Tenant identifier
-            config_path: Path to config being changed
-            old_state: Previous state
-            new_state: New state
-            operation: "update", "delete", or "revert"
-
-        Returns:
-            (transaction_id, error): transaction_id on success, None on error
-        """
-        if not tenant_id:
-            return "", "tenant_id is required"
+        """Write the WAL entry (fsynced). Returns ``(transaction_id, error)``."""
+        error = self._bind(tenant_id)
+        if error:
+            return "", error
         if not config_path:
             return "", "config_path is required"
-
+        if not isinstance(old_state, dict) or not isinstance(new_state, dict):
+            return "", "old_state and new_state must be dicts"
         transaction_id = str(uuid4())
-        now = datetime.utcnow().isoformat() + "Z"
-
+        wal_entry = {
+            "transaction_id": transaction_id,
+            "tenant_id": tenant_id,
+            "timestamp": _now(),
+            "status": TransactionStatus.PREPARED.value,
+            "operation": operation,
+            "config_path": config_path,
+            "old_state": old_state,
+            "new_state": new_state,
+        }
         try:
-            # Write to WAL (before commit)
-            wal_file = self.wal_dir / f"{transaction_id}.json"
-            wal_entry = {
-                "transaction_id": transaction_id,
-                "tenant_id": tenant_id,
-                "timestamp": now,
-                "status": TransactionStatus.PREPARED.value,
-                "operation": operation,
-                "config_path": config_path,
-                "old_state": old_state,
-                "new_state": new_state,
-            }
-
-            with open(wal_file, "w") as f:
-                json.dump(wal_entry, f)
-
-            return transaction_id, None
-        except Exception as e:
-            return "", f"begin_transaction failed: {str(e)}"
+            target = self._wal_file(transaction_id)
+            with open(target, "w", encoding="utf-8") as fh:
+                json.dump(wal_entry, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except (OSError, ValueError) as exc:
+            return "", f"begin_transaction failed: {exc}"
+        return transaction_id, None
 
     def commit_transaction(
         self,
@@ -182,108 +267,65 @@ class RollbackManager:
         operation: str = "update",
         audit_callback=None,
     ) -> Tuple[bool, Optional[str]]:
-        """Commit a transaction (all-or-nothing).
-
-        Atomicity guarantee: either the entire transaction commits (WAL + log),
-        or it rolls back with no side effects.
-
-        Args:
-            transaction_id: ID from begin_transaction
-            tenant_id: Tenant identifier
-            config_path: Path to config
-            old_state: Previous state
-            new_state: New state
-            operation: "update", "delete", or "revert"
-            audit_callback: Optional callback for audit events
-
-        Returns:
-            (success, error)
-        """
-        if not tenant_id:
-            return False, "tenant_id is required"
+        """Commit: chained log append, WAL removed. A failure is logged as FAILED
+        with the SAME chain/MAC treatment, so the chain stays verifiable."""
+        error = self._bind(tenant_id)
+        if error:
+            return False, error
         if not transaction_id:
             return False, "transaction_id is required"
-
-        now = datetime.utcnow().isoformat() + "Z"
-
         try:
-            # Validate WAL entry exists
-            wal_file = self.wal_dir / f"{transaction_id}.json"
+            wal_file = self._wal_file(transaction_id)
+        except ValueError as exc:
+            return False, str(exc)
+
+        with self._lock():
             if not wal_file.exists():
                 return False, f"WAL entry not found for {transaction_id}"
-
-            # Get chain hash from last log
-            prev_hash = self.get_last_log_hash(tenant_id)
-
-            # Create transaction log entry
-            log_entry_dict = {
+            try:
+                with open(wal_file, "r", encoding="utf-8") as fh:
+                    wal = json.load(fh)
+            except (OSError, ValueError) as exc:
+                return False, f"WAL entry unreadable: {exc}"
+            base = {
                 "transaction_id": transaction_id,
                 "tenant_id": tenant_id,
-                "timestamp": now,
-                "status": TransactionStatus.COMMITTED.value,
+                "timestamp": _now(),
                 "operation": operation,
                 "config_path": config_path,
                 "old_state": old_state,
                 "new_state": new_state,
-                "error": None,
-                "prev_hash": prev_hash,
             }
+            if (
+                wal.get("config_path") != config_path
+                or wal.get("old_state") != old_state
+                or wal.get("new_state") != new_state
+            ):
+                ok, err = self._append_locked({
+                    **base, "status": TransactionStatus.FAILED.value,
+                    "error": "commit payload does not match WAL entry",
+                })
+                wal_file.unlink(missing_ok=True)
+                return False, "commit_transaction failed: payload does not match WAL entry"
+            ok, err = self._append_locked({
+                **base, "status": TransactionStatus.COMMITTED.value, "error": None,
+            })
+            if not ok:
+                return False, f"commit_transaction failed: {err}"
+            wal_file.unlink(missing_ok=True)
 
-            # Compute hash
-            hash_value = TransactionLog.compute_hash(log_entry_dict)
-            log_entry_dict["hash"] = hash_value
-
-            # Atomic write: append to log (all-or-nothing)
-            log_file = self.log_dir / f"{tenant_id}.jsonl"
-            with open(log_file, "a") as f:
-                f.write(json.dumps(log_entry_dict) + "\n")
-
-            # Delete WAL entry (cleanup)
-            try:
-                wal_file.unlink()
-            except Exception:
-                pass  # Not critical if cleanup fails
-
-            # Emit audit event if callback provided
-            if audit_callback:
-                try:
-                    audit_callback(
-                        event_type="skill_config_updated",
-                        transaction_id=transaction_id,
-                        operation=operation,
-                        config_path=config_path,
-                        tenant_id=tenant_id,
-                        timestamp=now,
-                        old_state=old_state,
-                        new_state=new_state,
-                    )
-                except Exception:
-                    pass  # Audit callback error doesn't block commit
-
-            return True, None
-        except Exception as e:
-            # On error, mark as failed and clean up
-            try:
-                log_file = self.log_dir / f"{tenant_id}.jsonl"
-                failed_entry = {
-                    "transaction_id": transaction_id,
-                    "tenant_id": tenant_id,
-                    "timestamp": now,
-                    "status": TransactionStatus.FAILED.value,
-                    "operation": operation,
-                    "config_path": config_path,
-                    "old_state": old_state,
-                    "new_state": new_state,
-                    "error": str(e),
-                    "hash": "",
-                    "prev_hash": self.get_last_log_hash(tenant_id),
-                }
-                with open(log_file, "a") as f:
-                    f.write(json.dumps(failed_entry) + "\n")
-            except Exception:
-                pass
-
-            return False, f"commit_transaction failed: {str(e)}"
+        if audit_callback:
+            audit_callback(
+                event_type="infinite_session.transaction_committed",
+                transaction_id=transaction_id,
+                operation=operation,
+                config_path=config_path,
+                tenant_id=tenant_id,
+                old_state_hash=state_hash(old_state),
+                new_state_hash=state_hash(new_state),
+                timestamp=_now(),
+            )
+        return True, None
 
     def rollback_transaction(
         self,
@@ -291,85 +333,44 @@ class RollbackManager:
         transaction_id_to_undo: str,
         audit_callback=None,
     ) -> Tuple[bool, Optional[str]]:
-        """Rollback a previous transaction by reverting to old_state.
+        """Append a REVERT transaction restoring ``old_state`` of a committed one."""
+        error = self._bind(tenant_id)
+        if error:
+            return False, error
+        target = None
+        for entry in self._read_entries():
+            if entry.get("transaction_id") == transaction_id_to_undo:
+                target = entry
+                break
+        if target is None:
+            return False, f"Transaction {transaction_id_to_undo} not found"
+        if target.get("status") != TransactionStatus.COMMITTED.value:
+            return False, f"Transaction {transaction_id_to_undo} is not committed (status={target.get('status')})"
 
-        Creates a new REVERT transaction that restores the old_state.
-
-        Args:
-            tenant_id: Tenant identifier
-            transaction_id_to_undo: Transaction ID to rollback
-            audit_callback: Optional callback for audit events
-
-        Returns:
-            (success, error)
-        """
-        if not tenant_id:
-            return False, "tenant_id is required"
-
-        try:
-            # Find the transaction to undo
-            log_file = self.log_dir / f"{tenant_id}.jsonl"
-            if not log_file.exists():
-                return False, f"No transaction log for {tenant_id}"
-
-            transaction_to_undo = None
-            with open(log_file, "r") as f:
-                for line in f:
-                    entry = json.loads(line)
-                    if entry["transaction_id"] == transaction_id_to_undo:
-                        transaction_to_undo = entry
-                        break
-
-            if not transaction_to_undo:
-                return False, f"Transaction {transaction_id_to_undo} not found"
-
-            # Create revert transaction
-            old_state = transaction_to_undo.get("old_state", {})
-            new_state = transaction_to_undo.get("new_state", {})
-            config_path = transaction_to_undo.get("config_path", "")
-
-            revert_tx_id, err = self.begin_transaction(
+        old_state = target.get("old_state", {})
+        new_state = target.get("new_state", {})
+        config_path = target.get("config_path", "")
+        revert_tx_id, err = self.begin_transaction(
+            tenant_id, config_path, old_state=new_state, new_state=old_state, operation="revert",
+        )
+        if err:
+            return False, f"Failed to begin revert transaction: {err}"
+        ok, commit_err = self.commit_transaction(
+            revert_tx_id, tenant_id, config_path, old_state=new_state, new_state=old_state,
+            operation="revert", audit_callback=audit_callback,
+        )
+        if ok and audit_callback:
+            audit_callback(
+                event_type="infinite_session.rollback_initiated",
+                original_transaction_id=transaction_id_to_undo,
+                revert_transaction_id=revert_tx_id,
                 tenant_id=tenant_id,
                 config_path=config_path,
-                old_state=new_state,  # Current state
-                new_state=old_state,  # Revert to old
-                operation="revert",
+                timestamp=_now(),
             )
+        return ok, commit_err
 
-            if err:
-                return False, f"Failed to begin revert transaction: {err}"
-
-            # Commit the revert
-            success, commit_err = self.commit_transaction(
-                transaction_id=revert_tx_id,
-                tenant_id=tenant_id,
-                config_path=config_path,
-                old_state=new_state,
-                new_state=old_state,
-                operation="revert",
-                audit_callback=audit_callback,
-            )
-
-            if success:
-                if audit_callback:
-                    try:
-                        now = datetime.utcnow().isoformat() + "Z"
-                        audit_callback(
-                            event_type="rollback_initiated",
-                            original_transaction_id=transaction_id_to_undo,
-                            revert_transaction_id=revert_tx_id,
-                            tenant_id=tenant_id,
-                            timestamp=now,
-                            config_path=config_path,
-                            old_state=old_state,
-                            new_state=new_state,
-                        )
-                    except Exception:
-                        pass
-
-            return success, commit_err
-        except Exception as e:
-            return False, f"rollback_transaction failed: {str(e)}"
+    # ── queries ──────────────────────────────────────────────────────────
 
     def get_transaction_history(
         self,
@@ -377,77 +378,30 @@ class RollbackManager:
         config_path: Optional[str] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """Retrieve transaction history for a tenant.
-
-        Args:
-            tenant_id: Tenant identifier
-            config_path: Optional filter by config path
-            limit: Max number of entries to return
-
-        Returns:
-            List of transaction log entries (most recent first)
-        """
-        if not tenant_id:
+        """Most-recent-first entries, optionally filtered by ``config_path``."""
+        if self._bind(tenant_id):
             return []
-
-        try:
-            log_file = self.log_dir / f"{tenant_id}.jsonl"
-            if not log_file.exists():
-                return []
-
-            entries = []
-            with open(log_file, "r") as f:
-                for line in f:
-                    entry = json.loads(line)
-                    if config_path and entry.get("config_path") != config_path:
-                        continue
-                    entries.append(entry)
-
-            # Return most recent first, up to limit
-            return list(reversed(entries))[:limit]
-        except Exception:
-            return []
+        entries = [
+            e for e in self._read_entries()
+            if config_path is None or e.get("config_path") == config_path
+        ]
+        return list(reversed(entries))[:limit]
 
     def verify_chain_integrity(self, tenant_id: str) -> Tuple[bool, Optional[str]]:
-        """Verify hash-chain integrity of transaction log.
-
-        Args:
-            tenant_id: Tenant identifier
-
-        Returns:
-            (valid, error)
-        """
-        if not tenant_id:
-            return False, "tenant_id is required"
-
-        try:
-            log_file = self.log_dir / f"{tenant_id}.jsonl"
-            if not log_file.exists():
-                return True, None  # Empty log is valid
-
-            prev_hash = ""
-            with open(log_file, "r") as f:
-                for i, line in enumerate(f):
-                    entry = json.loads(line)
-
-                    # Check prev_hash matches
-                    if entry.get("prev_hash") != prev_hash:
-                        return False, f"Chain break at entry {i}: prev_hash mismatch"
-
-                    # Recompute hash and verify
-                    stored_hash = entry.get("hash", "")
-                    if not stored_hash:
-                        continue  # Skip entries without hash (e.g., FAILED)
-
-                    # Recreate dict for hashing (without hash field)
-                    verify_dict = {k: v for k, v in entry.items() if k != "hash"}
-                    computed_hash = TransactionLog.compute_hash(verify_dict)
-
-                    if stored_hash != computed_hash:
-                        return False, f"Hash mismatch at entry {i}"
-
-                    prev_hash = stored_hash
-
-            return True, None
-        except Exception as e:
-            return False, f"verify_chain_integrity failed: {str(e)}"
+        """Recompute every MAC and prev link (all statuses, no exceptions)."""
+        error = self._bind(tenant_id)
+        if error:
+            return False, error
+        prev_mac = ""
+        for i, entry in enumerate(self._read_entries()):
+            if entry.get("prev_mac", "") != prev_mac:
+                return False, f"Chain break at entry {i}: prev_mac mismatch"
+            stored = entry.get("mac", "")
+            if not stored:
+                return False, f"Entry {i} has no MAC"
+            body = {k: v for k, v in entry.items() if k != "mac"}
+            ok, err = self.crypto.verify_bytes(self.tenant_id, canonical_json(body), stored)
+            if not ok:
+                return False, f"MAC mismatch at entry {i}: {err}"
+            prev_mac = stored
+        return True, None
